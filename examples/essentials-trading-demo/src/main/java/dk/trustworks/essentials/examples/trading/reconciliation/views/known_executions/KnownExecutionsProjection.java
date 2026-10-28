@@ -22,38 +22,37 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.orders.events.OrderFilled;
 import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.sql.Date;
 import java.util.List;
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-
 /**
  * {@code reconciliation}'s own record of the brokerage's executions, projected from {@code orders}' {@link OrderFilled}
  * - a cross-BC {@code events/} import: instrument, side, quantity, amount and trade date per execution. What a clearing
  * statement is checked against.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
+ * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
+ * which opens one.
  */
 @Service
 public class KnownExecutionsProjection extends TradingDemoViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
-
-    public KnownExecutionsProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
+    public KnownExecutionsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_reconciliation_execution (
-                                              execution_id VARCHAR PRIMARY KEY,
-                                              instrument_id VARCHAR NOT NULL,
-                                              side VARCHAR NOT NULL,
-                                              quantity BIGINT NOT NULL,
-                                              amount NUMERIC(24, 6) NOT NULL,
-                                              trade_date DATE NOT NULL
-                                          )
-                                          """);
-        this.jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS projection_reconciliation_execution_trade_date ON projection_reconciliation_execution (trade_date)");
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_reconciliation_execution (
+                                                                                       execution_id VARCHAR PRIMARY KEY,
+                                                                                       instrument_id VARCHAR NOT NULL,
+                                                                                       side VARCHAR NOT NULL,
+                                                                                       quantity BIGINT NOT NULL,
+                                                                                       amount NUMERIC(24, 6) NOT NULL,
+                                                                                       trade_date DATE NOT NULL
+                                                                                   )
+                                                                                   """));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_reconciliation_execution_trade_date ON projection_reconciliation_execution (trade_date)"));
     }
 
     @Override
@@ -68,11 +67,16 @@ public class KnownExecutionsProjection extends TradingDemoViewEventProcessor {
 
     @MessageHandler
     void handle(OrderFilled e) {
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_reconciliation_execution (execution_id, instrument_id, side, quantity, amount, trade_date)
-                                    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (execution_id) DO NOTHING
-                                    """,
-                            e.executionId().toString(), e.instrumentId().toString(), e.side().name(), e.quantity().value(),
-                            e.price().getAmount().value().multiply(BigDecimal.valueOf(e.quantity().value())), Date.valueOf(e.tradeDate()));
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          INSERT INTO projection_reconciliation_execution (execution_id, instrument_id, side, quantity, amount, trade_date)
+                                                          VALUES (:executionId, :instrumentId, :side, :quantity, :amount, :tradeDate) ON CONFLICT (execution_id) DO NOTHING
+                                                          """)
+                                        .bind("executionId", e.executionId().toString())
+                                        .bind("instrumentId", e.instrumentId().toString())
+                                        .bind("side", e.side().name())
+                                        .bind("quantity", e.quantity().value())
+                                        .bind("amount", e.price().getAmount().value().multiply(BigDecimal.valueOf(e.quantity().value())))
+                                        .bind("tradeDate", Date.valueOf(e.tradeDate()))
+                                        .execute();
     }
 }

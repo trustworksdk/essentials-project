@@ -24,40 +24,39 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMes
 import dk.trustworks.essentials.examples.trading.accounts.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.List;
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-
 /**
  * The statement: one row per account event, keyed by its stream and {@code EventOrder}, so a redelivery inserts nothing.
  * Insert-only — no versioning needed.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
+ * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * constructor's DDL and the reset run where none is active, so they go through
+ * {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)}, which opens one.
  */
 @Service
 public class AccountActivityProjection extends TradingDemoViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
-
-    public AccountActivityProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
+    public AccountActivityProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_account_activity (
-                                              account_stream_id VARCHAR NOT NULL,
-                                              event_order BIGINT NOT NULL,
-                                              account_id VARCHAR NOT NULL,
-                                              generation BIGINT NOT NULL,
-                                              kind VARCHAR NOT NULL,
-                                              reference VARCHAR NULL,
-                                              description VARCHAR NOT NULL,
-                                              cash_effect NUMERIC(24, 6) NULL,
-                                              recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                              PRIMARY KEY (account_stream_id, event_order)
-                                          )
-                                          """);
-        this.jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS projection_account_activity_account ON projection_account_activity (account_id, generation, event_order)");
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                               CREATE TABLE IF NOT EXISTS projection_account_activity (
+                                                                                   account_stream_id VARCHAR NOT NULL,
+                                                                                   event_order BIGINT NOT NULL,
+                                                                                   account_id VARCHAR NOT NULL,
+                                                                                   generation BIGINT NOT NULL,
+                                                                                   kind VARCHAR NOT NULL,
+                                                                                   reference VARCHAR NULL,
+                                                                                   description VARCHAR NOT NULL,
+                                                                                   cash_effect NUMERIC(24, 6) NULL,
+                                                                                   recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                                                                   PRIMARY KEY (account_stream_id, event_order)
+                                                                               )
+                                                                               """));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_account_activity_account ON projection_account_activity (account_id, generation, event_order)"));
     }
 
     @Override
@@ -161,17 +160,24 @@ public class AccountActivityProjection extends TradingDemoViewEventProcessor {
     }
 
     private void record(AccountEvent e, OrderedMessage m, String kind, String reference, String description, BigDecimal cashEffect) {
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_account_activity (account_stream_id, event_order, account_id, generation, kind, reference, description, cash_effect)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                    ON CONFLICT (account_stream_id, event_order) DO NOTHING
-                                    """,
-                            e.accountStreamId().toString(), m.getOrder(), e.accountId().toString(), e.accountStreamId().generation(),
-                            kind, reference, description, cashEffect);
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          INSERT INTO projection_account_activity (account_stream_id, event_order, account_id, generation, kind, reference, description, cash_effect)
+                                                          VALUES (:accountStreamId, :eventOrder, :accountId, :generation, :kind, :reference, :description, :cashEffect)
+                                                          ON CONFLICT (account_stream_id, event_order) DO NOTHING
+                                                          """)
+                                        .bind("accountStreamId", e.accountStreamId().toString())
+                                        .bind("eventOrder", m.getOrder())
+                                        .bind("accountId", e.accountId().toString())
+                                        .bind("generation", e.accountStreamId().generation())
+                                        .bind("kind", kind)
+                                        .bind("reference", reference)
+                                        .bind("description", description)
+                                        .bind("cashEffect", cashEffect)
+                                        .execute();
     }
 
     @Override
     protected void onSubscriptionsReset(AggregateType aggregateType, GlobalEventOrder resubscribeFromAndIncluding) {
-        jdbcTemplate.execute("TRUNCATE TABLE projection_account_activity");
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE projection_account_activity"));
     }
 }

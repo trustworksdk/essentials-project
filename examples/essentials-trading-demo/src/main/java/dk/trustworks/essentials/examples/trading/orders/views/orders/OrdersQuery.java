@@ -16,11 +16,12 @@
 
 package dk.trustworks.essentials.examples.trading.orders.views.orders;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.examples.trading.orders.types.*;
 import dk.trustworks.essentials.types.*;
-import org.springframework.jdbc.core.*;
+import org.jdbi.v3.core.mapper.RowMapper;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
@@ -36,7 +37,7 @@ public class OrdersQuery {
             FROM projection_orders
             """;
 
-    private static final RowMapper<OrderView> ROW = (rs, rowNum) -> {
+    private static final RowMapper<OrderView> ROW = (rs, ctx) -> {
         var limit        = rs.getBigDecimal("limit_price");
         var averagePrice = rs.getBigDecimal("average_fill_price");
         return new OrderView(OrderId.of(rs.getString("order_id")),
@@ -56,15 +57,18 @@ public class OrdersQuery {
                              rs.getObject("updated_at", OffsetDateTime.class));
     };
 
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public OrdersQuery(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public OrdersQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     public List<OrderView> ordersOf(AccountId accountId) {
         requireNonNull(accountId, "No accountId provided");
-        return jdbcTemplate.query(SELECT + " WHERE account_id = ? ORDER BY placed_at DESC, order_id", ROW, accountId.toString());
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(SELECT + " WHERE account_id = :accountId ORDER BY placed_at DESC, order_id")
+                                                                   .bind("accountId", accountId.toString())
+                                                                   .map(ROW)
+                                                                   .list());
     }
 
     /**
@@ -72,17 +76,26 @@ public class OrdersQuery {
      * placed a moment ago may be missing.
      */
     public List<OrderId> openDayOrders() {
-        return jdbcTemplate.queryForList("SELECT order_id FROM projection_orders WHERE time_in_force = ? AND status IN (?, ?, ?) ORDER BY order_id",
-                                         String.class,
-                                         TimeInForce.DAY.name(), OrderStatus.PENDING.name(), OrderStatus.OPEN.name(), OrderStatus.PARTIALLY_FILLED.name())
-                           .stream()
-                           .map(OrderId::of)
-                           .toList();
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle()
+                                                          .createQuery("SELECT order_id FROM projection_orders WHERE time_in_force = :timeInForce AND status IN (:pending, :open, :partiallyFilled) ORDER BY order_id")
+                                                          .bind("timeInForce", TimeInForce.DAY.name())
+                                                          .bind("pending", OrderStatus.PENDING.name())
+                                                          .bind("open", OrderStatus.OPEN.name())
+                                                          .bind("partiallyFilled", OrderStatus.PARTIALLY_FILLED.name())
+                                                          .mapTo(String.class)
+                                                          .list())
+                                .stream()
+                                .map(OrderId::of)
+                                .toList();
     }
 
     public Optional<OrderView> findOrder(AccountId accountId, OrderId orderId) {
         requireNonNull(accountId, "No accountId provided");
         requireNonNull(orderId, "No orderId provided");
-        return jdbcTemplate.query(SELECT + " WHERE account_id = ? AND order_id = ?", ROW, accountId.toString(), orderId.toString()).stream().findFirst();
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(SELECT + " WHERE account_id = :accountId AND order_id = :orderId")
+                                                                   .bind("accountId", accountId.toString())
+                                                                   .bind("orderId", orderId.toString())
+                                                                   .map(ROW)
+                                                                   .findFirst());
     }
 }

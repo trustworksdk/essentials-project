@@ -16,10 +16,11 @@
 
 package dk.trustworks.essentials.examples.trading.accounts.views.account_overview;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.identity.types.UserId;
 import dk.trustworks.essentials.types.*;
-import org.springframework.jdbc.core.*;
+import org.jdbi.v3.core.mapper.RowMapper;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -37,7 +38,7 @@ public class AccountOverviewQuery {
             FROM projection_account_overview
             """;
 
-    private static final RowMapper<AccountOverview> ROW = (rs, rowNum) -> {
+    private static final RowMapper<AccountOverview> ROW = (rs, ctx) -> {
         var currency   = CurrencyCode.of(rs.getString("currency"));
         var settled    = rs.getBigDecimal("settled");
         var pendingIn  = rs.getBigDecimal("pending_in");
@@ -61,19 +62,25 @@ public class AccountOverviewQuery {
                                    settled.signum() < 0);
     };
 
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public AccountOverviewQuery(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public AccountOverviewQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     public Optional<AccountOverview> findAccount(AccountId accountId) {
         requireNonNull(accountId, "No accountId provided");
-        return jdbcTemplate.query(SELECT + " WHERE account_id = ?", ROW, accountId.toString()).stream().findFirst();
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(SELECT + " WHERE account_id = :accountId")
+                                                                   .bind("accountId", accountId.toString())
+                                                                   .map(ROW)
+                                                                   .findFirst());
     }
 
     public List<AccountOverview> accountsOwnedBy(UserId ownerId) {
         requireNonNull(ownerId, "No ownerId provided");
-        return jdbcTemplate.query(SELECT + " WHERE owner_id = ? ORDER BY account_id", ROW, ownerId.toString());
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(SELECT + " WHERE owner_id = :ownerId ORDER BY account_id")
+                                                                   .bind("ownerId", ownerId.toString())
+                                                                   .map(ROW)
+                                                                   .list());
     }
 }

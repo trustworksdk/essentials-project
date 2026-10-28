@@ -24,7 +24,6 @@ import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.examples.trading.orders.events.OrderFilled;
 import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -35,25 +34,29 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * {@code settlement}'s own record of which account, instrument and side each execution belongs to, projected from
  * {@code orders}' {@link OrderFilled} - a cross-BC {@code events/} import, so settlement never calls into
  * {@code orders}. Eventually consistent: a settlement report for a fill not projected yet is redelivered.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
+ * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
+ * which opens one; {@link #fill(ExecutionId)} reads through {@code getUnitOfWorkFactory().withUnitOfWork(uow -> …)}, which
+ * joins the caller's unit of work or opens one.
  */
 @Service
 public class SettlementFillsProjection extends TradingDemoViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
 
     public record Fill(ExecutionId executionId, AccountId accountId, InstrumentId instrumentId, TradeSide side) {
     }
 
-    public SettlementFillsProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
+    public SettlementFillsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_settlement_fill (
-                                              execution_id VARCHAR PRIMARY KEY,
-                                              account_id VARCHAR NOT NULL,
-                                              instrument_id VARCHAR NOT NULL,
-                                              side VARCHAR NOT NULL
-                                          )
-                                          """);
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_settlement_fill (
+                                                                                       execution_id VARCHAR PRIMARY KEY,
+                                                                                       account_id VARCHAR NOT NULL,
+                                                                                       instrument_id VARCHAR NOT NULL,
+                                                                                       side VARCHAR NOT NULL
+                                                                                   )
+                                                                                   """));
     }
 
     @Override
@@ -68,15 +71,21 @@ public class SettlementFillsProjection extends TradingDemoViewEventProcessor {
 
     @MessageHandler
     void handle(OrderFilled e) {
-        jdbcTemplate.update("INSERT INTO projection_settlement_fill (execution_id, account_id, instrument_id, side) VALUES (?, ?, ?, ?) ON CONFLICT (execution_id) DO NOTHING",
-                            e.executionId().toString(), e.accountId().toString(), e.instrumentId().toString(), e.side().name());
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("INSERT INTO projection_settlement_fill (execution_id, account_id, instrument_id, side) VALUES (:executionId, :accountId, :instrumentId, :side) ON CONFLICT (execution_id) DO NOTHING")
+                                .bind("executionId", e.executionId().toString())
+                                .bind("accountId", e.accountId().toString())
+                                .bind("instrumentId", e.instrumentId().toString())
+                                .bind("side", e.side().name())
+                                .execute();
     }
 
     public Optional<Fill> fill(ExecutionId executionId) {
         requireNonNull(executionId, "No executionId provided");
-        return jdbcTemplate.query("SELECT account_id, instrument_id, side FROM projection_settlement_fill WHERE execution_id = ?",
-                                  (rs, row) -> new Fill(executionId, AccountId.of(rs.getString(1)), InstrumentId.of(rs.getString(2)), TradeSide.valueOf(rs.getString(3))),
-                                  executionId.toString())
-                           .stream().findFirst();
+        return getUnitOfWorkFactory().withUnitOfWork(uow -> uow.handle()
+                                                               .createQuery("SELECT account_id, instrument_id, side FROM projection_settlement_fill WHERE execution_id = :executionId")
+                                                               .bind("executionId", executionId.toString())
+                                                               .map((rs, ctx) -> new Fill(executionId, AccountId.of(rs.getString(1)), InstrumentId.of(rs.getString(2)), TradeSide.valueOf(rs.getString(3))))
+                                                               .findFirst());
     }
 }

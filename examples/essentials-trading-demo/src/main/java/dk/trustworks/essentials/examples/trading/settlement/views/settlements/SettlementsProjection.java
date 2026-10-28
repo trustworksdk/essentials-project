@@ -23,41 +23,40 @@ import dk.trustworks.essentials.examples.trading.settlement.aggregates.TradeSett
 import dk.trustworks.essentials.examples.trading.settlement.events.*;
 import dk.trustworks.essentials.examples.trading.settlement.types.SettlementState;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.sql.Date;
 import java.util.List;
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-
 /**
  * Every execution's settlement: state, intended date, amount, and for an abandoned one the exchange's outcome and
  * reason - the operator's settlement exceptions (Q-1).
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
+ * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
+ * which opens one.
  */
 @Service
 public class SettlementsProjection extends TradingDemoViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
-
-    public SettlementsProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
+    public SettlementsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_settlement (
-                                              execution_id VARCHAR PRIMARY KEY,
-                                              account_id VARCHAR NOT NULL,
-                                              instrument_id VARCHAR NOT NULL,
-                                              side VARCHAR NOT NULL,
-                                              amount NUMERIC(24, 6) NOT NULL,
-                                              currency VARCHAR NOT NULL,
-                                              intended_settlement_date DATE NOT NULL,
-                                              state VARCHAR NOT NULL,
-                                              outcome VARCHAR NULL,
-                                              reason VARCHAR NULL,
-                                              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          )
-                                          """);
-        this.jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS projection_settlement_account ON projection_settlement (account_id)");
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_settlement (
+                                                                                       execution_id VARCHAR PRIMARY KEY,
+                                                                                       account_id VARCHAR NOT NULL,
+                                                                                       instrument_id VARCHAR NOT NULL,
+                                                                                       side VARCHAR NOT NULL,
+                                                                                       amount NUMERIC(24, 6) NOT NULL,
+                                                                                       currency VARCHAR NOT NULL,
+                                                                                       intended_settlement_date DATE NOT NULL,
+                                                                                       state VARCHAR NOT NULL,
+                                                                                       outcome VARCHAR NULL,
+                                                                                       reason VARCHAR NULL,
+                                                                                       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                                                   )
+                                                                                   """));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_settlement_account ON projection_settlement (account_id)"));
     }
 
     @Override
@@ -72,34 +71,57 @@ public class SettlementsProjection extends TradingDemoViewEventProcessor {
 
     @MessageHandler
     void handle(SettlementInstructed e) {
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_settlement (execution_id, account_id, instrument_id, side, amount, currency, intended_settlement_date, state)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (execution_id) DO NOTHING
-                                    """,
-                            e.executionId().toString(), e.accountId().toString(), e.instrumentId().toString(), e.side().name(),
-                            e.amount().getAmount().value(), e.amount().getCurrency().toString(), Date.valueOf(e.intendedSettlementDate()),
-                            SettlementState.INSTRUCTED.name());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          INSERT INTO projection_settlement (execution_id, account_id, instrument_id, side, amount, currency, intended_settlement_date, state)
+                                                          VALUES (:executionId, :accountId, :instrumentId, :side, :amount, :currency, :intendedSettlementDate, :state) ON CONFLICT (execution_id) DO NOTHING
+                                                          """)
+                                        .bind("executionId", e.executionId().toString())
+                                        .bind("accountId", e.accountId().toString())
+                                        .bind("instrumentId", e.instrumentId().toString())
+                                        .bind("side", e.side().name())
+                                        .bind("amount", e.amount().getAmount().value())
+                                        .bind("currency", e.amount().getCurrency().toString())
+                                        .bind("intendedSettlementDate", Date.valueOf(e.intendedSettlementDate()))
+                                        .bind("state", SettlementState.INSTRUCTED.name())
+                                        .execute();
     }
 
     @MessageHandler
     void handle(SettlementPostponed e) {
-        jdbcTemplate.update("UPDATE projection_settlement SET intended_settlement_date = ?, updated_at = CURRENT_TIMESTAMP WHERE execution_id = ? AND state = ?",
-                            Date.valueOf(e.intendedSettlementDate()), e.executionId().toString(), SettlementState.INSTRUCTED.name());
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("UPDATE projection_settlement SET intended_settlement_date = :intendedSettlementDate, updated_at = CURRENT_TIMESTAMP WHERE execution_id = :executionId AND state = :state")
+                                .bind("intendedSettlementDate", Date.valueOf(e.intendedSettlementDate()))
+                                .bind("executionId", e.executionId().toString())
+                                .bind("state", SettlementState.INSTRUCTED.name())
+                                .execute();
     }
 
     @MessageHandler
     void handle(SettlementSettled e) {
-        jdbcTemplate.update("UPDATE projection_settlement SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE execution_id = ?", SettlementState.SETTLED.name(), e.executionId().toString());
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("UPDATE projection_settlement SET state = :state, updated_at = CURRENT_TIMESTAMP WHERE execution_id = :executionId")
+                                .bind("state", SettlementState.SETTLED.name())
+                                .bind("executionId", e.executionId().toString())
+                                .execute();
     }
 
     @MessageHandler
     void handle(SettlementAbandoned e) {
-        jdbcTemplate.update("UPDATE projection_settlement SET state = ?, outcome = ?, reason = ?, updated_at = CURRENT_TIMESTAMP WHERE execution_id = ?",
-                            SettlementState.ABANDONED.name(), e.outcome(), e.reason(), e.executionId().toString());
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("UPDATE projection_settlement SET state = :state, outcome = :outcome, reason = :reason, updated_at = CURRENT_TIMESTAMP WHERE execution_id = :executionId")
+                                .bind("state", SettlementState.ABANDONED.name())
+                                .bind("outcome", e.outcome())
+                                .bind("reason", e.reason())
+                                .bind("executionId", e.executionId().toString())
+                                .execute();
     }
 
     @MessageHandler
     void handle(SettlementAmountChanged e) {
-        jdbcTemplate.update("UPDATE projection_settlement SET amount = ?, updated_at = CURRENT_TIMESTAMP WHERE execution_id = ?", e.amount().getAmount().value(), e.executionId().toString());
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("UPDATE projection_settlement SET amount = :amount, updated_at = CURRENT_TIMESTAMP WHERE execution_id = :executionId")
+                                .bind("amount", e.amount().getAmount().value())
+                                .bind("executionId", e.executionId().toString())
+                                .execute();
     }
 }

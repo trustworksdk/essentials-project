@@ -22,31 +22,30 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.accounts.events.AccountOpened;
 import dk.trustworks.essentials.examples.trading.accounts.types.AccountsAggregateTypes;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * {@code orders}' own record of who owns which account, projected from the ledger's {@link AccountOpened} — a cross-BC
  * {@code events/} import, so order entry never calls into {@code accounts}. Every generation repeats the owner, so the
  * upsert is idempotent.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
+ * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
+ * which opens one.
  */
 @Service
 public class AccountOwnersProjection extends TradingDemoViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
-
-    public AccountOwnersProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
+    public AccountOwnersProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_orders_account_owner (
-                                              account_id VARCHAR PRIMARY KEY,
-                                              owner_id VARCHAR NOT NULL
-                                          )
-                                          """);
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_orders_account_owner (
+                                                                                       account_id VARCHAR PRIMARY KEY,
+                                                                                       owner_id VARCHAR NOT NULL
+                                                                                   )
+                                                                                   """));
     }
 
     @Override
@@ -61,11 +60,12 @@ public class AccountOwnersProjection extends TradingDemoViewEventProcessor {
 
     @MessageHandler
     void handle(AccountOpened event) {
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_orders_account_owner (account_id, owner_id) VALUES (?, ?)
-                                    ON CONFLICT (account_id) DO NOTHING
-                                    """,
-                            event.accountId().toString(),
-                            event.ownerId().toString());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          INSERT INTO projection_orders_account_owner (account_id, owner_id) VALUES (:accountId, :ownerId)
+                                                          ON CONFLICT (account_id) DO NOTHING
+                                                          """)
+                                        .bind("accountId", event.accountId().toString())
+                                        .bind("ownerId", event.ownerId().toString())
+                                        .execute();
     }
 }

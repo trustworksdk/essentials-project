@@ -21,37 +21,36 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.orders.events.OrderFilledAfterClose;
 import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-
 /**
  * Projects the late-fill operator cases (design Q-3) into {@code projection_late_fills}, one row per execution.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
+ * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
+ * which opens one.
  */
 @Service
 public class LateFillsProjection extends TradingDemoViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
-
-    public LateFillsProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
+    public LateFillsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_late_fills (
-                                              execution_id VARCHAR PRIMARY KEY,
-                                              order_id VARCHAR NOT NULL,
-                                              account_id VARCHAR NOT NULL,
-                                              instrument_id VARCHAR NOT NULL,
-                                              side VARCHAR NOT NULL,
-                                              quantity BIGINT NOT NULL,
-                                              price NUMERIC(24, 6) NOT NULL,
-                                              currency VARCHAR NOT NULL,
-                                              closed_as VARCHAR NOT NULL,
-                                              recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          )
-                                          """);
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_late_fills (
+                                                                                       execution_id VARCHAR PRIMARY KEY,
+                                                                                       order_id VARCHAR NOT NULL,
+                                                                                       account_id VARCHAR NOT NULL,
+                                                                                       instrument_id VARCHAR NOT NULL,
+                                                                                       side VARCHAR NOT NULL,
+                                                                                       quantity BIGINT NOT NULL,
+                                                                                       price NUMERIC(24, 6) NOT NULL,
+                                                                                       currency VARCHAR NOT NULL,
+                                                                                       closed_as VARCHAR NOT NULL,
+                                                                                       recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                                                   )
+                                                                                   """));
     }
 
     @Override
@@ -66,19 +65,20 @@ public class LateFillsProjection extends TradingDemoViewEventProcessor {
 
     @MessageHandler
     void handle(OrderFilledAfterClose e) {
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_late_fills (execution_id, order_id, account_id, instrument_id, side, quantity, price, currency, closed_as)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                    ON CONFLICT (execution_id) DO NOTHING
-                                    """,
-                            e.executionId().toString(),
-                            e.orderId().toString(),
-                            e.accountId().toString(),
-                            e.instrumentId().toString(),
-                            e.side().name(),
-                            e.quantity().value(),
-                            e.price().getAmount().value(),
-                            e.price().getCurrency().toString(),
-                            e.closedAs().name());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          INSERT INTO projection_late_fills (execution_id, order_id, account_id, instrument_id, side, quantity, price, currency, closed_as)
+                                                          VALUES (:executionId, :orderId, :accountId, :instrumentId, :side, :quantity, :price, :currency, :closedAs)
+                                                          ON CONFLICT (execution_id) DO NOTHING
+                                                          """)
+                                        .bind("executionId", e.executionId().toString())
+                                        .bind("orderId", e.orderId().toString())
+                                        .bind("accountId", e.accountId().toString())
+                                        .bind("instrumentId", e.instrumentId().toString())
+                                        .bind("side", e.side().name())
+                                        .bind("quantity", e.quantity().value())
+                                        .bind("price", e.price().getAmount().value())
+                                        .bind("currency", e.price().getCurrency().toString())
+                                        .bind("closedAs", e.closedAs().name())
+                                        .execute();
     }
 }

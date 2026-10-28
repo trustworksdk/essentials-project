@@ -15,10 +15,11 @@
  */
 package dk.trustworks.essentials.examples.trading.orders.views.unknown_exchange_orders;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.orders.types.OrderId;
 import dk.trustworks.essentials.types.*;
-import org.springframework.jdbc.core.*;
+import org.jdbi.v3.core.mapper.RowMapper;
 import org.springframework.stereotype.Service;
 
 import java.time.*;
@@ -28,7 +29,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 @Service
 public class UnknownExchangeOrdersQuery {
-    private static final RowMapper<UnknownExchangeFill> ROW = (rs, rowNum) ->
+    private static final RowMapper<UnknownExchangeFill> ROW = (rs, ctx) ->
             new UnknownExchangeFill(OrderId.of(rs.getString("order_id")),
                                     ExecutionId.of(rs.getString("execution_id")),
                                     Quantity.of(rs.getLong("quantity")),
@@ -37,20 +38,22 @@ public class UnknownExchangeOrdersQuery {
                                     rs.getObject("settlement_date", LocalDate.class),
                                     rs.getObject("recorded_at", OffsetDateTime.class));
 
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public UnknownExchangeOrdersQuery(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public UnknownExchangeOrdersQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     /**
      * Newest first.
      */
     public List<UnknownExchangeFill> fills() {
-        return jdbcTemplate.query("""
-                                          SELECT order_id, execution_id, quantity, price, currency, trade_date, settlement_date, recorded_at
-                                          FROM projection_unknown_exchange_fills
-                                          ORDER BY recorded_at DESC, execution_id
-                                          """, ROW);
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
+                                                                                    SELECT order_id, execution_id, quantity, price, currency, trade_date, settlement_date, recorded_at
+                                                                                    FROM projection_unknown_exchange_fills
+                                                                                    ORDER BY recorded_at DESC, execution_id
+                                                                                    """)
+                                                                   .map(ROW)
+                                                                   .list());
     }
 }

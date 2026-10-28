@@ -21,36 +21,35 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.orders.events.UnknownExchangeOrderFilled;
 import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-
 /**
  * Projects the {@code UnknownExchangeOrder} operator cases into {@code projection_unknown_exchange_fills}, one row per
  * execution, so an operator sees every fill nobody booked.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
+ * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
+ * which opens one.
  */
 @Service
 public class UnknownExchangeOrdersProjection extends TradingDemoViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
-
-    public UnknownExchangeOrdersProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
+    public UnknownExchangeOrdersProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_unknown_exchange_fills (
-                                              execution_id VARCHAR PRIMARY KEY,
-                                              order_id VARCHAR NOT NULL,
-                                              quantity BIGINT NOT NULL,
-                                              price NUMERIC(24, 6) NOT NULL,
-                                              currency VARCHAR NOT NULL,
-                                              trade_date DATE NOT NULL,
-                                              settlement_date DATE NOT NULL,
-                                              recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          )
-                                          """);
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_unknown_exchange_fills (
+                                                                                       execution_id VARCHAR PRIMARY KEY,
+                                                                                       order_id VARCHAR NOT NULL,
+                                                                                       quantity BIGINT NOT NULL,
+                                                                                       price NUMERIC(24, 6) NOT NULL,
+                                                                                       currency VARCHAR NOT NULL,
+                                                                                       trade_date DATE NOT NULL,
+                                                                                       settlement_date DATE NOT NULL,
+                                                                                       recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                                                   )
+                                                                                   """));
     }
 
     @Override
@@ -65,17 +64,18 @@ public class UnknownExchangeOrdersProjection extends TradingDemoViewEventProcess
 
     @MessageHandler
     void handle(UnknownExchangeOrderFilled e) {
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_unknown_exchange_fills (execution_id, order_id, quantity, price, currency, trade_date, settlement_date)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                                    ON CONFLICT (execution_id) DO NOTHING
-                                    """,
-                            e.executionId().toString(),
-                            e.orderId().toString(),
-                            e.quantity().value(),
-                            e.price().getAmount().value(),
-                            e.price().getCurrency().toString(),
-                            e.tradeDate(),
-                            e.settlementDate());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          INSERT INTO projection_unknown_exchange_fills (execution_id, order_id, quantity, price, currency, trade_date, settlement_date)
+                                                          VALUES (:executionId, :orderId, :quantity, :price, :currency, :tradeDate, :settlementDate)
+                                                          ON CONFLICT (execution_id) DO NOTHING
+                                                          """)
+                                        .bind("executionId", e.executionId().toString())
+                                        .bind("orderId", e.orderId().toString())
+                                        .bind("quantity", e.quantity().value())
+                                        .bind("price", e.price().getAmount().value())
+                                        .bind("currency", e.price().getCurrency().toString())
+                                        .bind("tradeDate", e.tradeDate())
+                                        .bind("settlementDate", e.settlementDate())
+                                        .execute();
     }
 }

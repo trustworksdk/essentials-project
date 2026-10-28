@@ -16,8 +16,9 @@
 
 package dk.trustworks.essentials.examples.trading.settlement.views.settlements;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.examples.trading.settlement.types.SettlementState;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.jdbi.v3.core.statement.StatementContext;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -33,25 +34,33 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public class SettlementsAPI {
     private static final String SELECT = "SELECT execution_id, account_id, instrument_id, side, amount, currency, intended_settlement_date, state, outcome, reason FROM projection_settlement ";
 
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public SettlementsAPI(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public SettlementsAPI(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     @GetMapping
     public List<SettlementView> settlements(@RequestParam(name = "accountId", required = false) String accountId) {
-        return accountId == null
-               ? jdbcTemplate.query(SELECT + "ORDER BY updated_at DESC LIMIT 500", this::map)
-               : jdbcTemplate.query(SELECT + "WHERE account_id = ? ORDER BY updated_at DESC", this::map, accountId);
+        return unitOfWorkFactory.withUnitOfWork(uow -> accountId == null
+                                                       ? uow.handle().createQuery(SELECT + "ORDER BY updated_at DESC LIMIT 500")
+                                                            .map(this::map)
+                                                            .list()
+                                                       : uow.handle().createQuery(SELECT + "WHERE account_id = :accountId ORDER BY updated_at DESC")
+                                                            .bind("accountId", accountId)
+                                                            .map(this::map)
+                                                            .list());
     }
 
     @GetMapping("/exceptions")
     public List<SettlementView> exceptions() {
-        return jdbcTemplate.query(SELECT + "WHERE state = ? ORDER BY updated_at DESC", this::map, SettlementState.ABANDONED.name());
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(SELECT + "WHERE state = :state ORDER BY updated_at DESC")
+                                                                   .bind("state", SettlementState.ABANDONED.name())
+                                                                   .map(this::map)
+                                                                   .list());
     }
 
-    private SettlementView map(java.sql.ResultSet rs, int row) throws java.sql.SQLException {
+    private SettlementView map(java.sql.ResultSet rs, StatementContext ctx) throws java.sql.SQLException {
         return new SettlementView(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getBigDecimal(5), rs.getString(6),
                                   rs.getDate(7).toLocalDate(), SettlementState.valueOf(rs.getString(8)), rs.getString(9), rs.getString(10));
     }

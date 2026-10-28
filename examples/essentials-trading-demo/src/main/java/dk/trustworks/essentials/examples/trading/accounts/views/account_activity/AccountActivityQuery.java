@@ -16,8 +16,8 @@
 
 package dk.trustworks.essentials.examples.trading.accounts.views.account_activity;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.AccountId;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -26,10 +26,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 @Service
 public class AccountActivityQuery {
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public AccountActivityQuery(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public AccountActivityQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     /**
@@ -37,22 +37,23 @@ public class AccountActivityQuery {
      */
     public List<ActivityEntry> latest(AccountId accountId, int limit) {
         requireNonNull(accountId, "No accountId provided");
-        return jdbcTemplate.query("""
-                                          SELECT generation, event_order, kind, reference, description, cash_effect
-                                          FROM projection_account_activity
-                                          WHERE account_id = ?
-                                          ORDER BY generation DESC, event_order DESC
-                                          LIMIT ?
-                                          """,
-                                  (rs, rowNum) -> new ActivityEntry(accountId,
-                                                                    rs.getLong("generation"),
-                                                                    rs.getLong("event_order"),
-                                                                    rs.getString("kind"),
-                                                                    rs.getString("reference"),
-                                                                    rs.getString("description"),
-                                                                    rs.getBigDecimal("cash_effect")),
-                                  accountId.toString(),
-                                  Math.clamp(limit, 1, 1000));
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
+                                                                                    SELECT generation, event_order, kind, reference, description, cash_effect
+                                                                                    FROM projection_account_activity
+                                                                                    WHERE account_id = :accountId
+                                                                                    ORDER BY generation DESC, event_order DESC
+                                                                                    LIMIT :limit
+                                                                                    """)
+                                                                   .bind("accountId", accountId.toString())
+                                                                   .bind("limit", Math.clamp(limit, 1, 1000))
+                                                                   .map((rs, ctx) -> new ActivityEntry(accountId,
+                                                                                                       rs.getLong("generation"),
+                                                                                                       rs.getLong("event_order"),
+                                                                                                       rs.getString("kind"),
+                                                                                                       rs.getString("reference"),
+                                                                                                       rs.getString("description"),
+                                                                                                       rs.getBigDecimal("cash_effect")))
+                                                                   .list());
     }
 
     /**
@@ -61,9 +62,10 @@ public class AccountActivityQuery {
      */
     public long countEntriesForAccountsStartingWith(String accountIdPrefix) {
         requireNonNull(accountIdPrefix, "No accountIdPrefix provided");
-        var count = jdbcTemplate.queryForObject("SELECT count(*) FROM projection_account_activity WHERE account_id LIKE ?",
-                                                Long.class,
-                                                accountIdPrefix.replace("%", "\\%").replace("_", "\\_") + "%");
+        var count = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("SELECT count(*) FROM projection_account_activity WHERE account_id LIKE :accountIdPattern")
+                                                               .bind("accountIdPattern", accountIdPrefix.replace("%", "\\%").replace("_", "\\_") + "%")
+                                                               .mapTo(Long.class)
+                                                               .one());
         return count == null ? 0 : count;
     }
 }

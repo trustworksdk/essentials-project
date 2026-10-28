@@ -16,9 +16,9 @@
 
 package dk.trustworks.essentials.examples.trading.orders.views.account_owners;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.AccountId;
 import dk.trustworks.essentials.examples.trading.identity.types.AuthenticatedUser;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -29,10 +29,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 @Service
 public class AccountOwnersQuery {
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public AccountOwnersQuery(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public AccountOwnersQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     /**
@@ -44,7 +44,10 @@ public class AccountOwnersQuery {
         if (caller.isOperator()) {
             return true;
         }
-        var owners = jdbcTemplate.queryForList("SELECT owner_id FROM projection_orders_account_owner WHERE account_id = ?", String.class, accountId.toString());
+        var owners = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("SELECT owner_id FROM projection_orders_account_owner WHERE account_id = :accountId")
+                                                                .bind("accountId", accountId.toString())
+                                                                .mapTo(String.class)
+                                                                .list());
         return owners.contains(caller.userId().toString());
     }
 }

@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.reconciliation.views.bank_statement_breaks;
 
-import org.springframework.jdbc.core.JdbcTemplate;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import org.springframework.stereotype.Service;
 
 import java.sql.Date;
@@ -37,23 +37,24 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 @Service
 public class BankStatementBreaksQuery {
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public BankStatementBreaksQuery(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public BankStatementBreaksQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     public record StatementSummary(String statementId, LocalDate businessDate, String currency, int entries, int breaks) {
     }
 
     public List<StatementSummary> statements() {
-        return jdbcTemplate.query("""
-                                          SELECT s.statement_id, s.business_date, s.currency, count(e.entry_id)
-                                          FROM bank_statement s LEFT JOIN bank_statement_entry e ON e.statement_id = s.statement_id
-                                          GROUP BY s.statement_id, s.business_date, s.currency
-                                          ORDER BY s.business_date DESC, s.statement_id
-                                          """,
-                                  (rs, row) -> new StatementSummary(rs.getString(1), rs.getDate(2).toLocalDate(), rs.getString(3), rs.getInt(4), breaksOf(rs.getString(1)).size()));
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
+                                                                                    SELECT s.statement_id, s.business_date, s.currency, count(e.entry_id)
+                                                                                    FROM bank_statement s LEFT JOIN bank_statement_entry e ON e.statement_id = s.statement_id
+                                                                                    GROUP BY s.statement_id, s.business_date, s.currency
+                                                                                    ORDER BY s.business_date DESC, s.statement_id
+                                                                                    """)
+                                                                   .map((rs, ctx) -> new StatementSummary(rs.getString(1), rs.getDate(2).toLocalDate(), rs.getString(3), rs.getInt(4), breaksOf(rs.getString(1)).size()))
+                                                                   .list());
     }
 
     /**
@@ -62,65 +63,75 @@ public class BankStatementBreaksQuery {
     public Map<String, LocalDate> statementsFrom(LocalDate from) {
         requireNonNull(from, "No from provided");
         var statements = new LinkedHashMap<String, LocalDate>();
-        jdbcTemplate.query("SELECT statement_id, business_date FROM bank_statement WHERE business_date >= ? ORDER BY business_date",
-                           rs -> {
-                               statements.put(rs.getString(1), rs.getDate(2).toLocalDate());
-                           },
-                           java.sql.Date.valueOf(from));
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createQuery("SELECT statement_id, business_date FROM bank_statement WHERE business_date >= :from ORDER BY business_date")
+                                                     .bind("from", java.sql.Date.valueOf(from))
+                                                     .reduceResultSet(statements, (acc, rs, ctx) -> {
+                                                         acc.put(rs.getString(1), rs.getDate(2).toLocalDate());
+                                                         return acc;
+                                                     }));
         return statements;
     }
 
     public Optional<LocalDate> businessDateOf(String statementId) {
-        return jdbcTemplate.query("SELECT business_date FROM bank_statement WHERE statement_id = ?", (rs, row) -> rs.getDate(1).toLocalDate(), statementId).stream().findFirst();
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("SELECT business_date FROM bank_statement WHERE statement_id = :statementId")
+                                                                   .bind("statementId", statementId)
+                                                                   .map((rs, ctx) -> rs.getDate(1).toLocalDate())
+                                                                   .findFirst());
     }
 
     public List<StatementBreak> breaksOf(String statementId) {
         requireNonNull(statementId, "No statementId provided");
         var breaks = new ArrayList<StatementBreak>();
-        jdbcTemplate.query("""
-                                   SELECT e.end_to_end_id, e.kind, e.amount, p.kind, p.amount, e.payment_id, p.payment_id
-                                   FROM bank_statement_entry e LEFT JOIN projection_reconciliation_payment p ON p.reference = e.end_to_end_id
-                                   WHERE e.statement_id = ?
-                                   ORDER BY e.entry_id
-                                   """,
-                           rs -> {
-                               var reference = rs.getString(1);
-                               var entryKind = rs.getString(2);
-                               var entryAmount = rs.getBigDecimal(3);
-                               var ourKind = rs.getString(4);
-                               var ourAmount = rs.getBigDecimal(5);
-                               var entryPaymentId = rs.getString(6);
-                               var ourPaymentId = rs.getString(7);
-                               // Our reference on a payment the gateway never took for us: a copied or invented entry
-                               if (ourKind == null || (ourPaymentId != null && !ourPaymentId.equals(entryPaymentId))) {
-                                   breaks.add(new StatementBreak(statementId, StatementBreak.Kind.UNKNOWN_ENTRY, reference, entryKind, entryAmount, null));
-                               } else if (!entryKind.startsWith(ourKind)) {
-                                   breaks.add(new StatementBreak(statementId, StatementBreak.Kind.KIND_MISMATCH, reference, entryKind, entryAmount, ourAmount));
-                               } else if (entryAmount.compareTo(ourAmount) != 0) {
-                                   breaks.add(new StatementBreak(statementId, StatementBreak.Kind.AMOUNT_MISMATCH, reference, entryKind, entryAmount, ourAmount));
-                               }
-                           },
-                           statementId);
-        var statement = jdbcTemplate.query("SELECT business_date, currency FROM bank_statement WHERE statement_id = ?",
-                                           (rs, row) -> new Object[]{rs.getDate(1), rs.getString(2)}, statementId);
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createQuery("""
+                                                                              SELECT e.end_to_end_id, e.kind, e.amount, p.kind, p.amount, e.payment_id, p.payment_id
+                                                                              FROM bank_statement_entry e LEFT JOIN projection_reconciliation_payment p ON p.reference = e.end_to_end_id
+                                                                              WHERE e.statement_id = :statementId
+                                                                              ORDER BY e.entry_id
+                                                                              """)
+                                                     .bind("statementId", statementId)
+                                                     .reduceResultSet(breaks, (acc, rs, ctx) -> {
+                                                         var reference = rs.getString(1);
+                                                         var entryKind = rs.getString(2);
+                                                         var entryAmount = rs.getBigDecimal(3);
+                                                         var ourKind = rs.getString(4);
+                                                         var ourAmount = rs.getBigDecimal(5);
+                                                         var entryPaymentId = rs.getString(6);
+                                                         var ourPaymentId = rs.getString(7);
+                                                         // Our reference on a payment the gateway never took for us: a copied or invented entry
+                                                         if (ourKind == null || (ourPaymentId != null && !ourPaymentId.equals(entryPaymentId))) {
+                                                             acc.add(new StatementBreak(statementId, StatementBreak.Kind.UNKNOWN_ENTRY, reference, entryKind, entryAmount, null));
+                                                         } else if (!entryKind.startsWith(ourKind)) {
+                                                             acc.add(new StatementBreak(statementId, StatementBreak.Kind.KIND_MISMATCH, reference, entryKind, entryAmount, ourAmount));
+                                                         } else if (entryAmount.compareTo(ourAmount) != 0) {
+                                                             acc.add(new StatementBreak(statementId, StatementBreak.Kind.AMOUNT_MISMATCH, reference, entryKind, entryAmount, ourAmount));
+                                                         }
+                                                         return acc;
+                                                     }));
+        var statement = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("SELECT business_date, currency FROM bank_statement WHERE statement_id = :statementId")
+                                                                         .bind("statementId", statementId)
+                                                                         .map((rs, ctx) -> new Object[]{rs.getDate(1), rs.getString(2)})
+                                                                         .list());
         if (statement.isEmpty()) {
             return breaks;
         }
         var businessDate = (Date) statement.getFirst()[0];
         var currency     = (String) statement.getFirst()[1];
-        jdbcTemplate.query("""
-                                   SELECT p.reference, p.kind, p.amount, CASE WHEN p.completed_on = ? THEN p.kind ELSE p.kind || '_RETURN' END
-                                   FROM projection_reconciliation_payment p
-                                   WHERE p.currency = ? AND (p.completed_on = ? OR p.returned_on = ?)
-                                     AND NOT EXISTS (SELECT 1 FROM bank_statement_entry e
-                                                     WHERE e.statement_id = ? AND e.end_to_end_id = p.reference
-                                                       AND e.kind = CASE WHEN p.completed_on = ? THEN p.kind ELSE p.kind || '_RETURN' END)
-                                   ORDER BY p.reference
-                                   """,
-                           rs -> {
-                               breaks.add(new StatementBreak(statementId, StatementBreak.Kind.MISSING_ENTRY, rs.getString(1), rs.getString(4), null, rs.getBigDecimal(3)));
-                           },
-                           businessDate, currency, businessDate, businessDate, statementId, businessDate);
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createQuery("""
+                                                                              SELECT p.reference, p.kind, p.amount, CASE WHEN p.completed_on = :businessDate THEN p.kind ELSE p.kind || '_RETURN' END
+                                                                              FROM projection_reconciliation_payment p
+                                                                              WHERE p.currency = :currency AND (p.completed_on = :businessDate OR p.returned_on = :businessDate)
+                                                                                AND NOT EXISTS (SELECT 1 FROM bank_statement_entry e
+                                                                                                WHERE e.statement_id = :statementId AND e.end_to_end_id = p.reference
+                                                                                                  AND e.kind = CASE WHEN p.completed_on = :businessDate THEN p.kind ELSE p.kind || '_RETURN' END)
+                                                                              ORDER BY p.reference
+                                                                              """)
+                                                     .bind("businessDate", businessDate)
+                                                     .bind("currency", currency)
+                                                     .bind("statementId", statementId)
+                                                     .reduceResultSet(breaks, (acc, rs, ctx) -> {
+                                                         acc.add(new StatementBreak(statementId, StatementBreak.Kind.MISSING_ENTRY, rs.getString(1), rs.getString(4), null, rs.getBigDecimal(3)));
+                                                         return acc;
+                                                     }));
         return breaks;
     }
 }

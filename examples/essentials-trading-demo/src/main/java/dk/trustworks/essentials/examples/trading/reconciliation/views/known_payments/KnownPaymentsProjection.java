@@ -23,38 +23,37 @@ import dk.trustworks.essentials.examples.trading.funding.events.*;
 import dk.trustworks.essentials.examples.trading.funding.types.FundingAggregateTypes;
 import dk.trustworks.essentials.types.Money;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.sql.Date;
 import java.time.LocalDate;
 import java.util.List;
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-
 /**
  * {@code reconciliation}'s own record of the brokerage's payments, projected from {@code funding}'s events - a
  * cross-BC {@code events/} import, so reconciliation never calls into {@code funding}: what was requested (kind,
  * amount), the gateway's id it was taken under, and the value dates of its completion and return. What a bank statement is checked against.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
+ * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
+ * which opens one.
  */
 @Service
 public class KnownPaymentsProjection extends TradingDemoViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
-
-    public KnownPaymentsProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
+    public KnownPaymentsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_reconciliation_payment (
-                                              reference VARCHAR PRIMARY KEY,
-                                              kind VARCHAR NOT NULL,
-                                              amount NUMERIC(24, 6) NOT NULL,
-                                              currency VARCHAR NOT NULL,
-                                              payment_id VARCHAR NULL,
-                                              completed_on DATE NULL,
-                                              returned_on DATE NULL
-                                          )
-                                          """);
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_reconciliation_payment (
+                                                                                       reference VARCHAR PRIMARY KEY,
+                                                                                       kind VARCHAR NOT NULL,
+                                                                                       amount NUMERIC(24, 6) NOT NULL,
+                                                                                       currency VARCHAR NOT NULL,
+                                                                                       payment_id VARCHAR NULL,
+                                                                                       completed_on DATE NULL,
+                                                                                       returned_on DATE NULL
+                                                                                   )
+                                                                                   """));
     }
 
     @Override
@@ -79,12 +78,20 @@ public class KnownPaymentsProjection extends TradingDemoViewEventProcessor {
 
     @MessageHandler
     void handle(DepositInitiated e) {
-        jdbcTemplate.update("UPDATE projection_reconciliation_payment SET payment_id = ? WHERE reference = ?", e.paymentId().toString(), e.depositId().toString());
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("UPDATE projection_reconciliation_payment SET payment_id = :paymentId WHERE reference = :reference")
+                                .bind("paymentId", e.paymentId().toString())
+                                .bind("reference", e.depositId().toString())
+                                .execute();
     }
 
     @MessageHandler
     void handle(WithdrawalInitiated e) {
-        jdbcTemplate.update("UPDATE projection_reconciliation_payment SET payment_id = ? WHERE reference = ?", e.paymentId().toString(), e.withdrawalId().toString());
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("UPDATE projection_reconciliation_payment SET payment_id = :paymentId WHERE reference = :reference")
+                                .bind("paymentId", e.paymentId().toString())
+                                .bind("reference", e.withdrawalId().toString())
+                                .execute();
     }
 
     @MessageHandler
@@ -108,11 +115,20 @@ public class KnownPaymentsProjection extends TradingDemoViewEventProcessor {
     }
 
     private void requested(String reference, String kind, Money amount) {
-        jdbcTemplate.update("INSERT INTO projection_reconciliation_payment (reference, kind, amount, currency) VALUES (?, ?, ?, ?) ON CONFLICT (reference) DO NOTHING",
-                            reference, kind, amount.getAmount().value(), amount.getCurrency().toString());
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("INSERT INTO projection_reconciliation_payment (reference, kind, amount, currency) VALUES (:reference, :kind, :amount, :currency) ON CONFLICT (reference) DO NOTHING")
+                                .bind("reference", reference)
+                                .bind("kind", kind)
+                                .bind("amount", amount.getAmount().value())
+                                .bind("currency", amount.getCurrency().toString())
+                                .execute();
     }
 
     private void on(String column, String reference, LocalDate valueDate) {
-        jdbcTemplate.update("UPDATE projection_reconciliation_payment SET " + column + " = ? WHERE reference = ?", Date.valueOf(valueDate), reference);
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("UPDATE projection_reconciliation_payment SET " + column + " = :valueDate WHERE reference = :reference")
+                                .bind("valueDate", Date.valueOf(valueDate))
+                                .bind("reference", reference)
+                                .execute();
     }
 }

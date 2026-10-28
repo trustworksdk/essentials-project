@@ -23,7 +23,6 @@ import dk.trustworks.essentials.examples.trading.reconciliation.aggregates.Recon
 import dk.trustworks.essentials.examples.trading.reconciliation.events.*;
 import dk.trustworks.essentials.examples.trading.reconciliation.types.*;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.sql.Date;
@@ -35,6 +34,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * Every reconciliation case and its history, for the operator and for {@code automations/open_cases}, which clears the
  * open ones whose break has gone.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
+ * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
+ * which opens one; the read methods go through {@code getUnitOfWorkFactory().withUnitOfWork(uow -> …)}, which joins the
+ * caller's unit of work or opens one.
  */
 @Service
 public class CasesProjection extends TradingDemoViewEventProcessor {
@@ -43,40 +48,37 @@ public class CasesProjection extends TradingDemoViewEventProcessor {
                                          FROM projection_reconciliation_case
                                          """;
 
-    private final JdbcTemplate jdbcTemplate;
-
-    public CasesProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
+    public CasesProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_reconciliation_case (
-                                              case_id VARCHAR PRIMARY KEY,
-                                              statement_id VARCHAR NOT NULL,
-                                              business_date DATE NOT NULL,
-                                              kind VARCHAR NOT NULL,
-                                              reference VARCHAR NOT NULL,
-                                              detail VARCHAR NOT NULL,
-                                              state VARCHAR NOT NULL,
-                                              assignee VARCHAR NULL,
-                                              resolution VARCHAR NULL,
-                                              note VARCHAR NULL,
-                                              adjustment_id VARCHAR NULL,
-                                              opened_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          )
-                                          """);
-        this.jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS projection_reconciliation_case_state ON projection_reconciliation_case (state)");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_reconciliation_case_history (
-                                              case_id VARCHAR NOT NULL,
-                                              seq BIGSERIAL,
-                                              event VARCHAR NOT NULL,
-                                              by_whom VARCHAR NULL,
-                                              detail VARCHAR NULL,
-                                              at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                              PRIMARY KEY (case_id, seq)
-                                          )
-                                          """);
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_reconciliation_case (
+                                                                                       case_id VARCHAR PRIMARY KEY,
+                                                                                       statement_id VARCHAR NOT NULL,
+                                                                                       business_date DATE NOT NULL,
+                                                                                       kind VARCHAR NOT NULL,
+                                                                                       reference VARCHAR NOT NULL,
+                                                                                       detail VARCHAR NOT NULL,
+                                                                                       state VARCHAR NOT NULL,
+                                                                                       assignee VARCHAR NULL,
+                                                                                       resolution VARCHAR NULL,
+                                                                                       note VARCHAR NULL,
+                                                                                       adjustment_id VARCHAR NULL,
+                                                                                       opened_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                                                                       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                                                   )
+                                                                                   """));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_reconciliation_case_state ON projection_reconciliation_case (state)"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_reconciliation_case_history (
+                                                                                       case_id VARCHAR NOT NULL,
+                                                                                       seq BIGSERIAL,
+                                                                                       event VARCHAR NOT NULL,
+                                                                                       by_whom VARCHAR NULL,
+                                                                                       detail VARCHAR NULL,
+                                                                                       at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                                                                       PRIMARY KEY (case_id, seq)
+                                                                                   )
+                                                                                   """));
     }
 
     @Override
@@ -91,11 +93,18 @@ public class CasesProjection extends TradingDemoViewEventProcessor {
 
     @MessageHandler
     void handle(CaseOpened e) {
-        var inserted = jdbcTemplate.update("""
-                                                   INSERT INTO projection_reconciliation_case (case_id, statement_id, business_date, kind, reference, detail, state)
-                                                   VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (case_id) DO NOTHING
-                                                   """,
-                                           e.caseId().toString(), e.statementId(), Date.valueOf(e.businessDate()), e.kind(), e.reference(), e.detail(), CaseState.OPEN.name());
+        var inserted = getRequiredUnitOfWork().handle().createUpdate("""
+                                                                         INSERT INTO projection_reconciliation_case (case_id, statement_id, business_date, kind, reference, detail, state)
+                                                                         VALUES (:caseId, :statementId, :businessDate, :kind, :reference, :detail, :state) ON CONFLICT (case_id) DO NOTHING
+                                                                         """)
+                                                       .bind("caseId", e.caseId().toString())
+                                                       .bind("statementId", e.statementId())
+                                                       .bind("businessDate", Date.valueOf(e.businessDate()))
+                                                       .bind("kind", e.kind())
+                                                       .bind("reference", e.reference())
+                                                       .bind("detail", e.detail())
+                                                       .bind("state", CaseState.OPEN.name())
+                                                       .execute();
         if (inserted > 0) {
             history(e.caseId(), "OPENED", null, e.detail());
         }
@@ -103,21 +112,35 @@ public class CasesProjection extends TradingDemoViewEventProcessor {
 
     @MessageHandler
     void handle(CaseAssigned e) {
-        jdbcTemplate.update("UPDATE projection_reconciliation_case SET state = ?, assignee = ?, updated_at = CURRENT_TIMESTAMP WHERE case_id = ?",
-                            CaseState.ASSIGNED.name(), e.assignee(), e.caseId().toString());
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("UPDATE projection_reconciliation_case SET state = :state, assignee = :assignee, updated_at = CURRENT_TIMESTAMP WHERE case_id = :caseId")
+                                .bind("state", CaseState.ASSIGNED.name())
+                                .bind("assignee", e.assignee())
+                                .bind("caseId", e.caseId().toString())
+                                .execute();
         history(e.caseId(), "ASSIGNED", e.assignedBy(), e.assignee());
     }
 
     @MessageHandler
     void handle(CaseResolved e) {
-        jdbcTemplate.update("UPDATE projection_reconciliation_case SET state = ?, resolution = ?, note = ?, adjustment_id = ?, updated_at = CURRENT_TIMESTAMP WHERE case_id = ?",
-                            CaseState.RESOLVED.name(), e.resolution().name(), e.note(), e.adjustmentId() != null ? e.adjustmentId().toString() : null, e.caseId().toString());
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("UPDATE projection_reconciliation_case SET state = :state, resolution = :resolution, note = :note, adjustment_id = :adjustmentId, updated_at = CURRENT_TIMESTAMP WHERE case_id = :caseId")
+                                .bind("state", CaseState.RESOLVED.name())
+                                .bind("resolution", e.resolution().name())
+                                .bind("note", e.note())
+                                .bind("adjustmentId", e.adjustmentId() != null ? e.adjustmentId().toString() : null)
+                                .bind("caseId", e.caseId().toString())
+                                .execute();
         history(e.caseId(), "RESOLVED", e.resolvedBy(), e.resolution() + (e.note().isBlank() ? "" : ": " + e.note()));
     }
 
     @MessageHandler
     void handle(CaseCleared e) {
-        jdbcTemplate.update("UPDATE projection_reconciliation_case SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE case_id = ?", CaseState.CLEARED.name(), e.caseId().toString());
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("UPDATE projection_reconciliation_case SET state = :state, updated_at = CURRENT_TIMESTAMP WHERE case_id = :caseId")
+                                .bind("state", CaseState.CLEARED.name())
+                                .bind("caseId", e.caseId().toString())
+                                .execute();
         history(e.caseId(), "CLEARED", null, null);
     }
 
@@ -125,28 +148,49 @@ public class CasesProjection extends TradingDemoViewEventProcessor {
      * @param state {@code null} for every state
      */
     public List<CaseView> cases(CaseState state) {
-        return state == null
-               ? jdbcTemplate.query(SELECT + "ORDER BY opened_at DESC LIMIT 500", (rs, row) -> map(rs, List.of()))
-               : jdbcTemplate.query(SELECT + "WHERE state = ? ORDER BY opened_at DESC", (rs, row) -> map(rs, List.of()), state.name());
+        return getUnitOfWorkFactory().withUnitOfWork(uow -> state == null
+                                                            ? uow.handle().createQuery(SELECT + "ORDER BY opened_at DESC LIMIT 500")
+                                                                 .map((rs, ctx) -> map(rs, List.<CaseView.HistoryEntry>of()))
+                                                                 .list()
+                                                            : uow.handle().createQuery(SELECT + "WHERE state = :state ORDER BY opened_at DESC")
+                                                                 .bind("state", state.name())
+                                                                 .map((rs, ctx) -> map(rs, List.<CaseView.HistoryEntry>of()))
+                                                                 .list());
     }
 
     /**
      * The cases an operator still has to work - open or assigned.
      */
     public List<CaseView> openCases() {
-        return jdbcTemplate.query(SELECT + "WHERE state IN (?, ?) ORDER BY opened_at", (rs, row) -> map(rs, List.of()), CaseState.OPEN.name(), CaseState.ASSIGNED.name());
+        return getUnitOfWorkFactory().withUnitOfWork(uow -> uow.handle().createQuery(SELECT + "WHERE state IN (:open, :assigned) ORDER BY opened_at")
+                                                               .bind("open", CaseState.OPEN.name())
+                                                               .bind("assigned", CaseState.ASSIGNED.name())
+                                                               .map((rs, ctx) -> map(rs, List.<CaseView.HistoryEntry>of()))
+                                                               .list());
     }
 
     public Optional<CaseView> caseWithHistory(String caseId) {
         requireNonNull(caseId, "No caseId provided");
-        var history = jdbcTemplate.query("SELECT event, by_whom, detail, at FROM projection_reconciliation_case_history WHERE case_id = ? ORDER BY seq",
-                                         (rs, row) -> new CaseView.HistoryEntry(rs.getString(1), rs.getString(2), rs.getString(3), rs.getTimestamp(4).toInstant()),
-                                         caseId);
-        return jdbcTemplate.query(SELECT + "WHERE case_id = ?", (rs, row) -> map(rs, history), caseId).stream().findFirst();
+        return getUnitOfWorkFactory().withUnitOfWork(uow -> {
+            var history = uow.handle().createQuery("SELECT event, by_whom, detail, at FROM projection_reconciliation_case_history WHERE case_id = :caseId ORDER BY seq")
+                             .bind("caseId", caseId)
+                             .map((rs, ctx) -> new CaseView.HistoryEntry(rs.getString(1), rs.getString(2), rs.getString(3), rs.getTimestamp(4).toInstant()))
+                             .list();
+            return uow.handle().createQuery(SELECT + "WHERE case_id = :caseId")
+                      .bind("caseId", caseId)
+                      .map((rs, ctx) -> map(rs, history))
+                      .findFirst();
+        });
     }
 
     private void history(CaseId caseId, String event, String by, String detail) {
-        jdbcTemplate.update("INSERT INTO projection_reconciliation_case_history (case_id, event, by_whom, detail) VALUES (?, ?, ?, ?)", caseId.toString(), event, by, detail);
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("INSERT INTO projection_reconciliation_case_history (case_id, event, by_whom, detail) VALUES (:caseId, :event, :by, :detail)")
+                                .bind("caseId", caseId.toString())
+                                .bind("event", event)
+                                .bind("by", by)
+                                .bind("detail", detail)
+                                .execute();
     }
 
     private static CaseView map(ResultSet rs, List<CaseView.HistoryEntry> history) throws SQLException {

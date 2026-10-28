@@ -22,7 +22,6 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.accounts.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.sql.Date;
@@ -38,22 +37,25 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <p>
  * Idempotent per deposit, so a redelivered event changes nothing; keyed by deposit id, not by stream, because an
  * uncleared deposit carries into the account's next generation and clears there.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
+ * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
+ * which opens one; {@link #clearingOnOrBefore(LocalDate)} reads through {@code getUnitOfWorkFactory().withUnitOfWork(uow -> …)},
+ * which joins the caller's unit of work or opens one.
  */
 @Service
 public class UnclearedDepositsProjection extends TradingDemoViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
-
-    public UnclearedDepositsProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
+    public UnclearedDepositsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_uncleared_deposit (
-                                              deposit_id VARCHAR PRIMARY KEY,
-                                              account_id VARCHAR NOT NULL,
-                                              clears_on DATE NOT NULL
-                                          )
-                                          """);
-        this.jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS projection_uncleared_deposit_clears_on ON projection_uncleared_deposit (clears_on)");
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_uncleared_deposit (
+                                                                                       deposit_id VARCHAR PRIMARY KEY,
+                                                                                       account_id VARCHAR NOT NULL,
+                                                                                       clears_on DATE NOT NULL
+                                                                                   )
+                                                                                   """));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_uncleared_deposit_clears_on ON projection_uncleared_deposit (clears_on)"));
     }
 
     @Override
@@ -68,18 +70,28 @@ public class UnclearedDepositsProjection extends TradingDemoViewEventProcessor {
 
     @MessageHandler
     void handle(DepositCredited e) {
-        jdbcTemplate.update("INSERT INTO projection_uncleared_deposit (deposit_id, account_id, clears_on) VALUES (?, ?, ?) ON CONFLICT (deposit_id) DO NOTHING",
-                            e.depositId().toString(), e.accountId().toString(), Date.valueOf(e.clearsOn()));
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("INSERT INTO projection_uncleared_deposit (deposit_id, account_id, clears_on) VALUES (:depositId, :accountId, :clearsOn) ON CONFLICT (deposit_id) DO NOTHING")
+                                .bind("depositId", e.depositId().toString())
+                                .bind("accountId", e.accountId().toString())
+                                .bind("clearsOn", Date.valueOf(e.clearsOn()))
+                                .execute();
     }
 
     @MessageHandler
     void handle(DepositCleared e) {
-        jdbcTemplate.update("DELETE FROM projection_uncleared_deposit WHERE deposit_id = ?", e.depositId().toString());
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("DELETE FROM projection_uncleared_deposit WHERE deposit_id = :depositId")
+                                .bind("depositId", e.depositId().toString())
+                                .execute();
     }
 
     @MessageHandler
     void handle(DepositReturned e) {
-        jdbcTemplate.update("DELETE FROM projection_uncleared_deposit WHERE deposit_id = ?", e.depositId().toString());
+        getRequiredUnitOfWork().handle()
+                                .createUpdate("DELETE FROM projection_uncleared_deposit WHERE deposit_id = :depositId")
+                                .bind("depositId", e.depositId().toString())
+                                .execute();
     }
 
     /**
@@ -87,9 +99,11 @@ public class UnclearedDepositsProjection extends TradingDemoViewEventProcessor {
      */
     public List<UnclearedDeposit> clearingOnOrBefore(LocalDate businessDate) {
         requireNonNull(businessDate, "No businessDate provided");
-        return jdbcTemplate.query("SELECT account_id, deposit_id, clears_on FROM projection_uncleared_deposit WHERE clears_on <= ? ORDER BY clears_on, deposit_id",
-                                  (rs, row) -> new UnclearedDeposit(AccountId.of(rs.getString(1)), DepositId.of(rs.getString(2)), rs.getDate(3).toLocalDate()),
-                                  Date.valueOf(businessDate));
+        return getUnitOfWorkFactory().withUnitOfWork(uow -> uow.handle()
+                                                               .createQuery("SELECT account_id, deposit_id, clears_on FROM projection_uncleared_deposit WHERE clears_on <= :businessDate ORDER BY clears_on, deposit_id")
+                                                               .bind("businessDate", Date.valueOf(businessDate))
+                                                               .map((rs, ctx) -> new UnclearedDeposit(AccountId.of(rs.getString(1)), DepositId.of(rs.getString(2)), rs.getDate(3).toLocalDate()))
+                                                               .list());
     }
 
     public record UnclearedDeposit(AccountId accountId, DepositId depositId, LocalDate clearsOn) {

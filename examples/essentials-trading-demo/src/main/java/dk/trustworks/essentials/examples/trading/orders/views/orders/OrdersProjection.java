@@ -23,48 +23,47 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMes
 import dk.trustworks.essentials.examples.trading.orders.events.*;
 import dk.trustworks.essentials.examples.trading.orders.types.*;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-
 /**
  * Projects orders into {@code projection_orders}, one row per order. Every event sets absolute values, guarded by the
  * row's last applied {@code EventOrder}, so a redelivered or late event never moves the status back.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
+ * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
+ * which opens one.
  */
 @Service
 public class OrdersProjection extends TradingDemoViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
-
-    public OrdersProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
+    public OrdersProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_orders (
-                                              order_id VARCHAR PRIMARY KEY,
-                                              account_id VARCHAR NOT NULL,
-                                              instrument_id VARCHAR NOT NULL,
-                                              side VARCHAR NOT NULL,
-                                              type VARCHAR NOT NULL,
-                                              quantity BIGINT NOT NULL,
-                                              limit_price NUMERIC(24, 6),
-                                              currency VARCHAR,
-                                              time_in_force VARCHAR NOT NULL,
-                                              status VARCHAR NOT NULL,
-                                              filled_quantity BIGINT NOT NULL,
-                                              average_fill_price NUMERIC(24, 6),
-                                              exchange_order_id VARCHAR,
-                                              reason VARCHAR,
-                                              last_event_order BIGINT NOT NULL,
-                                              placed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          )
-                                          """);
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_orders (
+                                                                                       order_id VARCHAR PRIMARY KEY,
+                                                                                       account_id VARCHAR NOT NULL,
+                                                                                       instrument_id VARCHAR NOT NULL,
+                                                                                       side VARCHAR NOT NULL,
+                                                                                       type VARCHAR NOT NULL,
+                                                                                       quantity BIGINT NOT NULL,
+                                                                                       limit_price NUMERIC(24, 6),
+                                                                                       currency VARCHAR,
+                                                                                       time_in_force VARCHAR NOT NULL,
+                                                                                       status VARCHAR NOT NULL,
+                                                                                       filled_quantity BIGINT NOT NULL,
+                                                                                       average_fill_price NUMERIC(24, 6),
+                                                                                       exchange_order_id VARCHAR,
+                                                                                       reason VARCHAR,
+                                                                                       last_event_order BIGINT NOT NULL,
+                                                                                       placed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                                                                       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                                                   )
+                                                                                   """));
         // Added after the table first shipped; a demo database from before keeps working
-        this.jdbcTemplate.execute("ALTER TABLE projection_orders ADD COLUMN IF NOT EXISTS average_fill_price NUMERIC(24, 6)");
-        this.jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS projection_orders_account ON projection_orders (account_id, placed_at)");
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("ALTER TABLE projection_orders ADD COLUMN IF NOT EXISTS average_fill_price NUMERIC(24, 6)"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_orders_account ON projection_orders (account_id, placed_at)"));
     }
 
     @Override
@@ -79,23 +78,24 @@ public class OrdersProjection extends TradingDemoViewEventProcessor {
 
     @MessageHandler
     void handle(OrderPlaced e, OrderedMessage message) {
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_orders (order_id, account_id, instrument_id, side, type, quantity, limit_price, currency,
-                                                                   time_in_force, status, filled_quantity, last_event_order)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-                                    ON CONFLICT (order_id) DO NOTHING
-                                    """,
-                            e.orderId().toString(),
-                            e.accountId().toString(),
-                            e.instrumentId().toString(),
-                            e.side().name(),
-                            e.type().name(),
-                            e.quantity().value(),
-                            e.limitPrice() == null ? null : e.limitPrice().getAmount().value(),
-                            e.limitPrice() == null ? null : e.limitPrice().getCurrency().toString(),
-                            e.timeInForce().name(),
-                            OrderStatus.PENDING.name(),
-                            message.getOrder());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          INSERT INTO projection_orders (order_id, account_id, instrument_id, side, type, quantity, limit_price, currency,
+                                                                                         time_in_force, status, filled_quantity, last_event_order)
+                                                          VALUES (:orderId, :accountId, :instrumentId, :side, :type, :quantity, :limitPrice, :currency, :timeInForce, :status, 0, :lastEventOrder)
+                                                          ON CONFLICT (order_id) DO NOTHING
+                                                          """)
+                                        .bind("orderId", e.orderId().toString())
+                                        .bind("accountId", e.accountId().toString())
+                                        .bind("instrumentId", e.instrumentId().toString())
+                                        .bind("side", e.side().name())
+                                        .bind("type", e.type().name())
+                                        .bind("quantity", e.quantity().value())
+                                        .bind("limitPrice", e.limitPrice() == null ? null : e.limitPrice().getAmount().value())
+                                        .bind("currency", e.limitPrice() == null ? null : e.limitPrice().getCurrency().toString())
+                                        .bind("timeInForce", e.timeInForce().name())
+                                        .bind("status", OrderStatus.PENDING.name())
+                                        .bind("lastEventOrder", message.getOrder())
+                                        .execute();
     }
 
     @MessageHandler
@@ -153,7 +153,12 @@ public class OrdersProjection extends TradingDemoViewEventProcessor {
         args[values.length] = message.getOrder();
         args[values.length + 1] = e.orderId().toString();
         args[values.length + 2] = message.getOrder();
-        jdbcTemplate.update("UPDATE projection_orders SET " + set + ", last_event_order = ?, updated_at = CURRENT_TIMESTAMP " +
-                            "WHERE order_id = ? AND last_event_order < ?", args);
+        var update = getRequiredUnitOfWork().handle()
+                                            .createUpdate("UPDATE projection_orders SET " + set + ", last_event_order = ?, updated_at = CURRENT_TIMESTAMP " +
+                                                          "WHERE order_id = ? AND last_event_order < ?");
+        for (var i = 0; i < args.length; i++) {
+            update.bind(i, args[i]);
+        }
+        update.execute();
     }
 }

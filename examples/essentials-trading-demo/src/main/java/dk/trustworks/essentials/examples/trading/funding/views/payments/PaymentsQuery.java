@@ -16,10 +16,11 @@
 
 package dk.trustworks.essentials.examples.trading.funding.views.payments;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.AccountId;
 import dk.trustworks.essentials.examples.trading.funding.types.*;
 import dk.trustworks.essentials.types.Money;
-import org.springframework.jdbc.core.*;
+import org.jdbi.v3.core.statement.StatementContext;
 import org.springframework.stereotype.Service;
 
 import java.sql.*;
@@ -35,24 +36,31 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public class PaymentsQuery {
     private static final String SELECT = "SELECT reference, kind, account_id, amount, currency, status, payment_id, value_date, reason, iban, requested_at, updated_at FROM projection_funding_payment ";
 
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public PaymentsQuery(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public PaymentsQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     public List<PaymentView> paymentsOf(AccountId accountId) {
         requireNonNull(accountId, "No accountId provided");
-        return jdbcTemplate.query(SELECT + "WHERE account_id = ? ORDER BY requested_at DESC, reference", PaymentsQuery::map, accountId.toString());
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(SELECT + "WHERE account_id = :accountId ORDER BY requested_at DESC, reference")
+                                                                   .bind("accountId", accountId.toString())
+                                                                   .map(PaymentsQuery::map)
+                                                                   .list());
     }
 
     public Optional<PaymentView> payment(AccountId accountId, String reference) {
         requireNonNull(accountId, "No accountId provided");
         requireNonNull(reference, "No reference provided");
-        return jdbcTemplate.query(SELECT + "WHERE account_id = ? AND reference = ?", PaymentsQuery::map, accountId.toString(), reference).stream().findFirst();
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(SELECT + "WHERE account_id = :accountId AND reference = :reference")
+                                                                   .bind("accountId", accountId.toString())
+                                                                   .bind("reference", reference)
+                                                                   .map(PaymentsQuery::map)
+                                                                   .findFirst());
     }
 
-    private static PaymentView map(ResultSet rs, int row) throws SQLException {
+    private static PaymentView map(ResultSet rs, StatementContext ctx) throws SQLException {
         var valueDate = rs.getDate("value_date");
         return new PaymentView(rs.getString("reference"),
                                PaymentKind.valueOf(rs.getString("kind")),

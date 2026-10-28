@@ -25,47 +25,46 @@ import dk.trustworks.essentials.examples.trading.accounts.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.List;
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-
 /**
  * Projects positions into {@code projection_positions}, one row per account and instrument. Versioned per account in
  * {@code projection_positions_version} — the same generation + last {@code EventOrder} guard as the overview, for the
  * same reason (deltas, redelivery). The guard and the row update commit together in the view's unit of work.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
+ * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * constructor's DDL and the reset run where none is active, so they go through
+ * {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)}, which opens one.
  */
 @Service
 public class PositionsProjection extends TradingDemoViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
-
-    public PositionsProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
+    public PositionsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_positions_version (
-                                              account_id VARCHAR PRIMARY KEY,
-                                              currency VARCHAR NOT NULL,
-                                              generation BIGINT NOT NULL,
-                                              last_event_order BIGINT NOT NULL
-                                          )
-                                          """);
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_positions (
-                                              account_id VARCHAR NOT NULL,
-                                              instrument_id VARCHAR NOT NULL,
-                                              settled BIGINT NOT NULL DEFAULT 0,
-                                              pending_in BIGINT NOT NULL DEFAULT 0,
-                                              pending_out BIGINT NOT NULL DEFAULT 0,
-                                              reserved BIGINT NOT NULL DEFAULT 0,
-                                              cost_basis NUMERIC(24, 6) NOT NULL DEFAULT 0,
-                                              currency VARCHAR NOT NULL,
-                                              PRIMARY KEY (account_id, instrument_id)
-                                          )
-                                          """);
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_positions_version (
+                                                                                       account_id VARCHAR PRIMARY KEY,
+                                                                                       currency VARCHAR NOT NULL,
+                                                                                       generation BIGINT NOT NULL,
+                                                                                       last_event_order BIGINT NOT NULL
+                                                                                   )
+                                                                                   """));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_positions (
+                                                                                       account_id VARCHAR NOT NULL,
+                                                                                       instrument_id VARCHAR NOT NULL,
+                                                                                       settled BIGINT NOT NULL DEFAULT 0,
+                                                                                       pending_in BIGINT NOT NULL DEFAULT 0,
+                                                                                       pending_out BIGINT NOT NULL DEFAULT 0,
+                                                                                       reserved BIGINT NOT NULL DEFAULT 0,
+                                                                                       cost_basis NUMERIC(24, 6) NOT NULL DEFAULT 0,
+                                                                                       currency VARCHAR NOT NULL,
+                                                                                       PRIMARY KEY (account_id, instrument_id)
+                                                                                   )
+                                                                                   """));
     }
 
     @Override
@@ -81,25 +80,39 @@ public class PositionsProjection extends TradingDemoViewEventProcessor {
     @MessageHandler
     void handle(AccountOpened event, OrderedMessage message) {
         var generation = event.accountStreamId().generation();
-        var newer = jdbcTemplate.update("""
-                                                INSERT INTO projection_positions_version (account_id, currency, generation, last_event_order) VALUES (?, ?, ?, ?)
+        var handle     = getRequiredUnitOfWork().handle();
+        var newer = handle.createUpdate("""
+                                                INSERT INTO projection_positions_version (account_id, currency, generation, last_event_order)
+                                                VALUES (:accountId, :currency, :generation, :lastEventOrder)
                                                 ON CONFLICT (account_id) DO UPDATE SET generation = EXCLUDED.generation, last_event_order = EXCLUDED.last_event_order
                                                 WHERE projection_positions_version.generation < EXCLUDED.generation
-                                                """,
-                                        event.accountId().toString(), event.currency().toString(), generation, message.getOrder());
+                                                """)
+                          .bind("accountId", event.accountId().toString())
+                          .bind("currency", event.currency().toString())
+                          .bind("generation", generation)
+                          .bind("lastEventOrder", message.getOrder())
+                          .execute();
         if (newer == 0) {
             return;
         }
         var accountId = event.accountId().toString();
         var currency  = event.currency().toString();
-        jdbcTemplate.update("DELETE FROM projection_positions WHERE account_id = ?", accountId);
+        handle.createUpdate("DELETE FROM projection_positions WHERE account_id = :accountId")
+              .bind("accountId", accountId)
+              .execute();
         for (var position : event.openingBalances().positions()) {
-            jdbcTemplate.update("""
+            handle.createUpdate("""
                                         INSERT INTO projection_positions (account_id, instrument_id, settled, pending_in, pending_out, reserved, cost_basis, currency)
-                                        VALUES (?, ?, ?, ?, ?, 0, ?, ?)
-                                        """,
-                                accountId, position.instrumentId().toString(), position.settled().value(), position.pendingIn().value(),
-                                position.pendingOut().value(), position.costBasis().getAmount().value(), currency);
+                                        VALUES (:accountId, :instrumentId, :settled, :pendingIn, :pendingOut, 0, :costBasis, :currency)
+                                        """)
+                  .bind("accountId", accountId)
+                  .bind("instrumentId", position.instrumentId().toString())
+                  .bind("settled", position.settled().value())
+                  .bind("pendingIn", position.pendingIn().value())
+                  .bind("pendingOut", position.pendingOut().value())
+                  .bind("costBasis", position.costBasis().getAmount().value())
+                  .bind("currency", currency)
+                  .execute();
         }
         for (var reservation : event.openingBalances().reservations()) {
             change(accountId, reservation.instrumentId(), currency, 0, 0, 0, reservation.remaining().value(), BigDecimal.ZERO);
@@ -179,35 +192,49 @@ public class PositionsProjection extends TradingDemoViewEventProcessor {
      * stored order skips them — harmless, because the guard only needs to be monotonic.
      */
     private boolean advance(AccountEvent event, OrderedMessage message) {
-        return jdbcTemplate.update("""
-                                           UPDATE projection_positions_version SET last_event_order = ?
-                                           WHERE account_id = ? AND generation = ? AND last_event_order < ?
-                                           """,
-                                   message.getOrder(), event.accountId().toString(), event.accountStreamId().generation(), message.getOrder()) == 1;
+        return getRequiredUnitOfWork().handle().createUpdate("""
+                                                                 UPDATE projection_positions_version SET last_event_order = :eventOrder
+                                                                 WHERE account_id = :accountId AND generation = :generation AND last_event_order < :eventOrder
+                                                                 """)
+                                       .bind("eventOrder", message.getOrder())
+                                       .bind("accountId", event.accountId().toString())
+                                       .bind("generation", event.accountStreamId().generation())
+                                       .execute() == 1;
     }
 
     private void change(AccountEvent event, InstrumentId instrumentId, long settled, long pendingIn, long pendingOut, long reserved, BigDecimal cost) {
-        var currency = jdbcTemplate.queryForObject("SELECT currency FROM projection_positions_version WHERE account_id = ?", String.class, event.accountId().toString());
+        var currency = getRequiredUnitOfWork().handle().createQuery("SELECT currency FROM projection_positions_version WHERE account_id = :accountId")
+                                              .bind("accountId", event.accountId().toString())
+                                              .mapTo(String.class)
+                                              .one();
         change(event.accountId().toString(), instrumentId, currency, settled, pendingIn, pendingOut, reserved, cost);
     }
 
     private void change(String accountId, InstrumentId instrumentId, String currency, long settled, long pendingIn, long pendingOut, long reserved, BigDecimal cost) {
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_positions (account_id, instrument_id, settled, pending_in, pending_out, reserved, cost_basis, currency)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                    ON CONFLICT (account_id, instrument_id) DO UPDATE
-                                    SET settled = projection_positions.settled + EXCLUDED.settled,
-                                        pending_in = projection_positions.pending_in + EXCLUDED.pending_in,
-                                        pending_out = projection_positions.pending_out + EXCLUDED.pending_out,
-                                        reserved = projection_positions.reserved + EXCLUDED.reserved,
-                                        cost_basis = projection_positions.cost_basis + EXCLUDED.cost_basis
-                                    """,
-                            accountId, instrumentId.toString(), settled, pendingIn, pendingOut, reserved, cost, currency);
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          INSERT INTO projection_positions (account_id, instrument_id, settled, pending_in, pending_out, reserved, cost_basis, currency)
+                                                          VALUES (:accountId, :instrumentId, :settled, :pendingIn, :pendingOut, :reserved, :costBasis, :currency)
+                                                          ON CONFLICT (account_id, instrument_id) DO UPDATE
+                                                          SET settled = projection_positions.settled + EXCLUDED.settled,
+                                                              pending_in = projection_positions.pending_in + EXCLUDED.pending_in,
+                                                              pending_out = projection_positions.pending_out + EXCLUDED.pending_out,
+                                                              reserved = projection_positions.reserved + EXCLUDED.reserved,
+                                                              cost_basis = projection_positions.cost_basis + EXCLUDED.cost_basis
+                                                          """)
+                                        .bind("accountId", accountId)
+                                        .bind("instrumentId", instrumentId.toString())
+                                        .bind("settled", settled)
+                                        .bind("pendingIn", pendingIn)
+                                        .bind("pendingOut", pendingOut)
+                                        .bind("reserved", reserved)
+                                        .bind("costBasis", cost)
+                                        .bind("currency", currency)
+                                        .execute();
     }
 
     @Override
     protected void onSubscriptionsReset(AggregateType aggregateType, GlobalEventOrder resubscribeFromAndIncluding) {
-        jdbcTemplate.execute("TRUNCATE TABLE projection_positions");
-        jdbcTemplate.execute("TRUNCATE TABLE projection_positions_version");
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE projection_positions"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE projection_positions_version"));
     }
 }

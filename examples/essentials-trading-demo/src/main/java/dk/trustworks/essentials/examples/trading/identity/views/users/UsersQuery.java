@@ -16,8 +16,9 @@
 
 package dk.trustworks.essentials.examples.trading.identity.views.users;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.examples.trading.identity.types.*;
-import org.springframework.jdbc.core.*;
+import org.jdbi.v3.core.mapper.RowMapper;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -29,27 +30,32 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public class UsersQuery {
     private static final String SELECT = "SELECT user_id, email, display_name, roles, locked, lock_reason FROM projection_users";
 
-    private static final RowMapper<UserSummary> ROW = (rs, rowNum) -> new UserSummary(UserId.of(rs.getString("user_id")),
-                                                                                       Email.of(rs.getString("email")),
-                                                                                       rs.getString("display_name"),
-                                                                                       Arrays.stream(rs.getString("roles").split(","))
-                                                                                             .map(Role::valueOf)
-                                                                                             .collect(Collectors.toUnmodifiableSet()),
-                                                                                       rs.getBoolean("locked"),
-                                                                                       rs.getString("lock_reason"));
+    private static final RowMapper<UserSummary> ROW = (rs, ctx) -> new UserSummary(UserId.of(rs.getString("user_id")),
+                                                                                    Email.of(rs.getString("email")),
+                                                                                    rs.getString("display_name"),
+                                                                                    Arrays.stream(rs.getString("roles").split(","))
+                                                                                          .map(Role::valueOf)
+                                                                                          .collect(Collectors.toUnmodifiableSet()),
+                                                                                    rs.getBoolean("locked"),
+                                                                                    rs.getString("lock_reason"));
 
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public UsersQuery(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public UsersQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     public List<UserSummary> users() {
-        return jdbcTemplate.query(SELECT + " ORDER BY email", ROW);
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(SELECT + " ORDER BY email")
+                                                                   .map(ROW)
+                                                                   .list());
     }
 
     public Optional<UserSummary> findUser(UserId userId) {
         requireNonNull(userId, "No userId provided");
-        return jdbcTemplate.query(SELECT + " WHERE user_id = ?", ROW, userId.toString()).stream().findFirst();
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(SELECT + " WHERE user_id = :userId")
+                                                                   .bind("userId", userId.toString())
+                                                                   .map(ROW)
+                                                                   .findFirst());
     }
 }

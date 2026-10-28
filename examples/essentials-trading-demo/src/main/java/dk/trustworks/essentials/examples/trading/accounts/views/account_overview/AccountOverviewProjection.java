@@ -25,13 +25,10 @@ import dk.trustworks.essentials.examples.trading.accounts.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.types.Money;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.List;
-
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Projects the ledger's buckets into {@code projection_account_overview}, one row per account.
@@ -46,34 +43,36 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * </ul>
  * A late event from an older generation is therefore ignored, which is right: the newer generation's opening balances
  * already include it.
+ * <p>
+ * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
+ * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * constructor's DDL and the reset run where none is active, so they go through
+ * {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)}, which opens one.
  */
 @Service
 public class AccountOverviewProjection extends TradingDemoViewEventProcessor {
     private static final BigDecimal ZERO = BigDecimal.ZERO;
 
-    private final JdbcTemplate jdbcTemplate;
-
-    public AccountOverviewProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
+    public AccountOverviewProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_account_overview (
-                                              account_id VARCHAR PRIMARY KEY,
-                                              owner_id VARCHAR NOT NULL,
-                                              currency VARCHAR NOT NULL,
-                                              generation BIGINT NOT NULL,
-                                              period_id VARCHAR NOT NULL,
-                                              last_event_order BIGINT NOT NULL,
-                                              settled NUMERIC(24, 6) NOT NULL,
-                                              pending_in NUMERIC(24, 6) NOT NULL,
-                                              pending_out NUMERIC(24, 6) NOT NULL,
-                                              held NUMERIC(24, 6) NOT NULL,
-                                              uncleared NUMERIC(24, 6) NOT NULL,
-                                              realized_pnl NUMERIC(24, 6) NOT NULL,
-                                              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          )
-                                          """);
-        this.jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS projection_account_overview_owner ON projection_account_overview (owner_id)");
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                                   CREATE TABLE IF NOT EXISTS projection_account_overview (
+                                                                                       account_id VARCHAR PRIMARY KEY,
+                                                                                       owner_id VARCHAR NOT NULL,
+                                                                                       currency VARCHAR NOT NULL,
+                                                                                       generation BIGINT NOT NULL,
+                                                                                       period_id VARCHAR NOT NULL,
+                                                                                       last_event_order BIGINT NOT NULL,
+                                                                                       settled NUMERIC(24, 6) NOT NULL,
+                                                                                       pending_in NUMERIC(24, 6) NOT NULL,
+                                                                                       pending_out NUMERIC(24, 6) NOT NULL,
+                                                                                       held NUMERIC(24, 6) NOT NULL,
+                                                                                       uncleared NUMERIC(24, 6) NOT NULL,
+                                                                                       realized_pnl NUMERIC(24, 6) NOT NULL,
+                                                                                       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                                                   )
+                                                                                   """));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_account_overview_owner ON projection_account_overview (owner_id)"));
     }
 
     @Override
@@ -89,27 +88,29 @@ public class AccountOverviewProjection extends TradingDemoViewEventProcessor {
     @MessageHandler
     void handle(AccountOpened event, OrderedMessage message) {
         var opening = event.openingBalances();
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_account_overview (account_id, owner_id, currency, generation, period_id, last_event_order,
-                                                                             settled, pending_in, pending_out, held, uncleared, realized_pnl, updated_at)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
-                                    ON CONFLICT (account_id) DO UPDATE
-                                    SET generation = EXCLUDED.generation, period_id = EXCLUDED.period_id, last_event_order = EXCLUDED.last_event_order,
-                                        settled = EXCLUDED.settled, pending_in = EXCLUDED.pending_in, pending_out = EXCLUDED.pending_out,
-                                        held = EXCLUDED.held, uncleared = EXCLUDED.uncleared, realized_pnl = 0, updated_at = CURRENT_TIMESTAMP
-                                    WHERE projection_account_overview.generation < EXCLUDED.generation
-                                    """,
-                            event.accountId().toString(),
-                            event.ownerId().toString(),
-                            event.currency().toString(),
-                            event.accountStreamId().generation(),
-                            event.periodId().toString(),
-                            message.getOrder(),
-                            value(opening.settledCash()),
-                            value(opening.pendingCashIn()),
-                            value(opening.pendingCashOut()),
-                            opening.holds().stream().map(hold -> value(hold.remaining())).reduce(ZERO, BigDecimal::add),
-                            opening.unclearedDeposits().stream().map(deposit -> value(deposit.amount())).reduce(ZERO, BigDecimal::add));
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          INSERT INTO projection_account_overview (account_id, owner_id, currency, generation, period_id, last_event_order,
+                                                                                                   settled, pending_in, pending_out, held, uncleared, realized_pnl, updated_at)
+                                                          VALUES (:accountId, :ownerId, :currency, :generation, :periodId, :lastEventOrder,
+                                                                  :settled, :pendingIn, :pendingOut, :held, :uncleared, 0, CURRENT_TIMESTAMP)
+                                                          ON CONFLICT (account_id) DO UPDATE
+                                                          SET generation = EXCLUDED.generation, period_id = EXCLUDED.period_id, last_event_order = EXCLUDED.last_event_order,
+                                                              settled = EXCLUDED.settled, pending_in = EXCLUDED.pending_in, pending_out = EXCLUDED.pending_out,
+                                                              held = EXCLUDED.held, uncleared = EXCLUDED.uncleared, realized_pnl = 0, updated_at = CURRENT_TIMESTAMP
+                                                          WHERE projection_account_overview.generation < EXCLUDED.generation
+                                                          """)
+                                        .bind("accountId", event.accountId().toString())
+                                        .bind("ownerId", event.ownerId().toString())
+                                        .bind("currency", event.currency().toString())
+                                        .bind("generation", event.accountStreamId().generation())
+                                        .bind("periodId", event.periodId().toString())
+                                        .bind("lastEventOrder", message.getOrder())
+                                        .bind("settled", value(opening.settledCash()))
+                                        .bind("pendingIn", value(opening.pendingCashIn()))
+                                        .bind("pendingOut", value(opening.pendingCashOut()))
+                                        .bind("held", opening.holds().stream().map(hold -> value(hold.remaining())).reduce(ZERO, BigDecimal::add))
+                                        .bind("uncleared", opening.unclearedDeposits().stream().map(deposit -> value(deposit.amount())).reduce(ZERO, BigDecimal::add))
+                                        .execute();
     }
 
     @MessageHandler
@@ -204,18 +205,23 @@ public class AccountOverviewProjection extends TradingDemoViewEventProcessor {
 
     private void delta(AccountEvent event, OrderedMessage message,
                        BigDecimal settled, BigDecimal pendingIn, BigDecimal pendingOut, BigDecimal held, BigDecimal uncleared, BigDecimal realizedPnl) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_account_overview
-                                    SET settled = settled + ?, pending_in = pending_in + ?, pending_out = pending_out + ?,
-                                        held = held + ?, uncleared = uncleared + ?, realized_pnl = realized_pnl + ?,
-                                        last_event_order = ?, updated_at = CURRENT_TIMESTAMP
-                                    WHERE account_id = ? AND generation = ? AND last_event_order < ?
-                                    """,
-                            settled, pendingIn, pendingOut, held, uncleared, realizedPnl,
-                            message.getOrder(),
-                            event.accountId().toString(),
-                            event.accountStreamId().generation(),
-                            message.getOrder());
+        getRequiredUnitOfWork().handle().createUpdate("""
+                                                          UPDATE projection_account_overview
+                                                          SET settled = settled + :settled, pending_in = pending_in + :pendingIn, pending_out = pending_out + :pendingOut,
+                                                              held = held + :held, uncleared = uncleared + :uncleared, realized_pnl = realized_pnl + :realizedPnl,
+                                                              last_event_order = :eventOrder, updated_at = CURRENT_TIMESTAMP
+                                                          WHERE account_id = :accountId AND generation = :generation AND last_event_order < :eventOrder
+                                                          """)
+                                        .bind("settled", settled)
+                                        .bind("pendingIn", pendingIn)
+                                        .bind("pendingOut", pendingOut)
+                                        .bind("held", held)
+                                        .bind("uncleared", uncleared)
+                                        .bind("realizedPnl", realizedPnl)
+                                        .bind("eventOrder", message.getOrder())
+                                        .bind("accountId", event.accountId().toString())
+                                        .bind("generation", event.accountStreamId().generation())
+                                        .execute();
     }
 
     private static BigDecimal value(Money money) {
@@ -224,6 +230,6 @@ public class AccountOverviewProjection extends TradingDemoViewEventProcessor {
 
     @Override
     protected void onSubscriptionsReset(AggregateType aggregateType, GlobalEventOrder resubscribeFromAndIncluding) {
-        jdbcTemplate.execute("TRUNCATE TABLE projection_account_overview");
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE projection_account_overview"));
     }
 }

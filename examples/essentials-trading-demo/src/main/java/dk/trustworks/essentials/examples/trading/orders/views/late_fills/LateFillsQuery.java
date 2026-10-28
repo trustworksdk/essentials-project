@@ -15,11 +15,12 @@
  */
 package dk.trustworks.essentials.examples.trading.orders.views.late_fills;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.examples.trading.orders.types.*;
 import dk.trustworks.essentials.types.*;
-import org.springframework.jdbc.core.*;
+import org.jdbi.v3.core.mapper.RowMapper;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
@@ -29,7 +30,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 @Service
 public class LateFillsQuery {
-    private static final RowMapper<LateFill> ROW = (rs, rowNum) ->
+    private static final RowMapper<LateFill> ROW = (rs, ctx) ->
             new LateFill(OrderId.of(rs.getString("order_id")),
                          AccountId.of(rs.getString("account_id")),
                          InstrumentId.of(rs.getString("instrument_id")),
@@ -40,20 +41,22 @@ public class LateFillsQuery {
                          OrderStatus.valueOf(rs.getString("closed_as")),
                          rs.getObject("recorded_at", OffsetDateTime.class));
 
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public LateFillsQuery(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public LateFillsQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     /**
      * Newest first.
      */
     public List<LateFill> lateFills() {
-        return jdbcTemplate.query("""
-                                          SELECT order_id, account_id, instrument_id, side, execution_id, quantity, price, currency, closed_as, recorded_at
-                                          FROM projection_late_fills
-                                          ORDER BY recorded_at DESC, execution_id
-                                          """, ROW);
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
+                                                                                    SELECT order_id, account_id, instrument_id, side, execution_id, quantity, price, currency, closed_as, recorded_at
+                                                                                    FROM projection_late_fills
+                                                                                    ORDER BY recorded_at DESC, execution_id
+                                                                                    """)
+                                                                   .map(ROW)
+                                                                   .list());
     }
 }

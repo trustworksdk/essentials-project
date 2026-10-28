@@ -250,6 +250,9 @@ Not published; listed because they are the reference for how to use the framewor
 - **`essentials-trading-demo`** grows into a retail brokerage trading against the exchange-simulator and the
   payment-gateway: accounts, orders, funding, settlement and reconciliation, a phase 6 load driver (`run-load.sh`) and
   fault runs (`run-faults.sh`). See its `docs/EXPANSION_PLAN.md`.
+- **`essentials-trading-demo`: every view projection and query uses Jdbi through the `UnitOfWork`'s handle**, as
+  0.60.1 made the original views do: a projection writes through the processor's own unit of work, so its view row
+  commits together with the processor's progress, and its DDL and reset open one of their own.
 
 ---
 
