@@ -297,7 +297,8 @@ def sec_terrain(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, s
     if t.get("lane"):
         items.append(f"its write-style lane is reported as `{t['lane']}` — reporting the nearest lane as the actual lane fails")
     if t.get("redirect_to_slice_check") is False:
-        items.append("it does not redirect to /essentials:slice-check")
+        items.append("it does not redirect to /essentials:slice-check instead of running discovery (naming slice-check "
+                     "as the later hand-off, once manifests exist, is not a redirect)")
     body = intro(o["command"]) + "PASS if the report's terrain pass says all of:\n" + bullets(items) + "\nFAIL otherwise."
     return {"gen-terrain.md": grader(f"{src} terrain", "llm", body)}
 
@@ -326,14 +327,25 @@ def sec_slices(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, st
         raise MalformedError(f"{src}: `slices` is empty")
     listed = [f"{x['kind']} `{x['slice']}` (from `{x['file']}`)" + (f" — {x['also']}" if x.get("also") else "")
               for x in s.get("list") or []]
-    body = (intro(o["command"]) + f"PASS if the report proposes exactly {s.get('count')} candidate slices "
-            "(names may differ slightly), namely:\n" + bullets(listed))
     also = [f"{x['kind']} `{x['slice']}` (from `{x['file']}`)" for x in s.get("also") or []]
     if also:
-        body += "\nIt may additionally list these outside the count, or not at all:\n" + bullets(also)
+        # "exactly N" beside a list of optional extras reads to a one-word judge as a cap on the
+        # whole table, so a report listing the extras failed however correct it was.
+        # A judge matching by name failed `orders_by_status` against `order_status_report`, and read
+        # "on neither list" as a reason to fail a report whose extras were all allowed: match by code.
+        body = (intro(o["command"]) + f"PASS if the report's candidate slices include each of these {s.get('count')}, "
+                "each as a slice of its own. Match each by the code and entry point it comes from, not by its name: "
+                "the slice name, the context prefix and the wording may differ freely.\n" + bullets(listed)
+                + "\nThese further slices may also appear, under any name or kind, or not at all; they are not "
+                f"counted among the {s.get('count')} and never fail this check:\n" + bullets(also))
+    else:
+        body = (intro(o["command"]) + f"PASS if the report proposes exactly {s.get('count')} candidate slices "
+                "(names may differ slightly), namely:\n" + bullets(listed))
     if s.get("order_controller_splits_into"):
         body += f"\nOrderController must be shown splitting into {s['order_controller_splits_into']} slices."
-    body += "\nFAIL if the count differs or a listed slice is missing or merged into another."
+    body += (f"\nFAIL only if one of the {s.get('count')} has no slice of its own, or shares one with another of the "
+             f"{s.get('count')}, or the report proposes a slice from code that no line above covers." if also else
+             "\nFAIL if the count differs or a listed slice is missing or merged into another.")
     return {"gen-slices.md": grader(f"{src} slices", "llm", body)}
 
 

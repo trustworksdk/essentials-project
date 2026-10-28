@@ -629,13 +629,12 @@ Everything planned here before 2026-10-13 shipped in 0.60.1.
   `skipTests`). Generated projects take failsafe from Spring Boot, which still manages 3.5.6 in 4.1.2 (the current pin), so they
   are safe today. When the Boot pin moves, check the managed failsafe version; at 3.6+, add the same property to the backend
   POM template and a `stack-lint` rule.
-- **`slice-discover-brownfield-layered` below a clean pass (NW-7).** The other slice-check cases were triaged on
-  2026-10-27 and now score 0.94-1.00. This case scored 0.83 with no run passing, because the report numbered
-  `discovery-heuristics.md` §7's findings into the payoff tiers (`1c`, `2a`) and left `OrderController` out of the
-  cohesion tier. `commands/slice-discover.md` now says §7 findings come after the lane tier, unnumbered. Run the case
-  3 times to confirm. Also open: the `service-entity` fixture's `OrderStatusQueries.findByStatus` derives on a
-  property that does not exist, so it would fail at startup. Its `expected.yaml` tolerates a report of it; fix the
-  source or keep it as a deliberate trap.
+- **`slice-discover-brownfield-layered` below a clean pass (NW-7).** The case scores 0.86 (2026-10-27, 3 runs),
+  above the threshold, but no single run passes every grader. `gen-slices` and `gen-find-p5` were grader wording,
+  now fixed: the reports were right. Left: `gen-find-p7` fails 2 runs of 3 on reports that say the same thing as the
+  passing one, so judge it again, with its reasoning, before rewording P7. Also open: the `service-entity` fixture's
+  `OrderStatusQueries.findByStatus` derives on a property that does not exist, so it would fail at startup. Its
+  `expected.yaml` tolerates a report of it; fix the source or keep it as a deliberate trap.
 - **Profile-aware project `CLAUDE.md` (DOC-2).** The templates are done. Two pieces remain:
   - Scope init's "say which write styles the project can use" to the chat reply, and make it aware of the DB
     profile (no event-sourced lanes on `pg-crud` or `mongo`).
