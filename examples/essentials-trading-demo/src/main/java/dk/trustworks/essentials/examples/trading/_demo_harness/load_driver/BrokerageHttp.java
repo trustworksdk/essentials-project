@@ -157,6 +157,37 @@ final class BrokerageHttp {
         return send(step, HttpRequest.newBuilder(URI.create(url)).GET());
     }
 
+    Response plainPut(String step, String url, Object body) {
+        return send(step, HttpRequest.newBuilder(URI.create(url))
+                                     .header("Content-Type", "application/json")
+                                     .PUT(HttpRequest.BodyPublishers.ofString(write(body))));
+    }
+
+    Response plainDelete(String step, String url) {
+        return send(step, HttpRequest.newBuilder(URI.create(url)).DELETE());
+    }
+
+    /**
+     * A GET whose body is read as a stream, for answers too large to hold as a tree (a run's webhook attempts).
+     */
+    <T> T plainGetStreaming(String url, java.util.function.Function<tools.jackson.core.JsonParser, T> reader) {
+        try {
+            var response = client.send(HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(5)).GET().build(),
+                                       HttpResponse.BodyHandlers.ofInputStream());
+            try (var body = response.body(); var parser = json.createParser(body)) {
+                if (response.statusCode() != 200) {
+                    throw new IllegalStateException("GET " + url + ": " + response.statusCode());
+                }
+                return reader.apply(parser);
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("GET " + url + ": " + e, e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("GET " + url + ": interrupted");
+        }
+    }
+
     private Response send(String step, HttpRequest.Builder request) {
         var started = System.nanoTime();
         try {

@@ -55,6 +55,7 @@ public final class LoadDriver {
     private final LoadDriverSettings       settings;
     private final StepStats                stats     = new StepStats();
     private final BrokerageHttp            http;
+    private final SimulatorFaults          faults;
     private final List<Customer>           customers = new ArrayList<>();
     private final ConcurrentMap<String, double[]> quotes = new ConcurrentHashMap<>();
     private final AtomicLong               orderSequence   = new AtomicLong();
@@ -74,6 +75,7 @@ public final class LoadDriver {
         this.settings = settings;
         this.http = new BrokerageHttp(stats, settings.operatorUser(), settings.operatorPassword());
         this.inFlight = new Semaphore(settings.maxInFlight());
+        this.faults = new SimulatorFaults(http, List.of(settings.exchangeUrl(), settings.gatewayUrl()));
     }
 
     public static void main(String[] args) throws Exception {
@@ -89,6 +91,11 @@ public final class LoadDriver {
         loadCalendar();
         setUpPopulation();
         skipToTheLatestClose();
+        if (settings.fault().equals("F-1")) {
+            // From the first order on, so every flow's deliveries are damaged; cleared only after the drain
+            faults.applyDeliveryFaults(SimulatorFaults.deliveryFaultPolicy(Math.abs((long) settings.runToken().hashCode())));
+            log("fault F-1: delivery faults on every webhook subscription of both simulators");
+        }
         scheduler.scheduleAtFixedRate(this::refreshQuotes, 0, 1, TimeUnit.SECONDS);
         chooseActiveCustomers();
 
@@ -150,7 +157,12 @@ public final class LoadDriver {
         report = serverReport();
         var openCases = http.json(http.operatorGet("REPORT", base() + "/api/admin/reconciliation/cases?state=OPEN"));
         var missing   = http.json(http.operatorGet("REPORT", base() + "/api/admin/reconciliation/missing-statements"));
-        return report(report, openCases, missing, loadSeconds);
+        Map<String, Object> faultEvidence = null;
+        if (!settings.fault().equals("none")) {
+            faults.clearDeliveryFaults();
+            faultEvidence = faults.evidence();
+        }
+        return report(report, openCases, missing, faultEvidence, loadSeconds);
     }
 
     // ---- the exchange's calendar and clock
@@ -526,7 +538,7 @@ public final class LoadDriver {
                              pendingPayments(report), stats.counter("skipped:driver-saturated"));
     }
 
-    private boolean report(JsonNode server, JsonNode openCases, JsonNode missing, double loadSeconds) throws IOException {
+    private boolean report(JsonNode server, JsonNode openCases, JsonNode missing, Map<String, Object> faultEvidence, double loadSeconds) throws IOException {
         var deadLetters = 0L;
         for (var queue : server.path("queues").properties()) {
             deadLetters += queue.getValue().path("deadLetters").asLong();
@@ -540,6 +552,12 @@ public final class LoadDriver {
         checks.put("no open reconciliation case", openCases.isArray() && openCases.isEmpty());
         checks.put("no missing statement", missing.isArray() && missing.isEmpty());
         checks.put("driver never saturated", stats.counter("skipped:driver-saturated") == 0);
+        if (faultEvidence != null) {
+            // A fault run proves nothing unless the faults happened
+            for (var kind : List.of("duplicate", "missing", "null", "held")) {
+                checks.put("fault " + kind + " injected", SimulatorFaults.total(faultEvidence, kind) > 0);
+            }
+        }
 
         var result = new LinkedHashMap<String, Object>();
         result.put("settings", settings);
@@ -550,6 +568,9 @@ public final class LoadDriver {
         result.put("brokerage", server);
         result.put("openCases", openCases);
         result.put("missingStatements", missing);
+        if (faultEvidence != null) {
+            result.put("faults", Map.of("fault", settings.fault(), "evidence", faultEvidence));
+        }
         var directory = Path.of(settings.reportDirectory());
         Files.createDirectories(directory);
         var file = directory.resolve("load-" + settings.runToken() + ".json");
@@ -563,6 +584,9 @@ public final class LoadDriver {
         for (var stage : orders.path("stages").properties()) {
             log("stage %-18s p50 %8.0f ms  p99 %8.0f ms  max %8.0f ms", stage.getKey(), stage.getValue().path("p50Ms").asDouble(),
                 stage.getValue().path("p99Ms").asDouble(), stage.getValue().path("maxMs").asDouble());
+        }
+        if (faultEvidence != null) {
+            faultEvidence.forEach((subscription, evidence) -> log("fault %s %-24s %s", settings.fault(), subscription, evidence));
         }
         checks.forEach((check, passed) -> log("%s %s", passed ? "PASS" : "FAIL", check));
         log("report: %s", file.toAbsolutePath());

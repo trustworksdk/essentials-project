@@ -153,3 +153,88 @@ Decided 2026-10-23.
 | **Q-3** | Targets | §4's profile is the goal, not the start: **start smaller, everything configurable** (population, active customers, steady and burst rates, mix, duration) |
 | **Q-4** | Instances on this machine | **One instance is the baseline.** Two or three are a stretch in the devcontainer; the user runs them on other hardware once the driver is more complete |
 | **Q-5** | "Benchmarks against `main`" | **Not yet** - not before the next release is merged into this branch |
+| **Q-6** to **Q-10** | Faults under load (§7) | §10.6 (2026-10-27) |
+
+---
+
+## 10. Faults under load, in detail (§7)
+
+**Status:** decided, 2026-10-27 (§10.6: Q-6 to Q-10 as proposed; Q-8 starts with one instance).
+
+§7 lists five faults to run one at a time under the steady load, with §4's pass criteria still holding. This section
+works out how each one is switched on, what proves it really happened, and what "it held" means for it.
+
+### 10.1 What the pieces already give us
+
+- **Both simulators have a per-subscription delivery fault policy** (`PUT /test/webhooks/{id}/faults`, `DELETE` to
+  clear): `duplicateProbability`; `missing`, `nulls` and `invalid`, each damaging the listed fields or one random leaf;
+  `outOfOrder` (`holdMs`); `delay`; and a `seed`. It damages delivered copies only, never the canonical event.
+  `GET /test/attempts?subscriptionId=` lists every attempt with the faults applied to it, which is the evidence that a
+  fault happened. `ExchangeSimulatorWebhookIT` already uses duplicates, missing fields and out-of-order at 0.3 each.
+- **Subscriptions are configuration** (`simulators/*.yaml`, `source: config`) and are found by name through
+  `GET /api/webhooks`. Every one of them points at instance 1 (`:8080`); other instances receive only through the
+  catch-up readers.
+- **Anything other than a 2xx is retried with backoff until the delivery is dead-lettered** at the source. A refused
+  copy (`422` from a validator) and an unavailable endpoint look the same to the simulator.
+- **The catch-up readers are the guarantee** (`integration/CLAUDE.md`): a delivery dead-lettered at the source must
+  still arrive through `/api/events`. No fault run may call the simulators' dead-letter retry; that would hide a gap.
+- **Placing an order is idempotent on the client's `orderId`** (`PlaceOrderHandler` returns if the order exists), and
+  the driver chooses the ids (`LD-<run>-O<n>`), so the driver can retry a placement whose answer it never got.
+- **Seeded reconciliation breaks are simulator configuration** (`EXCHANGE__CLEARING__BREAKS__*`, the gateway's
+  `statement.breaks.*`), as the phase 5 ITs set them; they need the simulators started with them.
+- **The load report** already gives per-10 s placement buckets, stages, dead letters, open cases and missing
+  statements, and the driver's checks.
+
+### 10.2 The faults
+
+One fault per run. Load: the one-instance baseline (2 000 customers, 1 000 active, 100 orders/s, 300/s for 6 s at each
+open), on a fresh database and fresh simulators, for 10 business days; a fault with a window opens it in business day
+4 and closes it after the window, leaving at least 5 days to recover.
+
+| | Fault | Switched on by | Proof it happened | Holds when |
+|---|---|---|---|---|
+| **F-1** | Damaged, duplicated and reordered webhook copies, the whole run | The driver (`--fault=F-1`), on every subscription of both simulators at load start: duplicates 0.3, `missing` 0.2 and `nulls` 0.1 (one random leaf, so optional fields too), `outOfOrder` 0.3 (`holdMs` 500), seed from the run token; cleared after the drain. No `delay`: it holds the simulator's delivery worker, which would measure the simulator | `/test/attempts` counts per fault kind, per subscription | §4's pass, no difference in outcomes; the latency cost reported, not judged |
+| **F-2** | Receiver unavailable for 60 s | The driver, through a harness switch (Q-6) | Source-side failed attempts and dead letters over the window | §4's pass with every dead-lettered delivery arriving through catch-up; end-to-end p99 back under 10 s within 30 s of the window closing |
+| **F-3** | Instance `SIGKILL`ed during an open, restarted 10 s later | The run script (Q-9) | The kill and restart times; the process's exit status | §4's pass; in-flight messages redelivered, none lost, no per-key ordering violation reported by the engine beyond the network's; customers' sessions re-established (Q-7) |
+| **F-4** | A simulator restarted (`docker restart`) during a business day, exchange and gateway in separate runs | The run script (Q-9) | Container restart time; the routers' failed calls | §4's pass; market buys refused for want of a quote during the window are counted, not failures |
+| **F-5** | Seeded reconciliation breaks under load | Simulators started with the phase 5 IT settings (clearing: omit 0.3, alter 0.3, phantom 1.0; the bank's equivalents) | `/test/clearing/breaks`, `/test/statements/breaks` | Every seeded break found one for one, none invented, a case for each one still present at the next close; the rest of §4's pass |
+
+Built in this order: F-1 (driver only), F-5 (configuration, plus a one-for-one check in the driver), F-2 (one harness
+switch), F-4 and F-3 (process control). Each lands with a run recorded in `_demo_harness/CLAUDE.md`.
+
+### 10.3 The driver
+
+- `--fault=<F-n>` with `--fault-at-day` and `--fault-duration`; the driver applies the HTTP-level faults itself
+  (F-1, F-2) and, for the others, prints a `fault window open` / `closed` line the run script acts on and times.
+- **Riding out an outage as a client would.** A request that fails without an answer (connection refused or reset,
+  timeout) is counted and, for a placement, retried with the same `orderId` until it answers or the drain deadline
+  passes (Q-7). A `401` already makes a session log in again, which covers a restarted instance's lost sessions.
+- **The report gains a fault block**: the window's times, the evidence counts of §10.2, the source-side attempts and
+  dead letters per subscription, refusals and failed requests by step inside and outside the window, and the per-10 s
+  end-to-end p99 from the window's opening until it is back under 10 s.
+
+### 10.4 The run script (Q-9)
+
+F-3 and F-4 need process control the driver should not have. A `run-faults.sh <F-n>` beside `run-load.sh`: recreates
+the database and the simulators (with F-5's settings when asked), starts the instance with the full JIT and a pid file
+(`spring.pid.file`, Spring Boot's own), starts the driver, and on its `fault window open` line kills and restarts the
+instance or restarts a simulator. It leaves the user's demo database alone, as the profiling runs do.
+
+### 10.5 Not in this section
+
+Two or three instances (§6) - F-3 against a second instance, which exercises ownership moving between processes, is
+the first two-instance run once these pass on one (Q-8). Long runs (§4's hour) - separate. Faults in the brokerage's
+own outbound calls beyond a simulator restart (slow responses, `5xx` from the exchange) - the simulators would need a
+fault mode for their own API; noted as a candidate simulator requirement if F-4 shows the need.
+
+### 10.6 Decisions
+
+Decided 2026-10-27, as proposed.
+
+| | Question | Decided |
+|---|---|---|
+| **Q-6** | How F-2 makes the receiver unavailable | A harness switch (`/api/admin/webhook-outage?seconds=`) that makes every `SignedWebhookReceiver` answer `503` before doing anything. Alternatives: damage every copy (`missing` on a required field at probability 1, answered `422`) - no app change, but a validation refusal rather than an outage; pause the subscriptions - the simulator then holds deliveries instead of failing them, so retries and dead letters are never exercised |
+| **Q-7** | A placement whose answer was lost | The driver retries it with the same `orderId` (idempotent) until it answers; alternative: count it as failed and rely on the brokerage's own record. Retrying is what a real client does and exercises the idempotency |
+| **Q-8** | F-3 on one instance or two | One first: the restarted instance comes back under the same instance id and takes its leases back at once. Two (kill the instance that is not the webhook target, so shards move to the survivor) as the first §6 run |
+| **Q-9** | Who controls processes | `run-faults.sh`, coordinated by the driver's printed window lines; the driver stays HTTP-only |
+| **Q-10** | Load during the faults | The one-instance baseline above, 10 business days, the fault in day 4; not §4's full profile, so a failure is the fault's and not the load's |

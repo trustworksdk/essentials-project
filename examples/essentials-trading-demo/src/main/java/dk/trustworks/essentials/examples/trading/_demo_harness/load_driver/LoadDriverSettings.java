@@ -24,6 +24,7 @@ import java.util.*;
  *
  * @param baseUrls            the brokerage instances; customer {@code n} is pinned to {@code baseUrls[n % size]}
  * @param exchangeUrl         the exchange-simulator, for its clock and its {@code BusinessDayClosed} events
+ * @param gatewayUrl          the payment-gateway, for fault injection on its webhooks
  * @param population          customers {@code LDA-0} .. {@code LDA-<population-1>}, registered and funded once, reused
  * @param activePerDay        customers active in a business day, drawn afresh at each close
  * @param ordersPerSecond     the steady order rate
@@ -33,9 +34,12 @@ import java.util.*;
  * @param paymentsPerSecond   deposits and withdrawals together
  * @param businessDays        closes to run for
  * @param maxInFlight         concurrent customer actions; above it an action is skipped and counted, not queued
+ * @param fault               {@code none}, or the fault of design phase 6 §10 to run under the load: {@code F-1} damaged,
+ *                            duplicated and reordered webhook copies from both simulators for the whole run
  */
 public record LoadDriverSettings(List<String> baseUrls,
                                  String exchangeUrl,
+                                 String gatewayUrl,
                                  String operatorUser,
                                  String operatorPassword,
                                  int population,
@@ -59,7 +63,10 @@ public record LoadDriverSettings(List<String> baseUrls,
                                  int maxInFlight,
                                  Duration drainTimeout,
                                  String runToken,
-                                 String reportDirectory) {
+                                 String reportDirectory,
+                                 String fault) {
+    static final Set<String> FAULTS = Set.of("none", "F-1");
+
 
     public static LoadDriverSettings fromArguments(String[] args) {
         var values = new HashMap<String, String>();
@@ -72,6 +79,7 @@ public record LoadDriverSettings(List<String> baseUrls,
         var settings = new LoadDriverSettings(
                 List.of(take(values, "base-urls", "http://localhost:8080").split(",")),
                 take(values, "exchange-url", "http://localhost:18080"),
+                take(values, "gateway-url", "http://localhost:18081"),
                 take(values, "operator-user", "operator@demo.local"),
                 take(values, "operator-password", "operator-demo-password"),
                 Integer.parseInt(take(values, "population", "200")),
@@ -95,12 +103,16 @@ public record LoadDriverSettings(List<String> baseUrls,
                 Integer.parseInt(take(values, "max-in-flight", "256")),
                 Duration.parse(take(values, "drain-timeout", "PT10M")),
                 take(values, "run-token", Long.toString(System.currentTimeMillis() / 1000 % 1_000_000, 36)),
-                take(values, "report-directory", "target/load-driver"));
+                take(values, "report-directory", "target/load-driver"),
+                take(values, "fault", "none"));
         if (!values.isEmpty()) {
             throw new IllegalArgumentException("Unknown settings: " + values.keySet());
         }
         if (settings.marketBuyPercent + settings.limitBuyPercent + settings.sellPercent + settings.restingPercent != 100) {
             throw new IllegalArgumentException("market-buy, limit-buy, sell and resting percents must add up to 100");
+        }
+        if (!FAULTS.contains(settings.fault)) {
+            throw new IllegalArgumentException("fault must be one of " + new TreeSet<>(FAULTS) + ", got '" + settings.fault + "'");
         }
         if (settings.activePerDay > settings.population) {
             throw new IllegalArgumentException("active-per-day must not exceed population");

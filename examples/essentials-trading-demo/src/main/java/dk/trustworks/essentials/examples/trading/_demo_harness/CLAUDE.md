@@ -370,6 +370,12 @@ every check passed; the full report goes to `target/load-driver/load-<run>.json`
   away. The drain waits for it (`drain-timeout`, default 10 minutes).
 - **`skipped:driver-saturated`** counts actions not started because `max-in-flight` were running; non-zero means the
   driver, not the brokerage, set the rate.
+- **`--fault=F-1`** (design phase 6 §10): `SimulatorFaults` puts a delivery fault policy on every webhook subscription
+  of both simulators (found by name, `--gateway-url` for the gateway) before the first order and clears it after the
+  drain. The report's `faults.evidence` has, per subscription, the attempts by fault kind and by the status we answered
+  (`/test/attempts`, read with a streaming parser - hundreds of thousands per run), the source's own delivery counts
+  (`dead` must stay 0 or catch-up had to cover it), and `acceptedDamaged`: damaged copies we answered `2xx`, by event
+  type and damage. A run adds a check per fault kind, so a run whose faults never happened cannot pass.
 
 ### Baseline, 2026-10-23, devcontainer, `compose,simulators`, simulators 0.6.0, one instance, one sample each
 
@@ -642,3 +648,26 @@ got a snapshot and every load replayed the whole history. Same profile as above,
 - Every run passed every check. Scripts and per-run lines: `~/trading-demo-profiling/cpu-2026-10-27/` on the machine
   that ran them (`rush-prof.sh`, `sweep.sh`, `JfrHot.java`); the exchange's `/test/reset` takes minutes after a full
   run, so the runner recreates only the two simulator containers and their own volumes instead.
+
+### Faults under load: F-1, damaged webhook copies, 2026-10-27
+
+Design phase 6 §10. One instance, C2, the 300/s profile for 10 business days, fresh database and simulators,
+`--fault=F-1`: duplicates 0.3, `missing` 0.2 and `null` 0.1 on one random leaf, copies held 500 ms at 0.3, on every
+subscription of both simulators.
+
+| | Orders | Booked p50 / p99 | Submitted → filled p99 | Filled → booked p99 | Checks |
+|---|---|---|---|---|---|
+| F-1 | 49 664 | 267 ms / 1 322 ms | 1 092 ms | 192 ms | all 11 pass |
+| no fault, 7 days (snapshot sweep above) | ~33 500 | ~210 ms / ~370 ms | ~65 ms | ~170 ms | all pass |
+
+- **Outcomes unaffected**: every order, fill and payment reached its outcome, 0 dead letters on either side, 0 cases.
+  `demo-orders` alone took 174 788 attempts: 66 038 duplicates, 32 013 held, 42 988 damaged, 13 529 answered `422`.
+- **The cost is the exchange reports' latency**: a held copy waits 500 ms and a refused one waits for the simulator's
+  retry backoff, so submitted → filled p99 goes from ~65 ms to ~1.1 s; the rest of the path is unchanged.
+- **Two thirds of the damaged copies are accepted, and that is correct.** Validators require exactly what their
+  translation reads, per event type; a copy damaged elsewhere (`simulationId`, `schemaVersion`, `payload.side` on an
+  order event we key by `clientOrderId`, `paymentId` on a `PaymentCompleted` ...) is recorded as the event and the
+  intact copy dropped as a duplicate, losing only fields nobody reads. Checked against every translation's reads; no
+  envelope identity field (`eventId`, `aggregateId`, `sequence`, `occurredAt`) was ever accepted damaged. Rule for new
+  translations: a field read with `orElse(...)` for some event types is lost silently when a damaged copy wins - make the
+  validator require what each type reads, as they all do today.
