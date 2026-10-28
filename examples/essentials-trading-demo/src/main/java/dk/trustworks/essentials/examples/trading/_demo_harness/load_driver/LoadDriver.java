@@ -71,6 +71,8 @@ public final class LoadDriver {
     private Instant                        clockReading;
     private long                           clockReadAt;
     private double                         clockSpeed;
+    private Instant                        outageOpened; // F-2's window, on the driver's clock
+    private Instant                        outageClosed;
 
     LoadDriver(LoadDriverSettings settings) {
         this.settings = settings;
@@ -96,6 +98,8 @@ public final class LoadDriver {
             // From the first order on, so every flow's deliveries are damaged; cleared only after the drain
             faults.applyDeliveryFaults(SimulatorFaults.deliveryFaultPolicy(Math.abs((long) settings.runToken().hashCode())));
             log("fault F-1: delivery faults on every webhook subscription of both simulators");
+        } else if (settings.fault().equals("F-2")) {
+            faults.findSubscriptions(); // before the window, so a failure to reach the simulators stops the run early
         }
         scheduler.scheduleAtFixedRate(this::refreshQuotes, 0, 1, TimeUnit.SECONDS);
         chooseActiveCustomers();
@@ -106,6 +110,7 @@ public final class LoadDriver {
         var lastTick    = System.nanoTime();
         var lastPoll    = 0L;
         var wasOpen     = tradingOpen();
+        var outageLoggedClosed = false;
         var orderCredit = 0.0;
         var payCredit   = 0.0;
         while (closes < settings.businessDays()) {
@@ -126,6 +131,13 @@ public final class LoadDriver {
             var open = tradingOpen();
             if (open && !wasOpen) {
                 dayStarted = now; // the open: a business day's window begins
+                if (settings.fault().equals("F-2") && outageOpened == null && closes == settings.faultAtDay() - 1) {
+                    openWebhookOutage();
+                }
+            }
+            if (outageClosed != null && !outageLoggedClosed && Instant.now().isAfter(outageClosed)) {
+                outageLoggedClosed = true;
+                log("fault window closed (F-2); %s", progress());
             }
             wasOpen = open;
             var inBurst = dayStarted >= 0 && (now - dayStarted) / 1e6 < settings.burstFraction() * dayMillis;
@@ -163,6 +175,8 @@ public final class LoadDriver {
         if (settings.fault().equals("F-1")) {
             faults.clearDeliveryFaults();
             faultEvidence = faults.evidence();
+        } else if (settings.fault().equals("F-2")) {
+            faultEvidence = webhookOutageEvidence(report);
         } else if (settings.fault().equals("F-5")) {
             breaks = new ReconciliationBreaks(http, base(), settings.exchangeUrl(), settings.gatewayUrl()).compare(lastClosed);
             faultEvidence = breaks.evidence();
@@ -572,6 +586,13 @@ public final class LoadDriver {
             for (var kind : List.of("duplicate", "missing", "null", "held")) {
                 checks.put("fault " + kind + " injected", SimulatorFaults.total(faultEvidence, kind) > 0);
             }
+        } else if (settings.fault().equals("F-2")) {
+            checks.put("webhook outage opened", outageOpened != null);
+            checks.put("webhooks refused during the outage", ((Number) faultEvidence.get("refused")).longValue() > 0);
+            checks.put("simulators saw the refusals", ((Number) faultEvidence.get("answered503")).longValue() > 0);
+            // Deliveries the simulators gave up on can only arrive through catch-up: needs simulators/compose.outage.yml
+            checks.put("simulators dead-lettered deliveries", ((Number) faultEvidence.get("dead")).longValue() > 0);
+            checks.put("booked p99 under 10 s from 30 s to 2 min after the outage", (Boolean) faultEvidence.get("recovered"));
         }
 
         var result = new LinkedHashMap<String, Object>();
@@ -601,11 +622,64 @@ public final class LoadDriver {
                 stage.getValue().path("p99Ms").asDouble(), stage.getValue().path("maxMs").asDouble());
         }
         if (faultEvidence != null) {
-            faultEvidence.forEach((subscription, evidence) -> log("fault %s %-24s %s", settings.fault(), subscription, evidence));
+            faultEvidence.forEach((key, evidence) -> log("fault %s %-24s %s", settings.fault(), key, evidence));
         }
         checks.forEach((check, passed) -> log("%s %s", passed ? "PASS" : "FAIL", check));
         log("report: %s", file.toAbsolutePath());
         return !checks.containsValue(false);
+    }
+
+    // ---- F-2, the webhook outage
+
+    private void openWebhookOutage() {
+        outageOpened = Instant.now();
+        outageClosed = outageOpened.plus(settings.faultDuration());
+        for (var baseUrl : settings.baseUrls()) {
+            var opened = http.operatorPost("FAULTS", baseUrl + "/api/admin/webhook-outage?seconds=" + settings.faultDuration().toSeconds(), Map.of());
+            if (!opened.ok()) {
+                log("could not open the webhook outage on %s: %s", baseUrl, opened);
+            }
+        }
+        log("fault window open (F-2): every instance answers its webhooks 503 for %d s; %s", settings.faultDuration().toSeconds(), progress());
+    }
+
+    /**
+     * The window, what the instances refused, the simulators' side of it per subscription (attempts by the status we
+     * answered, deliveries delivered / dead / pending), and the recovery: the placement buckets' booked p99 from the
+     * window's opening, and whether every bucket placed from 30 s to 2 minutes after it closed booked its p99 under 10 s
+     * (design §10.2: back under 10 s within 30 s of the window closing).
+     */
+    private Map<String, Object> webhookOutageEvidence(JsonNode server) {
+        var subscriptions = faults.evidence();
+        var evidence      = new LinkedHashMap<String, Object>();
+        evidence.put("window", outageOpened == null ? "never opened" : outageOpened + " - " + outageClosed);
+        var refused = 0L;
+        for (var baseUrl : settings.baseUrls()) {
+            refused += http.json(http.operatorGet("FAULTS", baseUrl + "/api/admin/webhook-outage")).path("refused").asLong();
+        }
+        evidence.put("refused", refused);
+        evidence.put("answered503", SimulatorFaults.totalAnswered(subscriptions, "503"));
+        evidence.put("dead", SimulatorFaults.totalDead(subscriptions));
+        var recovered = outageOpened != null;
+        var curve     = new ArrayList<String>();
+        if (outageOpened != null) {
+            var recoveredFrom = outageClosed.plusSeconds(30);
+            for (var bucket : server.path("buckets")) {
+                var start = Instant.parse(bucket.path("start").asString());
+                var p99   = bucket.path("p99BookedMs").asDouble();
+                if (start.isBefore(outageOpened.minusSeconds(10)) || start.isAfter(outageClosed.plusSeconds(120))) {
+                    continue;
+                }
+                curve.add(String.format(Locale.ROOT, "%s %.0f ms", start, p99));
+                if (!start.isBefore(recoveredFrom) && p99 >= 10_000) {
+                    recovered = false;
+                }
+            }
+        }
+        evidence.put("recovered", recovered);
+        evidence.put("bookedP99Curve", curve);
+        evidence.put("subscriptions", subscriptions);
+        return evidence;
     }
 
     // ---- helpers

@@ -16,6 +16,7 @@
 package dk.trustworks.essentials.examples.trading._demo_harness.load_driver;
 
 import tools.jackson.core.*;
+import tools.jackson.databind.JsonNode;
 
 import java.util.*;
 
@@ -53,6 +54,22 @@ final class SimulatorFaults {
     }
 
     void applyDeliveryFaults(Map<String, Object> policy) {
+        findSubscriptions();
+        for (var subscription : subscriptions) {
+            var set = http.plainPut("FAULTS", subscription.simulatorUrl() + "/test/webhooks/" + subscription.id() + "/faults", policy);
+            if (!set.ok()) {
+                throw new IllegalStateException("Cannot set the faults of " + subscription.name() + ": " + set);
+            }
+        }
+    }
+
+    /**
+     * Every webhook subscription of both simulators, by name; once per run.
+     */
+    void findSubscriptions() {
+        if (!subscriptions.isEmpty()) {
+            return;
+        }
         for (var simulatorUrl : simulatorUrls) {
             var listed = http.plainGet("FAULTS", simulatorUrl + "/api/webhooks");
             if (!listed.ok()) {
@@ -60,12 +77,6 @@ final class SimulatorFaults {
             }
             for (var subscription : http.json(listed)) {
                 subscriptions.add(new Subscription(simulatorUrl, subscription.path("id").asString(), subscription.path("name").asString()));
-            }
-        }
-        for (var subscription : subscriptions) {
-            var set = http.plainPut("FAULTS", subscription.simulatorUrl() + "/test/webhooks/" + subscription.id() + "/faults", policy);
-            if (!set.ok()) {
-                throw new IllegalStateException("Cannot set the faults of " + subscription.name() + ": " + set);
             }
         }
     }
@@ -83,6 +94,7 @@ final class SimulatorFaults {
      * them ({@code delivered}, {@code dead}, {@code pending}, {@code inFlight}).
      */
     Map<String, Object> evidence() {
+        findSubscriptions();
         var evidence = new TreeMap<String, Object>();
         for (var subscription : subscriptions) {
             var entry = new LinkedHashMap<String, Object>();
@@ -104,6 +116,34 @@ final class SimulatorFaults {
         for (var entry : evidence.values()) {
             var attempts = (Map<String, Object>) ((Map<String, Object>) entry).get("attempts");
             total += ((Map<String, Long>) attempts.get("byFault")).getOrDefault(faultKind, 0L);
+        }
+        return total;
+    }
+
+    /**
+     * Over every subscription: the attempts we answered with {@code status} (e.g. {@code "503"}).
+     */
+    @SuppressWarnings("unchecked")
+    static long totalAnswered(Map<String, Object> evidence, String status) {
+        var total = 0L;
+        for (var entry : evidence.values()) {
+            var attempts = (Map<String, Object>) ((Map<String, Object>) entry).get("attempts");
+            total += ((Map<String, Long>) attempts.get("byStatus")).getOrDefault(status, 0L);
+        }
+        return total;
+    }
+
+    /**
+     * Over every subscription: the deliveries the source gave up on, {@code -1} if one subscription's count was unreadable.
+     */
+    @SuppressWarnings("unchecked")
+    static long totalDead(Map<String, Object> evidence) {
+        var total = 0L;
+        for (var entry : evidence.values()) {
+            if (!(((Map<String, Object>) entry).get("deliveries") instanceof JsonNode deliveries) || !deliveries.path("dead").isNumber()) {
+                return -1;
+            }
+            total += deliveries.path("dead").asLong();
         }
         return total;
     }

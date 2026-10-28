@@ -1,0 +1,11 @@
+# Phase 6 fault F-2 (docs/design/phase-6-realistic-load.md §10), layered over compose.yml by run-faults.sh: a short
+# delivery budget, so the 60 s webhook outage dead-letters deliveries and they have to arrive through the event-log
+# catch-up readers. With the default budget (10 attempts, backoff from 500 ms doubling to a 300 s cap) a delivery
+# lives ~4 minutes and every one of them got through on a retry. 4 attempts: dead ~3.5 s after the first failure.
+services:
+  exchange:
+    environment:
+      EXCHANGE__WEBHOOKS__MAX_ATTEMPTS: "4"
+  payment-gateway:
+    environment:
+      GATEWAY__WEBHOOKS__MAX_ATTEMPTS: "4"

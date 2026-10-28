@@ -5,13 +5,15 @@
 #
 #   ./run-faults.sh none                 # the same run without a fault, for comparison
 #   ./run-faults.sh F-1                  # damaged, duplicated and reordered webhook copies
+#   ./run-faults.sh F-2                  # every webhook answered 503 for 60 s from the open of business day 4
 #   ./run-faults.sh F-5                  # seeded reconciliation breaks (simulators/compose.breaks.yml)
 #   ./run-faults.sh F-1 --business-days=3 --population=500   # extra arguments go to the driver and win
 #
 # What it does, in order:
 #   1. recreates the exchange-simulator and the payment-gateway with empty volumes of their own (with the break settings
-#      for F-5). Only those two containers and their two volumes - never `down -v`, which would also delete the demo's
-#      PostgreSQL data, as it shares the compose project. Their `/test/reset` takes minutes after a full run.
+#      for F-5, the short delivery budget for F-2). Only those two containers and their two volumes - never `down -v`,
+#      which would also delete the demo's PostgreSQL data, as it shares the compose project. Their `/test/reset` takes
+#      minutes after a full run.
 #   2. recreates the database `trading_faults` and its CDC slot on the running PostgreSQL; the demo's own database is
 #      not touched.
 #   3. starts one instance from target/classes with plain `java` - the full JIT; `spring-boot:run` would give C1 only
@@ -25,7 +27,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-FAULT="${1:?usage: run-faults.sh <none|F-1|F-5> [driver arguments]}"
+FAULT="${1:?usage: run-faults.sh <none|F-1|F-2|F-5> [driver arguments]}"
 shift
 RUN="${RUN_TOKEN:-$(echo "$FAULT" | tr -d '-' | tr 'A-Z' 'a-z')$(date +%H%M%S)}"
 DB=trading_faults
@@ -35,6 +37,8 @@ PSQL="docker exec -i essentials-trading-demo-postgresql psql -U essentials -Atq"
 COMPOSE=(docker compose -p essentials-trading-demo -f compose.yml)
 if [[ $FAULT == F-5 ]]; then
   COMPOSE+=(-f simulators/compose.breaks.yml)
+elif [[ $FAULT == F-2 ]]; then
+  COMPOSE+=(-f simulators/compose.outage.yml)
 fi
 COMPOSE+=(--profile simulators)
 mkdir -p "$OUT"

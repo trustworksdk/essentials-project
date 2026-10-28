@@ -16,6 +16,7 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `FundingLoadGenerator`, `FundingLoadController` | Phase 2: simulated customers depositing and withdrawing, against the stub or the payment gateway, `/api/admin/funding-load` |
 | `NoOpAccounts*Processor`, `BatchedAccountsForwarder` | EF-2 measurement processors, off by default |
 | `load_driver/` (`LoadDriver`, `run-load.sh`) | Phase 6: the HTTP load driver - **not part of the application**, a plain `main` run in a JVM of its own |
+| `WebhookOutage`, `WebhookOutageController` | Phase 6 fault F-2: `/api/admin/webhook-outage?seconds=N` makes every `/webhooks/**` request answer `503` before anything reads it, for N seconds; `GET` reports the window and the refusals |
 | `LoadRunReport`, `LoadRunReportController` | `GET /api/admin/load-report?runPrefix=`: what the brokerage recorded of a driver run - orders by status, placed→filled/booked latency overall and per 10 s placement bucket, payments, durable-queue depth and dead letters, largest tables |
 
 The `brokerage` bootstrap runner, its trading load generator, the dashboard and the demo's own admin page went with
@@ -384,7 +385,15 @@ every check passed; the full report goes to `target/load-driver/load-<run>.json`
   day's breaks have none yet), no case without a break. Needs the simulators started with the break settings -
   `run-faults.sh F-5` does that. Results: "After the 0.60.1 merge" below. Cases are read one state at a time: the
   unfiltered `/api/admin/reconciliation/cases` returns only the newest 500.
-- **`./run-faults.sh <none|F-1|F-5> [driver arguments]`** runs one fault on a database (`trading_faults`) and
+- **`--fault=F-2`**: at the open of business day `--fault-at-day` (4) the driver opens a `--fault-duration` (60 s)
+  webhook outage on every instance (`WebhookOutage`, a servlet filter, so no receiver changes) and logs
+  `fault window open` / `closed`. Evidence: the window, our refusals, the `503`s per simulator subscription, the
+  deliveries the simulators gave up on (`dead`), and the per-10 s booked p99 from the window on. Its checks: the window
+  opened, we refused, the simulators saw it, they dead-lettered deliveries (which then only catch-up can bring), and
+  booked p99 under 10 s from 30 s to 2 minutes after the window. `run-faults.sh F-2` starts the simulators with
+  `simulators/compose.outage.yml`: `webhooks.max_attempts` 4 instead of 10. Their backoff starts at 500 ms and doubles
+  (cap 300 s, jitter), so by default a delivery lives ~4 minutes and a 60 s outage dead-letters nothing.
+- **`./run-faults.sh <none|F-1|F-2|F-5> [driver arguments]`** runs one fault on a database (`trading_faults`) and
   simulators of its own: recreates the exchange and gateway containers with their two volumes only (never `down -v`),
   recreates the database and its CDC slot, starts one instance with plain `java` from `target/classes` (C2, not
   `spring-boot:run`), waits for an authenticated operator call, runs `run-load.sh` with the decided fault profile
@@ -710,6 +719,7 @@ customers, 1 000 active, 100/s with 300/s at opens, 10 business days), fresh dat
 |---|---|---|---|
 | no fault, a / b / c | 48 807 / 49 228 / 49 717 | 217 / 480, 209 / 367, 217 / 436 ms | all 7 pass, each run |
 | F-1, a / b / c | 49 597 / 49 081 / 49 534 | 365 / 2 632, 406 / 2 547, 369 / 2 480 ms | all 11 pass, each run |
+| F-2, `pm-f2-b` | 49 675 | 227 / 5 017 ms | all 12 pass |
 | F-5, `pm-f5-b` | 49 776 | 212 / 368 ms | all 10 pass |
 
 - **The merge moved nothing beyond the spread.** Before it: no fault ~210 / ~370 ms (7 days, so not like for like),
@@ -724,3 +734,17 @@ customers, 1 000 active, 100/s with 300/s at opens, 10 business days), fresh dat
   stood in for the original. It now requires the `paymentId` as well, as the unknown-entry rule already did
   (`PhantomOfAnOmittedEntryIT`). The second failure was the driver's: it read the unfiltered case list, which stops at
   500, against 1 721 cases due.
+- **F-2: a 60 s outage costs its own window and no more, and catch-up brings what the simulators give up on.**
+  `pm-f2-b`, simulators on 4 delivery attempts: 79 352 webhook requests refused in the window, 19 849 deliveries
+  dead-lettered at the source (10 649 `demo-orders`, 9 093 `demo-settlement`, the rest calendar, statements, prices,
+  payments) - every one of them arrived through the catch-up readers: every order, fill and payment reached its
+  outcome. Booked p99 per 10 s bucket: ~330 ms before, 5.6-5.7 s for orders placed inside the window, 796 ms in the
+  bucket the window closed in, ~320 ms from 8 s after it; the slowest order took ~25 s end to end (stage max), the
+  whole run's p99 5.0 s.
+- **The default budget never dead-letters a 60 s outage.** The first run (`pm-f2-a`, simulators' default 10 attempts)
+  passed with `dead` 0 everywhere: each refused delivery got through on a retry, so catch-up was never needed. A
+  10-minute outage on the default (200 customers, `f2-budget`) dead-lettered 70 564 deliveries, each at exactly 10
+  attempts over ~3.6 minutes of real time, and every one still arrived. Hence the short budget for F-2.
+- `demo-instruments` dead-letters its 11 listings at every F-2 start: the simulators deliver them before the instance
+  is up (no answer at all), and with 4 attempts they die before it comes. Catch-up delivers them; the default budget
+  outlasts the start.

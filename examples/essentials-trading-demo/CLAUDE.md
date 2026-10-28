@@ -122,7 +122,7 @@ for; one instance exercises none of its ownership, rebalancing or fencing.
 
 `./run-load.sh` (phase 6, `docs/design/phase-6-realistic-load.md`) drives running instances over HTTP as simulated
 customers, from a JVM of its own; details in `_demo_harness/CLAUDE.md`, "The load driver". Needs the `simulators`
-profile - it follows the exchange's business days. `./run-faults.sh <none|F-1|F-5>` runs one phase 6 fault on a
+profile - it follows the exchange's business days. `./run-faults.sh <none|F-1|F-2|F-5>` runs one phase 6 fault on a
 database (`trading_faults`) and simulators of its own, with one instance it starts and stops itself.
 
 ## Simulators profile

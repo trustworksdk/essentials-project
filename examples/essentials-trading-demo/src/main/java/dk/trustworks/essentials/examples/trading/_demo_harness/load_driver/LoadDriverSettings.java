@@ -35,9 +35,12 @@ import java.util.*;
  * @param businessDays        closes to run for
  * @param maxInFlight         concurrent customer actions; above it an action is skipped and counted, not queued
  * @param fault               {@code none}, or the fault of design phase 6 §10 to run under the load: {@code F-1} damaged,
- *                            duplicated and reordered webhook copies from both simulators for the whole run; {@code F-5}
- *                            reconciliation breaks seeded by the simulators (started with them by {@code run-faults.sh}),
- *                            each found one for one and turned into a case
+ *                            duplicated and reordered webhook copies from both simulators for the whole run; {@code F-2}
+ *                            every instance answers its webhooks {@code 503} for {@code faultDuration} from the open of
+ *                            business day {@code faultAtDay}; {@code F-5} reconciliation breaks seeded by the simulators
+ *                            (started with them by {@code run-faults.sh}), each found one for one and turned into a case
+ * @param faultAtDay          the business day a fault with a window opens it in, at that day's open (day 1 is the first)
+ * @param faultDuration       how long a fault with a window keeps it open
  */
 public record LoadDriverSettings(List<String> baseUrls,
                                  String exchangeUrl,
@@ -66,8 +69,10 @@ public record LoadDriverSettings(List<String> baseUrls,
                                  Duration drainTimeout,
                                  String runToken,
                                  String reportDirectory,
-                                 String fault) {
-    static final Set<String> FAULTS = Set.of("none", "F-1", "F-5");
+                                 String fault,
+                                 int faultAtDay,
+                                 Duration faultDuration) {
+    static final Set<String> FAULTS = Set.of("none", "F-1", "F-2", "F-5");
 
 
     public static LoadDriverSettings fromArguments(String[] args) {
@@ -106,7 +111,9 @@ public record LoadDriverSettings(List<String> baseUrls,
                 Duration.parse(take(values, "drain-timeout", "PT10M")),
                 take(values, "run-token", Long.toString(System.currentTimeMillis() / 1000 % 1_000_000, 36)),
                 take(values, "report-directory", "target/load-driver"),
-                take(values, "fault", "none"));
+                take(values, "fault", "none"),
+                Integer.parseInt(take(values, "fault-at-day", "4")),
+                Duration.parse(take(values, "fault-duration", "PT60S")));
         if (!values.isEmpty()) {
             throw new IllegalArgumentException("Unknown settings: " + values.keySet());
         }
