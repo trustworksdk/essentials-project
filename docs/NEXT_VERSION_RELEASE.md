@@ -251,8 +251,10 @@ Not published; listed because they are the reference for how to use the framewor
   payment-gateway: accounts, orders, funding, settlement and reconciliation, a phase 6 load driver (`run-load.sh`) and
   fault runs (`run-faults.sh`). See its `docs/EXPANSION_PLAN.md`.
 - **`essentials-trading-demo`: every view projection and query uses Jdbi through the `UnitOfWork`'s handle**, as
-  0.60.1 made the original views do: a projection writes through the processor's own unit of work, so its view row
-  commits together with the processor's progress, and its DDL and reset open one of their own.
+  0.60.1 made the original views do. A projection writes through the processor's own unit of work, so its view row
+  commits together with the processor's progress by construction; with `JdbcTemplate` it did so only because the
+  Spring wiring bound both to one connection, which code copied into a project with another unit-of-work factory
+  would not get. Its DDL and reset open a unit of work of their own. Nothing changes at runtime in the demo.
 
 ---
 

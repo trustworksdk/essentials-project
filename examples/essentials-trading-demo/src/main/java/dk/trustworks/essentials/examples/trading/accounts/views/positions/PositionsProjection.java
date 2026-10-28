@@ -36,7 +36,8 @@ import java.util.List;
  * same reason (deltas, redelivery). The guard and the row update commit together in the view's unit of work.
  * <p>
  * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
- * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * {@link ViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
+ * with Spring's {@code JdbcTemplate}, only while the Spring wiring binds both to one connection. The
  * constructor's DDL and the reset run where none is active, so they go through
  * {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)}, which opens one.
  */

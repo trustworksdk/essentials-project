@@ -39,7 +39,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * uncleared deposit carries into the account's next generation and clears there.
  * <p>
  * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
- * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * {@link ViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
+ * with Spring's {@code JdbcTemplate}, only while the Spring wiring binds both to one connection. The
  * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
  * which opens one; {@link #clearingOnOrBefore(LocalDate)} reads through {@code getUnitOfWorkFactory().withUnitOfWork(uow -> …)},
  * which joins the caller's unit of work or opens one.

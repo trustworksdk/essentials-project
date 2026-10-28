@@ -31,7 +31,8 @@ import java.util.List;
  * {@code events/} import, as {@code orders} has its own. Every generation repeats the owner, so the upsert is idempotent.
  * <p>
  * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
- * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * {@link ViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
+ * with Spring's {@code JdbcTemplate}, only while the Spring wiring binds both to one connection. The
  * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
  * which opens one.
  */
