@@ -132,6 +132,13 @@ interval of its own. `@AggregateSnapshotPolicy` keeps its own default of 100. Se
 
 ## 2. New features
 
+**The shard-owned changes together, against 0.60.1** (`docs/durable-queue-measurements.md` §3.16; 2 pumps, 2 ms handler,
+three alternating rounds each): ordered-lane latency p50 / p99 at 8 queues and 2 000 msg/s 5.8-7.9 / 9.9-12.1 ms →
+2.8-3.1 / 4.1-5.3 ms, at 3 000 msg/s 9.1-11.0 / 15.7-33.9 ms → 2.9-3.1 / 5.0-8.1 ms; at 32 queues 3.3-4.2 / 8.3-10.7 ms
+against 11.6-15.7 / 21.7-349 ms, with the pumps using about a third less CPU under load (167-189 → 117-122 ms per 1 000
+messages) and half as much idle. Idle statement counts are level. The figures under each change below isolate that
+change and were measured before 0.60.1 was merged in.
+
 ### 2.1 Shard-owned: idle pumps can give their connections back (`postgresql-queue-shard-owned`, Spring Boot starter)
 
 Every pump holds a database connection for as long as it runs, so a process holds `pumpThreads + 1` connections (the

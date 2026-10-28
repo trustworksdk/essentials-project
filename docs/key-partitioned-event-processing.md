@@ -561,6 +561,12 @@ per node, nothing cross-instance. It pays only together with more inbox consumer
 |---|---|---|---|---|
 | two of five handled | 2 022 ms | 2 040 ms | 820 ms | **472 ms** |
 | all five handled | 5 310 ms | 5 065 ms | 1 942 ms | **1 099 ms** |
+| two of five, after the 0.60.1 merge (median of 3, per run) | 2 569 / 2 320 / 2 071 ms | 2 072 / 2 111 / 2 689 ms | 820 / 820 / 821 ms | **737 / 631 / 453 ms** |
+| all five, after the 0.60.1 merge (median of 3, per run) | 4 967 / 7 469 / 5 122 ms | 7 433 / 5 134 / 5 318 ms | 2 001 / 1 929 / 1 949 ms | **1 106 / 1 106 / 1 104 ms** |
+
+The 2026-10-28 rows are three runs of the benchmark on the merged code (`897cb31e`). The conclusion holds: the batch pays
+only with eight consumers, and there it halves the drain again. One consumer is noisy (all five, unbatched: single
+drains from 4.7 to 12.9 s); eight are steady.
 
 | Trading demo order flow, CDC, 4 runs each, alternating | forward per event | forward batch 100 |
 |---|---|---|

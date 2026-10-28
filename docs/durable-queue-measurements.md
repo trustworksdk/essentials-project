@@ -699,6 +699,40 @@ Three connections come back whenever the queues are quiet, between rushes as wel
 unchanged within the spread. The pool still has to fit every pump at a rush: all four pumps are busy then, and the
 start-up budget check still counts them. All 7 demo checks passed in all six load runs.
 
+### 3.16 After the 0.60.1 merge: this branch against 0.60.1
+
+§3.12-3.15 were measured against this branch's own earlier engine, before 0.60.1 was merged into it. 0.60.1 changed the
+engine for correctness (the pump's `serve()` loop, leases, retries), so the merged code was measured again against
+0.60.1 itself: `main` at `48616f8c` (with `ShardOwnedOrderedLoadedCostIT` copied in; it compiles unchanged) against the
+branch at `897cb31e`, both from worktrees outside `/workspace`, three alternating rounds, `-Dfailsafe.forkCount=1`,
+nothing else running. `ShardOwnedOrderedLoadedCostIT`: 2 pumps, 4 producers per queue, 2 ms handler, 20 s of load.
+Values are the three rounds.
+
+| Shape | Arm | p50 (ms) | p99 (ms) | max (ms) | pump CPU per 1 000 msg (ms) | pump CPU idle (of a core) | transactions / msg | read statements / msg |
+|---|---|---|---|---|---|---|---|---|
+| 8 queues, 2 000/s | 0.60.1 | 6.1 / 7.9 / 5.8 | 10.8 / 12.1 / 9.9 | 31 / 33 / 28 | 176 / 131 / 150 | 5 % | 6.8-7.6 | 2.7-3.1 |
+| 8 queues, 2 000/s | branch | **3.1 / 2.8 / 2.8** | **5.3 / 4.1 / 4.6** | 46 / 26 / 26 | 135 / 141 / 144 | 3 % | 7.2-7.7 | 3.8-4.0 |
+| 8 queues, 3 000/s | 0.60.1 | 11.0 / 9.1 / 9.1 | 33.9 / 33.1 / 15.7 | 60 / 156 / 53 | 129 / 120 / 140 | 4-5 % | 6.4-7.1 | 1.8-2.2 |
+| 8 queues, 3 000/s | branch | **3.1 / 3.0 / 2.9** | **8.1 / 7.4 / 5.0** | 37 / 31 / 26 | 109 / 114 / 112 | 3 % | 6.5-6.9 | 3.4-3.6 |
+| 32 queues, 2 000/s | 0.60.1 | 11.6 / 13.0 / 15.7 | 21.7 / 22.4 / 349 | 37 / 36 / 579 | 189 / 181 / 167 | 14-18 % | 8.3-9.0 | 3.7-4.5 |
+| 32 queues, 2 000/s | branch | **4.2 / 3.9 / 3.3** | **10.4 / 10.7 / 8.3** | 24 / 28 / 25 | **117 / 119 / 122** | **6-7 %** | 7.6-8.2 | 5.0-5.3 |
+
+Both arms delivered the same rate in every run (1 975, 2 963 and 1 910 msg/s), with key order intact. Every branch
+round beats every 0.60.1 round on p50 and p99 in all three shapes, and at 32 queues the pumps use a third less CPU
+under load and less than half when idle - §3.13's visit-only-owners-that-need-it and §3.14's wake after commit, both
+still in effect after the merge. The branch issues more read statements per message (§3.14's smaller, more frequent
+batches); transactions per message are level.
+
+Idle (`ShardOwnedMultiQueueCostIT`, `ShardOwnedOrderedIdleCostIT`), three rounds:
+
+| | 0.60.1 | branch |
+|---|---|---|
+| 5 queues x 2 lanes, completely idle, queries/s | 6.5 / 8.3 / 8.3 | 8.2 / 7.0 / 8.7 |
+| one idle ordered queue (64 units), statements in the window | 195 / **282** / 195 | 171 / 135 / 165 |
+
+Idle cost is level across queues. On 0.60.1, `ShardOwnedOrderedIdleCostIT`'s own gate failed once (282 statements
+against a bound of 243); the branch stayed well inside it in every round.
+
 ## 4. Environment
 
 | | |
