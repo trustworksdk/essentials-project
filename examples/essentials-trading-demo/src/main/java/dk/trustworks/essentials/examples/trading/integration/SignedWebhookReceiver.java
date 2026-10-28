@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_fo
 import org.slf4j.*;
 import org.springframework.http.*;
 import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.Set;
@@ -39,7 +40,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     <li>no ordering assumed — see {@link ExternalEventIntake}.</li>
  * </ol>
  * A damaged copy (fault injection: missing, null or invalid fields) is answered {@code 422} and recorded nowhere, so the
- * source retries with a fresh copy. If every retry is damaged the delivery is dead-lettered at the source, and
+ * source retries with a fresh copy. Damaged means either of two things: a field the simulator's own schema requires is
+ * missing or {@code null} ({@link SimulatorEventSchemas}) - provably not an event the simulator sent - or the slice's
+ * validator finds a field it reads unusable. Without the first, a copy damaged in a field the slice does not read would
+ * be recorded as the event and the intact copy dropped as a duplicate. If every retry is damaged the delivery is dead-lettered at the source, and
  * {@link ExternalEventLogCatchUp} reads the canonical event from the log instead.
  */
 public final class SignedWebhookReceiver {
@@ -50,16 +54,18 @@ public final class SignedWebhookReceiver {
     private final Predicate<ExternalEventEnvelope> validator;
     private final Inbox                            inbox;
     private final WebhookSignatureVerifier         verifier;
+    private final SimulatorEventSchemas            schemas;
     private final ExternalEventIntake              intake;
     private final ObjectMapper                     objectMapper;
 
-    public SignedWebhookReceiver(Settings settings, WebhookSignatureVerifier verifier, ExternalEventIntake intake, ObjectMapper objectMapper) {
+    public SignedWebhookReceiver(Settings settings, WebhookSignatureVerifier verifier, SimulatorEventSchemas schemas, ExternalEventIntake intake, ObjectMapper objectMapper) {
         requireNonNull(settings, "No settings provided");
         this.consumer = settings.consumer();
         this.eventTypes = settings.eventTypes();
         this.validator = settings.validator();
         this.inbox = settings.inbox();
         this.verifier = requireNonNull(verifier, "No verifier provided");
+        this.schemas = requireNonNull(schemas, "No schemas provided");
         this.intake = requireNonNull(intake, "No intake provided");
         this.objectMapper = requireNonNull(objectMapper, "No objectMapper provided");
     }
@@ -85,10 +91,13 @@ public final class SignedWebhookReceiver {
             log.warn("[{}] Rejected a webhook delivery with an invalid or stale signature", consumer);
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
+        JsonNode              json;
         ExternalEventEnvelope envelope;
         try {
-            envelope = ExternalEventEnvelope.from(objectMapper.readTree(rawBody)).orElse(null);
+            json = objectMapper.readTree(rawBody);
+            envelope = ExternalEventEnvelope.from(json).orElse(null);
         } catch (JacksonException e) {
+            json = null;
             envelope = null;
         }
         if (envelope == null) {
@@ -98,6 +107,11 @@ public final class SignedWebhookReceiver {
         if (!eventTypes.contains(envelope.eventType())) {
             log.debug("[{}] Ignoring event type '{}' this subscription does not process", consumer, envelope.eventType());
             return ResponseEntity.noContent().build();
+        }
+        var damage = schemas.damage(json);
+        if (!damage.isEmpty()) {
+            log.debug("[{}] '{}' event '{}' lacks what its schema requires {}, asking for a fresh copy", consumer, envelope.eventType(), envelope.eventId(), damage);
+            return ResponseEntity.status(HttpStatus.valueOf(422)).build();
         }
         if (!validator.test(envelope)) {
             log.debug("[{}] Damaged '{}' payload for event '{}', asking for a fresh copy", consumer, envelope.eventType(), envelope.eventId());

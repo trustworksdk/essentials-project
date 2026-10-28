@@ -129,7 +129,7 @@ class ExternalEventIntakeIT {
                                                         envelope -> envelope.payload().hasNonNull("clientOrderId"),
                                                         inbox);
         verifier = new WebhookSignatureVerifier(SECRET, Duration.ofMinutes(5), Clock.systemUTC());
-        receiver = new SignedWebhookReceiver(target, verifier, intake, objectMapper);
+        receiver = new SignedWebhookReceiver(target, verifier, SimulatorEventSchemas.load(objectMapper), intake, objectMapper);
         catchUp = new ExternalEventLogCatchUp(new ExternalEventLogCatchUp.Settings("IntakeIT-" + UUID.randomUUID(),
                                                                                    RestClient.create("http://127.0.0.1:" + source.getAddress().getPort()),
                                                                                    target,
@@ -218,10 +218,26 @@ class ExternalEventIntakeIT {
         return jdbcTemplate.queryForList("SELECT event_id FROM external_inbound_event WHERE consumer = ?", String.class, CONSUMER);
     }
 
+    /**
+     * A canonical event of the type, captured from the exchange ({@code simulator-events/canonical-events.json}), so it
+     * carries everything its schema requires and the receiver takes it; ids, order, aggregate and time are this test's.
+     */
     private static String event(String eventId, long sequence, String eventType, String aggregateId) {
-        return """
-                {"eventId":"%s","sequence":%d,"eventType":"%s","schemaVersion":1,"source":"exchange","simulationId":null,
-                 "aggregateId":"%s","correlationId":null,"occurredAt":"2030-01-07T09:00:00Z",
-                 "payload":{"clientOrderId":"%s"}}""".formatted(eventId, sequence, eventType, aggregateId, aggregateId);
+        var mapper = tools.jackson.databind.json.JsonMapper.builder().build();
+        try (var in = ExternalEventIntakeIT.class.getClassLoader().getResourceAsStream("simulator-events/canonical-events.json")) {
+            for (var canonical : mapper.readTree(in).path("exchange")) {
+                if (canonical.path("eventType").asString().equals(eventType)) {
+                    var event = (tools.jackson.databind.node.ObjectNode) canonical.deepCopy();
+                    event.put("eventId", eventId).put("sequence", sequence).put("aggregateId", aggregateId).put("occurredAt", "2030-01-07T09:00:00Z");
+                    if (event.path("payload").has("clientOrderId")) {
+                        ((tools.jackson.databind.node.ObjectNode) event.get("payload")).put("clientOrderId", aggregateId);
+                    }
+                    return mapper.writeValueAsString(event);
+                }
+            }
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+        throw new IllegalArgumentException("No canonical '" + eventType + "' event in the fixture");
     }
 }

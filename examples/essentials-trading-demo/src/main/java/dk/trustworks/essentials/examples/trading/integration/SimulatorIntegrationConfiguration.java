@@ -22,6 +22,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.*;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.*;
 import java.net.http.HttpClient;
@@ -46,6 +47,14 @@ public class SimulatorIntegrationConfiguration {
         } catch (IOException e) {
             throw new UncheckedIOException("Cannot read the simulators' webhook secret from '" + secretFile.toAbsolutePath() + "'", e);
         }
+    }
+
+    /**
+     * The simulators' event schemas, which every webhook receiver checks a delivered copy against.
+     */
+    @Bean
+    public SimulatorEventSchemas simulatorEventSchemas(ObjectMapper objectMapper) {
+        return SimulatorEventSchemas.load(objectMapper);
     }
 
     /**

@@ -145,6 +145,7 @@ class ExchangeSimulatorWebhookIT {
                                                         inbox);
         receiver = new SignedWebhookReceiver(target,
                                                  new WebhookSignatureVerifier(SECRET, Duration.ofMinutes(5), Clock.systemUTC()),
+                                                 SimulatorEventSchemas.load(objectMapper),
                                                  intake,
                                                  objectMapper);
         var subscriptionId = subscribe();

@@ -49,6 +49,7 @@ public class SettlementEvents {
 
     private final SettlementReports           reports;
     private final WebhookSignatureVerifier verifier;
+    private final SimulatorEventSchemas schemas;
     private final ExternalEventIntake      intake;
     private final Dependencies             dependencies;
     private final RestClient               gateway;
@@ -71,9 +72,10 @@ public class SettlementEvents {
         }
     }
 
-    public SettlementEvents(SettlementReports reports, WebhookSignatureVerifier verifier, ExternalEventIntake intake, Dependencies dependencies) {
+    public SettlementEvents(SettlementReports reports, WebhookSignatureVerifier verifier, SimulatorEventSchemas schemas, ExternalEventIntake intake, Dependencies dependencies) {
         this.reports = requireNonNull(reports, "No reports provided");
         this.verifier = requireNonNull(verifier, "No verifier provided");
+        this.schemas = requireNonNull(schemas, "No schemas provided");
         this.intake = requireNonNull(intake, "No intake provided");
         this.dependencies = requireNonNull(dependencies, "No dependencies provided");
         this.gateway = dependencies.restClientBuilder().clone().baseUrl(dependencies.properties().getExchange().getBaseUrl()).build();
@@ -85,7 +87,7 @@ public class SettlementEvents {
                                                           SettlementEventTranslation.EVENT_TYPES,
                                                           SettlementEventTranslation::isComplete,
                                                           reports.inbox());
-        receiver = new SignedWebhookReceiver(settings, verifier, intake, dependencies.objectMapper());
+        receiver = new SignedWebhookReceiver(settings, verifier, schemas, intake, dependencies.objectMapper());
         catchUp = new ExternalEventLogCatchUp(new ExternalEventLogCatchUp.Settings("exchange:" + CONSUMER, gateway, settings, Duration.ofSeconds(5), 500,
                                                                                          Set.of(dependencies.properties().getExchange().getParticipantId())),
                                               intake,

@@ -51,6 +51,7 @@ public class ExchangeOrderEvents {
 
     private final ExchangeReports          reports;
     private final WebhookSignatureVerifier verifier;
+    private final SimulatorEventSchemas schemas;
     private final ExternalEventIntake      intake;
     private final FencedLockManager        fencedLockManager;
     private final JdbcTemplate             jdbcTemplate;
@@ -62,10 +63,12 @@ public class ExchangeOrderEvents {
 
     public ExchangeOrderEvents(ExchangeReports reports,
                                WebhookSignatureVerifier verifier,
+                               SimulatorEventSchemas schemas,
                                ExternalEventIntake intake,
                                ExternalEventsDependencies dependencies) {
         this.reports = requireNonNull(reports, "No reports provided");
         this.verifier = requireNonNull(verifier, "No verifier provided");
+        this.schemas = requireNonNull(schemas, "No schemas provided");
         this.intake = requireNonNull(intake, "No intake provided");
         requireNonNull(dependencies, "No dependencies provided");
         this.fencedLockManager = dependencies.fencedLockManager();
@@ -100,7 +103,7 @@ public class ExchangeOrderEvents {
                                                           ExchangeOrderEventTranslation.EVENT_TYPES,
                                                           ExchangeOrderEventTranslation::isComplete,
                                                           reports.inbox());
-        receiver = new SignedWebhookReceiver(settings, verifier, intake, objectMapper);
+        receiver = new SignedWebhookReceiver(settings, verifier, schemas, intake, objectMapper);
         catchUp = new ExternalEventLogCatchUp(new ExternalEventLogCatchUp.Settings("exchange:" + CONSUMER, exchange, settings, Duration.ofSeconds(5), 500,
                                                                                          Set.of(participantId)),
                                               intake,

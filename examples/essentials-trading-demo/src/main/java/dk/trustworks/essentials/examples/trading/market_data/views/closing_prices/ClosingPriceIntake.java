@@ -55,6 +55,7 @@ public class ClosingPriceIntake {
 
     private final Inboxes                  inboxes;
     private final WebhookSignatureVerifier verifier;
+    private final SimulatorEventSchemas schemas;
     private final ExternalEventIntake      intake;
     private final Dependencies             dependencies;
     private final RestClient               exchange;
@@ -79,9 +80,10 @@ public class ClosingPriceIntake {
         }
     }
 
-    public ClosingPriceIntake(Inboxes inboxes, WebhookSignatureVerifier verifier, ExternalEventIntake intake, Dependencies dependencies) {
+    public ClosingPriceIntake(Inboxes inboxes, WebhookSignatureVerifier verifier, SimulatorEventSchemas schemas, ExternalEventIntake intake, Dependencies dependencies) {
         this.inboxes = requireNonNull(inboxes, "No inboxes provided");
         this.verifier = requireNonNull(verifier, "No verifier provided");
+        this.schemas = requireNonNull(schemas, "No schemas provided");
         this.intake = requireNonNull(intake, "No intake provided");
         this.dependencies = requireNonNull(dependencies, "No dependencies provided");
         this.exchange = dependencies.restClientBuilder().clone().baseUrl(dependencies.properties().getExchange().getBaseUrl()).build();
@@ -97,7 +99,7 @@ public class ClosingPriceIntake {
                                                         .build(),
                                              this::record);
         var settings = new SignedWebhookReceiver.Settings(CONSUMER, Set.of(EVENT_TYPE), ClosingPriceIntake::isComplete, inbox);
-        receiver = new SignedWebhookReceiver(settings, verifier, intake, dependencies.objectMapper());
+        receiver = new SignedWebhookReceiver(settings, verifier, schemas, intake, dependencies.objectMapper());
         catchUp = new ExternalEventLogCatchUp(new ExternalEventLogCatchUp.Settings("exchange:" + CONSUMER, exchange, settings, Duration.ofSeconds(5), 500),
                                               intake,
                                               dependencies.fencedLockManager(),

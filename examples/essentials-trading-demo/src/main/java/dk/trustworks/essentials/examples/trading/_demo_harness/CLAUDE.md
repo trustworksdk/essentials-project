@@ -664,10 +664,24 @@ subscription of both simulators.
   `demo-orders` alone took 174 788 attempts: 66 038 duplicates, 32 013 held, 42 988 damaged, 13 529 answered `422`.
 - **The cost is the exchange reports' latency**: a held copy waits 500 ms and a refused one waits for the simulator's
   retry backoff, so submitted → filled p99 goes from ~65 ms to ~1.1 s; the rest of the path is unchanged.
-- **Two thirds of the damaged copies are accepted, and that is correct.** Validators require exactly what their
-  translation reads, per event type; a copy damaged elsewhere (`simulationId`, `schemaVersion`, `payload.side` on an
-  order event we key by `clientOrderId`, `paymentId` on a `PaymentCompleted` ...) is recorded as the event and the
-  intact copy dropped as a duplicate, losing only fields nobody reads. Checked against every translation's reads; no
-  envelope identity field (`eventId`, `aggregateId`, `sequence`, `occurredAt`) was ever accepted damaged. Rule for new
-  translations: a field read with `orElse(...)` for some event types is lost silently when a damaged copy wins - make the
-  validator require what each type reads, as they all do today.
+- **Two thirds of the damaged copies were accepted** (answered `204`), each missing only fields its event type's
+  translation does not read - checked against every translation; no envelope identity field (`eventId`, `aggregateId`,
+  `sequence`, `occurredAt`) was ever accepted damaged. Harmless today, but the damaged copy became *the* event and the
+  intact one was dropped as a duplicate, many lacking fields the schema requires (`payload.side`, `payload.instrumentId`
+  ...), so a translation that later reads one would fail on it. Hence the schema check (`integration/CLAUDE.md`,
+  "Validate before deduplicating"): a webhook copy must now carry what its schema requires; the run with it is below.
+
+With the schema check (same profile, one run):
+
+| | Orders | Booked p50 / p99 | Submitted → filled p99 | `demo-orders` answered `422` | Damaged copies accepted (all subscriptions) | Checks |
+|---|---|---|---|---|---|---|
+| slice validators only | 49 664 | 267 ms / 1 322 ms | 1 092 ms | 13 529 | 51 117 | all pass |
+| + schema check | 49 503 | 324 ms / 2 661 ms | 2 470 ms | 46 657 | 2 973 | all pass |
+
+- **No copy missing a field is accepted any more.** What still gets through is `null` written into a field the schema
+  allows to be null (`correlationId`, `simulationId`, `payload.price`/`priceTicks` - a market order has none -,
+  `completedAt`, `reason` on a pending payment): indistinguishable from the real thing, and none of it read by the
+  event's translation.
+- **The cost is retries, under fault injection only**: three times the refusals, each waiting out the simulator's
+  backoff, so submitted → filled p99 goes from ~1.1 s to ~2.5 s. Source-side dead letters stay 0 - every refused
+  delivery got through on a later attempt. A producer that keeps its own contract never pays it.

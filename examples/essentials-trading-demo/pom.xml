@@ -257,6 +257,28 @@
     </dependencies>
 
     <build>
+        <!-- Replaces the parent's resources (a child's list is not merged), so its two entries are repeated. The third puts
+             the simulators' OpenAPI documents on the classpath: SimulatorEventSchemas checks every webhook copy against
+             the event schemas in them. -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <directory>${maven.multiModuleProjectDirectory}</directory>
+                <targetPath>META-INF</targetPath>
+                <includes>
+                    <include>LICENSE.txt</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/openapi</directory>
+                <targetPath>simulator-openapi</targetPath>
+                <includes>
+                    <include>*/openapi-3.0.json</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>

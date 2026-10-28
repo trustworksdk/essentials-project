@@ -11,7 +11,8 @@ simulators' receiver guide ("A correct receiver, in five rules").
 |---|---|
 | `ExternalEventEnvelope` | The canonical envelope. The payload stays a `JsonNode`; only the consuming translation slice interprets it |
 | `WebhookSignatureVerifier` | HMAC-SHA256 over `<timestamp>.<raw body>`, either value during a rotation, timestamp against the real clock |
-| `SignedWebhookReceiver` | One subscription's receiving side: verify, parse, filter, validate, hand to the intake, answer |
+| `SignedWebhookReceiver` | One subscription's receiving side: verify, parse, filter, check against the event's schema, validate, hand to the intake, answer |
+| `SimulatorEventSchemas` | Per event type, the fields the simulators' own schemas require (and whether `null` is allowed), read at startup from the OpenAPI copies, which the POM packages under `simulator-openapi/`; `damage(json)` lists what a copy lacks, in the simulators' notation (`missing:payload.side`) |
 | `ExternalEventIntake` | Deduplicates per `(consumer, eventId)` and queues to the consumer's `Inbox`, in one unit of work |
 | `ExternalEventLogCatchUp` | Reads the source's `/api/events` log behind a fenced lock and feeds the same intake; asks for its consumer's event types only, and its participants (`Settings.participants`, SR-39: the exchange's orders, settlement and clearing consumers ask for the firm's; empty for the gateway, which has no filter), and moves its cursor on by `Event-Log-Scanned-Through` (SR-34) |
 | `SimulatorProperties`, `SimulatorIntegrationConfiguration` | `trading-demo.simulators.*` (set by the `simulators` profile), the shared `WebhookSignatureVerifier` bean, which exists only when a secret file is configured, and the exchange's generated `ApiClient`, which exists only when its base URL is |
@@ -38,9 +39,16 @@ host port reachable only from containers started after that call.
 
 ## Rules that are easy to break
 
-- **Validate before deduplicating.** The simulators' fault injection damages delivered copies (missing, null, invalid
-  fields), never the canonical event. A damaged copy that got its `eventId` recorded would swallow the good copy that
-  the retry brings. So a slice's validator runs first, and a failing copy is answered `422` and recorded nowhere.
+- **Validate before deduplicating, against the schema as well as the slice's needs.** The simulators' fault injection
+  damages delivered copies (missing, null, invalid fields), never the canonical event. A damaged copy that got its
+  `eventId` recorded would swallow the good copy that the retry brings. So two checks run first, and a failing copy is
+  answered `422` and recorded nowhere: `SimulatorEventSchemas` (a field the schema requires is missing, or `null` where
+  not nullable - the simulators never emit that, so the copy is provably damaged) and the slice's validator (a field
+  the translation reads is unusable). The schema check was added after phase 6's F-1 run: with only the slice's check,
+  two thirds of the damaged copies were taken as the event, harmless only while nothing reads the fields they lacked.
+  Optional and unknown fields stay tolerated.
+- **The catch-up path checks only the slice's needs**, not the schema: it reads the canonical event from the log, and a
+  stricter check there could only make an event that cannot be ingested at all.
 - **The deduplication row and the `Inbox` message commit together**, or a failed enqueue leaves a row that makes the
   retry look like a duplicate.
 - **Nothing here reorders.** Subscriptions are unordered (D11), so deliveries arrive out of order. Messages are
