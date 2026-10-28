@@ -104,7 +104,7 @@
              release a generated project starts on. -->
         <springdoc.version>3.1.1</springdoc.version>
         <objenesis.version>3.6</objenesis.version>
-        <postgresql.version>42.7.13</postgresql.version>
+        <postgresql.version>42.7.14</postgresql.version>
         <slf4j.version>2.0.20</slf4j.version>
         <awaitility.version>4.3.0</awaitility.version>
         <assertj.version>3.27.7</assertj.version>

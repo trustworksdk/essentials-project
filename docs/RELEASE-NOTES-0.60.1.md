@@ -41,6 +41,7 @@ as `0.60.1` (§4), with the Slice Atlas page (`/essentials:slice-map-html`), `/e
 |---|---|---|
 | Spring Boot | 4.1.x, built against 4.1.1 | 4.1.x, built against **4.1.2** (§7) |
 | Jackson | 3.1.5 | **3.1.7**, the one Spring Boot 4.1.2 manages (§7) |
+| PostgreSQL JDBC driver | 42.7.13 | **42.7.14**, two CVEs fixed (§7) |
 | Supported PostgreSQL | 9.5+ (13+ for the shard-owned ordered lane) | **15+**; older servers still work but are no longer tested (§1) |
 
 ---
@@ -1537,6 +1538,13 @@ Not published; listed because they are the reference for how to use the framewor
 - **Built and tested against Spring Boot 4.1.2** (was 4.1.1) **and Jackson 3.1.7** (was 3.1.5), the Jackson that
   Spring Boot 4.1.2 manages. The root POM no longer holds Tomcat (11.0.26) and Netty (4.2.18.Final) ahead of Spring
   Boot for CVEs: 4.1.2 manages the fixed releases, Tomcat 11.0.27 and Netty 4.2.19.Final.
+- **Built and tested against the PostgreSQL JDBC driver 42.7.14** (was 42.7.13), the release Spring Boot 4.1.2
+  manages. It fixes CVE-2026-107314 (a `requireAuth` value that excludes every method was ignored in 42.7.11-42.7.13,
+  so any method the server asked for was accepted, cleartext password included) and CVE-2026-107315 (in
+  42.7.4-42.7.13 a value shorter than its declared length was padded with bytes of earlier messages on the
+  connection, through `ByteStreamWriter`, `CopyIn`, `LargeObject` and `Blob.setBytes(…, off, len)`). Essentials uses
+  neither path. The driver stays `provided`: an application on Spring Boot 4.1.2 already gets 42.7.14; one that pins
+  the driver itself should move to it.
 - Patch updates: Kotlin 2.4.21, the Jackson 2 BOM 2.22.4 (used only by swagger, Avro and the generated admin
   client), byte-buddy 1.18.16, swagger-core 2.2.55, maven-surefire-plugin and maven-failsafe-plugin 3.6.1, and
   snappy-java 1.1.10.12 in the examples.

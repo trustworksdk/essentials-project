@@ -430,21 +430,21 @@
       "cites": [
         {
           "path": "docs/RELEASE-NOTES-0.60.1.md",
-          "line": 64,
+          "line": 65,
           "token": "the additions can still stop your code compiling",
-          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L64"
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L65"
         },
         {
           "path": "docs/RELEASE-NOTES-0.60.1.md",
-          "line": 69,
+          "line": 70,
           "token": "`ShardOwnerSettings`, a record, gains a fifteenth component",
-          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L69"
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L70"
         },
         {
           "path": "docs/RELEASE-NOTES-0.60.1.md",
-          "line": 74,
+          "line": 75,
           "token": "`SchemaChange`, a record, gains a fifth component",
-          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L74"
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L75"
         }
       ],
       "findings": []
@@ -460,9 +460,9 @@
       "cites": [
         {
           "path": "docs/RELEASE-NOTES-0.60.1.md",
-          "line": 134,
+          "line": 135,
           "token": "Silent behaviour changes",
-          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L134"
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L135"
         }
       ],
       "items": [
@@ -487,9 +487,9 @@
       "cites": [
         {
           "path": "docs/RELEASE-NOTES-0.60.1.md",
-          "line": 120,
+          "line": 121,
           "token": "Only if you run `essentials.schema.mode=validate`",
-          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L120"
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L121"
         }
       ],
       "items": [
