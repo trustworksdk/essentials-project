@@ -66,7 +66,7 @@ All under `dk.trustworks.essentials.components.eventsourced.eventstore.postgresq
 
 ## Test Structure
 
-- **ITs** (`*IT.java`) — Testcontainers-based; require Docker. Use `PostgreSQLContainer` (standard) or `GenericContainer` built from `src/test/resources/docker/postgresql-wal2json/Dockerfile` (PG 17 + wal2json plugin) for CDC tests.
+- **ITs** (`*IT.java`) — Testcontainers-based; require Docker. Use `PostgreSQLContainer` (standard) or `GenericContainer` built from `src/test/resources/docker/postgresql-wal2json/Dockerfile` (PG 17 + wal2json plugin) for CDC tests. That image is built by this module's `docker-maven-plugin` in `pre-integration-test`, before failsafe forks; never per test JVM (`AbstractLogicalReplicationPostgresIT.WAL2JSON_IMAGE`).
 - **Abstract base** — `AbstractLogicalReplicationPostgresIT` wires JDBI, replication datasource, UoW factory for all CDC ITs.
 - **Unit tests** — no Docker; test individual classes (optimizer, decoder, column name builder, etc.).
 - **Multi-node** — `*_2_node_*IT` tests run two `DefaultEventStoreSubscriptionManager` instances sharing one DB to verify exclusive subscription handover via fenced lock.

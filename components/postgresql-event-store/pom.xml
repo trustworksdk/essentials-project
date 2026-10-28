@@ -47,6 +47,11 @@
           (two runs, within 3%): 6:20 off a 29:00 phase, about 22%. Peak RAM 9.9 GiB of 15 (was 9.3).
         -->
         <failsafe.forkCount>0.5C</failsafe.forkCount>
+        <!--
+          The wal2json image the CDC integration tests run on, built once below before any failsafe fork starts.
+          Bump the tag whenever its Dockerfile changes: an IDE run reuses whatever image carries this name.
+        -->
+        <essentials.wal2json.test-image>essentials-test/postgres-wal2json:1</essentials.wal2json.test-image>
     </properties>
 
 
@@ -260,6 +265,46 @@
                       byte-buddy 1.17.8 -> 1.18.11 bump did.
                     -->
                     <argLine>-javaagent:${net.bytebuddy:byte-buddy-agent:jar}</argLine>
+                </configuration>
+            </plugin>
+            <!--
+              Builds the CDC tests' wal2json image in Maven's own process, before failsafe forks a JVM. Each fork used to
+              build it through ImageFromDockerfile; two forks building the same tag at once left one of them unable to
+              find it, and Testcontainers then tried to pull the local-only name from Docker Hub (404). Same pattern as
+              essentials-postgres in components/foundation.
+            -->
+            <plugin>
+                <groupId>io.fabric8</groupId>
+                <artifactId>docker-maven-plugin</artifactId>
+                <version>${maven.docker.plugin.version}</version>
+                <configuration>
+                    <images>
+                        <image>
+                            <name>${essentials.wal2json.test-image}</name>
+                            <build>
+                                <dockerFile>${project.basedir}/src/test/resources/docker/postgresql-wal2json/Dockerfile</dockerFile>
+                                <contextDir>${project.basedir}/src/test/resources/docker/postgresql-wal2json</contextDir>
+                            </build>
+                        </image>
+                    </images>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>build-image</id>
+                        <phase>pre-integration-test</phase>
+                        <goals>
+                            <goal>build</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <essentials.wal2json.test-image>${essentials.wal2json.test-image}</essentials.wal2json.test-image>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
             <plugin>
