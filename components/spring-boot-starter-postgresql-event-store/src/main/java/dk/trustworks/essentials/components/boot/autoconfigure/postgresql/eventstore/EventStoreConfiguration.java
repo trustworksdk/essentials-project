@@ -50,6 +50,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
 import dk.trustworks.essentials.components.foundation.postgresql.TableChangeNotification;
@@ -91,7 +92,6 @@ import java.time.*;
 import java.util.*;
 import java.util.function.Function;
 
-import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 
 /**
  * {@link PostgresqlEventStore} auto configuration<br>
@@ -634,13 +634,20 @@ public class EventStoreConfiguration {
      * usually registered for the web layer, and adding them here would silently change the persisted JSON format. An
      * application that needs extra modules for persistence defines its own {@link JSONEventSerializer} bean, which
      * this backs off from.
+     * <p>
+     * The mapper is the one {@link EssentialsJSONEventSerializers#create()} builds, except that
+     * {@code essentials.immutable-jackson-module-enabled=false} (default {@code true}) leaves {@code EssentialsImmutableJacksonModule}
+     * out of it. That changes nothing that is written, only what can be read: a type Jackson cannot construct then fails
+     * to deserialize instead of being instantiated through Objenesis. Spring Boot's web mapper is separate: it gets the
+     * module only with an explicit {@code true}.
      *
+     * @param properties the Essentials components properties
      * @return the {@link JSONEventSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
      */
     @Bean
     @ConditionalOnMissingBean
-    public JSONEventSerializer jsonSerializer() {
-        return EssentialsJSONEventSerializers.create();
+    public JSONEventSerializer jsonSerializer(EssentialsComponentsProperties properties) {
+        return new Jackson3JSONEventSerializer(EssentialsObjectMappers.createJackson3ObjectMapper(properties.isImmutableJacksonModuleEnabled()));
     }
 
     /**
@@ -659,13 +666,19 @@ public class EventStoreConfiguration {
         return new EventStoreSubscriptionMonitorManager(enabled, interval, eventStoreSubscriptionManager, monitors);
     }
 
+    /**
+     * The {@value SubscriberGlobalOrderMicrometerMonitor#SUBSCRIPTION_EVENT_ORDER_DIFF_METRIC} gauge - how many events each
+     * subscriber has yet to read. Recorded whenever a {@link MeterRegistry} is present (until 0.60.1 only with
+     * {@code management.tracing.enabled=true}); without one the monitor does nothing. Run by the
+     * {@link EventStoreSubscriptionMonitorManager}, like {@link SubscriptionStoppedMicrometerMonitor}.
+     */
     @Bean
-    @ConditionalOnProperty(prefix = "management.tracing", name = "enabled", havingValue = "true")
+    @ConditionalOnMissingBean
     public SubscriberGlobalOrderMicrometerMonitor subscriberGlobalOrderMicrometerMonitor(EventStoreSubscriptionManager eventStoreSubscriptionManager,
                                                                                          Optional<MeterRegistry> meterRegistry,
                                                                                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
                                                                                          EssentialsComponentsProperties properties) {
-        requireTrue(meterRegistry.isPresent(), "MeterRegistry is not configured");
+        // Optional is idiomatic at the @Bean injection point and is unwrapped on the spot
         return new SubscriberGlobalOrderMicrometerMonitor(eventStoreSubscriptionManager,
                                                           meterRegistry.orElse(null),
                                                           eventStoreUnitOfWorkFactory,
@@ -676,8 +689,7 @@ public class EventStoreConfiguration {
      * The {@value SubscriptionStoppedMicrometerMonitor#SUBSCRIPTION_STOPPED_METRIC} gauge - {@code 1} while a subscription
      * is stopped by its {@link SubscriptionErrorPolicy}, the signal to alert on for a halted projection.
      * <p>
-     * Deliberately not gated by {@code management.tracing.enabled} like {@link SubscriberGlobalOrderMicrometerMonitor}:
-     * it is an incident signal, recorded whenever a {@link MeterRegistry} is present - the same rule as the
+     * Deliberately not gated by {@code management.tracing.enabled}: it is an incident signal, recorded whenever a {@link MeterRegistry} is present - the same rule as the
      * {@value MeasurementEventStoreSubscriptionObserver#SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC} counter it complements.
      * It is run by the {@link EventStoreSubscriptionMonitorManager}, so {@code essentials.eventstore.subscription-monitor.enabled=false}
      * switches it off together with every other monitor.

@@ -160,9 +160,9 @@
           "name": "CancelOrder",
           "fqn": "com.example.shop.orders.use_cases.cancel_order.CancelOrder",
           "resolvedBy": "import",
-          "via": "sendAndDontWait",
+          "via": "send",
           "file": "src/main/java/com/example/shop/orders/automations/cancel_unpaid/CancelUnpaidProcessor.java",
-          "line": 43,
+          "line": 44,
           "own": false
         }
       ],
@@ -181,7 +181,7 @@
           "class": "CancelUnpaidProcessor",
           "method": "sweep",
           "file": "src/main/java/com/example/shop/orders/automations/cancel_unpaid/CancelUnpaidProcessor.java",
-          "line": 41,
+          "line": 42,
           "cron": null,
           "fixedDelay": "PT15M",
           "fixedRate": null,
@@ -851,5 +851,9 @@
     }
   ],
   "unparsed": [],
-  "unresolved": []
+  "unresolved": [],
+  "tests": {
+    "roots": [],
+    "classes": []
+  }
 }

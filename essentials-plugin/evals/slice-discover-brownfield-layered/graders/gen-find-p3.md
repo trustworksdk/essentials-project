@@ -9,5 +9,5 @@ PASS if the report contains a finding that matches all of:
 - it concerns `src/main/java/com/example/shop/service/BillingService.java`
 - it is a boundary finding
 - it is ranked #3 among the report's structural findings
-- its substance: BillingService reaches into orders' entity and repository directly.
+- its substance: BillingService reaches into orders' entity and repository directly. "Ranked #3" means the boundary tier, after sole-writer and cohesion, however many findings those tiers hold.
 FAIL if no finding matches. Ignore formatting, ordering and other findings.

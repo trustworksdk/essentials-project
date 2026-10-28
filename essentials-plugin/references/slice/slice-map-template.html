@@ -266,7 +266,7 @@ const M = SLICE_MAP;
 function boot() {
   if (!M) {
     document.body.innerHTML = '<div class="wrap"><h1>Slice map</h1><p class="none">' +
-      'This template has not been rendered. /essentials:slice-map replaces the SLICE_MAP placeholder with real data.' +
+      'This template has not been rendered. slice-index.py html replaces the SLICE_MAP placeholder with real data.' +
       '</p></div>';
     return;
   }
@@ -977,7 +977,7 @@ function markEdges(id) {
 function renderFooter() {
   const f = $('#footer');
   f.append(document.createTextNode(
-    'Rendered from slice.yaml manifests by /essentials:slice-map. This is declared structure, not audited structure — run /essentials:slice-check to verify code against the law.'));
+    'Rendered from slice.yaml manifests by slice-index.py html. This is declared structure, not audited structure — run /essentials:slice-check to verify code against the law.'));
   const notes = arr(M.notes).concat(arr((M.meta || {}).skipped).map(s => 'skipped: ' + s));
   if (notes.length) {
     const ul = el('ul', 'notes');

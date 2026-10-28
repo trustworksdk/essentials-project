@@ -1,0 +1,5 @@
+expected: tests/fixtures/enrich/expected.yaml
+command: /essentials:slice-enrich
+sections: [runs_expect, must_find, must_not_find]
+read_only: true
+runs_scripts: [slice-lint.py, slice-source.py, slice-enrich.py]

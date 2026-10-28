@@ -37,5 +37,5 @@ class CancelOrderTest {
     }
 
     // TODO: one test per invariant enforced by CancelOrderDecider.
-    // Rejections use .thenThrows(SomeException.class).
+    // Rejections use .thenFailsWithExceptionType(SomeException.class).
 }

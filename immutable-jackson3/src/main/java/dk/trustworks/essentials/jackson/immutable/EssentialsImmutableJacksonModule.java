@@ -69,7 +69,7 @@ public final class EssentialsImmutableJacksonModule extends SimpleModule {
     /**
      * Convenience method for creating a new {@link ObjectMapper} with our {@link EssentialsImmutableJacksonModule} added and with opinionated defaults like explicit JSON mapping,
      * not failing on unknown properties or empty beans, propagation of transient markers, using FIELDS for serialization (i.e. disabling auto detection of getters
-     * and setters and instead using field and allowing ANY visibility for fields and constructors and none for getters/setters)
+     * and setters and instead using field and allowing ANY visibility for fields and constructors and none for getters, is-getters and setters), and reading a missing primitive as its default rather than failing
      *
      * @param additionalModules Additional modules that should be added to the {@link ObjectMapper} instance created
      * @return new {@link ObjectMapper} instance configured with sensible defaults and the {@link EssentialsImmutableJacksonModule} added
@@ -79,11 +79,13 @@ public final class EssentialsImmutableJacksonModule extends SimpleModule {
         return JsonMapper.builder()
                          .changeDefaultVisibility(v -> VisibilityChecker.defaultInstance()
                                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
+                                                              .withIsGetterVisibility(JsonAutoDetect.Visibility.NONE)
                                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
                                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
                                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY))
                          .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
                          .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                         .disable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
                          .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
                          .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                          .addModule(new EssentialsImmutableJacksonModule())

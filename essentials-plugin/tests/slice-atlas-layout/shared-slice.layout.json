@@ -1,0 +1,585 @@
+{
+ "atlas": {
+  "bounds": {
+   "h": 1408,
+   "w": 1152,
+   "x": 0,
+   "y": 0
+  },
+  "bridges": [],
+  "cards": [
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@orders|orders.place_order|trigger|POST /api/orders",
+    "lane": "trigger",
+    "name": "POST /api/orders",
+    "portal": false,
+    "role": "trigger",
+    "segment": "checkout@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 228,
+    "y": 160
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@orders|orders.place_order|command|PlaceOrder",
+    "lane": "action",
+    "name": "PlaceOrder",
+    "portal": false,
+    "role": "command",
+    "segment": "checkout@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 228,
+    "y": 272
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@orders|orders.place_order|event|OrderPlaced",
+    "lane": "stream:Order",
+    "name": "OrderPlaced",
+    "portal": false,
+    "role": "event",
+    "segment": "checkout@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 228,
+    "y": 384
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@orders|orders.order_history|trigger|GET /api/orders/history",
+    "lane": "trigger",
+    "name": "GET /api/orders/history",
+    "portal": false,
+    "role": "trigger",
+    "segment": "checkout@orders",
+    "slice": "orders.order_history",
+    "w": 168,
+    "x": 436,
+    "y": 160
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@orders|orders.order_history|view|OrderHistory",
+    "lane": "action",
+    "name": "OrderHistory",
+    "portal": false,
+    "role": "view",
+    "segment": "checkout@orders",
+    "slice": "orders.order_history",
+    "w": 168,
+    "x": 436,
+    "y": 272
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "returns@orders|orders.return_order|trigger|POST /api/orders/{id}/return",
+    "lane": "trigger",
+    "name": "POST /api/orders/{id}/return",
+    "portal": false,
+    "role": "trigger",
+    "segment": "returns@orders",
+    "slice": "orders.return_order",
+    "w": 168,
+    "x": 228,
+    "y": 716
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "returns@orders|orders.return_order|command|ReturnOrder",
+    "lane": "action",
+    "name": "ReturnOrder",
+    "portal": false,
+    "role": "command",
+    "segment": "returns@orders",
+    "slice": "orders.return_order",
+    "w": 168,
+    "x": 228,
+    "y": 828
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "returns@orders|orders.return_order|event|OrderReturned",
+    "lane": "stream:Order",
+    "name": "OrderReturned",
+    "portal": false,
+    "role": "event",
+    "segment": "returns@orders",
+    "slice": "orders.return_order",
+    "w": 168,
+    "x": 228,
+    "y": 940
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "returns@orders|orders.order_history|view|OrderHistory",
+    "lane": "action",
+    "name": "OrderHistory",
+    "portal": true,
+    "role": "view",
+    "segment": "returns@orders",
+    "slice": "orders.order_history",
+    "w": 168,
+    "x": 436,
+    "y": 828
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "returns@orders|orders.refund_on_return|automation|refund_on_return",
+    "lane": "trigger",
+    "name": "refund_on_return",
+    "portal": false,
+    "role": "automation",
+    "segment": "returns@orders",
+    "slice": "orders.refund_on_return",
+    "w": 168,
+    "x": 644,
+    "y": 716
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "returns@orders|orders.refund_order|command|RefundOrder",
+    "lane": "action",
+    "name": "RefundOrder",
+    "portal": false,
+    "role": "command",
+    "segment": "returns@orders",
+    "slice": "orders.refund_order",
+    "w": 168,
+    "x": 852,
+    "y": 828
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "returns@orders|orders.refund_order|event|OrderRefunded",
+    "lane": "stream:Order",
+    "name": "OrderRefunded",
+    "portal": false,
+    "role": "event",
+    "segment": "returns@orders",
+    "slice": "orders.refund_order",
+    "w": 168,
+    "x": 852,
+    "y": 940
+   }
+  ],
+  "contexts": [
+   {
+    "h": 1280,
+    "id": "orders",
+    "w": 1024,
+    "x": 64,
+    "y": 64
+   }
+  ],
+  "edges": [
+   {
+    "cross": false,
+    "from": "checkout@orders|orders.order_history|trigger|GET /api/orders/history",
+    "kind": "handles",
+    "to": "checkout@orders|orders.order_history|view|OrderHistory"
+   },
+   {
+    "cross": false,
+    "from": "checkout@orders|orders.place_order|command|PlaceOrder",
+    "kind": "publishes",
+    "to": "checkout@orders|orders.place_order|event|OrderPlaced"
+   },
+   {
+    "cross": false,
+    "from": "checkout@orders|orders.place_order|event|OrderPlaced",
+    "kind": "feeds",
+    "to": "checkout@orders|orders.order_history|view|OrderHistory"
+   },
+   {
+    "cross": false,
+    "from": "checkout@orders|orders.place_order|trigger|POST /api/orders",
+    "kind": "handles",
+    "to": "checkout@orders|orders.place_order|command|PlaceOrder"
+   },
+   {
+    "cross": false,
+    "from": "returns@orders|orders.refund_on_return|automation|refund_on_return",
+    "kind": "dispatches",
+    "to": "returns@orders|orders.refund_order|command|RefundOrder"
+   },
+   {
+    "cross": false,
+    "from": "returns@orders|orders.refund_order|command|RefundOrder",
+    "kind": "publishes",
+    "to": "returns@orders|orders.refund_order|event|OrderRefunded"
+   },
+   {
+    "cross": false,
+    "from": "returns@orders|orders.return_order|command|ReturnOrder",
+    "kind": "publishes",
+    "to": "returns@orders|orders.return_order|event|OrderReturned"
+   },
+   {
+    "cross": false,
+    "from": "returns@orders|orders.return_order|event|OrderReturned",
+    "kind": "feeds",
+    "to": "returns@orders|orders.order_history|view|OrderHistory"
+   },
+   {
+    "cross": false,
+    "from": "returns@orders|orders.return_order|event|OrderReturned",
+    "kind": "feeds",
+    "to": "returns@orders|orders.refund_on_return|automation|refund_on_return"
+   },
+   {
+    "cross": false,
+    "from": "returns@orders|orders.return_order|trigger|POST /api/orders/{id}/return",
+    "kind": "handles",
+    "to": "returns@orders|orders.return_order|command|ReturnOrder"
+   }
+  ],
+  "links": [],
+  "scenarioBoxes": [
+   {
+    "h": 64,
+    "segment": "checkout@orders",
+    "slice": "orders.place_order",
+    "w": 192,
+    "x": 216,
+    "y": 496
+   },
+   {
+    "h": 132,
+    "segment": "checkout@orders",
+    "slice": "orders.order_history",
+    "w": 192,
+    "x": 424,
+    "y": 496
+   },
+   {
+    "h": 64,
+    "segment": "returns@orders",
+    "slice": "orders.return_order",
+    "w": 192,
+    "x": 216,
+    "y": 1052
+   },
+   {
+    "h": 64,
+    "segment": "returns@orders",
+    "slice": "orders.refund_on_return",
+    "w": 192,
+    "x": 632,
+    "y": 1052
+   },
+   {
+    "h": 64,
+    "segment": "returns@orders",
+    "slice": "orders.refund_order",
+    "w": 192,
+    "x": 840,
+    "y": 1052
+   }
+  ],
+  "segments": [
+   {
+    "bc": "orders",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "orders.place_order",
+      "w": 192,
+      "x": 216
+     },
+     {
+      "portal": false,
+      "slice": "orders.order_history",
+      "w": 192,
+      "x": 424
+     }
+    ],
+    "h": 532,
+    "id": "checkout@orders",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 148
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 260
+     },
+     {
+      "h": 112,
+      "id": "stream:Order",
+      "label": "Events · Order",
+      "y": 372
+     }
+    ],
+    "process": "checkout",
+    "w": 544,
+    "x": 88,
+    "y": 112
+   },
+   {
+    "bc": "orders",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "orders.return_order",
+      "w": 192,
+      "x": 216
+     },
+     {
+      "portal": true,
+      "slice": "orders.order_history",
+      "w": 192,
+      "x": 424
+     },
+     {
+      "portal": false,
+      "slice": "orders.refund_on_return",
+      "w": 192,
+      "x": 632
+     },
+     {
+      "portal": false,
+      "slice": "orders.refund_order",
+      "w": 192,
+      "x": 840
+     }
+    ],
+    "h": 464,
+    "id": "returns@orders",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 704
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 816
+     },
+     {
+      "h": 112,
+      "id": "stream:Order",
+      "label": "Events · Order",
+      "y": 928
+     }
+    ],
+    "process": "returns",
+    "w": 960,
+    "x": 88,
+    "y": 668
+   }
+  ]
+ },
+ "matrix": {
+  "bcMatrix": {
+   "bcs": [
+    "orders"
+   ],
+   "counts": [
+    [
+     2
+    ]
+   ],
+   "events": [
+    [
+     [
+      "OrderPlaced",
+      "OrderReturned"
+     ]
+    ]
+   ]
+  },
+  "cells": [
+   {
+    "c": 0,
+    "cross": false,
+    "r": 0,
+    "v": "W"
+   },
+   {
+    "c": 1,
+    "cross": false,
+    "r": 0,
+    "v": "W"
+   },
+   {
+    "c": 2,
+    "cross": false,
+    "r": 0,
+    "v": "W"
+   },
+   {
+    "c": 3,
+    "cross": false,
+    "r": 1,
+    "v": "O"
+   }
+  ],
+  "cols": [
+   {
+    "bc": "orders",
+    "kind": "command",
+    "slice": "orders.place_order"
+   },
+   {
+    "bc": "orders",
+    "kind": "command",
+    "slice": "orders.refund_order"
+   },
+   {
+    "bc": "orders",
+    "kind": "command",
+    "slice": "orders.return_order"
+   },
+   {
+    "bc": "orders",
+    "kind": "view",
+    "slice": "orders.order_history"
+   },
+   {
+    "bc": "orders",
+    "kind": "automation",
+    "slice": "orders.refund_on_return"
+   }
+  ],
+  "rows": [
+   {
+    "bc": "orders",
+    "id": "Order",
+    "kind": "aggregate"
+   },
+   {
+    "bc": "orders",
+    "id": "OrderHistory",
+    "kind": "read-model"
+   }
+  ]
+ },
+ "metro": {
+  "bounds": {
+   "h": 120,
+   "w": 296,
+   "x": 0,
+   "y": 0
+  },
+  "lines": [
+   {
+    "color": 6,
+    "derived": false,
+    "points": [
+     [
+      40,
+      40
+     ],
+     [
+      120,
+      40
+     ]
+    ],
+    "process": "checkout"
+   },
+   {
+    "color": 9,
+    "derived": false,
+    "points": [
+     [
+      40,
+      80
+     ],
+     [
+      80,
+      80
+     ],
+     [
+      120,
+      40
+     ],
+     [
+      160,
+      80
+     ],
+     [
+      176,
+      80
+     ],
+     [
+      256,
+      80
+     ]
+    ],
+    "process": "returns"
+   }
+  ],
+  "stations": [
+   {
+    "interchange": false,
+    "lines": [
+     "checkout"
+    ],
+    "slice": "orders.place_order",
+    "x": 40,
+    "y": 40
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "returns"
+    ],
+    "slice": "orders.return_order",
+    "x": 40,
+    "y": 80
+   },
+   {
+    "interchange": true,
+    "lines": [
+     "checkout",
+     "returns"
+    ],
+    "slice": "orders.order_history",
+    "x": 120,
+    "y": 40
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "returns"
+    ],
+    "slice": "orders.refund_on_return",
+    "x": 176,
+    "y": 80
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "returns"
+    ],
+    "slice": "orders.refund_order",
+    "x": 256,
+    "y": 80
+   }
+  ]
+ },
+ "version": 1
+}

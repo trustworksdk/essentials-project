@@ -34,6 +34,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -268,15 +269,8 @@ class ShardOwnedCrossHostPartitionIT {
     }
 
     private int shardsHeldBy(String instanceId) throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT count(*) FROM shard_queue_lease WHERE lane = 'unordered' AND owner = ?")) {
-            statement.setString(1, instanceId);
-            try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Counting the unordered lease rows held by " + instanceId,
+                           "SELECT count(*) FROM shard_queue_lease WHERE lane = 'unordered' AND owner = ?", instanceId);
     }
 
     private static long millisSince(long startNanos) {
@@ -284,14 +278,7 @@ class ShardOwnedCrossHostPartitionIT {
     }
 
     private static ShardOwnerSettings shortLease() {
-        var defaults = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(),
-                                      defaults.ackFlushInterval(), defaults.chaseDelay(),
-                                      defaults.holeExpiry(), defaults.sweepInterval(),
-                                      defaults.maxHolesPerChase(), defaults.keyConcurrency(),
-                                      defaults.pollBackstop(), defaults.maxSweepInterval(),
-                                      defaults.pumpThreads(), defaults.shedGrace(),
-                                      Duration.ofSeconds(3), defaults.watermarkCap());
+        return ShardOwnerSettings.builder().setLeaseTtl(Duration.ofSeconds(3)).build();
     }
 
     private record Arm(String arm, Long takeoverMillis, Long noticedMillis) {

@@ -33,7 +33,7 @@ single-document transactions. The `TransactionalMode` enum that used to make thi
 0.60; `FullyTransactional` was documented as broken for retries and dead-lettering.
 
 - `messageHandlingTimeout` drives stuck-message reset; `builder()` defaults it to `DEFAULT_MESSAGE_HANDLING_TIMEOUT` (30s). Reset runs lazily per poll cycle when the timeout elapsed.
-- Optional `SpringMongoTransactionAwareUnitOfWorkFactory` (needs a replica set): each message is handled in its own UoW, and `queueMessage` inside a caller's UoW joins it (Outbox). Ack/retry/dead-letter stay separate transactions.
+- Optional `SpringMongoTransactionAwareUnitOfWorkFactory` (needs a replica set): `queueMessage` inside a caller's UoW joins it (Outbox). The handler is NOT wrapped in a UoW (no counterpart of postgresql-queue's `SingleOperationTransactionDurableQueuesInterceptor`): a handler that wants its writes transactional opens one itself (`MongoSpringRollbackOnlyTransactionInQueuedMessageHandlerIT`). Parity: roadmap RW-4. Ack/retry/dead-letter stay separate transactions.
 
 ## Polling & Notification
 
@@ -83,3 +83,4 @@ All ITs need Docker (Testcontainers spins up MongoDB).
 - `acknowledgeMessageAsHandled` matches on `isDeadLetterMessage=false`; if handler calls `markAsDeadLetterMessage` mid-flight then ack returns `true` via secondary DLQ check — this is intentional.
 - `QueuePollingOptimizer` default factory is `this::createQueuePollingOptimizerFor`; passing `null` for factory in constructors falls back to this default — not null-safe if overridden improperly in subclasses.
 - `sharedQueueCollectionName` lowercased in constructor → collection names always lowercase regardless of input case.
+- **`queueMessage`/`queueMessages` outside a UoW: WARN once per call site (first 3 application frames, max 32 per instance), or fail with `setRequireActiveUnitOfWorkForEnqueue(true)`** (`EnqueueOutsideUnitOfWorkGuard`, RN-2). No `unitOfWorkFactory` -> any active Spring tx counts (MongoTemplate joins it via session sync). Pinned by `MongoEnqueueTransactionBoundaryIT` (Essentials UoW + Spring `TransactionTemplate` rollback, guard on/off)

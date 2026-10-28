@@ -8,7 +8,7 @@ The agent's final message is the report `/essentials:slice-check` printed for a 
 PASS if the report contains a finding that matches all of:
 - it concerns `src/main/java/com/example/billing/use_cases/pay_invoice/slice.yaml`
 - it rests on rules/slice-design.md § The aggregate's own bar of the slice law
-- its severity is Should-fix
-- its substance: invariants[].enforcedBy names the handler: the manifest records the leak.
+- its severity is Blocking
+- its substance: invariants[].enforcedBy names the handler: the manifest records the leak. It is the same defect as F1 and takes F1's severity.
 Reporting it inside the finding for F1 counts, provided its substance is stated.
 FAIL if no finding matches, or the matching one has a different severity. Ignore formatting, ordering and other findings.

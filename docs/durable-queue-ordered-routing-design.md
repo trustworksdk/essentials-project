@@ -134,6 +134,19 @@ therefore allocate above `S`, or has already finished. Therefore:
 **Read `S` before `X`, never the reverse.** If `X` is sampled first, a transaction can allocate a
 `seq ≤ S` afterwards without appearing in `X`, and the watermark advances over a live writer.
 
+**Retire against the probe taken before a read, never the one after it.** Resolved is not yet read: the
+cursor may only pass rows a read has covered. A candidate is therefore retired against the probe the
+owner took *before* the pass's read (the previous pass's, `OrderedShardOwner.runningAtLastProbe`), and the
+probe it takes after the read only records the next candidate. A writer missing from the earlier probe
+had ended before the read ran, so the read saw its rows. Retiring on the later probe let a writer commit
+between the read and that probe: missing from the probe, its rows invisible to the read, so the cursor
+stepped over them and the head sweep delivered them behind later `key_order`s of the same key. And a
+read that returned as many rows as its limit (the limit it was issued with — a pump's batched read uses
+the runtime's `readBatchSize`) may have stopped short of the backlog, so the cursor advances no further
+than the last row it returned and the candidate waits for a later pass. The late-commit reasoning and its
+measurements are in the module's `CLAUDE.md` (gotcha "Retire a watermark candidate against the probe
+taken BEFORE the read").
+
 **Sets, not ordering, and that is not a stylistic choice.** The obvious formulation — keep the
 highest running xid `R` and wait for `pg_snapshot_xmin` to pass it — is unsafe here.
 `backend_xid` is a 32-bit `xid` that **wraps**, while `pg_snapshot_xmin` returns a non-wrapping
@@ -153,19 +166,22 @@ sequenceDiagram
     O->>PG: read rows; S = maxSeen
     O->>PG: X = {backend_xid} from pg_stat_activity
     Note right of PG: ORDER MATTERS: S before X.<br/>Reversed, a writer allocates below S<br/>without ever appearing in X
-    O->>O: push candidate (S, X, now) onto the deque
+    O->>O: push candidate (S, X, now) onto the deque, X_prev = X
 
-    loop each later probe, throttled by chaseDelay
+    loop each later pass while a candidate waits — with nothing else to do, every chaseDelay
+        O->>PG: read rows from safeCursor, up to the read limit
         O->>PG: running = {backend_xid} now
-        alt disjoint(candidate.X, running)
-            O->>O: retire — every seq ≤ S is committed-<br/>and-visible, or aborted and never coming
-            O->>O: safeCursor = max(safeCursor, S)
+        Note right of PG: retire against X_prev, the probe taken<br/>BEFORE this read. A writer committing<br/>between the read and running is missing<br/>from running, yet the read never saw its rows
+        alt disjoint(candidate.X, X_prev)
+            O->>O: retire — every seq ≤ S is committed-<br/>and-visible, or aborted and never coming,<br/>and this read saw what committed
+            O->>O: safeCursor = max(safeCursor, S),<br/>or only up to the last row read<br/>when the read hit its limit
         else candidate older than watermarkCap
-            O->>O: advance anyway, count watermarkCapped
+            O->>O: advance anyway (no further than a full read reached), count watermarkCapped
             Note right of O: a long WRITE transaction somewhere is<br/>holding the global horizon back.<br/>This one CAN skip messages — it is the<br/>escape hatch, not the mechanism
         else
             O->>O: leave it — nothing skipped, only delayed
         end
+        O->>O: X_prev = running, which records the next candidate too
     end
 ```
 

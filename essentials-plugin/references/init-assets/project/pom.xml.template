@@ -50,6 +50,8 @@
         <jdbi3-bom.version>{{pin:jdbi3-bom.version}}</jdbi3-bom.version>
         <spring-modulith.version>{{pin:spring-modulith.version}}</spring-modulith.version>
         <jqwik.version>{{pin:jqwik}}</jqwik.version>
+        <!-- Not managed by Spring Boot either: a plain dependency of the backend (S2.1). -->
+        <objenesis.version>{{pin:objenesis.version}}</objenesis.version>
     </properties>
 
     <dependencyManagement>

@@ -208,6 +208,35 @@ Java entity gotchas:
   `cannot access kotlin.reflect.KClass`. Adding a view slice is what pulls this module in; Step 4's
   `requires` names whichever of the three the build file lacks.
 
+### 2g. Start position
+
+A new projector starts at global order 1 and replays the whole history — that is what a view needs, so leave
+`isStartSubscriptionFromLatestEvent()` at its default `false` and do not override
+`resolveStartSubscriptionFromGlobalEventOrder()`. A view that starts from the latest event never backfills: aggregates
+whose events came before its first start never get a row. Either hook only applies on the first start under the
+processor name; after that the stored resume point wins. See `references/llm/LLM-postgresql-event-store.md` § Start
+position.
+
+### 2h. Handler failures
+
+A projection handler throws on a failure it cannot handle; never wrap it in a `try`/`catch` that logs and returns — the
+event is then acknowledged and the row is missing for good. A throw queues the event for redelivery and, once the
+redeliveries are used up, dead-letters it. The resume point keeps advancing, and only that aggregate's later events wait
+behind the dead letter. Say in the report that the team alerts on `essentials.messaging.durable_queues.dead_lettered`
+(or `DurableQueuesHealthIndicator`), fixes the cause and calls `resurrectDeadLetterMessage`. See
+`references/llm/LLM-postgresql-event-store.md` § Handler failures.
+
+### 2i. Testing the projection
+
+When filling the projector IT's "await the projection" TODO, call `awaitProcessed` on the projector with the **last**
+event the test appended (`appendToStream(...).lastEvent()`, or `AppendedEvents.recordDuring(...)` around the
+`commandBus.send` - import `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.AppendedEvents`; it
+records every append, decider or repository), then read the row once. Do not poll the view under a guessed timeout. `awaitProcessed` sees only
+the projector in this JVM; poll with an assertion and a deadline only for what it cannot see — a seam downstream of the
+projector, or a projector whose lock another instance holds. An existence check that must not lag (an idempotency
+probe) reads the write side, never this view. See `references/llm/LLM-postgresql-event-store.md` § Testing
+asynchronous projections.
+
 ## Step 3 — Check or scaffold the bounded context
 
 `Glob <sourceRoot>/<packageDir>/<bc>/`. **If absent, stop:** a bounded context starts with its first
@@ -245,8 +274,25 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py render --lang <language> -
     [--set apiPath=<apiPath>]         # only when it is not /api/<bc>
 ```
 
-Exit 2 means nothing was written: relay the message and stop. The tables below are what it writes;
-then fill the TODOs the JSON lists under `todos`.
+Exit 2 means nothing was written: relay the message and stop.
+
+**Exit 4 means the shell may not write the project** (a read-only filesystem, or a sandbox that lets
+the Write tool write but not Bash). Nothing was written. Do not stop, and never render a file by hand;
+take the emit fallback (`slice-authoring.md` §4b):
+
+1. Run the same command with `--emit` added, once. It writes nothing; its JSON report lists every file
+   in `files` with `path` (relative to `<projectRoot>`), `action` and `content`. If the output is too
+   large to read whole, run it again with `--only <path>` for each path in `files`: that prints the one
+   file's content, raw.
+2. Write every file with the Write tool at `<projectRoot>/<path>`, `content` verbatim: no edit, and no
+   TODO filled on the way. Never import or patch `render-slice.py`.
+3. Then run the same command with `verify` in place of `render` and without `--emit`. Exit 0: the slice is
+   rendered; go on from the emitted report as after a plain render. Exit 1 names each file `missing` or
+   `differs`: report them and stop. Never repair one by hand.
+
+Say in the final report, in one line, that the files were written through the emit fallback.
+
+The tables below are what it writes; then fill the TODOs the JSON lists under `todos`.
 
 **Decider / aggregate lane — `templates/<language>/view/`:**
 
@@ -322,6 +368,7 @@ Walk § Red flags in the law printed in Step 1 — do not load it again — then
 ## Red flags specific to this kind
 
 - A projection `@MessageHandler` with only the event parameter — it cannot detect a replay.
+- A projection handler that catches an exception and only logs it — the event is acknowledged and lost.
 - `repository.update(entity)` with no version argument.
 - **Java:** a `private` `@Id` field — dead-letters every message, projection never populates.
 - **Java:** a `@Configuration` class named `<View>Repository` — collides with its own `@Bean`.

@@ -33,11 +33,14 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.*;
+import org.slf4j.*;
 
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW extends UnitOfWork, UOW_FACTORY extends UnitOfWorkFactory<UOW>> {
+    private static final Logger log = LoggerFactory.getLogger(DurableQueuesIT.class);
+
     protected UOW_FACTORY         unitOfWorkFactory;
     protected DURABLE_QUEUES      durableQueues;
     protected ProxyJSONSerializer jsonSerializerProxy;
@@ -95,6 +98,47 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
 
     protected void usingDurableQueue(Runnable action) {
         action.run();
+    }
+
+    /**
+     * A message released because it never reached a handler (its consumer began stopping) is delivered again without
+     * being charged a redelivery attempt, and keeps the error of any earlier, real attempt.
+     */
+    @Test
+    void a_released_undelivered_message_is_redelivered_without_charging_a_redelivery_attempt() {
+        // Given
+        var queueName = QueueName.of("TestQueue");
+        var message1 = Message.of(new OrderEvent.OrderAdded(OrderId.random(), CustomerId.random(), 1234));
+        var addedMessageId = withDurableQueue(() -> durableQueues.queueMessage(queueName, message1));
+        assertThat(withDurableQueue(() -> durableQueues.getNextMessageReadyForDelivery(queueName))).isPresent();
+
+        // When
+        var released = withDurableQueue(() -> durableQueues.releaseUndeliveredMessage(addedMessageId, Duration.ZERO));
+
+        // Then
+        assertThat(released).isPresent();
+        assertThat(released.get().isBeingDelivered()).isFalse();
+        assertThat(released.get().getRedeliveryAttempts()).isEqualTo(0);
+        assertThat(released.get().getLastDeliveryError()).isNull();
+        // A message that is no longer being delivered is not released again
+        assertThat(withDurableQueue(() -> durableQueues.releaseUndeliveredMessage(addedMessageId, Duration.ZERO))).isEmpty();
+
+        // And it is redelivered, still uncharged
+        var redelivered = withDurableQueue(() -> durableQueues.getNextMessageReadyForDelivery(queueName));
+        assertThat(redelivered).isPresent();
+        assertThat((CharSequence) redelivered.get().getId()).isEqualTo(addedMessageId);
+        assertThat(redelivered.get().getRedeliveryAttempts()).isEqualTo(0);
+
+        // When a real attempt fails, and the next delivery is released before reaching a handler
+        usingDurableQueue(() -> durableQueues.retryMessage(addedMessageId, new RuntimeException("Handler failed"), Duration.ZERO));
+        assertThat(withDurableQueue(() -> durableQueues.getNextMessageReadyForDelivery(queueName))).isPresent();
+        released = withDurableQueue(() -> durableQueues.releaseUndeliveredMessage(addedMessageId, Duration.ZERO));
+
+        // Then only the real attempt is counted, and its error is kept
+        assertThat(released).isPresent();
+        assertThat(released.get().getRedeliveryAttempts()).isEqualTo(1);
+        assertThat(released.get().getLastDeliveryError()).contains("Handler failed");
+        assertThat(withDurableQueue(() -> durableQueues.getNextMessageReadyForDelivery(queueName))).isPresent();
     }
 
     @Test
@@ -290,6 +334,55 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         assertThat(durableQueues.getQueueNames()).isEqualTo(Set.of(queueName));
     }
 
+    /**
+     * Stopping a consumer interrupts the handler threads. A handler blocked in I/O then fails with an interrupt it did
+     * not cause - a Kafka send throws {@code InterruptException} and re-sets the interrupt flag, which is what this
+     * handler imitates. The redelivery policy allows no redeliveries, so classifying that failure would dead-letter
+     * the message on its first attempt; the centralized fetcher used to do so on every policy. The message must
+     * instead be handed back and reach the next consumer.
+     */
+    @Test
+    void a_message_whose_handler_is_interrupted_by_the_consumer_stopping_is_redelivered_not_dead_lettered() {
+        // Given
+        var queueName = QueueName.of("TestQueue");
+        var message   = Message.of(new OrderEvent.OrderAdded(OrderId.random(), CustomerId.random(), 1234));
+        withDurableQueue(() -> durableQueues.queueMessage(queueName, message));
+
+        var handlerStarted  = new CountDownLatch(1);
+        var handlerFinished = new CountDownLatch(1);
+        var consumer = durableQueues.consumeFromQueue(queueName, RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 0), 1, queuedMessage -> {
+            handlerStarted.countDown();
+            try {
+                Thread.sleep(Duration.ofSeconds(60));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Interrupted while sending", e);
+            } finally {
+                handlerFinished.countDown();
+            }
+        });
+        Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> handlerStarted.getCount() == 0);
+
+        // When
+        consumer.cancel();
+
+        // Then
+        Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> handlerFinished.getCount() == 0);
+        Awaitility.await()
+                  .during(Duration.ofMillis(500))
+                  .atMost(Duration.ofSeconds(10))
+                  .until(() -> durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName) == 0);
+
+        var recordingQueueMessageHandler = new RecordingQueuedMessageHandler();
+        var nextConsumer                 = durableQueues.consumeFromQueue(queueName, RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 0), 1, recordingQueueMessageHandler);
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(30))
+                  .untilAsserted(() -> assertThat(recordingQueueMessageHandler.messages).hasSize(1));
+        assertThat(recordingQueueMessageHandler.messages.peek()).usingRecursiveComparison().isEqualTo(message);
+        assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(0);
+        nextConsumer.cancel();
+    }
+
     @Test
     void verify_a_that_as_long_as_an_ordered_message_with_same_key_and_a_lower_key_order_exists_as_a_dead_letter_message_then_no_further_messages_with_the_same_key_will_be_delivered() {
         // Given
@@ -363,7 +456,7 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
                       var newDeadLetterMessages = durableQueues.getDeadLetterMessages(queueName, DurableQueues.QueueingSortOrder.ASC, 0, 20);
                       if (!newDeadLetterMessages.isEmpty()) {
                           newDeadLetterMessages.forEach(queuedMessage -> {
-                              System.out.println("Resurrected new DeadLetterMessage: " + queuedMessage);
+                              log.info("Resurrected new DeadLetterMessage: {}", queuedMessage);
                               usingDurableQueue(() -> durableQueues.resurrectDeadLetterMessage(queuedMessage.getId(), Duration.ofMillis(10)));
                           });
                       }
@@ -536,6 +629,9 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         assertThat(messages.get(4)).usingRecursiveComparison().isEqualTo(message1);
         assertThat(messages.get(5)).usingRecursiveComparison().isEqualTo(message1);
 
+        // The handler records the message before it throws, so the 6th delivery is seen before its failure is marked as a dead letter
+        Awaitility.waitAtMost(Duration.ofSeconds(4))
+                  .untilAsserted(() -> assertThat(withDurableQueue(() -> durableQueues.getDeadLetterMessage(message1Id))).isPresent());
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0); // Dead letter messages is not counted
         var deadLetterMessage = withDurableQueue(() -> durableQueues.getDeadLetterMessage(message1Id));
         assertThat(deadLetterMessage).isPresent();
@@ -602,9 +698,9 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
             @Override
             public Optional<QueuedMessage> intercept(MarkAsDeadLetterMessage operation, InterceptorChain<MarkAsDeadLetterMessage, Optional<QueuedMessage>, DurableQueuesInterceptor> interceptorChain) {
                 var queuedMessage = durableQueues.getQueuedMessage(operation.queueEntryId).get();
-                System.out.println("MarkAsDeadLetterMessage: " + queuedMessage);
+                log.info("MarkAsDeadLetterMessage: {}", queuedMessage);
                 if (queuedMessage.getTotalDeliveryAttempts() < totalExpectedDeliveries + 1) {
-                    System.out.println("---------------> Overriding decision to mark as dead letter message for message " + operation.queueEntryId + ". Total delivery attempts is " + queuedMessage.getTotalDeliveryAttempts());
+                    log.info("---------------> Overriding decision to mark as dead letter message for message {}. Total delivery attempts is {}", operation.queueEntryId, queuedMessage.getTotalDeliveryAttempts());
                     // Complete marking as dead letter message
                     if (interceptorChain.proceed().isEmpty()) {
                         throw new RuntimeException(msg("Failed to mark message '{}' as Dead Letter Message", operation.queueEntryId));
@@ -614,7 +710,7 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
                                                                     Duration.ofSeconds(1));
                 } else {
                     // Continue and Mark as Dead Letter Message
-                    System.out.println("---------------> Gave up on Redelivery");
+                    log.info("---------------> Gave up on Redelivery");
                     return interceptorChain.proceed();
                 }
             }
@@ -640,7 +736,9 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         assertThat(messages.get(8)).usingRecursiveComparison().isEqualTo(message1);
         assertThat(messages.get(9)).usingRecursiveComparison().isEqualTo(message1);
 
-        assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0); // Message was delivered
+        // The handler records the message before it returns, so the final delivery is seen before it is acknowledged
+        Awaitility.waitAtMost(Duration.ofSeconds(4))
+                  .untilAsserted(() -> assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0)); // Message was delivered
         var deadLetterMessage = withDurableQueue(() -> durableQueues.getDeadLetterMessage(message1Id));
         assertThat(deadLetterMessage).isEmpty();
         assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedMessages()).isEqualTo(0);

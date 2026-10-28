@@ -101,10 +101,15 @@ fi
 echo "Setting up language servers..."
 
 # TypeScript LSP. --ignore-scripts matches the project's NPM security posture.
+# Versions come from the Dockerfile ENV; typescript stays on 6.x because 7.x ships
+# no lib/tsserver.js (see the Dockerfile's runtime tool pins). The tsserver.js
+# check also heals a container that already holds a broken 7.x.
 if command -v npm &> /dev/null; then
-    if ! command -v typescript-language-server &> /dev/null; then
-        echo "  Installing typescript-language-server (npm)..."
-        npm install -g --ignore-scripts typescript typescript-language-server \
+    if ! command -v typescript-language-server &> /dev/null \
+        || [ ! -f "$(npm root -g)/typescript/lib/tsserver.js" ]; then
+        echo "  Installing typescript-language-server ${TS_LANGUAGE_SERVER_VERSION} + typescript ${TYPESCRIPT_VERSION} (npm)..."
+        npm install -g --ignore-scripts "typescript@${TYPESCRIPT_VERSION:?TYPESCRIPT_VERSION not set — Dockerfile ENV}" \
+            "typescript-language-server@${TS_LANGUAGE_SERVER_VERSION:?TS_LANGUAGE_SERVER_VERSION not set — Dockerfile ENV}" \
             || echo "  WARNING: typescript-language-server install failed."
     fi
 fi
@@ -115,7 +120,7 @@ if command -v uv &> /dev/null; then
         echo "  Installing pyright (uv tool)..."
         UV_TOOL_BIN_DIR="$HOME/.local/bin" \
         UV_TOOL_DIR="$HOME/.local/share/uv/tools" \
-        uv tool install pyright \
+        uv tool install "pyright==${PYRIGHT_VERSION:?PYRIGHT_VERSION not set — Dockerfile ENV}" \
             || echo "  WARNING: pyright install failed."
     fi
 fi
@@ -233,12 +238,12 @@ if [ "${INSTALL_GRAPHIFY:-false}" = "true" ]; then
             echo "  Installing graphifyy (uv tool, with SQL grammar)..."
             # [sql] extra pulls tree-sitter-sql so .sql files are indexed too;
             # without it graphify warns and skips SQL sources (#1745).
-            uv tool install "graphifyy[sql]" 2>&1 || echo "  WARNING: graphify install failed. Retry later with: uv tool install \"graphifyy[sql]\""
+            uv tool install "graphifyy[sql]==${GRAPHIFY_VERSION:?GRAPHIFY_VERSION not set — Dockerfile ENV}" 2>&1 || echo "  WARNING: graphify install failed. Retry later with: uv tool install \"graphifyy[sql]==${GRAPHIFY_VERSION}\""
         else
             echo "  graphify already installed ($(command -v graphify))"
             # Reassert the SQL grammar in case this is a pre-[sql] install being
             # reprovisioned on a reused uv-tool volume (idempotent; #1745).
-            uv tool install "graphifyy[sql]" 2>&1 | grep -iv "already installed" || true
+            uv tool install "graphifyy[sql]==${GRAPHIFY_VERSION:?GRAPHIFY_VERSION not set — Dockerfile ENV}" 2>&1 | grep -iv "already installed" || true
         fi
 
         if command -v graphify &> /dev/null; then
@@ -337,6 +342,154 @@ if [ "${INSTALL_GRAPHIFY:-false}" = "true" ]; then
         echo "  WARNING: uv not found — cannot install graphify."
     fi
     echo "  graphify setup complete"
+fi
+
+# =============================================================================
+# Headless Chromium for render-check (Conditional)
+# The system libraries are baked into the image (Dockerfile, INSTALL_PLAYWRIGHT).
+# Here Playwright's chromium-headless-shell, at the pinned PLAYWRIGHT_VERSION, is
+# put into the persisted ~/.cache/ms-playwright volume and linked as
+# ~/.local/bin/chrome-headless-shell — the first name
+# essentials-plugin/tests/fixtures/slice-map/render-check.py looks for, so
+# `scripts/plugin-check.sh` runs render-check instead of reporting SKIPPED.
+# Playwright runs through npx: the repository declares no Node dependency.
+# Only its `--dry-run` is used, to resolve the build's download URL and location;
+# the archive is fetched with curl and unpacked with unzip, because `playwright
+# install`'s own extraction hangs under this image's Node (seen with 1.55.0 on
+# Node 26: download complete, extraction never finishes). Headless shell only,
+# no `--with-deps`: that needs root, and the libraries are already in the image.
+# =============================================================================
+if [ "${INSTALL_PLAYWRIGHT:-false}" = "true" ]; then
+    echo "Setting up headless Chromium (Playwright ${PLAYWRIGHT_VERSION:-?})..."
+    PW_CACHE="$HOME/.cache/ms-playwright"
+    if [ -d "$PW_CACHE" ] && find "$PW_CACHE" -maxdepth 1 ! -user vscode -print -quit 2>/dev/null | grep -q .; then
+        fix_owner "$PW_CACHE"
+    fi
+    PW_PLAN=""
+    if [ -z "${PLAYWRIGHT_VERSION:-}" ]; then
+        setup_problem "PLAYWRIGHT_VERSION is not set (Dockerfile ARG not applied?) — headless Chromium not installed"
+    else
+        PW_PLAN="$(PLAYWRIGHT_BROWSERS_PATH="$PW_CACHE" npx -y "playwright@${PLAYWRIGHT_VERSION}" install --dry-run chromium-headless-shell 2>/dev/null \
+            | awk '/^browser: chromium-headless-shell/ {on=1; next} /^browser:/ {on=0} on' || true)"
+    fi
+    PW_DIR="$(printf '%s\n' "$PW_PLAN" | sed -n 's/^ *Install location: *//p' | head -1)"
+    PW_URL="$(printf '%s\n' "$PW_PLAN" | sed -n 's/^ *Download url: *//p' | head -1)"
+    if [ -n "${PLAYWRIGHT_VERSION:-}" ] && { [ -z "$PW_DIR" ] || [ -z "$PW_URL" ]; }; then
+        setup_problem "'npx playwright@${PLAYWRIGHT_VERSION} install --dry-run chromium-headless-shell' named no download — render-check will report SKIPPED"
+    elif [ -n "$PW_DIR" ]; then
+        # x64 builds name it chrome-headless-shell, Linux arm64 builds headless_shell.
+        find_hs() { find "$PW_DIR" -maxdepth 2 -type f \( -name chrome-headless-shell -o -name headless_shell \) 2>/dev/null | head -1; }
+        HS="$(find_hs)"
+        if [ -z "$HS" ]; then
+            PW_ZIP="$(mktemp --suffix=.zip)"
+            if curl -fsSL --retry 3 -o "$PW_ZIP" "$PW_URL" && rm -rf "$PW_DIR" && mkdir -p "$PW_DIR" && unzip -q "$PW_ZIP" -d "$PW_DIR"; then
+                HS="$(find_hs)"
+            fi
+            rm -f "$PW_ZIP"
+        fi
+        if [ -n "$HS" ]; then
+            mkdir -p "$HOME/.local/bin"
+            ln -sf "$HS" "$HOME/.local/bin/chrome-headless-shell"
+            echo "  chrome-headless-shell -> $HS"
+        else
+            setup_problem "headless Chromium download or unpack failed ($PW_URL) — render-check will report SKIPPED"
+        fi
+    fi
+fi
+
+# =============================================================================
+# markdownlint for the tw-code-review plugin (Conditional)
+# The rest of the review tools are baked into the image (Dockerfile,
+# INSTALL_REVIEW_TOOLS); this one needs Node, which the Node feature installs
+# after the image build. `npm ci` installs exactly the tree in
+# .devcontainer/tools/markdownlint/package-lock.json, integrity-checked, with no
+# install scripts. The lockfile's overrides lift js-yaml, smol-toml and katex past
+# advisories that markdownlint-cli 0.49.1's own ranges still allow
+# (GHSA-r3ph-w7gj-g6xm, GHSA-r4xh-jqrq-34v2, GHSA-238p-pmpm-9mq7); `npm audit`
+# must stay at zero when either file changes. Not added to the repository: the
+# Essentials build stays JVM-only.
+# =============================================================================
+if [ "${INSTALL_REVIEW_TOOLS:-false}" = "true" ]; then
+    echo "Setting up markdownlint..."
+    MDL_SRC="/workspace/.devcontainer/tools/markdownlint"
+    MDL_DIR="$HOME/.local/share/markdownlint-cli"
+    if rm -rf "$MDL_DIR" && mkdir -p "$MDL_DIR" \
+        && cp "$MDL_SRC/package.json" "$MDL_SRC/package-lock.json" "$MDL_DIR/" \
+        && (cd "$MDL_DIR" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error); then
+        mkdir -p "$HOME/.local/bin"
+        ln -sf "$MDL_DIR/node_modules/.bin/markdownlint" "$HOME/.local/bin/markdownlint"
+        echo "  markdownlint $("$HOME/.local/bin/markdownlint" --version)"
+    else
+        setup_problem "markdownlint install failed (npm ci in $MDL_DIR) — reviews skip the Markdown style lint"
+    fi
+fi
+
+# =============================================================================
+# semgrep, its rules, and PyYAML for the tw-code-review plugin (Conditional)
+# Python packages, so they wait for the Python feature like markdownlint waits
+# for Node. Versions are pinned in the Dockerfile (SEMGREP_VERSION,
+# PYYAML_VERSION) and reach this script through ENV.
+#
+# semgrep never phones home from this container:
+#   - metrics and the version check are off (SEMGREP_SEND_METRICS=off and
+#     SEMGREP_ENABLE_VERSION_CHECK=0 in containerEnv, and again in the wrapper
+#     below, so an edited containerEnv cannot switch them back on);
+#   - the rules are read from a local directory, never from the registry at
+#     scan time. The tw-code-review config points
+#     reviews.tools.polyglot.semgrep_config at it.
+# The rules are fetched once here, from the registry's p/java, p/kotlin and
+# p/security-audit rulesets. They are under the Semgrep Rules License v1.0:
+# internal business use only, no distribution, notices kept. That is why they
+# live under $HOME and never in the repository (which is public); each rule
+# carries its licence line in its metadata, unmodified. They refresh on every
+# container rebuild.
+#
+# PyYAML is the plugin's YAML fallback reader, used only for constructs its
+# built-in awk reader skips. It also covers yq, the plugin's other fallback, so
+# yq is not installed. PyYAML goes into the Python feature's own site-packages,
+# which vscode owns; the essentials plugin's scripts import it too.
+# =============================================================================
+if [ "${INSTALL_REVIEW_TOOLS:-false}" = "true" ]; then
+    echo "Setting up semgrep, its rules and PyYAML..."
+    export PATH="$HOME/.local/bin:$PATH"
+    if command -v uv &> /dev/null \
+        && uv tool install --force "semgrep==${SEMGREP_VERSION:?SEMGREP_VERSION not set — Dockerfile ENV}" 2>&1; then
+        # Replace uv's symlink with a wrapper that forces both switches off.
+        SG_BIN="$(uv tool dir)/semgrep/bin/semgrep"
+        rm -f "$HOME/.local/bin/semgrep"
+        printf '#!/bin/sh\n# Written by post-create.sh: semgrep with metrics and the version check forced off.\nexport SEMGREP_SEND_METRICS=off SEMGREP_ENABLE_VERSION_CHECK=0\nexec "%s" "$@"\n' "$SG_BIN" \
+            > "$HOME/.local/bin/semgrep"
+        chmod 0755 "$HOME/.local/bin/semgrep"
+        echo "  semgrep $(semgrep --version)"
+    else
+        setup_problem "semgrep install failed (uv tool install semgrep==${SEMGREP_VERSION}) — reviews skip the semgrep security rules"
+    fi
+    SG_RULES="$HOME/.local/share/semgrep-rules"
+    SG_TMP="$(mktemp -d)"
+    _sg_ok=true
+    for _rs in java kotlin security-audit; do
+        if ! curl -fsSL "https://semgrep.dev/c/p/${_rs}" -o "$SG_TMP/p_${_rs}.yml" \
+            || ! head -n1 "$SG_TMP/p_${_rs}.yml" | grep -q '^rules:'; then
+            _sg_ok=false
+        fi
+    done
+    if [ "$_sg_ok" = true ]; then
+        rm -rf "$SG_RULES" && mkdir -p "$(dirname "$SG_RULES")" && mv "$SG_TMP" "$SG_RULES"
+        echo "  semgrep rules: $(for _f in "$SG_RULES"/*.yml; do printf '%s=%s ' "$(basename "$_f" .yml)" "$(grep -c '^- id:' "$_f")"; done)"
+    else
+        rm -rf "$SG_TMP"
+        setup_problem "semgrep rules download from semgrep.dev failed — semgrep has no rules until the next rebuild"
+    fi
+    if python3 -m pip install --quiet --disable-pip-version-check "pyyaml==${PYYAML_VERSION:?PYYAML_VERSION not set — Dockerfile ENV}" 2>&1; then
+        echo "  PyYAML $(python3 -c 'import yaml; print(yaml.__version__)')"
+    else
+        setup_problem "PyYAML install failed (pip install pyyaml==${PYYAML_VERSION}) — YAML outside the plugin's built-in subset is read only partly"
+    fi
+    if python3 -m pip install --quiet --disable-pip-version-check "jsonschema==${JSONSCHEMA_VERSION:?JSONSCHEMA_VERSION not set — Dockerfile ENV}" 2>&1; then
+        echo "  jsonschema $(python3 -c 'from importlib.metadata import version; print(version("jsonschema"))')"
+    else
+        setup_problem "jsonschema install failed (pip install jsonschema==${JSONSCHEMA_VERSION}) — plugin schema validation falls back to weaker checks"
+    fi
 fi
 
 # =============================================================================
@@ -439,8 +592,8 @@ if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then
     if command -v uv &> /dev/null; then
         if ! command -v headroom &> /dev/null; then
             echo "  Installing headroom-ai[code,mcp] (uv tool — light extras, no proxy/ML deps)..."
-            uv tool install "headroom-ai[code,mcp]" --with fastapi --with "mcp<2" 2>&1 \
-                || echo "  WARNING: headroom install failed. Retry with: uv tool install \"headroom-ai[code,mcp]\" --with fastapi --with \"mcp<2\"."
+            uv tool install "headroom-ai[code,mcp]==${HEADROOM_VERSION:?HEADROOM_VERSION not set — Dockerfile ENV}" --with fastapi --with "mcp<2" 2>&1 \
+                || echo "  WARNING: headroom install failed. Retry with: uv tool install \"headroom-ai[code,mcp]==${HEADROOM_VERSION}\" --with fastapi --with \"mcp<2\"."
         else
             echo "  headroom already installed ($(command -v headroom))"
             # Self-heal an env that predates the mcp<2 pin (or was pushed onto
@@ -450,7 +603,7 @@ if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then
             if [ -x "$headroom_py" ] && ! "$headroom_py" -c \
                  'import mcp.server, sys; sys.exit(0 if hasattr(mcp.server.Server, "list_tools") else 1)' &> /dev/null; then
                 echo "  Re-pinning MCP SDK to 1.x (upstream mcp>=1.0.0 is unbounded)..."
-                uv tool install "headroom-ai[code,mcp]" --force --with fastapi --with "mcp<2" 2>&1 \
+                uv tool install "headroom-ai[code,mcp]==${HEADROOM_VERSION:?HEADROOM_VERSION not set — Dockerfile ENV}" --force --with fastapi --with "mcp<2" 2>&1 \
                     || echo "  WARNING: could not re-pin mcp<2 — 'headroom mcp serve' may fail to start."
             fi
         fi
@@ -479,7 +632,7 @@ fi
 
 # =============================================================================
 # rtk — Rust Token Killer (Conditional, part of the local-first stack)
-# https://github.com/rtk-ai/rtk (Apache-2.0). Transparent CLI-output compression:
+# https://github.com/rtk-ai/rtk (rtk-oss edition, Apache-2.0). Transparent CLI-output compression:
 # it rewrites Claude Code's Bash commands (e.g. `cargo test` → `rtk cargo test`)
 # via a PreToolUse hook, shrinking command output 60-90% before it hits context.
 # The `rtk` binary is installed at build time (see Dockerfile). The hook is the
@@ -546,8 +699,9 @@ if [ "$rc" -eq 0 ] && [ -n "$out" ] && command -v jq >/dev/null 2>&1; then
     */.claude/worktrees/*)
       rewritten="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.updatedInput.command // empty' 2>/dev/null)"
       # `rtk git …` anywhere in the command: at the start, after `&&`/`;`/`|`/`(`, or behind
-      # `rtk proxy`. Dropping the whole rewrite keeps the command exactly as the model wrote it.
-      if [[ "$rewritten" =~ (^|[^[:alnum:]_./-])rtk([[:space:]]+proxy)?[[:space:]]+git([[:space:]]|$) ]]; then
+      # `rtk bypass` (1.0's name) or `rtk proxy` (its alias). Dropping the whole rewrite keeps
+      # the command exactly as the model wrote it.
+      if [[ "$rewritten" =~ (^|[^[:alnum:]_./-])rtk([[:space:]]+(bypass|proxy))?[[:space:]]+git([[:space:]]|$) ]]; then
         exit 0
       fi
       ;;
@@ -893,6 +1047,11 @@ if [ "${INSTALL_CLAUDE:-false}" = "true" ]; then require_tool claude "post-creat
 if [ "${INSTALL_GRAPHIFY:-false}" = "true" ]; then require_tool graphify "post-create.sh: uv tool install graphifyy"; fi
 if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then require_tool headroom "post-create.sh: uv tool install headroom-ai"; fi
 if [ "${INSTALL_RTK:-false}" = "true" ]; then require_tool rtk "Dockerfile"; fi
+if [ "${INSTALL_REVIEW_TOOLS:-false}" = "true" ]; then
+    for _tool in gitleaks spotbugs detekt pmd; do require_tool "$_tool" "Dockerfile"; done
+    require_tool markdownlint "post-create.sh: npm ci in .devcontainer/tools/markdownlint"
+    require_tool semgrep "post-create.sh: uv tool install semgrep"
+fi
 
 if [ "${#SETUP_PROBLEMS[@]}" -gt 0 ]; then
     echo "============================================================================"

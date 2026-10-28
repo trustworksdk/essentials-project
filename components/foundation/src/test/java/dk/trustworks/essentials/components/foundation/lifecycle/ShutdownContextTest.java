@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.sql.SQLTransientConnectionException;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -48,6 +49,31 @@ class ShutdownContextTest {
         assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
         assertThat(shutdown.isDatabaseUnreachable()).isTrue();
         assertThat(Thread.currentThread().isInterrupted()).as("the watchdog's interrupt must not leak into the caller").isFalse();
+    }
+
+    /**
+     * DBFencedLockManager's shutdownStarting cancels its async-acquiring tick with cancel(true). A tick that had just
+     * acquired a lock and failed in its lockAcquired callback then released it on that interrupted thread, and the
+     * release's lockInterruptibly threw at once - the lock row stayed locked until the lock timeout.
+     */
+    @Test
+    void a_cleanup_step_on_an_already_interrupted_thread_still_runs_and_the_interrupt_is_restored_afterwards() {
+        var shutdown = ShutdownContext.startingNow(Duration.ofSeconds(10));
+        var lock     = new ReentrantLock();
+
+        Thread.currentThread().interrupt();
+        boolean completed;
+        try {
+            completed = shutdown.attemptCleanup("release lock", () -> {
+                lock.lockInterruptibly();
+                lock.unlock();
+            });
+        } finally {
+            assertThat(Thread.interrupted()).as("the caller's own interrupt must be restored").isTrue();
+        }
+
+        assertThat(completed).isTrue();
+        assertThat(shutdown.isDatabaseUnreachable()).isFalse();
     }
 
     @Test

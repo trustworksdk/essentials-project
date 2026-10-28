@@ -61,9 +61,13 @@
     </properties>
 
     <dependencies>
+        <!--
+          A PostgreSQL engine, so it builds on foundation's PostgreSQL helpers rather than copying them
+          (PostgresqlUtil's bootstrap lock key, PostgresqlSchemaStatements); shared comes with it.
+        -->
         <dependency>
-            <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>shared</artifactId>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>foundation</artifactId>
             <version>${project.version}</version>
         </dependency>
         <!--
@@ -97,8 +101,7 @@
         </dependency>
         <!--
           The construction-ergonomics guard. archunit-junit5 supplies the engine; foundation-test
-          supplies the shared rule definitions (EssentialsConstructionRules) and nothing else — this
-          module's production code still depends on `shared` alone.
+          supplies the shared rule definitions (EssentialsConstructionRules).
         -->
         <dependency>
             <groupId>com.tngtech.archunit</groupId>
@@ -135,6 +138,12 @@
         <dependency>
             <groupId>com.zaxxer</groupId>
             <artifactId>HikariCP</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- ShardOwnedSchemaContributorIT drives the contributor through foundation's JDBI-based schema harness -->
+        <dependency>
+            <groupId>org.jdbi</groupId>
+            <artifactId>jdbi3-core</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

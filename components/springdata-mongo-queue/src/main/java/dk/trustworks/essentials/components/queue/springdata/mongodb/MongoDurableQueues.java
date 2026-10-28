@@ -41,6 +41,8 @@ import org.springframework.data.mongodb.core.index.Index;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.messaging.*;
 import org.springframework.data.mongodb.core.query.*;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.*;
 import java.time.temporal.ChronoUnit;
@@ -102,6 +104,7 @@ public final class MongoDurableQueues implements DurableQueues {
     private final   ConcurrentMap<QueueName, ReentrantLock>             localQueuePollLock    = new ConcurrentHashMap<>();
     private final   List<DurableQueuesInterceptor>                      interceptors          = new CopyOnWriteArrayList<>();
     private volatile DurableQueueMessageObserver                        messageObserver       = DurableQueueMessageObserver.none();
+    private final    EnqueueOutsideUnitOfWorkGuard                      enqueueOutsideUnitOfWorkGuard = new EnqueueOutsideUnitOfWorkGuard(MongoDurableQueues.class);
     private final   MessageListenerContainer                            messageListenerContainer;
 
 
@@ -385,6 +388,36 @@ public final class MongoDurableQueues implements DurableQueues {
         this.messageObserver = DurableQueueMessageObserver.safe(requireNonNull(messageObserver, "No messageObserver provided"));
     }
 
+    /**
+     * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@link UnitOfWork} or Spring transaction?
+     * Default {@code false}: such an enqueue commits on its own, and each call site's first one is logged at WARN. In Spring Boot:
+     * {@value EnqueueOutsideUnitOfWorkGuard#REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}. See {@link EnqueueOutsideUnitOfWorkGuard}.
+     *
+     * @param requireActiveUnitOfWorkForEnqueue {@code true} to throw {@link NoActiveUnitOfWorkException} instead
+     */
+    public void setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+        enqueueOutsideUnitOfWorkGuard.setRequireActiveUnitOfWork(requireActiveUnitOfWorkForEnqueue);
+    }
+
+    /**
+     * @return whether an enqueue outside a {@link UnitOfWork} or Spring transaction fails - see
+     * {@link #setRequireActiveUnitOfWorkForEnqueue(boolean)}
+     */
+    public boolean isRequireActiveUnitOfWorkForEnqueue() {
+        return enqueueOutsideUnitOfWorkGuard.isRequireActiveUnitOfWork();
+    }
+
+    /**
+     * An enqueue joins a Spring transaction (through {@code MongoTemplate}'s session synchronization) or the Essentials
+     * {@link UnitOfWork} wrapping one. Without a {@link UnitOfWorkFactory}, any active Spring transaction counts.
+     */
+    private void checkEnqueue(QueueName queueName) {
+        enqueueOutsideUnitOfWorkGuard.checkEnqueue(queueName,
+                                                   unitOfWorkFactory != null
+                                                   ? EnqueueOutsideUnitOfWorkGuard.isUnitOfWorkActive(unitOfWorkFactory)
+                                                   : org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
+    }
+
     @Override
     public final DurableQueues addInterceptor(DurableQueuesInterceptor interceptor) {
         requireNonNull(interceptor, "No interceptor provided");
@@ -425,6 +458,7 @@ public final class MongoDurableQueues implements DurableQueues {
     @Override
     public final QueueEntryId queueMessage(QueueMessage operation) {
         requireNonNull(operation, "You must provide a QueueMessage instance");
+        checkEnqueue(operation.getQueueName());
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -473,6 +507,9 @@ public final class MongoDurableQueues implements DurableQueues {
         var durableQueuedMessage = createDurableQueuedMessage(queueName, isDeadLetterMessage, addedTimestamp, nextDeliveryTimestamp, message);
 
         mongoTemplate.save(durableQueuedMessage, this.sharedQueueCollectionName);
+        if (!isDeadLetterMessage) {
+            signalLocalConsumerWhenDue(queueName, nextDeliveryTimestamp);
+        }
         log.debug("[{}:{}] Queued {}{}message{} with nextDeliveryTimestamp {}",
                   queueName,
                   queueEntryId,
@@ -541,6 +578,7 @@ public final class MongoDurableQueues implements DurableQueues {
     public final List<QueueEntryId> queueMessages(QueueMessages operation) {
         requireNonNull(operation, "You must provide a QueueMessages instance");
         operation.validate();
+        checkEnqueue(operation.getQueueName());
 
 
         return newInterceptorChainForOperation(operation,
@@ -568,6 +606,7 @@ public final class MongoDurableQueues implements DurableQueues {
                                                                                        queueName);
                                                    }
 
+                                                   signalLocalConsumerWhenDue(queueName, nextDeliveryTimestamp);
                                                    log.debug("[{}] Queued {} Messages with nextDeliveryTimestamp {} and entry-id's: {}",
                                                              queueName,
                                                              payloads.size(),
@@ -630,9 +669,11 @@ public final class MongoDurableQueues implements DurableQueues {
                                                                                              .and("isBeingDelivered").is(true)
                                                                                  );
 
+                                                   // Before 0.60.1 the due time was computed but never stored, so every retry was redelivered at once
                                                    var update = new Update().inc("redeliveryAttempts", 1)
                                                                             .set("isBeingDelivered", false)
                                                                             .set("deliveryTimestamp", null)
+                                                                            .set("nextDeliveryTimestamp", nextDeliveryTimestamp)
                                                                             .set("lastDeliveryError", operation.getCauseForRetry() != null ? DeliveryErrorDescription.describe(operation.getCauseForRetry()) : RetryMessage.MANUALLY_REQUESTED_REDELIVERY);
                                                    var updateResult = mongoTemplate.findAndModify(findMessageToRetry,
                                                                                                   update,
@@ -645,9 +686,48 @@ public final class MongoDurableQueues implements DurableQueues {
                                                                  queueEntryId,
                                                                  nextDeliveryTimestamp,
                                                                  updateResult);
+                                                       signalLocalConsumerWhenDue(updateResult.queueName, nextDeliveryTimestamp);
                                                        return Optional.of((QueuedMessage) updateResult);
                                                    } else {
                                                        log.error("Failed to Mark Message with id '{}' for Retry", queueEntryId);
+                                                       return Optional.<QueuedMessage>empty();
+                                                   }
+                                               }).proceed();
+    }
+
+    @Override
+    public final Optional<QueuedMessage> releaseUndeliveredMessage(ReleaseUndeliveredMessage operation) {
+        requireNonNull(operation, "You must provide a ReleaseUndeliveredMessage instance");
+        operation.validate();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var nextDeliveryTimestamp = Instant.now().plus(operation.getDeliveryDelay());
+                                                   var queueEntryId          = operation.queueEntryId;
+                                                   var findMessageToRelease = query(where("id").is(queueEntryId)
+                                                                                               .and("isBeingDelivered").is(true));
+
+                                                   // Unlike retryMessage, neither redeliveryAttempts nor lastDeliveryError is touched: no handler ran
+                                                   var update = new Update().set("isBeingDelivered", false)
+                                                                            .set("deliveryTimestamp", null)
+                                                                            .set("nextDeliveryTimestamp", nextDeliveryTimestamp);
+                                                   var updateResult = mongoTemplate.findAndModify(findMessageToRelease,
+                                                                                                  update,
+                                                                                                  FindAndModifyOptions.options().returnNew(true),
+                                                                                                  DurableQueuedMessage.class,
+                                                                                                  this.sharedQueueCollectionName);
+                                                   if (updateResult != null) {
+                                                       log.debug("[{}] Released undelivered Message with id '{}' for delivery at {}. Message entry after update: {}",
+                                                                 updateResult.queueName,
+                                                                 queueEntryId,
+                                                                 nextDeliveryTimestamp,
+                                                                 updateResult);
+                                                       signalLocalConsumerWhenDue(updateResult.queueName, nextDeliveryTimestamp);
+                                                       return Optional.of((QueuedMessage) updateResult);
+                                                   } else {
+                                                       // Already acknowledged, deleted or reset by the stuck-message reset - nothing to release
+                                                       log.debug("Didn't release Message with id '{}' as it is no longer being delivered", queueEntryId);
                                                        return Optional.<QueuedMessage>empty();
                                                    }
                                                }).proceed();
@@ -752,6 +832,7 @@ public final class MongoDurableQueues implements DurableQueues {
                                                                  isOrderedMessage ? "(key: " + updateResult.getKey() + ", order: " + updateResult.getKeyOrder() + ")" : "",
                                                                  nextDeliveryTimestamp,
                                                                  updateResult);
+                                                       signalLocalConsumerWhenDue(updateResult.queueName, nextDeliveryTimestamp);
                                                        return Optional.of((QueuedMessage) updateResult);
                                                    } else {
                                                        log.error("Failed to resurrect Dead Letter Message with id '{}'", queueEntryId);
@@ -847,8 +928,11 @@ public final class MongoDurableQueues implements DurableQueues {
                                                            whereCriteria.and("key").not().in(excludedKeys);
                                                        }
 
+                                                       // Lowest key order first, so an ordered message's predecessor is claimed before it. Before
+                                                       // 0.60.1 the two fields were passed as one ("keyOrder, nextDeliveryTimestamp"), a field no
+                                                       // document has, so claims came in no particular order
                                                        var nextMessageReadyForDeliveryQuery = query(whereCriteria)
-                                                               .with(Sort.by(Sort.Direction.ASC, "keyOrder, nextDeliveryTimestamp"))
+                                                               .with(Sort.by(Sort.Direction.ASC, "keyOrder", "nextDeliveryTimestamp"))
                                                                .limit(1);
 
                                                        var update = new Update().inc("totalDeliveryAttempts", 1)
@@ -1004,14 +1088,17 @@ public final class MongoDurableQueues implements DurableQueues {
                                          messageWithTheHighestNextDeliveryTimestamp.getKeyOrder(),
                                          messageWithTheHighestNextDeliveryTimestamp.getNextDeliveryTimestamp());
                         log.debug("** [{}] {}. Message entry after update: {}", updateResult.getQueueName(), reason, updateResult);
+                        signalLocalConsumerWhenDue(queueName, nextDeliveryTimestamp.toInstant());
                     } else {
                         log.error("** Failed to update nextDeliveryTimestamp for message with id '{}'", nextMessageToDeliver.getId());
                     }
 
-                    var updateNextDeliveryTimestamp = new Update().set("nextDeliveryTimestamp", nextDeliveryTimestamp.plus(100, ChronoUnit.MILLIS).toInstant());
+                    var higherOrderNextDeliveryTimestamp = nextDeliveryTimestamp.plus(100, ChronoUnit.MILLIS).toInstant();
+                    var updateNextDeliveryTimestamp      = new Update().set("nextDeliveryTimestamp", higherOrderNextDeliveryTimestamp);
 
                     var updatedResult = mongoTemplate.updateMulti(findOrderedMessagesWithTheSameKeyAndAHigherOrder, updateNextDeliveryTimestamp, this.sharedQueueCollectionName);
                     if (updatedResult.getModifiedCount() > 0) {
+                        signalLocalConsumerWhenDue(queueName, higherOrderNextDeliveryTimestamp);
                         log.debug("** [{}] Updated {} messages nextDeliveryTimestamp to '{}', because Message '{}' with same key '{}' and lower order '{}' has nextDeliveryTimestamp '{}'",
                                   queueName,
                                   updatedResult.getModifiedCount(),
@@ -1273,7 +1360,7 @@ public final class MongoDurableQueues implements DurableQueues {
                                                                                                                              .setDurableQueues(this)
                                                                                                                              .setRemoveDurableQueueConsumer(this::removeQueueConsumer)
                                                                                                                              .setPollingIntervalMs(operation.getPollingInterval().toMillis())
-                                                                                                                             .setQueuePollingOptimizer(createQueuePollingOptimizerFor(operation))
+                                                                                                                             .setQueuePollingOptimizer(queuePollingOptimizerFactory.apply(operation))
                                                                                                                              .setInterceptors(interceptors)
                                                                                                                              .build())).proceed();
             if (started) {
@@ -1300,6 +1387,44 @@ public final class MongoDurableQueues implements DurableQueues {
         return new SimpleQueuePollingOptimizer(operation,
                                                (long) (pollingIntervalMs * 0.5d),
                                                pollingIntervalMs * 20);
+    }
+
+    /**
+     * Tell this node's consumer of {@code queueName} when a message this node scheduled for later becomes deliverable -
+     * a delayed enqueue, a retry, a delayed resurrection - so a consumer that had backed off while idle polls then,
+     * rather than up to its backoff cap later. The change stream does not cover it: it reports the write, which resets
+     * the backoff before the message is due, and the next empty poll backs off again.
+     * <p>
+     * Inside a Spring transaction - which a {@link SpringMongoTransactionAwareUnitOfWork} is - the consumer is told once
+     * it commits, as a message that is rolled back never comes due. Outside one the write has already committed.
+     */
+    private void signalLocalConsumerWhenDue(QueueName queueName, Instant dueAt) {
+        if (dueAt == null || !dueAt.isAfter(Instant.now())) {
+            // Deliverable now - the change stream's messageAdded resets the backoff
+            return;
+        }
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    tellLocalConsumerWhenDue(queueName, dueAt);
+                }
+            });
+        } else {
+            tellLocalConsumerWhenDue(queueName, dueAt);
+        }
+    }
+
+    private void tellLocalConsumerWhenDue(QueueName queueName, Instant dueAt) {
+        var consumer = durableQueueConsumers.get(queueName);
+        if (consumer == null) {
+            return;
+        }
+        try {
+            consumer.getQueuePollingOptimizer().messageScheduledFor(dueAt);
+        } catch (Exception e) {
+            log.debug("[{}] Could not tell the local consumer when a message becomes deliverable", queueName, e);
+        }
     }
 
     final void removeQueueConsumer(DurableQueueConsumer durableQueueConsumer) {
@@ -1626,6 +1751,8 @@ public final class MongoDurableQueues implements DurableQueues {
 
         private DurableQueueMessageObserver messageObserver = DurableQueueMessageObserver.none();
 
+        private boolean requireActiveUnitOfWorkForEnqueue = false;
+
         /**
          * @param mongoTemplate required
          * @return this builder
@@ -1698,6 +1825,18 @@ public final class MongoDurableQueues implements DurableQueues {
         }
 
         /**
+         * @param requireActiveUnitOfWorkForEnqueue should {@code queueMessage}/{@code queueMessages} fail when called outside
+         *                                          a {@code UnitOfWork} or Spring transaction? Default {@code false}: such an
+         *                                          enqueue commits on its own, and each call site's first one is logged at WARN. See
+         *                                          {@link EnqueueOutsideUnitOfWorkGuard}
+         * @return this builder
+         */
+        public Builder setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+            this.requireActiveUnitOfWorkForEnqueue = requireActiveUnitOfWorkForEnqueue;
+            return this;
+        }
+
+        /**
          * @return the new {@link MongoDurableQueues}
          */
         public MongoDurableQueues build() {
@@ -1708,6 +1847,7 @@ public final class MongoDurableQueues implements DurableQueues {
                                           sharedQueueCollectionName,
                                           queuePollingOptimizerFactory);
             durableQueues.setMessageObserver(messageObserver);
+            durableQueues.setRequireActiveUnitOfWorkForEnqueue(requireActiveUnitOfWorkForEnqueue);
             return durableQueues;
         }
     }

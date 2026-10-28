@@ -11,7 +11,7 @@
 - **Extends**: `DBFencedLockManager<HandleAwareUnitOfWork, DBFencedLock>` from foundation
 - **Key Deps**: JDBI, PostgreSQL, foundation module
 - **Scope**: Intra-service only (instances sharing same PostgreSQL database)
-- **Requirements**: PostgreSQL 9.5+
+- **Requirements**: PostgreSQL 15+ (the supported floor, `LLM.md`)
 - **Status**: WORK-IN-PROGRESS
 
 ```xml
@@ -91,7 +91,7 @@ import org.jdbi.v3.core.Jdbi;
 PostgresqlFencedLockManager lockManager = PostgresqlFencedLockManager.builder()
     .setJdbi(jdbi)                                        // Required
     .setUnitOfWorkFactory(unitOfWorkFactory)              // Required
-    .setLockManagerInstanceId("node-01")                  // Optional, defaults to hostname
+    .setLockManagerInstanceId("node-01")                  // Optional, defaults to <hostname>:<pid>
     .setLockTimeOut(Duration.ofSeconds(10))               // Optional, default 10s
     .setLockConfirmationInterval(Duration.ofSeconds(3))   // Optional, default 3s
     .setFencedLocksTableName("my_locks")                  // Optional, default "fenced_locks"
@@ -106,7 +106,7 @@ PostgresqlFencedLockManager lockManager = PostgresqlFencedLockManager.builder()
 |--------|------|---------|-------------|
 | `jdbi` | `Jdbi` | Required | JDBI instance for database access |
 | `unitOfWorkFactory` | `HandleAwareUnitOfWorkFactory` | Required | Transaction management |
-| `lockManagerInstanceId` | `String` | Hostname | Unique ID for this manager instance |
+| `lockManagerInstanceId` | `String` | `<hostname>:<pid>` (bare hostname before 0.60.1) | Unique ID for this manager instance; Spring: `essentials.fenced-lock-manager.instance-id` |
 | `lockTimeOut` | `Duration` | 10 seconds | Lock expiration without confirmation |
 | `lockConfirmationInterval` | `Duration` | 3 seconds | Heartbeat interval |
 | `fencedLocksTableName` | `String` | `"fenced_locks"` | Database table name ⚠️ SQL injection risk |
@@ -121,8 +121,8 @@ Duration lockTimeout = Duration.ofSeconds(30);
 Duration confirmationInterval = lockTimeout.dividedBy(3);  // 10 seconds
 
 // Instance ID best practices
-String instanceId = Network.hostName();                    // Use hostname (default)
-String instanceId = "service-" + UUID.randomUUID();        // Or unique ID
+String instanceId = FencedLockManagerSettings.defaultLockManagerInstanceId(); // <hostname>:<pid> (the default)
+String instanceId = System.getenv("POD_NAME");             // Or a stable, readable unique ID
 ```
 
 ## Usage Patterns
@@ -135,11 +135,12 @@ All `FencedLockManager` API methods inherited from foundation. See [LLM-foundati
 import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
 
 // Short-running locks with automatic release
-try (var handle = lockManager.acquireLock(
-        LockName.of("order-processor")) {
+try (var handle = lockManager.acquireLock(LockName.of("order-processor"))) {
     processOrders(handle.getCurrentToken());
-} 
+}
 ```
+
+`FencedLock.close()` calls `release()` but is declared `throws Exception`, so the enclosing method must catch or declare `Exception`. Where it cannot, use `try`/`finally` with `lock.release()`.
 
 ### Pattern: Try-Acquire (Non-Blocking)
 
@@ -152,7 +153,7 @@ if (lock.isPresent()) {
     try {
         processOrders(lock.get().getCurrentToken());
     } finally {
-        lockManager.releaseLock(lock.get());
+        lock.get().release();
     }
 }
 ```
@@ -190,6 +191,8 @@ boolean heldByMe = lockManager.isLockedByThisLockManagerInstance(LockName.of("my
 // Check if another instance holds the lock
 boolean heldByOther = lockManager.isLockAcquiredByAnotherLockManagerInstance(LockName.of("my-lock"));
 ```
+
+The manager predicates read the stored owner id and ignore the fence token; `FencedLock.isLockedByThisLockManagerInstance()` reads the lock object and can be one confirmation interval stale. Details: [LLM-foundation.md § Pattern: Lock Status Queries](./LLM-foundation.md#pattern-lock-status-queries).
 
 ## Spring Integration
 
@@ -257,9 +260,15 @@ public PostgresqlFencedLockManager fencedLockManager(
 .setLockManagerInstanceId("service-instance")
 
 // ✅ RIGHT - Each instance has unique ID
-.setLockManagerInstanceId(Network.hostName())
+.setLockManagerInstanceId(null)                           // default: <hostname>:<pid>
+.setLockManagerInstanceId(System.getenv("POD_NAME"))
 .setLockManagerInstanceId("node-" + UUID.randomUUID())
+
+// ⚠️ Not unique when two JVMs share a host or two containers share a hostname
+.setLockManagerInstanceId(Network.hostName())
 ```
+
+The id never decides mutual exclusion — acquire, confirm and release are compare-and-set updates on the fence token — but it is what the lock table, the admin API and `isLockedByThisLockManagerInstance()` report, so a shared id makes both instances look like the holder.
 
 ### ⚠️ Confirmation Interval vs Timeout
 
@@ -273,17 +282,24 @@ public PostgresqlFencedLockManager fencedLockManager(
 .setLockConfirmationInterval(Duration.ofSeconds(10))  // 3x buffer
 ```
 
+### ⚠️ A Lock Excludes Other JVMs, Not Other Callers in This JVM
+
+Ownership is per lock-manager instance, not per caller or thread. While this manager holds a lock, a second `tryAcquireLock`/`acquireLock` for the same name in the same JVM returns the **same** `FencedLock`, and `release()` by either caller releases it for both. Guard same-JVM callers that must not overlap yourself — see [LLM-foundation.md § Ownership is per lock-manager instance](./LLM-foundation.md#ownership-is-per-lock-manager-instance-not-per-caller-or-thread).
+
 ### ⚠️ Always Release Locks
 
 ```java
 // ❌ WRONG - Lock not released on exception
 FencedLock lock = lockManager.acquireLock(lockName);
 doWork(lock.getCurrentToken());
-lockManager.releaseLock(lock);  // Never called if doWork() throws
+lock.release();  // Never called if doWork() throws
 
-// ✅ RIGHT - Try-with-resources
-try (var handle = lockManager.acquireLock(lockName)) {
-    doWork(handle.getCurrentToken());
+// ✅ RIGHT - try/finally (or try-with-resources, see "Try-With-Resources" above)
+FencedLock lock = lockManager.acquireLock(lockName);
+try {
+    doWork(lock.getCurrentToken());
+} finally {
+    lock.release();
 }
 ```
 
@@ -342,7 +358,7 @@ See [README Security](../components/postgresql-distributed-fenced-lock/README.md
 
 ### Runtime Requirements
 
-- PostgreSQL 9.5+
+- PostgreSQL 15+ (the supported floor, `LLM.md`)
 - JDBI 3.x
 - PostgreSQL JDBC Driver
 - foundation module

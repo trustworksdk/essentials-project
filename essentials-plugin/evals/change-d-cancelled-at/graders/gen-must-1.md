@@ -5,5 +5,5 @@ type: llm
 
 The agent received this change request in a software project: "The order list should also show when each order was cancelled.". Grade its final reply.
 
-PASS if the reply shows this: Treats it as evolving the existing order_list view (change-procedure §5.3): extend its read model and its OrderCancelled handler in place, with an in-place rebuild (reset the subscription and replay) as the rollout default.
+PASS if the reply shows this: Evolves the existing order_list view in place (change-procedure §5.3): a cancellation-time field on its read model, set by its existing OrderCancelled handler, with no new view slice and no versioned twin.
 FAIL otherwise.

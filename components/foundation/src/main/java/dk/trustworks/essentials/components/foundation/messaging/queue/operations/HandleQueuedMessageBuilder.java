@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.foundation.messaging.queue.operation
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 
+import java.util.function.BooleanSupplier;
+
 /**
  * Builder for {@link HandleQueuedMessage}
  */
@@ -30,6 +32,11 @@ public final class HandleQueuedMessageBuilder {
      * The {@link QueuedMessageHandler} configured in the {@link DurableQueues#consumeFromQueue(ConsumeFromQueue)} operation
      */
     private QueuedMessageHandler messageHandler;
+    /**
+     * Live view of whether the consumer delivering the message is still started - see
+     * {@link HandleQueuedMessage#consumerState()}
+     */
+    private BooleanSupplier      consumerStarted;
 
     /**
      * @param message The {@link QueuedMessage} ready for being handled by the {@link #setMessageHandler(QueuedMessageHandler)}
@@ -50,11 +57,24 @@ public final class HandleQueuedMessageBuilder {
     }
 
     /**
+     * @param consumerStarted Live view of whether the consumer delivering the message is still started, typically
+     *                        {@code consumer::isStarted}. It is read each time it is asked, not once, because the
+     *                        consumer's {@code stop()} can begin while the handler runs. {@code null} (the default)
+     *                        when it is not known: {@link HandleQueuedMessage#consumerState()} then answers
+     *                        {@link HandleQueuedMessage.ConsumerState#UNKNOWN}
+     * @return this builder instance
+     */
+    public HandleQueuedMessageBuilder setConsumerStarted(BooleanSupplier consumerStarted) {
+        this.consumerStarted = consumerStarted;
+        return this;
+    }
+
+    /**
      * Build an {@link HandleQueuedMessage} instance from the builder properties
      *
      * @return the {@link HandleQueuedMessage} instance
      */
     public HandleQueuedMessage build() {
-        return new HandleQueuedMessage(message, messageHandler);
+        return new HandleQueuedMessage(message, messageHandler, consumerStarted);
     }
 }

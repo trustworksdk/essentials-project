@@ -5,7 +5,8 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 17 (Routing ↔ lane) about `src/main/java/com/example/multi/ledger/use_cases/post_entry/PostEntry.java`.
+PASS unless the report raises a finding under gate 17 (Routing ↔ lane) about `src/main/java/com/example/multi/ledger/use_cases/post_entry/PostEntry.java` line 5, `public record PostEntry(AccountId id, long amountMinor) {` (or what that line declares).
+Only a finding drawn from that code fails this check; match it by content, not only the line number. A finding about another line of the same file (for example a correct one drawn from a different guard or method) does not.
 Why that would be wrong: ledger's lane is Blocking, so no lane is picked and the decider-lane routing rules are not applied: reporting 'PostEntry does not implement AccountCommand' means gate 14 chose decider.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 These are tolerated and do not fail this check either:

@@ -201,8 +201,10 @@ public final class ShardOwnedQueuedMessage implements QueuedMessage {
      * <p>
      * The adapter reads this flag after the handler returns and, if set, ends the delivery with the
      * engine's {@code RedeliveryRequested} outcome. The engine schedules the message at
-     * {@code deliveryDelay}, counts the attempt, and - as with a manual redelivery in the classic
-     * {@code DurableQueues} - never dead-letters the message because of the request.
+     * {@code deliveryDelay} and never dead-letters it because of the request. Unlike a manual
+     * redelivery in the classic {@code DurableQueues}, the request is not counted: it does not raise
+     * {@link #getRedeliveryAttempts()}, and it does not use up the {@code RedeliveryPolicy}'s
+     * redeliveries for a later failure.
      */
     @Override
     public void markForRedeliveryIn(Duration deliveryDelay) {

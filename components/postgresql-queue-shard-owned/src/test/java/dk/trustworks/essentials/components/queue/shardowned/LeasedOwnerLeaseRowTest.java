@@ -1,0 +1,296 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.components.queue.shardowned;
+
+import dk.trustworks.essentials.components.queue.shardowned.LeasedOwner.*;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.*;
+
+import javax.sql.DataSource;
+import java.lang.reflect.Proxy;
+import java.sql.SQLException;
+import java.time.Duration;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * Where an owner's lease row stands is a field of the owner ({@link LeasedOwner#leaseRow()}), not something each site of
+ * {@code ShardOwnedQueue} derives from the owner's lease flag, its pump and the queue's owner list. The pump's death, and a
+ * stopping queue, end the owner in memory and keep the row ({@code ENDED_ROW_HELD}): it serves nothing, and still counts as
+ * this instance's until its queue has released the row. Only the queue moves it on, to {@code RELEASED}, once the row is
+ * released; a unit found taken goes there directly. The state never moves back.
+ * <p>
+ * The rule lives once, in {@link LeaseRowState}; the owner tests check that both owners delegate to it and that both
+ * signal their wake-up when they leave {@code HELD} from outside their pump, so the pump drops them on its next pass.
+ * <p>
+ * Two transitions need the database and are not here. In both, the owner's own fenced write is refused by its fence and the
+ * owner moves itself to {@code RELEASED} without going through {@link LeasedOwner#onLeaseEnded}: its acknowledgement flush
+ * (from {@code HELD} or {@code ENDED_ROW_HELD}; {@code ShardOwnedFencingIT} pins it on both lanes), and its takeover
+ * attempt charge ({@code leaseLostBeforeTakeover}; {@code ShardOwnedTakeoverAttemptsIT}'s
+ * {@code ..._whose_lease_was_taken_before_its_takeover_charges_nothing} pin it on both lanes).
+ */
+class LeasedOwnerLeaseRowTest {
+
+    @ParameterizedTest
+    @EnumSource(LeaseRow.class)
+    void the_state_only_ever_moves_forward_and_reports_where_it_was(LeaseRow start) {
+        for (var target : LeaseRow.values()) {
+            var state = stateAt(start);
+
+            var was = state.advanceTo(target);
+
+            assertThat(was).isEqualTo(start);
+            assertThat(state.get()).as("%s asked for %s", start, target)
+                                   .isEqualTo(target.ordinal() > start.ordinal() ? target : start);
+        }
+    }
+
+    @Test
+    void the_state_starts_held_and_may_skip_the_middle() {
+        var state = new LeaseRowState();
+        assertThat(state.get()).isEqualTo(LeaseRow.HELD);
+
+        assertThat(state.advanceTo(LeaseRow.RELEASED)).isEqualTo(LeaseRow.HELD);
+        assertThat(state.get()).isEqualTo(LeaseRow.RELEASED);
+    }
+
+    @Test
+    void the_states_are_declared_in_the_order_they_are_reached() {
+        // LeaseRowState compares ordinals: reordering the enum would silently reverse a transition.
+        assertThat(LeaseRow.values()).containsExactly(LeaseRow.HELD, LeaseRow.ENDED_ROW_HELD, LeaseRow.RELEASED);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void ending_an_owner_keeping_its_row_wakes_its_pump_once(String lane) {
+        var wakeup = new ShardWakeup();
+        var owner  = owner(lane, wakeup);
+
+        owner.endKeepingLeaseRow();
+        assertThat(wakeup.consume()).as("the pump drops the owner on its next pass, not at its backstop").isTrue();
+
+        owner.endKeepingLeaseRow();
+        owner.onLeaseEnded(LeaseEnd.RELEASED);
+        assertThat(wakeup.consume()).as("only leaving HELD wakes the pump: the owner was already out of its selection").isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_unit_found_taken_while_held_wakes_its_pump(String lane) {
+        var wakeup = new ShardWakeup();
+        var owner  = owner(lane, wakeup);
+
+        owner.onLeaseEnded(LeaseEnd.TAKEN);
+
+        assertThat(wakeup.consume()).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_new_owner_holds_its_row_and_serves_its_unit(String lane) {
+        var owner = owner(lane);
+
+        assertThat(owner.leaseRow()).isEqualTo(LeaseRow.HELD);
+        assertThat(owner.leaseHeld()).isTrue();
+        assertThat(owner.holdsLeaseRow()).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void an_owner_ended_keeping_its_row_serves_nothing_and_still_holds_the_row_until_the_queue_releases_it(String lane) {
+        var owner = owner(lane);
+
+        owner.endKeepingLeaseRow();
+
+        assertThat(owner.leaseRow()).isEqualTo(LeaseRow.ENDED_ROW_HELD);
+        assertThat(owner.leaseHeld()).as("serves nothing: not pumped, not shed, not in shardsHeld").isFalse();
+        assertThat(owner.holdsLeaseRow()).as("still this instance's: counted, not dropped, not taken again").isTrue();
+
+        owner.endKeepingLeaseRow();
+        assertThat(owner.leaseRow()).as("ending it again changes nothing").isEqualTo(LeaseRow.ENDED_ROW_HELD);
+
+        owner.onLeaseEnded(LeaseEnd.RELEASED);
+
+        assertThat(owner.leaseRow()).isEqualTo(LeaseRow.RELEASED);
+        assertThat(owner.leaseHeld()).isFalse();
+        assertThat(owner.holdsLeaseRow()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_unit_found_taken_releases_the_row_at_once_and_nothing_moves_it_back(String lane) {
+        var owner = owner(lane);
+
+        owner.onLeaseEnded(LeaseEnd.TAKEN);
+
+        assertThat(owner.leaseRow()).isEqualTo(LeaseRow.RELEASED);
+        assertThat(owner.holdsLeaseRow()).isFalse();
+
+        owner.endKeepingLeaseRow();
+        owner.onLeaseEnded(LeaseEnd.RELEASED);
+        assertThat(owner.leaseRow()).as("a released row is never held again").isEqualTo(LeaseRow.RELEASED);
+    }
+
+    /**
+     * {@code leasesLost} is counted by the transition into {@code RELEASED}, not by whoever finds the unit taken: the
+     * queue's lease check and a refused takeover charge can both find the same loss, and only the one whose
+     * {@link LeaseRowState#advanceTo} moved the row counts it.
+     */
+    @ParameterizedTest(name = "{0} lane, found taken while {1}")
+    @CsvSource({"unordered, HELD", "unordered, ENDED_ROW_HELD", "ordered, HELD", "ordered, ENDED_ROW_HELD"})
+    void a_unit_found_taken_is_counted_lost_once(String lane, LeaseRow foundIn) {
+        var owner = owner(lane);
+        if (foundIn == LeaseRow.ENDED_ROW_HELD) {
+            owner.endKeepingLeaseRow();
+        }
+
+        owner.onLeaseEnded(LeaseEnd.TAKEN);
+        owner.onLeaseEnded(LeaseEnd.TAKEN);
+
+        assertThat(owner.ownerMetrics().leasesLost.sum()).as("counted by the call that moved the row, once").isEqualTo(1L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_unit_this_instance_released_is_not_counted_lost_when_found_taken_afterwards(String lane) {
+        var owner = owner(lane);
+
+        owner.onLeaseEnded(LeaseEnd.RELEASED);
+        owner.onLeaseEnded(LeaseEnd.TAKEN);
+
+        assertThat(owner.ownerMetrics().leasesLost.sum()).isZero();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_unit_found_taken_after_its_takeover_charge_was_refused_is_counted_lost_once(String lane) {
+        var owner = owner(lane);
+
+        // The pump's refused charge, then a lease check that had selected the owner while it was still HELD
+        if (owner instanceof OrderedShardOwner ordered) {
+            ordered.leaseLostBeforeTakeover();
+        } else {
+            ((ShardOwner) owner).leaseLostBeforeTakeover();
+        }
+        owner.onLeaseEnded(LeaseEnd.TAKEN);
+
+        assertThat(owner.ownerMetrics().leasesLost.sum()).isEqualTo(1L);
+        assertThat(owner.leaseRow()).isEqualTo(LeaseRow.RELEASED);
+    }
+
+    @Test
+    void marking_a_release_in_doubt_leaves_the_state_where_it_is_and_stays() {
+        var state = new LeaseRowState();
+        assertThat(state.releaseInDoubt()).isFalse();
+
+        state.markReleaseInDoubt();
+
+        assertThat(state.get()).as("as far as the instance knows, the row still names it").isEqualTo(LeaseRow.HELD);
+        assertThat(state.releaseInDoubt()).isTrue();
+        state.advanceTo(LeaseRow.RELEASED);
+        assertThat(state.releaseInDoubt()).as("nothing undoes it").isTrue();
+    }
+
+    /**
+     * A release the database answered with an error of its own was rolled back: not in doubt. One whose connection was
+     * lost or whose read timed out (pgjdbc: {@code 08006}), or that failed with no SQL state or with anything but an
+     * {@link SQLException}, may have gone through.
+     */
+    @Test
+    void a_release_is_in_doubt_unless_the_database_answered_it_with_an_error_of_its_own() {
+        assertThat(LeaseRowState.mayHaveGoneThrough(new SQLException("An I/O error occurred while sending to the backend.", "08006")))
+                .as("a network timeout or a lost connection").isTrue();
+        assertThat(LeaseRowState.mayHaveGoneThrough(new SQLException("Connection is not available", "08001"))).isTrue();
+        assertThat(LeaseRowState.mayHaveGoneThrough(new SQLException("no state"))).isTrue();
+        assertThat(LeaseRowState.mayHaveGoneThrough(new IllegalStateException("thrown by the driver"))).isTrue();
+
+        assertThat(LeaseRowState.mayHaveGoneThrough(new SQLException("simulated failure releasing 1 unordered unit(s)", "P0001")))
+                .as("a trigger refusing the release").isFalse();
+        assertThat(LeaseRowState.mayHaveGoneThrough(new SQLException("canceling statement due to statement timeout", "57014")))
+                .as("a statement the server cancelled").isFalse();
+    }
+
+    /**
+     * A release of the row failed - the queue's {@code releaseLeaseRows} threw, a statement whose answer the network wait
+     * bound stopped waiting for among the causes - so it may have gone through on the server. The unit then found gone is
+     * read as given up by that release, not counted lost.
+     */
+    @ParameterizedTest(name = "{0} lane, found gone while {1}")
+    @CsvSource({"unordered, HELD", "unordered, ENDED_ROW_HELD", "ordered, HELD", "ordered, ENDED_ROW_HELD"})
+    void a_unit_found_gone_after_a_release_of_its_row_failed_is_not_counted_lost(String lane, LeaseRow foundIn) {
+        var wakeup = new ShardWakeup();
+        var owner  = owner(lane, wakeup);
+        if (foundIn == LeaseRow.ENDED_ROW_HELD) {
+            owner.endKeepingLeaseRow();
+            wakeup.consume();
+        }
+        owner.markReleaseInDoubt();
+        assertThat(owner.releaseInDoubt()).isTrue();
+        assertThat(owner.leaseRow()).as("marking moves nothing").isEqualTo(foundIn);
+
+        owner.onLeaseEnded(LeaseEnd.TAKEN);
+
+        assertThat(owner.ownerMetrics().leasesLost.sum()).isZero();
+        assertThat(owner.leaseRow()).isEqualTo(LeaseRow.RELEASED);
+        assertThat(wakeup.consume()).as("the owner still stops: the pump drops it on its next pass when it was serving")
+                                    .isEqualTo(foundIn == LeaseRow.HELD);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_refused_takeover_charge_after_a_release_of_the_row_failed_is_not_counted_lost(String lane) {
+        var owner = owner(lane);
+        owner.markReleaseInDoubt();
+
+        if (owner instanceof OrderedShardOwner ordered) {
+            ordered.leaseLostBeforeTakeover();
+        } else {
+            ((ShardOwner) owner).leaseLostBeforeTakeover();
+        }
+
+        assertThat(owner.ownerMetrics().leasesLost.sum()).isZero();
+        assertThat(owner.leaseRow()).as("the owner stops all the same").isEqualTo(LeaseRow.RELEASED);
+    }
+
+    private static LeaseRowState stateAt(LeaseRow start) {
+        var state = new LeaseRowState();
+        state.advanceTo(start);
+        return state;
+    }
+
+    private static LeasedOwner owner(String lane) {
+        return owner(lane, new ShardWakeup());
+    }
+
+    private static LeasedOwner owner(String lane, ShardWakeup wakeup) {
+        // Nothing here touches the database: the lease row's state is in memory.
+        var noDatabase = (DataSource) Proxy.newProxyInstance(DataSource.class.getClassLoader(), new Class<?>[]{DataSource.class},
+                                                             (proxy, method, args) -> {
+                                                                 throw new UnsupportedOperationException(method.getName());
+                                                             });
+        var storage  = new ShardOwnedStorage(noDatabase, (short) 1);
+        var settings = ShardOwnerSettings.defaults();
+        var policy   = RedeliveryPolicy.fixed(Duration.ofSeconds(1), 3);
+        if ("ordered".equals(lane)) {
+            return new OrderedShardOwner(storage, 3, 1L, settings, (id, key, payload, type) -> { }, new ShardOwnerMetrics(), policy,
+                                         "instance-under-test", wakeup, HandlerDispatch.inline(), false);
+        }
+        return new ShardOwner(storage, 3, 1L, settings, (id, payload, type) -> { }, new ShardOwnerMetrics(), policy, wakeup,
+                              "instance-under-test", HandlerDispatch.inline(), false);
+    }
+}

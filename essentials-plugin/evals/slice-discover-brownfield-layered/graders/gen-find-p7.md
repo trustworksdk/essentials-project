@@ -7,7 +7,6 @@ The agent's final message is the report `/essentials:slice-discover` printed for
 
 PASS if the report contains a finding that matches all of:
 - it concerns `src/main/java/com/example/shop/controller/InvoiceController.java`
-- it also cites `src/main/java/com/example/shop/service/BillingService.java`, `src/main/java/com/example/shop/model/Invoice.java`
 - it is a primitive-id-at-edge finding
-- its substance: Order, invoice and customer ids are plain Strings in the controller signatures, the service methods (BillingService.payInvoice(String invoiceId, String cardToken)) and the entity fields (Invoice.orderId), where the law puts semantic id types in each BC's types/. Grouped (per BC, or once overall), not one finding per parameter, and with no severity.
+- its substance: Order, invoice and customer ids are plain Strings in the controller signatures, the service methods (BillingService.payInvoice(String invoiceId, String cardToken)) and the entity fields (Invoice.orderId), where the law puts semantic id types in each BC's types/. Grouped (per BC, or once overall), not one finding per parameter, and with no severity. It names the ids and roughly how many sites carry each; naming those sites by role or member (a @PathVariable, payInvoice, Invoice.orderId) rather than by file path cites them.
 FAIL if no finding matches. Ignore formatting, ordering and other findings.

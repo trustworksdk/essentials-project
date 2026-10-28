@@ -1,0 +1,160 @@
+schema_version: 1 # int, required. Readers fail closed if absent.
+base_branch: main # default <base> for /tw-code-review:review
+
+# Reserved — not read by any phase yet.
+profile: balanced # concise | balanced | thorough
+language: en
+surface:
+  branch: { enabled: true }
+  pr: { enabled: true, platform: github }
+
+reviews:
+  walkthrough:
+    style: expanded # expanded | collapsed — reserved, not read yet
+
+  # Architecture profiles — named bundles of packs, adapters, sub-reviewers and checks.
+  # Listing one is the opt-in; nothing here is on by default.
+  # detected: event-driven — add to activate
+  architecture_profiles: []
+  style_packs: [baseline]
+  language_adapters: [polyglot, jvm]
+  path_instructions: []
+
+  # Per-adapter tool toggles. A bare bool is shorthand for {enabled: <bool>}.
+  tools:
+    polyglot:
+      gitleaks: true # secret scan
+      semgrep: true # opt-in — no ruleset opinion by default
+      # Offline rules (p/java, p/kotlin, p/security-audit) fetched by the devcontainer's
+      # post-create.sh; Semgrep Rules License, so never in the repo. Outside the
+      # devcontainer the directory is absent and semgrep is skipped.
+      semgrep_config: /home/vscode/.local/share/semgrep-rules
+      markdownlint: true
+      hygiene_grep: true # TODO/FIXME/console.log/debugger sweep
+      scope: added-lines # added-lines | changed-files
+      timeout: 120 # seconds; adapter is SIGTERMed past this budget
+
+    jvm:
+      checkstyle: true
+      detekt: true
+      spotbugs: true
+      pmd: true # opt-in; rules: pmd-ruleset.xml at the repo root
+      scope: added-lines
+      timeout: 300
+
+  # Custom adapters invoked through scripts/run-adapter.sh. Each entry needs a
+  # `command`; the script exits 64 for an adapter with no command configured.
+  # Example:
+  #   adapters:
+  #     house-linter:
+  #       command: 'house-linter --json --files "$TW_CHANGED_FILES"'
+  adapters: {}
+
+  # Project checks (Phase 2) — run the project's own commands against the review
+  # head and hand their output to the reviewer verbatim. Opt-in: running a
+  # repository's commands is the team's call, so it ships off and unconfigured.
+  # Example (uncomment, edit, set enabled: true):
+  #   mechanical:
+  #     enabled: false
+  #     timeout: 300              # seconds per command
+  #     output_cap_bytes: 20000   # the tail of each command's output is kept
+  #     commands:
+  #       - { name: test,      run: "pnpm test",      kind: test }
+  #       - { name: typecheck, run: "tsc --noEmit",   kind: typecheck }
+  #       - { name: lint,      run: "eslint .",       kind: lint }
+
+  # Concept-review pass (Phase 3b). Roughly doubles per-run LLM cost — it reads
+  # whole files on opus — so cost-sensitive teams set enabled: false.
+  concept_review:
+    enabled: true
+
+  # /tw-code-review:fix — test_command runs after every fixer round, beside the
+  # fixer's own narrow commands; red is rework. Whole-reactor unit tests, no Docker:
+  # catches cross-module unit breaks; ITs come from the fixer's own commands.
+  fix:
+    enabled: true
+    test_command: "mvn test -q"
+    max_rounds: 3 # fixer rounds per unit before it is parked and asked about
+    max_review_rounds: 3 # fix → /incremental rounds per /fix run
+    reviewers: auto # auto | all | one — the fix-reviewer lenses per unit
+    commit_subject: "fix: {title} ({ids})" # placeholders {title} {ids} {review}
+    full_suite: per-unit # per-unit | per-round — per-round runs test_command once per round (slow suites)
+    skip_tests_for_docs: true # a unit that changed only documentation runs no tests
+    compile_command: "" # a round that changed only comments or docs runs this alone (and one reviewer), e.g. "mvn -q compile"; empty: the tests as always
+    env_repair_command: "mvn -q -pl {module} clean" # on warn=env-suspect:<module> in an untouched module: run once, re-test, e.g. "mvn -q -pl {module} clean"; empty: by hand
+    orchestrator_rounds: 1 # rounds /fix may add to a unit it is not yet satisfied with
+    glossary: "" # a file of terms whose scope matters, put in every fixer brief
+    repo_rules: "" # a file of rules every change follows, put in every fixer brief
+    later_round_min_severity: major # from round 2: leave the run's own minor follow-ups open (major)
+    regression_min_severity: major # the last round's own fixes raised one at or above it: one extra round on those (off: none)
+    fill_subject: "docs: name the commits of fix round {round} ({units})" # fill-hashes' commit
+    parallel:
+      max_fixers: 2 # 2: the next unit's fixer runs beside the current unit's gate and review when their lanes are free
+      append_only_paths: [docs/NEXT_VERSION_RELEASE.md] # with 2: files every unit appends to (release notes) — paths or globs; each commit merges its unit's lines
+
+  sub_reviewers:
+    docs_freshness:
+      mode: always # always | off | globs
+      documentation_globs:
+        - "README.md"
+        - "**/README.md"
+        - "docs/**/*.md"
+        - "LLM-*.md"
+      public_symbol_globs:
+        - "src/**/*.ts"
+        - "src/**/*.tsx"
+        - "src/**/*.js"
+        - "components/*/src/main/java/**/*.java"
+        - "lib/**/*.py"
+      public_symbol_exclude_globs: # tests and type declarations are not
+        - "**/*.test.*"
+        - "**/*.spec.*"
+        - "**/*.d.ts"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/__tests__/**"
+        - "**/test_*.py"
+        - "**/*_test.py"
+        - "**/*_test.go"
+        - "**/*Tests.cs"
+        - "**/*.Tests/**"
+      check_changelog: false # flag a missing CHANGELOG entry on src/ changes
+    # Dispatched when a changed file matches the globs; an empty/absent `globs` means the
+    # registry default (references/sub-reviewers.json). `mode: off` opts out.
+    security: { mode: globs }
+    performance: { mode: globs }
+    # Shipped by a later release; off until an architecture profile turns them on.
+    accessibility: { mode: off }
+    data_quality: { mode: off }
+
+  # Check ids MUST be the ids Phase 6 emits. The 0.1.0 names `title` and
+  # `description` are read as aliases but are not written by /init any more.
+  pre_merge_checks:
+    title_conventional_commits: { mode: warning } # off | warning | error
+    description_not_empty: { mode: warning }
+    docstrings: { mode: off }
+    issue_assessment: { mode: off }
+    custom_checks: [] # declarative checks — see skills/custom-checks-dsl
+
+persistence:
+  commit_reviews: false # reviews/ stays gitignored
+  commit_learnings: true # learnings are the team's shared memory
+
+# The sdd and refac bridges. `auto` reads them when present and degrades quietly when not;
+# `off` turns a bridge off entirely. Finer keys can only narrow the master `enabled` switch.
+bridges:
+  sdd:
+    enabled: auto # auto | on | off — master switch: /to-sdd, /from-sdd, spec context, protected-block scan
+    from_sdd: auto # auto | on | off — on: /from-sdd runs even with no .sdd/constitution/
+    spec_context: auto # auto | on | off — on: warn (one line) when no sdd feature matches the branch
+  refac:
+    enabled: auto # auto | on | off — /from-refac
+
+
+# Model per role (optional). With no `models:` block every agent runs on the
+# model pinned in its own file, exactly as before. Classes map to aliases
+# (sonnet | opus | haiku); `roles` moves one agent to another class.
+# Example (uncomment to use):
+#   models:
+#     classes: { high: opus, standard: sonnet, low: haiku }
+#     roles:   { verifier: high }

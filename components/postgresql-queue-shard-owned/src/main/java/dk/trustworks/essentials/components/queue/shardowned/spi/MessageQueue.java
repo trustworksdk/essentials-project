@@ -69,6 +69,23 @@ import java.util.*;
  * Transactional enqueue, handler-driven consumption, per-key ordering, retry policy and dead letters,
  * depth and dead-letter inspection, and purge. Those are consumer needs rather than artefacts of
  * either implementation, and dropping them would be building a different product.
+ *
+ * <h2>{@code isStarted()} says whether the queue is started, not whether anything runs</h2>
+ * {@link #isStarted()} reads whether the queue is marked started - by {@link #start()}, or by a {@link #consume} made
+ * while no subscription is registered - and false again after a {@link #stop()}. After that stop, a {@link Subscription#start()}, or a
+ * {@code consume()} of another subscription, runs that subscription's consumers and leaves the queue marked not
+ * started, so the queue's {@code start()} still starts every subscription the stop stopped. The queue is then partly
+ * started: {@code isStarted()} reads false while a subscription leases units and handles messages. The queue's
+ * {@code stop()} and {@code close()} stop every subscription registered with it whatever {@code isStarted()} reads.
+ * <p>
+ * <b>A {@code Lifecycle} manager that calls {@code stop()} only on a bean reporting itself started skips a partly
+ * started queue</b>, as {@code Lifecycle}'s contract lets it - {@code foundation}'s {@code DefaultLifecycleManager} does
+ * at shutdown - and the running subscription goes on leasing units and handling messages after the manager has
+ * moved on. Stop such a queue whatever {@code isStarted()} reads (the Spring starter's {@code ShardOwnedQueueFactory}
+ * does on {@code close()}), or bring it back to started with its own {@code start()} first. Reading
+ * {@code isStarted()} as "any subscription is running" would fail the other way: a manager calling {@code start()}
+ * only on a bean reporting itself not started would then never restart the subscriptions the queue's stop stopped.
+ * {@link Subscription#isStarted()} answers for one subscription.
  */
 public interface MessageQueue extends Lifecycle, AutoCloseable {
 
@@ -92,11 +109,10 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * takes the messages with it, and the wake-up notification goes with them, because it is issued
      * inside the same transaction rather than sent alongside it.
      * <p>
-     * A {@code java.sql.Connection} rather than a unit-of-work type, deliberately. This module depends
-     * on nothing but {@code shared}, and a connection is what every caller can produce — Spring's
-     * {@code DataSourceUtils.getConnection}, a JDBI handle's {@code getConnection}, or a plain
-     * {@code DataSource}. Taking a framework's transaction abstraction here would make the queue
-     * depend on the framework rather than the other way round.
+     * A {@code java.sql.Connection} rather than a unit-of-work type, deliberately. A connection is what
+     * every caller can produce — Spring's {@code DataSourceUtils.getConnection}, a JDBI handle's
+     * {@code getConnection}, or a plain {@code DataSource} — and taking one framework's transaction
+     * abstraction here would shut out callers that use another.
      * <p>
      * The connection must already be in a transaction ({@code autoCommit == false}). A connection in
      * autocommit mode cannot express "together with my business writes", which is the entire point,
@@ -146,8 +162,14 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     /**
      * Consume with a handler. The engine leases shards, enforces per-key order, retries and
      * dead-letters according to {@code policy}, and acknowledges on the handler's behalf.
+     * <p>
+     * Each call is a subscription of its own, registered with the queue until it is
+     * {@link Subscription#unsubscribe() unsubscribed} or {@link Subscription#close() closed}: stopped, it
+     * stays registered, and the queue's {@code start()} starts it again. A second subscription registered
+     * in one process is a competing consumer under an instance id of its own.
      *
-     * @return a handle that stops consumption; closing it releases the leases
+     * @return a handle on the subscription; stopping it releases the leases and keeps it registered,
+     * unsubscribing or closing it also takes it out of the queue
      */
     Subscription consume(MessageHandler handler, ConsumerOptions options) throws SQLException;
 
@@ -180,17 +202,6 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      */
     MessageQueue addInterceptor(MessageQueueInterceptor interceptor);
 
-    /**
-     * Messages enqueued and not yet acknowledged, per lane. Cheap enough to poll for monitoring.
-     */
-    /**
-     * What this process's consumers of this queue have done since they started — see
-     * {@link QueueStatistics} for why the scope matters before the numbers do.
-     * <p>
-     * In-memory and free to call. An instance consuming none of this queue reports
-     * {@link QueueStatistics#NONE}; that is "served elsewhere", not "stalled", and {@link #health()}
-     * is what tells those apart because it reads the database.
-     */
     /**
      * Whether the ordered lane already holds a message for this key.
      * <p>
@@ -232,8 +243,24 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
         return queued;
     }
 
+    /**
+     * What this process's consumers of this queue have done since they started — see
+     * {@link QueueStatistics} for why the scope matters before the numbers do.
+     * <p>
+     * In-memory and free to call. An instance consuming none of this queue reports
+     * {@link QueueStatistics#NONE}; that is "served elsewhere", not "stalled", and {@link #health()}
+     * is what tells those apart because it reads the database.
+     * <p>
+     * The sum covers the subscriptions registered now. A subscription's counts leave it when the
+     * subscription is {@link Subscription#unsubscribe() unsubscribed}, so the running totals of a
+     * caller that unsubscribes and consumes anew start again from zero; a {@code stop()} and
+     * {@code start()} of the queue keep them.
+     */
     QueueStatistics statistics();
 
+    /**
+     * Messages enqueued and not yet acknowledged, per lane. Cheap enough to poll for monitoring.
+     */
     QueueDepth depth() throws SQLException;
 
     /**
@@ -338,6 +365,64 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * @return how many messages were put back; zero when the key has no dead letters
      */
     int resurrectKey(String key) throws SQLException;
+
+    /**
+     * Release ordered unit {@code unit} now, if a stop of a subscription of this queue in <b>this process</b> running under
+     * instance id {@code instanceId} kept it - accepting that a key of it may be in two handlers at once.
+     * <p>
+     * A stop keeps an ordered unit, its lease row still naming the subscription's instance id, when a key of it is still
+     * in its handler {@code shedGrace} after the stop began: a successor taking the unit then could start that key while
+     * it still runs here. The unit is released once that handler returns; until then nothing serves the unit's other
+     * keys, and nothing takes the unit before the instance's liveness lapses or the handler has been there longer than
+     * the queue's {@code stuckHandlerTimeout}. This is the operator's way out before then, for a handler known to be hung:
+     * the unit's acknowledgements are flushed under the fence it was kept under and its lease row released, so any
+     * instance below its fair share may take it under a new fence. Before the release each message still in a handler is
+     * charged an attempt, as a takeover would charge one, and a message that reaches {@code maxAttempts} by it is
+     * dead-lettered: a message whose handler hangs on every delivery, released this way each time, reaches the
+     * dead-letter table. <b>Whoever takes it delivers the messages still in a handler again, bar those dead-lettered,
+     * possibly while those handlers still run them</b> - the reordering and duplicate delivery the wait exists to prevent. A unit whose handler
+     * has returned meanwhile is simply handed back, as it would have been, and nothing is charged. The answer names what
+     * was charged and which keys were dead-lettered ({@link KeptUnitRelease#charged()},
+     * {@link KeptUnitRelease#deadLetteredKeys()}): such a key is blocked behind its dead letter until it is resurrected
+     * ({@link #resurrectKey}) or deleted.
+     * <p>
+     * Only a unit a stop of a subscription running under {@code instanceId} kept, and whose lease row still names that
+     * instance id under that fence, is touched; every other unit, this process's included - one a subscription under
+     * another instance id kept among them - is left alone. Kept units live in the memory of the process whose stop kept
+     * them, so ask the process named in the WARN that reported the unit kept, with the instance id that WARN names:
+     * anywhere else, or with another instance id, this releases nothing, and the answer's
+     * {@link KeptUnitReleases#answeredBy()} names the instance ids this process has for the queue, so the caller can tell
+     * which process answered. Each subscription registered with this queue is asked, and each that a {@code consume()}
+     * is still starting; and each that has ended - unsubscribed, or a {@code consume()} that failed - while its lanes'
+     * stops are still under way, or while this queue still keeps its instance id out of use because of a unit it kept.
+     * <p>
+     * Nothing passes the request on to another process, through the database or otherwise, deliberately: the kept owner,
+     * its fence and the keys in its handler exist only in the memory of the process whose stop kept the unit, the lane
+     * whose stop kept it runs no heartbeat while it stays stopped - and an ended subscription's lanes never run again -
+     * so nothing would pick up a recorded request, and the answer is what the caller's
+     * follow-up is decided from, so it is given at once. A caller behind a load balancer therefore sends the request to
+     * that process directly. Design notes: {@code docs/durable-queue-shard-owned.md} §13.7 and §18.3.
+     *
+     * @param instanceId the instance id the stop's WARN names - the subscription's, which may carry a suffix
+     * @param unit       the ordered unit, as the stop's WARN names it; from {@code 0} to the queue's ordered unit count,
+     *                   exclusive
+     * @return the instance ids that answered, and what was done: one entry per subscription under {@code instanceId}
+     * that had kept the unit, none when none had; {@link KeptUnitReleases#NONE} - the default - for an implementation
+     * that keeps no units
+     * @throws SQLException when a step of the release - its acknowledgement flush, its charge, the release of the lease
+     *                      row - fails, or waits for the database longer than the implementation's bound; the unit is
+     *                      then left kept, as far as this instance knows: a statement whose answer the bound stopped
+     *                      waiting for may still go through on the server, and a later request then answers
+     *                      {@link KeptUnitRelease.Outcome#ALREADY_TAKEN}, or nothing for the unit, for a release that
+     *                      did. A charge that gave up waiting for another release of the unit's lease row to end is
+     *                      not thrown: it is answered {@link KeptUnitRelease.Outcome#CLAIM_WAIT_TIMED_OUT}. A
+     *                      statement that gave up waiting for a lock on the database (PostgreSQL's
+     *                      {@code lock_timeout}) is thrown like any other failure; it was rolled back, and asking
+     *                      again is safe: a later request does not charge again a message this one charged
+     */
+    default KeptUnitReleases releaseKeptOrderedUnit(String instanceId, int unit) throws SQLException {
+        return KeptUnitReleases.NONE;
+    }
 
     /**
      * Remove everything, both lanes and dead letters. Administrative, not a delivery operation.

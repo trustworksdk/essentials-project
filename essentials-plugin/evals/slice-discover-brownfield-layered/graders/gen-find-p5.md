@@ -8,5 +8,5 @@ The agent's final message is the report `/essentials:slice-discover` printed for
 PASS if the report contains a finding that matches all of:
 - it concerns `src/main/java/com/example/shop/repository/OrderRepository.java`
 - it is a write-repository-query-drift finding
-- its substance: Write-repository finders serve OrderController.list/.get, ReportController and InvoiceController.unpaid.
+- its substance: Write-repository finders serve reads: OrderRepository's (findByCustomerId, findById, the inherited findAll) serve OrderController.list/.get and ReportController, and InvoiceRepository.findByState serves InvoiceController.unpaid (the reminder job's use of findByState is the write path). One finding naming both repositories, or one per repository, counts.
 FAIL if no finding matches. Ignore formatting, ordering and other findings.

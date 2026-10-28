@@ -87,7 +87,7 @@ class JsonPathExpressionGuardTest {
             "data->>''",
             "data->'a b'->>'c'",
             "data->>'name; DROP TABLE orders'",
-            "data->'select'->>'c'"
+            "data->>'${"a".repeat(PostgresqlUtil.MAX_IDENTIFIER_LENGTH + 1)}'"
         ).forEach { expression ->
             assertThatThrownBy { checkJsonPathExpression(expression) }
                 .describedAs("expression '%s'", expression)

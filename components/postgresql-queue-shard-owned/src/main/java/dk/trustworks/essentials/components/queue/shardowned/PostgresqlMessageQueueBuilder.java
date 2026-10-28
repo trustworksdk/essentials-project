@@ -38,6 +38,7 @@ public final class PostgresqlMessageQueueBuilder {
     private QueueName          queueName;
     private ShardOwnerSettings settings = ShardOwnerSettings.defaults();
     private ShardRuntime       runtime;
+    private PostgresqlMessageQueue.LifecycleHook lifecycleHook = PostgresqlMessageQueue.LifecycleHook.NONE;
 
     public PostgresqlMessageQueueBuilder setDataSource(DataSource dataSource) {
         this.dataSource = dataSource;
@@ -90,6 +91,16 @@ public final class PostgresqlMessageQueueBuilder {
         return this;
     }
 
+    /**
+     * What a test does once a start of the queue has taken its lifecycle lock ({@link PostgresqlMessageQueue.LifecycleHook});
+     * left unset, nothing. Package-private: no caller outside this package's tests has a use for it, and setting it here,
+     * rather than on a built queue, keeps it fixed for the queue's life.
+     */
+    PostgresqlMessageQueueBuilder setLifecycleHook(PostgresqlMessageQueue.LifecycleHook lifecycleHook) {
+        this.lifecycleHook = requireNonNull(lifecycleHook, "No lifecycleHook provided");
+        return this;
+    }
+
     public PostgresqlMessageQueueBuilder setQueueName(QueueName queueName) {
         this.queueName = requireNonNull(queueName, "No queueName provided");
         return this;
@@ -115,6 +126,6 @@ public final class PostgresqlMessageQueueBuilder {
 
     public PostgresqlMessageQueue build() {
         resolveQueueName();
-        return new PostgresqlMessageQueue(dataSource, queueId, shardCount, instanceId, settings, runtime);
+        return new PostgresqlMessageQueue(dataSource, queueId, shardCount, instanceId, settings, runtime, lifecycleHook);
     }
 }

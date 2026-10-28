@@ -35,6 +35,11 @@
             <artifactId>testcontainers-mongodb</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.objenesis</groupId>
+            <artifactId>objenesis</artifactId>
+            <version>3.6</version>
+        </dependency>
     </dependencies>
     <build>
         <plugins>

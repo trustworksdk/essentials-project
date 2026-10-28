@@ -1,6 +1,6 @@
 # Types-Jackson3 - LLM Reference
 
-> Token-efficient reference for Jackson serialization of Essentials types. For explanations see [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-jackson3/README.md).
+> Token-efficient reference for Jackson serialization of Essentials types. For explanations see [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.1/types-jackson3/README.md).
 
 ## Quick Facts
 - Package: `dk.trustworks.essentials.jackson.types`
@@ -312,6 +312,21 @@ The Essentials Spring Boot starters already define this bean. They deliberately 
 from the context into the persistence mapper; an application needing extra persistence modules defines its own
 `JSONSerializer` / `JSONEventSerializer` bean, which the starter backs off from.
 
+⚠️ **A request body that omits a primitive fails before validation.** Jackson 3 enables
+`FAIL_ON_NULL_FOR_PRIMITIVES` by default. `EssentialsObjectMappers` turns it off for the persistence mapper, but
+Essentials does not configure Boot's web mapper, so a body that leaves out an `int`/`boolean`/`long` record component
+is rejected with HTTP 400 before `@Valid` runs. The error Spring reports, ``JSON parse error: Cannot map `null` into
+type `int` …``, names no field. To read a missing primitive as `0`/`false` (Jackson 2 behaviour), set
+`spring.jackson.deserialization.fail-on-null-for-primitives=false`; or use a boxed type and validate it with
+`@NotNull`.
+
+⚠️ **A hand-built test client does not use the web mapper.** `WebTestClient.bindToServer()` (or any client built
+with `builder()`) uses default codecs, without `EssentialTypesJacksonModule`, so a value type in a request body is
+written as a bean — a `CharSequenceType` id becomes `{"bytes":"…","empty":false,"value":"o-1"}` instead of `"o-1"` —
+and the test exercises a wire format the application never sees. Inject the context's client instead:
+`@AutoConfigureWebTestClient` (`spring-boot-webtestclient`) plus `@Autowired WebTestClient`. That client is built with
+Boot's `CodecCustomizer`s, so it encodes with the same `JsonMapper` and `JacksonModule` beans as the application.
+
 ### Complete Type Definition
 
 ```java
@@ -421,7 +436,7 @@ No issue was found for this exact combination.
 - ⚠️ `JSR310SingleValueType` needs `@JsonCreator` on constructor
 - ⚠️ Map keys typed by a value type need no annotation; a Jackson 2 `@JsonDeserialize(keyUsing = ...)` is silently ignored
 - ⚠️ `Money` serializes as `{"amount":"...","currency":"..."}` object, not single value
-- ⚠️ Factory `createObjectMapper()` disables getter/setter detection - uses fields only
+- ⚠️ Factory `createObjectMapper()` disables getter, `is`-getter and setter detection - uses fields only. Before the next release after 0.60.0 it left `is`-getters on, so a public `isX()` added a property
 - ⚠️ All registered types are from `dk.trustworks.essentials.types` — the **Java** hierarchy. Kotlin value types need `jackson-module-kotlin`
 - ⚠️ This module covers `@RequestBody`/`@ResponseBody` and persistence. `@PathVariable`/`@RequestParam` is `types-spring-web`, a separate mechanism
 
@@ -429,7 +444,7 @@ No issue was found for this exact combination.
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-jackson3/README.md) - Full documentation
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.1/types-jackson3/README.md) - Full documentation
 - [LLM-types.md](LLM-types.md) - Core types module
 - [LLM-immutable-jackson.md](LLM-immutable-jackson.md) - Immutable object Jackson support
-- [EssentialTypesJacksonModuleTest.java](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-jackson3/src/test/java/dk/trustworks/essentials/jackson/EssentialTypesJacksonModuleTest.java) - Usage examples
+- [EssentialTypesJacksonModuleTest.java](https://github.com/trustworksdk/essentials-project/blob/0.60.1/types-jackson3/src/test/java/dk/trustworks/essentials/jackson/EssentialTypesJacksonModuleTest.java) - Usage examples

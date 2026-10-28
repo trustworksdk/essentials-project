@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: market_data.suspend_instrument
 kind: command
 bc: market_data
@@ -7,6 +7,7 @@ status: live
 summary: Suspend trading in an instrument, recording why.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [SuspendInstrument]
 publishes: [InstrumentSuspended]
@@ -24,6 +25,8 @@ invariants:
     enforcedBy: Instrument
 forbidden:
   - cross-slice-internal:market_data
+tier: cqrs-es
+flow: instrument-lifecycle
 tests:
   unit: { present: false }
   integration: { present: false }

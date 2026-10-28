@@ -215,8 +215,18 @@ def sec_must_not_find(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[
         kinds = [gate_label(g) for g in gates if g != "*"] + [f"id {i}" for i in e.get("not_ids") or []]
         under = "of any kind" if "*" in gates else "under " + " or ".join(kinds)
         subject = f" about {where(e)}" if e.get("file") else ""
+        at = ", ".join(p for p in (f"line {e['line']}" if e.get("line") else "",
+                                   f"`{e['anchor']}`" if e.get("anchor") else "") if p)
+        if subject and at:
+            subject += f" {at} (or what that line declares)"
         what = f", described as: {e['what']}" if e.get("what") else ""
         body = intro(o["command"]) + f"PASS unless the report raises a finding {under}{subject}{what}."
+        if subject and at:
+            # Naming the file alone reads as "any such finding about this file" to the judge, which then
+            # fails a correct finding drawn from another line of it.
+            body += ("\nOnly a finding drawn from that code fails this check; match it by content, not only the line"
+                     " number. A finding about another line of the same file (for example a correct one drawn from"
+                     " a different guard or method) does not.")
         if e.get("why"):
             body += f"\nWhy that would be wrong: {' '.join(str(e['why']).split())}"
         body += "\n" + NOT_A_FINDING
@@ -287,7 +297,8 @@ def sec_terrain(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, s
     if t.get("lane"):
         items.append(f"its write-style lane is reported as `{t['lane']}` — reporting the nearest lane as the actual lane fails")
     if t.get("redirect_to_slice_check") is False:
-        items.append("it does not redirect to /essentials:slice-check")
+        items.append("it does not redirect to /essentials:slice-check instead of running discovery (naming slice-check "
+                     "as the later hand-off, once manifests exist, is not a redirect)")
     body = intro(o["command"]) + "PASS if the report's terrain pass says all of:\n" + bullets(items) + "\nFAIL otherwise."
     return {"gen-terrain.md": grader(f"{src} terrain", "llm", body)}
 
@@ -316,14 +327,25 @@ def sec_slices(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, st
         raise MalformedError(f"{src}: `slices` is empty")
     listed = [f"{x['kind']} `{x['slice']}` (from `{x['file']}`)" + (f" — {x['also']}" if x.get("also") else "")
               for x in s.get("list") or []]
-    body = (intro(o["command"]) + f"PASS if the report proposes exactly {s.get('count')} candidate slices "
-            "(names may differ slightly), namely:\n" + bullets(listed))
     also = [f"{x['kind']} `{x['slice']}` (from `{x['file']}`)" for x in s.get("also") or []]
     if also:
-        body += "\nIt may additionally list these outside the count, or not at all:\n" + bullets(also)
+        # "exactly N" beside a list of optional extras reads to a one-word judge as a cap on the
+        # whole table, so a report listing the extras failed however correct it was.
+        # A judge matching by name failed `orders_by_status` against `order_status_report`, and read
+        # "on neither list" as a reason to fail a report whose extras were all allowed: match by code.
+        body = (intro(o["command"]) + f"PASS if the report's candidate slices include each of these {s.get('count')}, "
+                "each as a slice of its own. Match each by the code and entry point it comes from, not by its name: "
+                "the slice name, the context prefix and the wording may differ freely.\n" + bullets(listed)
+                + "\nThese further slices may also appear, under any name or kind, or not at all; they are not "
+                f"counted among the {s.get('count')} and never fail this check:\n" + bullets(also))
+    else:
+        body = (intro(o["command"]) + f"PASS if the report proposes exactly {s.get('count')} candidate slices "
+                "(names may differ slightly), namely:\n" + bullets(listed))
     if s.get("order_controller_splits_into"):
         body += f"\nOrderController must be shown splitting into {s['order_controller_splits_into']} slices."
-    body += "\nFAIL if the count differs or a listed slice is missing or merged into another."
+    body += (f"\nFAIL only if one of the {s.get('count')} has no slice of its own, or shares one with another of the "
+             f"{s.get('count')}, or the report proposes a slice from code that no line above covers." if also else
+             "\nFAIL if the count differs or a listed slice is missing or merged into another.")
     return {"gen-slices.md": grader(f"{src} slices", "llm", body)}
 
 
@@ -431,7 +453,9 @@ def change_case(c: dict[str, Any]) -> dict[Path, str]:
     g = d / "graders"
     head = f"The agent received this change request in a software project: \"{request}\". Grade its final reply.\n\n"
     cls = c.get("class")
-    if cls != "silent":
+    # A class-E request (config, wiring, build) need not reach the router: it may fire and say "Class E", or
+    # never fire and do the work plainly. Its must/must_not graders check that no slice machinery leaked in.
+    if cls not in ("silent", "E"):
         out[g / "gen-skill-fired.md"] = grader(f"{src} (routing)", "tool_used", tool="Skill",
                                                input_match=r'"skill"\s*:\s*"(?:[\w-]+:)?essentials-change"')
     if cls == "ask":
@@ -445,6 +469,10 @@ def change_case(c: dict[str, Any]) -> dict[Path, str]:
                 "FAIL if it says nothing about it, imposes slice structure on the change, or dwells on it.")
     elif cls is None or cls == "silent":
         body = None
+    elif cls == "E":
+        body = (f"PASS if the reply handles the request as {CLASS_TEXT['E']} (class E): it names class E, or it "
+                "simply does or proposes the change without classifying it as a slice change.\n"
+                "FAIL if it classifies it as class A, B, C or D, or treats it as a change to a slice.")
     else:
         allowed = cls if isinstance(cls, list) else [cls]
         if not allowed or any(x not in CLASSES for x in allowed):
@@ -456,8 +484,12 @@ def change_case(c: dict[str, Any]) -> dict[Path, str]:
         out[g / "gen-class.md"] = grader(f"{src} class", "llm", head + body, weight=2)
     if c.get("slices"):
         ids = ", ".join(f"`{s}`" for s in c["slices"])
+        # An ask case has not settled whether the change belongs to the existing slice: it names it as the one the
+        # question is about.
+        role = ("as the existing slice the request concerns — the one that would be extended if the answer is the "
+                "same intent" if cls == "ask" else "as the slice(s) the change belongs to")
         out[g / "gen-owner.md"] = grader(f"{src} slices", "llm", head + (
-            f"PASS if the reply names {ids} as the slice(s) the change belongs to, by id or by the slice's directory "
+            f"PASS if the reply names {ids} {role}, by id or by the slice's directory "
             "(for example `orders/views/order_list`).\nFAIL if it attributes the change to a different slice or names none."))
     if c.get("lane"):
         out[g / "gen-lane.md"] = grader(f"{src} lane", "llm", head + (

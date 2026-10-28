@@ -1,0 +1,23 @@
+schemaVersion: "1.4"
+slice: billing.payment_list
+kind: view
+bc: billing
+owner: billing-team
+status: live
+summary: Payments with their charged and refunded amounts.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+flow: [checkout, returns]
+serves: [ListPayments]
+owns: [PaymentListView]
+endpoints:
+  - { method: GET, path: "/api/payments", auth: user }
+projections:
+  - { name: PaymentListProjection, from: [PaymentCharged, PaymentRefunded] }
+forbidden:
+  - cross-slice-internal:billing
+tests:
+  unit: { present: false }
+  integration: { present: false }

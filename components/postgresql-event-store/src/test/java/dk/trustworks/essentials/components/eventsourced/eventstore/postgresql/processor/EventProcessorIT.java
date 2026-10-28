@@ -53,10 +53,11 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.IntStream;
+import org.slf4j.*;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT.TestOrderEventProcessor.TEST_ORDERS;
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 /**
  * Integration test for the EventProcessor using the following scenarios:
@@ -69,6 +70,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @Testcontainers
 public class EventProcessorIT {
+    private static final Logger log = LoggerFactory.getLogger(EventProcessorIT.class);
+
     public static final EventMetaData META_DATA = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
 
     private Jdbi                                                                    jdbi;
@@ -89,6 +92,10 @@ public class EventProcessorIT {
     private Inboxes.DurableQueueBasedInboxes inboxes;
     private DurableLocalCommandBus           commandBus;
     private DurableSubscriptionRepository    durableSubscriptionRepository;
+    /**
+     * "processorName:EventType" per {@link EventStoreSubscriptionObserver#eventTypeNotHandledByProcessor} call
+     */
+    private final List<String>               eventsNotHandledByProcessor = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setup() {
@@ -112,7 +119,12 @@ public class EventProcessorIT {
                                          .setUnitOfWorkFactory(unitOfWorkFactory)
                                          .setPersistenceStrategy(persistenceStrategy)
                                          .setEventStreamGapHandlerFactory(eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
-                                         .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver())
+                                         .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver() {
+                                             @Override
+                                             public void eventTypeNotHandledByProcessor(String processorName, PersistedEvent event) {
+                                                 eventsNotHandledByProcessor.add(processorName + ":" + event.event().getEventTypeAsJavaClass().map(Class::getSimpleName).orElse("?"));
+                                             }
+                                         })
                                          .build();
 
         fencedLockManager = PostgresqlFencedLockManager.builder()
@@ -191,23 +203,158 @@ public class EventProcessorIT {
         var orderDetails = "Test order details";
         var placeCmd     = new PlaceOrderCommand(orderId, orderDetails);
 
-        // Send the command via the command bus
+        // Send the command via the command bus - the command bus' UnitOfWork has committed the OrderPlacedEvent when send returns
         commandBus.send(placeCmd);
+        var orderPlaced = unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(TEST_ORDERS, orderId).get().eventList().get(0));
 
-        // Fetch the aggregate event stream for this order
-        Awaitility.waitAtMost(Duration.ofSeconds(2))
-                  .until(() -> unitOfWorkFactory.withUnitOfWork(() -> {
-                      var streamOpt = eventStore.fetchStream(TEST_ORDERS, orderId);
-                      return streamOpt.isPresent() && streamOpt.get().eventList().size() == 2;
-                  }));
+        // ES-4: wait for the processor instead of polling the event stream under a guessed timeout. The subscription only
+        // forwards the event to the Inbox, so the barrier also waits for the Inbox to have handled it
+        testProcessor.awaitProcessed(orderPlaced, Duration.ofSeconds(10));
 
-        // We expect two events: first the OrderPlacedEvent then the OrderConfirmedEvent
+        // We expect two events: first the OrderPlacedEvent then the OrderConfirmedEvent, appended by the Inbox handler
         var events = unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(TEST_ORDERS, orderId).get().eventList());
         assertThat(events).hasSize(2);
         var event0 = events.get(0);
         var event1 = events.get(1);
         assertThat(event0.event().getEventTypeAsJavaClass()).isPresent().isEqualTo(Optional.of(OrderPlacedEvent.class));
         assertThat(event1.event().getEventTypeAsJavaClass()).isPresent().isEqualTo(Optional.of(OrderConfirmedEvent.class));
+        assertThat(testProcessor.getOrderPlacedEventCounter().get()).isEqualTo(1);
+        assertThat(testProcessor.getInboxForTesting().hasOrderedMessageQueuedForKey(orderId.toString())).isFalse();
+    }
+
+    /**
+     * ES-4 + CB-4: the processor has no handler for {@link OrderConfirmedEvent}. The barrier still releases for it, and the
+     * ignored event is reported to the {@link EventStoreSubscriptionObserver}
+     */
+    @Test
+    void awaitProcessedAsync_releases_for_an_event_type_the_processor_ignores_and_the_ignored_type_is_reported() {
+        var orderId = OrderId.random();
+        var placed = unitOfWorkFactory.withUnitOfWork(() -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "Test order details")))
+                                                                      .firstEvent());
+        testProcessor.awaitProcessedAsync(TEST_ORDERS, placed.globalEventOrder(), Duration.ofSeconds(10)).block(Duration.ofSeconds(15));
+        var confirmed = unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(TEST_ORDERS, orderId).get().eventList().get(1));
+
+        testProcessor.awaitProcessedAsync(TEST_ORDERS, confirmed.globalEventOrder(), Duration.ofSeconds(10)).block(Duration.ofSeconds(15));
+
+        assertThat(eventsNotHandledByProcessor).containsExactly("TestOrderEventProcessor:OrderConfirmedEvent");
+    }
+
+    @Test
+    void awaitProcessed_times_out_naming_the_processor_the_event_and_the_resume_point() {
+        var orderId = OrderId.random();
+        var placed = unitOfWorkFactory.withUnitOfWork(() -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "Test order details")))
+                                                                      .firstEvent());
+        testProcessor.awaitProcessed(placed, Duration.ofSeconds(10));
+        var neverAppended = GlobalEventOrder.of(placed.globalEventOrder().longValue() + 100);
+
+        assertThatThrownBy(() -> testProcessor.awaitProcessed(TEST_ORDERS, neverAppended, Duration.ofMillis(300)))
+                .isInstanceOf(AwaitProcessedTimeoutException.class)
+                .hasMessageContaining("Processor 'TestOrderEventProcessor' had not processed the 'TestOrders' event with global-event-order " + neverAppended)
+                .hasMessageContaining("the subscription hasn't moved past the event yet")
+                .hasMessageContaining("Resume point (next global-event-order to handle): ")
+                .hasMessageContaining("0 queued message(s) and 0 dead-letter message(s)");
+    }
+
+    /**
+     * ES-4: an {@link InTransactionEventProcessor} handles the event in the appending UnitOfWork, so the barrier is
+     * satisfied as soon as that UnitOfWork has committed. CB-4: an event type it ignores is reported
+     */
+    @Test
+    void an_in_transaction_processor_has_processed_the_event_once_the_appending_unit_of_work_committed() {
+        var inTransactionProcessor = new TestInTransactionOrderProcessor(new EventProcessorDependencies(eventStoreSubscriptionManager, inboxes, commandBus, List.of()));
+        inTransactionProcessor.start();
+        try {
+            var orderId = OrderId.random();
+            var placed = unitOfWorkFactory.withUnitOfWork(() -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "Test order details")))
+                                                                          .firstEvent());
+
+            inTransactionProcessor.awaitProcessed(placed, Duration.ZERO);
+            inTransactionProcessor.awaitProcessedAsync(TEST_ORDERS, placed.globalEventOrder(), Duration.ZERO).block(Duration.ofSeconds(1));
+            assertThat(inTransactionProcessor.ordersPlaced).containsExactly(orderId);
+
+            unitOfWorkFactory.usingUnitOfWork(() -> eventStore.appendToStream(TEST_ORDERS, orderId, new OrderConfirmedEvent(orderId)));
+            assertThat(eventsNotHandledByProcessor).contains("TestInTransactionOrderProcessor:OrderConfirmedEvent");
+        } finally {
+            inTransactionProcessor.stop();
+        }
+    }
+
+    /**
+     * A stopped processor that is started again subscribes again with the same subscriber ids. Its stop() must therefore
+     * unsubscribe, not just stop, its subscriptions - the manager hands a subscription it still holds back to that
+     * subscribe call without starting it - and its start() must consume from the Inbox its stop() stopped consuming
+     */
+    @Test
+    void an_event_processor_that_is_stopped_and_started_again_handles_an_event_appended_after_the_restart() {
+        // Running before it stops: the subscription holds its fenced lock and the Inbox consumes. Not straight after
+        // start(): a stop while the first lock-acquiring tick is still in flight can leave the lock held for the stopped
+        // subscription - an open race, RW-11 in docs/ROADMAP-0.6x.md, which this test does not cover
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .until(() -> testProcessor.isActive() && testProcessor.getInboxForTesting().isConsumingMessages());
+        testProcessor.stop();
+        testProcessor.start();
+        assertThat(testProcessor.isStarted()).isTrue();
+
+        var orderId = OrderId.random();
+        var placed = unitOfWorkFactory.withUnitOfWork(() -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "Test order details")))
+                                                                      .firstEvent());
+
+        testProcessor.awaitProcessed(placed, Duration.ofSeconds(10));
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(testProcessor.getOrderPlacedEventCounter().get()).isEqualTo(1));
+    }
+
+    /**
+     * The {@link InTransactionEventProcessor} counterpart of
+     * {@link #an_event_processor_that_is_stopped_and_started_again_handles_an_event_appended_after_the_restart()}
+     */
+    @Test
+    void an_in_transaction_processor_that_is_stopped_and_started_again_handles_an_event_appended_after_the_restart() {
+        var inTransactionProcessor = new TestInTransactionOrderProcessor(new EventProcessorDependencies(eventStoreSubscriptionManager, inboxes, commandBus, List.of()));
+        inTransactionProcessor.start();
+        try {
+            inTransactionProcessor.stop();
+            inTransactionProcessor.start();
+            assertThat(inTransactionProcessor.isStarted()).isTrue();
+
+            var orderId = OrderId.random();
+            unitOfWorkFactory.usingUnitOfWork(() -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "Test order details"))));
+
+            assertThat(inTransactionProcessor.ordersPlaced).containsExactly(orderId);
+        } finally {
+            inTransactionProcessor.stop();
+        }
+    }
+
+    /**
+     * The exclusive ({@link InTransactionEventProcessor#isUseExclusively()}) variant of
+     * {@link #an_in_transaction_processor_that_is_stopped_and_started_again_handles_an_event_appended_after_the_restart()}:
+     * its subscriptions hand events to the handler only while they hold their fenced lock
+     */
+    @Test
+    void an_exclusive_in_transaction_processor_that_is_stopped_and_started_again_handles_an_event_appended_after_the_restart() {
+        var inTransactionProcessor = new TestInTransactionOrderProcessor(new EventProcessorDependencies(eventStoreSubscriptionManager, inboxes, commandBus, List.of()), true);
+        inTransactionProcessor.start();
+        try {
+            // Holding its fenced lock before it stops. Not straight after start(): a stop while the first lock-acquiring
+            // tick is still in flight can leave the lock held for the stopped subscription - an open race, RW-11 in
+            // docs/ROADMAP-0.6x.md, which this test does not cover
+            Awaitility.waitAtMost(Duration.ofSeconds(10))
+                      .until(inTransactionProcessor::isActive);
+            inTransactionProcessor.stop();
+            inTransactionProcessor.start();
+            assertThat(inTransactionProcessor.isStarted()).isTrue();
+            // The restarted subscription acquires the fenced lock again before it hands events on
+            Awaitility.waitAtMost(Duration.ofSeconds(10))
+                      .until(inTransactionProcessor::isActive);
+
+            var orderId = OrderId.random();
+            unitOfWorkFactory.usingUnitOfWork(() -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "Test order details"))));
+
+            assertThat(inTransactionProcessor.ordersPlaced).containsExactly(orderId);
+        } finally {
+            inTransactionProcessor.stop();
+        }
     }
 
     /**
@@ -333,14 +480,14 @@ public class EventProcessorIT {
         testProcessor.setResetCallback(resetPoints -> {
             Awaitility.waitAtMost(Duration.ofSeconds(2)).untilAsserted(() -> {
                 var currentEventOrder = eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS);
-                System.out.println("After resetting: Current event order: " + currentEventOrder.get());
+                log.info("After resetting: Current event order: {}", currentEventOrder);
                 assertThat(currentEventOrder)
                         .hasValueSatisfying(order ->
                                                     assertThat(order.longValue()).isEqualTo(1)
                                            )
                         .describedAs("After resetting: Current event order");
                 var currentResumePoint = durableSubscriptionRepository.getResumePoint(subscriberId, TEST_ORDERS);
-                System.out.println("After resetting: Current resume point: " + currentEventOrder.get());
+                log.info("After resetting: Current resume point: {}", currentResumePoint);
                 assertThat(currentResumePoint)
                         .hasValueSatisfying(resumePoint -> assertThat(resumePoint.getResumeFromAndIncluding().longValue()).isEqualTo(1))
                         .describedAs("After resetting: Current resume point");
@@ -351,14 +498,14 @@ public class EventProcessorIT {
         // Check subscriptions catchup again
         Awaitility.waitAtMost(Duration.ofSeconds(3)).untilAsserted(() -> {
             var currentEventOrder = eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS);
-            System.out.println("After resetting: Current event order: " + currentEventOrder.get());
+            log.info("After resetting: Current event order: {}", currentEventOrder);
             assertThat(currentEventOrder)
                     .hasValueSatisfying(order ->
                                                 assertThat(order.longValue()).isEqualTo(11)
                                        )
                     .describedAs("After resetting: Current event order");
             var currentResumePoint = durableSubscriptionRepository.getResumePoint(subscriberId, TEST_ORDERS);
-            System.out.println("After resetting: Current resume point: " + currentEventOrder.get());
+            log.info("After resetting: Current resume point: {}", currentResumePoint);
             assertThat(currentResumePoint)
                     .hasValueSatisfying(resumePoint -> assertThat(resumePoint.getResumeFromAndIncluding().longValue()).isEqualTo(11))
                     .describedAs("After resetting: Current resume point");
@@ -484,6 +631,33 @@ public class EventProcessorIT {
      *     <li>Handles FailingCommand by throwing an exception</li>
      * </ul>
      */
+    public static class TestInTransactionOrderProcessor extends InTransactionEventProcessor {
+        final List<OrderId> ordersPlaced = new CopyOnWriteArrayList<>();
+
+        public TestInTransactionOrderProcessor(EventProcessorDependencies eventProcessorDependencies) {
+            super(eventProcessorDependencies);
+        }
+
+        public TestInTransactionOrderProcessor(EventProcessorDependencies eventProcessorDependencies, boolean useExclusively) {
+            super(eventProcessorDependencies, useExclusively);
+        }
+
+        @Override
+        public String getProcessorName() {
+            return "TestInTransactionOrderProcessor";
+        }
+
+        @Override
+        protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
+            return List.of(TEST_ORDERS);
+        }
+
+        @MessageHandler
+        void onOrderPlaced(OrderPlacedEvent event) {
+            ordersPlaced.add(event.orderId);
+        }
+    }
+
     public static class TestOrderEventProcessor extends EventProcessor {
         public static final AggregateType TEST_ORDERS = AggregateType.of("TestOrders");
 
@@ -580,7 +754,7 @@ public class EventProcessorIT {
 
         @CmdHandler
         public void handle(FailingCommandSentUsingAsyncAndDontWaitViaCommandBus cmd) {
-            System.out.println("*** Handling FailingCommand: " + cmd.reason);
+            log.info("*** Handling FailingCommand: {}", cmd.reason);
             throw new RuntimeException(cmd.reason);
         }
 
@@ -589,7 +763,7 @@ public class EventProcessorIT {
 
         @MessageHandler
         public void handle(FailingCommandSentViaInbox cmd) {
-            System.out.println("*** Handling FailingCommand: " + cmd.reason);
+            log.info("*** Handling FailingCommand: {}", cmd.reason);
             throw new RuntimeException(cmd.reason);
         }
 

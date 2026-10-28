@@ -1,0 +1,3255 @@
+{
+ "contexts": [
+  {
+   "id": "billing",
+   "lane": "decider",
+   "language": "java",
+   "owners": [
+    "billing-team"
+   ],
+   "sliceIds": [
+    "billing.charge_customer",
+    "billing.charge_on_order_placed",
+    "billing.invoice_list"
+   ],
+   "tier": "cqrs-es"
+  },
+  {
+   "id": "orders",
+   "lane": "decider",
+   "language": "java",
+   "owners": [
+    "orders-team"
+   ],
+   "sliceIds": [
+    "orders.cancel_order",
+    "orders.order_list",
+    "orders.place_order",
+    "orders.refund",
+    "orders.request_return"
+   ],
+   "tier": "cqrs-es"
+  },
+  {
+   "id": "shipping",
+   "lane": "service-entity",
+   "language": "java",
+   "owners": [
+    "shipping-team"
+   ],
+   "sliceIds": [
+    "shipping.nightly_retry",
+    "shipping.notify_carrier",
+    "shipping.ship_on_payment",
+    "shipping.ship_order"
+   ],
+   "tier": "cqrs-es"
+  }
+ ],
+ "crossReads": [
+  {
+   "declared": true,
+   "from": "billing.charge_customer",
+   "model": "OrderList",
+   "toBc": "orders",
+   "via": "OrderReader"
+  },
+  {
+   "declared": true,
+   "from": "shipping.ship_on_payment",
+   "model": "OrderList",
+   "toBc": "orders",
+   "via": null
+  }
+ ],
+ "diff": {
+  "before": {
+   "ref": "main",
+   "sha": "9f8e7d6",
+   "sliceCount": 12
+  },
+  "edges": {
+   "added": [
+    {
+     "from": "evt:OrderShipped",
+     "kind": "feeds",
+     "to": "slice:shipping.notify_carrier"
+    }
+   ],
+   "removed": [
+    {
+     "from": "evt:OrderPlaced",
+     "kind": "feeds",
+     "to": "slice:orders.legacy_export"
+    }
+   ]
+  },
+  "issues": {
+   "fixed": [
+    {
+     "code": "map-dangling-consume",
+     "id": "map-dangling-consume:orders.legacy_export:consumes:LegacyTick",
+     "level": "warn",
+     "source": "map",
+     "target": {
+      "id": "orders.legacy_export",
+      "kind": "slice",
+      "part": "consumes:LegacyTick"
+     },
+     "text": "consumes LegacyTick, which no slice publishes"
+    }
+   ],
+   "new": [
+    "flow-undeclared:orders.cancel_order",
+    "map-parse-error:orders.refund",
+    "scenario-none:billing.charge_on_order_placed",
+    "scenario-test-missing:shipping.ship_order:scenario:ships a paid order"
+   ]
+  },
+  "messages": {
+   "commands": {
+    "added": [],
+    "removed": []
+   },
+   "events": {
+    "added": [],
+    "removed": []
+   }
+  },
+  "slices": {
+   "added": [
+    "shipping.notify_carrier"
+   ],
+   "changed": [
+    {
+     "fields": [
+      {
+       "added": [],
+       "field": "scenarios",
+       "from": 1,
+       "removed": [
+        "charges a placed order"
+       ],
+       "to": 0
+      }
+     ],
+     "id": "billing.charge_on_order_placed"
+    },
+    {
+     "fields": [
+      {
+       "added": [
+        "returns"
+       ],
+       "field": "flow",
+       "from": "checkout",
+       "removed": [],
+       "to": "checkout, returns"
+      }
+     ],
+     "id": "orders.order_list"
+    },
+    {
+     "fields": [
+      {
+       "added": [
+        "rejects an empty order"
+       ],
+       "field": "scenarios",
+       "from": 1,
+       "removed": [],
+       "to": 2
+      },
+      {
+       "added": [
+        "POST /api/orders"
+       ],
+       "field": "endpoints",
+       "from": null,
+       "removed": [
+        "POST /api/order"
+       ],
+       "to": null
+      }
+     ],
+     "id": "orders.place_order"
+    }
+   ],
+   "removed": [
+    {
+     "bc": "orders",
+     "consumes": [],
+     "direction": null,
+     "dispatches": [],
+     "doc": null,
+     "endpoints": [],
+     "externalSystem": null,
+     "files": [],
+     "flags": [],
+     "flows": [],
+     "handles": [],
+     "id": "orders.legacy_export",
+     "invariants": [],
+     "kind": "view",
+     "lane": "decider",
+     "language": "java",
+     "name": "legacy_export",
+     "owner": "orders-team",
+     "owns": [
+      "LegacyExport"
+     ],
+     "package": "com.example.shop.orders.legacy_export",
+     "path": "backend/src/main/java/com/example/shop/orders/legacy_export",
+     "projections": [
+      {
+       "from": [
+        "OrderPlaced"
+       ],
+       "name": "LegacyExportProjector"
+      }
+     ],
+     "publishes": [],
+     "readModels": [
+      {
+       "columns": [
+        "orderId",
+        "total"
+       ],
+       "name": "LegacyExport",
+       "store": "file"
+      }
+     ],
+     "reads": [],
+     "scenarios": [],
+     "serves": [],
+     "status": "live",
+     "summary": "Nightly CSV export (removed)",
+     "supersedes": null,
+     "tests": [],
+     "writes": []
+    }
+   ]
+  }
+ },
+ "flows": [
+  {
+   "bc": "orders",
+   "crossContext": false,
+   "dangling": false,
+   "event": "OrderCancelled",
+   "from": [
+    "orders.cancel_order"
+   ],
+   "to": [
+    "orders.order_list"
+   ]
+  },
+  {
+   "bc": "orders",
+   "crossContext": true,
+   "dangling": false,
+   "event": "OrderPlaced",
+   "from": [
+    "orders.place_order"
+   ],
+   "to": [
+    "billing.charge_on_order_placed",
+    "orders.order_list"
+   ]
+  },
+  {
+   "bc": "shipping",
+   "crossContext": true,
+   "dangling": false,
+   "event": "OrderShipped",
+   "from": [
+    "shipping.ship_order"
+   ],
+   "to": [
+    "orders.order_list",
+    "shipping.notify_carrier"
+   ]
+  },
+  {
+   "bc": "billing",
+   "crossContext": true,
+   "dangling": false,
+   "event": "PaymentCaptured",
+   "from": [
+    "billing.charge_customer"
+   ],
+   "to": [
+    "billing.invoice_list",
+    "shipping.ship_on_payment"
+   ]
+  },
+  {
+   "bc": "billing",
+   "crossContext": false,
+   "dangling": false,
+   "event": "PaymentFailed",
+   "from": [
+    "billing.charge_customer"
+   ],
+   "to": []
+  },
+  {
+   "bc": null,
+   "crossContext": false,
+   "dangling": true,
+   "event": "RefundIssued",
+   "from": [],
+   "to": [
+    "billing.invoice_list"
+   ]
+  },
+  {
+   "bc": "orders",
+   "crossContext": false,
+   "dangling": false,
+   "event": "ReturnRequested",
+   "from": [
+    "orders.request_return"
+   ],
+   "to": []
+  }
+ ],
+ "issues": [
+  {
+   "code": "map-parse-error",
+   "id": "map-parse-error:orders.refund",
+   "level": "error",
+   "source": "map",
+   "target": {
+    "id": "orders.refund",
+    "kind": "slice",
+    "part": null
+   },
+   "text": "manifest did not parse: mapping values are not allowed here (line 7)"
+  },
+  {
+   "code": "map-dangling-consume",
+   "id": "map-dangling-consume:billing.invoice_list:consumes:RefundIssued",
+   "level": "warn",
+   "source": "map",
+   "target": {
+    "id": "billing.invoice_list",
+    "kind": "slice",
+    "part": "consumes:RefundIssued"
+   },
+   "text": "consumes RefundIssued, which no slice publishes"
+  },
+  {
+   "code": "map-dangling-consume",
+   "id": "map-dangling-consume:event:RefundIssued",
+   "level": "warn",
+   "source": "map",
+   "target": {
+    "id": "event:RefundIssued",
+    "kind": "message",
+    "part": null
+   },
+   "text": "RefundIssued is consumed but never published"
+  },
+  {
+   "code": "map-endpoint-missing",
+   "id": "map-endpoint-missing:billing.invoice_list:endpoint:GET /api/invoices",
+   "level": "warn",
+   "source": "map",
+   "target": {
+    "id": "billing.invoice_list",
+    "kind": "slice",
+    "part": "endpoint:GET /api/invoices"
+   },
+   "text": "declared endpoint GET /api/invoices not found in source"
+  },
+  {
+   "code": "scenario-given-unpublished",
+   "id": "scenario-given-unpublished:orders.cancel_order:scenario:cancelling twice is a no-op",
+   "level": "warn",
+   "source": "atlas",
+   "target": {
+    "id": "orders.cancel_order",
+    "kind": "slice",
+    "part": "scenario:cancelling twice is a no-op"
+   },
+   "text": "given event OrderRefunded is published by no slice in scope"
+  },
+  {
+   "code": "scenario-test-missing",
+   "id": "scenario-test-missing:orders.cancel_order:scenario:rejects an unknown order",
+   "level": "warn",
+   "source": "atlas",
+   "target": {
+    "id": "orders.cancel_order",
+    "kind": "slice",
+    "part": "scenario:rejects an unknown order"
+   },
+   "text": "test CancelOrderDeciderTest#rejectsUnknown resolves to no test"
+  },
+  {
+   "code": "scenario-test-missing",
+   "id": "scenario-test-missing:shipping.ship_order:scenario:ships a paid order",
+   "level": "warn",
+   "source": "atlas",
+   "target": {
+    "id": "shipping.ship_order",
+    "kind": "slice",
+    "part": "scenario:ships a paid order"
+   },
+   "text": "test ShipOrderDeciderTest#shipsPaidOrder resolves to no test"
+  },
+  {
+   "code": "completeness-unsourced-column",
+   "id": "completeness-unsourced-column:orders.order_list:readModel:OrderList.discount",
+   "level": "info",
+   "source": "atlas",
+   "target": {
+    "id": "orders.order_list",
+    "kind": "slice",
+    "part": "readModel:OrderList.discount"
+   },
+   "text": "column discount of OrderList matches no field of OrderPlaced, OrderCancelled, OrderShipped"
+  },
+  {
+   "code": "flow-undeclared",
+   "id": "flow-undeclared:orders.cancel_order",
+   "level": "info",
+   "source": "atlas",
+   "target": {
+    "id": "orders.cancel_order",
+    "kind": "slice",
+    "part": null
+   },
+   "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey"
+  },
+  {
+   "code": "flow-undeclared",
+   "id": "flow-undeclared:~shipping.nightly_retry",
+   "level": "info",
+   "source": "atlas",
+   "target": {
+    "id": "~shipping.nightly_retry",
+    "kind": "process",
+    "part": null
+   },
+   "text": "process derived from shipping.nightly_retry; declare flow: to name it"
+  },
+  {
+   "code": "map-not-checked",
+   "id": "map-not-checked:shipping",
+   "level": "info",
+   "source": "map",
+   "target": {
+    "id": "shipping",
+    "kind": "context",
+    "part": null
+   },
+   "text": "source facts missing for shipping: endpoints not checked"
+  },
+  {
+   "code": "scenario-none",
+   "id": "scenario-none:billing",
+   "level": "info",
+   "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
+   "members": [
+    "billing.charge_customer",
+    "billing.charge_on_order_placed",
+    "billing.invoice_list"
+   ],
+   "source": "atlas",
+   "target": {
+    "id": "billing",
+    "kind": "context",
+    "part": null
+   },
+   "text": "3 of 3 slices in `billing` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests"
+  },
+  {
+   "code": "scenario-none",
+   "id": "scenario-none:orders.request_return",
+   "level": "info",
+   "source": "atlas",
+   "target": {
+    "id": "orders.request_return",
+    "kind": "slice",
+    "part": null
+   },
+   "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests"
+  },
+  {
+   "code": "scenario-unknown-field",
+   "id": "scenario-unknown-field:orders.place_order:scenario:places an order",
+   "level": "info",
+   "source": "atlas",
+   "target": {
+    "id": "orders.place_order",
+    "kind": "slice",
+    "part": "scenario:places an order"
+   },
+   "text": "with key lines of PlaceOrder is not a payload field"
+  }
+ ],
+ "layout": {
+  "atlas": {
+   "bounds": {
+    "h": 2364,
+    "w": 2504,
+    "x": 0,
+    "y": 0
+   },
+   "bridges": [
+    {
+     "events": [
+      "PaymentCaptured"
+     ],
+     "from": "billing",
+     "to": "shipping"
+    },
+    {
+     "events": [
+      "OrderPlaced"
+     ],
+     "from": "orders",
+     "to": "billing"
+    },
+    {
+     "events": [
+      "OrderShipped"
+     ],
+     "from": "shipping",
+     "to": "orders"
+    }
+   ],
+   "cards": [
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@billing|billing.charge_customer|command|ChargeCustomer",
+     "lane": "action",
+     "name": "ChargeCustomer",
+     "portal": false,
+     "role": "command",
+     "segment": "checkout@billing",
+     "slice": "billing.charge_customer",
+     "w": 180,
+     "x": 364,
+     "y": 206
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@billing|billing.charge_customer|event|PaymentCaptured",
+     "lane": "stream:Payment",
+     "name": "PaymentCaptured",
+     "portal": false,
+     "role": "event",
+     "segment": "checkout@billing",
+     "slice": "billing.charge_customer",
+     "w": 180,
+     "x": 364,
+     "y": 310
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@billing|billing.charge_customer|event|PaymentFailed",
+     "lane": "stream:Payment",
+     "name": "PaymentFailed",
+     "portal": false,
+     "role": "event",
+     "segment": "checkout@billing",
+     "slice": "billing.charge_customer",
+     "w": 180,
+     "x": 364,
+     "y": 396
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@billing|billing.charge_on_order_placed|automation|charge on order placed",
+     "lane": "trigger",
+     "name": "charge on order placed",
+     "portal": false,
+     "role": "automation",
+     "segment": "checkout@billing",
+     "slice": "billing.charge_on_order_placed",
+     "w": 180,
+     "x": 144,
+     "y": 102
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@billing|billing.charge_on_order_placed|command|ChargeCustomer",
+     "lane": "action",
+     "name": "ChargeCustomer",
+     "portal": false,
+     "role": "command",
+     "segment": "checkout@billing",
+     "slice": "billing.charge_on_order_placed",
+     "w": 180,
+     "x": 144,
+     "y": 206
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@billing|billing.invoice_list|trigger|GET /api/invoices",
+     "lane": "trigger",
+     "name": "GET /api/invoices",
+     "portal": false,
+     "role": "trigger",
+     "segment": "checkout@billing",
+     "slice": "billing.invoice_list",
+     "w": 180,
+     "x": 584,
+     "y": 102
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@billing|billing.invoice_list|view|InvoiceList",
+     "lane": "action",
+     "name": "InvoiceList",
+     "portal": false,
+     "role": "view",
+     "segment": "checkout@billing",
+     "slice": "billing.invoice_list",
+     "w": 180,
+     "x": 584,
+     "y": 206
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@orders|orders.order_list|trigger|GET /api/orders",
+     "lane": "trigger",
+     "name": "GET /api/orders",
+     "portal": false,
+     "role": "trigger",
+     "segment": "checkout@orders",
+     "slice": "orders.order_list",
+     "w": 180,
+     "x": 1312,
+     "y": 102
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@orders|orders.order_list|view|OrderList",
+     "lane": "action",
+     "name": "OrderList",
+     "portal": false,
+     "role": "view",
+     "segment": "checkout@orders",
+     "slice": "orders.order_list",
+     "w": 180,
+     "x": 1312,
+     "y": 206
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@orders|orders.place_order|command|PlaceOrder",
+     "lane": "action",
+     "name": "PlaceOrder",
+     "portal": false,
+     "role": "command",
+     "segment": "checkout@orders",
+     "slice": "orders.place_order",
+     "w": 180,
+     "x": 1092,
+     "y": 206
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@orders|orders.place_order|event|OrderPlaced",
+     "lane": "stream:Order",
+     "name": "OrderPlaced",
+     "portal": false,
+     "role": "event",
+     "segment": "checkout@orders",
+     "slice": "orders.place_order",
+     "w": 180,
+     "x": 1092,
+     "y": 310
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@orders|orders.place_order|trigger|POST /api/orders",
+     "lane": "trigger",
+     "name": "POST /api/orders",
+     "portal": false,
+     "role": "trigger",
+     "segment": "checkout@orders",
+     "slice": "orders.place_order",
+     "w": 180,
+     "x": 1092,
+     "y": 102
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@shipping|shipping.notify_carrier|external|DHL",
+     "lane": "external",
+     "name": "DHL",
+     "portal": false,
+     "role": "external",
+     "segment": "checkout@shipping",
+     "slice": "shipping.notify_carrier",
+     "w": 180,
+     "x": 2260,
+     "y": 414
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@shipping|shipping.ship_on_payment|automation|ship on payment",
+     "lane": "trigger",
+     "name": "ship on payment",
+     "portal": false,
+     "role": "automation",
+     "segment": "checkout@shipping",
+     "slice": "shipping.ship_on_payment",
+     "w": 180,
+     "x": 1820,
+     "y": 102
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@shipping|shipping.ship_on_payment|command|ShipOrder",
+     "lane": "action",
+     "name": "ShipOrder",
+     "portal": false,
+     "role": "command",
+     "segment": "checkout@shipping",
+     "slice": "shipping.ship_on_payment",
+     "w": 180,
+     "x": 1820,
+     "y": 206
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@shipping|shipping.ship_order|command|ShipOrder",
+     "lane": "action",
+     "name": "ShipOrder",
+     "portal": false,
+     "role": "command",
+     "segment": "checkout@shipping",
+     "slice": "shipping.ship_order",
+     "w": 180,
+     "x": 2040,
+     "y": 206
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "checkout@shipping|shipping.ship_order|event|OrderShipped",
+     "lane": "stream:Shipment",
+     "name": "OrderShipped",
+     "portal": false,
+     "role": "event",
+     "segment": "checkout@shipping",
+     "slice": "shipping.ship_order",
+     "w": 180,
+     "x": 2040,
+     "y": 310
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "returns@orders|orders.order_list|view|OrderList",
+     "lane": "action",
+     "name": "OrderList",
+     "portal": true,
+     "role": "view",
+     "segment": "returns@orders",
+     "slice": "orders.order_list",
+     "w": 180,
+     "x": 1312,
+     "y": 874
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "returns@orders|orders.request_return|command|RequestReturn",
+     "lane": "action",
+     "name": "RequestReturn",
+     "portal": false,
+     "role": "command",
+     "segment": "returns@orders",
+     "slice": "orders.request_return",
+     "w": 180,
+     "x": 1092,
+     "y": 874
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "returns@orders|orders.request_return|event|ReturnRequested",
+     "lane": "stream:Order",
+     "name": "ReturnRequested",
+     "portal": false,
+     "role": "event",
+     "segment": "returns@orders",
+     "slice": "orders.request_return",
+     "w": 180,
+     "x": 1092,
+     "y": 978
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "returns@orders|orders.request_return|trigger|POST /api/orders/{orderId}/returns",
+     "lane": "trigger",
+     "name": "POST /api/orders/{orderId}/returns",
+     "portal": false,
+     "role": "trigger",
+     "segment": "returns@orders",
+     "slice": "orders.request_return",
+     "w": 180,
+     "x": 1092,
+     "y": 770
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "~orders.cancel_order@orders|orders.cancel_order|command|CancelOrder",
+     "lane": "action",
+     "name": "CancelOrder",
+     "portal": false,
+     "role": "command",
+     "segment": "~orders.cancel_order@orders",
+     "slice": "orders.cancel_order",
+     "w": 180,
+     "x": 1092,
+     "y": 1366
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "~orders.cancel_order@orders|orders.cancel_order|event|OrderCancelled",
+     "lane": "stream:Order",
+     "name": "OrderCancelled",
+     "portal": false,
+     "role": "event",
+     "segment": "~orders.cancel_order@orders",
+     "slice": "orders.cancel_order",
+     "w": 180,
+     "x": 1092,
+     "y": 1470
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "~orders.cancel_order@orders|orders.cancel_order|trigger|POST /api/orders/{orderId}/cancel",
+     "lane": "trigger",
+     "name": "POST /api/orders/{orderId}/cancel",
+     "portal": false,
+     "role": "trigger",
+     "segment": "~orders.cancel_order@orders",
+     "slice": "orders.cancel_order",
+     "w": 180,
+     "x": 1092,
+     "y": 1262
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "~shipping.nightly_retry@shipping|shipping.nightly_retry|automation|0 2 * * *",
+     "lane": "trigger",
+     "name": "0 2 * * *",
+     "portal": false,
+     "role": "automation",
+     "segment": "~shipping.nightly_retry@shipping",
+     "slice": "shipping.nightly_retry",
+     "w": 180,
+     "x": 1820,
+     "y": 754
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "~shipping.nightly_retry@shipping|shipping.nightly_retry|command|ShipOrder",
+     "lane": "action",
+     "name": "ShipOrder",
+     "portal": false,
+     "role": "command",
+     "segment": "~shipping.nightly_retry@shipping",
+     "slice": "shipping.nightly_retry",
+     "w": 180,
+     "x": 1820,
+     "y": 858
+    },
+    {
+     "ghost": true,
+     "h": 76,
+     "id": "~unattached:orders@orders|orders.legacy_export|view|LegacyExport",
+     "lane": "action",
+     "name": "LegacyExport",
+     "portal": false,
+     "role": "view",
+     "segment": "~unattached:orders@orders",
+     "slice": "orders.legacy_export",
+     "w": 180,
+     "x": 1312,
+     "y": 2154
+    },
+    {
+     "ghost": false,
+     "h": 76,
+     "id": "~unattached:orders@orders|orders.refund|error|refund",
+     "lane": "action",
+     "name": "refund",
+     "portal": false,
+     "role": "error",
+     "segment": "~unattached:orders@orders",
+     "slice": "orders.refund",
+     "w": 180,
+     "x": 1092,
+     "y": 2154
+    }
+   ],
+   "contexts": [
+    {
+     "h": 606,
+     "id": "billing",
+     "w": 828,
+     "x": 0,
+     "y": 0
+    },
+    {
+     "h": 2364,
+     "id": "orders",
+     "w": 608,
+     "x": 948,
+     "y": 0
+    },
+    {
+     "h": 1124,
+     "id": "shipping",
+     "w": 828,
+     "x": 1676,
+     "y": 0
+    }
+   ],
+   "edges": [
+    {
+     "cross": false,
+     "from": "checkout@billing|billing.charge_customer|command|ChargeCustomer",
+     "kind": "publishes",
+     "to": "checkout@billing|billing.charge_customer|event|PaymentCaptured"
+    },
+    {
+     "cross": false,
+     "from": "checkout@billing|billing.charge_customer|command|ChargeCustomer",
+     "kind": "publishes",
+     "to": "checkout@billing|billing.charge_customer|event|PaymentFailed"
+    },
+    {
+     "cross": false,
+     "from": "checkout@billing|billing.charge_customer|event|PaymentCaptured",
+     "kind": "feeds",
+     "to": "checkout@billing|billing.invoice_list|view|InvoiceList"
+    },
+    {
+     "cross": true,
+     "from": "checkout@billing|billing.charge_customer|event|PaymentCaptured",
+     "kind": "feeds",
+     "to": "checkout@shipping|shipping.ship_on_payment|automation|ship on payment"
+    },
+    {
+     "cross": false,
+     "from": "checkout@billing|billing.charge_on_order_placed|automation|charge on order placed",
+     "kind": "dispatches",
+     "to": "checkout@billing|billing.charge_on_order_placed|command|ChargeCustomer"
+    },
+    {
+     "cross": false,
+     "from": "checkout@billing|billing.charge_on_order_placed|command|ChargeCustomer",
+     "kind": "dispatches",
+     "to": "checkout@billing|billing.charge_customer|command|ChargeCustomer"
+    },
+    {
+     "cross": false,
+     "from": "checkout@orders|orders.place_order|command|PlaceOrder",
+     "kind": "publishes",
+     "to": "checkout@orders|orders.place_order|event|OrderPlaced"
+    },
+    {
+     "cross": true,
+     "from": "checkout@orders|orders.place_order|event|OrderPlaced",
+     "kind": "feeds",
+     "to": "checkout@billing|billing.charge_on_order_placed|automation|charge on order placed"
+    },
+    {
+     "cross": false,
+     "from": "checkout@orders|orders.place_order|event|OrderPlaced",
+     "kind": "feeds",
+     "to": "checkout@orders|orders.order_list|view|OrderList"
+    },
+    {
+     "cross": true,
+     "from": "checkout@orders|orders.place_order|event|OrderPlaced",
+     "kind": "feeds",
+     "to": "~unattached:orders@orders|orders.legacy_export|view|LegacyExport"
+    },
+    {
+     "cross": false,
+     "from": "checkout@orders|orders.place_order|trigger|POST /api/orders",
+     "kind": "handles",
+     "to": "checkout@orders|orders.place_order|command|PlaceOrder"
+    },
+    {
+     "cross": false,
+     "from": "checkout@shipping|shipping.ship_on_payment|automation|ship on payment",
+     "kind": "dispatches",
+     "to": "checkout@shipping|shipping.ship_on_payment|command|ShipOrder"
+    },
+    {
+     "cross": false,
+     "from": "checkout@shipping|shipping.ship_on_payment|command|ShipOrder",
+     "kind": "dispatches",
+     "to": "checkout@shipping|shipping.ship_order|command|ShipOrder"
+    },
+    {
+     "cross": false,
+     "from": "checkout@shipping|shipping.ship_order|command|ShipOrder",
+     "kind": "publishes",
+     "to": "checkout@shipping|shipping.ship_order|event|OrderShipped"
+    },
+    {
+     "cross": true,
+     "from": "checkout@shipping|shipping.ship_order|event|OrderShipped",
+     "kind": "feeds",
+     "to": "checkout@orders|orders.order_list|view|OrderList"
+    },
+    {
+     "cross": false,
+     "from": "checkout@shipping|shipping.ship_order|event|OrderShipped",
+     "kind": "external",
+     "to": "checkout@shipping|shipping.notify_carrier|external|DHL"
+    },
+    {
+     "cross": false,
+     "from": "returns@orders|orders.request_return|command|RequestReturn",
+     "kind": "publishes",
+     "to": "returns@orders|orders.request_return|event|ReturnRequested"
+    },
+    {
+     "cross": false,
+     "from": "returns@orders|orders.request_return|trigger|POST /api/orders/{orderId}/returns",
+     "kind": "handles",
+     "to": "returns@orders|orders.request_return|command|RequestReturn"
+    },
+    {
+     "cross": false,
+     "from": "~orders.cancel_order@orders|orders.cancel_order|command|CancelOrder",
+     "kind": "publishes",
+     "to": "~orders.cancel_order@orders|orders.cancel_order|event|OrderCancelled"
+    },
+    {
+     "cross": true,
+     "from": "~orders.cancel_order@orders|orders.cancel_order|event|OrderCancelled",
+     "kind": "feeds",
+     "to": "checkout@orders|orders.order_list|view|OrderList"
+    },
+    {
+     "cross": false,
+     "from": "~orders.cancel_order@orders|orders.cancel_order|trigger|POST /api/orders/{orderId}/cancel",
+     "kind": "handles",
+     "to": "~orders.cancel_order@orders|orders.cancel_order|command|CancelOrder"
+    },
+    {
+     "cross": false,
+     "from": "~shipping.nightly_retry@shipping|shipping.nightly_retry|automation|0 2 * * *",
+     "kind": "dispatches",
+     "to": "~shipping.nightly_retry@shipping|shipping.nightly_retry|command|ShipOrder"
+    },
+    {
+     "cross": true,
+     "from": "~shipping.nightly_retry@shipping|shipping.nightly_retry|command|ShipOrder",
+     "kind": "dispatches",
+     "to": "checkout@shipping|shipping.ship_order|command|ShipOrder"
+    }
+   ],
+   "links": [
+    {
+     "cross": true,
+     "events": [
+      "PaymentCaptured"
+     ],
+     "from": "checkout@billing",
+     "to": "checkout@shipping"
+    },
+    {
+     "cross": true,
+     "events": [
+      "OrderPlaced"
+     ],
+     "from": "checkout@orders",
+     "to": "checkout@billing"
+    },
+    {
+     "cross": false,
+     "events": [
+      "OrderPlaced"
+     ],
+     "from": "checkout@orders",
+     "to": "~unattached:orders@orders"
+    },
+    {
+     "cross": true,
+     "events": [
+      "OrderShipped"
+     ],
+     "from": "checkout@shipping",
+     "to": "checkout@orders"
+    },
+    {
+     "cross": false,
+     "events": [
+      "OrderCancelled"
+     ],
+     "from": "~orders.cancel_order@orders",
+     "to": "checkout@orders"
+    },
+    {
+     "cross": false,
+     "events": [
+      "ShipOrder"
+     ],
+     "from": "~shipping.nightly_retry@shipping",
+     "to": "checkout@shipping"
+    }
+   ],
+   "scenarioBoxes": [
+    {
+     "h": 240,
+     "segment": "checkout@orders",
+     "slice": "orders.place_order",
+     "w": 208,
+     "x": 1078,
+     "y": 412
+    },
+    {
+     "h": 240,
+     "segment": "checkout@orders",
+     "slice": "orders.order_list",
+     "w": 208,
+     "x": 1298,
+     "y": 412
+    },
+    {
+     "h": 64,
+     "segment": "checkout@billing",
+     "slice": "billing.charge_on_order_placed",
+     "w": 208,
+     "x": 130,
+     "y": 498
+    },
+    {
+     "h": 64,
+     "segment": "checkout@billing",
+     "slice": "billing.charge_customer",
+     "w": 208,
+     "x": 350,
+     "y": 498
+    },
+    {
+     "h": 64,
+     "segment": "checkout@billing",
+     "slice": "billing.invoice_list",
+     "w": 208,
+     "x": 570,
+     "y": 498
+    },
+    {
+     "h": 64,
+     "segment": "checkout@shipping",
+     "slice": "shipping.ship_on_payment",
+     "w": 208,
+     "x": 1806,
+     "y": 516
+    },
+    {
+     "h": 120,
+     "segment": "checkout@shipping",
+     "slice": "shipping.ship_order",
+     "w": 208,
+     "x": 2026,
+     "y": 516
+    },
+    {
+     "h": 120,
+     "segment": "checkout@shipping",
+     "slice": "shipping.notify_carrier",
+     "w": 208,
+     "x": 2246,
+     "y": 516
+    },
+    {
+     "h": 64,
+     "segment": "returns@orders",
+     "slice": "orders.request_return",
+     "w": 208,
+     "x": 1078,
+     "y": 1080
+    },
+    {
+     "h": 360,
+     "segment": "~orders.cancel_order@orders",
+     "slice": "orders.cancel_order",
+     "w": 208,
+     "x": 1078,
+     "y": 1572
+    },
+    {
+     "h": 120,
+     "segment": "~shipping.nightly_retry@shipping",
+     "slice": "shipping.nightly_retry",
+     "w": 208,
+     "x": 1806,
+     "y": 960
+    },
+    {
+     "h": 64,
+     "segment": "~unattached:orders@orders",
+     "slice": "orders.refund",
+     "w": 208,
+     "x": 1078,
+     "y": 2256
+    },
+    {
+     "h": 64,
+     "segment": "~unattached:orders@orders",
+     "slice": "orders.legacy_export",
+     "w": 208,
+     "x": 1298,
+     "y": 2256
+    }
+   ],
+   "segments": [
+    {
+     "bc": "orders",
+     "columns": [
+      {
+       "portal": false,
+       "slice": "orders.place_order",
+       "w": 220,
+       "x": 1072
+      },
+      {
+       "portal": false,
+       "slice": "orders.order_list",
+       "w": 220,
+       "x": 1292
+      }
+     ],
+     "h": 620,
+     "id": "checkout@orders",
+     "lanes": [
+      {
+       "h": 104,
+       "id": "trigger",
+       "label": "Trigger",
+       "y": 88
+      },
+      {
+       "h": 104,
+       "id": "action",
+       "label": "Command · View",
+       "y": 192
+      },
+      {
+       "h": 104,
+       "id": "stream:Order",
+       "label": "Events · Order",
+       "y": 296
+      }
+     ],
+     "process": "checkout",
+     "w": 552,
+     "x": 976,
+     "y": 48
+    },
+    {
+     "bc": "billing",
+     "columns": [
+      {
+       "portal": false,
+       "slice": "billing.charge_on_order_placed",
+       "w": 220,
+       "x": 124
+      },
+      {
+       "portal": false,
+       "slice": "billing.charge_customer",
+       "w": 220,
+       "x": 344
+      },
+      {
+       "portal": false,
+       "slice": "billing.invoice_list",
+       "w": 220,
+       "x": 564
+      }
+     ],
+     "h": 530,
+     "id": "checkout@billing",
+     "lanes": [
+      {
+       "h": 104,
+       "id": "trigger",
+       "label": "Trigger",
+       "y": 88
+      },
+      {
+       "h": 104,
+       "id": "action",
+       "label": "Command · View",
+       "y": 192
+      },
+      {
+       "h": 190,
+       "id": "stream:Payment",
+       "label": "Events · Payment",
+       "y": 296
+      }
+     ],
+     "process": "checkout",
+     "w": 772,
+     "x": 28,
+     "y": 48
+    },
+    {
+     "bc": "shipping",
+     "columns": [
+      {
+       "portal": false,
+       "slice": "shipping.ship_on_payment",
+       "w": 220,
+       "x": 1800
+      },
+      {
+       "portal": false,
+       "slice": "shipping.ship_order",
+       "w": 220,
+       "x": 2020
+      },
+      {
+       "portal": false,
+       "slice": "shipping.notify_carrier",
+       "w": 220,
+       "x": 2240
+      }
+     ],
+     "h": 604,
+     "id": "checkout@shipping",
+     "lanes": [
+      {
+       "h": 104,
+       "id": "trigger",
+       "label": "Trigger",
+       "y": 88
+      },
+      {
+       "h": 104,
+       "id": "action",
+       "label": "Command · View",
+       "y": 192
+      },
+      {
+       "h": 104,
+       "id": "stream:Shipment",
+       "label": "Events · Shipment",
+       "y": 296
+      },
+      {
+       "h": 104,
+       "id": "external",
+       "label": "External",
+       "y": 400
+      }
+     ],
+     "process": "checkout",
+     "w": 772,
+     "x": 1704,
+     "y": 48
+    },
+    {
+     "bc": "orders",
+     "columns": [
+      {
+       "portal": false,
+       "slice": "orders.request_return",
+       "w": 220,
+       "x": 1072
+      },
+      {
+       "portal": true,
+       "slice": "orders.order_list",
+       "w": 220,
+       "x": 1292
+      }
+     ],
+     "h": 444,
+     "id": "returns@orders",
+     "lanes": [
+      {
+       "h": 104,
+       "id": "trigger",
+       "label": "Trigger",
+       "y": 756
+      },
+      {
+       "h": 104,
+       "id": "action",
+       "label": "Command · View",
+       "y": 860
+      },
+      {
+       "h": 104,
+       "id": "stream:Order",
+       "label": "Events · Order",
+       "y": 964
+      }
+     ],
+     "process": "returns",
+     "w": 552,
+     "x": 976,
+     "y": 716
+    },
+    {
+     "bc": "orders",
+     "columns": [
+      {
+       "portal": false,
+       "slice": "orders.cancel_order",
+       "w": 220,
+       "x": 1072
+      }
+     ],
+     "h": 740,
+     "id": "~orders.cancel_order@orders",
+     "lanes": [
+      {
+       "h": 104,
+       "id": "trigger",
+       "label": "Trigger",
+       "y": 1248
+      },
+      {
+       "h": 104,
+       "id": "action",
+       "label": "Command · View",
+       "y": 1352
+      },
+      {
+       "h": 104,
+       "id": "stream:Order",
+       "label": "Events · Order",
+       "y": 1456
+      }
+     ],
+     "process": "~orders.cancel_order",
+     "w": 332,
+     "x": 976,
+     "y": 1208
+    },
+    {
+     "bc": "shipping",
+     "columns": [
+      {
+       "portal": false,
+       "slice": "shipping.nightly_retry",
+       "w": 220,
+       "x": 1800
+      }
+     ],
+     "h": 396,
+     "id": "~shipping.nightly_retry@shipping",
+     "lanes": [
+      {
+       "h": 104,
+       "id": "trigger",
+       "label": "Trigger",
+       "y": 740
+      },
+      {
+       "h": 104,
+       "id": "action",
+       "label": "Command · View",
+       "y": 844
+      }
+     ],
+     "process": "~shipping.nightly_retry",
+     "w": 332,
+     "x": 1704,
+     "y": 700
+    },
+    {
+     "bc": "orders",
+     "columns": [
+      {
+       "portal": false,
+       "slice": "orders.refund",
+       "w": 220,
+       "x": 1072
+      },
+      {
+       "portal": false,
+       "slice": "orders.legacy_export",
+       "w": 220,
+       "x": 1292
+      }
+     ],
+     "h": 340,
+     "id": "~unattached:orders@orders",
+     "lanes": [
+      {
+       "h": 104,
+       "id": "trigger",
+       "label": "Trigger",
+       "y": 2036
+      },
+      {
+       "h": 104,
+       "id": "action",
+       "label": "Command · View",
+       "y": 2140
+      }
+     ],
+     "process": "~unattached:orders",
+     "w": 552,
+     "x": 976,
+     "y": 1996
+    }
+   ]
+  },
+  "matrix": {
+   "bcMatrix": {
+    "bcs": [
+     "billing",
+     "orders",
+     "shipping"
+    ],
+    "counts": [
+     [
+      1,
+      0,
+      1
+     ],
+     [
+      1,
+      2,
+      0
+     ],
+     [
+      0,
+      1,
+      1
+     ]
+    ],
+    "events": [
+     [
+      [
+       "PaymentCaptured"
+      ],
+      [],
+      [
+       "PaymentCaptured"
+      ]
+     ],
+     [
+      [
+       "OrderPlaced"
+      ],
+      [
+       "OrderCancelled",
+       "OrderPlaced"
+      ],
+      []
+     ],
+     [
+      [],
+      [
+       "OrderShipped"
+      ],
+      [
+       "OrderShipped"
+      ]
+     ]
+    ]
+   },
+   "cells": [
+    {
+     "c": 0,
+     "cross": false,
+     "r": 0,
+     "v": "W"
+    },
+    {
+     "c": 1,
+     "cross": false,
+     "r": 1,
+     "v": "O"
+    },
+    {
+     "c": 3,
+     "cross": false,
+     "r": 2,
+     "v": "W"
+    },
+    {
+     "c": 4,
+     "cross": false,
+     "r": 2,
+     "v": "W"
+    },
+    {
+     "c": 6,
+     "cross": false,
+     "r": 2,
+     "v": "W"
+    },
+    {
+     "c": 0,
+     "cross": true,
+     "r": 3,
+     "v": "R·via"
+    },
+    {
+     "c": 7,
+     "cross": false,
+     "r": 3,
+     "v": "O"
+    },
+    {
+     "c": 10,
+     "cross": true,
+     "r": 3,
+     "v": "R!"
+    },
+    {
+     "c": 8,
+     "cross": false,
+     "r": 4,
+     "v": "W"
+    }
+   ],
+   "cols": [
+    {
+     "bc": "billing",
+     "kind": "command",
+     "slice": "billing.charge_customer"
+    },
+    {
+     "bc": "billing",
+     "kind": "view",
+     "slice": "billing.invoice_list"
+    },
+    {
+     "bc": "billing",
+     "kind": "automation",
+     "slice": "billing.charge_on_order_placed"
+    },
+    {
+     "bc": "orders",
+     "kind": "command",
+     "slice": "orders.cancel_order"
+    },
+    {
+     "bc": "orders",
+     "kind": "command",
+     "slice": "orders.place_order"
+    },
+    {
+     "bc": "orders",
+     "kind": "command",
+     "slice": "orders.refund"
+    },
+    {
+     "bc": "orders",
+     "kind": "command",
+     "slice": "orders.request_return"
+    },
+    {
+     "bc": "orders",
+     "kind": "view",
+     "slice": "orders.order_list"
+    },
+    {
+     "bc": "shipping",
+     "kind": "command",
+     "slice": "shipping.ship_order"
+    },
+    {
+     "bc": "shipping",
+     "kind": "automation",
+     "slice": "shipping.nightly_retry"
+    },
+    {
+     "bc": "shipping",
+     "kind": "automation",
+     "slice": "shipping.ship_on_payment"
+    },
+    {
+     "bc": "shipping",
+     "kind": "translation",
+     "slice": "shipping.notify_carrier"
+    }
+   ],
+   "rows": [
+    {
+     "bc": "billing",
+     "id": "Payment",
+     "kind": "aggregate"
+    },
+    {
+     "bc": "billing",
+     "id": "InvoiceList",
+     "kind": "read-model"
+    },
+    {
+     "bc": "orders",
+     "id": "Order",
+     "kind": "aggregate"
+    },
+    {
+     "bc": "orders",
+     "id": "OrderList",
+     "kind": "read-model"
+    },
+    {
+     "bc": "shipping",
+     "id": "Shipment",
+     "kind": "aggregate"
+    }
+   ]
+  },
+  "metro": {
+   "bounds": {
+    "h": 410,
+    "w": 1400,
+    "x": 0,
+    "y": 0
+   },
+   "lines": [
+    {
+     "color": 6,
+     "derived": false,
+     "points": [
+      [
+       80,
+       60
+      ],
+      [
+       190,
+       60
+      ],
+      [
+       300,
+       60
+      ],
+      [
+       410,
+       60
+      ],
+      [
+       520,
+       60
+      ],
+      [
+       630,
+       60
+      ],
+      [
+       740,
+       60
+      ],
+      [
+       850,
+       60
+      ]
+     ],
+     "process": "checkout"
+    },
+    {
+     "color": 9,
+     "derived": false,
+     "points": [
+      [
+       960,
+       130
+      ],
+      [
+       850,
+       60
+      ]
+     ],
+     "process": "returns"
+    },
+    {
+     "color": 2,
+     "derived": true,
+     "points": [
+      [
+       1070,
+       200
+      ]
+     ],
+     "process": "~orders.cancel_order"
+    },
+    {
+     "color": 2,
+     "derived": true,
+     "points": [
+      [
+       1180,
+       270
+      ]
+     ],
+     "process": "~shipping.nightly_retry"
+    },
+    {
+     "color": 1,
+     "derived": true,
+     "points": [
+      [
+       1290,
+       340
+      ]
+     ],
+     "process": "~unattached:orders"
+    }
+   ],
+   "stations": [
+    {
+     "interchange": false,
+     "lines": [
+      "checkout"
+     ],
+     "slice": "billing.charge_customer",
+     "x": 300,
+     "y": 60
+    },
+    {
+     "interchange": false,
+     "lines": [
+      "checkout"
+     ],
+     "slice": "billing.charge_on_order_placed",
+     "x": 190,
+     "y": 60
+    },
+    {
+     "interchange": false,
+     "lines": [
+      "checkout"
+     ],
+     "slice": "billing.invoice_list",
+     "x": 410,
+     "y": 60
+    },
+    {
+     "interchange": false,
+     "lines": [
+      "~orders.cancel_order"
+     ],
+     "slice": "orders.cancel_order",
+     "x": 1070,
+     "y": 200
+    },
+    {
+     "interchange": true,
+     "lines": [
+      "checkout",
+      "returns"
+     ],
+     "slice": "orders.order_list",
+     "x": 850,
+     "y": 60
+    },
+    {
+     "interchange": false,
+     "lines": [
+      "checkout"
+     ],
+     "slice": "orders.place_order",
+     "x": 80,
+     "y": 60
+    },
+    {
+     "interchange": false,
+     "lines": [
+      "~unattached:orders"
+     ],
+     "slice": "orders.refund",
+     "x": 1290,
+     "y": 340
+    },
+    {
+     "interchange": false,
+     "lines": [
+      "returns"
+     ],
+     "slice": "orders.request_return",
+     "x": 960,
+     "y": 130
+    },
+    {
+     "interchange": false,
+     "lines": [
+      "~shipping.nightly_retry"
+     ],
+     "slice": "shipping.nightly_retry",
+     "x": 1180,
+     "y": 270
+    },
+    {
+     "interchange": false,
+     "lines": [
+      "checkout"
+     ],
+     "slice": "shipping.notify_carrier",
+     "x": 740,
+     "y": 60
+    },
+    {
+     "interchange": false,
+     "lines": [
+      "checkout"
+     ],
+     "slice": "shipping.ship_on_payment",
+     "x": 520,
+     "y": 60
+    },
+    {
+     "interchange": false,
+     "lines": [
+      "checkout"
+     ],
+     "slice": "shipping.ship_order",
+     "x": 630,
+     "y": 60
+    }
+   ]
+  },
+  "version": 1
+ },
+ "lineage": {
+  "fields": {
+   "amount": [
+    "msg:command:ChargeCustomer",
+    "msg:event:PaymentCaptured",
+    "rm:InvoiceList"
+   ],
+   "customerid": [
+    "msg:command:PlaceOrder",
+    "msg:event:OrderPlaced",
+    "rm:OrderList"
+   ],
+   "orderid": [
+    "msg:command:PlaceOrder",
+    "msg:event:OrderPlaced",
+    "msg:command:CancelOrder",
+    "msg:event:OrderCancelled",
+    "msg:event:OrderShipped",
+    "rm:OrderList"
+   ],
+   "total": [
+    "msg:event:OrderPlaced",
+    "rm:OrderList"
+   ]
+  },
+  "technicalColumns": [
+   "createdAt",
+   "etag",
+   "id",
+   "lastModified",
+   "updatedAt",
+   "version"
+  ]
+ },
+ "messages": [
+  {
+   "declaredIn": "orders/cancel_order/CancelOrder.java",
+   "fields": [
+    "orderId: OrderId",
+    "reason: String"
+   ],
+   "idempotencyKey": null,
+   "identity": "orderId: OrderId",
+   "name": "CancelOrder",
+   "schema": null,
+   "summary": null,
+   "type": "command",
+   "version": 1
+  },
+  {
+   "declaredIn": "billing/charge_customer/ChargeCustomer.java",
+   "fields": [
+    "orderId: OrderId",
+    "amount: Money"
+   ],
+   "idempotencyKey": null,
+   "identity": "orderId: OrderId",
+   "name": "ChargeCustomer",
+   "schema": null,
+   "summary": null,
+   "type": "command",
+   "version": 1
+  },
+  {
+   "declaredIn": "orders/place_order/PlaceOrder.java",
+   "fields": [
+    "orderId: OrderId",
+    "customerId: CustomerId",
+    "lines: List<OrderLine>"
+   ],
+   "idempotencyKey": null,
+   "identity": "orderId: OrderId",
+   "name": "PlaceOrder",
+   "schema": null,
+   "summary": null,
+   "type": "command",
+   "version": 1
+  },
+  {
+   "declaredIn": "orders/request_return/RequestReturn.java",
+   "fields": [
+    "orderId: OrderId"
+   ],
+   "idempotencyKey": null,
+   "identity": "orderId: OrderId",
+   "name": "RequestReturn",
+   "schema": null,
+   "summary": null,
+   "type": "command",
+   "version": 1
+  },
+  {
+   "declaredIn": "shipping/ship_order/ShipOrder.java",
+   "fields": [
+    "orderId: OrderId"
+   ],
+   "idempotencyKey": null,
+   "identity": "orderId: OrderId",
+   "name": "ShipOrder",
+   "schema": null,
+   "summary": null,
+   "type": "command",
+   "version": 1
+  },
+  {
+   "declaredIn": "orders/events/OrderCancelled.java",
+   "fields": [
+    "orderId: OrderId",
+    "cancelledAt: Instant"
+   ],
+   "idempotencyKey": null,
+   "identity": "orderId: OrderId",
+   "name": "OrderCancelled",
+   "schema": null,
+   "summary": null,
+   "type": "event",
+   "version": 1
+  },
+  {
+   "declaredIn": "orders/events/OrderPlaced.java",
+   "fields": [
+    "orderId: OrderId",
+    "customerId: CustomerId",
+    "total: Money",
+    "placedAt: Instant"
+   ],
+   "idempotencyKey": null,
+   "identity": "orderId: OrderId",
+   "name": "OrderPlaced",
+   "schema": null,
+   "summary": null,
+   "type": "event",
+   "version": 1
+  },
+  {
+   "declaredIn": "shipping/events/OrderShipped.java",
+   "fields": [
+    "shipmentId: ShipmentId",
+    "orderId: OrderId",
+    "carrier: String"
+   ],
+   "idempotencyKey": null,
+   "identity": "shipmentId: ShipmentId",
+   "name": "OrderShipped",
+   "schema": null,
+   "summary": null,
+   "type": "event",
+   "version": 1
+  },
+  {
+   "declaredIn": "billing/events/PaymentCaptured.java",
+   "fields": [
+    "paymentId: PaymentId",
+    "orderId: OrderId",
+    "amount: Money"
+   ],
+   "idempotencyKey": null,
+   "identity": "paymentId: PaymentId",
+   "name": "PaymentCaptured",
+   "schema": null,
+   "summary": null,
+   "type": "event",
+   "version": 1
+  },
+  {
+   "declaredIn": "billing/events/PaymentFailed.java",
+   "fields": [
+    "paymentId: PaymentId",
+    "orderId: OrderId",
+    "reason: String"
+   ],
+   "idempotencyKey": null,
+   "identity": "paymentId: PaymentId",
+   "name": "PaymentFailed",
+   "schema": null,
+   "summary": null,
+   "type": "event",
+   "version": 1
+  },
+  {
+   "declaredIn": "orders/events/ReturnRequested.java",
+   "fields": [
+    "orderId: OrderId",
+    "requestedAt: Instant"
+   ],
+   "idempotencyKey": null,
+   "identity": "orderId: OrderId",
+   "name": "ReturnRequested",
+   "schema": null,
+   "summary": null,
+   "type": "event",
+   "version": 1
+  }
+ ],
+ "meta": {
+  "atlasVersion": 1,
+  "bcCount": 3,
+  "generatedBy": "slice-index.py atlas",
+  "incomplete": 1,
+  "project": "shop",
+  "root": "backend/src/main/java/com/example/shop",
+  "scope": "full",
+  "sha": "a1b2c3d",
+  "skipped": [],
+  "sliceCount": 12
+ },
+ "notes": [
+  "sample.json is hand-written for page development; P2a's output replaces it"
+ ],
+ "processes": [
+  {
+   "bcs": [
+    "orders",
+    "billing",
+    "shipping"
+   ],
+   "color": 6,
+   "declared": true,
+   "entries": [
+    "orders.place_order"
+   ],
+   "id": "checkout",
+   "links": [],
+   "name": "checkout",
+   "sliceIds": [
+    "orders.place_order",
+    "billing.charge_on_order_placed",
+    "billing.charge_customer",
+    "billing.invoice_list",
+    "shipping.ship_on_payment",
+    "shipping.ship_order",
+    "shipping.notify_carrier",
+    "orders.order_list"
+   ]
+  },
+  {
+   "bcs": [
+    "orders"
+   ],
+   "color": 9,
+   "declared": true,
+   "entries": [
+    "orders.request_return"
+   ],
+   "id": "returns",
+   "links": [],
+   "name": "returns",
+   "sliceIds": [
+    "orders.request_return",
+    "orders.order_list"
+   ]
+  },
+  {
+   "bcs": [
+    "orders"
+   ],
+   "color": 2,
+   "declared": false,
+   "entries": [
+    "orders.cancel_order"
+   ],
+   "id": "~orders.cancel_order",
+   "links": [
+    {
+     "to": "checkout",
+     "via": [
+      "OrderCancelled"
+     ]
+    }
+   ],
+   "name": "cancel order",
+   "sliceIds": [
+    "orders.cancel_order"
+   ]
+  },
+  {
+   "bcs": [
+    "shipping"
+   ],
+   "color": 2,
+   "declared": false,
+   "entries": [
+    "shipping.nightly_retry"
+   ],
+   "id": "~shipping.nightly_retry",
+   "links": [
+    {
+     "to": "checkout",
+     "via": [
+      "ShipOrder"
+     ]
+    }
+   ],
+   "name": "nightly retry",
+   "sliceIds": [
+    "shipping.nightly_retry"
+   ]
+  },
+  {
+   "bcs": [
+    "orders"
+   ],
+   "color": 1,
+   "declared": false,
+   "entries": [],
+   "id": "~unattached:orders",
+   "links": [],
+   "name": "unattached (orders)",
+   "sliceIds": [
+    "orders.refund"
+   ]
+  }
+ ],
+ "slices": [
+  {
+   "bc": "orders",
+   "consumes": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": "<h2>Place order</h2><p>Accepts an order and emits <code>OrderPlaced</code>. <strong>Never</strong> charges the customer itself.</p><h3>Invariants</h3><ul><li>An order must have at least one line</li><li>Prices are taken from the catalogue at <em>placement</em> time</li></ul><table><thead><tr><th>Field</th><th>Source</th></tr></thead><tbody><tr><td><code>orderId</code></td><td>client</td></tr><tr><td><code>total</code></td><td>catalogue</td></tr></tbody></table><pre><code>curl -X POST /api/orders -d '{&quot;lines&quot;:[]}'</code></pre>",
+   "endpoints": [
+    {
+     "auth": "user",
+     "method": "POST",
+     "path": "/api/orders"
+    }
+   ],
+   "externalSystem": null,
+   "files": [
+    "PlaceOrder.java",
+    "PlaceOrderDecider.java",
+    "PlaceOrderAPI.java",
+    "OrderPlaced.java"
+   ],
+   "flags": [],
+   "flows": [
+    "checkout"
+   ],
+   "handles": [
+    "PlaceOrder"
+   ],
+   "id": "orders.place_order",
+   "invariants": [
+    {
+     "enforcedBy": "PlaceOrderDecider",
+     "id": "INV-1",
+     "text": "An order must have at least one line"
+    }
+   ],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "place_order",
+   "owner": "orders-team",
+   "owns": [],
+   "package": "com.example.shop.orders.place_order",
+   "path": "backend/src/main/java/com/example/shop/orders/place_order",
+   "projections": [],
+   "publishes": [
+    "OrderPlaced"
+   ],
+   "reads": [],
+   "scenarios": [
+    {
+     "given": [],
+     "name": "places an order",
+     "note": null,
+     "test": "PlaceOrderDeciderTest#placesAnOrder",
+     "testResolved": {
+      "line": 31,
+      "path": "backend/src/test/java/com/example/shop/orders/place_order/PlaceOrderDeciderTest.java",
+      "status": "found"
+     },
+     "then": {
+      "kind": "steps",
+      "steps": [
+       {
+        "name": "OrderPlaced",
+        "type": "event",
+        "with": {
+         "customerId": "c-7",
+         "orderId": "o-1",
+         "total": 42.5
+        }
+       }
+      ]
+     },
+     "when": {
+      "name": "PlaceOrder",
+      "type": "command",
+      "with": {
+       "customerId": "c-7",
+       "lines": 2,
+       "orderId": "o-1"
+      }
+     }
+    },
+    {
+     "given": [],
+     "name": "rejects an empty order",
+     "note": "Thrown by requireTrue, so the queue would dead-letter it on first delivery",
+     "test": "PlaceOrderDeciderTest#rejectsAnEmptyOrder",
+     "testResolved": {
+      "line": 48,
+      "path": "backend/src/test/java/com/example/shop/orders/place_order/PlaceOrderDeciderTest.java",
+      "status": "found"
+     },
+     "then": {
+      "error": "IllegalArgumentException",
+      "kind": "error",
+      "message": "An order must have at least one line"
+     },
+     "when": {
+      "name": "PlaceOrder",
+      "type": "command",
+      "with": {
+       "lines": 0,
+       "orderId": "o-2"
+      }
+     }
+    }
+   ],
+   "serves": [],
+   "status": "live",
+   "summary": "Accept a new order from a customer",
+   "supersedes": null,
+   "tests": [
+    "unit",
+    "integration"
+   ],
+   "writes": [
+    "Order"
+   ]
+  },
+  {
+   "bc": "orders",
+   "consumes": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [
+    {
+     "auth": "user",
+     "method": "POST",
+     "path": "/api/orders/{orderId}/cancel"
+    }
+   ],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [
+    "CancelOrder"
+   ],
+   "id": "orders.cancel_order",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "cancel_order",
+   "owner": "orders-team",
+   "owns": [],
+   "package": "com.example.shop.orders.cancel_order",
+   "path": "backend/src/main/java/com/example/shop/orders/cancel_order",
+   "projections": [],
+   "publishes": [
+    "OrderCancelled"
+   ],
+   "reads": [],
+   "scenarios": [
+    {
+     "given": [
+      {
+       "name": "OrderPlaced",
+       "type": "event",
+       "with": {
+        "customerId": "c-7",
+        "orderId": "o-1"
+       }
+      }
+     ],
+     "name": "cancels a placed order",
+     "note": null,
+     "test": "CancelOrderDeciderTest#cancelsPlacedOrder",
+     "testResolved": {
+      "line": 22,
+      "path": "backend/src/test/java/com/example/shop/orders/cancel_order/CancelOrderDeciderTest.java",
+      "status": "found"
+     },
+     "then": {
+      "kind": "steps",
+      "steps": [
+       {
+        "name": "OrderCancelled",
+        "type": "event",
+        "with": {
+         "orderId": "o-1"
+        }
+       }
+      ]
+     },
+     "when": {
+      "name": "CancelOrder",
+      "type": "command",
+      "with": {
+       "orderId": "o-1"
+      }
+     }
+    },
+    {
+     "given": [],
+     "name": "rejects an unknown order",
+     "note": null,
+     "test": "CancelOrderDeciderTest#rejectsUnknown",
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "missing"
+     },
+     "then": {
+      "error": "OrderNotFound",
+      "kind": "error",
+      "message": "Order o-404 not found"
+     },
+     "when": {
+      "name": "CancelOrder",
+      "type": "command",
+      "with": {
+       "orderId": "o-404"
+      }
+     }
+    },
+    {
+     "given": [
+      {
+       "name": "OrderPlaced",
+       "type": "event",
+       "with": {}
+      },
+      {
+       "name": "OrderCancelled",
+       "type": "event",
+       "with": {}
+      },
+      {
+       "name": "OrderRefunded",
+       "type": "event",
+       "with": {}
+      }
+     ],
+     "name": "cancelling twice is a no-op",
+     "note": null,
+     "test": null,
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "not-checked"
+     },
+     "then": {
+      "kind": "nothing"
+     },
+     "when": {
+      "name": "CancelOrder",
+      "type": "command",
+      "with": {}
+     }
+    }
+   ],
+   "serves": [],
+   "status": "live",
+   "summary": "Cancel an order that has not shipped",
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "writes": [
+    "Order"
+   ]
+  },
+  {
+   "bc": "orders",
+   "consumes": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [
+    {
+     "auth": "user",
+     "method": "POST",
+     "path": "/api/orders/{orderId}/returns"
+    }
+   ],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "returns"
+   ],
+   "handles": [
+    "RequestReturn"
+   ],
+   "id": "orders.request_return",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "request_return",
+   "owner": "orders-team",
+   "owns": [],
+   "package": "com.example.shop.orders.request_return",
+   "path": "backend/src/main/java/com/example/shop/orders/request_return",
+   "projections": [],
+   "publishes": [
+    "ReturnRequested"
+   ],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": "Ask for a return of a delivered order",
+   "supersedes": null,
+   "tests": [],
+   "writes": [
+    "Order"
+   ]
+  },
+  {
+   "bc": "orders",
+   "consumes": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [
+    {
+     "auth": "user",
+     "method": "GET",
+     "path": "/api/orders"
+    }
+   ],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout",
+    "returns"
+   ],
+   "handles": [],
+   "id": "orders.order_list",
+   "invariants": [],
+   "kind": "view",
+   "lane": "decider",
+   "language": "java",
+   "name": "order_list",
+   "owner": "orders-team",
+   "owns": [
+    "OrderList"
+   ],
+   "package": "com.example.shop.orders.order_list",
+   "path": "backend/src/main/java/com/example/shop/orders/order_list",
+   "projections": [
+    {
+     "from": [
+      "OrderPlaced",
+      "OrderCancelled",
+      "OrderShipped"
+     ],
+     "name": "OrderListProjector"
+    }
+   ],
+   "publishes": [],
+   "readModels": [
+    {
+     "columns": [
+      {
+       "name": "orderId",
+       "note": "identity",
+       "type": "OrderId"
+      },
+      {
+       "name": "customerId",
+       "note": null,
+       "type": "CustomerId"
+      },
+      {
+       "name": "status",
+       "note": null,
+       "type": "String"
+      },
+      {
+       "name": "total",
+       "note": null,
+       "type": "BigDecimal"
+      },
+      {
+       "name": "discount",
+       "note": "not on any event",
+       "type": "BigDecimal"
+      },
+      {
+       "name": "updatedAt",
+       "note": null,
+       "type": "Instant"
+      }
+     ],
+     "name": "OrderList",
+     "store": "postgresql"
+    }
+   ],
+   "reads": [],
+   "scenarios": [
+    {
+     "given": [
+      {
+       "name": "OrderPlaced",
+       "type": "event",
+       "with": {
+        "customerId": "c-7",
+        "orderId": "o-1",
+        "total": 42.5
+       }
+      }
+     ],
+     "name": "lists a placed order",
+     "note": null,
+     "test": "OrderListProjectorTest",
+     "testResolved": {
+      "line": 1,
+      "path": "backend/src/test/java/com/example/shop/orders/order_list/OrderListProjectorTest.java",
+      "status": "found"
+     },
+     "then": {
+      "kind": "readModel",
+      "readModel": "OrderList",
+      "rows": [
+       {
+        "orderId": "o-1",
+        "status": "PLACED",
+        "total": 42.5
+       },
+       {
+        "orderId": "o-0",
+        "status": "SHIPPED",
+        "total": 9
+       }
+      ]
+     },
+     "when": {
+      "name": "GetOrders",
+      "type": "query",
+      "with": {
+       "customerId": "c-7"
+      }
+     }
+    },
+    {
+     "given": [],
+     "name": "empty for a new customer",
+     "note": null,
+     "test": null,
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "not-checked"
+     },
+     "then": {
+      "kind": "readModel",
+      "readModel": "OrderList",
+      "rows": []
+     },
+     "when": null
+    }
+   ],
+   "serves": [
+    "GetOrders"
+   ],
+   "status": "live",
+   "summary": "Orders of a customer, newest first",
+   "supersedes": null,
+   "tests": [
+    "integration"
+   ],
+   "writes": []
+  },
+  {
+   "bc": "orders",
+   "consumes": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "error": true,
+   "externalSystem": null,
+   "files": [],
+   "flags": [
+    {
+     "level": "error",
+     "text": "manifest did not parse: mapping values are not allowed here (line 7)"
+    }
+   ],
+   "flows": [],
+   "handles": [],
+   "id": "orders.refund",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "refund",
+   "owner": "orders-team",
+   "owns": [],
+   "package": "com.example.shop.orders.refund",
+   "path": "backend/src/main/java/com/example/shop/orders/refund",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [],
+   "writes": []
+  },
+  {
+   "bc": "billing",
+   "consumes": [
+    "OrderPlaced"
+   ],
+   "direction": null,
+   "dispatches": [
+    "ChargeCustomer"
+   ],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout"
+   ],
+   "handles": [],
+   "id": "billing.charge_on_order_placed",
+   "invariants": [],
+   "kind": "automation",
+   "lane": "decider",
+   "language": "java",
+   "name": "charge_on_order_placed",
+   "owner": "billing-team",
+   "owns": [],
+   "package": "com.example.shop.billing.charge_on_order_placed",
+   "path": "backend/src/main/java/com/example/shop/billing/charge_on_order_placed",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": "Charge the customer when an order is placed",
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "writes": []
+  },
+  {
+   "bc": "billing",
+   "consumes": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout"
+   ],
+   "handles": [
+    "ChargeCustomer"
+   ],
+   "id": "billing.charge_customer",
+   "invariants": [
+    {
+     "enforcedBy": "ChargeCustomerDecider",
+     "id": "INV-1",
+     "text": "Amount must be positive"
+    },
+    {
+     "enforcedBy": "Payment aggregate",
+     "id": "INV-2",
+     "text": "A payment is captured at most once"
+    }
+   ],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "charge_customer",
+   "owner": "billing-team",
+   "owns": [],
+   "package": "com.example.shop.billing.charge_customer",
+   "path": "backend/src/main/java/com/example/shop/billing/charge_customer",
+   "projections": [],
+   "publishes": [
+    "PaymentCaptured",
+    "PaymentFailed"
+   ],
+   "reads": [
+    {
+     "external": false,
+     "name": "OrderList",
+     "via": "OrderReader"
+    }
+   ],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": "Capture a payment with the card on file",
+   "supersedes": null,
+   "tests": [
+    "unit",
+    "integration"
+   ],
+   "writes": [
+    "Payment"
+   ]
+  },
+  {
+   "bc": "billing",
+   "consumes": [
+    "RefundIssued"
+   ],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [
+    {
+     "auth": "admin",
+     "method": "GET",
+     "path": "/api/invoices"
+    }
+   ],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout"
+   ],
+   "handles": [],
+   "id": "billing.invoice_list",
+   "invariants": [],
+   "kind": "view",
+   "lane": "decider",
+   "language": "java",
+   "name": "invoice_list",
+   "owner": "billing-team",
+   "owns": [
+    "InvoiceList"
+   ],
+   "package": "com.example.shop.billing.invoice_list",
+   "path": "backend/src/main/java/com/example/shop/billing/invoice_list",
+   "projections": [
+    {
+     "from": [
+      "PaymentCaptured"
+     ],
+     "name": "InvoiceListProjector"
+    }
+   ],
+   "publishes": [],
+   "readModels": [
+    {
+     "columns": [
+      "invoiceId",
+      "orderId",
+      "amount"
+     ],
+     "name": "InvoiceList",
+     "store": "postgresql"
+    }
+   ],
+   "reads": [],
+   "scenarios": [],
+   "serves": [
+    "GetInvoices"
+   ],
+   "status": "live",
+   "summary": "Invoices for the back office",
+   "supersedes": null,
+   "tests": [],
+   "writes": []
+  },
+  {
+   "bc": "shipping",
+   "consumes": [
+    "PaymentCaptured"
+   ],
+   "direction": null,
+   "dispatches": [
+    "ShipOrder"
+   ],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout"
+   ],
+   "handles": [],
+   "id": "shipping.ship_on_payment",
+   "invariants": [],
+   "kind": "automation",
+   "lane": "decider",
+   "language": "java",
+   "name": "ship_on_payment",
+   "owner": "shipping-team",
+   "owns": [],
+   "package": "com.example.shop.shipping.ship_on_payment",
+   "path": "backend/src/main/java/com/example/shop/shipping/ship_on_payment",
+   "projections": [],
+   "publishes": [],
+   "reads": [
+    {
+     "external": false,
+     "name": "OrderList",
+     "via": null
+    }
+   ],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": "Ship as soon as payment is captured",
+   "supersedes": null,
+   "tests": [],
+   "writes": []
+  },
+  {
+   "bc": "shipping",
+   "consumes": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout"
+   ],
+   "handles": [
+    "ShipOrder"
+   ],
+   "id": "shipping.ship_order",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "ship_order",
+   "owner": "shipping-team",
+   "owns": [],
+   "package": "com.example.shop.shipping.ship_order",
+   "path": "backend/src/main/java/com/example/shop/shipping/ship_order",
+   "projections": [],
+   "publishes": [
+    "OrderShipped"
+   ],
+   "reads": [],
+   "scenarios": [
+    {
+     "given": [
+      {
+       "name": "PaymentCaptured",
+       "type": "event",
+       "with": {
+        "orderId": "o-1"
+       }
+      }
+     ],
+     "name": "ships a paid order",
+     "note": null,
+     "test": "ShipOrderDeciderTest#shipsPaidOrder",
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "missing"
+     },
+     "then": {
+      "kind": "steps",
+      "steps": [
+       {
+        "name": "OrderShipped",
+        "type": "event",
+        "with": {
+         "carrier": "DHL",
+         "orderId": "o-1"
+        }
+       }
+      ]
+     },
+     "when": {
+      "name": "ShipOrder",
+      "type": "command",
+      "with": {
+       "orderId": "o-1"
+      }
+     }
+    }
+   ],
+   "serves": [],
+   "status": "live",
+   "summary": "Hand the parcel to the warehouse",
+   "supersedes": null,
+   "tests": [],
+   "writes": [
+    "Shipment"
+   ]
+  },
+  {
+   "bc": "shipping",
+   "consumes": [
+    "OrderShipped"
+   ],
+   "direction": "outbound",
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": "DHL",
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout"
+   ],
+   "handles": [],
+   "id": "shipping.notify_carrier",
+   "invariants": [],
+   "kind": "translation",
+   "lane": "decider",
+   "language": "java",
+   "name": "notify_carrier",
+   "owner": "shipping-team",
+   "owns": [],
+   "package": "com.example.shop.shipping.notify_carrier",
+   "path": "backend/src/main/java/com/example/shop/shipping/notify_carrier",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [
+    {
+     "given": [],
+     "name": "books a pickup",
+     "note": null,
+     "test": null,
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "not-checked"
+     },
+     "then": {
+      "kind": "steps",
+      "steps": [
+       {
+        "name": "BookPickup",
+        "type": "external",
+        "with": {
+         "reference": "o-1"
+        }
+       }
+      ]
+     },
+     "when": {
+      "name": "OrderShipped",
+      "type": "event",
+      "with": {
+       "orderId": "o-1"
+      }
+     }
+    }
+   ],
+   "serves": [],
+   "status": "live",
+   "summary": "Book the pickup with the carrier",
+   "supersedes": null,
+   "tests": [],
+   "writes": []
+  },
+  {
+   "bc": "shipping",
+   "consumes": [],
+   "direction": null,
+   "dispatches": [
+    "ShipOrder"
+   ],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [],
+   "id": "shipping.nightly_retry",
+   "invariants": [],
+   "kind": "automation",
+   "lane": "decider",
+   "language": "java",
+   "name": "nightly_retry",
+   "owner": "shipping-team",
+   "owns": [],
+   "package": "com.example.shop.shipping.nightly_retry",
+   "path": "backend/src/main/java/com/example/shop/shipping/nightly_retry",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [
+    {
+     "given": [],
+     "name": "retries refused shipments",
+     "note": null,
+     "test": null,
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "not-checked"
+     },
+     "then": {
+      "kind": "steps",
+      "steps": [
+       {
+        "name": "ShipOrder",
+        "type": "command",
+        "with": {
+         "orderId": "o-9"
+        }
+       }
+      ]
+     },
+     "when": {
+      "name": null,
+      "type": "schedule",
+      "with": {}
+     }
+    }
+   ],
+   "schedule": "0 2 * * *",
+   "serves": [],
+   "status": "live",
+   "summary": "Retry shipments the warehouse refused",
+   "supersedes": null,
+   "tests": [],
+   "writes": []
+  }
+ ],
+ "writers": [
+  {
+   "bcs": [
+    "orders"
+   ],
+   "flag": null,
+   "kind": "aggregate",
+   "slices": [
+    "orders.cancel_order",
+    "orders.place_order",
+    "orders.request_return"
+   ],
+   "target": "Order"
+  },
+  {
+   "bcs": [
+    "billing"
+   ],
+   "flag": null,
+   "kind": "aggregate",
+   "slices": [
+    "billing.charge_customer"
+   ],
+   "target": "Payment"
+  },
+  {
+   "bcs": [
+    "shipping"
+   ],
+   "flag": null,
+   "kind": "aggregate",
+   "slices": [
+    "shipping.ship_order"
+   ],
+   "target": "Shipment"
+  },
+  {
+   "bcs": [
+    "orders"
+   ],
+   "flag": null,
+   "kind": "read-model",
+   "slices": [
+    "orders.order_list"
+   ],
+   "target": "OrderList"
+  },
+  {
+   "bcs": [
+    "billing"
+   ],
+   "flag": null,
+   "kind": "read-model",
+   "slices": [
+    "billing.invoice_list"
+   ],
+   "target": "InvoiceList"
+  }
+ ]
+}

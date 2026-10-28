@@ -176,6 +176,16 @@
             <artifactId>HikariCP</artifactId>
             <scope>test</scope>
         </dependency>
+        <!--
+          Test scope: EnqueueTransactionBoundaryOnShardOwnedIT proves an enqueue joins a plain Spring
+          TransactionTemplate (DataSourceTransactionManager + TransactionAwareDataSourceProxy), the
+          set-up spring-boot-starter-postgresql wires.
+        -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-jdbc</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>

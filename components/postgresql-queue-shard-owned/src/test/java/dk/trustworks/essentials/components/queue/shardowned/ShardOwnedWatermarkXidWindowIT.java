@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -57,20 +58,12 @@ class ShardOwnedWatermarkXidWindowIT {
      * Sweeps 20 s apart, so the head sweep cannot recover a stepped-over row inside this test and make a
      * failure look like a slow success. {@code watermarkCap} is longer than the test for the same reason.
      */
-    private static final ShardOwnerSettings SETTINGS = new ShardOwnerSettings(500,
-                                                                              200,
-                                                                              Duration.ofMillis(1),
-                                                                              Duration.ofMillis(2),
-                                                                              Duration.ofMillis(200),
-                                                                              Duration.ofSeconds(20),   // sweepInterval
-                                                                              1_000,
-                                                                              8,
-                                                                              Duration.ofMillis(500),
-                                                                              Duration.ofSeconds(20),   // maxSweepInterval
-                                                                              2,
-                                                                              Duration.ofSeconds(5),
-                                                                              Duration.ofSeconds(30),
-                                                                              Duration.ofSeconds(30));  // watermarkCap
+    private static final ShardOwnerSettings SETTINGS = ShardOwnerSettings.builder()
+                                                                         .setHoleExpiry(Duration.ofMillis(200))
+                                                                         .setSweepInterval(Duration.ofSeconds(20))
+                                                                         .setMaxSweepInterval(Duration.ofSeconds(20))
+                                                                         .setWatermarkCap(Duration.ofSeconds(30))
+                                                                         .build();
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();
@@ -121,7 +114,7 @@ class ShardOwnedWatermarkXidWindowIT {
         var storage   = new ShardOwnedStorage(dataSource, QUEUE_ID);
         var units     = storage.orderedUnits();
         var unit      = ShardOwnedSchema.unitForKey(HELD_KEY, units);
-        var neighbour = keyInUnit(unit, units);
+        var neighbour = OrderedUnitKeys.keyInUnit("neighbour-", unit, units);
         var received  = new CopyOnWriteArrayList<String>();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
@@ -151,21 +144,8 @@ class ShardOwnedWatermarkXidWindowIT {
     }
 
     private boolean writerIsPausedInTrigger() throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement("SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'PgSleep'");
-             var resultSet = statement.executeQuery()) {
-            resultSet.next();
-            return resultSet.getInt(1) == 1;
-        }
-    }
-
-    private static String keyInUnit(int unit, int units) {
-        for (var index = 0; ; index++) {
-            var candidate = "neighbour-" + index;
-            if (ShardOwnedSchema.unitForKey(candidate, units) == unit) {
-                return candidate;
-            }
-        }
+        return queryForInt(dataSource, "Counting the backends sleeping in pg_sleep",
+                           "SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'PgSleep'") == 1;
     }
 
     private static void enqueue(ShardOwnedQueue queue, String key, long keyOrder) {

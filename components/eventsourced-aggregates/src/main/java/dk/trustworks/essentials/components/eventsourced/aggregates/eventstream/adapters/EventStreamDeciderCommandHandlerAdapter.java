@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.reactive.command.CommandHandler;
 import org.slf4j.*;
 
@@ -101,6 +102,23 @@ public class EventStreamDeciderCommandHandlerAdapter implements CommandHandler {
     public boolean canHandle(Class<?> commandType) {
         List<EventStreamDecider<?, ?>> applicableEventStreamDeciders = findApplicableEventStreamDeciders(commandType);
         return !applicableEventStreamDeciders.isEmpty();
+    }
+
+    /**
+     * The concrete command types this adapter's deciders declare as their {@code COMMAND} type argument
+     * ({@code implements EventStreamDecider<CreateOrder, OrderEvent>}), or - for a sealed one - its concrete permitted
+     * subtypes, as far as the decider {@link EventStreamDecider#canHandle(Class) can handle} them. A decider whose type
+     * argument cannot be resolved (a lambda, a generic base class) contributes nothing.
+     * <p>
+     * Used by the {@code CommandBus} to warn about command types handled by more than one command handler.
+     *
+     * @return the command types this adapter's deciders declare
+     */
+    @Override
+    public Set<Class<?>> handledCommandTypes() {
+        var commandTypes = new LinkedHashSet<Class<?>>();
+        deciders.forEach(decider -> commandTypes.addAll(EventStreamDeciderCommandTypes.declaredCommandTypes(decider)));
+        return Collections.unmodifiableSet(commandTypes);
     }
 
     /**
@@ -235,7 +253,9 @@ public class EventStreamDeciderCommandHandlerAdapter implements CommandHandler {
     }
 
     /**
-     * Persists a new event to the event store.
+     * Persists a new event to the event store - which hands it to {@link AppendedEvents}, so a caller that wraps
+     * {@code commandBus.send(...)} in {@link AppendedEvents#recordDuring(java.util.function.Supplier)} learns its
+     * {@link PersistedEvent#globalEventOrder()}.
      *
      * @param aggregateId The aggregate ID to persist the event for
      * @param event       The event to persist
@@ -272,5 +292,15 @@ public class EventStreamDeciderCommandHandlerAdapter implements CommandHandler {
      */
     public List<EventStreamDecider<?, ?>> getDeciders() {
         return Collections.unmodifiableList(deciders);
+    }
+
+    /**
+     * Names the {@link AggregateType} and the deciders - this is what a {@code MultipleCommandHandlersFoundException}
+     * or {@code NoCommandHandlerFoundException} from the {@code CommandBus} lists
+     */
+    @Override
+    public String toString() {
+        return "EventStreamDeciderCommandHandlerAdapter{aggregateType=" + configuration.aggregateType() +
+                ", deciders=" + deciders.stream().map(decider -> decider.getClass().getName()).toList() + "}";
     }
 }

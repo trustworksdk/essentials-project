@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: task.comment_on_task_created
 kind: automation
 bc: task
@@ -7,6 +7,7 @@ status: live
 summary: Turn the initial comment carried by a newly created task into an explicit AddComment command.
 generator: essentials
 language: java
+lane: aggregate
 
 consumes: [TaskCreated]
 dispatches: [AddComment]
@@ -14,6 +15,8 @@ invariants:
   - { id: INV-AC-1, text: "A comment (taskId + content + createdAt) is applied at most once per task", enforcedBy: Task }
 forbidden:
   - cross-slice-internal:task
+tier: cqrs-es
+flow: create-task
 tests:
   unit: { present: false }
   integration: { present: true }

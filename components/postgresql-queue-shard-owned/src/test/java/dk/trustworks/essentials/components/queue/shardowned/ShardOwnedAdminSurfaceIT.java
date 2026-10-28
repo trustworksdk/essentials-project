@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
 import static org.assertj.core.api.Assertions.*;
 
 /**
@@ -467,14 +468,7 @@ class ShardOwnedAdminSurfaceIT {
 
     /** Heartbeat at a third of the lease, so growth is observed in seconds rather than in ten. */
     private static ShardOwnerSettings fastHeartbeat() {
-        var defaults = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(),
-                                      defaults.ackFlushInterval(), defaults.chaseDelay(),
-                                      defaults.holeExpiry(), defaults.sweepInterval(),
-                                      defaults.maxHolesPerChase(), defaults.keyConcurrency(),
-                                      defaults.pollBackstop(), defaults.maxSweepInterval(),
-                                      defaults.pumpThreads(), defaults.shedGrace(),
-                                      Duration.ofSeconds(3), Duration.ofSeconds(60));
+        return ShardOwnerSettings.builder().setLeaseTtl(Duration.ofSeconds(3)).build();
     }
 
     /**
@@ -552,15 +546,8 @@ class ShardOwnedAdminSurfaceIT {
     }
 
     private int distinctShardsUsed(short queueId) throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT count(DISTINCT shard) FROM " + ShardOwnedSchema.UNORDERED_TABLE
-                     + " WHERE queue_id = ?")) {
-            statement.setShort(1, queueId);
-            try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
-                return resultSet.getInt(1);
-            }
-        }
+        return queryForInt(dataSource, "Counting the occupied shards of queue " + queueId,
+                           "SELECT count(DISTINCT shard) FROM " + ShardOwnedSchema.UNORDERED_TABLE + " WHERE queue_id = ?",
+                           queueId);
     }
 }

@@ -102,7 +102,7 @@ Full detail and the failure modes: [docs/durable-queue-shard-owned.md](../../doc
 
 | Requirement | Why |
 |---|---|
-| **PostgreSQL 13+** for the ordered lane (9.5+ for the unordered lane alone) | The floor comes from the ordered lane's start-up probe (`pg_current_xact_id()`), not from its delivery path |
+| **PostgreSQL 15+** (the supported floor, [README § Version Compatibility](../../README.md#version-compatibility)) | The ordered lane on its own would need 13+, for its start-up probe (`pg_current_xact_id()`) |
 | **`pg_stat_activity.backend_xid` must be readable** | The ordered lane's cursor proves a sequence value can never arrive from the set of running write transactions. A *partial* answer is a wrong answer — the cursor would step over a live writer and lose its messages silently |
 | **`pumpThreads + 1` pool connections held permanently** (default 3) | Held for the life of the process and never returned, and lease renewal and enqueue need the pool too. Given the pool's size (`ConnectionPoolMetadata` — the Spring Boot starter supplies it for every pool Spring Boot can read), the runtime refuses a pool no larger than that at start-up and warns when it takes more than half; without it the requirement is only logged, and a pool that is too small shows up as pumps retrying while their shards stop delivering, logged as `connection pool exhausted` where the pool's live count is known |
 | **`LISTEN`/`NOTIFY` on one channel** | Blocked notifications (some poolers in transaction mode) cost latency, not correctness — delivery falls back to the sweep cadence, worst case `maxSweepInterval` |
@@ -164,7 +164,7 @@ ShardOwnedSchema.registerQueue(dataSource, QueueName.of("orders"), 4);
 try (var orders = PostgresqlMessageQueue.builder()
                                         .setDataSource(dataSource)
                                         .setQueueName(QueueName.of("orders"))  // id + shard count from the registry
-                                        .setInstanceId(Network.hostName())
+                                        .setInstanceId(Network.hostName() + ":" + ProcessHandle.current().pid())  // unique per process
                                         .build()) {
 
     // 4. Produce
@@ -193,10 +193,48 @@ Re-registering a name with a *different* shard count is refused rather than acce
 
 | Call | Effect |
 |---|---|
-| `consume(handler, options)` | Registers a consumer and starts it. Returns a `Subscription` |
-| `start()` | Restarts consumers this queue created and then stopped. A queue that has never consumed has nothing to start |
-| `stop()` | Stops the consumers: dispatches nothing new, **waits up to `shedGrace` for handlers already running** and acknowledges them, then **releases the shard leases** so a successor picks them up immediately rather than waiting the lease out. An ordered unit with a key still in a handler after the grace is kept instead, until this instance's liveness lapses, so no successor starts that key while it runs. They stay registered, so `start()` brings them back |
-| `close()` | `stop()` |
+| `consume(handler, options)` | Registers a consumer and starts it. Returns a `Subscription`. A `consume()` made while no subscription is registered also starts the queue; any other, like `Subscription.start()`, starts its own consumer only and leaves the queue as it is, so after a `stop()` the queue's `start()` still restarts the others |
+| `start()` | Starts the consumers of every subscription still registered — after a `stop()`, the ones it stopped, including a subscription stopped on its own with `Subscription.stop()`. It does this only while `isStarted()` reads false; on a queue marked started it returns at once. An unsubscribed subscription is no longer registered and is never started again. A queue that has never consumed has nothing to start |
+| `stop()` | Stops every registered consumer, whether `isStarted()` reads true or not: dispatches nothing new, **waits up to `shedGrace` for handlers already running** and acknowledges them, then **releases the shard leases** so a successor picks them up immediately rather than waiting the lease out. An ordered unit with a key still in a handler after the grace is kept instead, so no successor starts that key while it runs: another instance can take it only once this instance's liveness lapses. Once the handler has returned the unit is handed back — its acknowledgement flushed and its lease released, whether or not the queue runs again — so whichever instance takes it next charges no attempt and does not deliver the handled message again; a hand-back that fails (a database error) is retried once the queue runs again. A `start()` meanwhile leaves that unit alone until it has been handed back, and may take it after that (no key of the unit is delivered until then) — unless the key has been in its handler longer than `stuckHandlerTimeout` (default 15 min): then the restarted queue stops waiting and takes the unit over under a new fence, and that key may run in two handlers at once ([Configuration Reference](#configuration-reference)). They stay registered, so `start()` brings them back. **If a `consume()`/`start()` is still doing its database work, `stop()` does not wait for it past about 4 s** (2 s on a `ShardOwnedQueue`; on an interrupted thread not at all): it returns with `isStarted()` false and logs a WARN, and that start releases the leases and deregisters the instance only once its statements return, which nothing bounds but the driver's `socketTimeout`. Closing the `DataSource` before that start returns makes the release fail — the case a Spring shutdown is most likely to hit, since it closes the pool once `stop()` has returned. Under a partition, or after a failed release, the units stay unserved as after a crash: a successor takes them only once this instance's membership row is older than `leaseTtl`. Set `socketTimeout` on the pool ([Prerequisites](#prerequisites)) |
+| `close()` | The queue's `stop()`: its subscriptions stay registered. Not to be confused with `Subscription.close()`, which ends one subscription as `Subscription.unsubscribe()` does |
+| `isStarted()` | Whether the queue is marked started — by `start()` or by a `consume()` made while no subscription is registered — not whether anything runs. After a `stop()`, a `Subscription.start()` or a later `consume()` runs that subscription's consumers while `isStarted()` reads false |
+
+**`Subscription.stop()` keeps a subscription registered; `Subscription.unsubscribe()` and
+`Subscription.close()` end it.** A subscription stopped with `Subscription.stop()` stays with its
+queue, so the queue's next `start()` after a `stop()` starts it again. `Subscription.close()` is
+`unsubscribe()` — what try-with-resources, and Spring destroying a `Subscription` bean, call — so a
+closed subscription is ended, not paused (in 0.60.0 `close()` only stopped it; call `stop()` to pause
+one you mean to start again). `unsubscribe()` stops both lanes and takes them out of the queue: no
+`start()` starts them again, the subscription's own `start()` throws, and its instance id is free for
+the next `consume()`, which is not counted as competing with the unsubscribed subscription (it still is
+with any other subscription of the queue, and logs the competing-consumer WARN for it). A caller that
+lets go of a subscription and consumes anew must unsubscribe it first (see
+[The Two Lanes](#the-two-lanes)). Two cases delay the id, either one enough, and when both apply it
+is free only once both have passed: when the stop kept an ordered unit, because a key was still in
+its handler past `shedGrace`, the id stays out of use until that handler has returned and the unit has
+been handed back (its acknowledgement flushed, its lease released; before it picks an id, a `consume()`
+retries a hand-back that failed), or until that handler has been running longer than the queue's
+`stuckHandlerTimeout`, or until the unit is released on request (`MessageQueue.releaseKeptOrderedUnit`,
+`POST .../ordered-units/{unit}/release-kept?instanceId=…`), as until then that unit's lease
+names the id and a subscription under it would take the unit at once; and, when the stop gave up
+waiting for the hand-back to the database of a lane whose stop kept no ordered unit (releasing that
+lane's leases and deregistering the id, which the stop stops waiting for after 2 s when the database
+does not answer, and at once on an interrupted thread; an ordered lane that kept one never deletes
+the id's membership row from its hand-back), the id stays out of use until that hand-back has
+returned, as it may still delete the id's
+membership row, each of its waits for the database bounded by the queue's `leaseTtl` (2 s at least)
+unless the connection's own network timeout is shorter. A `consume()` before then registers under
+another instance id, the lowest one free (`<id>-1` when the unsubscribed subscription held `<id>` and
+no other is registered or held back), with no competing-consumer WARN unless another subscription is
+registered.
+
+**A `Lifecycle` manager that stops only a bean reporting itself started skips a partly started queue.**
+`foundation`'s `DefaultLifecycleManager` does that at shutdown, as `Lifecycle`'s contract allows, so a
+`PostgresqlMessageQueue` it manages, stopped and then given a `Subscription.start()` or a later
+`consume()`, is not stopped, and that subscription goes on leasing units and handling messages. Call
+the queue's `stop()`/`close()` whatever `isStarted()` reads (the starter's `ShardOwnedQueueFactory.close()`
+does), or bring the queue back to started with its own `start()` first. `Subscription.isStarted()`
+answers for one subscription.
 
 Enqueueing and reading depth never require the queue to be started — matching `DurableQueues`, where
 the lifecycle governs the consuming side.
@@ -222,6 +260,15 @@ handler, and one process reported as two live instances.
 Neither symptom loses messages — the second identity is a real consumer and its share of the units is
 served — so the engine allows it rather than refusing a legitimate competing consumer. It does log a
 WARN naming the additional instance, since that is the only signal either symptom produces.
+
+Stopping a subscription does not end it. `Subscription.stop()` keeps it registered, so the queue's
+`start()` after a `stop()` starts it again: a caller that stops one subscription and consumes anew
+leaves the stopped one behind, gets the competing-consumer WARN under a new instance id suffix, and
+has the abandoned handler restarted by the next queue `stop()`/`start()`. Call
+`Subscription.unsubscribe()` (or `close()`, which calls it) on the old subscription first: it stops
+both lanes and removes them from the queue, so the next `consume()` is not counted as competing with
+it, and its instance id is free again (unless the stop kept an ordered unit or gave up waiting for its
+hand-back to the database — see [Lifecycle](#lifecycle)).
 
 ### What a handler is given
 
@@ -250,7 +297,12 @@ queue.getMessage(messageId).ifPresent(m -> log.warn("attempt {} of {}, enqueued 
 ```
 
 The last delivery error is not on `QueuedMessage`; it is on `DeadLetter(id, key, payload, payloadType,
-attempts, lastError)`, read through `deadLetters(offset, limit)`.
+attempts, lastError)`, read through `deadLetters(offset, limit)`. `lastError` is the failing
+exception as `<type>: <message>`; when the handler's exception reached the engine wrapped, it starts
+with a `Root cause: <type>: <message>` summary of the innermost cause, followed by the outermost
+exception — the same summary `PostgresqlDurableQueues` puts in front of its stored stack trace. The
+summary spans several lines when the root cause's message does (PostgreSQL errors often carry `Detail:`
+or `Where:` lines), so the first line alone is not always the whole root cause.
 
 That is a cost paid per lookup by the handler that wants it, rather than per message by everyone.
 
@@ -289,22 +341,34 @@ bookkeeping error. The engine counts what that costs instead of claiming it cann
 | **An instance is declared dead** | Its units are taken while its handlers may still be running. The staleness gate stops it *dispatching*, not the handler already in flight | Nothing; this is the same window at-least-once delivery comes from |
 | **At-least-once redelivery** | A message handled but not yet acknowledged when its unit moves is delivered again by the successor, after the key has moved on | Make handlers idempotent — the contract requires it anyway |
 
-Three things that look like they should reorder and do not:
+Three things that look like they should reorder, and how far each one holds:
 
 - **A dead letter never reorders.** The key stops at it, and the messages behind it are dead-lettered
   too rather than delivered without it — see [Dead letters block their key](#dead-letters-block-their-key).
   Resurrecting is likewise in order, because nothing ran ahead of the parked message while the key was
   stopped.
-- **A retry never reorders.** A failing message keeps its key blocked for the whole backoff
-  (`keysAwaitingRetry`) and is put back at its key's head, so the key retries *that* message before
-  anything later. The same applies to a handler that returns while its thread is interrupted: the
-  message is requeued, not acknowledged.
-- **A voluntary hand-over never reorders.** A rebalance sheds by draining — the outgoing owner stops
-  dispatching new keys, waits out the in-flight ones, flushes its acknowledgements under the still
-  valid fence, then releases. A shed that outlasts `shedGrace` is **abandoned and the shard kept**:
-  staying unbalanced is a performance cost, releasing mid-key would be an ordering bug.
+- **A retry never reorders, including across a hand-over.** A failing message keeps its key blocked
+  for the whole backoff (`keysAwaitingRetry`) and is put back at its key's head, so the key retries
+  *that* message before anything later. The same applies to a handler that returns while its thread is
+  interrupted: the message is requeued, not acknowledged. The block also survives a change of owner:
+  a new owner, after a rebalance, a graceful stop or a crash, reloads every ordered row a retry has
+  pushed into the future and holds its key until the retry is due, exactly as the previous owner did.
+  Before 0.60.1 it did not, and a later message for the key overtook the one waiting out its backoff.
+  `ShardOwnedOrderedRetryHandoverIT` asserts all three hand-overs.
+- **A voluntary hand-over does not reorder what is in a handler.** A rebalance sheds by draining — the
+  outgoing owner stops dispatching new keys, waits out the in-flight ones, flushes its acknowledgements
+  under the still valid fence, then releases. A shed that outlasts `shedGrace` is **abandoned and the
+  shard kept**: staying unbalanced is a performance cost, releasing mid-key would be an ordering bug.
   `ShardOwnedOrderedRebalanceIT` and `ShardOwnedMultiProcessIT` assert that no key is ever in two
-  handlers while units move between instances.
+  handlers while units move between instances. The one exception is a handler the queue counts as
+  stuck: once a key has been in its handler longer than `stuckHandlerTimeout` (15 minutes by default),
+  the shed releases the unit with every key still in a handler — the one past the bound and any other
+  still running — each of those messages in a handler longer than `stuckHandlerTimeout` is charged an
+  attempt before the release, and dead-lettered if that brings it to `maxAttempts` (one in a handler for
+  less is released uncharged, as on the unordered lane), and the next owner delivers the rest again, possibly beside their
+  handlers, so those keys may run in two handlers at once (see [Engine-level metrics worth watching](#engine-level-metrics-worth-watching)); the hand-back of a dead pump's
+  unit does the same. A key waiting out a retry backoff is not in flight and
+  the drain does not wait for it: the new owner takes the block over instead (previous bullet).
 
 Note that the exact watermark does *not* remove the first row of the table. It governs the cursor, so
 a value is never stepped over while a transaction that could still commit it is running — that is what
@@ -497,6 +561,18 @@ every queue once with a user that has them.
 
 ### `ShardOwnerSettings` — per engine, usually one instance per process
 
+Build it with `ShardOwnerSettings.builder()`, which starts from `defaults()`, so only the settings that differ are
+named; `settings.toBuilder()` starts from existing settings instead. Prefer either to the canonical constructor, which
+takes every setting in a row and gains a parameter whenever a setting is added, as it did for `stuckHandlerTimeout`.
+
+```java
+var settings = ShardOwnerSettings.builder()
+                                 .setLeaseTtl(Duration.ofSeconds(10))
+                                 .setStuckHandlerTimeout(Duration.ofHours(1))
+                                 .build();
+var slowShedding = settings.toBuilder().setShedGrace(Duration.ofSeconds(30)).build();   // every other setting as in `settings`
+```
+
 | Setting | Default | What it costs | When to change |
 |---|---|---|---|
 | `pumpThreads` | 2 | **Held connections = `pumpThreads + 1`.** Also the pump thread count | Raise only if the pumps are the bottleneck; each costs a permanent connection |
@@ -511,7 +587,8 @@ every queue once with a user that has them.
 | `maxHolesPerChase` | 1 000 | **Unordered lane only.** Holes resolved per chase query | Rarely |
 | `watermarkCap` | 60 s | **Ordered lane only.** How long one long-running *write* transaction may pin the lane before the cursor is forced past it — which can skip that transaction's messages | Leave it. An escape hatch, not a tuning knob; if it fires, fix the long transaction |
 | `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. The heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause, and **well above your slowest handler** — a handler longer than the lease is what lets a liveness lapse put a key in two handlers at once (`handlersOutlastingLease`) |
-| `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over, and how long `stop()` waits for handlers in flight | Raise if handlers are slow and rebalancing stalls, or if `stop()` keeps ordered units |
+| `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over (retried every heartbeat; once a key has been in its handler longer than `stuckHandlerTimeout`, the hand-over goes ahead with every key still in a handler), and how long `stop()` waits for handlers in flight | Raise if handlers are slow and rebalancing stalls, or if `stop()` keeps ordered units |
+| `stuckHandlerTimeout` | 15 min | How long a message may be in its handler before the queue treats the handler as stuck and stops waiting for it. Applied to the three waits for an ordered unit's handler: a unit a `stop()` kept because a key was still in its handler, a fair-share shed, and the hand-back of a unit whose pump died. Each time it stops waiting, the message in that handler is charged an attempt, and dead-lettered if that brings it to `maxAttempts`; a shed or a hand-back releases a message of the unit in a handler for less than this uncharged. The unordered lane waits for no handler, but a message in a handler longer than this when its shard is released (shed, dead-pump hand-back, `stop()`) is charged an attempt first, and dead-lettered at `maxAttempts` | **Behaviour change in 0.60.1**: in 0.60.0 a restart took the kept unit back at once; now it waits for the handler up to this bound, then takes the unit over. A fair-share shed, which waited for the handler however long it ran, now releases the unit past this bound, the handler still running; the dead-pump hand-back, new in 0.60.1, does the same. Set it above the longest time a handler of the queue really takes, as `messageHandlingTimeout` is set for `postgresql-queue`; per queue with `settings.withStuckHandlerTimeout(...)` on that queue's builder, or `essentials.shard-owned-queue.stuck-handler-timeouts.<queue>` in the starter. Must be positive; there is no off switch |
 
 `watermarkCap` and `holeExpiry` answer the same question for different lanes, and are deliberately
 separate settings with an order of magnitude between them. The ordered lane resolves a gap *exactly*
@@ -529,9 +606,14 @@ The unordered lane *chases* each unresolved value with a query, so `holeExpiry` 
 
 ### Instance identity
 
-Defaults to the hostname (`Network.hostName()`, the same source the fenced lock manager and the
-scheduler use). Set it explicitly where one host runs several instances: **two processes sharing an id
-look like one instance**, so each is allowed half the shards.
+The engine takes it from the caller (`setInstanceId`). The Spring Boot starter defaults it to
+`<hostname>:<pid>` — `FencedLockManagerSettings.defaultLockManagerInstanceId()`, the fenced lock
+manager's default — and before 0.60.1 to the bare hostname. It must be unique per process: **two
+processes sharing an id look like one instance**, so each is allowed half the shards. Set
+`essentials.shard-owned-queue.instance-id` where `hostname:pid` is still not unique, such as containers
+that share a hostname and all run as pid 1. A new pid on every restart costs nothing: the id names a
+membership row and a lease owner, a graceful stop hands the units back, and a crashed instance's units
+are taken once its membership row is older than `leaseTtl`.
 
 ## Shard Count, Scaling and Autoscaling
 
@@ -585,7 +667,7 @@ Almost never. The table is the whole answer:
 |---|---|---|
 | **Rolling redeploy** | no | nothing |
 | **Scale up** | no | nothing — new pods register and take a share within a heartbeat |
-| **Scale down / pod evicted** | no | nothing — a graceful stop releases its shards and deregisters immediately |
+| **Scale down / pod evicted** | no | nothing — a graceful stop releases its shards and deregisters immediately, unless it keeps an ordered unit whose key is still in its handler `shedGrace` after the stop began ([Lifecycle](#lifecycle)): then it stays registered, also once that unit has been handed back, until its membership row ages out (`leaseTtl` after its last heartbeat), and survivors count it in their fair share until then, so a survivor already at its share takes none of the stopped instance's units before that |
 | **Crash** | no | nothing — shards move when the lease expires (`leaseTtl`, 30 s default) |
 | **Grow an unordered queue** | yes | `ShardOwnedSchema.growShardCount(dataSource, name, n)`. That is all |
 | **Grow an ordered queue** | n/a | nothing to grow — the routing space is fixed |
@@ -704,7 +786,8 @@ if (!health.fullyOwned()) {
 unordered, `orderedUnits` for ordered. Depth tells you how much work is waiting; it cannot tell a queue nobody
 is consuming from a queue that is merely busy, and those diverge only slowly. It is zero in steady
 state, briefly non-zero while shards move between instances, and persistently non-zero when messages
-sit in shards nobody reads.
+sit in shards nobody reads. It cannot see a shard that is leased but not served — one whose takeover
+keeps failing; see `essentials.queue.shards.awaiting.takeover` and `shardsAwaitingTakeover` below.
 
 `liveInstances` below your running process count means **colliding instance ids** — two processes
 sharing one id count as one instance and are each allowed half the shards.
@@ -721,15 +804,18 @@ queue.addObserver(observer);
 | Meter | Read it for |
 |---|---|
 | `essentials.queue.shards.unowned` | **the alert** — messages in shards nobody is reading |
+| `essentials.queue.shards.awaiting.takeover` | **the alert** for what `shards.unowned` cannot see — shards this instance holds but does not serve, because their takeover keeps failing |
 | `essentials.queue.shards.owned` (tag `lane`) | coverage per lane |
 | `essentials.queue.instances` | scale events, and id collisions |
 | `essentials.queue.depth` (tag `lane`) | backlog |
 | `essentials.queue.enqueued` / `.delivery` / `.delivery.failures` / `.retries` / `.deadletters` | throughput and failure rates |
 
 Both bindings are **opt-in and cached**, because a gauge is polled on every scrape and these are
-database queries — hence the `maxAge` argument.
+database queries — hence the `maxAge` argument. `shards.awaiting.takeover` needs neither: it is
+registered by the constructor and fed by the `QueueObserver.takeoverStalled` callback, so it costs no query.
+It is per instance; sum it across instances.
 
-### Two engine-level metrics worth watching
+### Engine-level metrics worth watching
 
 **`ShardOwnerMetrics.deliveryPauses`.** An instance that has not been able to confirm its own liveness
 within four fifths of `leaseTtl` stops dispatching until it can — at the full lease the rest of the
@@ -743,6 +829,154 @@ unit to. A surplus instance holds nothing, delivers nothing and reports no error
 like an instance whose queue is quiet, so this is the only way to tell. The engine also logs a warning
 naming the queue, the instance count and the space when the condition starts, and another when it
 clears. A value that *persists* means the queue was created with a space too small for the deployment.
+
+**`ShardOwnerMetrics.shardsAwaitingTakeover`.** Shards this instance holds a lease on but does not serve,
+because taking them over keeps failing with the database connection still healthy (for example a trigger
+or constraint refusing the takeover's dead-letter move). The takeover is retried every 200 ms with no
+limit and the lease is kept, so no other instance takes the shard and it delivers nothing until the cause
+is fixed. `unownedShards` cannot see this, because the shard is leased: alert on this one being above zero
+next to it. `takeoverFailures` counts the failed attempts. The log carries at most one ERROR a minute per
+subscription (one per queue unless you `consume()` a queue twice in one process), with the cause, naming one
+stalled shard and counting the subscription's others (a cause that fails one takeover usually fails them all);
+every failed attempt is logged at DEBUG, and an INFO for each shard when it recovers. Only the engine-level
+`ShardOwnedQueue.metrics()` exposes these counters, since a `PostgresqlMessageQueue` keeps its
+`ShardOwnerMetrics` private. Through `MessageQueue` (and the Spring starter and the `DurableQueues` adapter
+built on it) the same stall reaches `QueueObserver.takeoverStalled`, once when it starts and once when it
+ends, which `MicrometerQueueObserver` publishes as `essentials.queue.shards.awaiting.takeover`.
+
+**`stuckHandlerTimeout` and `ShardOwnerMetrics.keptUnitsInHandler()`.** A `stop()` keeps an ordered unit
+whose key is still in its handler `shedGrace` after the stop began, so no successor starts that key
+while it runs. A restart of the queue, and a `consume()` wanting the stopped subscription's instance id,
+wait for that handler. **Without a bound, a handler that never returns leaves that unit unserved - and
+the instance id out of use - until the process restarts**: the instance stays registered and
+heartbeats, so no other instance takes the unit either. `stuckHandlerTimeout` (default 15 minutes, per
+queue) is that bound: once the key has been in its handler longer, the restarted queue (or the
+`consume()`) stops waiting and takes the unit over under a new fence. The stuck handler's
+acknowledgement is refused and its message delivered again with an attempt charged - one attempt per
+takeover of a kept unit; a message that hangs again in the owner that took it over is not bounded by
+this while that owner serves the unit, as the bound covers only a queue waiting for a unit's handler -
+and **that key may run in two handlers at once**, the stuck one and the new one. That is the
+at-least-once trade the bound makes; set it above the longest time a handler of the queue really
+takes. Once a kept key has been in its handler longer than `leaseTtl`, the engine logs a WARN naming
+the queue, the unit, the key(s), how long they have run and the bound, at most once a minute per unit,
+and one more WARN when it stops waiting.
+
+**Releasing a kept unit before the bound.** For a handler known to be hung, an operator need not wait
+for `stuckHandlerTimeout`: `MessageQueue.releaseKeptOrderedUnit(instanceId, unit)` - in the admin API
+`ShardOwnedQueuesApi.releaseKeptOrderedUnit`, `POST /shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept?instanceId=…`,
+`QUEUE_WRITER` - flushes the kept unit's acknowledgements under the fence it was kept under and releases
+its lease row, so any instance below its fair share takes it under a new fence. **It accepts the cost
+the wait exists to avoid**: each message still in a handler is charged an attempt before the release,
+and dead-lettered if that brings it to `maxAttempts`, and whoever takes the unit delivers the rest
+again, possibly while those handlers still run them. It touches only a unit a stop of a subscription
+running under the instance id given kept, whose lease row still names that instance id; every other unit,
+one of the same number kept under another instance id included, is left alone. Kept units live in the
+memory of the process whose stop kept them, so call the instance whose WARN named the unit, with the
+instance id that WARN names (required). The answer is `{answeredBy, releases}`: `answeredBy` names the
+instance ids the answering process has for the queue, so an empty `releases` - from another process, or
+for another instance id - still says which process answered. Each entry of `releases` says what was done: `RELEASED` (with the keys in a handler when the
+release's flush took its batch of acknowledgements, and how long the longest had been there: a handler that
+returned before that is acknowledged and not named, and a key named is not acknowledged), `ALREADY_TAKEN`
+(the row no longer named the instance under the fence it was kept under - taken under a newer fence
+meanwhile, or released by an earlier hand-back or release whose answer the instance stopped waiting for;
+nothing released) or `BUSY` (nothing released: the stop that kept it is still flushing it, or
+another hand-back or release of it is running, and nothing was done - ask again; or a dead-letter
+move an earlier release's charge left owed was still to be made when the row was to be released,
+and the WARN that the release left the unit out says so, at most once a minute per unit, the
+repeats at DEBUG: a guard behind the release sites that a release on request does not normally
+reach, as it makes every owed move before it releases, so a `BUSY` that comes back on every request
+points at a defect in the engine, to be investigated, not retried) - except a unit kept longer than
+`stuckHandlerTimeout` - or, when that is longer, than 2 s plus the network timeout that stop puts on
+its waits for the database (`leaseTtl`, or 2 s when that is longer) - with that flush still running:
+the release reviews the kept units first, so such a unit is given up and released, not answered
+`BUSY`. A fourth answer, `CLAIM_WAIT_TIMED_OUT`, says the request's charge waited for another release
+of the unit's lease row to end for longer than the request's network wait bound and did not start:
+nothing was charged, dead-lettered or released, the unit is still kept, and asking again is safe;
+over HTTP it is a 200 answer like the others. A step that fails on the database still throws:
+`MessageQueue.releaseKeptOrderedUnit` its `SQLException`, `ShardOwnedQueuesApi.releaseKeptOrderedUnit`
+a `MessageQueueException` with it as the cause, and over HTTP the request answers 500. A statement
+that gave up waiting for a lock (`lock_timeout`) is one of those; it was rolled back, and asking
+again is safe: a later request does not charge again a message this one charged. A release with a key in its handler is logged as a WARN naming
+the unit and the keys. Once released, the unit no longer keeps an unsubscribed subscription's instance
+id out of use, and a later stop does not stay registered for it.
+
+The same bound covers the two other waits for an ordered unit's handler. A fair-share shed waits for
+the keys in its handlers before it releases the unit, and otherwise keeps it and retries every
+heartbeat; the unit of a pump a critical error ended is handed back only once no key is in a handler.
+Without a bound, a hung handler kept the cluster unbalanced and the unit's other keys unserved (the
+shed), or the unit leased and unserved (the dead pump), until a restart. Once a key has been in its
+handler longer than `stuckHandlerTimeout`, either one releases the unit with every key still in a
+handler — the one past the bound and any other still running — and logs one WARN naming the queue,
+the unit, the key(s) and how long the longest has been there. The row is released, so the next owner
+charges no attempt; instead each message that has been in its handler longer than `stuckHandlerTimeout`
+is charged an attempt before the release, and dead-lettered if that brings it to `maxAttempts`. A message
+in a handler for less - another key of the unit that entered its handler moments before - is released
+uncharged, its handler taken to be slow, not hung, as on the unordered lane; charged, one at its last
+attempt but one was dead-lettered though its handler was healthy, and its key blocked behind the dead
+letter. A release on request (above) charges every message in a handler. The next owner delivers the
+rest again, possibly beside their handlers.
+
+The unordered lane waits for no handler: a fair-share shed and a dead pump's hand-back release a shard
+at once, and `stop()` once `shedGrace` has run out, with whatever is still in its handlers. Its next
+owner finds the row released and charges nothing, so before the release each message that has been in
+its handler longer than `stuckHandlerTimeout` is charged an attempt, and dead-lettered if that brings it
+to `maxAttempts`; a message in a handler for less is released uncharged, its handler taken to be slow,
+not hung. A message whose unordered handler hangs on every delivery therefore reaches the dead-letter
+table once it has been released past the bound `maxAttempts` times, instead of being delivered again
+after every rebalance or restart, each delivery leaving one more handler hung. A release that charged
+logs one WARN naming the shard, how many it charged and which it dead-lettered. A charge that fails
+with an attempt or a dead-letter move still owed leaves that shard leased: the shed and the dead-pump
+hand-back retry it on the next heartbeat and release the other shards meanwhile; `stop()` leaves its
+lease as a failed release does, so whoever takes the shard over next charges, as after a crash. A
+`QueueObserver` that throws when told of a message the charge dead-lettered does not keep the shard: it
+is released all the same, with a WARN.
+
+On both lanes, a message deleted through the admin API while in its handler is not charged and is not
+asked for again, so it does not hold the release up. When the release is refused after the charge and the
+owner keeps the unit or shard, a failure its handler then reports counts on from the charged attempt
+instead of undoing the charge. A handler that returns after the charge has dead-lettered its message is
+neither acknowledged nor counted in `ShardOwnerMetrics.delivered`: one that completes logs a WARN saying
+that resurrecting the dead letter delivers the message again, and one that throws logs a WARN with its
+exception - the dead letter carries the release's error, not what the handler threw - and is reported
+to `QueueObserver.deliveryFailed` at the charged count (not for a requested redelivery). A handler that
+returns before the charge has taken its message is left alone by it: the charge neither charges nor
+dead-letters that message, and the handler's acknowledgement or failure goes the way it would without
+the charge - recorded only if written while this owner still holds the unit or shard, otherwise the
+next owner delivers the message again, as after any release. The `QueueObserver` is told of the
+charge's dead letters after the charge's database statements, not during them, so a slow
+`deadLettered` callback does not hold up the handlers returning meanwhile. As a result, a handler
+failing meanwhile may be reported to `deliveryFailed` before its message's `deadLettered`; an observer
+must not assume the reverse order.
+
+`keptUnitsInHandler()` (also in `snapshot()`) counts the kept units whose key is in its handler now:
+normally zero, so alert on it staying above zero. A unit taken over at the bound still counts while
+its stuck handler runs on, and so does a unit a shed or a dead pump's hand-back released at the bound,
+and so does a unit released on request while its handler runs on.
+Like the counters below, it is readable only through `ShardOwnedQueue.metrics()`; through
+`MessageQueue` the WARN is the signal.
+
+**`ShardOwnerMetrics.pumpFailures`, `batchedReadFailures`, `pumpLoopFailures` and `shardsOnDeadPumps`.**
+Each covers a shard that is leased but delivers nothing for a reason other than a stalled takeover, which
+`unownedShards` cannot see either. `pumpFailures` counts delivery passes that failed with the connection still
+healthy (a refused statement, an exception from the engine; not a handler failing): the shard keeps its lease
+and is retried 200 ms later with no limit, so alert on its rate. `batchedReadFailures` counts the ordered lane's
+failed per-queue batched reads; the shards then read for themselves, and when they cannot either it shows in
+`pumpFailures`. `pumpLoopFailures` counts pump passes ended by something thrown outside the per-shard guards;
+the pump reconnects 200 ms later, but while it persists it can deliver nothing for every shard it serves.
+`shardsOnDeadPumps` counts shards on a pump thread a critical error (`VirtualMachineError`, `LinkageError`)
+ended, until their leases are handed back: nothing restarts the pump, so the queue's next heartbeat releases
+them (an ordered unit once no key is in a handler, or once one has been there longer than
+`stuckHandlerTimeout` - see above) and another instance, or a live pump here, takes them over,
+redelivering what was not acknowledged. Alert on it staying above zero. With no live pump left the instance
+acquires nothing, and its shards stay unowned until the `ShardRuntime` restarts. The log carries at most one
+ERROR a minute per subscription for `pumpFailures` (naming one shard), at most one WARN a minute per
+subscription for `batchedReadFailures` (naming the queue and the shards it read for; one subscription per
+queue unless you `consume()` a queue twice in one process), at most one ERROR a minute per pump for
+`pumpLoopFailures`, and one ERROR when a pump dies; every other failure at DEBUG, and an INFO on recovery (for
+`pumpFailures` and `batchedReadFailures` only after a run whose ERROR or WARN was logged, DEBUG otherwise). All
+four are readable only through `ShardOwnedQueue.metrics()`: a `PostgresqlMessageQueue` keeps its metrics
+private and no `QueueObserver` callback reports them, so through `MessageQueue` (the Spring starter, the
+`DurableQueues` adapter) those `ShardPump` log lines are the only signal.
 
 ## Interceptors and Observers
 
@@ -798,6 +1032,7 @@ api.retryMessage(principal, orders, id, Duration.ZERO);
 api.markAsDeadLetterMessage(principal, orders, id, "parked by hand");
 api.resurrectDeadLetterMessage(principal, orders, id);
 api.resurrectDeadLettersForKey(principal, orders, "account-7");   // the whole key, in key_order
+api.releaseKeptOrderedUnit(principal, orders, "node-1", 17);   // a unit a stop of instance node-1 kept behind a hung handler - see stuckHandlerTimeout
 api.deleteMessage(principal, orders, id);
 api.purgeQueue(principal, orders);
 ```
@@ -812,7 +1047,7 @@ use, so it can be pasted into psql.
 |---|---|
 | all reads | `QUEUE_READER` |
 | seeing message payloads in those reads | `QUEUE_PAYLOAD_READER`, **additionally** |
-| delete, retry, mark-as-dead-letter, resurrect, purge | `QUEUE_WRITER` |
+| delete, retry, mark-as-dead-letter, resurrect, release a kept ordered unit, purge | `QUEUE_WRITER` |
 
 A reader without the payload role still gets the message, with `payload` **null** — null, not empty,
 because an empty payload is a legal message. Non-UTF-8 payloads come back as hex, matching the
@@ -835,6 +1070,7 @@ and an `EssentialsSecurityProvider` are on the classpath. Under the admin API ba
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/retry` |
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/mark-as-dead-letter` |
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/resurrect` |
+| `POST` | `/shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept?instanceId=…` |
 
 ## The Low-Level Engine
 
@@ -924,7 +1160,9 @@ that owns the queue.
   are per `(queue, shard)`, so `u-0-1` exists in every queue. Every admin operation therefore takes the
   queue name too, and there is no `getQueueNameFor(messageId)` — the question has no answer.
 - **A second `consume()` is a second competing consumer**, not the second lane. One `consume()` serves
-  both.
+  both. Replacing a subscription therefore means `Subscription.unsubscribe()` or `close()` on the old
+  one first: `Subscription.stop()` keeps it registered, and the queue's `start()` after a `stop()` runs
+  it again.
 - **`payloadType` is yours, not the engine's.** An `int` you define, stored and handed back. Never
   compared, indexed or interpreted, and there is no registry mapping it to a type name — keeping two
   services' mappings in step is your job.

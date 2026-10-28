@@ -5,6 +5,6 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-discover` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding of any kind, described as: any severity labelled Blocking (the report ranks by payoff).
+PASS unless the report raises a finding of any kind, described as: a finding carrying the label Blocking (or Should-fix / Advisory) as its severity. The report ranks by payoff instead, so findings with a rank and no such label pass, including a rank-1 concurrency hazard called a bug.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 FAIL only if such a finding is present.

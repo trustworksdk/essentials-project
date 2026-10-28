@@ -19,7 +19,6 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types.TaskId;
 
 import java.time.LocalDateTime;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.routing.TaskCommand;
 
 /**
  * Add a comment to an existing task.
@@ -32,5 +31,5 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.routing.Tas
  * a redelivery carry the same timestamp as the original, and therefore be recognised as the same comment; it is part
  * of the dedup key, not decoration.
  */
-public record AddComment(TaskId taskId, String content, LocalDateTime createdAt) implements TaskCommand {
+public record AddComment(TaskId taskId, String content, LocalDateTime createdAt) {
 }

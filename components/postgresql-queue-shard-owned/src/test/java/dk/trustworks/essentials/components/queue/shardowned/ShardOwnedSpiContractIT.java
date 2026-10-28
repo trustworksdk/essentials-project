@@ -29,6 +29,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForLong;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -261,15 +262,8 @@ class ShardOwnedSpiContractIT {
     }
 
     private long countRows(String table) throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT count(*) FROM " + table + " WHERE queue_id = ?")) {
-            statement.setShort(1, QUEUE_ID);
-            try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
-                return resultSet.getLong(1);
-            }
-        }
+        return queryForLong(dataSource, "Counting the " + table + " rows of queue " + QUEUE_ID,
+                            "SELECT count(*) FROM " + table + " WHERE queue_id = ?", QUEUE_ID);
     }
 
     /**

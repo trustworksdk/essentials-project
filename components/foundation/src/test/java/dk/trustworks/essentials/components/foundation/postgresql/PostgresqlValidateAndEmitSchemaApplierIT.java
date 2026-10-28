@@ -62,6 +62,17 @@ class PostgresqlValidateAndEmitSchemaApplierIT {
     }
 
     @Test
+    void validate_names_what_a_missing_object_is_for() {
+        var described = List.of(set("postgresql-event-store", SchemaOrder.ORDER_EVENT_STORE,
+                                    SchemaChange.repeatable("event-stream-table", "orders_events", "CREATE TABLE IF NOT EXISTS orders_events (id BIGINT)")
+                                                .describedAs("AggregateType 'Orders'")));
+
+        assertThatThrownBy(() -> new PostgresqlValidateSchemaApplier(jdbi).apply(described))
+                .isInstanceOfSatisfying(SchemaValidationException.class, e -> assertThat(e.problems()).singleElement().asString()
+                                                                                                        .isEqualTo("'postgresql-event-store' change 'event-stream-table' on 'orders_events' (AggregateType 'Orders'): not applied"));
+    }
+
+    @Test
     void validate_passes_once_the_create_applier_has_applied_the_same_schema() {
         var creator = new PostgresqlCreateSchemaApplier(jdbi);
         assertThat(creator.createsSchema()).isTrue();

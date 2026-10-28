@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.foundation.messaging.queue;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import org.slf4j.*;
 
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -25,6 +26,13 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 /**
  * The {@link dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer} supports extending the polling sleep time (i.e. the time between calls to
  * {@link DurableQueues#getNextMessageReadyForDelivery(GetNextMessageReadyForDelivery)}) up until a given threshold for a given queue consumer
+ * <p>
+ * <b>Subclassing:</b> the framework reports an empty poll through {@link #queuePollingReturnedNoMessages(Instant)},
+ * which carries the claim's time, and never through {@link #queuePollingReturnedNoMessages()}. A subclass that reacts
+ * to an empty poll must override the {@code Instant} overload; an override of only the form without a claim time is
+ * never called by the framework. That form is therefore deprecated on this class. A poll that claimed messages is
+ * reported through {@link #queuePollingReturnedMessages(java.util.List, Instant)}, which this class does not override,
+ * so the {@link QueuePollingOptimizer} default still forwards it to {@link #queuePollingReturnedMessages(java.util.List)}.
  */
 public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
     private static Logger           log                     = LoggerFactory.getLogger(dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer.class);
@@ -34,12 +42,17 @@ public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
     private final  long             maxDelayMs;
     private final  ConsumeFromQueue consumeFromQueue;
     private final  long             pollingIntervalMs;
+    /**
+     * When messages known to this node become deliverable - see {@link #messageScheduledFor(Instant)}. Bounded: past
+     * {@link DueTimes#MAX_TRACKED_DUE_TIMES} the latest are dropped, and those messages wait at most {@code maxDelayMs}
+     */
+    private final  DueTimes         dueTimes                = new DueTimes();
 
     /**
      * Create a new {@link dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer}
      *
      * @param consumeFromQueue the {@link ConsumeFromQueue} command
-     * @param delayIncrementMs when ever {@link QueuePollingOptimizer#queuePollingReturnedNoMessages()} is called
+     * @param delayIncrementMs when ever {@link QueuePollingOptimizer#queuePollingReturnedNoMessages(Instant)} is called
      *                         the delay between calls to {@link DurableQueues#getNextMessageReadyForDelivery(GetNextMessageReadyForDelivery)}
      *                         will be increased by <code>delayIncrementMs</code><br>
      *                         If {@link QueuePollingOptimizer#messageAdded(QueuedMessage)} or {@link QueuePollingOptimizer#queuePollingReturnedMessage(QueuedMessage)}
@@ -68,8 +81,25 @@ public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
         }
     }
 
+    /**
+     * Reports an empty poll without the time its claim ran at, by delegating to
+     * {@link #queuePollingReturnedNoMessages(Instant)} with a claim time slightly in the past.
+     *
+     * @deprecated the framework only calls {@link #queuePollingReturnedNoMessages(Instant)}, so a subclass must override
+     * that overload - an override of this method is never called by the framework. Callers should report the claim's
+     * time through {@link #queuePollingReturnedNoMessages(Instant)} as well. Only deprecated on this class: the method
+     * on {@link QueuePollingOptimizer} stays, as its {@code Instant} overload delegates to it for implementations that
+     * do not track due times.
+     */
+    @Deprecated(since = "0.60.1")
     @Override
     public void queuePollingReturnedNoMessages() {
+        queuePollingReturnedNoMessages(DueTimes.assumedClaimTime());
+    }
+
+    @Override
+    public void queuePollingReturnedNoMessages(Instant claimedAt) {
+        dueTimes.forgetSeenBy(claimedAt);
         var currentDelay = pollingThreadDelay.get();
         if (currentDelay < maxDelayMs) {
             var newDelayMs = currentDelay + delayIncrementMs;
@@ -92,6 +122,8 @@ public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
         log.trace("[{}] {} - queuePollingReturnedMessage - resetting pollingThreadDelay: 0 ms",
                   consumeFromQueue.queueName,
                   consumeFromQueue.consumerName);
+        // The delay is reset, so the next poll runs whatever is due by then
+        dueTimes.forgetSeenByNowMinusGrace();
         pollingThreadDelay.set(0L);
         shouldSkipPollCallCount.set(0L);
     }
@@ -103,6 +135,15 @@ public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
             log.trace("[{}] {} - shouldSkipPolling: false - pollingDelay: 0 ms",
                       consumeFromQueue.queueName,
                       consumeFromQueue.consumerName);
+            return false;
+        }
+        // A message coming due ends the backoff early
+        var now = Instant.now();
+        if (dueTimes.hasDueBy(now.toEpochMilli())) {
+            log.trace("[{}] {} - shouldSkipPolling: false - a message became deliverable at or before {}",
+                      consumeFromQueue.queueName,
+                      consumeFromQueue.consumerName,
+                      now);
             return false;
         }
         var callCount = shouldSkipPollCallCount.get();
@@ -136,6 +177,18 @@ public class SimpleQueuePollingOptimizer implements QueuePollingOptimizer {
                   queuedMessage);
         pollingThreadDelay.set(0L);
         shouldSkipPollCallCount.set(0L);
+    }
+
+    /**
+     * Poll when a message on this queue becomes deliverable, rather than sleeping past it on the backoff. The
+     * PostgreSQL and MongoDB {@code DurableQueues} report the due time of each retry, delayed enqueue and delayed
+     * resurrection made by this node here; without it, a retry on a queue that had backed off was delivered up to
+     * {@code maxDelayMs} late. The consumer polls on its polling interval and asks {@link #shouldSkipPolling()} each
+     * time, so the message is claimed within one polling interval of its due time.
+     */
+    @Override
+    public void messageScheduledFor(Instant dueAt) {
+        dueTimes.schedule(dueAt);
     }
 
     @Override

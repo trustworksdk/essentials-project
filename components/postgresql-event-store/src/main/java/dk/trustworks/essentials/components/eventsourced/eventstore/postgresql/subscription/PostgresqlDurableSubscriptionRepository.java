@@ -33,8 +33,10 @@ import java.sql.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.addColumnUnlessPresent;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
@@ -174,9 +176,13 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                                                        "reposition_epoch BIGINT NOT NULL DEFAULT 0,\n" +
                                                        "PRIMARY KEY (subscriber_id, aggregate_type))",
                                                // Added in 0.60, so tables created by an earlier release get it here rather than only via CREATE TABLE.
-                                               // 0 is the epoch of a resume point that has never been repositioned - what every existing row is
-                                               "ALTER TABLE " + this.durableSubscriptionsTableName +
-                                                       " ADD COLUMN IF NOT EXISTS reposition_epoch BIGINT NOT NULL DEFAULT 0"));
+                                               // 0 is the epoch of a resume point that has never been repositioned - what every existing row is.
+                                               // Only when missing: ADD COLUMN IF NOT EXISTS alone locks the table exclusively on every start, against
+                                               // every resume point the running instances read or save - see PostgresqlSchemaStatements
+                                               addColumnUnlessPresent(this.durableSubscriptionsTableName,
+                                                                      "reposition_epoch",
+                                                                      "ALTER TABLE " + this.durableSubscriptionsTableName +
+                                                                              " ADD COLUMN IF NOT EXISTS reposition_epoch BIGINT NOT NULL DEFAULT 0")));
     }
 
     @Override
@@ -186,6 +192,48 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
         requireNonNull(subscriberId, "No subscriberId value provided");
         requireNonNull(forAggregateType, "No forAggregateType value provided");
         requireNonNull(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder, "No onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder value provided");
+        return insertResumePoint(subscriberId, forAggregateType, onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder)
+                .orElseThrow(() -> new IllegalStateException(msg("Cannot createResumePoint for subscriberId '{}' and aggregateType '{}' since a ResumePoint already exists",
+                                                                  subscriberId,
+                                                                  forAggregateType)));
+    }
+
+    /**
+     * Returns the resume point another transaction created between this one's get and its insert, as the interface's
+     * concurrency contract requires, without going through {@link #createResumePoint(SubscriberId, AggregateType, GlobalEventOrder)}'s
+     * exception. Two subscriptions for the same subscriber starting at the same time - on two threads or two instances -
+     * both find none and both insert: the second insert waits for the first to commit and then inserts nothing
+     * ({@code ON CONFLICT DO NOTHING}), and this then reads the row the first one committed
+     */
+    @Override
+    public SubscriptionResumePoint getOrCreateResumePoint(SubscriberId subscriberId,
+                                                          AggregateType forAggregateType,
+                                                          Function<AggregateType, GlobalEventOrder> onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder) {
+        requireNonNull(subscriberId, "No subscriberId value provided");
+        requireNonNull(forAggregateType, "No forAggregateType value provided");
+        requireNonNull(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder, "No onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder value provided");
+        return getResumePoint(subscriberId, forAggregateType)
+                .or(() -> insertResumePoint(subscriberId,
+                                            forAggregateType,
+                                            requireNonNull(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder.apply(forAggregateType),
+                                                           "onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder returned no GlobalEventOrder")))
+                .or(() -> {
+                    log.debug("[{}-{}] ResumePoint was created concurrently by another transaction - using that one", subscriberId, forAggregateType);
+                    // A new statement, so READ COMMITTED sees the row the conflicting insert waited for
+                    return getResumePoint(subscriberId, forAggregateType);
+                })
+                .orElseThrow(() -> new IllegalStateException(msg("Cannot getOrCreateResumePoint for subscriberId '{}' and aggregateType '{}': the insert conflicted with a ResumePoint this transaction cannot see",
+                                                                  subscriberId,
+                                                                  forAggregateType)));
+    }
+
+    /**
+     * @return the created resume point, or {@link Optional#empty()} if a resume point already exists - one another
+     * transaction committed, after waiting for it to commit if it had not yet
+     */
+    private Optional<SubscriptionResumePoint> insertResumePoint(SubscriberId subscriberId,
+                                                                AggregateType forAggregateType,
+                                                                GlobalEventOrder onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder) {
         return unitOfWorkFactory.withUnitOfWork(uow -> {
             var subscribeFromGlobalEventOrder = eventStore.findLowestGlobalEventOrderPersisted(forAggregateType).map(lowestGlobalEventOrderPersisted -> {
                 if (lowestGlobalEventOrderPersisted.isGreaterThan(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder)) {
@@ -210,17 +258,14 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                                  .bind("last_updated", now)
                                  .execute();
             if (rowsUpdated == 0) {
-                throw new IllegalStateException(msg("Cannot createResumePoint for subscriberId '{}' and aggregateType '{}' since a ResumePoint already exists",
-                                                    subscriberId,
-                                                    forAggregateType));
-            } else {
-                var subscriptionResumePoint = new SubscriptionResumePoint(subscriberId,
-                                                                          forAggregateType,
-                                                                          subscribeFromGlobalEventOrder,
-                                                                          now);
-                log.debug("Created {}", subscriptionResumePoint);
-                return subscriptionResumePoint;
+                return Optional.<SubscriptionResumePoint>empty();
             }
+            var subscriptionResumePoint = new SubscriptionResumePoint(subscriberId,
+                                                                      forAggregateType,
+                                                                      subscribeFromGlobalEventOrder,
+                                                                      now);
+            log.debug("Created {}", subscriptionResumePoint);
+            return Optional.of(subscriptionResumePoint);
         });
     }
 

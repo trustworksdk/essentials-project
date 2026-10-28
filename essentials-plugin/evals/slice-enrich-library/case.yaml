@@ -1,0 +1,14 @@
+schema_version: "1.1"
+name: slice-enrich-library
+description: "slice-enrich --dry-run on the enrich fixture (Java lending + Kotlin accounts): which drafts it makes, which it refuses"
+tags: [slice-enrich]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 80
+  timeout_seconds: 1800
+  allowed_tools: [Read, Glob, Grep, Skill, Bash]
+  prompt: |
+    /essentials:slice-enrich . --dry-run
+    This session is non-interactive and AskUserQuestion is not available, so do not ask. Wherever the command would ask, print the questions exactly as you would have asked them, one numbered batch per AskUserQuestion call you would have made, and then go on as though I answered Yes to every one: accept every journey under its suggested or declared name, and every slice's drafts as you showed them.
+    Your final message must be the complete report: the journeys, each slice's drafts with their evidence, the question batches, apply's output, and the Step 7 summary.

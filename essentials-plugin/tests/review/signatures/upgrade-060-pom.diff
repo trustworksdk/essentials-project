@@ -1,0 +1,30 @@
+# review-scan signature fixture: ESS-094 the 0.50 Jackson-flavour properties
+# The property itself is dead residue (manual delete); an Essentials artifactId taken from it is swapped for the
+# Jackson 3 module by name. Another group's artifactId and a commented-out property do not fire.
+# expect: backend/pom.xml:4 ess-094-jackson-flavor-property confirmed Advisory manual
+# expect: backend/pom.xml:9 ess-094-jackson-flavor-property confirmed Should-fix mechanical
+# expect-not: backend/pom.xml:14 ess-094-jackson-flavor-property
+# expect-not: backend/pom.xml:16 ess-094-jackson-flavor-property
+diff --git a/backend/pom.xml b/backend/pom.xml
+new file mode 100644
+--- /dev/null
++++ b/backend/pom.xml
+@@ -0,0 +1,18 @@
++<project>
++  <properties>
++    <essentials.version>0.60.0</essentials.version>
++    <essentials.types-jackson.artifactId>types-jackson3</essentials.types-jackson.artifactId>
++  </properties>
++  <dependencies>
++    <dependency>
++      <groupId>dk.trustworks.essentials</groupId>
++      <artifactId>${essentials.types-jackson.artifactId}</artifactId>
++      <version>${essentials.version}</version>
++    </dependency>
++    <dependency>
++      <groupId>com.example</groupId>
++      <artifactId>${essentials.immutable-jackson.artifactId}</artifactId>
++    </dependency>
++    <!-- <essentials.jackson.flavor>jackson3</essentials.jackson.flavor> -->
++  </dependencies>
++</project>

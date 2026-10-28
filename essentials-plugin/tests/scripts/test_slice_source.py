@@ -123,7 +123,9 @@ class RenderedTemplates(unittest.TestCase):
 
     def test_rendered_compositions_check_clean(self):
         root = PLUGIN / "tests" / "slice-golden"
-        compositions = sorted(p for p in root.iterdir() if p.is_dir() and any(p.rglob("slice.yaml")))
+        # _seeds/ holds a composition's inputs (hand-written files, a planner's manifests), not a render.
+        compositions = sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith("_")
+                              and any(p.rglob("slice.yaml")))
         self.assertTrue(compositions, f"no rendered compositions under {root}")
         for comp in compositions:
             with self.subTest(composition=comp.name):
@@ -143,6 +145,8 @@ class ExitCodes(unittest.TestCase):
         "lexer": (0, 0),
         "raw-ids": (0, 1),
         "unparsed": (3, 3),
+        "tests": (3, 0),  # facts: test files unparsed; check: never reads test source
+        "inbox": (0, 1),
     }
 
     def test_case_exit_codes(self):
@@ -196,6 +200,23 @@ class Rules(unittest.TestCase):
                          ("OrderCancelled", "fqn"))
         self.assertEqual(seen[("orders.warehouse", "Placement")], ("OrderPlaced", "typealias"))
         self.assertEqual(seen[("orders.warehouse", "OrderCancelled?")], ("OrderCancelled", "import"))
+
+    def test_an_inbox_forwarding_to_the_command_bus_dispatches(self):
+        def dispatched(sid):
+            return [(d["name"], d["via"]) for d in self.slice("inbox", sid)["dispatches"]]
+        self.assertEqual(dispatched("depot.carrier"), [("RecordCollection", "inbox.addMessageReceived")])
+        self.assertEqual(dispatched("depot.courier"), [("FlagLostParcel", "inbox.addMessageReceived")])
+        unresolved = [u["reason"] for u in self.facts["inbox"]["unresolved"] if u["what"] == "inbox target"]
+        self.assertEqual(len(unresolved), 1)
+        self.assertIn("`lostParcels`", unresolved[0])
+
+    def test_an_ingress_handler_is_held_to_consumes(self):
+        msgs = [f["message"] for f in self.check["inbox"]["findings"] if f["gate"] == "11(b) handled events"]
+        self.assertEqual(len(msgs), 1)
+        self.assertIn("receives the supertype CarrierEvent; its subtypes ParcelLost are not declared", msgs[0])
+        reasons = [u["reason"] for u in self.check["inbox"]["unverified"]]
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("@RabbitListener CarrierListener.onNote(String)", reasons[0])
 
     def test_java_fqn_parameter_resolves(self):
         h = [h for h in self.slice("java-clean", "orders.order_list")["handlers"]]
@@ -351,6 +372,49 @@ class Rules(unittest.TestCase):
                 with self.subTest(case=case, gate=f["gate"]):
                     self.assertEqual(f["id"], ss.gate_id(f["gate"]))
                     self.assertRegex(f["id"], r"^ESS-G(6|11b|14)$")
+
+
+    def test_test_index(self):
+        t = self.facts["tests"]["tests"]
+        self.assertEqual(t["roots"], ["src/integrationTest/java", "src/test/java", "src/test/kotlin"],
+                         "testFixtures, resources and main are not test roots")
+        methods = {(c["name"], m["name"]): m["displayName"] for c in t["classes"] for m in c["methods"]}
+        self.assertEqual(sorted(methods), sorted([
+            ("OrdersIT", "placesAndCancels"),
+            ("CancelOrderDeciderTest", "cancelsPlacedOrder"),
+            ("CancelOrderDeciderTest", "rejectsUnknownOrder"),
+            ("CancelOrderDeciderTest", "fullyQualifiedAnnotation"),
+            ("CancelOrderDeciderTest", "parameterised"),
+            ("CancelOrderDeciderTest", "repeated"),
+            ("CancelOrderDeciderTest", "factory"),
+            ("CancelOrderDeciderTest", "template"),
+            ("CancelOrderDeciderTest.WhenCancelled", "secondCancelIsNoOp"),
+            ("CancelOrderDeciderTest.WhenCancelled.Twice", "stillNoOp"),
+            ("CancelOrderTest", "cancels a placed order"),
+            ("CancelOrderTest", "cancelling twice is a no-op"),
+            ("CancelOrderTest", "rejectsUnknown"),
+            ("CancelOrderTest.when unpaid", "auto cancels"),
+            ("TemplatedNameTest", "templated"),
+        ]), "no helper, no commented or string-borne @Test, nothing from main, testFixtures or target/")
+        self.assertEqual(methods[("CancelOrderDeciderTest", "rejectsUnknownOrder")], "rejects an unknown order")
+        self.assertEqual(methods[("CancelOrderDeciderTest.WhenCancelled", "secondCancelIsNoOp")],
+                         "cancelling twice is a no-op", "a concatenation of literals is readable")
+        self.assertEqual(methods[("CancelOrderTest", "cancelling twice is a no-op")], "idempotent retry")
+        self.assertIsNone(methods[("TemplatedNameTest", "templated")], "a templated display name is never guessed")
+        self.assertNotIn("BrokenTest", {c["name"] for c in t["classes"]}, "an unreadable file contributes no class")
+        self.assertEqual(sorted((u["file"].rsplit("/", 1)[-1], u["what"]) for u in self.facts["tests"]["unparsed"]), [
+            ("BrokenTest.kt", "test source file"),
+            ("StrayTest.kt", "@Test"),
+            ("TemplatedNameTest.kt", "@DisplayName on TemplatedNameTest.templated"),
+        ])
+        for c in t["classes"]:
+            self.assertEqual([m["line"] for m in c["methods"]], sorted(m["line"] for m in c["methods"]))
+        self.assertEqual([(c["path"], c["name"]) for c in t["classes"]],
+                         sorted((c["path"], c["name"]) for c in t["classes"]))
+        self.assertEqual(self.check["tests"]["unparsed"], [], "--check never reads test source")
+
+    def test_no_test_roots_is_an_empty_index(self):
+        self.assertEqual(self.facts["java-clean"]["tests"], {"roots": [], "classes": []})
 
 
 class Units(unittest.TestCase):

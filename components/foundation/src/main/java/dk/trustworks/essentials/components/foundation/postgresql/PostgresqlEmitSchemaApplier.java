@@ -40,7 +40,8 @@ public final class PostgresqlEmitSchemaApplier implements SchemaApplier {
 
     private final Path                   scriptFile;
     private final PostgresqlSchemaScript script;
-    private final AtomicBoolean          written = new AtomicBoolean();
+    private final AtomicBoolean          written       = new AtomicBoolean();
+    private final AtomicBoolean          exitTriggered = new AtomicBoolean();
 
     /**
      * Records into {@link PostgresqlCreateSchemaApplier#DEFAULT_SCHEMA_HISTORY_TABLE_NAME}.
@@ -64,18 +65,48 @@ public final class PostgresqlEmitSchemaApplier implements SchemaApplier {
         return scriptFile;
     }
 
+    /**
+     * Tell the applier that the application is being stopped now that the script is written - the default of the emit
+     * mode in Spring, where {@code essentials.schema.emit.exit} defaults to {@code true}. An object registered from now on
+     * (a lazily created bean, a component started by a shutdown hook) is still appended if the JVM has not halted yet, but
+     * logged at WARN: it may be missing from the script, and it will be the next time.
+     */
+    public void exitTriggered() {
+        exitTriggered.set(true);
+    }
+
+    /**
+     * @return whether {@link #exitTriggered()} was called
+     */
+    public boolean isExitTriggered() {
+        return exitTriggered.get();
+    }
+
     @Override
     public void apply(List<SchemaChangeSet> changeSets) {
         requireNonNull(changeSets, "No changeSets provided");
         var first = written.compareAndSet(false, true);
         var text  = first ? script.render(changeSets, Network.hostName()) : script.renderAddition(changeSets);
+        if (!first && exitTriggered.get()) {
+            log.warn("Schema mode 'emit': {} registered after the application began stopping to exit - appending it to '{}', but the JVM may halt " +
+                             "first and the script may then lack it. Register it at start-up (as a singleton bean, or in its component's configuration - " +
+                             "not from an ApplicationRunner, a @Lazy bean or on demand) and re-run the emit mode",
+                     describe(changeSets),
+                     scriptFile.toAbsolutePath());
+        }
         write(text, first);
-        log.info("{} the schema of {} change set(s), {} change(s), to '{}'",
+        log.info("{} the schema of {} change set(s), {} change(s), to '{}': {}",
                  first ? "Wrote" : "Appended",
                  changeSets.size(),
                  changeSets.stream().mapToInt(changeSet -> changeSet.changes().size()).sum(),
-                 scriptFile.toAbsolutePath());
+                 scriptFile.toAbsolutePath(),
+                 describe(changeSets));
     }
+
+    private static String describe(List<SchemaChangeSet> changeSets) {
+        return changeSets.isEmpty() ? "nothing" : String.join("; ", changeSets.stream().map(SchemaChangeSet::describe).toList());
+    }
+
     private synchronized void write(String text, boolean replace) {
         try {
             var parent = scriptFile.toAbsolutePath().getParent();

@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: shipping.ship_order
 kind: command
 bc: shipping
@@ -7,6 +7,7 @@ status: live
 summary: Mark a registered shipping order as shipped.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [ShipOrder]
 publishes: [OrderShipped]
@@ -21,6 +22,8 @@ invariants:
     enforcedBy: ShippingOrder
 forbidden:
   - cross-slice-internal:shipping
+tier: cqrs-es
+flow: shipping-order
 tests:
   unit: { present: false }
   integration: { present: true }

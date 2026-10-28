@@ -165,6 +165,29 @@ class GapMiddlesAwaitedAcrossSubscribesTest {
         assertThat(acrossSubscribes.isKeptFor(SUBSCRIBER, ORDERS)).isFalse();
     }
 
+    @Test
+    void an_order_is_awaited_for_its_subscriber_and_aggregate_type_while_a_middle_holds_it_also_between_subscribes() {
+        assertThat(acrossSubscribes.isAwaited(SUBSCRIBER, ORDERS, 150)).as("nothing kept").isFalse();
+        var first = subscribe(1);
+        first.await(between(100, 200));
+
+        assertThat(acrossSubscribes.isAwaited(SUBSCRIBER, ORDERS, 100)).isTrue();
+        assertThat(acrossSubscribes.isAwaited(SUBSCRIBER, ORDERS, 200)).isTrue();
+        assertThat(acrossSubscribes.isAwaited(SUBSCRIBER, ORDERS, 99)).isFalse();
+        assertThat(acrossSubscribes.isAwaited(SUBSCRIBER, ORDERS, 201)).isFalse();
+        assertThat(acrossSubscribes.isAwaited(SubscriberId.of("other"), ORDERS, 150)).isFalse();
+        assertThat(acrossSubscribes.isAwaited(SUBSCRIBER, AggregateType.of("Products"), 150)).isFalse();
+
+        first.handled(List.of(event(150)));
+        assertThat(acrossSubscribes.isAwaited(SUBSCRIBER, ORDERS, 150)).as("handled").isFalse();
+
+        acrossSubscribes.subscribeEnded(first);
+        assertThat(acrossSubscribes.isAwaited(SUBSCRIBER, ORDERS, 160)).as("kept for the next subscribe").isTrue();
+
+        acrossSubscribes.forget(SUBSCRIBER, ORDERS);
+        assertThat(acrossSubscribes.isAwaited(SUBSCRIBER, ORDERS, 160)).as("forgotten").isFalse();
+    }
+
     private GapMiddlesAwaitedInMemory subscribe(long fromInclusive) {
         return acrossSubscribes.subscribe(SUBSCRIBER, ORDERS, fromInclusive, TIMEOUT);
     }

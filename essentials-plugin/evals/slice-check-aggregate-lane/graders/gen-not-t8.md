@@ -5,9 +5,11 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 6 (§R2) about `src/main/java/com/example/billing/views/invoice_list/InvoiceListAPI.java`.
+PASS unless the report raises a finding under gate 6 (§R2) about `src/main/java/com/example/billing/views/invoice_list/InvoiceListAPI.java` line 15, `public class InvoiceListAPI {` (or what that line declares).
+Only a finding drawn from that code fails this check; match it by content, not only the line number. A finding about another line of the same file (for example a correct one drawn from a different guard or method) does not.
 Why that would be wrong: Three @GetMapping methods on a view API over its own read model is §R2 working.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 These are tolerated and do not fail this check either:
+- F4, the ESS-G6 discriminator finding on views/invoice_list/slice.yaml:17, citing paidInvoices() (:28/:29) and byAmount() (:35/:36) as the handlers that each bind only part of ?paid=true&minAmount=. That is F4's evidence, not a finding against these mappings or against the class.
 - A 'no test' finding on any slice. Every manifest here says tests.*.present: false and the fixture has no test tree; the law rates a view slice with no test Should-fix, so such a finding is correct but not what this fixture grades.
 FAIL only if such a finding is present.

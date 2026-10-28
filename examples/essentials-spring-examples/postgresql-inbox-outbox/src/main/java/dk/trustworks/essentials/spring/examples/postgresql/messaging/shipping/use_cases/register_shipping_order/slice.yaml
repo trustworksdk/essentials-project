@@ -7,6 +7,7 @@ status: live
 summary: Register a new shipping order with its destination address.
 generator: essentials
 language: java
+lane: service-entity
 tier: service-entity
 
 handles: [RegisterShippingOrder]

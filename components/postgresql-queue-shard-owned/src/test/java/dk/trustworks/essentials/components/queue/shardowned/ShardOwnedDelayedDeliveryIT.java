@@ -144,11 +144,7 @@ class ShardOwnedDelayedDeliveryIT {
     }
 
     private static ShardOwnerSettings withHoleExpiry(Duration holeExpiry) {
-        var d = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(d.readBatchSize(), d.ackBatchSize(), d.ackFlushInterval(), d.chaseDelay(),
-                                      holeExpiry, d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(),
-                                      d.pollBackstop(), d.maxSweepInterval(), d.pumpThreads(), d.shedGrace(),
-                                      d.leaseTtl(), d.watermarkCap());
+        return ShardOwnerSettings.builder().setHoleExpiry(holeExpiry).build();
     }
 
     /**

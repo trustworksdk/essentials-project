@@ -27,6 +27,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForLong;
 import static org.assertj.core.api.Assertions.*;
 
 /**
@@ -185,16 +186,8 @@ class ShardOwnedQueueRegistryIT {
     }
 
     private long rowsInShardsAtOrAbove(short queueId, int shard) throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT count(*) FROM " + ShardOwnedSchema.UNORDERED_TABLE
-                     + " WHERE queue_id = ? AND shard >= ?")) {
-            statement.setShort(1, queueId);
-            statement.setInt(2, shard);
-            try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
-                return resultSet.getLong(1);
-            }
-        }
+        return queryForLong(dataSource, "Counting the unordered rows of queue " + queueId + " at shard " + shard + " or above",
+                            "SELECT count(*) FROM " + ShardOwnedSchema.UNORDERED_TABLE + " WHERE queue_id = ? AND shard >= ?",
+                            queueId, shard);
     }
 }

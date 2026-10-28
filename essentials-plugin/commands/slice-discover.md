@@ -101,6 +101,9 @@ State how many slices each god file splits into — that number is the finding, 
 ## Step 5 — Pass 3: findings
 
 Rank by payoff per `discovery-heuristics.md` §4: sole-writer first, then cohesion, boundary, lane.
+**Number the four tiers, not the findings**: several findings of one tier share its number (1a, 1b),
+so rank 2 is always cohesion and rank 4 always the lane. A sole-writer finding names every writer,
+the owning component's methods as well as the stray one.
 
 **Do not use `slice-check`'s Blocking / Should-fix / Advisory severities.** This code never opted
 into the law; grading it against one it never adopted is how the report gets dismissed unread. The
@@ -114,7 +117,9 @@ bar or § The entity's own bar respectively, and do not recommend deciders to ei
 Where the lane is service-entity or nearest to it, also run `discovery-heuristics.md` §7 — the
 lane-specific findings (write-repository query drift, command-type leakage, entity returned from an
 API, god handler, bypassable invariant) and, just as importantly, its two traps: ORM-only accessors
-and write-path-only finders are **not** findings.
+and write-path-only finders are **not** findings. §7's findings are **not tiers**: list them after
+the lane tier, unnumbered, never as a 1c or a 2a. A god handler stays in the cohesion tier (rank 2),
+which names **every** god file with its slice count, the controllers as well as the services.
 
 On every lane, `none` included, run `discovery-heuristics.md` §8 — primitive ids at the domain edge,
 reported once per BC, after every other finding and without a severity — and its traps: a foreign
@@ -159,8 +164,9 @@ without being wrong.
 Three real candidates with honest confidence beat thirty speculative ones. If a pass yields nothing,
 say so in a line.
 
-With `--write <file>`, write the same report to that path and tell the user where it went. Never
-choose the path yourself; suggest one and let them pass it.
+With `--write <file>`, write the same report to that path with the Write tool (a shell redirect fails
+where Bash may not write) and tell the user where it went. Never choose the path yourself; suggest one
+and let them pass it.
 
 ## Cost bounding
 

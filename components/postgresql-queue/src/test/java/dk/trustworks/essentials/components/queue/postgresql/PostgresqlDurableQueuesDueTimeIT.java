@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.queue.postgresql;
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
-import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
+import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import org.awaitility.Awaitility;
@@ -35,7 +35,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Polling with a long backoff cap: a message that becomes due is delivered when it is due, not up to a whole backoff
- * later.
+ * later. Consumed through the centralized message fetcher - {@link TraditionalPostgresqlDurableQueuesDueTimeIT} runs
+ * the same with each consumer polling on its own.
  */
 @Testcontainers
 class PostgresqlDurableQueuesDueTimeIT {
@@ -45,6 +46,11 @@ class PostgresqlDurableQueuesDueTimeIT {
     /**
      * A poll every 20 ms, so a message due when the backoff has been bypassed is picked up within a few of them
      */
+    protected static final Duration POLLING_INTERVAL = Duration.ofMillis(20);
+    /**
+     * A cap far longer than the delays: a due message that waited out the backoff would be seconds late
+     */
+    protected static final long     MAX_BACKOFF_MS   = 10_000;
     private static final Duration  ALLOWED_DELAY = Duration.ofMillis(400);
 
     @Container
@@ -57,16 +63,24 @@ class PostgresqlDurableQueuesDueTimeIT {
     @BeforeEach
     void setUp() {
         unitOfWorkFactory = new JdbiUnitOfWorkFactory(Jdbi.create(postgreSQLContainer.getJdbcUrl(), postgreSQLContainer.getUsername(), postgreSQLContainer.getPassword()));
-        durableQueues = PostgresqlDurableQueues.builder()
-                                               .setUnitOfWorkFactory(unitOfWorkFactory)
-                                               .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
-                                               .setSharedQueueTableName(QUEUE_TABLE)
-                                               // A cap far longer than the delays: a due message that waited out
-                                               // the backoff would be seconds late
-                                               .setCentralizedQueuePollingOptimizerFactory(queueName -> new CentralizedQueuePollingOptimizer(queueName, 50, 10_000, 1.5, 0.1))
-                                               .build();
+        durableQueues = configurePolling(PostgresqlDurableQueues.builder()
+                                                                .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
+                                                                .setSharedQueueTableName(QUEUE_TABLE))
+                .build();
         durableQueues.start();
         durableQueues.purgeQueue(QUEUE);
+    }
+
+    /**
+     * Back off to {@link #MAX_BACKOFF_MS} while the queue is idle
+     */
+    protected PostgresqlDurableQueuesBuilder configurePolling(PostgresqlDurableQueuesBuilder builder) {
+        return builder.setCentralizedQueuePollingOptimizerFactory(queueName -> new CentralizedQueuePollingOptimizer(queueName, 50, MAX_BACKOFF_MS, 1.5, 0.1));
+    }
+
+    protected ConsumeFromQueueBuilder configurePolling(ConsumeFromQueueBuilder builder) {
+        return builder;
     }
 
     @AfterEach
@@ -109,11 +123,11 @@ class PostgresqlDurableQueuesDueTimeIT {
     }
 
     private DurableQueueConsumer consume(RedeliveryPolicy redeliveryPolicy, QueuedMessageHandler handler) {
-        return durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
-                                                              .setQueueName(QUEUE)
-                                                              .setRedeliveryPolicy(redeliveryPolicy)
-                                                              .setParallelConsumers(1)
-                                                              .setQueueMessageHandler(handler)
-                                                              .build());
+        return durableQueues.consumeFromQueue(configurePolling(ConsumeFromQueue.builder()
+                                                                               .setQueueName(QUEUE)
+                                                                               .setRedeliveryPolicy(redeliveryPolicy)
+                                                                               .setParallelConsumers(1)
+                                                                               .setQueueMessageHandler(handler))
+                                                      .build());
     }
 }

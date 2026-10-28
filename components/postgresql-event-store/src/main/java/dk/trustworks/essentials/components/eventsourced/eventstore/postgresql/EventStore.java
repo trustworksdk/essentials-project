@@ -757,7 +757,9 @@ public interface EventStore {
      * is associated with the <code>aggregateType</code><br>
      * The {@link AggregateEventStream} will include {@link PersistedEvent} from the specified <code>eventOrderRange</code><br>
      * If the <code>tenant</code> arguments is {@link Optional#isPresent()}, then only {@link PersistedEvent}'s belonging to the specified <code>tenant</code> and matching the specified <code>eventOrderRange</code> will be returned<br>
-     * Otherwise all {@link PersistedEvent}'s matching the specified <code>eventOrderRange</code> will be returned
+     * Otherwise all {@link PersistedEvent}'s matching the specified <code>eventOrderRange</code> will be returned<br>
+     * An empty <code>eventOrderRange</code> ({@link LongRange#isEmpty()}, as it stands after the {@link EventStoreInterceptor}s ran)
+     * returns {@link Optional#empty()} without reading anything
      *
      * @param operation the {@link FetchStream} operation
      * @param <ID>      the id type for the aggregate
@@ -875,7 +877,9 @@ public interface EventStore {
     }
 
     /**
-     * Load all events, belonging to the specified <code>onlyIncludeEventIfItBelongsToTenant</code> option, and which are relating to the provided <code>aggregateType</code> by their {@link PersistedEvent#globalEventOrder()}
+     * Load all events, belonging to the specified <code>onlyIncludeEventIfItBelongsToTenant</code> option, and which are relating to the provided <code>aggregateType</code> by their {@link PersistedEvent#globalEventOrder()}<br>
+     * An empty <code>globalEventOrderRange</code> ({@link LongRange#isEmpty()}, as it stands after the {@link EventStoreInterceptor}s ran)
+     * with no additional global orders returns an empty stream without reading anything
      *
      * @param operation the {@link LoadEventsByGlobalOrder} operation
      * @return a stream of all {@link PersistedEvent}'s matching the <code>aggregateType</code> and the <code>globalEventOrderRange</code>

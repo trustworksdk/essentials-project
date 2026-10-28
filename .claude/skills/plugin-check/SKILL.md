@@ -29,7 +29,7 @@ nothing was checked; say so plainly — it is not a pass, and a release needs it
 
 Ask with AskUserQuestion, one grouped question per expensive mode `changed` called for, recommended option first:
 
-- **scaffold** (Docker, a full reactor install, minutes per mode): offer the narrowest set `changed` printed (for
+- **scaffold** (Docker; a subset install of ~25 s, then ~70 s for `scaffold all` at the default `--jobs`): offer the narrowest set `changed` printed (for
   example `scaffold slices --case fixture-multi-lane`) first, then `scaffold all`, then skip. Before running, check
   nothing else is building in this checkout (another agent, a terminal): the script refuses the install while another
   Maven process runs, and `--force` is the user's call, never yours.
@@ -52,6 +52,7 @@ governs the file, and fix what that row says. The common ones:
 | `eval-graders`: graders drifted | Run `evals/build.py` (no `--check`) and commit; never hand-edit a `gen-*` grader or a `change-*` case |
 | `render-slice`, `init-render`, `slice-source`, `slice-index`: a golden differs | Read the diff. Regenerate with that script's `--update-golden` (or `render-slice.py update-golden`) only when the change was intended, and review the regenerated diff |
 | `ess-ids` | An id vanished or was reused: restore it, or retire it under `## Retired ids`; never renumber |
+| `prepare-release` | `scripts/prepare-release.py --self-test` names the case: a release-notes conversion or reset-skeleton change that lost content. Fix the script, never the fixture's expected text to match |
 | `plugin-version` | Move `plugin.json`'s `version`: the `essentials.version` pin, or raise its `-N` suffix |
 | `check-patches` | Re-cut the patch that no longer applies, and move its `expected.yaml` lines |
 | scaffold build red | Open the log path the summary prints; a context-startup failure usually means an S2.1 dependency, and the fix goes in the contract first, then the tree |

@@ -78,6 +78,8 @@ import org.springframework.context.event.*;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.env.Environment;
 import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
+import org.springframework.boot.jdbc.autoconfigure.JdbcConnectionDetails;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
@@ -175,7 +177,7 @@ public class EssentialsComponentsConfiguration {
      * {@code keyUsing} annotation is needed).
      * <p>
      * Published as a bean so Spring Boot adds it to the application's auto-configured (web) {@code JsonMapper}. The
-     * Essentials persistence {@link JSONSerializer} does not pick it up from here - see {@link #jsonSerializer()}.
+     * Essentials persistence {@link JSONSerializer} does not pick it up from here - see {@link #jsonSerializer(EssentialsComponentsProperties)}.
      *
      * @return the Essential Jackson module which adds support for serializing and deserializing any Essentials types
      */
@@ -187,11 +189,18 @@ public class EssentialsComponentsConfiguration {
 
     /**
      * Essential Immutable Jackson module which adds support for serializing and deserializing objects with no {@link JsonCreator} or a default constructor
+     * <p>
+     * Published as a bean so Spring Boot adds it to the application's auto-configured (web) {@code JsonMapper}, and
+     * therefore created only when {@code essentials.immutable-jackson-module-enabled=true} is set <em>explicitly</em>
+     * (the 0.60.0 behaviour). On the web mapper the module changes HTTP request binding: a request body Jackson cannot
+     * construct gets its fields left {@code null} through Objenesis instead of failing with a 400. The property's
+     * default {@code true} applies to the persistence {@link JSONSerializer} only - see {@link #jsonSerializer(EssentialsComponentsProperties)}.
      *
      * @return the Essential Immutable Jackson module which adds support for serializing and deserializing objects with no {@link JsonCreator} or a default constructor
      */
     @Bean
     @ConditionalOnClass(name = "org.objenesis.ObjenesisStd")
+    // No matchIfMissing: the default true is the persistence mapper's, not the web mapper's (N-11)
     @ConditionalOnProperty(prefix = "essentials", name = "immutable-jackson-module-enabled", havingValue = "true")
     @ConditionalOnMissingBean
     public EssentialsImmutableJacksonModule essentialsImmutableJacksonModule() {
@@ -265,6 +274,7 @@ public class EssentialsComponentsConfiguration {
         var builder = PostgresqlFencedLockManager.builder()
                                           .setJdbi(jdbi)
                                           .setUnitOfWorkFactory(unitOfWorkFactory)
+                                          .setLockManagerInstanceId(properties.getFencedLockManager().getInstanceId())
                                           .setLockTimeOut(properties.getFencedLockManager().getLockTimeOut())
                                           .setLockConfirmationInterval(properties.getFencedLockManager().getLockConfirmationInterval())
                                           .setFencedLocksTableName(properties.getFencedLockManager().getFencedLocksTableName())
@@ -306,6 +316,7 @@ public class EssentialsComponentsConfiguration {
                                                    .setUseBatchedFetch(properties.getDurableQueues().isUseBatchedFetch())
                                                    .setBatchedFetchSwitchThreshold(properties.getDurableQueues().getBatchedFetchSwitchThreshold())
                                                    .setBatchedFetchWarnRowsThreshold(properties.getDurableQueues().getBatchedFetchWarnRowsThreshold())
+                                                   .setRequireActiveUnitOfWorkForEnqueue(properties.getDurableQueues().isRequireActiveUnitOfWorkForEnqueue())
                                                    .setQueuePollingOptimizerFactory(consumeFromQueue -> new SimpleQueuePollingOptimizer(consumeFromQueue,
                                                                                                                                         (long) (consumeFromQueue.getPollingInterval().toMillis() *
                                                                                                                                                                       properties.getDurableQueues()
@@ -377,17 +388,38 @@ public class EssentialsComponentsConfiguration {
                                                           health.getCacheTimeToLive());
     }
 
+    /**
+     * The {@link MultiTableChangeListener} that fans PostgreSQL LISTEN/NOTIFY out to the event store and the queues.<br>
+     * Its LISTEN connection is borrowed from the application's pool for as long as it polls, unless
+     * {@code essentials.multi-table-change-listener.dedicated-connection=true}: then it opens its own, outside the pool,
+     * from the same {@link JdbcConnectionDetails} (URL, user name and password) Spring Boot built the pool from.
+     */
     @Bean
     @ConditionalOnMissingBean
     public MultiTableChangeListener<TableChangeNotification> multiTableChangeListener(Jdbi jdbi,
                                                                                       JSONSerializer jsonSerializer,
                                                                                       EventBus eventBus,
-                                                                                      EssentialsComponentsProperties properties) {
-        return new MultiTableChangeListener<>(jdbi,
-                                              properties.getMultiTableChangeListener().getPollingInterval(),
-                                              jsonSerializer,
-                                              eventBus,
-                                              properties.getMultiTableChangeListener().isFilterDuplicateNotifications());
+                                                                                      EssentialsComponentsProperties properties,
+                                                                                      ObjectProvider<JdbcConnectionDetails> jdbcConnectionDetails) {
+        var listenerProperties = properties.getMultiTableChangeListener();
+        var builder = MultiTableChangeListener.builder()
+                                              .setJdbi(jdbi)
+                                              .setJsonSerializer(jsonSerializer)
+                                              .setEventBus(eventBus)
+                                              .setPollingInterval(listenerProperties.getPollingInterval())
+                                              .setFilterDuplicateNotifications(listenerProperties.isFilterDuplicateNotifications());
+        if (listenerProperties.isDedicatedConnection()) {
+            var connectionDetails = jdbcConnectionDetails.getIfAvailable();
+            if (connectionDetails == null) {
+                throw new IllegalStateException("essentials.multi-table-change-listener.dedicated-connection=true needs the database's JDBC URL, " +
+                                                        "but there is no JdbcConnectionDetails bean (normally created from spring.datasource.url). " +
+                                                        "Set spring.datasource.url, or define your own MultiTableChangeListener bean using MultiTableChangeListener.builder().setListenerDataSource(...)");
+            }
+            builder.setListenerDataSource(new DriverManagerDataSource(connectionDetails.getJdbcUrl(),
+                                                                      connectionDetails.getUsername(),
+                                                                      connectionDetails.getPassword()));
+        }
+        return builder.build();
     }
 
     /**
@@ -472,14 +504,21 @@ public class EssentialsComponentsConfiguration {
      * usually registered for the web layer, and adding them here would silently change the persisted JSON format. An
      * application that needs extra modules for persistence defines its own {@link JSONSerializer} bean, which this
      * backs off from.
+     * <p>
+     * {@code EssentialsImmutableJacksonModule} is registered on this mapper unless
+     * {@code essentials.immutable-jackson-module-enabled=false} (default {@code true}). That changes nothing that is
+     * written, only what can be read: without it a type Jackson cannot construct fails to deserialize instead of being
+     * instantiated through Objenesis. The web mapper gets the module only with an explicit {@code true} - see
+     * {@link #essentialsImmutableJacksonModule()}.
      *
+     * @param properties the auto configure properties
      * @return the {@link JSONSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
      */
     @Bean
     @ConditionalOnMissingClass("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer")
     @ConditionalOnMissingBean
-    public JSONSerializer jsonSerializer() {
-        return EssentialsObjectMappers.createJSONSerializer();
+    public JSONSerializer jsonSerializer(EssentialsComponentsProperties properties) {
+        return EssentialsObjectMappers.createJSONSerializer(properties.isImmutableJacksonModuleEnabled());
     }
 
     /**

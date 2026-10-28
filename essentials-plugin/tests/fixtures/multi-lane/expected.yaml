@@ -10,7 +10,8 @@
 #   runs          which command runs against this fixture, with which argument
 #   lanes         gate 14 per bounded context: code signals, declared lanes, verdict
 #   must_find     every entry must appear in the report (matched on file, plus symbol when given)
-#   must_not_find a finding under any listed gate at that file/symbol fails the run ("*" = any gate)
+#   must_not_find a finding under any listed gate at that line (file/symbol when no line) fails the run
+#                 ("*" = any gate); a finding drawn from another line of the same file does not
 #   skipped       gates the report must name as skipped or out of scope, never silently omit
 #   tolerated     findings that may appear or not; neither counts for or against the run
 #   reader        syntactic facts a source reader must extract (handlers, mappings, endpoint bindings)
@@ -174,6 +175,9 @@ must_not_find:
   file: src/main/java/com/example/multi/ledger/use_cases/post_entry/slice.yaml
   line: 10
   anchor: 'tier: aggregate'
+  what: >-
+    a lane finding (code lane or declared-lane cross-check) that takes `tier: aggregate` as lane evidence;
+    the finding that the tier value itself is wrong is ML-5 and does not count
   why: >-
     The tier: aggregate value is ML-5 (a tier finding). It must not be read as a lane signal, and no lane finding
     may cite a manifest field as its evidence: detection reads code.
@@ -238,6 +242,9 @@ must_not_find:
   file: src/main/java/com/example/multi/payments/use_cases/request_payment/slice.yaml
   line: 11
   anchor: 'lane: decider'
+  what: >-
+    request_payment's declared lane flagged as the wrong side, the one to change; naming it as the side
+    that matches the code, inside the payments two-lane finding, does not count
   why: request_payment declares the lane the code has; the wrong side of ML-3 is capture_payment.
 - id: ML-T11
   not_gates:

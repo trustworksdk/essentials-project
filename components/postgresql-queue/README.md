@@ -134,8 +134,14 @@ through a 10-connection pool, without LISTEN/NOTIFY). If the acknowledgement fai
 stayed committed and the message was delivered again after `messageHandlingTimeout`. A `DurableQueuesInterceptor`
 on `AcknowledgeMessageAsHandled` therefore runs inside the handler's transaction. The acknowledgement stays separate,
 as before, for a handler that requests redelivery, one that marks its unit of work rollback-only (its message is
-still consumed), and `UnitOfWorkMode.NONE` handlers. A crash before the commit still redelivers, so handlers should
-stay idempotent.
+still consumed), and a handler that owns its unit-of-work boundary (every `EventProcessor` handler, whatever its
+`UnitOfWorkMode`, and an `Inbox` with a `UnitOfWorkBoundaryOwningMessageConsumer`, which between them cover every
+`UnitOfWorkMode.NONE` handler). A handler that returns with the interrupt flag set while its consumer is stopping may
+have given up part-way: its unit of work is marked rollback-only, discarding its writes, and the consumer hands the
+message back for redelivery - a plain hand-back, not a handler failure, so it is never dead-lettered. That rollback
+reaches only a handler run in the queue's own unit of work: a boundary-owning handler keeps whatever it committed
+before returning and is still handed back, so it must be idempotent across a partial run. A crash before the commit
+still redelivers, so handlers should stay idempotent.
 
 ## Polling Mechanisms
 
@@ -290,11 +296,12 @@ var durableQueues = PostgresqlDurableQueues.builder()
 For instant response when messages arrive (instead of waiting for next poll cycle), configure a `MultiTableChangeListener`:
 
 ```java
-var multiTableChangeListener = new MultiTableChangeListener<>(
-    jdbi,
-    Duration.ofMillis(100),
-    jsonSerializer
-);
+var multiTableChangeListener = MultiTableChangeListener.builder()
+    .setJdbi(jdbi)
+    .setJsonSerializer(jsonSerializer)
+    .setEventBus(eventBus)
+    .setPollingInterval(Duration.ofMillis(100))
+    .build();
 
 var durableQueues = PostgresqlDurableQueues.builder()
     .setUnitOfWorkFactory(unitOfWorkFactory)

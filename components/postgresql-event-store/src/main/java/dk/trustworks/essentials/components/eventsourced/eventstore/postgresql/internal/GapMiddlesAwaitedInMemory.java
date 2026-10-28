@@ -143,6 +143,14 @@ public final class GapMiddlesAwaitedInMemory {
         }
 
         /**
+         * @return whether {@code order} lies in an awaited range
+         */
+        synchronized boolean isAwaited(long order) {
+            var entry = byFromInclusive.floorEntry(order);
+            return entry != null && entry.getValue().toInclusive >= order;
+        }
+
+        /**
          * Stop awaiting anything, and stop the subscribe that holds the ranges, if one does, from awaiting anything new
          */
         synchronized void forget() {
@@ -345,10 +353,7 @@ public final class GapMiddlesAwaitedInMemory {
      * @return whether {@code order} is awaited
      */
     public boolean isAwaited(long order) {
-        synchronized (ranges) {
-            var entry = ranges.byFromInclusive.floorEntry(order);
-            return entry != null && entry.getValue().toInclusive >= order;
-        }
+        return ranges.isAwaited(order);
     }
 
     /**

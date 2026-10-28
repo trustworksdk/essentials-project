@@ -250,4 +250,36 @@ public interface Inbox {
      * @return the number of message received that haven't been processed yet (or successfully processed) by the message consumer
      */
     long getNumberOfUndeliveredMessages();
+
+    /**
+     * Is an {@link OrderedMessage} with the given {@link OrderedMessage#getKey()} still queued in this {@link Inbox} -
+     * waiting to be delivered, being delivered, waiting for a redelivery, or marked as a Dead Letter Message?
+     * <p>
+     * Event processors use it to tell whether the messages they forwarded for an aggregate have been handled (e.g.
+     * {@code EventProcessor#awaitProcessed(...)}).
+     * <p>
+     * The default implementation throws {@link UnsupportedOperationException}, since an {@link Inbox} that doesn't expose
+     * its queued messages can't answer. The {@link Inbox}es created by
+     * {@link Inboxes#durableQueueBasedInboxes(DurableQueues, FencedLockManager)} override it.
+     *
+     * @param key the {@link OrderedMessage#getKey()} to look for
+     * @return true if at least one {@link OrderedMessage} with the given key is queued in this {@link Inbox}, Dead Letter Messages included
+     * @throws UnsupportedOperationException if this {@link Inbox} can't tell
+     */
+    default boolean hasOrderedMessageQueuedForKey(String key) {
+        throw new UnsupportedOperationException(getClass().getName() + " can't tell whether an ordered message is queued for a key");
+    }
+
+    /**
+     * Get the number of messages in this {@link Inbox} that are marked as Dead Letter Messages.
+     * <p>
+     * The default implementation throws {@link UnsupportedOperationException}. The {@link Inbox}es created by
+     * {@link Inboxes#durableQueueBasedInboxes(DurableQueues, FencedLockManager)} override it.
+     *
+     * @return the number of Dead Letter Messages in this {@link Inbox}
+     * @throws UnsupportedOperationException if this {@link Inbox} can't tell
+     */
+    default long getNumberOfDeadLetterMessages() {
+        throw new UnsupportedOperationException(getClass().getName() + " doesn't expose its number of Dead Letter Messages");
+    }
 }

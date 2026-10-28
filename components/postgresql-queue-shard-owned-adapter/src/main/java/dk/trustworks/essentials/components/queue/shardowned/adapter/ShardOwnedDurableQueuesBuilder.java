@@ -41,6 +41,7 @@ public class ShardOwnedDurableQueuesBuilder {
      * refuse, which has to be asked for now — see {@link #setAutoRegisterShardCount(int)}.
      */
     private int                                     autoRegisterShardCount = ShardOwnedDurableQueues.DEFAULT_AUTO_REGISTER_SHARD_COUNT;
+    private boolean                                 requireActiveUnitOfWorkForEnqueue;
 
     /**
      * Where queues are looked up by name.
@@ -64,9 +65,14 @@ public class ShardOwnedDurableQueuesBuilder {
     }
 
     /**
-     * Optional. When present and a {@code HandleAwareUnitOfWork} is in progress, enqueued messages are
-     * written on that unit of work's connection and commit with the caller's own work — which is what
-     * makes an Outbox an Outbox. Without one, every enqueue commits on its own.
+     * Strongly recommended, and required from 0.61. Every enqueue runs inside
+     * {@code unitOfWorkFactory.withUnitOfWork(...)} and is written on the {@code HandleAwareUnitOfWork}'s
+     * connection, so it commits with the caller's own work — an Essentials {@code UnitOfWork}, or with a
+     * Spring-aware factory (as the Spring Boot starter wires) a plain {@code @Transactional} /
+     * {@code TransactionTemplate} transaction. That is what makes an Outbox an Outbox.
+     * <p>
+     * Without one, every enqueue commits on its own and a rollback of the caller's work does not undo it;
+     * {@link #build()} logs a WARN saying so.
      */
     public ShardOwnedDurableQueuesBuilder setUnitOfWorkFactory(UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory) {
         this.unitOfWorkFactory = unitOfWorkFactory;
@@ -115,7 +121,24 @@ public class ShardOwnedDurableQueuesBuilder {
         return this;
     }
 
+    /**
+     * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@code UnitOfWork} or Spring
+     * transaction? Default {@code false}: such an enqueue commits on its own, and each call site's first one is logged at WARN. See
+     * {@link dk.trustworks.essentials.components.foundation.messaging.queue.EnqueueOutsideUnitOfWorkGuard}. Needs
+     * {@link #setUnitOfWorkFactory(UnitOfWorkFactory)}: without a factory every enqueue would fail.
+     */
+    public ShardOwnedDurableQueuesBuilder setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+        this.requireActiveUnitOfWorkForEnqueue = requireActiveUnitOfWorkForEnqueue;
+        return this;
+    }
+
     public ShardOwnedDurableQueues build() {
-        return new ShardOwnedDurableQueues(queues, jsonSerializer, unitOfWorkFactory, dataSource, autoRegisterShardCount);
+        if (requireActiveUnitOfWorkForEnqueue && unitOfWorkFactory == null) {
+            throw new IllegalArgumentException("requireActiveUnitOfWorkForEnqueue needs a unitOfWorkFactory: without one no enqueue can "
+                                               + "join a unit of work, so every enqueue would fail. Call setUnitOfWorkFactory(...)");
+        }
+        var durableQueues = new ShardOwnedDurableQueues(queues, jsonSerializer, unitOfWorkFactory, dataSource, autoRegisterShardCount);
+        durableQueues.setRequireActiveUnitOfWorkForEnqueue(requireActiveUnitOfWorkForEnqueue);
+        return durableQueues;
     }
 }

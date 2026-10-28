@@ -1,0 +1,14 @@
+schemaVersion: "1.3"
+slice: lending.loan_reminders
+kind: automation
+bc: lending
+owner: circulation
+status: live
+summary: Asks for a reminder whenever a copy goes out on loan.
+generator: essentials
+language: java
+lane: decider
+consumes: [BookBorrowed]
+dispatches: [ScheduleReminder]
+tests:
+  integration: { present: false }

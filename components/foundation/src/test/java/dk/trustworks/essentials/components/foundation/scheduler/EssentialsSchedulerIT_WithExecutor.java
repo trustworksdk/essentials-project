@@ -19,13 +19,15 @@ package dk.trustworks.essentials.components.foundation.scheduler;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.scheduler.executor.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
+import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.core.statement.*;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -204,6 +206,57 @@ public class EssentialsSchedulerIT_WithExecutor extends AbstractEssentialsSchedu
 
         essentialsScheduler2.stop();
         fencedLockManager2.stop();
+    }
+
+    /**
+     * The lock callback schedules the jobs registered so far and only then marks the lock as acquired. A job registered
+     * in between - by a lifecycle bean starting on another thread, e.g. {@code PostgresqlTTLManager} with a
+     * {@code @TTLJob} - was missing from the list being scheduled and still saw the lock as not acquired, so nothing
+     * ever scheduled it. The test opens that window deterministically: while the callback is scheduling the first job
+     * (its {@code existsByName} query), a second job is registered from another thread.
+     */
+    @Test
+    public void a_job_registered_while_the_lock_acquired_callback_is_scheduling_jobs_is_scheduled_too() {
+        var schedulerJdbi     = Jdbi.create(postgreSQLContainer.getJdbcUrl(), postgreSQLContainer.getUsername(), postgreSQLContainer.getPassword());
+        var unitOfWorkFactory = new JdbiUnitOfWorkFactory(schedulerJdbi);
+        var fencedLockManager = new TestFencedLockManager(jdbi);
+        fencedLockManager.start();
+        var scheduler = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, 2);
+
+        var registeredBeforeTheLock = new ExecutorJob("registeredBeforeTheLock", new FixedDelay(1, 1, TimeUnit.HOURS), () -> {});
+        var registeredDuringTheLock = new ExecutorJob("registeredDuringTheLock", new FixedDelay(1, 1, TimeUnit.HOURS), () -> {});
+        scheduler.scheduleExecutorJob(registeredBeforeTheLock);
+
+        var lateRegistrationAttempted = new AtomicBoolean();
+        schedulerJdbi.setSqlLogger(new SqlLogger() {
+            @Override
+            public void logBeforeExecution(StatementContext context) {
+                if (context.getRenderedSql().contains("SELECT EXISTS") && lateRegistrationAttempted.compareAndSet(false, true)) {
+                    var registration = Thread.ofPlatform().start(() -> scheduler.scheduleExecutorJob(registeredDuringTheLock));
+                    try {
+                        // Returns at once while the registration can slip past the callback. Once it is held off until
+                        // the callback has finished, this times out and the callback carries on.
+                        registration.join(Duration.ofMillis(500));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+        });
+
+        try {
+            scheduler.start();
+            waitAtMost(Duration.ofSeconds(5)).untilTrue(lateRegistrationAttempted);
+            waitAtMost(Duration.ofSeconds(10))
+                    .untilAsserted(() -> assertThat(scheduler.fetchExecutorJobEntries(0, 10))
+                            .extracting(ExecutorScheduledJobRepository.ExecutorJobEntry::name)
+                            .as("both jobs must have been scheduled once the lock was acquired")
+                            .anySatisfy(name -> assertThat(name).startsWith("registeredBeforeTheLock"))
+                            .anySatisfy(name -> assertThat(name).startsWith("registeredDuringTheLock")));
+        } finally {
+            scheduler.stop();
+            fencedLockManager.stop();
+        }
     }
 
     @Test

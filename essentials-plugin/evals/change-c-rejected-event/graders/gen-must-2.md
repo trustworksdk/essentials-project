@@ -5,5 +5,5 @@ type: llm
 
 The agent received this change request in a software project: "When screening cancels an order, record it as its own OrderRejected event instead of OrderCancelled.". Grade its final reply.
 
-PASS if the reply shows this: Checks the event's consumers before finishing: orders.order_list projects cancellations, so reacting to OrderRejected is a declared change to that view (projections[].from), not something left to discover later.
+PASS if the reply shows this: Recognises that screen_order is an automation, which dispatches commands and never emits events itself, so OrderRejected needs a command slice as its producer (a new reject_order command slice, or cancel_order extended), and screen_order changes to dispatch to that producer.
 FAIL otherwise.

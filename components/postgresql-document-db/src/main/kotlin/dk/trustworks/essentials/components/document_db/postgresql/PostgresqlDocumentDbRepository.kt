@@ -133,8 +133,9 @@ class PostgresqlDocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID>(
 
         unitOfWorkFactory.usingUnitOfWork { uow ->
             indexedFields.forEach { field ->
-                val fieldName = field.name
-                PostgresqlUtil.checkIsValidTableOrColumnName(fieldName)
+                // A JSON property name: it lands in the quoted '<fieldName>' literal below and as the suffix of the
+                // prefixed index name, which is itself checked as a SQL identifier on the next line but one
+                val fieldName = checkIsValidJsonPropertyName(field.name, "${entityConfiguration.entityClass().simpleName}.${field.name}")
 
                 val indexName = "idx_${entityConfiguration.tableName()}_${fieldName}".lowercase()
                 PostgresqlUtil.checkIsValidTableOrColumnName(indexName)
@@ -155,7 +156,7 @@ class PostgresqlDocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID>(
         }
         PostgresqlUtil.checkIsValidTableOrColumnName(index.name)
         require(index.properties.isNotEmpty()) { "You have to specify at least 1 property" }
-        index.properties.forEach { PostgresqlUtil.checkIsValidTableOrColumnName(it.name()) }
+        index.properties.forEach { checkIsValidJsonPropertyName(it.name(), "Index '${index.name}'") }
 
         // Property is a public extension point, and it is the path expression - not name() - that lands in the DDL
         val properties = index.properties.joinToString(", ") { "(" + it.checkedJSONValueArrowPath() + ")" }

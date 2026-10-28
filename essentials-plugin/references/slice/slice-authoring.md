@@ -178,14 +178,45 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py render --lang <language> -
   (`eventsourced-aggregates` is optional in the event-store starter, and no starter brings
   `postgresql-document-db`). Report it and offer to add it before rendering; a slice rendered into a
   project without it does not compile.
-- **`render` exits 2 and writes nothing** on a bad input, a template drift, an existing slice
+- **`render` exits 2 and writes nothing** — a failure part-way through the writes or the wiring edits
+  restores every file it touched — on a bad input, a template drift, an existing slice
   directory or file, a lane that does not match the BC's directories (§1b), a service-entity view whose
   entity does not exist yet, or a refused combination (§1b Kotlin aggregate lane; automation and
   translation on the service-entity lane; `--new-bc` on a non-command kind). Relay the message.
+- **`render` exits 4 and writes nothing** when it cannot write a target: a read-only filesystem
+  (`EROFS`), or a sandbox that gives the shell no write access (`EACCES`) while the Write tool still
+  writes. It checks every target before the first write, and its one stderr line names the path, the
+  cause and "re-run with --emit". Do not stop, and do not render anything yourself; run the **emit
+  fallback**:
+  1. Run the same `render` command with `--emit` added, once. It validates and renders exactly as
+     `render` does, wiring included, writes nothing, and prints the report with every file in `files`:
+     `path` (relative to `--project-root`), `action` (`create` or `replace`; `role: wiring` marks an
+     existing file only a wiring edit changes) and `content`. Output too large to read whole: run it
+     again with `--only <path>` per path in `files`, which prints that file's content, raw. A re-run
+     part-way through the writes accepts a target only when it already holds exactly that content.
+  2. Write every file with the Write tool at `<projectRoot>/<path>`, `content` verbatim. Never edit,
+     reformat or complete it on the way; the TODOs are filled afterwards, as after any render. Never
+     import or patch the script.
+  3. Then run the same command with `verify` in place of `render` and without `--emit`. It is read-only: it
+     renders again in memory and compares every target with the disk, byte for byte. Only exit 0 means
+     the slice was rendered. Exit 1 names each file `missing` or `differs`: report them and stop. Never
+     fix the content by hand; verify proving the bytes is what keeps the fallback a render.
+
+  Everything after the render runs as usual, from the emitted report. The final report says in one line
+  that the files were written through the emit fallback because the shell could not write. Neither
+  `--emit` nor `verify` needs a writable directory: read their output from standard output, never from a
+  file in a temporary directory. A `uv run --script` that fails for want of a writable cache runs with
+  `python3` instead.
 - **`--json`** returns `written` (every file), `wiring` (each edit as `applied`, `present` or
   `manual` with a reason — `manual` means the anchor comment is gone and the edit is yours to make by
   hand; on the decider lane the first entry counts the application's decider configurators, and
   `manual` there means none or more than one, which you report) and `todos` (`path:line: text` of every TODO the templates left).
+  It also carries `behaviours` — what the rendered code already does (`implemented`) and what is left
+  to you (`placeholder`), from `templates/behaviours.json` — and `stubTests`, every stub test written.
+- An existing BC supplies `AggregateType`, `Aggregates`, `Aggregate` and `Entity` when they are not
+  passed and its scaffold names exactly one of each.
+- `--tests none`, `--manifest <slice.yaml>` and the full report are the renderer's interface for another
+  plugin's agent — `references/sdd-contract.md` §2. The kind skills use neither flag.
 
 **`slice.yaml` is the one rendered file that must also be *parsed* before it is written**, and it has
 a rule that no other template has: **every `path:` value is quoted**, in the template and in anything

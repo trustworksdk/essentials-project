@@ -52,18 +52,25 @@ this file is language-neutral and the two language files are short.
 
 ## S1 — Baseline and version pins (MUST)
 
-An Essentials 0.60.0 application runs on **Java 25 or newer** and **Spring Boot 4.1.x**. Spring
-Boot 4.0.x and 3.x are not supported. 0.60.0 class files are built at `--release 25`, and a Java 21
+An Essentials 0.60.x application runs on **Java 25 or newer** and **Spring Boot 4.1.x**. Spring
+Boot 4.0.x and 3.x are not supported. 0.60.x class files are built at `--release 25`, and a Java 21
 runtime rejects them with `UnsupportedClassVersionError`.
 
 Every Essentials artifact is pinned from **one** `essentials.version` property. Mixed Essentials
 versions on one classpath is not a supported configuration.
 
+Within that line the application SHOULD be on at least the Spring Boot patch release `stack-pins.md`
+pins for `spring-boot-starter-parent`, and a Kotlin application's compiler on at least its
+`kotlin.version` pin: those are the releases the Essentials build itself is tested on, and an
+earlier Boot patch manages dependency releases that lack security fixes a later one carries. Below
+either is a lag, not a break — the application still builds and runs.
+
 Concrete versions are **not** listed here — they live in `stack-pins.md`, which is the single
 place a version rots. Nothing else in this directory may name a version number.
 
 > Proof: `references/llm/LLM.md` § Quick Facts (Java 25+, Spring Boot 4.1.x). The `--release`
-> level is the Essentials root `pom.xml`'s `java.release.version`. Concrete pins: `stack-pins.md`.
+> level is the Essentials root `pom.xml`'s `java.release.version`; the patch floors are its
+> `spring-boot.version` and `kotlin.version`. Concrete pins: `stack-pins.md`.
 
 ## S2 — Module selection (MUST pick exactly one persistence profile)
 
@@ -102,7 +109,7 @@ A Java project must not carry `kotlin-eventsourcing`: its decider family lives i
 "Cumulative" describes the Essentials components. It does **not** describe the third-party
 libraries they run on. Every Essentials integration declares its framework dependencies in
 **`provided` scope**, which is non-transitive by design — the zero-dependency-core philosophy —
-so the application names them itself. **Every one of them kills context startup**, several under a
+so the application names them itself. **Every one of them kills the application** (at context startup; on Essentials 0.60.0, objenesis only at the first read), several under a
 message that never names the real cause — and **most of them compile first**. Two compile errors are
 the exception, and both only when the project's own code touches the library: `jdbi3-core` where
 code imports `Jdbi` (the generated `config/DocumentDbConfig` does), and `kotlin-reflect` for Java code
@@ -116,6 +123,7 @@ calling the document store's overloads (below).
 | `pg-crud`, `pg-event-sourced` | `kotlin-stdlib-jdk8`, `kotlin-reflect` | `NoClassDefFoundError: kotlin/jvm/internal/Intrinsics`. **Applies to pure-Java projects too** — see below |
 | `mongo` | `spring-boot-starter-data-mongodb` | Spring Data MongoDB is absent, so the Essentials Mongo auto-configuration cannot even be introspected: *"Failed to deduce bean type for `…reactiveHandlersBeanPostProcessor`"*, caused by `NoClassDefFoundError: org/springframework/data/mongodb/core/convert/MongoCustomConversions$MongoConverterConfigurationAdapter` |
 | all | `tools.jackson.core:jackson-databind` (Jackson 3) | Context startup fails with `NoClassDefFoundError` for a `tools.jackson` class. A Boot 4 web starter brings it through `spring-boot-starter-jackson`, so this bites a headless application |
+| all | `org.objenesis:objenesis` | Context startup fails: creating the persistence mapper throws `IllegalStateException` naming `org.objenesis:objenesis` (Essentials 0.60.1 and later). On 0.60.0, startup and every write succeed, then the **first read** of a persisted object (an event, a queue message, a document) fails with `NoClassDefFoundError` for an `org/objenesis` class. The starters bring `immutable-jackson3`, and Essentials registers its module in the persistence mapper whenever it is on the classpath. Tests hide it: Mockito brings objenesis in test scope. Spring Boot does not manage its version — set it from `objenesis.version` |
 | all | `reactor-core` | `NoClassDefFoundError: org/reactivestreams/Publisher` while creating the Essentials `EventBus` (`essentialsEventBus`). Satisfied transitively by WebFlux; **not** on a WebMvc stack |
 
 **The Kotlin row is the one that ambushes Java projects.** `postgresql-document-db` is written in
@@ -176,6 +184,13 @@ at startup. No Essentials artifact needs Jackson 2's `com.fasterxml.jackson.core
 comes with Jackson 3's databind. SpringDoc does need it: `springdoc-openapi-starter-common` brings it
 through swagger-core, so a *transitive* Jackson 2 databind on the classpath is expected and harmless.
 The guard is against the Jackson 2 Essentials modules above, not against databind.
+Jackson 3 itself stays at the version Spring Boot manages: the Essentials release is built and
+tested on that Jackson 3 minor, which `stack-pins.md` names, and its wire-format check
+(`EssentialsObjectMappers.findWireFormatDeviations`) is calibrated to it. Do not override
+`jackson-bom.version`, the `tools.jackson:jackson-bom` import or a `tools.jackson` artifact's version
+to a newer Jackson 3 minor. On the next one, a primitive record component absent from the document
+reads as `0`/`false` even with `FAIL_ON_NULL_FOR_PRIMITIVES` enabled, so the check stops reporting
+that drift, and the application runs a Jackson its Essentials release was never tested on.
 
 **S3.2 — The persistence serializer is built by `EssentialsObjectMappers` and ignores module
 beans.** The starters' `JSONSerializer` (`pg-crud`, `mongo`) and `JSONEventSerializer`
@@ -210,8 +225,11 @@ way to construct the type, Jackson 3 uses the sole constructor regardless.
 
 > Proof: `references/llm/LLM-types-jackson.md` § Quick Facts and § Spring Boot 4 (web mapper);
 > `references/llm/LLM-foundation.md` § JSONSerializer (the canonical mapper, the Jackson 2 jar
-> guard, constructor parameter names); the Kotlin persistence serializer is in
-> `kotlin-spring-boot.md`.
+> guard, constructor parameter names, and `findWireFormatDeviations`' missing-primitive probe); the
+> Kotlin persistence serializer is in `kotlin-spring-boot.md`. Spring Boot manages Jackson 3 through
+> `spring-boot-dependencies`' `jackson-bom.version` property and its `tools.jackson:jackson-bom`
+> import; the next minor's missing-primitive behaviour, and why Essentials holds back from it, is
+> recorded in the Essentials repository's `docs/ROADMAP-0.6x.md` (DU-1).
 
 ## S4 — The typed edge (MUST if any endpoint takes a semantic type)
 
@@ -356,6 +374,21 @@ The one rule that belongs here: **pick a mode explicitly and configure only that
 A project carrying both a SPA-forwarding filter and a permissive CORS policy has not chosen; it
 has accumulated — see `frontend-react.md` § "Two half-choices to check for".
 
+The rules belong to the mode, not to the frontend tooling, and hold for any TypeScript or
+JavaScript frontend. A standalone frontend's API base URL is a build-time variable that the
+fetch mutator Orval's config names reads and prefixes onto every request URL — declared but not
+prefixed, the generated client's relative paths resolve against the static host. The variable's
+spelling is the tooling's: `VITE_*` through `import.meta.env` on Vite, `NEXT_PUBLIC_*` through
+`process.env` on Next.js, `REACT_APP_*` through `process.env` on Create React App.
+`frontend-react.md` states each rule once, with Vite — the tooling the template ships — as its
+example.
+
+> Proof: build configuration, in the generated frontend's `custom-fetch.ts` and
+> `custom-fetch.test.ts` (the base URL read per call and prefixed), the backend's `CorsConfig`
+> and `CorsPreflightIT` (the origins as a bound list, the preflight through the security chain),
+> and `SpaWebFilter` (embedded deep links). How a browser resolves a relative URL and refuses a
+> credentialed wildcard origin is the Fetch standard's, not Essentials'.
+
 ## S9 — Security posture (MUST decide, MUST NOT inherit)
 
 The scaffolded security configuration permits everything. That is a deliberate starting point for
@@ -433,10 +466,15 @@ A **`skip-frontend` profile** must exist on any project whose package phase buil
 backend-only development does not pay for a Node install. Without it, `mvn spring-boot:run`
 during backend work runs `npm ci` and a Vite build.
 
+A **Maven wrapper**, where the project has one, SHOULD download at least the Maven release
+`stack-pins.md` pins — the one the Essentials build's own wrapper runs and `/essentials:init`
+generates. An older one still builds; it is a lag, not a break.
+
 > Proof: build configuration, inlined in `frontend-react.md` § Mode A. The property names are
 > Spring Boot's own (`spring-boot-dependencies` imports `testcontainers-bom`, `mockito-bom` and
 > `mongodb-driver-bom` at `${testcontainers.version}`, `${mockito.version}`, `${mongodb.version}`).
-> Every version is in `stack-pins.md`.
+> Every version is in `stack-pins.md`. The Maven pin is the release the Essentials repository's own
+> `.mvn/wrapper/maven-wrapper.properties` downloads.
 
 ---
 
@@ -454,7 +492,8 @@ files (`/essentials:upgrade` Group C and `/essentials:review` run it); the rest 
       stdlib/reflect on Postgres profiles (S2.1) — most of these compile and then kill context startup
 - [ ] Mongo connection properties use `spring.mongodb.*`, not `spring.data.mongodb.*`; the
       database and the test container are replica sets (S2)
-- [ ] Jackson 3 only — no 0.50-era `types-jackson` / `immutable-jackson` jar resolved (S3.1)
+- [ ] Jackson 3 only — no 0.50-era `types-jackson` / `immutable-jackson` jar resolved, and Jackson 3
+      left at the version Spring Boot manages (S3.1)
 - [ ] Extra persistence modules come from an own `JSONSerializer` / `JSONEventSerializer` bean built on `EssentialsObjectMappers`, never a module `@Bean` or a hand-built mapper (S3.2)
 - [ ] `EssentialTypesJacksonModule` reaches the **web** mapper — via the starter's bean, or explicitly when Boot's `JsonMapper` is replaced (S3.3)
 - [ ] Event/payload constructor parameter names match their JSON properties (S3.5)

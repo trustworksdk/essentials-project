@@ -8,7 +8,7 @@
 - **Purpose**: Kotlin-native functional event sourcing (Decider/Evolver patterns)
 - **Status**: WORK-IN-PROGRESS (experimental API)
 - **Key deps**: `kotlin-stdlib`, `kotlin-reflect` (all `provided` scope), EventStore, CommandBus
-- **Java equiv**: [eventsourced-aggregates](./LLM-eventsourced-aggregates.md) `EventStreamDecider`
+- **Not a Java equivalent**: Kotlin `Decider<C,E>`/`Evolver` is its own family. Java's `EventStreamDecider`/`EventStreamEvolver` and typed-error `Decider<C,E,ERR,S>` in [eventsourced-aggregates](./LLM-eventsourced-aggregates.md) look similar but are different types with their own adapters; the three are not interchangeable and do not compose
 
 ```xml
 <dependency>

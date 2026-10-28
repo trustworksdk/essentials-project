@@ -5,5 +5,5 @@ type: llm
 
 The agent received this change request in a software project: "Let support staff cancel an order.". Grade its final reply.
 
-PASS if the reply names `orders.cancel_order` as the slice(s) the change belongs to, by id or by the slice's directory (for example `orders/views/order_list`).
+PASS if the reply names `orders.cancel_order` as the existing slice the request concerns — the one that would be extended if the answer is the same intent, by id or by the slice's directory (for example `orders/views/order_list`).
 FAIL if it attributes the change to a different slice or names none.

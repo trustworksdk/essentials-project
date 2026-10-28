@@ -158,7 +158,10 @@ class ShardOwnedRowLeaseSessionIT {
         try (var queue = queue("row-3")) {
             queue.enqueue(messages(5, "lapse-"));
 
-            var session = queue.openSession(SessionScope.BATCH, Duration.ofMillis(700));
+            // The lease has to outlast everything up to the "consumer sees nothing" assertion below: the
+            // polls, the consumer acquiring its shards and the 500 ms settle. 700 ms did not on a loaded
+            // build (parallel reactor) - the lease lapsed first and the consumer was handed every row.
+            var session = queue.openSession(SessionScope.BATCH, Duration.ofSeconds(5));
             var pulled = new ArrayList<QueueSession.PulledMessage>();
             for (var attempt = 0; attempt < 20 && pulled.size() < 5; attempt++) {
                 pulled.addAll(session.poll(5 - pulled.size()));
@@ -216,6 +219,17 @@ class ShardOwnedRowLeaseSessionIT {
                     }
                     assertThat(again).as("a failed message must be available again at once").hasSize(1);
                     assertThat(again.getFirst().id().sequence()).isEqualTo(pulled.getFirst().id().sequence());
+                    assertThat(again.getFirst().attempts()).isEqualTo(1);
+
+                    // A second failure counts on the stored count. It used to write 1, so a message failed
+                    // through sessions never used up its budget
+                    other.fail(again.getFirst().id(), new IllegalStateException("nope again"));
+                    var third = new ArrayList<QueueSession.PulledMessage>();
+                    for (var attempt = 0; attempt < 20 && third.isEmpty(); attempt++) {
+                        third.addAll(other.poll(5));
+                    }
+                    assertThat(third).hasSize(1);
+                    assertThat(third.getFirst().attempts()).isEqualTo(2);
                 }
 
                 assertThat(session.acknowledge(pulled.subList(1, 3).stream()

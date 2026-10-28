@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: shipping.order_status
 kind: view
 bc: shipping
@@ -7,6 +7,7 @@ status: live
 summary: Answer where a shipping order stands, by list, by id, or filtered by shipped status.
 generator: essentials
 language: java
+lane: service-entity
 tier: service-entity
 
 serves: [ListOrders, GetOrderStatus, FindOrdersByShippedStatus]
@@ -21,6 +22,47 @@ reads:
 # (projection idempotency) does not apply.
 forbidden:
   - cross-slice-internal:shipping
+scenarios:
+  - name: reports a shipped order as shipped
+    given:
+      - state: ShippingOrder
+        with:
+          orderId: o-1
+          shipped: false
+      - state: ShippingOrder
+        with:
+          orderId: o-2
+          shipped: true
+    when:
+      query: GetOrderStatus
+      with:
+        orderId: o-2
+    then:
+      readModel: OrderStatusView
+      rows:
+        - id: o-2
+          shipped: true
+    test: OrderStatusIT#the_view_reports_shipped_status_immediately_after_the_commands_that_change_it
+  - name: filters orders by shipped status
+    given:
+      - state: ShippingOrder
+        with:
+          orderId: o-1
+          shipped: false
+      - state: ShippingOrder
+        with:
+          orderId: o-2
+          shipped: true
+    when:
+      query: FindOrdersByShippedStatus
+      with:
+        shipped: true
+    then:
+      readModel: OrderStatusView
+      rows:
+        - id: o-2
+          shipped: true
+    test: OrderStatusIT#the_view_filters_and_lists_over_the_read_model_it_owns
 tests:
   unit: { present: false }
   integration: { present: true }

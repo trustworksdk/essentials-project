@@ -580,5 +580,9 @@
       "reason": "not a readable string: Routes.EXPORT"
     }
   ],
-  "unresolved": []
+  "unresolved": [],
+  "tests": {
+    "roots": [],
+    "classes": []
+  }
 }

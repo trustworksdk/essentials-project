@@ -21,7 +21,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EventJSON;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
-import dk.trustworks.essentials.components.foundation.Lifecycle;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
@@ -31,10 +30,12 @@ import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.reactive.Handler;
 import dk.trustworks.essentials.reactive.command.*;
+import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -218,6 +219,7 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     private       Consumer<Message>             inboxMessageHandlerDelegate;
     private       Inbox                         inbox;
     private       PatternMatchingMessageHandler patternMatchingInboxMessageHandlerDelegate;
+    private       UnhandledEventTypes           unhandledEventTypes;
 
     /**
      * Create a new {@link EventProcessor} instance
@@ -292,81 +294,114 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     @Override
     public void start() {
         if (!started) {
-            started = true;
             var processorName              = requireNonNull(getProcessorName(), "getProcessorName() returned null");
             var subscribeToEventsRelatedTo = requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null");
-            log.info("⚙️ [{}] Starting EventProcessor - will subscribe to events related to these AggregatesType's: {}",
-                     processorName,
-                     subscribeToEventsRelatedTo);
+            started = true;
+            // The Inbox whose consumption this start holds, once it does - stopped again when a later step fails
+            var consumingInbox = new AtomicReference<Inbox>();
+            // Any step may fail (getOrCreateInbox, the Inbox's consume, a subscribe), and subscribeEachOrUnsubscribe unsubscribes
+            // what it created. Left not started, so start() may be called again - and stop() then does nothing, so the Inbox
+            // consumption this start holds is undone here too - see startOrRollBack
+            startOrRollBack(() -> {
+                log.info("⚙️ [{}] Starting EventProcessor - will subscribe to events related to these AggregatesType's: {}",
+                         processorName,
+                         subscribeToEventsRelatedTo);
 
-            setupMessageHandlerDelegate();
-            inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
-                                                        .inboxName(InboxName.of(processorName))
-                                                        .messageConsumptionMode(getInboxMessageConsumptionMode())
-                                                        .numberOfParallelMessageConsumers(getNumberOfParallelInboxMessageConsumers())
-                                                        .redeliveryPolicy(getInboxRedeliveryPolicy())
-                                                        .build(),
-                                             inboxMessageHandlerDelegate);
-            durableQueueName = inbox.name().asQueueName();
+                setupMessageHandlerDelegate();
+                warnOnceIfEventStoreIsNoAwaitedGapInspector();
+                UnhandledEventTypes.logHandledMessageTypes(processorName, this);
+                unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingInboxMessageHandlerDelegate, UnhandledEventTypes.Reporting.DEBUG);
+                inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
+                                                            .inboxName(InboxName.of(processorName))
+                                                            .messageConsumptionMode(getInboxMessageConsumptionMode())
+                                                            .numberOfParallelMessageConsumers(getNumberOfParallelInboxMessageConsumers())
+                                                            .redeliveryPolicy(getInboxRedeliveryPolicy())
+                                                            .build(),
+                                                 inboxMessageHandlerDelegate);
+                // The Inbox outlives a stop(): Inbox#stopConsuming() drops its message consumer, and getOrCreateInbox
+                // returns the existing Inbox as it is, so a processor started again consumes from it again here
+                if (!inbox.hasAMessageConsumer()) {
+                    inbox.consume(inboxMessageHandlerDelegate);
+                }
+                consumingInbox.set(inbox);
+                durableQueueName = inbox.name().asQueueName();
 
-            eventStoreSubscriptions = subscribeToEventsRelatedTo.stream()
-                                                                .map(aggregateType -> {
-                                                                    var subscriberId = resolveSubscriberId(aggregateType, processorName);
-                                                                    var lockAwareSubscriber = new FencedLockAwareSubscriber() {
-                                                                        @Override
-                                                                        public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint resumeFromAndIncluding) {
-                                                                            log.info("⚙️ [{}] Subscriber '{}' acquired lock. Will resumeFromAndIncluding: {}",
-                                                                                     processorName,
-                                                                                     subscriberId,
-                                                                                     resumeFromAndIncluding);
-                                                                        }
+                // Assigned only once every subscribe succeeded, so eventStoreSubscriptions holds the (unsubscribed) ones of an earlier run until then
+                eventStoreSubscriptions = subscribeEachOrUnsubscribe(subscribeToEventsRelatedTo, aggregateType -> subscribe(processorName, aggregateType));
+            }, () -> {
+                var heldInbox = consumingInbox.get();
+                if (heldInbox != null) {
+                    heldInbox.stopConsuming();
+                }
+            }, () -> started = false);
 
-                                                                        @Override
-                                                                        public void onLockReleased(FencedLock fencedLock) {
-                                                                            log.info("⚙️ [{}] Subscriber '{}''s lock was released",
-                                                                                     processorName,
-                                                                                     subscriberId);
-
-                                                                        }
-                                                                    };
-                                                                    var forwardBatchSize = getForwardBatchSize();
-                                                                    var subscription = forwardBatchSize > 1
-                                                                                       ? subscribeForwardingInBatches(subscriberId, aggregateType, forwardBatchSize, lockAwareSubscriber, processorName)
-                                                                                       : eventStoreSubscriptionManager.exclusivelySubscribeToAggregateEventsAsynchronously(
-                                                                                               subscriberId,
-                                                                                               aggregateType,
-                                                                                               resolveStartSubscriptionFromGlobalEventOrder(),
-                                                                                               Optional.empty(),
-                                                                                               lockAwareSubscriber,
-                                                                                               new PersistedEventHandler() {
-                                                                                                   @Override
-                                                                                                   public void handle(PersistedEvent event) {
-                                                                                                       forwardEventToInbox(event, inbox);
-                                                                                                   }
-
-                                                                                                   @Override
-                                                                                                   public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
-                                                                                                       return getSubscriptionErrorPolicy();
-                                                                                                   }
-
-                                                                                                   @Override
-                                                                                                   public String toString() {
-                                                                                                       return processorName;
-                                                                                                   }
-                                                                                               });
-                                                                    log.info("⚙️ [{}] Created exclusive '{}' subscription{}: {}",
-                                                                             processorName,
-                                                                             aggregateType,
-                                                                             forwardBatchSize > 1 ? " forwarding in batches of up to " + forwardBatchSize : "",
-                                                                             subscription);
-                                                                    return subscription;
-                                                                })
-                                                                .toList();
-
+            // The count is a database query. Read in its own try, so a start that subscribed everything does not fail on its log line
+            // and leave the processor started with its caller told it failed. Throwable, not RuntimeException | Error, for a checked
+            // exception thrown sneakily too
+            long undeliveredMessages;
+            try {
+                undeliveredMessages = inbox.getNumberOfUndeliveredMessages();
+            } catch (Throwable e) {
+                Exceptions.rethrowIfCriticalError(e);
+                log.warn("⚙️ [{}] Started. Failed to read the # of undelivered Inbox messages", processorName, e);
+                return;
+            }
             log.info("⚙️ [{}] Started. # of undelivered Inbox messages: {}",
                      processorName,
-                     inbox.getNumberOfUndeliveredMessages());
+                     undeliveredMessages);
         }
+    }
+
+    private EventStoreSubscription subscribe(String processorName, AggregateType aggregateType) {
+        var subscriberId = resolveSubscriberId(aggregateType, processorName);
+        var lockAwareSubscriber = new FencedLockAwareSubscriber() {
+            @Override
+            public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint resumeFromAndIncluding) {
+                log.info("⚙️ [{}] Subscriber '{}' acquired lock. Will resumeFromAndIncluding: {}",
+                         processorName,
+                         subscriberId,
+                         resumeFromAndIncluding);
+            }
+
+            @Override
+            public void onLockReleased(FencedLock fencedLock) {
+                log.info("⚙️ [{}] Subscriber '{}''s lock was released",
+                         processorName,
+                         subscriberId);
+
+            }
+        };
+        var forwardBatchSize = getForwardBatchSize();
+        var subscription = forwardBatchSize > 1
+                           ? subscribeForwardingInBatches(subscriberId, aggregateType, forwardBatchSize, lockAwareSubscriber, processorName)
+                           : eventStoreSubscriptionManager.exclusivelySubscribeToAggregateEventsAsynchronously(
+                subscriberId,
+                aggregateType,
+                resolveStartSubscriptionFromGlobalEventOrder(),
+                Optional.empty(),
+                lockAwareSubscriber,
+                new PersistedEventHandler() {
+                    @Override
+                    public void handle(PersistedEvent event) {
+                        forwardEventToInbox(event, inbox);
+                    }
+
+                    @Override
+                    public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+                        return getSubscriptionErrorPolicy();
+                    }
+
+                    @Override
+                    public String toString() {
+                        return processorName;
+                    }
+                });
+        log.info("⚙️ [{}] Created exclusive '{}' subscription{}: {}",
+                 processorName,
+                 aggregateType,
+                 forwardBatchSize > 1 ? " forwarding in batches of up to " + forwardBatchSize : "",
+                 subscription);
+        return subscription;
     }
 
     @Override
@@ -375,8 +410,13 @@ public abstract class EventProcessor extends AbstractEventProcessor {
             started = false;
             log.info("⚙️ [{}] Stopping EventProcessor",
                      getProcessorName());
-            eventStoreSubscriptions.forEach(Lifecycle::stop);
-            inbox.stopConsuming();
+            // Unsubscribed, not just stopped, so start() subscribes anew - see AbstractEventProcessor#unsubscribeEach.
+            // The (unsubscribed) subscriptions are kept: resetAllSubscriptions/resetSubscriptions still find them
+            try {
+                unsubscribeEach(eventStoreSubscriptions);
+            } finally {
+                inbox.stopConsuming();
+            }
         }
     }
 
@@ -474,7 +514,8 @@ public abstract class EventProcessor extends AbstractEventProcessor {
      * Forward the event to the <code>forwardToInbox</code> as an {@link OrderedMessage}<br>
      * The default implementation checks if the concrete {@link EventProcessor} class has an {@literal @MessageHandler} annotated method that
      * handles the event. Only events with a corresponding {@link MessageHandler} annotated method will be forwarded to the {@link Inbox} and thereby delegates to the
-     * {@link MessageHandler} annotated method
+     * {@link MessageHandler} annotated method. An event it doesn't forward is reported as an ignored event type: a
+     * DEBUG log line (skipping events is normal for an {@link EventProcessor}) and {@code EventStoreSubscriptionObserver#eventTypeNotHandledByProcessor}
      *
      * @param event          the event to forward
      * @param forwardToInbox the {@link Inbox} the event should be forwarded to
@@ -489,6 +530,8 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                                                                                                       aggregateIdSerializer.serialize(event.aggregateId()),
                                                                                                       event.eventOrder(),
                                                                                                       new MessageMetaData(event.metaData().deserialize())));
+        } else if (unhandledEventTypes != null) {
+            unhandledEventTypes.report(event);
         }
     }
 
@@ -556,6 +599,32 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                 ", reactsToEventsRelatedToAggregateTypes=" + reactsToEventsRelatedToAggregateTypes() +
                 ", started=" + started +
                 " }";
+    }
+
+    /**
+     * The {@link Inbox} the events are forwarded to - see {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)}
+     */
+    @Override
+    protected boolean hasQueuedMessagesForAggregate(AggregateType aggregateType, String serializedAggregateId) {
+        var currentInbox = inbox;
+        if (currentInbox == null) {
+            // Not started: nothing can have been forwarded by this instance, and no subscription exists to be past the event
+            return true;
+        }
+        return currentInbox.hasOrderedMessageQueuedForKey(serializedAggregateId);
+    }
+
+    @Override
+    protected Optional<QueuedMessageCounts> getQueuedMessageCountsForAwaitProcessed() {
+        var currentInbox = inbox;
+        if (currentInbox == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new QueuedMessageCounts(currentInbox.name().asQueueName(),
+                                                   currentInbox.getNumberOfUndeliveredMessages(),
+                                                   currentInbox.getNumberOfDeadLetterMessages(),
+                                                   null,
+                                                   null));
     }
 
     /**

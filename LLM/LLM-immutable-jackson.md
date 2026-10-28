@@ -6,7 +6,7 @@
 - Package: `dk.trustworks.essentials.jackson.immutable`
 - Purpose: Jackson deserialization for immutable classes without matching constructors
 - Artifact: `immutable-jackson3` (Jackson 3 / `tools.jackson`)
-- Dependencies: `tools.jackson.core:jackson-databind`, `objenesis` (both provided scope)
+- Dependencies: `tools.jackson.core:jackson-databind`, `objenesis` (both provided scope - the application declares them). Since 0.60.1 `EssentialsObjectMappers` refuses to build a mapper when this module is on the classpath without Objenesis, instead of the first read failing with `NoClassDefFoundError`
 - **Status**: WORK-IN-PROGRESS
 
 ```xml
@@ -84,7 +84,9 @@ ObjectMapper mapper = EssentialsImmutableJacksonModule.createObjectMapper(
 
 For persistence use `EssentialsObjectMappers.createJackson3ObjectMapper(...)` / `createJSONSerializer()` (foundation),
 which registers this module and carries the frozen wire-format configuration. The Essentials Spring Boot starters
-already define the module bean.
+register it on their persistence serializer by default (`essentials.immutable-jackson-module-enabled=false` turns that
+off) and define the module bean - which puts it on Boot's web mapper - only when that property is set to `true`
+explicitly.
 
 ### ImmutableObjectsValueInstantiator
 
@@ -174,10 +176,11 @@ public class ValidatedOrder {
 | Setting | Value | Purpose |
 |---------|-------|---------|
 | Field visibility | `ANY` | Serialize all fields |
-| Getter/setter visibility | `NONE` | Fields only, no getters/setters |
+| Getter, `is`-getter and setter visibility | `NONE` | Fields only: a public `isX()` adds no property |
 | Creator visibility | `ANY` | Any constructor may be used as creator |
 | `DEFAULT_VIEW_INCLUSION` | disabled | - |
 | `FAIL_ON_UNKNOWN_PROPERTIES` | disabled | Don't fail on extra JSON fields |
+| `FAIL_ON_NULL_FOR_PRIMITIVES` | disabled | A missing primitive reads as `0`/`false`, as under Jackson 2 |
 | `FAIL_ON_EMPTY_BEANS` | disabled | Allow empty objects |
 | `PROPAGATE_TRANSIENT_MARKER` | enabled | Respect `transient` keyword |
 

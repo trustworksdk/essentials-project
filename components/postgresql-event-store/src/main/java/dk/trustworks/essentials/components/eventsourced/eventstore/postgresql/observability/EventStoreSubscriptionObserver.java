@@ -328,6 +328,20 @@ public interface EventStoreSubscriptionObserver {
                                                           EventStoreSubscription eventStoreSubscription) {
     }
 
+    /**
+     * An event processor ({@code EventProcessor}, {@code ViewEventProcessor} or {@code InTransactionEventProcessor})
+     * received an event from its subscription that none of its {@code @MessageHandler} methods accepts, and ignored it.
+     * Event processors allow unmatched events, so this is the only signal that an event type has no handler - which is
+     * deliberate for some types and a missing handler for others. Called once per ignored event, on the subscription's
+     * delivery thread; it must not block or throw. The default does nothing, so existing observers are unaffected.
+     *
+     * @param processorName the name of the event processor that ignored the event
+     * @param event         the event it ignored - {@link PersistedEvent#aggregateType()} and
+     *                      {@code event.event().getEventTypeOrNamePersistenceValue()} name the unhandled type
+     */
+    default void eventTypeNotHandledByProcessor(String processorName, PersistedEvent event) {
+    }
+
 
     /**
      * How long did it take for an asynchronous {@link EventStoreSubscription} to resolve the resume point while starting

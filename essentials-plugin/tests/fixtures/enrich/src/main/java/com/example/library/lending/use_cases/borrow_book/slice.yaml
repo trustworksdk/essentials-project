@@ -1,0 +1,28 @@
+# Lending: borrowing a copy.
+schemaVersion: "1.2"
+slice: lending.borrow_book
+kind: command
+bc: lending
+owner: circulation
+status: live
+summary: Lends a copy of a book to a member.
+generator: essentials
+language: java
+lane: decider
+
+# --- Contracts ---
+handles: [BorrowBook]
+publishes: [BookBorrowed]
+endpoints:
+  - { method: POST, path: "/api/lending/loans", auth: user }
+
+# --- Data ---
+writes: [Copy]
+
+forbidden:
+  - cross-slice-internal:lending
+
+# --- Testing ---
+tests:
+  unit: { present: true }   # the decider test
+  integration: { present: false }

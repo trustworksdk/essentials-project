@@ -1,0 +1,13 @@
+schemaVersion: "1.3"
+slice: lending.waitlist
+kind: view
+bc: lending
+owner: circulation
+status: live
+summary: Lists the members waiting for a title.
+generator: essentials
+serves: [Waitlist]
+endpoints:
+  - { method: GET, path: /api/lending/titles/{isbn}/waitlist, auth: user }
+tests:
+  integration: { present: false }

@@ -83,6 +83,8 @@ final class EssentialsAdminApiSpec {
             ApiShardOwnedMessage.class,
             ApiShardOwnedQueueStatus.class,
             ApiShardOwnedQueueStatistics.class,
+            ApiShardOwnedKeptUnitRelease.class,
+            ApiShardOwnedKeptUnitReleases.class,
             ApiQueueStatistics.class,
             ApiSubscription.class,
             ApiSubscriptionStatistics.class,
@@ -473,6 +475,22 @@ final class EssentialsAdminApiSpec {
          .pathParam("queueName", new StringSchema(), "The queue name.")
          .pathParam("key", new StringSchema(), "The ordering key.")
          .responseRef("ShardOwnedResurrectKeyResult", "How many messages were put back.");
+
+        b.operation(ShardOwnedQueuesApi.class, "releaseKeptOrderedUnit")
+         .operationId("shardOwnedReleaseKeptOrderedUnit")
+         .tag("shard-owned-queues").post("/shard-owned-queues/{queueName}/ordered-units/{unit}/release-kept")
+         .summary("Release an ordered unit a stop of a subscription running under the given instance id kept because a key "
+                  + "of it was still in its handler, without waiting for that handler any longer. Whoever takes the unit "
+                  + "next delivers the messages still in a handler again, possibly while those handlers still run them. "
+                  + "Answered by the process receiving the request, from its own memory: answeredBy names the instance ids "
+                  + "that process has for the queue, and empty releases mean it kept no such unit under that instance id "
+                  + "with its lease row still held.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("unit", new IntegerSchema(), "The ordered unit, as the WARN reporting it kept names it.")
+         .queryParam("instanceId", new StringSchema(), true,
+                     "The instance id the WARN reporting the unit kept names. Only a unit a subscription under it kept is touched.")
+         .responseRef("ApiShardOwnedKeptUnitReleases", "The instance ids that answered, and what was done.");
 
         b.operation(ShardOwnedQueuesApi.class, "purgeQueue")
          .operationId("shardOwnedPurgeQueue")

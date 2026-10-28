@@ -20,11 +20,13 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
+import com.github.dockerjava.api.exception.NotFoundException;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.BeforeEach;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.postgresql.util.PSQLException;
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.*;
 import org.testcontainers.images.builder.ImageFromDockerfile;
@@ -34,7 +36,7 @@ import javax.sql.DataSource;
 import java.sql.*;
 import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.*;
 
 /**
  * Abstract test class providing an integration testing framework for PostgreSQL databases
@@ -75,15 +77,26 @@ public class AbstractLogicalReplicationPostgresIT {
     public static final AggregateType ORDERS = AggregateType.of("Orders");
 
     /**
-     * Built from {@code docker/postgresql-wal2json/Dockerfile}.
+     * Built from {@code docker/postgresql-wal2json/Dockerfile}, by this module's {@code docker-maven-plugin} execution
+     * before failsafe forks a JVM; the name comes from the POM property {@code essentials.wal2json.test-image}.
      * <p>
-     * The image name and {@code deleteOnExit=false} are load-bearing: an anonymous {@link ImageFromDockerfile} is
-     * rebuilt and then orphaned on every use, which left thousands of dangling ~640 MB images behind on developer
-     * machines. With a stable tag the image is built once and reused. <b>Bump the tag whenever the Dockerfile
-     * changes</b>, otherwise the stale image is reused.
+     * Never build it per JVM under Maven: two failsafe forks building the same tag at once left one unable to find it,
+     * and Testcontainers then tried to pull the local-only name from Docker Hub. Only a run outside Maven (an IDE) that
+     * finds no such image builds it here, once. The stable tag and {@code deleteOnExit=false} keep that from leaving a
+     * dangling ~640 MB image behind on every run, so <b>bump the tag in the POM whenever the Dockerfile changes</b>.
      */
-    protected static final ImageFromDockerfile WAL2JSON_IMAGE = new ImageFromDockerfile("essentials-test/postgres-wal2json:1", false)
-            .withFileFromClasspath("Dockerfile", "docker/postgresql-wal2json/Dockerfile");
+    protected static final Future<String> WAL2JSON_IMAGE = wal2jsonImage();
+
+    private static Future<String> wal2jsonImage() {
+        var name = System.getProperty("essentials.wal2json.test-image", "essentials-test/postgres-wal2json:1");
+        try {
+            DockerClientFactory.instance().client().inspectImageCmd(name).exec();
+            return CompletableFuture.completedFuture(name);
+        } catch (NotFoundException e) {
+            return new ImageFromDockerfile(name, false)
+                    .withFileFromClasspath("Dockerfile", "docker/postgresql-wal2json/Dockerfile");
+        }
+    }
 
     /**
      * The readiness check for {@link #WAL2JSON_IMAGE}, shared with {@link CdcModeAutoRequireIT}.

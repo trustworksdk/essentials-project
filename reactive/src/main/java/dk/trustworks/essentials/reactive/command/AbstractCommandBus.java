@@ -24,6 +24,7 @@ import reactor.core.scheduler.Schedulers;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.locks.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -32,13 +33,28 @@ import static dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChai
 /**
  * Base implementation of the {@link CommandBus} - provides default implementation for all
  * operations except for {@link #sendAndDontWait(Object)}/{@link #sendAndDontWait(Object, Duration)}
+ * <p>
+ * Adding and removing {@link CommandHandler}s is safe from any number of threads, also while commands are sent. When an
+ * added {@link CommandHandler} makes a command type handled by more than one {@link CommandHandler}, the bus logs a WARN
+ * naming the command type and the handlers (see {@link #findCommandTypesHandledByMoreThanOneCommandHandler(CommandHandler)}) -
+ * it does not fail the registration, as an overlap that is never sent keeps working.
  */
 public abstract class AbstractCommandBus implements CommandBus {
     private final Logger log = LoggerFactory.getLogger(this.getClass());
 
     protected final List<CommandBusInterceptor>    interceptors       = new CopyOnWriteArrayList<>();
     protected final List<CommandContextPropagator> contextPropagators = new CopyOnWriteArrayList<>();
-    protected final Set<CommandHandler>            commandHandlers    = new HashSet<>();
+    /**
+     * The registered {@link CommandHandler}s, in registration order. Modified only under {@link #commandHandlerRegistrationLock}'s
+     * write lock, together with clearing {@link #commandTypeToCommandHandlerCache}; read freely (a copy-on-write snapshot)
+     */
+    protected final Set<CommandHandler>            commandHandlers    = new CopyOnWriteArraySet<>();
+    /**
+     * Write lock: changing {@link #commandHandlers} and clearing {@link #commandTypeToCommandHandlerCache}.<br>
+     * Read lock: resolving a command type that is not yet in {@link #commandTypeToCommandHandlerCache} - so a resolution
+     * made from the handlers as they were before a registration can never be cached after that registration cleared the cache
+     */
+    protected final ReadWriteLock                  commandHandlerRegistrationLock = new ReentrantReadWriteLock();
     protected final SendAndDontWaitErrorHandler sendAndDontWaitErrorHandler;
 
     protected AbstractCommandBus(List<CommandBusInterceptor> interceptors) {
@@ -128,22 +144,77 @@ public abstract class AbstractCommandBus implements CommandBus {
 
     @Override
     public CommandBus addCommandHandler(CommandHandler commandHandler) {
-        if (!hasCommandHandler(commandHandler)) {
-            log.info("Adding CommandHandler: {}", commandHandler);
-            if (commandHandlers.add(requireNonNull(commandHandler, "No commandHandler provided"))) {
+        requireNonNull(commandHandler, "No commandHandler provided");
+        boolean added;
+        commandHandlerRegistrationLock.writeLock().lock();
+        try {
+            added = commandHandlers.add(commandHandler);
+            if (added) {
+                log.info("Adding CommandHandler: {}", commandHandler);
                 commandTypeToCommandHandlerCache.clear();
             }
+        } finally {
+            commandHandlerRegistrationLock.writeLock().unlock();
+        }
+        if (added) {
+            // Outside the lock: the check calls the handlers' canHandle
+            warnAboutCommandTypesHandledByMoreThanOneCommandHandler(commandHandler);
         }
         return this;
     }
 
+    /**
+     * WARN for every command type that the just added {@link CommandHandler} and another registered {@link CommandHandler}
+     * can both handle - every send of it fails with a {@link MultipleCommandHandlersFoundException}, which would otherwise
+     * surface only at the first send.
+     * <p>
+     * A WARN, not a failure: an overlap that is never sent works today, and rejecting it would break such a setup in a
+     * patch release. The check never fails the registration either - its own failure is logged at ERROR, as DEBUG is
+     * usually filtered out and would hide that the check did not run.
+     *
+     * @param addedCommandHandler the {@link CommandHandler} that was just added
+     */
+    private void warnAboutCommandTypesHandledByMoreThanOneCommandHandler(CommandHandler addedCommandHandler) {
+        try {
+            findCommandTypesHandledByMoreThanOneCommandHandler(addedCommandHandler).forEach((commandType, handlers) ->
+                    log.warn("Command type '{}' would be handled by {} command handlers: {}. The {} fails every send of it with a {} - " +
+                                     "register each command type with exactly one {}",
+                             commandType.getName(),
+                             handlers.size(),
+                             handlers,
+                             this.getClass().getSimpleName(),
+                             MultipleCommandHandlersFoundException.class.getSimpleName(),
+                             CommandHandler.class.getSimpleName()));
+        } catch (RuntimeException e) {
+            log.error(msg("Could not check whether the command types of {} '{}' are handled by more than one {}",
+                          CommandHandler.class.getSimpleName(),
+                          addedCommandHandler,
+                          CommandHandler.class.getSimpleName()),
+                      e);
+        }
+    }
+
     @Override
     public CommandBus removeCommandHandler(CommandHandler commandHandler) {
-        log.info("Removing CommandHandler: {}", commandHandler);
-        if (commandHandlers.remove(requireNonNull(commandHandler, "No commandHandler provided"))) {
-            commandTypeToCommandHandlerCache.clear();
+        requireNonNull(commandHandler, "No commandHandler provided");
+        commandHandlerRegistrationLock.writeLock().lock();
+        try {
+            if (commandHandlers.remove(commandHandler)) {
+                log.info("Removing CommandHandler: {}", commandHandler);
+                commandTypeToCommandHandlerCache.clear();
+            }
+        } finally {
+            commandHandlerRegistrationLock.writeLock().unlock();
         }
         return this;
+    }
+
+    /**
+     * @return an immutable snapshot of the registered {@link CommandHandler}s, in registration order
+     */
+    @Override
+    public List<CommandHandler> getCommandHandlers() {
+        return List.copyOf(commandHandlers);
     }
 
     @Override
@@ -176,7 +247,20 @@ public abstract class AbstractCommandBus implements CommandBus {
     @Override
     public CommandHandler findCommandHandlerCapableOfHandling(Object command) {
         requireNonNull(command, "No command provided");
-        return commandTypeToCommandHandlerCache.computeIfAbsent(command.getClass(), commandType -> {
+        var cachedCommandHandler = commandTypeToCommandHandlerCache.get(command.getClass());
+        if (cachedCommandHandler != null) {
+            return cachedCommandHandler;
+        }
+        commandHandlerRegistrationLock.readLock().lock();
+        try {
+            return resolveAndCacheCommandHandlerCapableOfHandling(command.getClass());
+        } finally {
+            commandHandlerRegistrationLock.readLock().unlock();
+        }
+    }
+
+    private CommandHandler resolveAndCacheCommandHandlerCapableOfHandling(Class<?> commandType_) {
+        return commandTypeToCommandHandlerCache.computeIfAbsent(commandType_, commandType -> {
             var commandHandlersThatCanHandleCommand = commandHandlers.stream().filter(commandHandler -> commandHandler.canHandle(commandType)).toList();
             if (commandHandlersThatCanHandleCommand.isEmpty()) {
                 throw new NoCommandHandlerFoundException(commandType, msg("Couldn't find a {} that can handle a command of type '{}'", CommandHandler.class.getSimpleName(), commandType.getName()));

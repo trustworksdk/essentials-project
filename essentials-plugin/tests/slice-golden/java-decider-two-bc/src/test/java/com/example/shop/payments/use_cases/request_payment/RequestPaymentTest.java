@@ -37,5 +37,5 @@ class RequestPaymentTest {
     }
 
     // TODO: one test per invariant enforced by RequestPaymentDecider.
-    // Rejections use .thenThrows(SomeException.class).
+    // Rejections use .thenFailsWithExceptionType(SomeException.class).
 }

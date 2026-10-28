@@ -1,0 +1,24 @@
+// markdownlint rules for the tw-code-review plugin's markdown adapter, which runs
+// markdownlint from the repository root and picks this file up there.
+// Not wired into the Maven build.
+//
+// markdownlint's defaults, minus the rules that contradict this repository's
+// deliberate Markdown idioms.
+{
+  // Gate and table rows cannot wrap, so each stays on one line; prose is hard-wrapped
+  // at about 100-110 columns, and CLAUDE.md paragraphs are not wrapped at all.
+  "MD013": false,
+
+  // <a id="…"></a> anchors are link targets for review ids: the slice-check gate anchors
+  // (`commands/slice-check.md#g<n>`, linked by /essentials:review) and the ESS-NNN anchors
+  // in LLM/LLM-traps.md. essentials-plugin/CLAUDE.md requires them. No other HTML.
+  "MD033": { "allowed_elements": ["a"] },
+
+  // The house emphasis style is *asterisk*.
+  "MD049": { "style": "asterisk" },
+
+  // Tables put a bare `|---|---|` delimiter under a spaced `| Key | Meaning |` header, in
+  // essentials-plugin/ and LLM/ alike. MD060 reads that as mixed column style, and none of its
+  // styles (aligned, compact, tight) accepts it.
+  "MD060": false
+}

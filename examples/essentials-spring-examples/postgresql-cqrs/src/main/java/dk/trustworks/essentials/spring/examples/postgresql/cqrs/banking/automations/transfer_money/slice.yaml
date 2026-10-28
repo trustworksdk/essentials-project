@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: banking.transfer_money
 kind: automation
 bc: banking
@@ -7,6 +7,7 @@ status: live
 summary: Carry a requested intra-bank transfer through withdrawal, deposit and completion.
 generator: essentials
 language: java
+lane: aggregate
 
 consumes:
   - IntraBankMoneyTransferRequested
@@ -33,6 +34,8 @@ invariants:
     enforcedBy: IntraBankMoneyTransfer
 forbidden:
   - cross-slice-internal:banking
+tier: cqrs-es
+flow: money-transfer
 tests:
   unit: { present: false }
   integration: { present: true }

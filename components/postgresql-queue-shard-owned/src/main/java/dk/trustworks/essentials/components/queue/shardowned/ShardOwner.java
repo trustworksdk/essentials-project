@@ -22,8 +22,9 @@ import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
 import java.sql.*;
+import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
@@ -83,9 +84,12 @@ final class ShardOwner implements LeasedOwner {
      */
     private final    Object                                       stateLock     = new Object();
     /**
-     * Cleared when the lease is lost, so the owner stops dispatching rather than racing its successor.
+     * Where this owner's lease row stands ({@link LeasedOwner#leaseRow()}). Anything but {@code HELD} stops the owner
+     * dispatching, rather than racing its successor. Every transition goes through {@link LeaseRowState#advanceTo}, one
+     * compare-and-set, not {@link #stateLock}: no field the lock guards changes with it, and the pump's selection check
+     * on every pass reads it without taking the lock the handler threads contend for.
      */
-    private final    AtomicBoolean                                leaseHeld     = new AtomicBoolean(true);
+    private final    LeaseRowState                                leaseRow      = new LeaseRowState();
     /**
      * Set by {@link #beginDraining()}: nothing new is read or dispatched, acknowledgements still flush.
      */
@@ -98,7 +102,7 @@ final class ShardOwner implements LeasedOwner {
      * sweep is what still delivers the message, filtered by the owner's own in-memory dedup. Making
      * the sweep exclude them would turn a lost hand-off into a permanently stuck message.
      */
-    private final    ConcurrentLinkedQueue<ShardOwnedStorage.Row> localHandoffs = new ConcurrentLinkedQueue<>();
+    private final    Queue<ShardOwnedStorage.Row> localHandoffs = new ConcurrentLinkedQueue<>();
 
     /**
      * The in-memory retry schedule — §4.6's timer wheel at the scale one shard needs.
@@ -108,7 +112,7 @@ final class ShardOwner implements LeasedOwner {
      * the table with {@code visible_at} in the future, where the head sweep will find it if this
      * owner dies. Retries therefore cost the read path nothing at all.
      */
-    private final PriorityQueue<Retry> retrySchedule = new PriorityQueue<>(Comparator.comparingLong(Retry::dueNanos));
+    private final Queue<Retry>         retrySchedule = new PriorityQueue<>(Comparator.comparingLong(Retry::dueNanos));
     private final Map<Long, Integer>   attemptsBySeq = new HashMap<>();
 
     /**
@@ -130,15 +134,31 @@ final class ShardOwner implements LeasedOwner {
     /**
      * Sequence values the cursor stepped over, mapped to when they were first missed.
      */
-    private final TreeMap<Long, Long> pendingHoles = new TreeMap<>();
+    private final NavigableMap<Long, Long> pendingHoles = new TreeMap<>();
     /**
-     * Delivered but not yet acknowledged, so a sweep does not deliver them twice.
+     * In a handler: delivered and not yet returned, so a sweep does not deliver them twice. Each with when it was handed to
+     * the handler executor, by {@link System#nanoTime()}, which {@link #chargeInHandlerBeforeRelease} times
+     * {@code stuckHandlerTimeout} from.
      */
-    private final TreeSet<Long>       inFlight     = new TreeSet<>();
+    private final NavigableMap<Long, Long> inFlight     = new TreeMap<>();
+    /**
+     * The messages in {@link #inFlight} whose handler has returned or thrown, while the owner records the outcome (still
+     * inside the in-flight slot): left out of the candidates of {@link #chargeInHandlerBeforeRelease}. Marked before the
+     * handler thread asks {@link ReleaseChargeLedger#completedInHandler} or {@link ReleaseChargeLedger#deadLetteredWhileInHandler},
+     * so a charge that takes its candidates after that leaves the message to the outcome its handler records, and one that
+     * took them before is seen running and waited for. Charged regardless, a message whose handler had completed was acknowledged and dead-lettered both.
+     * <p>
+     * A handler that failed is left out too while it records its failure, and that record is a fenced write: when the
+     * release commits before it, the write is refused (the lease is no longer this owner's), and the next owner, finding
+     * the shard released, charges nothing - that delivery's attempt is not counted. Accepted: the window runs only from the
+     * mark until that write commits, and charged in it, the delivery would be counted twice (by the charge and by its own
+     * failure write) or dead-lettered by the charge while its handler schedules a retry of it.
+     */
+    private final Set<Long>                returnedFromHandler = new HashSet<>();
     /**
      * Handled and awaiting the next ack flush.
      */
-    private final TreeSet<Long>       pendingAcks  = new TreeSet<>();
+    private final NavigableSet<Long>       pendingAcks  = new TreeSet<>();
 
     private long lastChaseNanos;
     private long lastSweepNanos;
@@ -161,10 +181,36 @@ final class ShardOwner implements LeasedOwner {
 
     /**
      * Whether the takeover charge has been made - or is not owed, because the previous owner released the shard
-     * cleanly. {@link #onTakeover} runs once per pump connection, a reconnect included, and charging again on
-     * every reconnect cost the in-flight window an attempt each time the database blipped.
+     * cleanly. {@link #onTakeover} runs once per pump connection, a reconnect included, and again on every pump
+     * pass until it has completed; charging again on every reconnect cost the in-flight window an attempt each
+     * time the database blipped. Set as soon as the charge has committed, not after the exhaustion pass that
+     * follows it: a pass that failed left the charge unrecorded, and the call that retried it charged the window
+     * a second time.
      */
     private boolean takeoverCharged;
+
+    /**
+     * Whether the exhaustion dead-letter pass that follows the takeover charge has yet to complete. Set with
+     * {@link #takeoverCharged} and cleared once the pass has run, so a pass that failed is retried - on the pump's
+     * next pass while the connection is healthy, which keeps the pump serving its other shards meanwhile, or on
+     * the next connection when it is not - and only then. A plain reconnect, with no new charge behind it, must
+     * not run the pass: it would park a message this owner is itself delivering on its last attempt.
+     */
+    private boolean exhaustionPending;
+
+    /**
+     * The charge {@link #chargeInHandlerBeforeRelease} makes, shared with the ordered lane: the messages charged before a
+     * release past their handlers, and their dead-letter moves. The handler of a message it dead-lettered that completes or
+     * throws later records nothing against the row, which is gone: no acknowledgement, no attempt, no retry - a WARN instead
+     * (an interrupted one is counted in {@code abandonedOnInterrupt} only)
+     * ({@link #completedAfterItsDeadLetter}, {@link #failedAfterItsDeadLetter}).
+     */
+    private final ReleaseChargeLedger releaseChargeLedger;
+    /**
+     * The rate limit of the WARN that a release left this owner out, a dead-letter move of it still owed
+     * ({@link #owedMoveReleaseRefusals()}).
+     */
+    private final OwedMoveReleaseRefusals owedMoveReleaseRefusals = new OwedMoveReleaseRefusals();
 
     ShardOwner(ShardOwnedStorage storage,
                int shard,
@@ -189,6 +235,30 @@ final class ShardOwner implements LeasedOwner {
         this.instanceId = requireNonNull(instanceId, "No instanceId provided");
         this.dispatch = requireNonNull(dispatch, "No dispatch provided");
         this.takeoverCharged = previousOwnerReleased;
+        this.releaseChargeLedger = new ReleaseChargeLedger(MessageId.Lane.UNORDERED, shard, new ReleaseChargeLedger.Writes() {
+            @Override
+            public Map<Long, Integer> chargeRowsInHandler(Connection connection, Collection<Long> seqs) throws SQLException {
+                return storage.chargeRowsInHandler(connection, ShardOwnedSchema.UNORDERED_TABLE, shard, seqs, instanceId, fence);
+            }
+
+            @Override
+            public boolean moveToDeadLetterIfOwned(Connection connection, long seq) throws SQLException {
+                return storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard, seq,
+                                                       ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER, instanceId, fence);
+            }
+
+            @Override
+            public boolean isDeadLetteredOnRelease(Connection connection, long seq, int attempts) throws SQLException {
+                return storage.isDeadLetteredWith(connection, "unordered", shard, seq, attempts, ShardOwnedStorage.EXHAUSTED_IN_A_RELEASED_HANDLER);
+            }
+
+            @Override
+            public boolean stillOwns(Connection connection) throws SQLException {
+                return storage.stillOwns(connection, "unordered", shard, instanceId, fence);
+            }
+        }, redeliveryPolicy, metrics, this::recordChargedAttempts, deadLettered -> {
+            // No key to block: a dead letter holds nothing back on this lane
+        });
     }
 
     /**
@@ -205,19 +275,52 @@ final class ShardOwner implements LeasedOwner {
     }
 
     @Override
+    public void endKeepingLeaseRow() {
+        if (leaseRow.advanceTo(LeaseRow.ENDED_ROW_HELD) != LeaseRow.HELD) {
+            return;
+        }
+        log.debug("Shard {}: owner stopping under fence {}; its lease row is still to be released", shard, fence);
+        // So the pump drops it on its next pass rather than at its backstop.
+        wakeup.signal();
+    }
+
+    @Override
     public void onLeaseEnded(LeaseEnd reason) {
-        if (leaseHeld.compareAndSet(true, false)) {
-            // Per unit, and DEBUG for both: the caller knows how many units it just moved and says so
-            // once. At a two-instance handover this fires 32 times in one heartbeat tick.
-            log.debug("Shard {}: lease {} under fence {}, owner stopping",
-                      shard, reason == LeaseEnd.TAKEN ? "taken" : "released", fence);
+        var was = leaseRow.advanceTo(LeaseRow.RELEASED);
+        if (was == LeaseRow.RELEASED) {
+            return;
+        }
+        // A unit found gone after a release of its row failed with no error answer from the database
+        // (LeaseRowState#mayHaveGoneThrough) is read as given up by that release, which may have gone through on the
+        // server (markReleaseInDoubt), not as a lease lost.
+        var lost = reason == LeaseEnd.TAKEN && !leaseRow.releaseInDoubt();
+        if (lost) {
+            // Counted by the call that moved the row: a refused takeover charge may have found the same loss first
+            metrics.leasesLost.increment();
+        }
+        // Per unit, and DEBUG for both: the caller knows how many units it just moved and says so
+        // once. At a two-instance handover this fires 32 times in one heartbeat tick.
+        log.debug("Shard {}: lease under fence {} {}{}",
+                  shard, fence, lost ? "taken" : reason == LeaseEnd.TAKEN ? "found given up by a release whose answer was not received" : "released",
+                  was == LeaseRow.HELD ? ", owner stopping" : "");
+        if (was == LeaseRow.HELD) {
             wakeup.signal();
         }
     }
 
     @Override
-    public boolean leaseHeld() {
-        return leaseHeld.get();
+    public LeaseRow leaseRow() {
+        return leaseRow.get();
+    }
+
+    @Override
+    public void markReleaseInDoubt() {
+        leaseRow.markReleaseInDoubt();
+    }
+
+    @Override
+    public boolean releaseInDoubt() {
+        return leaseRow.releaseInDoubt();
     }
 
     @Override
@@ -228,6 +331,11 @@ final class ShardOwner implements LeasedOwner {
     @Override
     public int shard() {
         return shard;
+    }
+
+    @Override
+    public short queueId() {
+        return storage.queueId();
     }
 
     @Override
@@ -277,23 +385,67 @@ final class ShardOwner implements LeasedOwner {
             sweepPinnedUntilNanos = System.nanoTime() + settings.holeExpiry().toNanos();
             cursorPositioned = true;
         }
-        if (takeoverCharged) {
+        if (!takeoverCharged) {
+            var charged = storage.bumpAttemptsOnTakeover(connection, shard, dispatch.capacity(), settings.ackBatchSize(), instanceId, fence);
+            if (charged == 0 && !storage.stillOwns("unordered", shard, instanceId, fence)) {
+                // The charge is fenced: this owner's lease moved on before its pump took it over, and its charge would
+                // have fallen on rows the successor may be delivering. Nothing else here is this owner's to do.
+                leaseLostBeforeTakeover();
+                return;
+            }
+            metrics.takeoverAttemptBumps.add(charged);
+            // The bump has committed: record it before anything else can fail, or the next call charges again
+            takeoverCharged = true;
+            exhaustionPending = true;
+        }
+        if (!exhaustionPending) {
             return;
         }
-        metrics.takeoverAttemptBumps.add(storage.bumpAttemptsOnTakeover(connection, shard, fence, dispatch.capacity(),
-                                                                        settings.ackBatchSize()));
         // A message whose handler took the process down every time never fails, so the failure path never parks
         // it. The charge above is the only count it has; once that reaches the policy's limit it is parked here.
         for (var seq : storage.exhaustedAfterTakeover(connection, ShardOwnedSchema.UNORDERED_TABLE, shard,
                                                        redeliveryPolicy.maxAttempts())) {
             if (storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard, seq,
                                                 ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS, instanceId, fence)) {
+                // Counted before the observer is told: the move has committed, so an observer that throws must not take
+                // the count with it - no later pass finds the row to move again.
+                metrics.deadLettered.increment();
                 metrics.observer().deadLettered(new MessageId(MessageId.Lane.UNORDERED, shard, seq),
                                                 redeliveryPolicy.maxAttempts(), new IllegalStateException(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS));
-                metrics.deadLettered.increment();
             }
         }
-        takeoverCharged = true;
+        exhaustionPending = false;
+    }
+
+    /**
+     * The takeover charge was refused by its fence: the shard's lease row no longer names this instance under this
+     * owner's fence. As on the acknowledgement path, that is the lease lost; the pump drops the owner at the end of its pass.
+     * Counted in {@code leasesLost} when this call moved the owner out of {@code HELD}: the unit was taken from an owner
+     * that served it. The queue's lease check may find the same unit taken; its {@link #onLeaseEnded} counts only when it
+     * is the call that moves the row to {@code RELEASED}, so whichever of the two gets there first counts the loss, once.
+     * Not counted when the owner was no longer {@code HELD}, which its pump does not check before the takeover: it runs the
+     * takeover of every owner it was handed and drops the ended ones only at the end of that pass. Two cases reach that:
+     * <ul>
+     *     <li>{@code stop()} had ended the owner ({@code ENDED_ROW_HELD}), and its row was since released by that stop, or
+     *     taken by another instance before the stop released it.</li>
+     *     <li>The owner was already {@code RELEASED}: this instance released its row (a stop, or a rebalance shedding it),
+     *     or the queue's lease check found the unit taken and counted it in {@code leasesLost} then.</li>
+     * </ul>
+     * Nor when a release of the row had failed with no error answer from the database (a lost connection or a timed-out
+     * read, {@link LeaseRowState#mayHaveGoneThrough}; {@link #markReleaseInDoubt()}): that release may have gone through
+     * on the server, the row given up by this instance itself; logged at DEBUG.
+     */
+    void leaseLostBeforeTakeover() {
+        var was = leaseRow.advanceTo(LeaseRow.RELEASED);
+        if (was == LeaseRow.HELD && !leaseRow.releaseInDoubt()) {
+            metrics.leasesLost.increment();
+            log.warn("Shard {}: takeover charge rejected under fence {} — lease lost, stopping", shard, fence);
+        } else if (was == LeaseRow.HELD) {
+            log.debug("Shard {}: takeover charge rejected under fence {} after a release of the row whose answer was not received; "
+                              + "taken as given up by that release, stopping", shard, fence);
+        } else {
+            log.debug("Shard {}: takeover charge rejected under fence {}; the owner had already stopped", shard, fence);
+        }
     }
 
     @Override
@@ -582,12 +734,12 @@ final class ShardOwner implements LeasedOwner {
      */
     private boolean deliver(ShardOwnedStorage.Row row) {
         synchronized (stateLock) {
-            if (inFlight.contains(row.seq()) || pendingAcks.contains(row.seq())) {
+            if (inFlight.containsKey(row.seq()) || pendingAcks.contains(row.seq())) {
                 // Already ours. Hand the permit back — it was taken speculatively by the caller.
                 dispatch.release();
                 return false;
             }
-            inFlight.add(row.seq());
+            inFlight.put(row.seq(), System.nanoTime());
             // Whichever path gets there first invalidates the other. A failed message exists in two
             // places timed by different clocks — the table's `visible_at` by the database's now(),
             // the in-memory schedule by System.nanoTime() — so the sweep can deliver, acknowledge
@@ -600,11 +752,13 @@ final class ShardOwner implements LeasedOwner {
 
     private void runHandler(ShardOwnedStorage.Row row) {
         var handled      = false;
+        var interrupted  = false;
         var startedNanos = System.nanoTime();
         try {
             try {
                 handler.handle(new MessageId(MessageId.Lane.UNORDERED, shard, row.seq()),
                                row.payload(), row.payloadType());
+                markReturnedFromHandler(row.seq());
                 // An interrupted handler has NOT necessarily finished its work. A handler that catches
                 // InterruptedException and returns normally — which is what well-behaved code does on
                 // shutdown — would otherwise be indistinguishable from success, and the message would
@@ -613,6 +767,7 @@ final class ShardOwner implements LeasedOwner {
                 // everything it had dispatched, leaving the incoming owner nothing to redeliver.
                 if (Thread.currentThread().isInterrupted()) {
                     metrics.abandonedOnInterrupt.increment();
+                    interrupted = true;
                 } else {
                     handled = true;
                 }
@@ -622,6 +777,7 @@ final class ShardOwner implements LeasedOwner {
                 // through the head sweep forever and never reached the dead-letter table. A critical one
                 // (VirtualMachineError, LinkageError) still propagates, as it does from the classic queue.
                 Exceptions.rethrowIfCriticalError(e);
+                markReturnedFromHandler(row.seq());
                 if (!(e instanceof RedeliveryRequested)) {
                     metrics.handlerFailures.increment();
                 }
@@ -631,6 +787,21 @@ final class ShardOwner implements LeasedOwner {
                 // retry. It cost exactly one message of forty, every run.
                 onFailure(row, e);
             }
+            if (handled) {
+                // Still inside the in-flight slot, and before stateLock is taken: this may wait for a running charge, which
+                // takes stateLock itself. A message whose dead-letter move is still owed is settled as handled, not moved
+                // (the ledger's "completion wins"): it is acknowledged below
+                var deadLettered = releaseChargeLedger.completedInHandler(row.seq());
+                if (deadLettered.isPresent()) {
+                    handled = false;
+                    completedAfterItsDeadLetter(deadLettered.get());
+                }
+            } else if (interrupted) {
+                // Not finished, so nothing to log; but a row the charge dead-lettered is gone and will not be read again,
+                // so its seq is forgotten here, as the ordered lane does
+                releaseChargeLedger.deadLetteredWhileInHandler(row.seq())
+                                   .ifPresent(deadLettered -> forgetDeadLettered(deadLettered.seq()));
+            }
         } finally {
             LeaseOverrun.check(metrics, settings, "unordered", shard, startedNanos);
             // In the finally, not in the branches: a slot that is never released is a shard that
@@ -639,6 +810,7 @@ final class ShardOwner implements LeasedOwner {
             // rethrows — has to leave the slot free.
             synchronized (stateLock) {
                 inFlight.remove(row.seq());
+                returnedFromHandler.remove(row.seq());
                 if (handled) {
                     pendingAcks.add(row.seq());
                 }
@@ -655,9 +827,27 @@ final class ShardOwner implements LeasedOwner {
     }
 
     /**
+     * Mark {@code seq} as a message whose handler has returned ({@link #returnedFromHandler}), before its handler thread asks
+     * {@link ReleaseChargeLedger#completedInHandler} or {@link ReleaseChargeLedger#deadLetteredWhileInHandler}.
+     */
+    private void markReturnedFromHandler(long seq) {
+        synchronized (stateLock) {
+            returnedFromHandler.add(seq);
+        }
+    }
+
+    /**
      * Failure path. Rare, so it is allowed to be expensive — one row update (and its index entry), or a dead-letter move.
      */
     private void onFailure(ShardOwnedStorage.Row row, Throwable cause) {
+        // Asked before a connection is taken: it may wait for a running charge
+        var deadLettered = releaseChargeLedger.deadLetteredWhileInHandler(row.seq());
+        if (deadLettered.isPresent()) {
+            // Dead-lettered while this handler ran, by the charge before a release (chargeInHandlerBeforeRelease): the row is
+            // gone, so there is no attempt to count and nothing to retry.
+            failedAfterItsDeadLetter(deadLettered.get(), cause);
+            return;
+        }
         try (var connection = storage.connection()) {
             onFailure(connection, row, cause);
         } catch (SQLException e) {
@@ -682,19 +872,75 @@ final class ShardOwner implements LeasedOwner {
         return attempts;
     }
 
-    private void onFailure(Connection connection, ShardOwnedStorage.Row row, Throwable cause) throws SQLException {
-        var attempts = countAttempt(connection, row.seq());
-        // A requested redelivery is not a failure: it is scheduled at the delay the handler asked for and never
-        // dead-letters the message - see RedeliveryRequested
-        var redeliveryRequest = cause instanceof RedeliveryRequested request ? request : null;
-        if (redeliveryRequest == null) {
-            // Emitted here rather than at the call site, because this is the only place that knows which
-            // attempt this was. The SPI's `attempt` argument used to be hardcoded to zero.
-            metrics.observer().deliveryFailed(null, attempts, cause);
+    /**
+     * The attempts counted so far, without counting one: what this owner has counted, or else what the row holds.
+     */
+    private int attemptsSoFar(Connection connection, long seq) throws SQLException {
+        Integer counted;
+        synchronized (stateLock) {
+            counted = attemptsBySeq.get(seq);
         }
-        if (redeliveryRequest == null && redeliveryPolicy.isExhausted(attempts)) {
+        return counted != null ? counted : storage.storedAttempts(connection, ShardOwnedSchema.UNORDERED_TABLE, shard, seq);
+    }
+
+    /**
+     * The handler of a message the charge before a release dead-lettered while it ran
+     * ({@link ReleaseChargeLedger#deadLetteredWhileInHandler}) has returned without an exception: its row is gone, so there
+     * is nothing to acknowledge, and it is not counted delivered. The message has been handled and is dead-lettered all the
+     * same, so it is logged at WARN: resurrecting that dead letter delivers it again.
+     */
+    private void completedAfterItsDeadLetter(ReleaseChargeLedger.ChargedRow deadLettered) {
+        forgetDeadLettered(deadLettered.seq());
+        log.warn("Shard {} of queue {}: the handler of seq {} completed after the charge before a release of the shard had "
+                 + "dead-lettered its message at {} attempts. The message is not acknowledged and stays dead-lettered: "
+                 + "resurrecting that dead letter delivers it again", shard, storage.queueId(), deadLettered.seq(),
+                 deadLettered.attemptsAfterCharge());
+    }
+
+    /**
+     * The handler of a message the charge before a release dead-lettered while it ran
+     * ({@link ReleaseChargeLedger#deadLetteredWhileInHandler}) has thrown: its row is gone, so there is no attempt to count
+     * and nothing to retry. The dead letter carries {@link ShardOwnedStorage#EXHAUSTED_IN_A_RELEASED_HANDLER}, not what the
+     * handler threw - often why it hung - so that is logged at WARN with the throwable, and a failure (not a requested
+     * redelivery) is told to the {@code QueueObserver} as the attempt the charge counted.
+     */
+    private void failedAfterItsDeadLetter(ReleaseChargeLedger.ChargedRow deadLettered, Throwable cause) {
+        forgetDeadLettered(deadLettered.seq());
+        log.warn("Shard {} of queue {}: the handler of seq {} threw after the charge before a release of the shard had "
+                 + "dead-lettered its message at {} attempts; that dead letter does not carry this exception", shard,
+                 storage.queueId(), deadLettered.seq(), deadLettered.attemptsAfterCharge(), cause);
+        if (cause instanceof RedeliveryRequested) {
+            return;
+        }
+        try {
+            metrics.observer().deliveryFailed(null, deadLettered.attemptsAfterCharge(), cause);
+        } catch (RuntimeException | Error e) {
+            // On the handler thread, after the outcome is settled: nothing is left for a throwing observer to fail
+            Exceptions.rethrowIfCriticalError(e);
+            log.warn("Shard {} of queue {}: the QueueObserver told of the failure of seq {} threw", shard, storage.queueId(),
+                     deadLettered.seq(), e);
+        }
+    }
+
+    private void forgetDeadLettered(long seq) {
+        synchronized (stateLock) {
+            attemptsBySeq.remove(seq);
+            seenAcked(seq);
+        }
+    }
+
+    private void onFailure(Connection connection, ShardOwnedStorage.Row row, Throwable cause) throws SQLException {
+        if (cause instanceof RedeliveryRequested request) {
+            onRedeliveryRequested(connection, row, request);
+            return;
+        }
+        var attempts = countAttempt(connection, row.seq());
+        // Emitted here rather than at the call site, because this is the only place that knows which
+        // attempt this was. The SPI's `attempt` argument used to be hardcoded to zero.
+        metrics.observer().deliveryFailed(null, attempts, cause);
+        if (redeliveryPolicy.isExhausted(attempts)) {
             var moved = storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard,
-                                                        row.seq(), cause.getClass().getName() + ": " + cause.getMessage(),
+                                                        row.seq(), DeliveryErrorText.describe(cause),
                                                         instanceId, fence);
             synchronized (stateLock) {
                 attemptsBySeq.remove(row.seq());
@@ -711,12 +957,14 @@ final class ShardOwner implements LeasedOwner {
                          + "was not dead-lettered", shard, row.seq());
                 return;
             }
+            // Counted before the observer is told: the move has committed, and an observer that throws must not take the
+            // count with it
+            metrics.deadLettered.increment();
             metrics.observer().deadLettered(new MessageId(MessageId.Lane.UNORDERED, shard, row.seq()),
                                             attempts, cause);
-            metrics.deadLettered.increment();
             return;
         }
-        var delay = redeliveryRequest != null ? redeliveryRequest.delay() : redeliveryPolicy.delayAfter(attempts);
+        var delay = redeliveryPolicy.delayAfter(attempts);
         if (!storage.scheduleRetryIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, shard, row.seq(), attempts,
                                           delay.toMillis(), instanceId, fence)
                 && leaseLost("retry")) {
@@ -726,6 +974,28 @@ final class ShardOwner implements LeasedOwner {
             }
             return;
         }
+        scheduleInMemory(row, attempts, delay);
+    }
+
+    /**
+     * A requested redelivery is not a failure, and not an attempt either: it is scheduled at the delay the handler
+     * asked for and leaves the count alone, so it neither uses up the redelivery policy's budget nor brings the
+     * message closer to a takeover's dead-letter - see RedeliveryRequested.
+     */
+    private void onRedeliveryRequested(Connection connection, ShardOwnedStorage.Row row, RedeliveryRequested request) throws SQLException {
+        var delay = request.delay();
+        if (!storage.scheduleRequestedRedeliveryIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, shard, row.seq(),
+                                                        delay.toMillis(), instanceId, fence)
+                && leaseLost("requested redelivery")) {
+            synchronized (stateLock) {
+                attemptsBySeq.remove(row.seq());
+            }
+            return;
+        }
+        scheduleInMemory(row, attemptsSoFar(connection, row.seq()), delay);
+    }
+
+    private void scheduleInMemory(ShardOwnedStorage.Row row, int attempts, Duration delay) {
         synchronized (stateLock) {
             retrySchedule.add(new Retry(System.nanoTime() + delay.toNanos(), row));
         }
@@ -741,8 +1011,13 @@ final class ShardOwner implements LeasedOwner {
         if (storage.stillOwns("unordered", shard, instanceId, fence)) {
             return false;
         }
-        log.info("Shard {}: {} not recorded under fence {} - lease lost, the next owner redelivers the message",
-                 shard, write, fence);
+        if (leaseRow.releaseInDoubt()) {
+            log.info("Shard {}: {} not recorded under fence {} after a release of the row whose answer was not received - the next "
+                     + "owner redelivers the message", shard, write, fence);
+        } else {
+            log.info("Shard {}: {} not recorded under fence {} - lease lost, the next owner redelivers the message",
+                     shard, write, fence);
+        }
         return true;
     }
 
@@ -817,7 +1092,7 @@ final class ShardOwner implements LeasedOwner {
             // schedule still redelivered it from memory, but its row was gone, so a crash lost it and
             // the dead-letter move on its last attempt found nothing to move. Every unordered poison
             // message that had traffic acknowledged around it vanished that way.
-            var inFlightFloor = inFlight.isEmpty() ? Long.MAX_VALUE : inFlight.first();
+            var inFlightFloor = inFlight.isEmpty() ? Long.MAX_VALUE : inFlight.firstKey();
             var holeFloor     = pendingHoles.isEmpty() ? Long.MAX_VALUE : pendingHoles.firstKey();
             var retryFloor    = Long.MAX_VALUE;
             for (var retry : retrySchedule) {
@@ -875,8 +1150,23 @@ final class ShardOwner implements LeasedOwner {
             // already gone. Only the first means the shard has moved, and treating the second as if
             // it had cost a lease that was still held: the owner stopped, the shard was re-acquired,
             // and everything in flight was redelivered.
+            // Counted and logged only by the refusal that moves the row to RELEASED. One already there was released by
+            // this instance (releaseLeaseRows: a stop, a shed, a dead pump's hand-back) or found taken by an earlier check
+            // or write: a refusal after that is not a lease lost now.
+            if (leaseRow.advanceTo(LeaseRow.RELEASED) == LeaseRow.RELEASED) {
+                log.debug("Shard {}: acknowledgement refused under fence {} for a lease row already given up or found taken",
+                          shard, fence);
+                return;
+            }
+            // Nor by one refused after a release of the row failed with no error answer from the database (a lost
+            // connection or a timed-out read, LeaseRowState#mayHaveGoneThrough; ShardOwnedQueue.releaseLeaseRows marked
+            // it): that release may have gone through on the server after all, the row given up by this instance itself.
+            if (leaseRow.releaseInDoubt()) {
+                log.debug("Shard {}: acknowledgement refused under fence {} after a release of the row whose answer was not received; "
+                                  + "taken as given up by that release, stopping", shard, fence);
+                return;
+            }
             metrics.fencedOutAcks.increment();
-            leaseHeld.set(false);
             log.warn("Shard {}: acknowledgement rejected under fence {} — lease lost, stopping", shard, fence);
             return;
         }
@@ -893,6 +1183,129 @@ final class ShardOwner implements LeasedOwner {
             // it on success before, so the map grew by one entry per message that ever recovered.
             attemptsBySeq.keySet().removeIf(seq -> (seq > finalRangeAbove && seq <= finalContiguous) || finalStragglers.contains(seq));
         }
+    }
+
+    /**
+     * Whether {@link #chargeInHandlerBeforeRelease} has anything to write: a message in a handler longer than
+     * {@code stuckHandlerTimeout} it has not charged yet, nor found gone from the table (deleted while in its handler), or a charged one at the redelivery limit whose dead-letter move is
+     * still to be made. Lets the queue skip the connection that call needs for an owner it would find nothing to do for.
+     */
+    boolean owesReleaseCharge() {
+        return releaseChargeLedger.owes(inHandlerPastStuckHandlerTimeout());
+    }
+
+    @Override
+    public boolean owesDeadLetterMove() {
+        return releaseChargeLedger.owesDeadLetterMove();
+    }
+
+    @Override
+    public boolean claimReleaseUnlessMoveOwed() {
+        return releaseChargeLedger.claimReleaseUnlessMoveOwed();
+    }
+
+    @Override
+    public void endReleaseClaim() {
+        releaseChargeLedger.endReleaseClaim();
+    }
+
+    @Override
+    public OwedMoveReleaseRefusals owedMoveReleaseRefusals() {
+        return owedMoveReleaseRefusals;
+    }
+
+    /**
+     * Charge one attempt to each message that has been in a handler longer than {@code stuckHandlerTimeout}
+     * ({@link ShardOwnerSettings}), and dead-letter each one the charge brings to the redelivery limit, before the queue
+     * releases this owner's shard without waiting for those handlers: by a fair-share shed, by the hand-back from a dead
+     * pump, or by {@code stop()} once its drain has given up ({@code ShardOwnedQueue.chargeInHandlerBeforeRelease}).
+     * <p>
+     * Whoever takes a released shard next charges nothing ({@link ShardOwnedStorage.LeaseGrant#previousOwnerReleased()}),
+     * and a handler that hangs never returns to record its attempt, so without this a message whose handler hung on every
+     * delivery was delivered again after every release with its count unchanged, never reaching the dead-letter table, and
+     * each delivery left one more handler hung, holding a {@link HandlerDispatch} permit. It is the charge an unclean
+     * takeover makes for a delivery whose outcome was never recorded ({@link #onTakeover}), made by the owner that knows
+     * which messages those are. Only those in a handler past {@code stuckHandlerTimeout}: a handler that has run for less is
+     * taken to be slow, not hung, and its message is released uncharged, as before - the next owner delivers it again, which
+     * this lane allows. A row the charge brings to the limit is dead-lettered here with
+     * {@link ShardOwnedStorage#EXHAUSTED_IN_A_RELEASED_HANDLER}, as the next owner runs no exhaustion pass for a released
+     * shard; the handler may still be running it.
+     * <p>
+     * Fenced, as the release after it is: the row must still name this instance under this owner's fence, which releasing
+     * does not bump. Each message is charged once per owner: recorded as soon as the charge has committed, so a release that
+     * failed and is retried does not charge it again, and a message that has gone past the bound since is charged by the
+     * retry; the dead-letter moves are made until a call completes them. Callers do not run it for one owner at the same
+     * time (the queue's heartbeat, or a stop's budget thread once the heartbeat is cancelled); the ledger's monitor makes it
+     * safe if they do.
+     * <p>
+     * The charge itself is {@link ReleaseChargeLedger}'s, which the ordered lane composes too
+     * ({@code OrderedShardOwner.chargeKeysInHandlerBeforeRelease}); this owner supplies only its candidates - the messages
+     * in a handler past the bound, taken once the ledger's charge is running and leaving out a message whose handler has
+     * returned - and its table.
+     *
+     * @return what this owner has charged and dead-lettered so far, this call included; nothing when no message is in a
+     *         handler past the bound, or when the row no longer names this owner
+     * @throws SQLException when the charge, the lease lookup after a charge that left a row out, or a dead-letter move fails
+     * @throws RuntimeException what the {@code QueueObserver} threw when told of a dead letter (or a non-critical
+     *                          {@link Error}), thrown once every move is made, so {@link #owesReleaseCharge()} then answers
+     *                          as after a call that returned
+     */
+    ReleaseCharge chargeInHandlerBeforeRelease(Connection connection) throws SQLException {
+        return toReleaseCharge(releaseChargeLedger.charge(connection, this::inHandlerPastStuckHandlerTimeout));
+    }
+
+    /**
+     * What {@link #chargeInHandlerBeforeRelease} has charged and dead-lettered so far, without writing anything.
+     */
+    ReleaseCharge releaseCharge() {
+        return toReleaseCharge(releaseChargeLedger.answer());
+    }
+
+    private static ReleaseCharge toReleaseCharge(ReleaseChargeLedger.Answer answer) {
+        return answer.charged() == 0 ? ReleaseCharge.NONE
+                                     : new ReleaseCharge(answer.charged(), answer.deadLettered().stream().map(ReleaseChargeLedger.ChargedRow::seq).toList());
+    }
+
+    /**
+     * The count after the charge of each message {@link #chargeInHandlerBeforeRelease} charged, as the count this owner has
+     * for it, so a failure its handler reports later - the release having failed, and this owner serving on - counts on from
+     * the charge: {@link #countAttempt} prefers this map to the row, and {@code scheduleRetryIfOwned} writes the count it is
+     * given, which would undo the charge.
+     */
+    private void recordChargedAttempts(Map<Long, Integer> charged) {
+        synchronized (stateLock) {
+            attemptsBySeq.putAll(charged);
+        }
+    }
+
+    /**
+     * The messages in a handler since longer than {@code stuckHandlerTimeout} ago, in sequence order, each with no key
+     * ({@link ReleaseChargeLedger.Candidate#UNORDERED}): the candidates of {@link #chargeInHandlerBeforeRelease}. A message
+     * whose handler has returned ({@link #returnedFromHandler}) is not one: its handler records its outcome.
+     */
+    private Map<Long, ReleaseChargeLedger.Candidate> inHandlerPastStuckHandlerTimeout() {
+        var now   = System.nanoTime();
+        var bound = settings.stuckHandlerTimeout().toNanos();
+        var stuck = new TreeMap<Long, ReleaseChargeLedger.Candidate>();
+        synchronized (stateLock) {
+            inFlight.forEach((seq, sinceNanos) -> {
+                if (now - sinceNanos >= bound && !returnedFromHandler.contains(seq)) {
+                    stuck.put(seq, ReleaseChargeLedger.Candidate.UNORDERED);
+                }
+            });
+        }
+        return stuck;
+    }
+
+    /**
+     * What {@link #chargeInHandlerBeforeRelease} has done for this owner.
+     *
+     * @param charged          how many messages in a handler past {@code stuckHandlerTimeout} were charged an attempt
+     * @param deadLetteredSeqs the sequence values of those the charge brought to the redelivery limit, and which were
+     *                         dead-lettered
+     */
+    record ReleaseCharge(int charged, List<Long> deadLetteredSeqs) {
+        static final ReleaseCharge NONE = new ReleaseCharge(0, List.of());
     }
 
     @Override

@@ -1,0 +1,254 @@
+{
+  "before": {
+    "issuesKnown": true,
+    "ref": "HEAD",
+    "sha": "<sha>",
+    "sliceCount": 14
+  },
+  "edges": {
+    "added": [
+      {
+        "from": "cmd:AmendOrder",
+        "kind": "handles",
+        "to": "slice:orders.amend_order"
+      },
+      {
+        "from": "evt:OrderShipped",
+        "kind": "consumes",
+        "to": "slice:shipping.shipment_list"
+      },
+      {
+        "from": "slice:orders.amend_order",
+        "kind": "publishes",
+        "to": "evt:OrderAmended"
+      },
+      {
+        "from": "slice:shipping.ship_order",
+        "kind": "publishes",
+        "to": "evt:ShipmentLabelled"
+      }
+    ],
+    "removed": [
+      {
+        "from": "slice:shipping.nightly_reship",
+        "kind": "dispatches",
+        "to": "cmd:ShipOrder"
+      }
+    ]
+  },
+  "issues": {
+    "fixed": [
+      {
+        "code": "map-parse-error",
+        "fix": {
+          "bc": "orders",
+          "route": "repair"
+        },
+        "id": "map-parse-error:src/main/java/com/example/orders/use_cases/amend_order",
+        "level": "error",
+        "source": "map",
+        "target": {
+          "id": "src/main/java/com/example/orders/use_cases/amend_order",
+          "kind": "slice",
+          "part": null
+        },
+        "text": "slice.yaml is not valid YAML (line 15) — this slice is missing from every edge of the map. Repair: /essentials:slice-check --fix-manifests (manifest-guide.md §3)"
+      },
+      {
+        "code": "scenario-test-missing",
+        "fix": {
+          "bc": "orders",
+          "route": "author"
+        },
+        "id": "scenario-test-missing:orders.cancel_order:scenario:cancelling twice is a no-op",
+        "level": "warn",
+        "source": "atlas",
+        "target": {
+          "id": "orders.cancel_order",
+          "kind": "slice",
+          "part": "scenario:cancelling twice is a no-op"
+        },
+        "text": "scenario `cancelling twice is a no-op`: test `CancelOrderTest#cancellingTwiceIsANoOp` resolves to no test under src/test/java"
+      },
+      {
+        "code": "flow-undeclared",
+        "fix": {
+          "bc": "shipping",
+          "route": "author"
+        },
+        "id": "flow-undeclared:shipping.nightly_reship",
+        "level": "info",
+        "source": "atlas",
+        "target": {
+          "id": "shipping.nightly_reship",
+          "kind": "slice",
+          "part": null
+        },
+        "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey"
+      }
+    ],
+    "new": [
+      "flow-undeclared:orders.amend_order",
+      "map-endpoint-missing:orders.amend_order:6 endpoint route@src/main/java/com/example/orders/use_cases/amend_order/slice.yaml",
+      "map-not-checked:shipping.shipment_list:11(b) handled events",
+      "scenario-none:orders.amend_order",
+      "scenario-none:shipping.shipment_list"
+    ]
+  },
+  "messages": {
+    "commands": {
+      "added": [
+        "AmendOrder"
+      ],
+      "removed": []
+    },
+    "events": {
+      "added": [
+        "OrderAmended",
+        "ShipmentLabelled"
+      ],
+      "removed": []
+    }
+  },
+  "slices": {
+    "added": [
+      "orders.amend_order",
+      "shipping.shipment_list"
+    ],
+    "changed": [
+      {
+        "fields": [
+          {
+            "added": [],
+            "field": "scenarios",
+            "from": 3,
+            "removed": [],
+            "to": 3
+          }
+        ],
+        "id": "orders.cancel_order"
+      },
+      {
+        "fields": [
+          {
+            "added": [
+              "ShipmentLabelled"
+            ],
+            "field": "publishes",
+            "from": 1,
+            "removed": [],
+            "to": 2
+          }
+        ],
+        "id": "shipping.ship_order"
+      }
+    ],
+    "removed": [
+      {
+        "bc": "shipping",
+        "consumes": [],
+        "dependsOn": [],
+        "direction": null,
+        "dispatches": [
+          "ShipOrder"
+        ],
+        "doc": null,
+        "endpoints": [],
+        "externalSystem": null,
+        "files": [
+          "NightlyReship.java"
+        ],
+        "flags": [],
+        "flows": [],
+        "handles": [],
+        "id": "shipping.nightly_reship",
+        "invariants": [],
+        "kind": "automation",
+        "lane": "decider",
+        "language": "java",
+        "name": "nightly_reship",
+        "owner": "shipping-team",
+        "owns": [],
+        "package": "com.example.shipping.automations.nightly_reship",
+        "path": "src/main/java/com/example/shipping/automations/nightly_reship",
+        "projections": [],
+        "publishes": [],
+        "reads": [],
+        "scenarios": [
+          {
+            "given": [],
+            "name": "nothing is stuck",
+            "note": null,
+            "test": null,
+            "testResolved": {
+              "line": null,
+              "path": null,
+              "status": "not-checked"
+            },
+            "then": {
+              "kind": "nothing"
+            },
+            "when": {
+              "name": null,
+              "type": "schedule",
+              "with": {}
+            }
+          }
+        ],
+        "schedule": {
+          "cron": "0 0 2 * * *",
+          "note": "after the carrier's last collection"
+        },
+        "serves": [],
+        "status": "live",
+        "summary": "Re-ship orders the carrier has not collected by the end of the day.",
+        "supersedes": null,
+        "tests": [],
+        "tier": "cqrs-es",
+        "writes": []
+      },
+      {
+        "bc": null,
+        "consumes": [],
+        "dependsOn": [],
+        "direction": null,
+        "dispatches": [],
+        "doc": null,
+        "endpoints": [],
+        "error": true,
+        "externalSystem": null,
+        "files": [],
+        "flags": [
+          {
+            "level": "error",
+            "text": "slice.yaml is not valid YAML (line 15) — this slice is missing from every edge of the map. Repair: /essentials:slice-check --fix-manifests (manifest-guide.md §3)"
+          }
+        ],
+        "flows": [],
+        "handles": [],
+        "id": "src/main/java/com/example/orders/use_cases/amend_order",
+        "invariants": [],
+        "kind": null,
+        "lane": null,
+        "language": null,
+        "name": "amend_order",
+        "owner": null,
+        "owns": [],
+        "package": null,
+        "path": "src/main/java/com/example/orders/use_cases/amend_order",
+        "projections": [],
+        "publishes": [],
+        "reads": [],
+        "scenarios": [],
+        "schedule": null,
+        "serves": [],
+        "status": null,
+        "summary": null,
+        "supersedes": null,
+        "tests": [],
+        "tier": null,
+        "writes": []
+      }
+    ]
+  }
+}

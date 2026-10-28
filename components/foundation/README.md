@@ -133,6 +133,12 @@ The `UnitOfWorkFactory`'s `withUnitOfWork(CheckedFunction)` and `usingUnitOfWork
 
 This behavior enables composable transactional methods where inner methods don't need to know if they're running in an existing transaction.
 
+### Usage Rule
+
+- **Application code** opens or joins a transaction with `unitOfWorkFactory.usingUnitOfWork(...)`/`withUnitOfWork(...)`, or with Spring `@Transactional`/`TransactionTemplate`.
+- **Framework-internal:** `getOrCreateNewUnitOfWork()`, `getRequiredUnitOfWork()` and a `UnitOfWork`'s own `start()`/`commit()`/`rollback()`. When you need the `UnitOfWork` itself (a JDBI `Handle`, `markAsRollbackOnly`), take it as the lambda parameter: `usingUnitOfWork(uow -> …)` / `withUnitOfWork(uow -> …)`.
+- **`getCurrentUnitOfWork()` is a read-only probe** ("is a `UnitOfWork` bound to this thread?"), never a way to decide whether to join or open one - `withUnitOfWork` already decides that. Under a Spring-aware factory it is empty inside a plain `@Transactional` method until something has used the factory, so it does not answer "is a transaction active?" either.
+
 ### `UnitOfWorkFactory` Implementations
 
 | Class | Use Case                                                            |
@@ -163,7 +169,9 @@ The Spring-aware `UnitOfWorkFactory` implementations provide **transparent integ
 
 #### Internal Mechanism: `getRequiredUnitOfWork()`
 
-The `getRequiredUnitOfWork()` method is used by framework components (like `DurableQueues`, `EventStore`) to obtain a UnitOfWork:
+> How the framework works, not API to call - see [Usage Rule](#usage-rule).
+
+The `getRequiredUnitOfWork()` method is used by framework components (like `EventStore`, or `DurableQueues` inside the `withUnitOfWork` it opens for each operation) to obtain a UnitOfWork:
 
 1. Checks if a Spring transaction is active
 2. If **YES** → calls `getOrCreateNewUnitOfWork()` which creates a `UnitOfWork` if one doesn't exist
@@ -185,6 +193,8 @@ This means framework components work correctly whether called from:
 - `TransactionTemplate` callbacks (Spring transaction already active)
 
 #### Internal Mechanism: `getOrCreateNewUnitOfWork()`
+
+> How the framework works, not API to call - see [Usage Rule](#usage-rule).
 
 When `usingUnitOfWork()`, `withUnitOfWork()`, or `getRequiredUnitOfWork()` is called, the factory's `getOrCreateNewUnitOfWork()` method determines what to do based on the current transaction state:
 
@@ -251,8 +261,7 @@ public class OrderService {
         // Spring Data repository participates in the Spring transaction
         orderRepository.save(order);
 
-        // DurableQueues internally calls getRequiredUnitOfWork() which auto-creates
-        // a UnitOfWork joining the existing Spring transaction
+        // The enqueue joins the existing Spring transaction
         durableQueues.queueMessage(queueName, new OrderProcessedEvent(order.getId()));
 
         // All operations commit or rollback together
@@ -260,7 +269,9 @@ public class OrderService {
 }
 ```
 
-**Why this works:** Framework components internally call `unitOfWorkFactory.getRequiredUnitOfWork()`, which detects the active Spring transaction and automatically creates a `UnitOfWork` that participates in it.
+**Why this works:** Framework components go through the same factory. A `DurableQueues` operation runs in `withUnitOfWork` (PostgreSQL) or as a `MongoTemplate` write that joins the Spring transaction (MongoDB), and the `EventStore` calls `getRequiredUnitOfWork()`; under a Spring-aware factory each of these creates a `UnitOfWork` that participates in the active Spring transaction.
+
+**Outside any transaction** an enqueue commits on its own and is not rolled back with the caller's work. The first enqueue from a call site is logged at WARN with its stack trace - a call site is the first three stack frames outside Essentials, the JDK, Reactor, Kotlin and Spring, up to 32 innermost application frames per `DurableQueues` instance, each with up to 4 of its callers (past that, enqueues are not logged); set `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true` (builder: `setRequireActiveUnitOfWorkForEnqueue(true)`) to make it throw `NoActiveUnitOfWorkException` instead. See [postgresql-queue](../postgresql-queue/README.md) / [springdata-mongo-queue](../springdata-mongo-queue/README.md).
 
 #### When to Use Explicit `usingUnitOfWork()`
 
@@ -280,32 +291,38 @@ Use `usingUnitOfWork()` or `withUnitOfWork()` when:
    ```java
    @Transactional
    public void complexOperation(Order order) {
-       // Get the UnitOfWork for direct access
-       var uow = unitOfWorkFactory.getRequiredUnitOfWork();
-       // ... use uow.handle() for custom JDBI queries
+       // Joins the @Transactional transaction; uow.handle() runs custom JDBI queries in it
+       unitOfWorkFactory.usingUnitOfWork(uow -> {
+           uow.handle().createUpdate("UPDATE orders SET status = :status WHERE id = :id")
+              .bind("status", order.getStatus())
+              .bind("id", order.getId())
+              .execute();
+       });
    }
    ```
 
 #### Accessing the Current UnitOfWork
 
-Regardless of how the transaction was started, you can access the current `UnitOfWork`:
+Regardless of how the transaction was started, take the current `UnitOfWork` as the lambda parameter - the call joins it, or opens one if none is active:
 
 ```java
-// Get current UnitOfWork (returns Optional - empty if no transaction active)
-Optional<UnitOfWork> currentUow = unitOfWorkFactory.getCurrentUnitOfWork();
-
-// Get required UnitOfWork (throws NoActiveUnitOfWorkException if none exists)
-UnitOfWork uow = unitOfWorkFactory.getRequiredUnitOfWork();
-
 // For JDBI-based factories (HandleAwareUnitOfWork), access the Handle
-HandleAwareUnitOfWork handleUow = (HandleAwareUnitOfWork) unitOfWorkFactory.getRequiredUnitOfWork();
-Handle handle = handleUow.handle();
+int rows = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle()
+        .createUpdate("UPDATE orders SET status = :status WHERE id = :id")
+        .bind("status", status)
+        .bind("id", orderId)
+        .execute());
+
+// Mark the current transaction for rollback without throwing
+unitOfWorkFactory.usingUnitOfWork(uow -> uow.markAsRollbackOnly(cause));
+
+// Read-only probe: is a UnitOfWork bound to this thread? (see Usage Rule - not a test for "is a transaction active?")
+boolean bound = unitOfWorkFactory.getCurrentUnitOfWork().isPresent();
 ```
 
 This is useful when you need to:
 - Execute custom JDBI queries within the same transaction
 - Access transaction metadata or status
-- Perform conditional logic based on transaction state
 - Register lifecycle callbacks on the current transaction
 
 This seamless integration ensures that **all database operations** (whether from Spring Data, JDBI, or Essentials components) participate in the **same transaction boundary**, maintaining data consistency.
@@ -327,7 +344,7 @@ Use the variant **with** `UnitOfWork` parameter when you need to:
 - Access to `handle()` method when using `HandleAwareUnitOfWork`
 - Use other `UnitOfWork` methods
 
-> **Note:** Even without the `UnitOfWork` parameter, you can always retrieve the current `UnitOfWork` via `unitOfWorkFactory.getRequiredUnitOfWork()` from within your lambda.
+> **Note:** Need the `UnitOfWork` inside the lambda? Use the variant that takes it as a parameter rather than calling `unitOfWorkFactory.getRequiredUnitOfWork()` - see [Usage Rule](#usage-rule).
 
 ### Avoid Using `getOrCreateNewUnitOfWork` Directly
 
@@ -585,7 +602,8 @@ try {
     lock.release();
 }
 
-// Try-with-resources pattern
+// Try-with-resources pattern - close() calls release(), but is declared `throws Exception`,
+// so the enclosing method must catch or declare it
 try (FencedLock lock = lockManager.acquireLock(LockName.of("MyLock"))) {
     performCriticalWork();
 }
@@ -619,6 +637,12 @@ lockManager.acquireLockAsync(LockName.of("ScheduledTask"), new LockCallback() {
 });
 ```
 
+A `stop()` of a database-backed lock manager (`PostgresqlFencedLockManager`, `MongoFencedLockManager`) cancels each async acquiring but keeps its registration (the lock name and its `LockCallback`), and its `start()` resumes every registration not cancelled with `cancelAsyncLockAcquiring`, logging each one at WARN. Call `cancelAsyncLockAcquiring(lockName)` in your component's own stop, or the next `start()` gives the lock to the old callback again. A component recreated across the `stop()`/`start()` may call `acquireLockAsync` again: while the lock manager is started, one with another callback for a registration a `stop()` kept replaces it, as `cancelAsyncLockAcquiring` followed by `acquireLockAsync` would (the lock, when this instance holds it, is released first, which calls `lockReleased` on the callbacks registered with it), and one with the kept callback itself, or for a lock name registered since the last `start()`, does nothing. While it is stopped, a call with another callback replaces the kept one and `start()` schedules it; a call for a lock name with no registration registers nothing.
+
+### Ownership is per lock-manager instance, not per caller or thread
+
+A `FencedLock` excludes other lock-manager instances (other JVMs), never other callers in the same JVM. While a `FencedLockManager` holds a lock, a second `tryAcquireLock`/`acquireLock` for the same `LockName` - from another component, another thread or the same thread - returns the **same** `FencedLock` instance instead of an empty result, and `release()` by **either** caller releases the lock for both; another node can then acquire it while the first caller is still working. Callers in one JVM that share a lock name and must not overlap (e.g. a scheduled run and a manual trigger of the same job) need their own in-process guard, such as an `AtomicBoolean`, in front of the lock.
+
 ### FencedLockManager API
 
 ```java
@@ -633,8 +657,17 @@ public interface FencedLockManager extends Lifecycle {
     void acquireLockAsync(LockName lockName, LockCallback lockCallback);
     void cancelAsyncLockAcquiring(LockName lockName);
     String getLockManagerInstanceId();
+    default boolean isLockConfirmationEnded() { return false; }   // DB-backed managers: true once the lock confirmation ended (critical error) until stop()+start()
 }
 ```
+
+A started lock manager can stop acquiring locks: when a critical error ends its scheduled lock confirmation, the database-backed lock managers release locally every lock they hold (`lockReleased` is called and `LockReleased` published; the database rows are not released and expire after the lock timeout, so another instance can take a lock only after that) and publish `FencedLockEvents.LockConfirmationEnded`, and from then on `isLockConfirmationEnded()` returns `true` while `isStarted()` is still `true`. Until the lock manager is stopped and started again (or the application restarted), `tryAcquireLock` returns empty, `acquireLock` throws `IllegalStateException` and an `acquireLockAsync` acquires nothing. No starter registers a health indicator for this state; call `isLockConfirmationEnded()` from your own.
+
+The ownership predicates answer from different sources:
+- `FencedLockManager.isLockedByThisLockManagerInstance(LockName)` (like `isLockAcquired` and `isLockAcquiredByAnotherLockManagerInstance`) looks the lock row up in the database and compares the stored owner id with `getLockManagerInstanceId()`. It ignores the fence token and the last-confirmed timestamp, so a row left by a crashed process with the same instance id reads as held by this instance. A failed lookup returns `false`.
+- `FencedLock.isLockedByThisLockManagerInstance()` reads only the lock object, which changes when this manager confirms or releases the lock. It can still read `true` up to one `lockConfirmationInterval` after another instance took the lock over (longer while the database is unreachable and `releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation` is `false`).
+
+Use them for status and reporting; to guard work, hold the acquired `FencedLock` and pass its fence token downstream.
 
 ### Implementations
 
@@ -1936,9 +1969,20 @@ eventBus.addAsyncSubscriber(notification -> {
 });
 ```
 
+#### The LISTEN Connection
+
+A LISTEN lasts as long as its database session, so the listener holds one connection for as long as it polls:
+
+- It is opened from the `Jdbi` given to `setJdbi(...)` - normally borrowed from the application's pool - unless `setListenerJdbi(...)` or `setListenerDataSource(...)` gives the listener a connection source of its own (in the Spring Boot starter: `essentials.multi-table-change-listener.dedicated-connection=true`).
+- Every `setLivenessCheckInterval(...)` (default 10 seconds) it is probed with `Connection.isValid()`. A non-blocking read for notifications never fails on a half-open connection, so the probe is what detects one.
+- A lost connection is logged at WARN (`setConnectionLossLogLevel(...)`), at most once per `setConnectionLossLogInterval(...)` (default 1 minute), and reopened on the next poll. A new connection LISTENs to every registered table again.
+- Delivery is **at most once**: a notification sent while no connection is listening is lost. Use notifications as wake-up hints, never as the data itself.
+- Polling starts in `start()`. `stop()` closes the connection (after `UNLISTEN *`), and a later `start()` resumes. A listener that is never `start()`ed starts polling on its first `listenToNotificationsFor(...)`.
+- Table names are lower-cased (`Locale.ROOT`) to form the channel name, because `LISTEN` folds an unquoted name to lower case while `pg_notify` does not.
+
 #### Duplicate Notification Filtering
 
-When `filterDuplicateNotifications` is enabled, the listener can filter duplicate notifications within the same poll batch using `NotificationDuplicationFilter`:
+When `filterDuplicateNotifications` is enabled, the listener can filter duplicate notifications within the same poll batch using `NotificationDuplicationFilter`. Duplicates are detected **per channel**: notifications on different tables never collapse into one. A notification without a key - including one whose payload is not JSON - is never treated as a duplicate. `setChannelDeduplicationPolicy(ChannelDeduplicationPolicy.onlyTables(...))` limits de-duplication to some tables:
 
 ```java
 // Add a custom duplication filter

@@ -8,14 +8,15 @@ description: >-
   and smoke-builds it so a context-startup failure surfaces here. Always writes a project CLAUDE.md
   that points back to the essentials-docs skill.
 user-invocable: true
+argument-hint: "[--preset <file>] [--report <file>]"
 allowed-tools: [Read, Write, Edit, Bash, Glob, AskUserQuestion]
 ---
 
 # /essentials:init
 
 Bootstrap a new Trustworks Essentials project. Walk through the steps below in order, using
-`AskUserQuestion` for every choice. Do not skip steps — each one captures information that later
-steps depend on.
+`AskUserQuestion` for every choice (a `--preset` answers some of them up front — § Preset and report).
+Do not skip steps — each one captures information that later steps depend on.
 
 **This command asks; a script writes.** The project is rendered from the plugin's template tree by
 `scripts/init-render.py`: two runs with the same answers produce the same bytes, and those bytes are
@@ -39,6 +40,68 @@ edit the generated project into agreement.
 
 The LLM docs under `${CLAUDE_PLUGIN_ROOT}/references/llm/` are consumed by the `essentials-docs`
 skill and are **never** copied into the generated project.
+
+## Preset and report (another plugin's entry point)
+
+Arguments: `$ARGUMENTS`
+
+**No arguments — a person running the command by hand — means this section does not apply**: every
+step asks, exactly as written. Another plugin's agent (sdd hands over to this command inline) passes
+`--preset <file>` to answer questions up front and `--report <file>` to get a machine-readable result.
+Either may come alone. Both are a contract, so `scripts/init-report.py` decides and writes them, never
+the model.
+
+**`--preset <file>`** is a JSON object with any subset of the ten answer keys (Step 10) and
+their value sets, plus `targetMode` (`current` = Step 1's "In the current directory", `subdirectory` =
+"In a new subdirectory") and `targetDir` (absolute, or relative to the workspace; supersedes
+`targetMode`). Before Step 0's questions, run:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-report.py" preset --preset "<file>" --workspace "$(pwd)"
+```
+
+It prints `preset` (the usable keys and values, `targetDir` made absolute), `ignored` (key → reason: a
+value the renderer would reject, an unknown key, a superseded `targetMode`, or an unreadable file as
+`(preset)`) and `ask` (the keys still to ask). It never fails on a preset, and neither does this
+command: an ignored key is asked as if it were absent. Say once, before the first question, which
+answers came from the preset and which keys were ignored and why.
+
+Then, in every step: **a question whose key is in `preset` is neither asked nor confirmed again** —
+take the value. Questions that have no key (Step 0's escape hatch, an existing `CLAUDE.md` or
+`README.md`, the workspace pointer, a Step 12 forwarder) are asked as without a preset. Step 7's
+four-tuple confirmation stays whenever any of `projectName`, `groupId`, `artifactId`, `packagePath`
+was asked; a preset value the user changes there counts as asked.
+
+**`--report <file>`** is written at Step 14, and also whenever the command stops before Step 11 has
+rendered the project — every stop or abort in the steps and § Error handling — with
+`--status stopped --stopped-at "Step <n>"`. A project that was rendered is `rendered` even when the lint
+or the build failed; `--stack-lint` and `--smoke-build` carry that.
+
+```bash
+printf '%s\n' '<answers JSON>' | \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-report.py" write --report "<file>" --workspace "${WORKSPACE_DIR}" \
+  --status rendered --preset "<preset file>" --answers - \
+  --target "${TARGET_DIR}" --stack-lint "${LINT_RESULT}" --smoke-build "${SMOKE_RESULT}"
+#   stack-lint: passed | failed | not-run      smoke-build: passed | compiled-only | failed | not-run
+```
+
+`<answers JSON>` is Step 10's. Leave out `--preset` when there was none, and the pipe with `--answers`,
+or `--target`, when the stop came before they existed. `--asked k,k,…` (comma-separated keys) is needed only on a stop — the keys asked so far — or
+when the user changed a preset value at Step 7; otherwise it defaults to every key the preset did not
+supply. Exit 2 is a wrong call: fix it from the `init-report:` line and rerun. **Exit 4** is a report
+path this shell cannot write (EROFS or EACCES: a read-only mount, a sandbox that allows no writes);
+nothing was written. Rerun the same command with `--emit`, write the one file it prints with the Write
+tool, its `content` verbatim at its `path`, then rerun with `--verify` in place of `--emit`: only exit 0
+means the report is written. Exit 1 names the path that differs — report that and stop, never correct
+the file by hand. Say in one line of Step 14 that the report was written this way. Only where the script
+cannot run — `CLAUDE_PLUGIN_ROOT` unset or no Python 3.11 — write the report by hand, exactly this,
+plus `"essentialsVersion"` from the § Version stamp command when the plugin root is known:
+
+```json
+{"contractVersion": 1, "status": "stopped", "stoppedAt": "Step 0", "target": null,
+ "workspace": "<absolute $(pwd)>", "answers": {}, "preset": [], "asked": [], "ignoredPreset": {},
+ "stackLint": "not-run", "smokeBuild": "not-run"}
+```
 
 ## Step 0 — Pre-flight check
 
@@ -75,7 +138,8 @@ Stop here and say plainly what was found:
 > `<the marker that matched>` — this is already a Trustworks Essentials project. `/essentials:init`
 > scaffolds a **new** one; it never updates an existing project. To pick up what this plugin has
 > shipped since the project was created — the slice-manifest lint gate, a refreshed rules pointer,
-> and a conformance check against the current stack contract — run **`/essentials:upgrade`**.
+> a conformance check against the current stack contract, and the move to the plugin's Essentials
+> release — run **`/essentials:upgrade`**.
 
 Then offer exactly one escape hatch via `AskUserQuestion`, because continuing *is* legitimate in one
 case: the user wants a **second, separate** project inside this repository (a monorepo gaining a
@@ -100,7 +164,8 @@ Ask via `AskUserQuestion`:
   1. **"In the current directory"** — "Scaffold into `$(pwd)`. Use only if the current directory is empty (or contains only .git/README/CLAUDE.md/LICENSE/.gitignore)."
   2. **"In a new subdirectory"** — "Create `./<artifactId>/` and scaffold there. The artifactId is captured later. Recommended if the current directory is non-empty."
 
-Remember the choice as `TARGET_MODE`.
+Remember the choice as `TARGET_MODE`. A preset `targetMode` is this choice (`current`, `subdirectory`);
+a preset `targetDir` replaces the question, and Step 8 resolves it.
 
 ## Step 2 — Frontend
 
@@ -172,8 +237,8 @@ Remember as `COMPOSE` (boolean). Integration tests use Testcontainers either way
 
 ## Step 7 — Project metadata
 
-Capture three free-text values. Use `AskUserQuestion` for each, with a single sensible default as
-the recommended option and "Other" letting the user enter their own.
+Capture three free-text values. Use `AskUserQuestion` for each the preset does not supply, with a
+single sensible default as the recommended option and "Other" letting the user enter their own.
 
 1. **Project display name** — e.g., "Orders Service". Used in the POM `<name>` and the project
    CLAUDE.md heading. Default suggestion: derive from the current directory name.
@@ -202,8 +267,15 @@ anything else (exit 2), so ask again rather than letting it fail.
 
 - `TARGET_MODE == "current directory"` ⇒ `TARGET_DIR = WORKSPACE_DIR`.
 - `TARGET_MODE == "new subdirectory"` ⇒ `TARGET_DIR = WORKSPACE_DIR/<artifactId>`. If it exists and
-  is non-empty, abort: "directory <X> already exists and is non-empty; remove it or pick a
+  is non-empty, abort: "directory `<X>` already exists and is non-empty; remove it or pick a
   different artifactId". Do **not** overwrite.
+- A preset `targetDir` ⇒ `TARGET_DIR` = the absolute path `init-report.py preset` printed;
+  `mkdir -p` it. Equal to `WORKSPACE_DIR`, it is current-directory mode in every later step.
+  Otherwise it is subdirectory mode with two differences: an existing non-empty directory is not an
+  abort — its entries are handled as in current-directory mode below (`--preserve`, and the
+  `CLAUDE.md`/`README.md` question); and unless `TARGET_DIR` is `WORKSPACE_DIR/<artifactId>`, there
+  is **no workspace pointer** (it names `./<artifactId>/`, so it would point at the wrong directory):
+  render without `--workspace-out`, skip Step 13.5, and say so in Step 14.
 
 The renderer writes only into an absent or empty directory (`.git/` aside). An entry that already
 exists is named with `--preserve`: the renderer never overwrites it, and when it would have written
@@ -254,14 +326,20 @@ gate that makes it loud, and it is only worth anything if the project runs it wi
 | Option | `lintGate` | What the render adds |
 |---|---|---|
 | **Pre-commit hook (recommended)** | `hook` | `scripts/slice-lint.py`, `scripts/slice-yaml.schema.json` and `.githooks/pre-commit` |
-| **Script only** | `script` | `scripts/slice-lint.py` and `scripts/slice-yaml.schema.json`, for the user to wire into their own CI |
+| **Script only** | `script` | `scripts/slice-lint.py` and `scripts/slice-yaml.schema.json`, for the user to wire into their own CI (the project README gives the command) |
 | **Neither** | `none` | Nothing. Say once that `/essentials:slice-check` still runs the same checks on demand |
 
 The schema copy is required: installed into a project, the script has no plugin root to resolve
 its schema from, so the project keeps its own copy beside it and the hook passes `--schema`. The
-hook (`references/init-assets/project/.githooks/pre-commit.template`) runs the script with `uv run`
-when uv is installed, else with `python3`, and **fails open** when neither can run it, so a
-contributor without the tooling can still commit.
+hook (`references/init-assets/project/.githooks/pre-commit.template`) locates its project from its
+own path, so it works with the project in a subdirectory of the repository: it lints only that
+project, and only when a `slice.yaml` inside it is staged. It runs the script with `uv run` when uv
+is installed, else with `python3`. It **blocks** the commit on findings, when the script or schema is
+missing, and when the script cannot validate (exit 2 — a `python3` without `pyyaml` or `jsonschema`),
+naming the install line and `git commit --no-verify`. It lets the commit through only when neither uv
+nor python3 exists. A hook is inert until git is told about it, and `core.hooksPath` is local
+configuration that a clone does not carry: Step 12 activates it here, and the README the render
+writes gives every other clone the command.
 
 **This is the second file set this plugin copies into a project, and the only one besides the
 rules pointer.** That is a deliberate exception to the one-copy invariant, taken because a gate that
@@ -270,14 +348,14 @@ obligations come with it: `/essentials:slice-check` gate 12 reports a project co
 the plugin's alongside the rules-pointer staleness check, and `/essentials:upgrade` Group A2 does the
 same — both *offer* a refresh and never overwrite silently.
 
-## Step 10 — Write the answers
+## Step 10 — The answers
 
-```bash
-mkdir -p /tmp/essentials-init
-```
-
-Write `/tmp/essentials-init/answers.json` with exactly these keys (the renderer rejects unknown
-keys, a missing one, and a value outside its set):
+The answers are one JSON object, never written to a file: Steps 11 and 12, and the report, hand it to
+the scripts on standard input as one single-quoted shell word — `printf '%s\n' '<answers JSON>' | …
+--answers -`. Inside it write each `'` (a project name can hold one) as `'\''`, which closes the quote,
+adds the apostrophe and reopens it. Not a heredoc: zsh writes every heredoc to a temporary file, which
+fails where no directory is writable. It has exactly these keys (the renderer rejects unknown keys, a
+missing one, and a value outside its set):
 
 ```json
 {"language": "kotlin",
@@ -294,22 +372,26 @@ keys, a missing one, and a value outside its set):
 
 `language` = `LANGUAGE`, `db` = `DB_PROFILE`, `web` = `WEB`, `frontend` = `FRONTEND`, `compose` =
 `COMPOSE` (a JSON boolean), `lintGate` from Step 9, the metadata from Step 7, and `packagePath` as
-the user confirmed it.
+the user confirmed it — or each as the preset supplied it.
 
 ## Step 11 — Render the project
 
 ```bash
 # Subdirectory mode: the project, plus the workspace pointer at the invocation root
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers /tmp/essentials-init/answers.json \
+printf '%s\n' '<answers JSON>' | python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers - \
   --out "${TARGET_DIR}" --workspace-out "${WORKSPACE_DIR}"
 
 # Current-directory mode: one --preserve per entry Step 8 listed (here: an existing CLAUDE.md and .gitignore)
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers /tmp/essentials-init/answers.json \
+printf '%s\n' '<answers JSON>' | python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers - \
   --out "${TARGET_DIR}" --preserve CLAUDE.md --preserve .gitignore
 ```
 
 Exit 0 prints the target directory. **Exit 2 means nothing usable was written** — report the
-`init-render:` line from stderr verbatim and stop. Never write the project, or any file of it, by
+`init-render:` line from stderr verbatim and stop. **Exit 4 means nothing was written at all**: this
+shell cannot write the target (EROFS or EACCES — a read-only mount, a sandbox that allows no writes),
+found before the first file. Report the line verbatim and stop: a project needs a directory the shell
+can write, for its executable files and for every later step (the wrapper, the hook, the build), so
+there is no other way to render it. Never write the project, or any file of it, by
 hand as a fallback: a hand-written file is exactly the non-determinism the renderer exists to
 remove.
 
@@ -356,7 +438,7 @@ Two files cannot be rendered: the Maven wrapper (a download) and the frontend lo
 resolution). The manifest names the commands that create them, with their pins already substituted:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers /tmp/essentials-init/answers.json --hooks
+printf '%s\n' '<answers JSON>' | python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers - --hooks
 ```
 
 That prints a JSON list of `{"id", "cwd", "run", "why"}`. Run each `run` from `${TARGET_DIR}/<cwd>`,
@@ -369,9 +451,36 @@ in order, and record each outcome for Step 14:
   costs: the embedded build's `npm ci` fails until a `package-lock.json` exists, so until then the
   backend builds with `-Pskip-frontend`.
 
-If `lintGate == "hook"` and `${TARGET_DIR}` is inside a git repository whose `core.hooksPath` is
-unset, set it: `git -C "${TARGET_DIR}" config core.hooksPath .githooks`. Otherwise tell the user
-that one command, to run after `git init`.
+If `lintGate == "hook"`, activate the hook. A relative `core.hooksPath` resolves against the
+repository's **top level**, not against `${TARGET_DIR}`, so in subdirectory mode — and in "current
+directory" mode inside a larger repository — a bare `.githooks` names a directory that does not exist
+and the hook never runs. Use the project's path from the top level:
+
+```bash
+git -C "${TARGET_DIR}" rev-parse --is-inside-work-tree     # not a repository ⇒ case 4
+PREFIX="$(git -C "${TARGET_DIR}" rev-parse --show-prefix)"  # "" at the top level, "orders-service/" below it
+git -C "${TARGET_DIR}" config --get core.hooksPath          # set ⇒ case 2
+test -e "$(git -C "${TARGET_DIR}" rev-parse --git-path hooks/pre-commit)"   # exists ⇒ case 3
+```
+
+1. **`core.hooksPath` unset and no existing `pre-commit` hook**: set it,
+   `git -C "${TARGET_DIR}" config core.hooksPath "${PREFIX}.githooks"`, and say it is local to this
+   clone — every other clone runs the README's command once.
+2. **`core.hooksPath` already set** — to `${PREFIX}.githooks`, nothing to do; to anything else (a
+   hook manager such as husky): leave it. Changing it would
+   silence every hook the manager runs, and leaving the gate unwired installs it dead. Offer
+   (`AskUserQuestion`) to add one forwarder line to the pre-commit hook that setting points at —
+   for husky, `.husky/pre-commit` — before any `exit` in it:
+   `"$(git rev-parse --show-toplevel)/${PREFIX}.githooks/pre-commit" || exit 1`.
+   On no, print the line for the user to add.
+3. **`core.hooksPath` unset, but `.git/hooks/pre-commit` exists**: setting `core.hooksPath` would
+   disable that hook and every other one in `.git/hooks`. Offer the same forwarder line in that
+   file instead, and state the trade-off: the forwarder keeps the existing hook running but, being
+   in `.git/`, is local to this clone exactly like `core.hooksPath`. On no, print the line.
+4. **Not a git repository yet**: tell the user to run the README's command from the project
+   directory after `git init` — `git config core.hooksPath "$(git rev-parse --show-prefix).githooks"`.
+
+Record which case applied for Step 14.
 
 ## Step 13 — Merge what the user already had
 
@@ -458,14 +567,14 @@ as a plugin bug to file. Do not patch the project. Exit 2: report the stderr lin
 cd "${TARGET_DIR}"
 if [ -x ./mvnw ]; then MVN=./mvnw; else MVN=mvn; fi
 SKIP=""; [ "${FRONTEND}" = embedded ] && SKIP=-Pskip-frontend     # the SPA is checked in 3.
-cp contracts/openapi.json /tmp/essentials-init/openapi.seed.json
+SEED=$(cksum < contracts/openapi.json)                             # a checksum, so no copy needs a scratch file
 
 if docker info >/dev/null 2>&1; then
   # Compile, unit tests, then the integration tests against a Testcontainers database:
   # ApplicationContextIT starts the context, OpenApiContractIT regenerates the spec,
   # CorsPreflightIT sends a preflight through the security chain (standalone).
   "$MVN" -B verify $SKIP 2>&1 | tail -60
-  cmp -s contracts/openapi.json /tmp/essentials-init/openapi.seed.json || echo "SPEC CHANGED"
+  [ "$(cksum < contracts/openapi.json)" = "$SEED" ] || echo "SPEC CHANGED"
 else
   # No Docker: compile only. The context start is NOT tested.
   "$MVN" -B test-compile $SKIP 2>&1 | tail -30
@@ -528,7 +637,7 @@ Configuration:
   Web stack:       ${WEB}
   DB profile:      ${DB_PROFILE}
   Docker Compose:  ${COMPOSE}
-  Lint gate:       ${LINT_GATE}         # hook | script | none
+  Lint gate:       ${LINT_GATE}         # hook | script | none; for hook, its Step 12 activation case
   Project name:    ${displayName}
   groupId:         ${groupId}
   artifactId:      ${artifactId}
@@ -557,10 +666,15 @@ Add your first slice:
   /essentials:slice-check            # audit slices against the law
 ```
 
+With `--report`, write the report now (§ Preset and report), `--status rendered`.
+
 If `FRONTEND == "none"`, drop the frontend lines from "Next steps". Use `mvn` instead of `./mvnw`
 when no wrapper was created, and say how to create it (the Step 12 command).
 
 Say plainly that `config/SecurityConfig` permits everything: a starting point, not a posture (S9).
+
+If `LINT_GATE == "hook"` and Step 12 did not activate it (a forwarder declined, or no repository
+yet), say the hook is installed but **inactive**, and give the line or command that activates it.
 
 If `SMOKE_RESULT` is `compiled-only`, say that the context was never started and that
 `./mvnw verify` with Docker running is the check that was skipped. If the frontend lockfile hook
@@ -585,9 +699,13 @@ If `TARGET_MODE == "new subdirectory"`, add a line about the workspace pointer:
 
 - `WORKSPACE_CLAUDE_MD_MODE == "none"` or `"overwrite"`: "Wrote the workspace pointer at `${WORKSPACE_DIR}/CLAUDE.md`, so planner and implementer sessions launched from the workspace root know the project lives at `${artifactId}/` and that the stack pins are authoritative in `${artifactId}/pom.xml`."
 - `WORKSPACE_CLAUDE_MD_MODE == "merge"`: "Merged the Essentials workspace pointer into `${WORKSPACE_DIR}/CLAUDE.md` — review the new `## Trustworks Essentials project pointer` section."
+- No pointer, because a preset `targetDir` is not `<artifactId>/` (Step 8): "No workspace pointer was written: it can only name `./<artifactId>/`, and the project is at `${TARGET_DIR}`."
 - `WORKSPACE_CLAUDE_MD_MODE == "skip"`: warn loudly — "Skipped writing `${WORKSPACE_DIR}/CLAUDE.md`. Planners and implementers launched at this workspace will have no signal that the project lives at `${artifactId}/` and may scaffold files at the wrong root or invent their own stack pins. Recommended: paste the pointer (quoted below) into your workspace `CLAUDE.md`." Then quote the side-rendered `CLAUDE.md.essentials-init` and delete it.
 
 ## Error handling
+
+With `--report`, every stop below that comes before Step 11 has rendered the project writes the
+`stopped` report first (§ Preset and report). A bad preset is never one of them.
 
 - `${CLAUDE_PLUGIN_ROOT}` unset (the command was invoked outside Claude Code's plugin runner) ⇒
   abort: "This command must be invoked from within Claude Code with the essentials plugin installed."
@@ -596,7 +714,10 @@ If `TARGET_MODE == "new subdirectory"`, add a line about the workspace pointer:
   message; never overwrite.
 - `init-render.py` exits 2 (unknown placeholder or pin, a malformed template, bad answers, a
   non-empty target) ⇒ report its message verbatim and stop. An unknown placeholder or pin is a
-  plugin defect; bad answers are yours — fix the answers file and rerun.
+  plugin defect; bad answers are yours — fix the answers JSON and rerun.
+- `init-render.py` exits 4, or Step 8's `mkdir -p` fails with `Read-only file system` or `Permission
+  denied` ⇒ the target is not writable from this shell; nothing was written. Report the line and stop,
+  with `--status stopped --stopped-at "Step 11"` (or `"Step 8"`) when `--report` was given.
 - A pin the render needs and `stack-pins.md` does not list surfaces as that exit 2. Do not guess a
   version.
 - `stack-lint.py` reports a finding on a fresh render, or the Step 13.7 build fails ⇒ **stop and

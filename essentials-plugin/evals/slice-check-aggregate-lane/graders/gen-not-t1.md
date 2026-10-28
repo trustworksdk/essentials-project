@@ -5,8 +5,9 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 5 (§R1) about `src/main/java/com/example/billing/aggregates/Invoice.java` (symbol `Invoice.isPaid`).
-Why that would be wrong: A public getter on an aggregate whose callers are a command handler (PayInvoiceHandler) is not a query surface. The view reads its own read model, not the aggregate.
+PASS unless the report raises a finding under gate 5 (§R1) about `src/main/java/com/example/billing/aggregates/Invoice.java` (symbol `Invoice.isPaid`) line 35, `public boolean isPaid() { return paid; }` (or what that line declares).
+Only a finding drawn from that code fails this check; match it by content, not only the line number. A finding about another line of the same file (for example a correct one drawn from a different guard or method) does not.
+Why that would be wrong: A public getter on an aggregate whose callers are a command handler (PayInvoiceHandler) is not a query surface. The view reads its own read model, not the aggregate. F1's finding (the pay-once rule decided in PayInvoiceHandler) may name isPaid() as the method the handler's check calls, or say it can go once the rule moves into Invoice.pay(): that is F1's remedy, not a finding against isPaid().
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 These are tolerated and do not fail this check either:
 - A 'no test' finding on any slice. Every manifest here says tests.*.present: false and the fixture has no test tree; the law rates a view slice with no test Should-fix, so such a finding is correct but not what this fixture grades.

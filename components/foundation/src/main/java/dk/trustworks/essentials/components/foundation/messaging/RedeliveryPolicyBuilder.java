@@ -24,6 +24,7 @@ public final class RedeliveryPolicyBuilder {
     private double                      followupRedeliveryDelayMultiplier;
     private Duration                    maximumFollowupRedeliveryDelayThreshold;
     private int                         maximumNumberOfRedeliveries;
+    private boolean                     maximumNumberOfRedeliveriesSet;
     private MessageDeliveryErrorHandler deliveryErrorHandler = MessageDeliveryErrorHandler.alwaysRetry();
 
     public RedeliveryPolicyBuilder setInitialRedeliveryDelay(Duration initialRedeliveryDelay) {
@@ -48,6 +49,7 @@ public final class RedeliveryPolicyBuilder {
 
     public RedeliveryPolicyBuilder setMaximumNumberOfRedeliveries(int maximumNumberOfRedeliveries) {
         this.maximumNumberOfRedeliveries = maximumNumberOfRedeliveries;
+        this.maximumNumberOfRedeliveriesSet = true;
         return this;
     }
 
@@ -56,12 +58,40 @@ public final class RedeliveryPolicyBuilder {
         return this;
     }
 
+    /**
+     * Build the policy.
+     * <p>
+     * A setting that was never given is logged in one WARN naming the setter to call (QL-3): an unset delay (which
+     * still fails, as before), {@code setMaximumNumberOfRedeliveries} not called (it silently means 0 redeliveries), and a multiplier below 1.0 or not set (it silently means no growth).
+     * <b>From 0.61 these make {@code build()} throw an {@link IllegalArgumentException}</b>; in 0.60.x the policy is
+     * built exactly as before.
+     *
+     * @return the policy
+     */
     public RedeliveryPolicy build() {
+        checks().warnIfIncomplete();
         return new RedeliveryPolicy(initialRedeliveryDelay,
                                     followupRedeliveryDelay,
                                     followupRedeliveryDelayMultiplier,
                                     maximumFollowupRedeliveryDelayThreshold,
                                     maximumNumberOfRedeliveries,
                                     deliveryErrorHandler);
+    }
+
+    /**
+     * The checks {@link #build()} runs, applied to this builder's current settings.
+     * <p>
+     * Package-private rather than private only so {@code RedeliveryPolicyBuilderChecksTest} can assert the problems
+     * found without capturing the WARN {@link #build()} logs; nothing outside this package calls it.
+     *
+     * @return the checks, already run against this builder's current settings
+     */
+    RedeliveryPolicyBuilderChecks checks() {
+        return new RedeliveryPolicyBuilderChecks(RedeliveryPolicyBuilder.class)
+                .delay(initialRedeliveryDelay, "setInitialRedeliveryDelay")
+                .delay(followupRedeliveryDelay, "setFollowupRedeliveryDelay")
+                .multiplier(followupRedeliveryDelayMultiplier)
+                .delay(maximumFollowupRedeliveryDelayThreshold, "setMaximumFollowupRedeliveryDelayThreshold")
+                .maximumNumberOfRedeliveries(maximumNumberOfRedeliveriesSet);
     }
 }

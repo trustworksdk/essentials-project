@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.foundation.json;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
 
+import java.util.List;
+
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
@@ -46,12 +48,37 @@ public final class EssentialsObjectMappers {
     }
 
     /**
+     * Create a Jackson 3 {@link tools.jackson.databind.ObjectMapper} with the canonical Essentials configuration - the
+     * mapper to use for anything Essentials persists or that must read what it persisted: event payloads and metadata,
+     * durable-queue messages, documents.
+     * <p>
+     * Registers every Essentials Jackson module on the classpath ({@link EssentialsJacksonModules#modules()}), including
+     * {@code immutable-jackson3}'s module when present, followed by the <code>additionalModules</code>. Use
+     * {@link #createJackson3ObjectMapper(boolean, tools.jackson.databind.JacksonModule...)} to leave the immutable module out.
+     *
      * @param additionalModules extra modules to register, e.g. application-specific serializers
      * @return a Jackson 3 {@link tools.jackson.databind.ObjectMapper} with the canonical Essentials configuration,
      *         writing the same JSON the Jackson 2 mapper of Essentials 0.50 and earlier wrote
      * @throws IllegalStateException if an Essentials Jackson module on the classpath was built for Jackson 2
      */
     public static tools.jackson.databind.ObjectMapper createJackson3ObjectMapper(tools.jackson.databind.JacksonModule... additionalModules) {
+        return createJackson3ObjectMapper(true, additionalModules);
+    }
+
+    /**
+     * Create a Jackson 3 {@link tools.jackson.databind.ObjectMapper} with the canonical Essentials configuration, as
+     * {@link #createJackson3ObjectMapper(tools.jackson.databind.JacksonModule...)}, choosing whether
+     * {@code immutable-jackson3}'s module is registered.
+     *
+     * @param includeImmutableModule {@code false} leaves {@code immutable-jackson3}'s {@code EssentialsImmutableJacksonModule}
+     *                               out even when it is on the classpath; see {@link EssentialsJacksonModules#modules(boolean)}.
+     *                               Only reading is affected - the JSON written is identical either way. Spring Boot:
+     *                               {@code essentials.immutable-jackson-module-enabled}
+     * @param additionalModules      extra modules to register, e.g. application-specific serializers
+     * @return a Jackson 3 {@link tools.jackson.databind.ObjectMapper} with the canonical Essentials configuration
+     * @throws IllegalStateException as {@link #createJackson3ObjectMapper(tools.jackson.databind.JacksonModule...)}
+     */
+    public static tools.jackson.databind.ObjectMapper createJackson3ObjectMapper(boolean includeImmutableModule, tools.jackson.databind.JacksonModule... additionalModules) {
         requireNonNull(additionalModules, "No additionalModules provided");
         // Jackson 3 has JavaTime and Jdk8 support built in, and its mappers are immutable, so visibility is configured
         // on the builder rather than after the fact.
@@ -59,11 +86,22 @@ public final class EssentialsObjectMappers {
                                                             .changeDefaultVisibility(visibility -> tools.jackson.databind.introspect.VisibilityChecker
                                                                     .defaultInstance()
                                                                     .withGetterVisibility(Visibility.NONE)
+                                                                    // Jackson 3 detects is-getters separately from
+                                                                    // getters. The 0.50 Jackson 2 mapper did not
+                                                                    // detect them at all, and a visible isX() adds a
+                                                                    // property to the persisted JSON - or overwrites
+                                                                    // a field of the same name.
+                                                                    .withIsGetterVisibility(Visibility.NONE)
                                                                     .withSetterVisibility(Visibility.NONE)
                                                                     .withFieldVisibility(Visibility.ANY)
                                                                     .withCreatorVisibility(Visibility.ANY))
                                                             .disable(tools.jackson.databind.MapperFeature.DEFAULT_VIEW_INCLUSION)
                                                             .disable(tools.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                                                            // Jackson 3 turned this on by default. Off, a document
+                                                            // persisted before a primitive component was added reads
+                                                            // it as 0/false, as Jackson 2 did; on, every such read
+                                                            // fails.
+                                                            .disable(tools.jackson.databind.DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
                                                             .disable(tools.jackson.databind.SerializationFeature.FAIL_ON_EMPTY_BEANS)
                                                             .enable(tools.jackson.databind.MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                                                             .enable(tools.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
@@ -101,15 +139,57 @@ public final class EssentialsObjectMappers {
         // Jackson uses the sole constructor regardless. The parameter name is therefore part of the JSON contract under
         // Jackson 3, and a mismatch has to be fixed on the type rather than configured away.
         builder.addModule(new Jackson3CollectionWrapperModule());
-        EssentialsJacksonModules.modules().forEach(builder::addModule);
+        EssentialsJacksonModules.modules(includeImmutableModule).forEach(builder::addModule);
         builder.addModules(additionalModules);
         return builder.build();
     }
 
     /**
+     * Create a {@link JSONSerializer} backed by {@link #createJackson3ObjectMapper(tools.jackson.databind.JacksonModule...)}
+     * - the serializer to hand to Essentials components that take one (durable queues, the multi-table change listener),
+     * and to build test serializers with, so they write the persisted format.
+     *
      * @return a {@link JSONSerializer} using the canonical Essentials configuration
+     * @throws IllegalStateException as {@link #createJackson3ObjectMapper(tools.jackson.databind.JacksonModule...)}
      */
     public static JSONSerializer createJSONSerializer() {
         return new Jackson3JSONSerializer(createJackson3ObjectMapper());
+    }
+
+    /**
+     * Create a {@link JSONSerializer} as {@link #createJSONSerializer()}, choosing whether {@code immutable-jackson3}'s
+     * module is registered.
+     *
+     * @param includeImmutableModule see {@link #createJackson3ObjectMapper(boolean, tools.jackson.databind.JacksonModule...)}
+     * @return a {@link JSONSerializer} using the canonical Essentials configuration
+     * @throws IllegalStateException as {@link #createJackson3ObjectMapper(tools.jackson.databind.JacksonModule...)}
+     */
+    public static JSONSerializer createJSONSerializer(boolean includeImmutableModule) {
+        return new Jackson3JSONSerializer(createJackson3ObjectMapper(includeImmutableModule));
+    }
+
+    /**
+     * Checks whether a mapper reproduces the persisted JSON format, for a mapper Essentials did not build.
+     * <p>
+     * Every mapper {@link #createJackson3ObjectMapper(tools.jackson.databind.JacksonModule...)} builds writes the
+     * format, but {@link Jackson3JSONSerializer} accepts any mapper, and a hand-built one drifts without a signal: the
+     * application starts, writes, and only data persisted by another version tells the difference.
+     * <p>
+     * The check is behavioural, not a comparison of configuration: it writes and reads small probe types and compares
+     * the result with what the Essentials 0.50 mapper wrote, so a mapper configured differently but to the same effect
+     * passes. It covers field access, getter and {@code is}-getter visibility, the ISO-8601 date and numeric
+     * {@code Duration} formats, a missing primitive reading as its default ({@code FAIL_ON_NULL_FOR_PRIMITIVES}),
+     * unknown properties being ignored, untyped floats reading as {@code BigDecimal}, and - when {@code types-jackson3}
+     * is on the classpath - Essentials value types written and read as JSON primitives.
+     * <p>
+     * The Essentials Spring Boot starters run it at startup against every {@link JSONSerializer} bean backed by a
+     * {@link Jackson3JSONSerializer} ({@code essentials.json.wire-format-check}).
+     *
+     * @param objectMapper the mapper to check
+     * @return every deviation found; empty when the mapper reproduces the persisted format
+     */
+    public static List<WireFormatDeviation> findWireFormatDeviations(tools.jackson.databind.ObjectMapper objectMapper) {
+        requireNonNull(objectMapper, "No objectMapper provided");
+        return WireFormatProbes.findDeviations(objectMapper);
     }
 }

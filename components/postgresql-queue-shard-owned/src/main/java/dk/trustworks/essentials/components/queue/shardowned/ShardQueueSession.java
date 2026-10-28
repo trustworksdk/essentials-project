@@ -138,11 +138,23 @@ public final class ShardQueueSession implements QueueSession {
     public void fail(MessageId id, Throwable cause) throws SQLException {
         requireOpen();
         requireNonNull(id, "No id provided");
+        var fence = held.stream().filter(entry -> entry[0] == id.shard()).mapToLong(entry -> entry[1]).findFirst();
+        if (fence.isEmpty()) {
+            throw new IllegalArgumentException("Session " + sessionId + " does not hold shard " + id.shard() + " of " + id);
+        }
         try (var connection = dataSource.getConnection()) {
             // A pulled message that failed goes back with a short backoff. The session does not track
             // attempts in memory — it may be gone before the retry is due — so the durable count on
-            // the row is what the redelivery policy sees, which is what it is there for.
-            storage.scheduleRetry(connection, ShardOwnedSchema.UNORDERED_TABLE, id.shard(), id.sequence(), 1, 1_000L);
+            // the row is what the redelivery policy sees, which is what it is there for: counted on the
+            // row, never written as a constant, which gave the message a fresh budget on every failure.
+            // Fenced like the acknowledgement, so a superseded session cannot push out the visibility of
+            // a row the shard's new holder is delivering.
+            if (!storage.countAndScheduleRetryIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, id.shard(), id.sequence(),
+                                                      1_000L, sessionId, fence.getAsLong())) {
+                log.warn("Session {}: the failure of {} was not recorded - the session was superseded, or the message is gone",
+                         sessionId, id);
+                return;
+            }
         }
         cursors.merge(id.shard(), id.sequence() - 1, Math::min);
     }

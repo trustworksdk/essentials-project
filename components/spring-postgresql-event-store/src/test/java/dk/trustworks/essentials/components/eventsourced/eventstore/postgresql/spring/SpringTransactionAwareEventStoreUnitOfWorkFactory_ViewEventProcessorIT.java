@@ -289,9 +289,11 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_ViewEventProcessorIT {
      */
     @Test
     void an_escalating_event_in_a_batch_is_replayed_alone_and_queued_and_every_other_event_is_projected_once() {
-        // The event-by-event processor goes away, so only the batched one handles the events below
-        testProcessor.stop();
+        // The event-by-event processor goes away, so only the batched one handles the events below. Waited for until it has
+        // subscribed: a stop before its lock is acquired leaves no subscriptions to unsubscribe, and one acquired after it
+        // would then still subscribe
         Awaitility.waitAtMost(Duration.ofSeconds(10)).until(() -> testProcessor.subscriptionsForTesting() != null);
+        testProcessor.stop();
         testProcessor.subscriptionsForTesting().forEach(eventStoreSubscriptionManager::unsubscribe);
         testProcessor = new BatchedTestOrderViewEventProcessor(new ViewEventProcessorDependencies(eventStoreSubscriptionManager,
                                                                                                   fencedLockManager,

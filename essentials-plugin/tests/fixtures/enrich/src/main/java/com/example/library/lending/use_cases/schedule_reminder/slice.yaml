@@ -1,0 +1,16 @@
+schemaVersion: "1.4"
+slice: lending.schedule_reminder
+kind: command
+bc: lending
+owner: circulation
+status: live
+summary: Plans a due-date reminder for a loan.
+generator: essentials
+language: java
+lane: decider
+flow: reminders
+handles: [ScheduleReminder]
+publishes: [ReminderScheduled]
+writes: [Copy]
+tests:
+  unit: { present: true }

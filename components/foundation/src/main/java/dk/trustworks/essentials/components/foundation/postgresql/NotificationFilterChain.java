@@ -20,6 +20,7 @@ import tools.jackson.databind.*;
 import org.postgresql.core.Notification;
 
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -27,12 +28,16 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Manages a chain of {@link NotificationDuplicationFilter} instances and uses them
  * to extract unique keys from the {@link Notification#getParameter()} JSON content.<br>
  * The key extracted from {@link NotificationDuplicationFilter#extractDuplicationKey(JsonNode)}
- * will be used inside {@link MultiTableChangeListener} for duplication checks across all {@link Notification}'s returned in one poll.<br>
+ * will be used inside {@link MultiTableChangeListener} for duplication checks among the {@link Notification}'s that arrive on the same channel in one poll.<br>
  * If an empty {@link Optional} is returned then the given notification won't be deduplicated.<br>
- * If two or more {@link Notification}'s in a given poll batch share the same duplication key, then only one of them will be published to the listeners registered with the {@link MultiTableChangeListener}
+ * If two or more {@link Notification}'s on the same channel in a given poll batch share the same duplication key, then only one of them will be published to the listeners registered with the {@link MultiTableChangeListener}
  */
 public class NotificationFilterChain {
-    private final List<NotificationDuplicationFilter> filters = new ArrayList<>();
+    /**
+     * Copy-on-write: filters are added and removed by the components that use the listener (e.g. when a queue starts),
+     * while the listener's poll thread iterates them.
+     */
+    private final List<NotificationDuplicationFilter> filters = new CopyOnWriteArrayList<>();
     private final ObjectMapper objectMapper;
 
     public NotificationFilterChain(ObjectMapper objectMapper) {
@@ -47,7 +52,7 @@ public class NotificationFilterChain {
      * @param filter the filter to be added to the chain
      * @return true if the filter was added as the first, otherwise false (e.g. the filter was already added)
      */
-    public boolean addFilterAsFirst(NotificationDuplicationFilter filter) {
+    public synchronized boolean addFilterAsFirst(NotificationDuplicationFilter filter) {
         if (!filters.contains(filter)) {
             filters.add(0, filter);
             return true;
@@ -63,7 +68,7 @@ public class NotificationFilterChain {
      * @param filter the filter to be added to the chain
      * @return true if the filter was added as the last, otherwise false (e.g. the filter was already added)
      */
-    public boolean addFilterAsLast(NotificationDuplicationFilter filter) {
+    public synchronized boolean addFilterAsLast(NotificationDuplicationFilter filter) {
         if (!filters.contains(filter)) {
             return filters.add(filter);
         }
@@ -75,7 +80,7 @@ public class NotificationFilterChain {
      *
      * @param filter the filter to be added to the chain
      */
-    public void removeFilter(NotificationDuplicationFilter filter) {
+    public synchronized void removeFilter(NotificationDuplicationFilter filter) {
         filters.remove(filter);
     }
 

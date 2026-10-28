@@ -5,7 +5,8 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 6 (§R2) or gate 11a (Manifest ↔ code) about `src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java`.
+PASS unless the report raises a finding under gate 6 (§R2) or gate 11a (Manifest ↔ code) about `src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java` line 23, `@RequestParam(defaultValue = "false") boolean shipped` (or what that line declares).
+Only a finding drawn from that code fails this check; match it by content, not only the line number. A finding about another line of the same file (for example a correct one drawn from a different guard or method) does not.
 Why that would be wrong: An optional filter with a default is not a discriminator and needs no endpoint entry.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 FAIL only if such a finding is present.

@@ -99,6 +99,13 @@ Also expected:
   identified by the foreign snake_case schema crossing the boundary.
 - `OrderController` reported as splitting into **four** slices (3 command + 1 view).
 
+Tolerated outside the count, listed or not:
+
+- `BillingService.issueInvoice` as `billing.issue_invoice` — a command with **no entry point** (nothing calls
+  it), so a report may list it as an unclassified or triggerless candidate, or leave it out.
+- `orders.mark_order_paid` — a command split out of `payInvoice`'s `Order` write, proposed as the remedy for
+  the sole-writer finding.
+
 ## Pass 3 — findings, in rank order
 
 1. **Sole-writer violation (highest payoff).** `Order` is written by `OrderService.placeOrder`,
@@ -108,8 +115,12 @@ Also expected:
 2. **Cohesion.** `OrderController` → 4 slices; `OrderService` → 4 slices (3 command + shared queries).
    Reported as slice counts, **not** as line counts.
 3. **Boundary.** `BillingService` reaches into `orders`' entity and repository directly.
-4. **Lane.** No sanctioned R5 lane; nearest is service-entity. The ladder's rung 4 is a *later*
-   choice, not a recommendation now.
+4. **Lane.** No sanctioned R5 lane: `none (nearest: service-entity)`, the same in both contexts, for the whole
+   project rather than any one file. Adopting a lane is left to the ladder's optional rung 4.
+
+The ranks are tiers, not ordinals: a report that splits the sole-writer tier into two findings (the
+`Invoice` lost update between `payInvoice` and `PaymentReminderJob` beside the `Order` one) still ranks
+cohesion second, boundary third and lane fourth.
 
 Also expected from `discovery-heuristics.md` §7, because the nearest lane is service-entity:
 
@@ -122,7 +133,8 @@ Also expected from `discovery-heuristics.md` §8, on any lane:
 - **Primitive ids at the domain edge** — order, invoice and customer ids are `String` in
   `InvoiceController.pay`'s and `OrderController`'s `@PathVariable`s, in `BillingService.payInvoice(String
   invoiceId, String cardToken)` (two adjacent `String`s a caller can swap) and in `Invoice.orderId`. Reported
-  **once per BC**, after the ranked four and the §7 findings, with no severity. Ranking it above any of
+  **once per BC**, after the ranked four and the §7 findings, with no severity. Sites named by role or member
+  (a `@PathVariable`, `payInvoice`, `Invoice.orderId`) cite them as well as file paths do. Ranking it above any of
   1–4 is a failure: it is a compile-time nicety next to a concurrent write.
 
   Tolerated either way: `PaymentGatewayClient.charge(String invoiceId, …)`, the inner side of the
@@ -143,7 +155,7 @@ true.
 Introducing the semantic id types into each BC's `types/` must sit at **rung 2 or later** — the per-slice
 API files the split writes are where they first appear — never inside rung 1's pure move, and it must
 **not require Essentials**: a plain Java record or final class does. Essentials' `CharSequenceType` is a
-rung-4 choice. A ladder that makes typed ids wait on adopting the framework has inverted it.
+rung-4 choice: a ladder that names it earlier fails, one that never names it passes. A ladder that makes typed ids wait on adopting the framework has inverted it.
 
 ## False-positive checks
 
@@ -151,9 +163,11 @@ The report must **not** contain any of these:
 
 - A `payments` or `reporting` bounded context — `PaymentGatewayClient` is an outbound adapter of
   `billing`, and `ReportController` is a view of `orders`. Neither is a context.
-- `orders.get_order` as its own view slice (see the `order_list` row).
+- `orders.get_order` as its own view slice (see the `order_list` row). The entity-returned-from-API finding on
+  the same `get()` line is correct and is not this.
 - A recommendation to adopt Essentials before rungs 1–3.
-- Any severity labelled **Blocking**. This code never opted into the law; `slice-discover` ranks by
+- Any finding labelled with a severity, **Blocking** above all. A rank, or calling the rank-1 concurrency hazard
+  a bug, is not a severity label. This code never opted into the law; `slice-discover` ranks by
   payoff and leaves the law's severities to `slice-check`.
 - **`lane: service-entity`.** The nearest lane is service-entity; the actual lane is `none`. Collapsing
   the two is the failure mode `discovery-heuristics.md` §3.1 exists to prevent.

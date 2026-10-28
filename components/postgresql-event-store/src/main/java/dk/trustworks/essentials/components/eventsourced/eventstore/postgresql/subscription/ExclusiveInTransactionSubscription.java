@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.types.*;
+import dk.trustworks.essentials.reactive.EventHandler;
 import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.time.StopWatch;
 
@@ -44,6 +45,11 @@ public class ExclusiveInTransactionSubscription extends AbstractEventStoreSubscr
     private final FencedLockManager fencedLockManager;
     private final TransactionalPersistedEventHandler eventHandler;
     private final LockName lockName;
+    /**
+     * Registered on, and removed from, the local event bus as this one instance: the bus finds a handler to remove by
+     * equality, and every {@code this::onEvent} is a new object, so removing one never removed the registered handler
+     */
+    private final EventHandler localEventBusHandler = this::onEvent;
 
     private volatile boolean active;
 
@@ -80,7 +86,7 @@ public class ExclusiveInTransactionSubscription extends AbstractEventStoreSubscr
                     eventStoreSubscriptionObserver.lockAcquired(lock, ExclusiveInTransactionSubscription.this);
 
                     eventStore.localEventBus()
-                            .addSyncSubscriber(ExclusiveInTransactionSubscription.this::onEvent);
+                            .addSyncSubscriber(localEventBusHandler);
 
                 }
 
@@ -95,7 +101,7 @@ public class ExclusiveInTransactionSubscription extends AbstractEventStoreSubscr
                     eventStoreSubscriptionObserver.lockReleased(lock, ExclusiveInTransactionSubscription.this);
                     try {
                         eventStore.localEventBus()
-                                .removeSyncSubscriber(ExclusiveInTransactionSubscription.this::onEvent);
+                                .removeSyncSubscriber(localEventBusHandler);
                     } catch (Exception e) {
                         log.error(msg("[{}-{}] Failed to dispose subscription flux",
                                 subscriberId,
@@ -163,7 +169,8 @@ public class ExclusiveInTransactionSubscription extends AbstractEventStoreSubscr
 
     @Override
     protected void onErrorHandlingEvent(PersistedEvent e, Throwable cause) {
-        // TODO: Add better retry mechanism, poison event handling, etc.
+        // Rethrown, never skipped: the handler runs inside the appending unit of work, so its failure fails that
+        // appendToStream call (Flush) or rolls back that commit (BeforeCommit) - retrying is the appender's to do
         super.onErrorHandlingEvent(e, cause);
         Exceptions.sneakyThrow(cause);
     }
@@ -174,17 +181,21 @@ public class ExclusiveInTransactionSubscription extends AbstractEventStoreSubscr
             log.info("[{}-{}] Stopping subscription",
                     subscriberId,
                     aggregateType);
+            // Stops acquiring the lock and releases it if held, so another instance can take over - the release runs
+            // lockReleased, which removes the handler too
+            fencedLockManager.cancelAsyncLockAcquiring(lockName);
             try {
                 log.debug("[{}-{}] Stopping subscription flux",
                         subscriberId,
                         aggregateType);
                 eventStore.localEventBus()
-                        .removeSyncSubscriber(ExclusiveInTransactionSubscription.this::onEvent);
+                        .removeSyncSubscriber(localEventBusHandler);
             } catch (Exception e) {
                 log.error(msg("[{}-{}] Failed to dispose subscription flux",
                         subscriberId,
                         aggregateType), e);
             }
+            active = false;
             started = false;
             log.info("[{}-{}] Stopped subscription",
                     subscriberId,

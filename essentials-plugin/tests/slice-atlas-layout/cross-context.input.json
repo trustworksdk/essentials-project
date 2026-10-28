@@ -1,0 +1,757 @@
+{
+ "crossReads": [
+  {
+   "declared": false,
+   "from": "billing.invoice_list",
+   "model": "OrderList",
+   "toBc": "orders",
+   "via": null
+  },
+  {
+   "declared": true,
+   "from": "orders.order_list",
+   "model": "InvoiceList",
+   "toBc": "billing",
+   "via": "InvoiceReader"
+  }
+ ],
+ "diff": null,
+ "flows": [
+  {
+   "bc": "billing",
+   "crossContext": true,
+   "dangling": false,
+   "event": "InvoiceIssued",
+   "from": [
+    "billing.issue_invoice"
+   ],
+   "to": [
+    "billing.invoice_list",
+    "shipping.ship_on_invoice"
+   ]
+  },
+  {
+   "bc": "orders",
+   "crossContext": true,
+   "dangling": false,
+   "event": "OrderPlaced",
+   "from": [
+    "orders.place_order"
+   ],
+   "to": [
+    "billing.invoice_on_order",
+    "orders.order_list"
+   ]
+  },
+  {
+   "bc": "billing",
+   "crossContext": false,
+   "dangling": false,
+   "event": "InvoiceRejected",
+   "from": [
+    "billing.issue_invoice"
+   ],
+   "to": []
+  },
+  {
+   "bc": "shipping",
+   "crossContext": false,
+   "dangling": false,
+   "event": "OrderShipped",
+   "from": [
+    "shipping.ship_order"
+   ],
+   "to": [
+    "shipping.notify_carrier"
+   ]
+  },
+  {
+   "bc": "billing",
+   "crossContext": false,
+   "dangling": false,
+   "event": "PaymentReceived",
+   "from": [
+    "billing.psp_webhook"
+   ],
+   "to": []
+  }
+ ],
+ "issues": [],
+ "lineage": {
+  "fields": {},
+  "technicalColumns": []
+ },
+ "messages": [],
+ "meta": {
+  "atlasVersion": 1
+ },
+ "processes": [
+  {
+   "bcs": [
+    "billing",
+    "orders",
+    "shipping"
+   ],
+   "color": 6,
+   "declared": true,
+   "entries": [],
+   "id": "checkout",
+   "links": [],
+   "name": "checkout",
+   "sliceIds": [
+    "billing.invoice_on_order",
+    "billing.issue_invoice",
+    "orders.place_order",
+    "shipping.ship_on_invoice",
+    "shipping.ship_order"
+   ]
+  },
+  {
+   "bcs": [
+    "billing"
+   ],
+   "color": 6,
+   "declared": false,
+   "entries": [
+    "billing.dunning"
+   ],
+   "id": "~billing.dunning",
+   "links": [],
+   "name": "dunning",
+   "sliceIds": [
+    "billing.dunning"
+   ]
+  },
+  {
+   "bcs": [
+    "billing"
+   ],
+   "color": 8,
+   "declared": false,
+   "entries": [
+    "billing.psp_webhook"
+   ],
+   "id": "~billing.psp_webhook",
+   "links": [],
+   "name": "psp webhook",
+   "sliceIds": [
+    "billing.psp_webhook"
+   ]
+  },
+  {
+   "bcs": [
+    "billing"
+   ],
+   "color": 8,
+   "declared": false,
+   "entries": [],
+   "id": "~unattached:billing",
+   "links": [],
+   "name": "unattached billing",
+   "sliceIds": [
+    "billing.invoice_list"
+   ]
+  },
+  {
+   "bcs": [
+    "orders"
+   ],
+   "color": 1,
+   "declared": false,
+   "entries": [],
+   "id": "~unattached:orders",
+   "links": [],
+   "name": "unattached orders",
+   "sliceIds": [
+    "orders.order_list"
+   ]
+  },
+  {
+   "bcs": [
+    "shipping"
+   ],
+   "color": 11,
+   "declared": false,
+   "entries": [],
+   "id": "~unattached:shipping",
+   "links": [],
+   "name": "unattached shipping",
+   "sliceIds": [
+    "shipping.notify_carrier"
+   ]
+  }
+ ],
+ "slices": [
+  {
+   "bc": "orders",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [
+    {
+     "auth": "user",
+     "method": "POST",
+     "path": "/api/orders"
+    },
+    {
+     "auth": "user",
+     "method": "PUT",
+     "path": "/api/orders/{id}"
+    }
+   ],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout"
+   ],
+   "handles": [
+    "PlaceOrder"
+   ],
+   "id": "orders.place_order",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "place_order",
+   "owner": "orders-team",
+   "owns": [],
+   "package": null,
+   "path": "orders/use_cases/place_order",
+   "projections": [],
+   "publishes": [
+    "OrderPlaced"
+   ],
+   "reads": [],
+   "scenarios": [
+    {
+     "given": [],
+     "name": "scenario 1",
+     "note": null,
+     "test": null,
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "not-checked"
+     },
+     "then": {
+      "kind": "nothing"
+     },
+     "when": null
+    }
+   ],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": [
+    "Order"
+   ]
+  },
+  {
+   "bc": "orders",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [
+    {
+     "auth": "user",
+     "method": "GET",
+     "path": "/api/orders"
+    }
+   ],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [],
+   "id": "orders.order_list",
+   "invariants": [],
+   "kind": "view",
+   "lane": "decider",
+   "language": "java",
+   "name": "order_list",
+   "owner": "orders-team",
+   "owns": [
+    "OrderList"
+   ],
+   "package": null,
+   "path": "orders/views/order_list",
+   "projections": [
+    {
+     "from": [
+      "OrderPlaced"
+     ],
+     "name": "OrderListProjection"
+    }
+   ],
+   "publishes": [],
+   "readModels": [],
+   "reads": [
+    {
+     "external": true,
+     "name": "InvoiceList",
+     "via": "InvoiceReader"
+    }
+   ],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  },
+  {
+   "bc": "billing",
+   "consumes": [
+    "OrderPlaced"
+   ],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [
+    "IssueInvoice"
+   ],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout"
+   ],
+   "handles": [],
+   "id": "billing.invoice_on_order",
+   "invariants": [],
+   "kind": "automation",
+   "lane": "decider",
+   "language": "java",
+   "name": "invoice_on_order",
+   "owner": "billing-team",
+   "owns": [],
+   "package": null,
+   "path": "billing/automations/invoice_on_order",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  },
+  {
+   "bc": "billing",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout"
+   ],
+   "handles": [
+    "IssueInvoice"
+   ],
+   "id": "billing.issue_invoice",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "issue_invoice",
+   "owner": "billing-team",
+   "owns": [],
+   "package": null,
+   "path": "billing/use_cases/issue_invoice",
+   "projections": [],
+   "publishes": [
+    "InvoiceIssued",
+    "InvoiceRejected"
+   ],
+   "reads": [],
+   "scenarios": [
+    {
+     "given": [],
+     "name": "scenario 1",
+     "note": null,
+     "test": null,
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "not-checked"
+     },
+     "then": {
+      "kind": "nothing"
+     },
+     "when": null
+    },
+    {
+     "given": [],
+     "name": "scenario 2",
+     "note": null,
+     "test": null,
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "not-checked"
+     },
+     "then": {
+      "kind": "nothing"
+     },
+     "when": null
+    }
+   ],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": [
+    "Invoice"
+   ]
+  },
+  {
+   "bc": "billing",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [],
+   "id": "billing.invoice_list",
+   "invariants": [],
+   "kind": "view",
+   "lane": "decider",
+   "language": "java",
+   "name": "invoice_list",
+   "owner": "billing-team",
+   "owns": [
+    "InvoiceList"
+   ],
+   "package": null,
+   "path": "billing/views/invoice_list",
+   "projections": [
+    {
+     "from": [
+      "InvoiceIssued"
+     ],
+     "name": "InvoiceListProjection"
+    }
+   ],
+   "publishes": [],
+   "readModels": [],
+   "reads": [
+    {
+     "external": true,
+     "name": "OrderList",
+     "via": null
+    }
+   ],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  },
+  {
+   "bc": "billing",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [
+    "IssueInvoice"
+   ],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [],
+   "id": "billing.dunning",
+   "invariants": [],
+   "kind": "automation",
+   "lane": "decider",
+   "language": "java",
+   "name": "dunning",
+   "owner": "billing-team",
+   "owns": [],
+   "package": null,
+   "path": "billing/automations/dunning",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [],
+   "schedule": {
+    "cron": "0 0 6 * * *"
+   },
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  },
+  {
+   "bc": "billing",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": "inbound",
+   "dispatches": [
+    "SettleInvoice"
+   ],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": "Psp",
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [],
+   "id": "billing.psp_webhook",
+   "invariants": [],
+   "kind": "translation",
+   "lane": "decider",
+   "language": "java",
+   "name": "psp_webhook",
+   "owner": "billing-team",
+   "owns": [],
+   "package": null,
+   "path": "billing/external_systems/psp_webhook",
+   "projections": [],
+   "publishes": [
+    "PaymentReceived"
+   ],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  },
+  {
+   "bc": "shipping",
+   "consumes": [
+    "InvoiceIssued"
+   ],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [
+    "ShipOrder"
+   ],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout"
+   ],
+   "handles": [],
+   "id": "shipping.ship_on_invoice",
+   "invariants": [],
+   "kind": "automation",
+   "lane": "decider",
+   "language": "java",
+   "name": "ship_on_invoice",
+   "owner": "shipping-team",
+   "owns": [],
+   "package": null,
+   "path": "shipping/automations/ship_on_invoice",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  },
+  {
+   "bc": "shipping",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout"
+   ],
+   "handles": [
+    "ShipOrder"
+   ],
+   "id": "shipping.ship_order",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "ship_order",
+   "owner": "shipping-team",
+   "owns": [],
+   "package": null,
+   "path": "shipping/use_cases/ship_order",
+   "projections": [],
+   "publishes": [
+    "OrderShipped"
+   ],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": [
+    "Shipment"
+   ]
+  },
+  {
+   "bc": "shipping",
+   "consumes": [
+    "OrderShipped"
+   ],
+   "dependsOn": [],
+   "direction": "outbound",
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": "Carrier",
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [],
+   "id": "shipping.notify_carrier",
+   "invariants": [],
+   "kind": "translation",
+   "lane": "decider",
+   "language": "java",
+   "name": "notify_carrier",
+   "owner": "shipping-team",
+   "owns": [],
+   "package": null,
+   "path": "shipping/external_systems/notify_carrier",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  }
+ ],
+ "writers": [
+  {
+   "bcs": [
+    "billing"
+   ],
+   "flag": null,
+   "kind": "aggregate",
+   "slices": [
+    "billing.issue_invoice"
+   ],
+   "target": "Invoice"
+  },
+  {
+   "bcs": [
+    "billing"
+   ],
+   "flag": null,
+   "kind": "read-model",
+   "slices": [
+    "billing.invoice_list"
+   ],
+   "target": "InvoiceList"
+  },
+  {
+   "bcs": [
+    "orders"
+   ],
+   "flag": null,
+   "kind": "aggregate",
+   "slices": [
+    "orders.place_order"
+   ],
+   "target": "Order"
+  },
+  {
+   "bcs": [
+    "orders"
+   ],
+   "flag": null,
+   "kind": "read-model",
+   "slices": [
+    "orders.order_list"
+   ],
+   "target": "OrderList"
+  },
+  {
+   "bcs": [
+    "shipping"
+   ],
+   "flag": null,
+   "kind": "aggregate",
+   "slices": [
+    "shipping.ship_order"
+   ],
+   "target": "Shipment"
+  }
+ ]
+}

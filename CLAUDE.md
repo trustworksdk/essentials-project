@@ -18,9 +18,14 @@ Edit `LLM/` only: `essentials-plugin/references/llm/` is generated from it by `s
 
 ```bash
 mvn test                                              # unit only, no Docker
-mvn verify                                            # unit + integration (needs Docker)
-mvn test -pl types -am                                # single module, unit
-mvn verify -pl components/postgresql-event-store -am  # single module, integration
+mvn verify                                            # unit + integration (needs Docker), interleaved per module
+scripts/fast-verify.sh                                # both in sequence: every unit test first (fail fast), then ITs only
+mvn verify -DskipUTs                                  # integration only
+mvn verify -DskipITs                                  # unit only, through the whole lifecycle
+mvn clean install -DskipTests                         # no tests at all (skips failsafe too)
+mvn test -pl types -am                                # one module, unit (-am also runs upstream modules' unit tests)
+mvn verify -pl components/postgresql-event-store -am  # one module, unit + integration — and every upstream module's too
+mvn verify -pl <module> -am -DskipUTs -Dit.test=<Class> -Dfailsafe.failIfNoSpecifiedTests=false  # one IT class only
 mvn clean install                                     # full build
 mvn clean install -DskipDependencyCheck=true          # skip OWASP check
 mvn clean install -P test-release                     # simulated release
@@ -31,7 +36,7 @@ Plugin/`LLM/` work: `scripts/plugin-check.sh changed` → what change needs; `qu
 Integration-test speed knobs (ITs are ~99% of the build's wall clock):
 
 ```bash
-mvn -T 1C verify                                      # parallel reactor; multiplies container concurrency with forkCount
+mvn -T 1C verify                                      # parallel reactor; faster, but postgresql-queue-shard-owned's timing-sensitive ITs flake under it
 mvn verify -Dfailsafe.forkCount=1                     # serialize ITs on a constrained machine / low Docker memory
 mvn verify -Dfailsafe.forkCount=0.5C                  # more forks on a big machine — measure, don't assume
 mvn verify -Dbenchmark.run=true                       # also run the opt-in latency/throughput suites (off by default)
@@ -40,7 +45,11 @@ scripts/test-timings.sh                               # rank test classes by ela
 scripts/test-timings.sh --csv > before.csv            # capture a baseline to diff against
 ```
 
-`failsafe.forkCount` defaults to 2. Over-forking Docker makes things slower, not faster — use `scripts/test-timings.sh` to tune it rather than guessing.
+`failsafe.forkCount` defaults to 2 (0.5C in the reactor's longest chain; why and numbers: `components/postgresql-event-store/pom.xml`). Over-forking Docker makes things slower, not faster — use `scripts/test-timings.sh` to tune it rather than guessing.
+
+## Release notes
+
+**RULE:** every change a framework, plugin or example user would notice adds an entry to `docs/NEXT_VERSION_RELEASE.md` in the same commit — bug fixes and behaviour changes above all. It collects everything since the last release tag; at release it becomes `docs/RELEASE-NOTES-<version>.md` (shape: `RELEASE-NOTES-0.60.0.md`) and is reset. What goes where: the file's header. Preparing a release: the `prepare-release` skill (`scripts/prepare-release.py`).
 
 ## Critical Gotchas
 
@@ -85,10 +94,11 @@ Hand-curated `graphify query` rules. Keep them here — `## graphify` below is o
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
 
 Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- When graphify-out/graph.json exists, run `graphify query "<question>"` before your first grep, search or source-file read for a codebase question, and put this rule in every subagent prompt that explores code. Read raw files only for lines the graph or an earlier read already located. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- A committed graphify-out/graph.json is rewritten whole on every build, so a large diff to it in a pull request is expected. Do not flag it as churn or suggest skipping the graph rebuild or its hooks.
 
 ## headroom_read
 

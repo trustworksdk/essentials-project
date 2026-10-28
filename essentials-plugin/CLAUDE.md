@@ -51,21 +51,25 @@ file-by-file enumeration of `references/llm/` — that is the skill's module ind
 | A file `/essentials:init` copies into a project, or a capability it offers to install | `commands/upgrade.md` Group A — an existing project reaches that capability **only** through `/essentials:upgrade`. A capability added to init alone ships to new projects and to nobody else, which is the gap `upgrade` exists to close |
 | A requirement (S1–S11) added or re-scoped such that an existing project could now be non-conformant | The Group C table in `commands/upgrade.md`, with its severity and the symptom the failure presents as. A requirement no upgrade check names is one existing projects cannot discover except by booting and misreading a stack trace |
 | A slice template added, removed, or changed | `references/slice/api-provenance.md` (re-run its verification snippet) and the owning kind skill's emission table. Then `python3 scripts/render-slice.py update-golden` and review the `tests/slice-golden/` diff, `uv run --script tests/scripts/test_slice_source.py` (it reads the goldens), and `../scripts/plugin-check.sh scaffold slices` — the goldens compile and start only there |
+| An entry point another plugin's agent drives (`render-slice.py render`'s options, exit codes or `--json` fields; `/essentials:init --preset`/`--report`; a project mark of `references/sdd-contract.md` §5) | `references/sdd-contract.md` and `capabilities.json` in the same commit, then `python3 -m unittest discover -s tests/scripts -p 'test_capabilities.py'`. Additive only: a removal, rename or changed meaning is the next `interface` / `contractVersion` and a `CHANGELOG.md` line. A template change that alters what the rendered code does: its entry in `references/slice/templates/behaviours.json` (`implemented` only when a test of it passes against the untouched skeleton: that test, with its `// behaviour:` line, under `tests/slice-compile/behaviours/` — `tests/scripts/test_behaviours_catalog.py` fails an `implemented` entry without one — then `../scripts/plugin-scaffold.sh slices --case <composition>`) |
 | A new placeholder in a slice template | The placeholder table in `references/slice/slice-authoring.md` §4 — `render-slice.py` refuses an unknown one (exit 2) |
 | The pointer template's body changed | Bump its `<!-- essentials-slices-rules: vN -->` stamp by one **in the same edit** — the counter continues from its current value and never restarts at `v1`, because existing projects carry the values already issued and a lower number would never be offered a refresh. `/essentials:init` copies the file straight from `references/slice/project-rules-pointer.md.template`; there is no second copy |
 | A section added/renamed in `rules/slice-design.md`, or a scope line under a heading changed | Its scope line (`<!-- slice-law: lane=… kind=… store=… -->`, grammar in `scripts/slice-law.py`'s docstring): a section without one is printed to every reader, so a lane- or kind-specific section left unscoped costs every other lane its bytes. Then `python3 tests/scripts/test_slice_law.py --update-golden` and review the `tests/slice-law/views.golden` diff; `slice-law.py --check` fails a view over its budget — raise `BUDGET_VIEW` only as a decision. Then every skill, command, reference and template citing it by section name — `scripts/check-citations.py` (rule `law-section`) names each one left dangling — and the intro's `━━━ CORE PRINCIPLES ━━━` block. A template's citations are rendered into user projects, where nothing checks them: a rename strands every project scaffolded before it, so rename only for a reason |
 | A change class, decision point, or guard rail in `references/slice/change-procedure.md` | `skills/essentials-change/SKILL.md`, which routes by those §-numbers and breaks silently if they move. A decision point also gets a case in `tests/fixtures/change-router/cases.yaml`; then `uv run --script evals/build.py` |
-| A manifest field's meaning, or which field a kind declares its inbound events in | `references/slice/manifest-guide.md` §3, `references/slice/manifest-reconciliation.md` §1–§2 (derivable/human-owned split + extraction rules), `commands/slice-check.md` gate 11 and its `--fix-manifests` field list, and **every reader** — `scripts/slice-index.py`, `scripts/slice-source.py`, `commands/slice-map.md` Steps 2–4 and the graph builder in `references/slice/slice-map-template.html` |
+| A manifest field's meaning, or which field a kind declares its inbound events in | `references/slice/manifest-guide.md` §3, `references/slice/manifest-reconciliation.md` §1–§2 (derivable/human-owned split + extraction rules), `commands/slice-check.md` gate 11 and its `--fix-manifests` field list, and **every reader** — `scripts/slice-index.py`, `scripts/slice-source.py`, `scripts/slice_atlas.py`, `scripts/slice-enrich.py`, `commands/slice-map.md` Steps 2–4 and the graph builder in `references/slice/slice-map-template.html` |
 | `references/slice/slice-map-template.html` or the data contract in `commands/slice-map.md` §6 | The other one — they are one contract — then `uv run --script tests/scripts/test_slice_index.py` and `python3 tests/fixtures/slice-map/render-check.py`, and check the by-eye rows of that fixture's `TEST-GUIDE.md` |
-| `scripts/slice-index.py` or `scripts/slice-source.py` changed | Its test: `uv run --script tests/scripts/test_slice_index.py` / `test_slice_source.py`; `--update-golden` only for an intended change, and review the diff. After a slice-index change, rerun `render-check.py` |
+| `references/slice/atlas/` (`atlas.html`, `index.html` or a `lens-*.js`), or the Atlas keys in `commands/slice-map.md` §6 | `index.html` (the `--per-app` index page) receives the colour tokens between `atlas.html`'s `/* __TOKENS_BEGIN__ */` … `/* __TOKENS_END__ */` markers: keep that block tokens only. `commands/slice-map-html.md` § What the page shows when a lens is added or re-scoped; `uv run --script tests/scripts/test_slice_atlas.py`, then `python3 tests/fixtures/slice-map/render-check.py --only atlas` and the by-eye rows of that fixture's `TEST-GUIDE.md` § The Atlas pages. A lens file is named `lens-<n>-<id>.js` after the id it registers: render-check derives the lens list from the file names |
+| `scripts/slice-index.py`, `scripts/slice-source.py`, `scripts/slice_atlas.py` or `scripts/slice_atlas_layout.py` changed | Its test: `uv run --script tests/scripts/test_slice_index.py` / `test_slice_source.py` / `test_slice_atlas.py` (goldens `tests/slice-index/golden/atlas.*.json`) / `test_slice_atlas_layout.py` (goldens and the estate budget in `tests/slice-atlas-layout/`); `--update-golden` only for an intended change, and review the diff. After a slice-index change, rerun `render-check.py`. `test_slice_enrich.py` imports `slice-source.py` and `slice-index.py`: rerun it after either |
+| `scripts/slice-enrich.py` or `commands/slice-enrich.md` | The other one — the proposal JSON and the accepted set are one contract (`extracted` is already in the manifest's scenario shape) — then `uv run --script tests/scripts/test_slice_enrich.py` (goldens `tests/slice-enrich/golden/`, fixture `tests/fixtures/enrich/`). `references/slice/manifest-reconciliation.md` §1 when what it may draft changes; `commands/slice-check.md` Step 4 when the tier rule changes, which both commands apply |
 | A heuristic added/changed in `references/slice/discovery-heuristics.md` | `tests/fixtures/brownfield-layered/` — add a source element that exercises it and a row to that fixture's `TEST-GUIDE.md` and `expected.yaml`. A heuristic with no fixture element is unexercised; the fixture's `TEST-GUIDE.md` and `expected.yaml` are its expected results, run by `evals/` |
 | `references/slice/slice-yaml.schema.json` changed | Keep it backward compatible: manifests written by another tool — a `generator` other than `essentials`, the optional event-model linkage — must still validate. Then `uv run --script tests/scripts/test_slice_lint.py`, which validates every fixture and every rendered golden: a schema tightening that the plugin's own artifacts fail is a defect in the tightening or in the artifacts, and you cannot tell which without both |
 | A gate added, removed, or re-scoped in `commands/slice-check.md` | Whether its mechanical part belongs in a script. Decidable from manifests alone (parsing, schema, id sets) → `scripts/slice-lint.py`. A syntactic fact of the Java/Kotlin source (an annotation, a handler's parameter type, a mapping's route) → `scripts/slice-source.py`, with a case under `tests/slice-source/cases/`. The judgement stays in the gate. Never the same check in both the script and the gate. Gate numbers are review ids (`ESS-G<gate><clause>`): never renumber, and a new gate gets its `<a id="g<n>">` anchor, which `/essentials:review` links to |
-| `scripts/slice-lint.py` changed | `commands/slice-check.md` Step 1.5 (its contract and exit codes), `references/slice/manifest-guide.md` § Validating a manifest, `commands/init.md` Step 9 and the hook template `references/init-assets/project/.githooks/pre-commit.template` — projects hold an installed copy that gate 12 diffs against this one — then `uv run --script tests/scripts/test_slice_lint.py` |
+| `scripts/slice-lint.py` changed | `commands/slice-check.md` Step 1.5 (its contract and exit codes), `references/slice/manifest-guide.md` § Validating a manifest, `commands/init.md` Step 9, `commands/upgrade.md` Group A2 and the hook template `references/init-assets/project/.githooks/pre-commit.template` — projects hold an installed copy that gate 12 diffs against this one — then `uv run --script tests/scripts/test_slice_lint.py`, and `uv run --script tests/scripts/test_pre_commit_hook.py` when the hook or the exit codes it reads changed |
 | A requirement (S1–S11) added or re-scoped in `references/stack/stack-contract.md` | Every citer — they cite **by number**: `skills/essentials-docs/SKILL.md`, `commands/init.md`, `commands/upgrade.md` Group C, and the three sibling files in `references/stack/`. Its decidable half in `scripts/stack-lint.py` `RULES_LIST` (cites are `path:line` + token) and `tests/stack-lint/expectations.json`, then `python3 scripts/stack-lint.py --self-test`. **Never renumber**: `ESS-S<n>` is a review finding id |
 | A fix op added to `scripts/stack-lint.py` or `scripts/review-scan.py` | Its row in `commands/review.md` § Applying a fix descriptor — the op → edit table exists there once |
 | A review-scan check that duplicates a stack-lint check | The pair table in `commands/review.md` Step 3e |
-| A pin needs changing | `references/stack/stack-pins.md` — the only place. Then `python3 scripts/init-render.py --check` fails until `--update-golden`, because the goldens hold every rendered pin: review that diff |
+| A pin needs changing | `references/stack/stack-pins.md` — the only place. Then `python3 scripts/init-render.py --check` fails until `--update-golden`, because the goldens hold every rendered pin: review that diff. `python3 scripts/migration-plan.py --self-test` fails the same way (its goldens hold the plan's targets), and a new `essentials.version` needs its release's notes in `references/stack/migrations/`: `--check` fails until the newest notes file's `to` is the pin |
+| A release's migration notes (`references/stack/migrations/*.json`), or a `docs/MIGRATION-*` / `RELEASE-NOTES-*` line they cite | `python3 scripts/migration-plan.py --self-test` (`--check` resolves every id, slug, pin and `path:line` + token; a docs edit that moves a cited line fails it). Notes hold only order, pin names, ids, slugs and citations — detection goes in `review-scan.py`, fixes in the catalogue |
 | A requirement's evidence changes | Its `Proof:` line in `stack-contract.md`. Every requirement cites a `references/llm/` doc or inlines the configuration that *is* the fact; a requirement with neither is an opinion |
 | A `references/llm/` doc states an obligation a generated project must meet (a non-transitive dependency, a required registration, a package move) | `stack-contract.md` — **restate it as a requirement**. `/essentials:init` never reads `references/llm/`, so a `Proof:` line alone does not ship it |
 | Java or Kotlin lane capability changes (a command starts or stops supporting a language) | The **Status paragraph** of the affected `references/stack/<language>-spring-boot.md`, `commands/intro.md` (and its `━━━ DELIBERATELY ABSENT ━━━` block when the Kotlin aggregate lane is concerned), and `README.md` § Deliberately absent |
@@ -91,16 +95,19 @@ that load.
   decidable half of S1–S11, a trap's grep-able signature — is a script under `scripts/` with a
   committed golden or test, and the command takes its output verbatim: `init-render.py`,
   `render-slice.py`, `slice-lint.py`, `slice-source.py`, `slice-index.py`, `slice-law.py`,
-  `stack-lint.py`, `review-scan.py`. The model elicits, reads code for what a script cannot decide, merges into files
+  `stack-lint.py`, `review-scan.py`, `migration-plan.py`, `slice-enrich.py` — plus `slice_atlas.py` and `slice_atlas_layout.py`, modules `slice-index.py` imports, with no CLI of their own. The model elicits, reads code for what a script cannot decide, merges into files
   the user already has, and diagnoses failures. It never writes a rendered file freehand and never
   re-derives what a script reports: a model doing mechanical work produces confident wrong answers.
+  Where the shell cannot write, a writer exits 4 before its first write; its `--emit` output then goes
+  through the Write tool verbatim and its read-only `verify` proves the bytes. That is the script's output,
+  not freehand, and nothing counts as written until `verify` exits 0.
   Every script is Python ≥ 3.11 and either standard library only (`#!/usr/bin/env python3`) or
   pins its dependencies in PEP 723 inline metadata and runs with `uv run --script`. The pins
   travel with the copy init installs into projects. Scripts are Pyright-clean in basic mode.
   The one exception is `scripts/doctor.sh`, bash (3.2-safe, no tools beyond those it probes) because it
   detects a missing Python; its impact lines restate what each command does without a tool, so they move with that command.
 - **Goldens are committed and byte-diffed; regenerating one is a review, not a fix.**
-  `tests/golden/init/`, `tests/slice-golden/`, `tests/slice-index/golden/` and
+  `tests/golden/init/`, `tests/slice-golden/`, `tests/slice-index/golden/`, `tests/slice-atlas-layout/` and
   `tests/slice-source/golden/` are what the renderers and readers produce today. Each has an
   `--update-golden`; run it only for an intended change, then read the diff before committing. A
   golden regenerated to make a red check green has stopped checking anything.
@@ -160,7 +167,7 @@ that load.
 - **`scripts/stack-lint.py` is the decidable half of S1–S11: deterministic, standard library only,
   reports and never writes.** Its finding ids are `ESS-S<n>` plus a `check` slug that is never
   reused; a retired slug stays in `RETIRED_CHECKS`. `/essentials:init` Step 13.7,
-  `/essentials:upgrade` Group C and `/essentials:review` all take its findings verbatim — a
+  `/essentials:upgrade` Groups C and D (D through `migration-plan.py`) and `/essentials:review` all take its findings verbatim — a
   judgement it cannot make stays with the command, never becomes a heuristic in the script.
 - **Review ids are anchored, stable, and defined in one place each.** `ESS-NNN` is defined only on
   its `LLM/LLM-traps.md` line: sequential, never renumbered, never reused, retired by a tombstone
@@ -176,6 +183,7 @@ that load.
 - **`scripts/review-scan.py` is the deterministic half of `/essentials:review`:** standard library
   only, reports and never writes, matches added lines only, and every signature cites a catalogue id
   and its evidence in the framework source. A signature that needs judgement ships as `candidate`, never `confirmed`.
+  `--tree` is sugar for the empty-tree diff of a whole tree, so added-lines-only still holds.
 - **`tests/fixtures/worked-example/` is what the slice tooling reads, and that is its only job.**
   It is the {Kotlin, decider-lane} tree carrying manifests, so it is the "project already has manifests" case
   for `slice-map` and `slice-discover` and the decider-lane input for `slice-check`
@@ -234,14 +242,13 @@ that load.
   reader that consults `consumes` alone reports every correctly-generated view as reacting to nothing,
   on manifests that are entirely correct. When adding a
   reader, union the two; when adding a writer, write only the field that kind owns, never both.
-- **`/essentials:slice-map` renders, never grades.** `scripts/slice-index.py` computes the map from
-  the manifests, and `scripts/slice-source.py` adds the facts a manifest does not carry. The map
-  shows eight cheap divergence checks and stops there: manifest parses, directory exists, kind
-  matches location, handled events declared, endpoint appears in source, id uniqueness, twin
-  pairing, and dangling consume (`consumes` ∪ `projections[].from`). Every R1–R5 gate, every severity, and every `--fix`
-  belongs to `/essentials:slice-check`; a map that starts scoring becomes a second, weaker audit and
-  the two then disagree in front of the user. Its counterpart rule is `slice-discover`'s: `slice-map`
-  requires manifests and redirects without them, `slice-discover` redirects *with* them.
+- **`/essentials:slice-enrich` drafts only from evidence, and only a person writes.** It is the one writer of
+  human-owned fields (`manifest-reconciliation.md` §1): every draft cites code or a test, nothing is written
+  without a yes per journey and per slice, a present field is never proposed for, and a scenario comes only
+  from an existing test. `scripts/slice-enrich.py` writes. The command has no Edit tool, and uses Write only for the fallback
+  where the shell cannot write: `apply --emit`'s content verbatim, proven by `slice-enrich.py verify`.
+  `--fix-manifests` still writes no human-owned field, and slice-lint and slice-source still never write.
+- **`/essentials:slice-map` and `/essentials:slice-map-html` render, never grade.** `scripts/slice-index.py` computes the map from the manifests, `scripts/slice-source.py` adds the facts a manifest does not carry, and `scripts/slice_atlas.py` the checks that need the whole project. The map shows a closed set of checks and stops there: eight cheap divergence checks — manifest parses, directory exists, kind matches location, handled events declared, endpoint appears in source, id uniqueness, twin pairing, and dangling consume (`consumes` ∪ `projections[].from`) — plus the completeness rule (a read-model column no inbound event carries a field for) and the scenario and adoption checks (`given` unpublished, unknown field, test missing, malformed, no `flow:`, no scenarios), all listed in `commands/slice-map.md` Step 4. Their levels are annotations, never severities. Every R1–R5 gate, every severity, and every `--fix` belongs to `/essentials:slice-check`; a map that starts scoring becomes a second, weaker audit and the two then disagree in front of the user. Its counterpart rule is `slice-discover`'s: `slice-map` requires manifests and redirects without them, `slice-discover` redirects *with* them.
 - **`/essentials:init` renders the project from `references/init-assets/project/` with
   `scripts/init-render.py`; there is one tree, gated per answer by `manifest.json`.** The
   renderer is the only skeleton source — no Spring Initializr, no second template tree, no file the
@@ -262,14 +269,26 @@ that load.
   projects only — the lint gate offered at Step 9 would reach nobody who already had a project,
   and `slice-check` gate 12 cannot see the absence of a gate that was never installed. The split is: **init elicits and generates, upgrade detects and
   offers.** Upgrade re-asks nothing (language, profile, frontend mode and coordinates are facts of
-  the project — read them), regenerates no skeleton, touches no slice source, and **moves no version
-  pin** — a pin move is an upgrade decision wanting an ADR, and folding it in here would make
-  "catch up with the plugin" mean "change every dependency in the application". The one exception
-  is `s1-kotlin-compiler-floor`: a Kotlin compiler that cannot target the project's own Java
-  baseline is a project that does not compile, not a lag. Upgrade reads the project's own
-  `essentials.version`, and a finding that only holds on the plugin's Essentials release
-  (`appliesWithUpgrade` in stack-lint's JSON) is reported as applying with that upgrade, never
-  offered on its own — its fix would break an application still on its older release. Upgrade's Group C is
+  the project — read them) and regenerates no skeleton. **Pins move only in Group D, the Essentials
+  upgrade:** `essentials.version` and the platform pins that release requires, and never a pin the
+  release does not require — folding other moves in would make "catch up with the plugin" mean
+  "change every dependency in the application". A release move is an upgrade decision wanting an ADR,
+  so it runs behind a decision note the user approves — the note *is* the ADR — on an
+  `essentials-<to>` branch the command creates, with a commit per step when the user says so (asked
+  once). Its pins, steps, findings and checklist are `scripts/migration-plan.py`'s, taken verbatim;
+  each step is verified, and the project's full build gates the move — a release move has no
+  compile-only outcome. Slice source is edited there and only there, for API migrations alone: per
+  call site, each confirmed, only where a review-scan signature or a compiler error pins it, never
+  structural — structure stays `slice-check`'s. The pin moves outside a release are
+  `s1-kotlin-compiler-floor` — a Kotlin compiler that cannot target the project's own Java baseline
+  is a project that does not compile, not a lag — and the floors the Essentials build itself runs on,
+  `s1-boot-patch`, `s1-kotlin-patch` and `s11-maven-wrapper` (plus `s3.1-jackson3-override`, which
+  removes an override rather than moving a pin): each a named `stack-lint` finding reported only on the
+  wrong side of its `stack-pins.md` row, offered on its own with a yes, never folded into Group D. Still no
+  general lag report. Upgrade reads the project's own `essentials.version`,
+  and a finding that only holds on the plugin's Essentials release (`appliesWithUpgrade` in
+  stack-lint's JSON) is never offered on its own in Group C — its fix would break an application
+  still on its older release — but applied by Group D, right after the pins move. Upgrade's Group C is
   `scripts/stack-lint.py`'s output plus the judgement rows, read against the contract live — never a
   diff against the template tree `/essentials:init` renders from: a project diverges from its render
   the day work starts, and a diff would report the application itself as drift.
@@ -301,9 +320,11 @@ that load.
   credentials). Init deletes known strays as a safety net, not as a licence to add them.
 - **Stateless.** No `.essentials/` runtime directory and no Claude Code hooks. Persistent state is a
   design decision to raise, not to add quietly. This is why `/essentials:slice-discover --write`
-  and `/essentials:review --out` take a **user-supplied** path and default to printing: a
-  plugin-owned directory starts as one report and accretes config, cache, and last-run state, which
-  is how statelessness actually dies.
+  and `/essentials:review --out` take a **user-supplied** path and default to printing, and why
+  `/essentials:upgrade`'s decision note is printed or written to a path the user chooses (it offers
+  the project's own `docs/adr/`, never a directory of its own). Upgrade's gate command is derived on every
+  run, asked for only when that fails, and never recorded. A plugin-owned directory starts as one
+  report and accretes config, cache, and last-run state, which is how statelessness actually dies.
 - **`slice-discover` never writes source, at any depth, and gains no `--fix` mode.** It *infers*
   structure where `slice-check` *audits* declared structure; an inferred boundary applied wrongly is
   worse than the layering it replaced. Its findings rank by **payoff**, never by the law's
@@ -319,8 +340,8 @@ that load.
   **traps** as well as findings — a fixture that only contains findings proves nothing about false
   positives.
 - **The model-judgement steps are scored by `claude plugin eval`, before each release, not per PR.**
-  `evals/` holds one case per judgement a command makes (the audits, discovery, the map, the change
-  router, add-slice, review). Its graders are generated by `evals/build.py` from the fixtures'
+  `evals/` holds one case per judgement a command makes (the audits, discovery, the map, enrichment, the
+  change router, add-slice, review). Its graders are generated by `evals/build.py` from the fixtures'
   expected results, so an expectation is written once, in `expected.yaml` or
   `change-router/cases.yaml`; the CI gate is `build.py --check`, which calls no model. A run costs
   real tokens and the model is not
@@ -329,20 +350,24 @@ that load.
 ## Before committing
 
 From the repository root, `scripts/plugin-check.sh quick` runs every step of the `plugin-docs` job of
-`.github/workflows/maven.yml`, in its order, with the same commands, arguments and `UV_PYTHON=3.11`: CI calls the
+`.github/workflows/maven.yml`, in its order (side by side, up to `--jobs N`, default the CPU count; output and table
+still in that order; `--jobs 1` runs one at a time), with the same commands, arguments and `UV_PYTHON=3.11`: CI calls the
 same script one step at a time, so the two cannot drift. Each step exits 0. `scripts/plugin-check.sh list` names the
 steps and `step <name>` reruns one. It needs `git` and `uv` (uv fetches Python 3.11, the scripts' declared minimum, and
 the PEP 723 pins). Locally `ess-ids` compares with HEAD and `plugin-version` with the merge base with `origin/main`
 (CI: `HEAD^1`), so an unbumped plugin change fails before the push. `render-check` shows SKIPPED without a headless
-Chrome (the arm64 devcontainer): nothing was checked, which is not a pass; pass `--chrome PATH` where one runs.
+Chrome: nothing was checked, which is not a pass; pass `--chrome PATH` where one runs. The devcontainer
+(`INSTALL_PLAYWRIGHT`) puts Playwright's headless shell on PATH as `chrome-headless-shell`.
 
 `scripts/plugin-check.sh changed [BASE]` maps every changed path to its row in the companion table above and prints
 what else the change needs, with the commands.
 
 The scaffold builds — the `scaffold ·` jobs beside `verify`, run on every PR — when a template, a pin,
 the init tree, an S2.1 row or a fixture's source changed: `scripts/plugin-check.sh scaffold [matrix|slices|all]`.
-It installs the reactor first (`mvn clean install -DskipTests -DskipDependencyCheck=true`; `--no-install` skips it;
-CI installs only the Essentials modules the init templates declare, `-am`, and a full install is a superset), refuses
+It installs first with `scripts/plugin-scaffold.sh install`, the command CI runs too: only the Essentials modules
+the init templates declare (`plugin-scaffold.sh modules`), `-am`, a parallel reactor, no versions report, ~25 s;
+`--full-install` installs the whole reactor, `--no-install` skips it. It builds the cases from one queue of `--jobs N`
+builds (default half the CPU count; `PLUGIN_CHECK_SCAFFOLD_JOBS`), refuses
 without Maven, a JDK or Docker, and needs nothing else building in this checkout (root `CLAUDE.md`, `target/`). The
 remaining arguments go to `scripts/plugin-scaffold.sh`. About 1.5 minutes per mode once warm. The frontend legs are
 not automated and need Node; run them in each cell with a frontend, after the matrix (`--work` names where the cells
@@ -368,10 +393,11 @@ sections beside the intro's `━━━ CORE PRINCIPLES ━━━` block as READ:
 ## Before a release
 
 A release is a commit that reaches the marketplace ref with a new `plugin.json` version. Before it, run
-`scripts/plugin-check.sh release` (with `--chrome PATH` on a machine with Chrome): quick, manual, scaffold all, the
-eval suite over every case with the flags of `evals/README.md` § Run it, `claude plugin validate essentials-plugin`
+`scripts/plugin-check.sh release` (with `--chrome PATH` on a machine with Chrome): scaffold all (the only Maven
+build) beside one lane of quick, manual, the eval suite over every case with the flags of `evals/README.md` § Run it, `claude plugin validate essentials-plugin`
 and `claude plugin validate .` (the marketplace manifest), and `CHANGELOG.md`'s top heading against the
-`plugin.json` version and the `essentials.version` pin. A SKIPPED `render-check` fails it: a release needs exit 0,
+`plugin.json` version and the `essentials.version` pin; each part's output prints whole, in that order.
+`--no-evals` runs everything else and records the evals SKIPPED. A SKIPPED `render-check` or eval suite fails it: a release needs exit 0,
 not 3. It ends with what no script can check:
 
 1. The latest run of `plugin-scaffold-scheduled.yml` green (start it by hand if the ref has not had a nightly run),

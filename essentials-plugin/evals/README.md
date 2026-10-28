@@ -44,7 +44,7 @@ twice, the last one wins). One cheap probe while editing a case: `--case <name> 
 **Cost and time.** Measured with Opus as the agent and Sonnet as the judge, one run each: a `change-*`
 case $0.22–0.34 in under a minute, `add-slice-java-command` $0.79 in 1.5 minutes,
 `slice-check-worked-example` $1.09 in 2 minutes; the larger fixtures (multi-lane, aggregate-lane,
-service-entity) and the review cases cost more. One pass over all 28 cases is roughly $20 and 40 minutes
+service-entity) and the review cases cost more. One pass over all 29 cases is roughly $20 and 40 minutes
 of agent time, so the default three runs come to about $50–90 and 30–45 minutes at `-j 4`. Pass
 `--max-cost-usd` for a hard ceiling; the summary table prints the real figure.
 

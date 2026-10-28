@@ -20,10 +20,11 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import io.micrometer.core.instrument.*;
 import io.micrometer.core.instrument.Timer;
 
+import java.lang.ref.WeakReference;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -40,7 +41,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * depth is different: it is a query, not an event, and Micrometer polls a gauge on every scrape. A
  * naive depth gauge would put {@code 2 x shardCount + 1} queries on the database per scrape per
  * process. So depth is opt-in through {@link #bindQueueDepth}, and behind a cache whose age the
- * caller chooses.
+ * caller chooses. The one gauge registered here regardless, {@link #SHARDS_AWAITING_TAKEOVER_GAUGE}, is
+ * fed by events too (a stall starting and ending), so a scrape reads a number in memory, not the database.
  * <p>
  * <b>What the tags deliberately do not include.</b> There is no tag for the ordering key. Keys are
  * unbounded — one per customer, per order, per aggregate — and a tag value per key is the classic way
@@ -66,6 +68,26 @@ public final class MicrometerQueueObserver implements QueueObserver {
      * sitting in shards nobody reads.
      */
     public static final String SHARDS_UNOWNED_GAUGE = "essentials.queue.shards.unowned";
+    /**
+     * Shards, across both lanes, that this instance holds a lease on but does not serve, because their
+     * takeover keeps failing. <b>Alert on it above zero, next to {@link #SHARDS_UNOWNED_GAUGE}</b>, which
+     * cannot see these: they are leased. Fed by {@link #takeoverStalled}, so unlike the depth and health
+     * gauges it costs no query and is always registered. Per process: sum it across instances.
+     * <p>
+     * It counts only the stalls an observer saw start. An observer registered while a shard is already
+     * stalled reads that shard only from its next stall; the end of the one it missed does not take the
+     * gauge below zero, nor end a stall of another shard, or one another observer reported. Stalls are
+     * told apart by lane and shard, which is all the callback carries: one observer attached to two queues
+     * counts both queues' stalls of the same shard, but the end of one it missed on one queue can still end
+     * the same shard's stall it saw on the other.
+     * <p>
+     * Every observer on one registry with the same tags adds into this one gauge, whichever was registered
+     * first: an observer rebuilt for a re-created queue, or one bound by hand next to the starter's, publishes
+     * its stalls here too, and a retired one keeps only the stalls it was told started and not yet told ended.
+     * So give each queue's observer its queue tag (the Spring starter does); two queues sharing one tag set
+     * publish the sum of their counts, as their counters do.
+     */
+    public static final String SHARDS_AWAITING_TAKEOVER_GAUGE = "essentials.queue.shards.awaiting.takeover";
     /**
      * Instances heartbeating for this queue. Below the number of running processes means colliding ids.
      */
@@ -97,7 +119,61 @@ public final class MicrometerQueueObserver implements QueueObserver {
     private final Counter deadLetters;
     private final Counter shardsAcquired;
     private final Counter shardsReleased;
+    /**
+     * The count behind each registered {@link #SHARDS_AWAITING_TAKEOVER_GAUGE} gauge, keyed by its registry and
+     * then by the gauge {@code register} returned. Micrometer hands every observer with the same registry and
+     * (post-filter) tags the gauge the first one registered, and that gauge reads only the first one's supplier;
+     * so the count lives here, one per gauge, and every observer that gets the gauge adds into it. Keying by the
+     * returned gauge rather than by tags gets tag order, registry common tags and meter filters right without
+     * restating Micrometer's rules.
+     * <p>
+     * Registry first, because a meter's {@code equals} compares ids alone: gauges with the same name and tags in
+     * two registries are equal keys, and one flat map let an observer on one registry replace the entry of the
+     * other's gauge, leaving a later observer there with a count its gauge never reads. {@code MeterRegistry}
+     * does not override {@code equals}, so the outer map tells registries apart by identity.
+     * <p>
+     * Weak keys at both levels: an entry lasts as long as its registry, and within it as long as its gauge is
+     * registered. Neither a gauge nor its count refers back to the registry, so the inner map does not keep its
+     * own key alive. Guarded by itself, so registering and recording the count is one step for concurrent
+     * constructors.
+     */
+    private static final Map<MeterRegistry, Map<Gauge, SharedStallCount>> AWAITING_TAKEOVER_COUNTS = new WeakHashMap<>();
 
+    /**
+     * The value in {@link #AWAITING_TAKEOVER_COUNTS}' per-registry map. It names its gauge by identity because a
+     * meter's {@code equals} compares ids: a gauge removed from the registry and registered again is a new gauge
+     * reading a new count, which an equal key alone would not tell apart. A weak reference, or the value would
+     * hold its own key and the entry would never go.
+     */
+    private record SharedStallCount(WeakReference<Gauge> gauge, AtomicInteger count) {
+    }
+
+    /**
+     * Shards whose takeover is failing now, summed over every observer publishing into this observer's
+     * {@link #SHARDS_AWAITING_TAKEOVER_GAUGE} gauge. Held by the gauge's supplier, which is a strong reference.
+     */
+    private final AtomicInteger shardsAwaitingTakeover;
+    /**
+     * This observer's share of {@link #shardsAwaitingTakeover}: the stalls it was told started and not
+     * yet told ended, counted per lane and shard. An end is taken off the shared count only when this
+     * observer saw that same shard's stall start, so an observer that missed a stall's start cannot end a
+     * stall another observer reported, nor one of another shard it reported itself. A count rather than a
+     * set, because one observer attached to two queues is told about each queue's shard 3. An entry goes
+     * when its count reaches zero.
+     */
+    private final ConcurrentMap<Stall, Integer> stallsSeenStarting = new ConcurrentHashMap<>();
+
+    /**
+     * A stalled shard as {@link #takeoverStalled} names it: shard numbers repeat across the two lanes.
+     */
+    private record Stall(MessageId.Lane lane, int shard) {
+    }
+
+    /**
+     * No tags. Fine for one queue per {@code registry}; with more, prefer {@link #MicrometerQueueObserver(MeterRegistry, QueueName)}.
+     * Untagged, every queue's counters, timer and {@link #SHARDS_AWAITING_TAKEOVER_GAUGE} gauge add into one
+     * series, so a dashboard cannot tell which queue a stalled takeover or a failure belongs to.
+     */
     public MicrometerQueueObserver(MeterRegistry registry) {
         this(registry, List.of());
     }
@@ -136,6 +212,33 @@ public final class MicrometerQueueObserver implements QueueObserver {
                                   .tags(this.commonTags)
                                   .publishPercentileHistogram()
                                   .register(registry);
+        this.shardsAwaitingTakeover = sharedAwaitingTakeoverCount(registry, this.commonTags);
+    }
+
+    /**
+     * Register the {@link #SHARDS_AWAITING_TAKEOVER_GAUGE} gauge and return the count it reads: a fresh one
+     * when this call registered the gauge, the one already behind it when another observer did.
+     */
+    private static AtomicInteger sharedAwaitingTakeoverCount(MeterRegistry registry, List<Tag> tags) {
+        synchronized (AWAITING_TAKEOVER_COUNTS) {
+            var candidate = new AtomicInteger();
+            // Supplier form, for the reason spelled out on the depth gauge helper. It captures the count only,
+            // not this observer, so a retired observer is not kept alive by the registry.
+            var gauge = Gauge.builder(SHARDS_AWAITING_TAKEOVER_GAUGE, candidate::get)
+                             .description("shards leased by this instance but not served, because their takeover keeps failing")
+                             .tags(tags)
+                             .register(registry);
+            var countsInRegistry = AWAITING_TAKEOVER_COUNTS.computeIfAbsent(registry, r -> new WeakHashMap<>());
+            var shared = countsInRegistry.get(gauge);
+            if (shared != null && shared.gauge().get() == gauge) {
+                return shared.count();
+            }
+            // Removed first: put() on an equal key keeps the OLD key object, whose collection would then drop
+            // this entry while the new gauge is still registered.
+            countsInRegistry.remove(gauge);
+            countsInRegistry.put(gauge, new SharedStallCount(new WeakReference<>(gauge), candidate));
+            return candidate;
+        }
     }
 
     private Counter counter(String name, String description, Tag... tags) {
@@ -172,6 +275,34 @@ public final class MicrometerQueueObserver implements QueueObserver {
     @Override
     public void shardOwnershipChanged(int shard, boolean acquired) {
         (acquired ? shardsAcquired : shardsReleased).increment();
+    }
+
+    @Override
+    public void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
+        var stall = new Stall(lane, shard);
+        if (stalled) {
+            // Shared count first, own second: the end below takes one off the shared count only after taking it off
+            // this observer's own, so the shared count can never be read below zero, even mid-update.
+            shardsAwaitingTakeover.incrementAndGet();
+            stallsSeenStarting.merge(stall, 1, Integer::sum);
+        } else if (endSeenStall(stall)) {
+            // Only a stall this observer saw start: one registered while a shard was already stalled is told only that
+            // the stall ended. Taking that off the shared count would cancel a stall of another shard, or another
+            // observer's, or read -1 and hide the next real stall behind a reading of zero.
+            shardsAwaitingTakeover.decrementAndGet();
+        }
+    }
+
+    /**
+     * Take one off this observer's count for {@code stall}, and say whether there was one to take.
+     */
+    private boolean endSeenStall(Stall stall) {
+        var ended = new boolean[1];
+        stallsSeenStarting.computeIfPresent(stall, (key, count) -> {
+            ended[0] = true;
+            return count > 1 ? count - 1 : null;
+        });
+        return ended[0];
     }
 
     /**

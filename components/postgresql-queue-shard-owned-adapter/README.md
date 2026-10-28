@@ -268,9 +268,10 @@ as a constant delay.
 > to both the limit and the backoff — the engine's first retry asks for `calculateNextRedeliveryDelay(0)`.
 
 **`markForRedeliveryIn(delay)` redelivers after `delay`.** The adapter ends the delivery with the
-engine's `RedeliveryRequested` outcome, which the engine schedules at the requested delay. The attempt
-is counted, but — as with a manual redelivery in `PostgresqlDurableQueues` — the request never
-dead-letters the message.
+engine's `RedeliveryRequested` outcome, which the engine schedules at the requested delay. The request
+is not an attempt: it does not raise the redelivery count, does not use up the redelivery policy's
+budget, and never dead-letters the message — unlike a manual redelivery in `PostgresqlDurableQueues`,
+which counts.
 
 **`resurrectDeadLetterMessage` returns empty even on success.** The message re-enters at a fresh
 sequence, so its `QueueEntryId` changes and the old one no longer addresses it.
@@ -416,7 +417,7 @@ messages behind it are dead-lettered too, so it appears in the dead-letter count
 - **Two `queue` packages export `QueueName`, `Message` and `QueuedMessage`** — the engine's `spi`
   package and `foundation`'s messaging package. Star-importing both is a compile error, and it is the
   first thing that happens to anyone adding a file here.
-- **The engine's own prerequisites still apply** — PostgreSQL 13+ for the ordered lane, a readable
+- **The engine's own prerequisites still apply** — PostgreSQL 15+, a readable
   `pg_stat_activity.backend_xid`, `pumpThreads + 1` permanently held connections, and above all
   **`socketTimeout` on the DataSource**. See the
   [engine README](../postgresql-queue-shard-owned/README.md#prerequisites).

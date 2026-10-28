@@ -1,0 +1,47 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/slice-source/cases/inbox",
+  "manifests": 4,
+  "parsed": 4,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [],
+  "lanes": [
+    {
+      "bc": "depot",
+      "path": "src/main/*/com/example/depot",
+      "detected": "undetermined",
+      "signals": {
+        "decider": 0,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 0
+      },
+      "declared": {}
+    }
+  ],
+  "endpoints": [],
+  "findings": [
+    {
+      "severity": "Should-fix",
+      "gate": "11(b) handled events",
+      "id": "ESS-G11b",
+      "slice": "depot.carrier",
+      "file": "src/main/java/com/example/depot/external_systems/carrier/incoming/CarrierListener.java",
+      "line": 33,
+      "message": "@KafkaListener CarrierListener.on(CarrierEvent) receives the supertype CarrierEvent; its subtypes ParcelLost are not declared in consumes",
+      "hint": "the code is right and the manifest is stale \u2014 `/essentials:slice-check --fix-manifests` (manifest-reconciliation.md \u00a72)"
+    }
+  ],
+  "unverified": [
+    {
+      "slice": "depot.carrier",
+      "gate": "11(b) handled events",
+      "id": "ESS-G11b",
+      "file": "src/main/java/com/example/depot/external_systems/carrier/incoming/CarrierListener.java",
+      "reason": "@RabbitListener CarrierListener.onNote(String) (line 43) receives String, which is not declared in the project, so the external message it carries is not compared with consumes"
+    }
+  ],
+  "unparsed": []
+}

@@ -1,0 +1,1178 @@
+{
+ "atlas": {
+  "bounds": {
+   "h": 2688,
+   "w": 2368,
+   "x": 0,
+   "y": 0
+  },
+  "bridges": [
+   {
+    "events": [
+     "InvoiceIssued"
+    ],
+    "from": "billing",
+    "to": "shipping"
+   },
+   {
+    "events": [
+     "OrderPlaced"
+    ],
+    "from": "orders",
+    "to": "billing"
+   }
+  ],
+  "cards": [
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@billing|billing.invoice_on_order|automation|invoice_on_order",
+    "lane": "trigger",
+    "name": "invoice_on_order",
+    "portal": false,
+    "role": "automation",
+    "segment": "checkout@billing",
+    "slice": "billing.invoice_on_order",
+    "w": 168,
+    "x": 228,
+    "y": 160
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@billing|billing.issue_invoice|command|IssueInvoice",
+    "lane": "action",
+    "name": "IssueInvoice",
+    "portal": false,
+    "role": "command",
+    "segment": "checkout@billing",
+    "slice": "billing.issue_invoice",
+    "w": 168,
+    "x": 436,
+    "y": 272
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@billing|billing.issue_invoice|event|InvoiceIssued",
+    "lane": "stream:Invoice",
+    "name": "InvoiceIssued",
+    "portal": false,
+    "role": "event",
+    "segment": "checkout@billing",
+    "slice": "billing.issue_invoice",
+    "w": 168,
+    "x": 436,
+    "y": 384
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@billing|billing.issue_invoice|event|InvoiceRejected",
+    "lane": "stream:Invoice",
+    "name": "InvoiceRejected",
+    "portal": false,
+    "role": "event",
+    "segment": "checkout@billing",
+    "slice": "billing.issue_invoice",
+    "w": 168,
+    "x": 436,
+    "y": 484
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~billing.dunning@billing|billing.dunning|automation|0 0 6 * * *",
+    "lane": "trigger",
+    "name": "0 0 6 * * *",
+    "portal": false,
+    "role": "automation",
+    "segment": "~billing.dunning@billing",
+    "slice": "billing.dunning",
+    "w": 168,
+    "x": 228,
+    "y": 956
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~billing.psp_webhook@billing|billing.psp_webhook|external|Psp",
+    "lane": "trigger",
+    "name": "Psp",
+    "portal": false,
+    "role": "external",
+    "segment": "~billing.psp_webhook@billing",
+    "slice": "billing.psp_webhook",
+    "w": 168,
+    "x": 228,
+    "y": 1332
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~billing.psp_webhook@billing|billing.psp_webhook|command|SettleInvoice",
+    "lane": "action",
+    "name": "SettleInvoice",
+    "portal": false,
+    "role": "command",
+    "segment": "~billing.psp_webhook@billing",
+    "slice": "billing.psp_webhook",
+    "w": 168,
+    "x": 228,
+    "y": 1444
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~billing.psp_webhook@billing|billing.psp_webhook|event|PaymentReceived",
+    "lane": "events",
+    "name": "PaymentReceived",
+    "portal": false,
+    "role": "event",
+    "segment": "~billing.psp_webhook@billing",
+    "slice": "billing.psp_webhook",
+    "w": 168,
+    "x": 228,
+    "y": 1556
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:billing@billing|billing.invoice_list|view|InvoiceList",
+    "lane": "action",
+    "name": "InvoiceList",
+    "portal": false,
+    "role": "view",
+    "segment": "~unattached:billing@billing",
+    "slice": "billing.invoice_list",
+    "w": 168,
+    "x": 228,
+    "y": 1932
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@orders|orders.place_order|trigger|POST /api/orders",
+    "lane": "trigger",
+    "name": "POST /api/orders",
+    "portal": false,
+    "role": "trigger",
+    "segment": "checkout@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 1092,
+    "y": 160
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@orders|orders.place_order|command|PlaceOrder",
+    "lane": "action",
+    "name": "PlaceOrder",
+    "portal": false,
+    "role": "command",
+    "segment": "checkout@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 1092,
+    "y": 272
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@orders|orders.place_order|event|OrderPlaced",
+    "lane": "stream:Order",
+    "name": "OrderPlaced",
+    "portal": false,
+    "role": "event",
+    "segment": "checkout@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 1092,
+    "y": 384
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:orders@orders|orders.order_list|trigger|GET /api/orders",
+    "lane": "trigger",
+    "name": "GET /api/orders",
+    "portal": false,
+    "role": "trigger",
+    "segment": "~unattached:orders@orders",
+    "slice": "orders.order_list",
+    "w": 168,
+    "x": 1092,
+    "y": 716
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:orders@orders|orders.order_list|view|OrderList",
+    "lane": "action",
+    "name": "OrderList",
+    "portal": false,
+    "role": "view",
+    "segment": "~unattached:orders@orders",
+    "slice": "orders.order_list",
+    "w": 168,
+    "x": 1092,
+    "y": 828
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@shipping|shipping.ship_on_invoice|automation|ship_on_invoice",
+    "lane": "trigger",
+    "name": "ship_on_invoice",
+    "portal": false,
+    "role": "automation",
+    "segment": "checkout@shipping",
+    "slice": "shipping.ship_on_invoice",
+    "w": 168,
+    "x": 1700,
+    "y": 160
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@shipping|shipping.ship_order|command|ShipOrder",
+    "lane": "action",
+    "name": "ShipOrder",
+    "portal": false,
+    "role": "command",
+    "segment": "checkout@shipping",
+    "slice": "shipping.ship_order",
+    "w": 168,
+    "x": 1908,
+    "y": 272
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "checkout@shipping|shipping.ship_order|event|OrderShipped",
+    "lane": "stream:Shipment",
+    "name": "OrderShipped",
+    "portal": false,
+    "role": "event",
+    "segment": "checkout@shipping",
+    "slice": "shipping.ship_order",
+    "w": 168,
+    "x": 1908,
+    "y": 384
+   },
+   {
+    "ghost": false,
+    "h": 88,
+    "id": "~unattached:shipping@shipping|shipping.notify_carrier|external|Carrier",
+    "lane": "external",
+    "name": "Carrier",
+    "portal": false,
+    "role": "external",
+    "segment": "~unattached:shipping@shipping",
+    "slice": "shipping.notify_carrier",
+    "w": 168,
+    "x": 1700,
+    "y": 872
+   }
+  ],
+  "contexts": [
+   {
+    "h": 2560,
+    "id": "billing",
+    "w": 768,
+    "x": 64,
+    "y": 64
+   },
+   {
+    "h": 1024,
+    "id": "orders",
+    "w": 512,
+    "x": 928,
+    "y": 64
+   },
+   {
+    "h": 1024,
+    "id": "shipping",
+    "w": 768,
+    "x": 1536,
+    "y": 64
+   }
+  ],
+  "edges": [
+   {
+    "cross": false,
+    "from": "checkout@billing|billing.invoice_on_order|automation|invoice_on_order",
+    "kind": "dispatches",
+    "to": "checkout@billing|billing.issue_invoice|command|IssueInvoice"
+   },
+   {
+    "cross": false,
+    "from": "checkout@billing|billing.issue_invoice|command|IssueInvoice",
+    "kind": "publishes",
+    "to": "checkout@billing|billing.issue_invoice|event|InvoiceIssued"
+   },
+   {
+    "cross": false,
+    "from": "checkout@billing|billing.issue_invoice|command|IssueInvoice",
+    "kind": "publishes",
+    "to": "checkout@billing|billing.issue_invoice|event|InvoiceRejected"
+   },
+   {
+    "cross": true,
+    "from": "checkout@billing|billing.issue_invoice|event|InvoiceIssued",
+    "kind": "feeds",
+    "to": "checkout@shipping|shipping.ship_on_invoice|automation|ship_on_invoice"
+   },
+   {
+    "cross": true,
+    "from": "checkout@billing|billing.issue_invoice|event|InvoiceIssued",
+    "kind": "feeds",
+    "to": "~unattached:billing@billing|billing.invoice_list|view|InvoiceList"
+   },
+   {
+    "cross": false,
+    "from": "checkout@orders|orders.place_order|command|PlaceOrder",
+    "kind": "publishes",
+    "to": "checkout@orders|orders.place_order|event|OrderPlaced"
+   },
+   {
+    "cross": true,
+    "from": "checkout@orders|orders.place_order|event|OrderPlaced",
+    "kind": "feeds",
+    "to": "checkout@billing|billing.invoice_on_order|automation|invoice_on_order"
+   },
+   {
+    "cross": true,
+    "from": "checkout@orders|orders.place_order|event|OrderPlaced",
+    "kind": "feeds",
+    "to": "~unattached:orders@orders|orders.order_list|view|OrderList"
+   },
+   {
+    "cross": false,
+    "from": "checkout@orders|orders.place_order|trigger|POST /api/orders",
+    "kind": "handles",
+    "to": "checkout@orders|orders.place_order|command|PlaceOrder"
+   },
+   {
+    "cross": false,
+    "from": "checkout@shipping|shipping.ship_on_invoice|automation|ship_on_invoice",
+    "kind": "dispatches",
+    "to": "checkout@shipping|shipping.ship_order|command|ShipOrder"
+   },
+   {
+    "cross": false,
+    "from": "checkout@shipping|shipping.ship_order|command|ShipOrder",
+    "kind": "publishes",
+    "to": "checkout@shipping|shipping.ship_order|event|OrderShipped"
+   },
+   {
+    "cross": true,
+    "from": "checkout@shipping|shipping.ship_order|event|OrderShipped",
+    "kind": "feeds",
+    "to": "~unattached:shipping@shipping|shipping.notify_carrier|external|Carrier"
+   },
+   {
+    "cross": true,
+    "from": "~billing.dunning@billing|billing.dunning|automation|0 0 6 * * *",
+    "kind": "dispatches",
+    "to": "checkout@billing|billing.issue_invoice|command|IssueInvoice"
+   },
+   {
+    "cross": false,
+    "from": "~billing.psp_webhook@billing|billing.psp_webhook|external|Psp",
+    "kind": "external",
+    "to": "~billing.psp_webhook@billing|billing.psp_webhook|command|SettleInvoice"
+   },
+   {
+    "cross": false,
+    "from": "~billing.psp_webhook@billing|billing.psp_webhook|external|Psp",
+    "kind": "external",
+    "to": "~billing.psp_webhook@billing|billing.psp_webhook|event|PaymentReceived"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:orders@orders|orders.order_list|trigger|GET /api/orders",
+    "kind": "handles",
+    "to": "~unattached:orders@orders|orders.order_list|view|OrderList"
+   }
+  ],
+  "links": [
+   {
+    "cross": true,
+    "events": [
+     "InvoiceIssued"
+    ],
+    "from": "checkout@billing",
+    "to": "checkout@shipping"
+   },
+   {
+    "cross": false,
+    "events": [
+     "InvoiceIssued"
+    ],
+    "from": "checkout@billing",
+    "to": "~unattached:billing@billing"
+   },
+   {
+    "cross": true,
+    "events": [
+     "OrderPlaced"
+    ],
+    "from": "checkout@orders",
+    "to": "checkout@billing"
+   },
+   {
+    "cross": false,
+    "events": [
+     "OrderPlaced"
+    ],
+    "from": "checkout@orders",
+    "to": "~unattached:orders@orders"
+   },
+   {
+    "cross": false,
+    "events": [
+     "OrderShipped"
+    ],
+    "from": "checkout@shipping",
+    "to": "~unattached:shipping@shipping"
+   }
+  ],
+  "scenarioBoxes": [
+   {
+    "h": 64,
+    "segment": "checkout@billing",
+    "slice": "billing.invoice_on_order",
+    "w": 192,
+    "x": 216,
+    "y": 596
+   },
+   {
+    "h": 272,
+    "segment": "checkout@billing",
+    "slice": "billing.issue_invoice",
+    "w": 192,
+    "x": 424,
+    "y": 596
+   },
+   {
+    "h": 64,
+    "segment": "~billing.dunning@billing",
+    "slice": "billing.dunning",
+    "w": 192,
+    "x": 216,
+    "y": 1180
+   },
+   {
+    "h": 64,
+    "segment": "~billing.psp_webhook@billing",
+    "slice": "billing.psp_webhook",
+    "w": 192,
+    "x": 216,
+    "y": 1668
+   },
+   {
+    "h": 64,
+    "segment": "~unattached:billing@billing",
+    "slice": "billing.invoice_list",
+    "w": 192,
+    "x": 216,
+    "y": 2044
+   },
+   {
+    "h": 132,
+    "segment": "checkout@orders",
+    "slice": "orders.place_order",
+    "w": 192,
+    "x": 1080,
+    "y": 496
+   },
+   {
+    "h": 64,
+    "segment": "~unattached:orders@orders",
+    "slice": "orders.order_list",
+    "w": 192,
+    "x": 1080,
+    "y": 940
+   },
+   {
+    "h": 64,
+    "segment": "checkout@shipping",
+    "slice": "shipping.ship_on_invoice",
+    "w": 192,
+    "x": 1688,
+    "y": 496
+   },
+   {
+    "h": 64,
+    "segment": "checkout@shipping",
+    "slice": "shipping.ship_order",
+    "w": 192,
+    "x": 1896,
+    "y": 496
+   },
+   {
+    "h": 64,
+    "segment": "~unattached:shipping@shipping",
+    "slice": "shipping.notify_carrier",
+    "w": 192,
+    "x": 1688,
+    "y": 984
+   }
+  ],
+  "segments": [
+   {
+    "bc": "billing",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "billing.invoice_on_order",
+      "w": 192,
+      "x": 216
+     },
+     {
+      "portal": false,
+      "slice": "billing.issue_invoice",
+      "w": 192,
+      "x": 424
+     }
+    ],
+    "h": 772,
+    "id": "checkout@billing",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 148
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 260
+     },
+     {
+      "h": 212,
+      "id": "stream:Invoice",
+      "label": "Events · Invoice",
+      "y": 372
+     }
+    ],
+    "process": "checkout",
+    "w": 544,
+    "x": 88,
+    "y": 112
+   },
+   {
+    "bc": "billing",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "billing.dunning",
+      "w": 192,
+      "x": 216
+     }
+    ],
+    "h": 352,
+    "id": "~billing.dunning@billing",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 944
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 1056
+     }
+    ],
+    "process": "~billing.dunning",
+    "w": 336,
+    "x": 88,
+    "y": 908
+   },
+   {
+    "bc": "billing",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "billing.psp_webhook",
+      "w": 192,
+      "x": 216
+     }
+    ],
+    "h": 464,
+    "id": "~billing.psp_webhook@billing",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 1320
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 1432
+     },
+     {
+      "h": 112,
+      "id": "events",
+      "label": "Events",
+      "y": 1544
+     }
+    ],
+    "process": "~billing.psp_webhook",
+    "w": 336,
+    "x": 88,
+    "y": 1284
+   },
+   {
+    "bc": "billing",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "billing.invoice_list",
+      "w": 192,
+      "x": 216
+     }
+    ],
+    "h": 352,
+    "id": "~unattached:billing@billing",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 1808
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 1920
+     }
+    ],
+    "process": "~unattached:billing",
+    "w": 336,
+    "x": 88,
+    "y": 1772
+   },
+   {
+    "bc": "orders",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "orders.place_order",
+      "w": 192,
+      "x": 1080
+     }
+    ],
+    "h": 532,
+    "id": "checkout@orders",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 148
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 260
+     },
+     {
+      "h": 112,
+      "id": "stream:Order",
+      "label": "Events · Order",
+      "y": 372
+     }
+    ],
+    "process": "checkout",
+    "w": 336,
+    "x": 952,
+    "y": 112
+   },
+   {
+    "bc": "orders",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "orders.order_list",
+      "w": 192,
+      "x": 1080
+     }
+    ],
+    "h": 352,
+    "id": "~unattached:orders@orders",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 704
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 816
+     }
+    ],
+    "process": "~unattached:orders",
+    "w": 336,
+    "x": 952,
+    "y": 668
+   },
+   {
+    "bc": "shipping",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "shipping.ship_on_invoice",
+      "w": 192,
+      "x": 1688
+     },
+     {
+      "portal": false,
+      "slice": "shipping.ship_order",
+      "w": 192,
+      "x": 1896
+     }
+    ],
+    "h": 464,
+    "id": "checkout@shipping",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 148
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 260
+     },
+     {
+      "h": 112,
+      "id": "stream:Shipment",
+      "label": "Events · Shipment",
+      "y": 372
+     }
+    ],
+    "process": "checkout",
+    "w": 544,
+    "x": 1560,
+    "y": 112
+   },
+   {
+    "bc": "shipping",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "shipping.notify_carrier",
+      "w": 192,
+      "x": 1688
+     }
+    ],
+    "h": 464,
+    "id": "~unattached:shipping@shipping",
+    "lanes": [
+     {
+      "h": 112,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 636
+     },
+     {
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 748
+     },
+     {
+      "h": 112,
+      "id": "external",
+      "label": "External",
+      "y": 860
+     }
+    ],
+    "process": "~unattached:shipping",
+    "w": 336,
+    "x": 1560,
+    "y": 600
+   }
+  ]
+ },
+ "matrix": {
+  "bcMatrix": {
+   "bcs": [
+    "billing",
+    "orders",
+    "shipping"
+   ],
+   "counts": [
+    [
+     1,
+     0,
+     1
+    ],
+    [
+     1,
+     1,
+     0
+    ],
+    [
+     0,
+     0,
+     1
+    ]
+   ],
+   "events": [
+    [
+     [
+      "InvoiceIssued"
+     ],
+     [],
+     [
+      "InvoiceIssued"
+     ]
+    ],
+    [
+     [
+      "OrderPlaced"
+     ],
+     [
+      "OrderPlaced"
+     ],
+     []
+    ],
+    [
+     [],
+     [],
+     [
+      "OrderShipped"
+     ]
+    ]
+   ]
+  },
+  "cells": [
+   {
+    "c": 0,
+    "cross": false,
+    "r": 0,
+    "v": "W"
+   },
+   {
+    "c": 1,
+    "cross": false,
+    "r": 1,
+    "v": "O"
+   },
+   {
+    "c": 6,
+    "cross": true,
+    "r": 1,
+    "v": "R·via"
+   },
+   {
+    "c": 5,
+    "cross": false,
+    "r": 2,
+    "v": "W"
+   },
+   {
+    "c": 1,
+    "cross": true,
+    "r": 3,
+    "v": "R!"
+   },
+   {
+    "c": 6,
+    "cross": false,
+    "r": 3,
+    "v": "O"
+   },
+   {
+    "c": 7,
+    "cross": false,
+    "r": 4,
+    "v": "W"
+   }
+  ],
+  "cols": [
+   {
+    "bc": "billing",
+    "kind": "command",
+    "slice": "billing.issue_invoice"
+   },
+   {
+    "bc": "billing",
+    "kind": "view",
+    "slice": "billing.invoice_list"
+   },
+   {
+    "bc": "billing",
+    "kind": "automation",
+    "slice": "billing.dunning"
+   },
+   {
+    "bc": "billing",
+    "kind": "automation",
+    "slice": "billing.invoice_on_order"
+   },
+   {
+    "bc": "billing",
+    "kind": "translation",
+    "slice": "billing.psp_webhook"
+   },
+   {
+    "bc": "orders",
+    "kind": "command",
+    "slice": "orders.place_order"
+   },
+   {
+    "bc": "orders",
+    "kind": "view",
+    "slice": "orders.order_list"
+   },
+   {
+    "bc": "shipping",
+    "kind": "command",
+    "slice": "shipping.ship_order"
+   },
+   {
+    "bc": "shipping",
+    "kind": "automation",
+    "slice": "shipping.ship_on_invoice"
+   },
+   {
+    "bc": "shipping",
+    "kind": "translation",
+    "slice": "shipping.notify_carrier"
+   }
+  ],
+  "rows": [
+   {
+    "bc": "billing",
+    "id": "Invoice",
+    "kind": "aggregate"
+   },
+   {
+    "bc": "billing",
+    "id": "InvoiceList",
+    "kind": "read-model"
+   },
+   {
+    "bc": "orders",
+    "id": "Order",
+    "kind": "aggregate"
+   },
+   {
+    "bc": "orders",
+    "id": "OrderList",
+    "kind": "read-model"
+   },
+   {
+    "bc": "shipping",
+    "id": "Shipment",
+    "kind": "aggregate"
+   }
+  ]
+ },
+ "metro": {
+  "bounds": {
+   "h": 280,
+   "w": 480,
+   "x": 0,
+   "y": 0
+  },
+  "lines": [
+   {
+    "color": 6,
+    "derived": false,
+    "points": [
+     [
+      40,
+      40
+     ],
+     [
+      120,
+      40
+     ],
+     [
+      200,
+      40
+     ],
+     [
+      280,
+      40
+     ],
+     [
+      360,
+      40
+     ]
+    ],
+    "process": "checkout"
+   },
+   {
+    "color": 6,
+    "derived": true,
+    "points": [
+     [
+      120,
+      80
+     ]
+    ],
+    "process": "~billing.dunning"
+   },
+   {
+    "color": 8,
+    "derived": true,
+    "points": [
+     [
+      120,
+      120
+     ]
+    ],
+    "process": "~billing.psp_webhook"
+   },
+   {
+    "color": 8,
+    "derived": true,
+    "points": [
+     [
+      280,
+      160
+     ]
+    ],
+    "process": "~unattached:billing"
+   },
+   {
+    "color": 1,
+    "derived": true,
+    "points": [
+     [
+      120,
+      200
+     ]
+    ],
+    "process": "~unattached:orders"
+   },
+   {
+    "color": 11,
+    "derived": true,
+    "points": [
+     [
+      440,
+      240
+     ]
+    ],
+    "process": "~unattached:shipping"
+   }
+  ],
+  "stations": [
+   {
+    "interchange": false,
+    "lines": [
+     "checkout"
+    ],
+    "slice": "orders.place_order",
+    "x": 40,
+    "y": 40
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "checkout"
+    ],
+    "slice": "billing.invoice_on_order",
+    "x": 120,
+    "y": 40
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~billing.dunning"
+    ],
+    "slice": "billing.dunning",
+    "x": 120,
+    "y": 80
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~billing.psp_webhook"
+    ],
+    "slice": "billing.psp_webhook",
+    "x": 120,
+    "y": 120
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:orders"
+    ],
+    "slice": "orders.order_list",
+    "x": 120,
+    "y": 200
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "checkout"
+    ],
+    "slice": "billing.issue_invoice",
+    "x": 200,
+    "y": 40
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "checkout"
+    ],
+    "slice": "shipping.ship_on_invoice",
+    "x": 280,
+    "y": 40
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:billing"
+    ],
+    "slice": "billing.invoice_list",
+    "x": 280,
+    "y": 160
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "checkout"
+    ],
+    "slice": "shipping.ship_order",
+    "x": 360,
+    "y": 40
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:shipping"
+    ],
+    "slice": "shipping.notify_carrier",
+    "x": 440,
+    "y": 240
+   }
+  ]
+ },
+ "version": 1
+}

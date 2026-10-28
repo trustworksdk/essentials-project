@@ -1,0 +1,2041 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Slice Atlas</title>
+<style>
+/* ======================================================================================
+   Brand tokens (contract C7). Every colour on the page comes from one of these custom
+   properties; lenses use the tokens and never a literal colour.
+
+   Palette: Trustworks visual style. Aqua 100/80/60/40 #96B7B9 #AAC5C7 #BFD4D5 #D5E2E3,
+   Yellow 100/80/60/40 #F3D4A1 #F5DCB4 #F3E4CD #FAEDDA, Light grey #EAEAEA, Dark grey #666672.
+   Event Modeling keeps its own hues, toned to the palette (--evt / --cmd / --view below):
+   events orange, commands blue, views green; triggers Light grey with a Dark grey rule. Those three
+   and the muted status colours are the only off-palette hues.
+
+   Token                     role
+   --surface                 page and stage ground
+   --panel / --panel-2       chrome panels / raised cards on a panel
+   --panel-strong            pressed controls, table heads
+   --text / --text-muted     body text / secondary text
+   --rule / --rule-strong    hairlines / control borders, region outlines
+   --accent                  focus ring, selection, links (an Aqua shade)
+   --on-sticky               text drawn on any sticky
+   --evt / --evt-rule        event sticky fill / rule              (Event Modeling orange)
+   --cmd / --cmd-rule        command sticky fill / rule            (Event Modeling blue)
+   --view / --view-rule      view sticky fill / rule               (Event Modeling green)
+                             The one deliberate departure from the palette: the three Event
+                             Modeling roles keep the method's own hues so a board reads like
+                             every other event model, toned to the brand — orange is Yellow 100
+                             turned 8° towards red at the same saturation, blue and green take
+                             Aqua's muted weight. Text on each passes 6.4:1 in both themes.
+   --trg / --trg-rule        trigger, automation, schedule sticky  (Light grey + Dark grey)
+   --ext                     external-system sticky fill (dashed --trg-rule)
+   --ctx-fill                bounded-context region fill
+   --lane-fill               alternate board lane band
+   --err / --err-bg          error status (issues, broken manifests, then-error, removed)
+   --warn / --warn-bg        warn status (issues, missing tests, changed)
+   --info / --info-bg        info status (muted)
+   --ok                      resolved test, added
+   --p0 … --p11              process colours: three families (Aqua, Yellow, Dark grey) × four
+                             lightness steps, interleaved so neighbouring indices differ in
+                             family. Light theme uses shades (dark enough for a 2px line on
+                             white); dark theme uses tints of the same twelve.
+       index  family  light     dark
+       p0     aqua    #4F7F83   #96B7B9
+       p1     yellow  #C08A2E   #F3D4A1
+       p2     grey    #666672   #B4B4BE
+       p3     aqua    #2F5558   #BFD4D5
+       p4     yellow  #8C6119   #FAEDDA
+       p5     grey    #3D3D45   #8D8D99
+       p6     aqua    #6E9DA1   #6E9497
+       p7     yellow  #A8742A   #E3B871
+       p8     grey    #8D8D99   #D9D9DF
+       p9     aqua    #1E3C3E   #D5E2E3
+       p10    yellow  #6B4810   #C9A15F
+       p11    grey    #26262B   #EAEAEA
+   The block between the TOKENS markers is copied verbatim into the per-application index page
+   (index.html, by slice_atlas.assemble_index), so the palette exists once: keep it tokens only.
+   ====================================================================================== */
+/* __TOKENS_BEGIN__ */
+:root {
+  color-scheme: light;
+  --font: "Neue Haas Grotesk Text Pro", "Neue Haas Grotesk Display Pro", Arial, sans-serif;
+  --font-display: "Neue Haas Grotesk Display Pro", "Neue Haas Grotesk Text Pro", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --surface: #FFFFFF; --panel: #F5F5F5; --panel-2: #FFFFFF; --panel-strong: #EAEAEA;
+  --text: #2E2E33; --text-muted: #666672; --rule: #DCDCE0; --rule-strong: #B5B5BC;
+  --accent: #4F7F83; --on-sticky: #2E2E33;
+  --evt: #F2BE8C; --evt-rule: #B97A3D;
+  --cmd: #A9C3DB; --cmd-rule: #5F86A8;
+  --view: #B9D3AE; --view-rule: #6F9963;
+  --trg: #EAEAEA; --trg-rule: #666672; --ext: #FFFFFF;
+  --ctx-fill: #FAFAFA; --lane-fill: #F7F7F8;
+  --err: #B3473D; --err-bg: #F6E3E1; --warn: #9A6B14; --warn-bg: #F8EED9;
+  --info: #666672; --info-bg: #EAEAEA; --ok: #3E7D5A;
+  --p0: #4F7F83; --p1: #C08A2E; --p2: #666672; --p3: #2F5558; --p4: #8C6119; --p5: #3D3D45;
+  --p6: #6E9DA1; --p7: #A8742A; --p8: #8D8D99; --p9: #1E3C3E; --p10: #6B4810; --p11: #26262B;
+  --shadow: 0 6px 24px rgba(30, 30, 34, .16);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface: #1E1E22; --panel: #26262B; --panel-2: #2E2E34; --panel-strong: #3A3A41;
+    --text: #EAEAEA; --text-muted: #A9A9B3; --rule: #3A3A41; --rule-strong: #55555E;
+    --accent: #AAC5C7; --on-sticky: #F2F2F2;
+    --evt: #6E4E30; --evt-rule: #E0A66E;
+    --cmd: #3E5A73; --cmd-rule: #A9C3DB;
+    --view: #3F5A3A; --view-rule: #9BC08D;
+    --trg: #3A3A41; --trg-rule: #8D8D99; --ext: #26262B;
+    --ctx-fill: #232328; --lane-fill: #29292F;
+    --err: #E08A80; --err-bg: #3A2523; --warn: #D9B05E; --warn-bg: #3A3020;
+    --info: #A9A9B3; --info-bg: #34343B; --ok: #7CC49A;
+    --p0: #96B7B9; --p1: #F3D4A1; --p2: #B4B4BE; --p3: #BFD4D5; --p4: #FAEDDA; --p5: #8D8D99;
+    --p6: #6E9497; --p7: #E3B871; --p8: #D9D9DF; --p9: #D5E2E3; --p10: #C9A15F; --p11: #EAEAEA;
+    --shadow: 0 6px 24px rgba(0, 0, 0, .5);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #1E1E22; --panel: #26262B; --panel-2: #2E2E34; --panel-strong: #3A3A41;
+  --text: #EAEAEA; --text-muted: #A9A9B3; --rule: #3A3A41; --rule-strong: #55555E;
+  --accent: #AAC5C7; --on-sticky: #F2F2F2;
+  --evt: #6E4E30; --evt-rule: #E0A66E;
+  --cmd: #3E5A73; --cmd-rule: #A9C3DB;
+  --view: #3F5A3A; --view-rule: #9BC08D;
+  --trg: #3A3A41; --trg-rule: #8D8D99; --ext: #26262B;
+  --ctx-fill: #232328; --lane-fill: #29292F;
+  --err: #E08A80; --err-bg: #3A2523; --warn: #D9B05E; --warn-bg: #3A3020;
+  --info: #A9A9B3; --info-bg: #34343B; --ok: #7CC49A;
+  --p0: #96B7B9; --p1: #F3D4A1; --p2: #B4B4BE; --p3: #BFD4D5; --p4: #FAEDDA; --p5: #8D8D99;
+  --p6: #6E9497; --p7: #E3B871; --p8: #D9D9DF; --p9: #D5E2E3; --p10: #C9A15F; --p11: #EAEAEA;
+  --shadow: 0 6px 24px rgba(0, 0, 0, .5);
+}
+/* __TOKENS_END__ */
+
+/* ---------- chrome ---------- */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--surface); color: var(--text);
+  font: 14px/1.45 var(--font); -webkit-text-size-adjust: 100%;
+}
+button, input, select { font: inherit; color: inherit; }
+.mono { font-family: var(--mono); }
+#app { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
+       padding-top: env(safe-area-inset-top, 0px); }
+#bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 16px;
+  background: var(--panel); border-bottom: 1px solid var(--rule); flex: 0 0 auto;
+}
+#bar .brand { display: flex; flex-direction: column; min-width: 0; margin-right: 4px; }
+#bar .brand b { font-family: var(--font-display); font-size: 16px; letter-spacing: -0.01em; white-space: nowrap; }
+#bar .brand .apps { font-size: 12px; color: var(--accent); text-decoration: none; white-space: nowrap; }
+#bar .brand .apps:hover, #bar .brand .apps:focus-visible { text-decoration: underline; }
+#prov { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 42ch; }
+#lenses { display: flex; gap: 4px; flex-wrap: wrap; }
+.btn {
+  border: 1px solid var(--rule-strong); background: var(--panel-2); border-radius: 6px;
+  padding: 5px 10px; font-size: 13px; cursor: pointer; line-height: 1.2; white-space: nowrap;
+}
+.btn:hover { border-color: var(--accent); }
+.btn:focus-visible, input:focus-visible, select:focus-visible, .iss:focus-visible, .lnk:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+.btn[aria-selected="true"], .btn[aria-pressed="true"] { background: var(--panel-strong); border-color: var(--text-muted); font-weight: 600; }
+.btn kbd { font-family: var(--mono); font-size: 11px; color: var(--text-muted); margin-left: 4px; }
+.search { display: flex; align-items: center; gap: 6px; flex: 1 1 200px; min-width: 0; }
+#q {
+  flex: 1 1 auto; min-width: 0; padding: 5px 10px; border-radius: 6px; font-size: 13px;
+  border: 1px solid var(--rule-strong); background: var(--panel-2);
+}
+#qcount { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.tools { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
+.lvl { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; margin-left: 6px; }
+.lvl i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.lvl-error i, i.lvl-error { background: var(--err); }
+.lvl-warn i, i.lvl-warn { background: var(--warn); }
+.lvl-info i, i.lvl-info { background: var(--info); }
+#banner {
+  flex: 0 0 auto; padding: 7px 16px; font-size: 13px; background: var(--err-bg); color: var(--err);
+  border-bottom: 1px solid var(--err); cursor: pointer;
+}
+#banner[hidden] { display: none; }
+#main { position: relative; flex: 1 1 auto; display: flex; min-height: 0; }
+#stage { position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; background: var(--surface); }
+#lens-host { position: absolute; inset: 0; }
+#lens-host > .lens-root { position: absolute; inset: 0; }
+.lens-msg { padding: 24px; color: var(--text-muted); max-width: 60ch; }
+
+/* issues dock */
+#dock {
+  flex: 0 0 340px; width: 340px; display: flex; flex-direction: column; min-height: 0;
+  background: var(--panel); border-right: 1px solid var(--rule);
+}
+#dock[hidden] { display: none; }
+#dock .head { padding: 10px 12px 8px; border-bottom: 1px solid var(--rule); display: flex; flex-direction: column; gap: 8px; }
+#dock .head .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+#dock h2 { margin: 0; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); flex: 1; }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--rule-strong); border-radius: 999px;
+  padding: 2px 9px; font-size: 12px; background: var(--panel-2); cursor: pointer;
+}
+.chip[aria-pressed="false"] { opacity: .45; }
+.chip i { width: 8px; height: 8px; border-radius: 50%; }
+#codes { font-size: 12px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--rule-strong); background: var(--panel-2); max-width: 100%; }
+#issues { overflow-y: auto; flex: 1 1 auto; padding: 4px 0 16px; overscroll-behavior: contain; }
+#issues h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; margin: 12px 12px 4px; color: var(--text-muted); font-weight: 600; }
+#issues h4 { font-size: 12px; margin: 8px 12px 2px; font-family: var(--mono); font-weight: 500; color: var(--text-muted); }
+.iss {
+  display: block; width: 100%; text-align: left; border: 0; border-left: 3px solid transparent; background: none;
+  padding: 6px 12px 6px 10px; cursor: pointer; font-size: 13px;
+}
+.iss:hover { background: var(--panel-strong); }
+.iss.lvl-error { border-left-color: var(--err); } .iss.lvl-warn { border-left-color: var(--warn); }
+.iss.sel { background: var(--panel-strong); box-shadow: inset 3px 0 0 var(--accent); }
+.iss .t { display: block; }
+.iss .c { display: block; font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); overflow-wrap: anywhere; }
+.iss.new .c::after { content: "  new"; color: var(--warn); font-weight: 600; }
+
+/* detail card */
+#card {
+  position: absolute; top: 0; right: 0; bottom: 0; width: min(460px, 100%); z-index: 20;
+  background: var(--panel-2); border-left: 1px solid var(--rule); box-shadow: var(--shadow);
+  display: flex; flex-direction: column; min-height: 0;
+}
+#card[hidden] { display: none; }
+#card .head { padding: 12px 16px 10px; border-bottom: 1px solid var(--rule); position: relative; }
+#card .head h2 { margin: 0 30px 4px 0; font-family: var(--mono); font-size: 15px; overflow-wrap: anywhere; }
+#card .close { position: absolute; top: 8px; right: 10px; border: 0; background: none; font-size: 22px; line-height: 1;
+               cursor: pointer; color: var(--text-muted); padding: 4px 6px; }
+#card .body { overflow-y: auto; padding: 4px 16px 24px; flex: 1 1 auto; overscroll-behavior: contain; }
+#card section { margin-top: 14px; }
+#tip.rich section { margin-top: 10px; }
+#card h3, #tip.rich h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: 0 0 6px; font-weight: 600; }
+.badge { display: inline-block; font-size: 11.5px; padding: 1px 7px; border-radius: 4px; border: 1px solid var(--rule-strong);
+         margin: 2px 4px 2px 0; white-space: nowrap; }
+.badge.err { color: var(--err); border-color: var(--err); background: var(--err-bg); }
+.badge.warn { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+.badge.ok { color: var(--ok); border-color: var(--ok); }
+.sum { color: var(--text); margin: 8px 0 0; }
+dl.kv { display: grid; grid-template-columns: minmax(84px, max-content) 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+dl.kv dt { color: var(--text-muted); font-size: 12px; padding-top: 1px; }
+dl.kv dd { margin: 0; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.lnk { border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline;
+       text-underline-offset: 2px; font: inherit; text-align: left; }
+.msg { border: 1px solid var(--rule); border-left-width: 4px; border-radius: 6px; padding: 6px 9px; margin-bottom: 6px; font-size: 12px; }
+.msg.t-event { border-left-color: var(--evt-rule); } .msg.t-command { border-left-color: var(--cmd-rule); }
+.msg .role { color: var(--text-muted); font-size: 11.5px; margin-left: 6px; }
+.msg ul { margin: 4px 0 0; padding: 0; list-style: none; font-family: var(--mono); font-size: 11.5px; }
+.msg li.id { font-weight: 700; }
+.tbl { overflow-x: auto; margin-bottom: 8px; }
+.tbl table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.tbl th, .tbl td { border: 1px solid var(--rule); padding: 3px 7px; text-align: left; vertical-align: top; }
+.tbl th { background: var(--panel-strong); font-weight: 600; font-size: 11.5px; }
+.tbl td { font-family: var(--mono); font-size: 11.5px; }
+.tbl caption { text-align: left; font-family: var(--mono); font-size: 12px; padding: 2px 0 4px; }
+.issue-row { border-left: 3px solid var(--info); padding: 4px 8px; margin-bottom: 6px; font-size: 13px; background: var(--panel); border-radius: 0 4px 4px 0; cursor: pointer; }
+.issue-row.lvl-error { border-left-color: var(--err); } .issue-row.lvl-warn { border-left-color: var(--warn); }
+.issue-row .c { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); display: block; overflow-wrap: anywhere; }
+.flash { animation: flash 1.4s ease-out 1; }
+@keyframes flash { 0% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+.scn { border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+.scn .nm { font-weight: 600; font-size: 13px; display: flex; gap: 6px; align-items: baseline; justify-content: space-between; }
+.scn .g { display: grid; grid-template-columns: 44px 1fr; gap: 4px 8px; margin-top: 6px; align-items: start; }
+.scn .g > span { font-size: 11.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; padding-top: 3px; }
+.scn .note { font-size: 12px; color: var(--text-muted); margin-top: 6px; overflow-wrap: anywhere; }
+.stp { display: inline-block; border-radius: 4px; padding: 2px 7px; margin: 0 4px 4px 0; font-size: 12px;
+       border: 1px solid var(--rule-strong); background: var(--panel); color: var(--on-sticky); }
+.stp small { display: block; font-family: var(--mono); font-size: 11px; opacity: .85; white-space: pre-wrap; }
+.stp.s-event { background: var(--evt); border-color: var(--evt-rule); }
+.stp.s-command { background: var(--cmd); border-color: var(--cmd-rule); }
+.stp.s-query, .stp.s-readModel { background: var(--view); border-color: var(--view-rule); }
+.stp.s-state, .stp.s-schedule { background: var(--trg); border-color: var(--trg-rule); }
+.stp.s-external { background: var(--ext); border-color: var(--trg-rule); border-style: dashed; }
+.stp.s-error { background: var(--err-bg); border-color: var(--err); color: var(--err); }
+.stp.s-nothing { background: transparent; border-style: dashed; color: var(--text-muted); }
+.doc { font-size: 13px; overflow-wrap: anywhere; }
+.doc h1, .doc h2, .doc h3, .doc h4, .doc h5, .doc h6 { font-size: 13.5px; margin: 12px 0 4px; text-transform: none; letter-spacing: 0; color: var(--text); }
+.doc pre { background: var(--panel); padding: 8px; border-radius: 6px; overflow-x: auto; font-size: 12px; }
+.doc code { font-family: var(--mono); font-size: 12px; }
+.doc table { border-collapse: collapse; font-size: 12px; display: block; overflow-x: auto; }
+.doc th, .doc td { border: 1px solid var(--rule); padding: 3px 7px; }
+.ghostnote { padding: 6px 10px; border-radius: 6px; background: var(--err-bg); color: var(--err); font-size: 13px; margin-top: 8px; }
+.changes { margin: 0; padding-left: 18px; font-family: var(--mono); font-size: 12px; }
+
+/* stage overlays */
+#zoomtools { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; gap: 4px; z-index: 5; }
+#zoomtools[hidden] { display: none; }
+#zoomtools .btn { min-width: 34px; padding: 6px 8px; font-size: 14px; }
+#minimap {
+  position: absolute; left: 10px; bottom: 10px; width: 200px; height: 130px; z-index: 5;
+  background: var(--panel-2); border: 1px solid var(--rule-strong); border-radius: 6px; overflow: hidden;
+  touch-action: none; cursor: crosshair;
+}
+#minimap[hidden] { display: none; }
+#minimap svg { width: 100%; height: 100%; display: block; }
+.mm-ctx { fill: var(--ctx-fill); stroke: var(--rule-strong); vector-effect: non-scaling-stroke; }
+.mm-seg { fill: var(--panel-strong); fill-opacity: .9; stroke: none; }
+.mm-card { fill: var(--rule-strong); }
+.mm-view { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+#legend {
+  position: absolute; right: 10px; bottom: 10px; z-index: 6; max-width: min(340px, calc(100% - 20px)); max-height: 60%;
+  overflow: auto; background: var(--panel-2); border: 1px solid var(--rule-strong); border-radius: 8px;
+  padding: 10px 12px; font-size: 12px; box-shadow: var(--shadow);
+}
+#legend[hidden] { display: none; }
+#legend h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: 8px 0 4px; }
+#legend h3:first-child { margin-top: 0; }
+.lg { display: flex; align-items: center; gap: 7px; margin: 3px 0; }
+.lg .sw { width: 22px; height: 14px; border-radius: 3px; border: 1.5px solid var(--rule-strong); flex: 0 0 auto; }
+.lg .ln { width: 22px; height: 0; border-top: 2px solid var(--rule-strong); flex: 0 0 auto; }
+.lg .dt { width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto; margin: 0 5px; }
+#tip {
+  position: absolute; z-index: 40; pointer-events: none; max-width: 340px; background: var(--panel-2);
+  border: 1px solid var(--rule-strong); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: var(--shadow);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+#tip[hidden] { display: none; }
+#tip.rich { width: 420px; max-width: calc(100% - 16px); max-height: 72vh; overflow: hidden; white-space: normal; padding: 10px 12px; }
+#tip .rhead { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+#tip .rhead b { font-size: 13px; }
+#tip .rsub .badge { margin: 4px 4px 0 0; }
+#tip .rnote { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--rule); color: var(--text-muted); font-size: 11.5px; }
+#tip .sum { font-size: 12.5px; }
+#tip .scn { margin: 8px 0 0; }
+.scl { font-size: 12px; margin-bottom: 4px; }
+.scl b { font-family: var(--font); margin-right: 6px; }
+.scl .mono { color: var(--text-muted); overflow-wrap: anywhere; }
+#tip b { font-family: var(--mono); }
+#toast {
+  position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50; background: var(--text);
+  color: var(--surface); padding: 8px 14px; border-radius: 8px; font-size: 13px; box-shadow: var(--shadow); max-width: 90%;
+}
+#toast[hidden] { display: none; }
+#help {
+  position: absolute; inset: 0; z-index: 60; background: rgba(0, 0, 0, .35); display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+#help[hidden] { display: none; }
+#copybox { position: absolute; inset: 0; z-index: 61; background: rgba(0, 0, 0, .35); display: flex; align-items: center; justify-content: center; padding: 16px; }
+#copybox[hidden] { display: none; }
+#copybox > div { background: var(--panel-2); border-radius: 10px; padding: 16px 20px; max-width: 720px; width: 100%; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; max-height: 90%; }
+#copybox h2 { margin: 0; font-size: 15px; }
+#copybox p { margin: 0; font-size: 13px; color: var(--text-muted); }
+#copybox textarea { font-family: var(--mono); font-size: 12px; min-height: 280px; flex: 1 1 auto; resize: vertical; background: var(--surface); color: var(--text); border: 1px solid var(--rule-strong); border-radius: 6px; padding: 8px; }
+#copybox .btn { align-self: flex-end; }
+#copyfix .lbl { font-size: 12px; color: var(--text-muted); margin-right: 2px; }
+#copyfix .btn { font-size: 12px; padding: 2px 8px; }
+#help > div { background: var(--panel-2); border-radius: 10px; padding: 16px 20px; max-width: 460px; width: 100%; box-shadow: var(--shadow); max-height: 90%; overflow: auto; }
+#help h2 { margin: 0 0 10px; font-size: 15px; }
+#help p { font-size: 13px; color: var(--text-muted); }
+#help table { border-collapse: collapse; font-size: 13px; width: 100%; }
+#help td { padding: 3px 8px 3px 0; vertical-align: top; }
+#help kbd { font-family: var(--mono); font-size: 12px; border: 1px solid var(--rule-strong); border-radius: 4px; padding: 0 5px; background: var(--panel); }
+.notice { padding: 32px; max-width: 70ch; }
+
+/* ---------- shared SVG vocabulary: every lens draws with these classes (API §7) ---------- */
+svg.lens-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab;
+               user-select: none; -webkit-user-select: none; }
+svg.lens-svg.dragging { cursor: grabbing; }
+svg.lens-svg text { font-family: var(--font); fill: var(--text); }
+svg.lens-svg rect, svg.lens-svg path, svg.lens-svg line, svg.lens-svg circle, svg.lens-svg polyline { vector-effect: non-scaling-stroke; }
+.st { cursor: pointer; }
+.st > rect.bg { fill: var(--panel-2); stroke: var(--rule-strong); stroke-width: 1.2; }
+svg.lens-svg .st text { fill: var(--on-sticky); }
+svg.lens-svg .st text.cap { opacity: .72; }
+.st.r-event > rect.bg { fill: var(--evt); stroke: var(--evt-rule); }
+.st.r-command > rect.bg { fill: var(--cmd); stroke: var(--cmd-rule); }
+.st.r-view > rect.bg { fill: var(--view); stroke: var(--view-rule); stroke-width: 2; }
+.st.r-trigger > rect.bg, .st.r-automation > rect.bg { fill: var(--trg); stroke: var(--trg-rule); }
+.st.r-external > rect.bg { fill: var(--ext); stroke: var(--trg-rule); stroke-dasharray: 5 3; }
+.st.r-error > rect.bg { fill: var(--err-bg); stroke: var(--err); stroke-width: 2; }
+svg.lens-svg .st.r-error text { fill: var(--err); }
+.st.portal > rect.bg { stroke-dasharray: 7 4; fill-opacity: .5; stroke-width: 1.6; }
+.removed > rect.bg { fill-opacity: .18; stroke: var(--err); stroke-dasharray: 4 3; stroke-width: 1.6; }
+.st.removed text { opacity: .6; }
+.added > rect.bg { stroke: var(--ok); stroke-width: 3; }
+.changed > rect.bg { stroke: var(--warn); stroke-width: 3; }
+.sel > rect.bg { stroke: var(--accent); stroke-width: 3.5; }
+.dim { opacity: .16; }
+.ed { fill: none; stroke: var(--rule-strong); stroke-width: 1.4; }
+.ed.k-handles, .ed.k-dispatches { stroke: var(--cmd-rule); }
+.ed.k-publishes, .ed.k-feeds { stroke: var(--evt-rule); }
+.ed.k-external { stroke: var(--trg-rule); stroke-dasharray: 4 3; }
+.ed.cross { stroke-dasharray: 7 5; stroke-width: 1.8; }
+.ed.added { stroke: var(--ok); stroke-width: 2.6; }
+.ed.removed { stroke: var(--err); stroke-dasharray: 3 4; stroke-width: 2; }
+.ed.hi { stroke-width: 2.6; }
+.ed.hi-in { stroke: var(--accent); stroke-width: 2.8; stroke-dasharray: none; }
+.ed.hi-out { stroke: var(--warn); stroke-width: 2.8; stroke-dasharray: none; }
+.arrow { fill: var(--rule-strong); }
+.dot-error { fill: var(--err); } .dot-warn { fill: var(--warn); } .dot-info { fill: var(--info); }
+.mark { fill: none; stroke: var(--err); stroke-width: 3; }
+.mark-badge { fill: var(--err); }
+svg.lens-svg text.mark-badge-t { fill: var(--surface); font-weight: 700; }
+@media (prefers-reduced-motion: no-preference) {
+  .mark { animation: pulse 1.6s ease-in-out 3; }
+  @keyframes pulse { 50% { stroke-opacity: .25; } }
+}
+
+/* ---------- narrow screens: dock and card become bottom sheets ---------- */
+@media (max-width: 760px) {
+  #bar { padding: 6px 10px; gap: 6px 8px; }
+  #prov { max-width: 60vw; }
+  .btn kbd { display: none; }
+  .search { order: 5; flex-basis: 100%; }
+  #dock { position: absolute; left: 0; right: 0; bottom: 0; width: auto; height: 58%; z-index: 25;
+          border-right: 0; border-top: 1px solid var(--rule-strong); box-shadow: var(--shadow); }
+  #card { top: auto; height: 72%; width: 100%; border-left: 0; border-top: 1px solid var(--rule-strong); }
+  #minimap { display: none; }
+  #legend { left: 10px; right: 10px; max-width: none; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="bar">
+    <div class="brand"><a id="app-index" class="apps" hidden></a><b id="title">Slice Atlas</b><span id="prov" class="mono"></span></div>
+    <nav id="lenses" role="tablist" aria-label="Lenses"></nav>
+    <div class="search">
+      <input type="search" id="q" placeholder="Search slices, messages, paths  ( / )" autocomplete="off" spellcheck="false" aria-label="Search">
+      <span id="qcount" aria-live="polite"></span>
+    </div>
+    <div class="tools">
+      <button class="btn" id="btn-issues" aria-pressed="false" aria-controls="dock" title="Issues (i)">Issues<span id="issue-counts"></span></button>
+      <button class="btn" id="btn-legend" aria-pressed="false" aria-controls="legend" title="Legend (l)">Legend</button>
+      <button class="btn" id="btn-theme" title="Theme (t)">Theme: auto</button>
+      <button class="btn" id="btn-help" title="Keyboard (?)" aria-label="Keyboard shortcuts">?</button>
+    </div>
+  </header>
+  <div id="banner" role="alert" hidden></div>
+  <div id="main">
+    <aside id="dock" aria-label="Issues" hidden>
+      <div class="head">
+        <div class="row"><h2>Issues</h2><button class="btn" id="dock-close" aria-label="Close issues">✕</button></div>
+        <div class="row" id="levels"></div>
+        <div class="row"><select id="codes" aria-label="Filter by code"></select></div>
+        <div class="row" id="copyfix"></div>
+      </div>
+      <div id="issues" role="listbox" aria-label="Issues"></div>
+    </aside>
+    <section id="stage" aria-label="Map">
+      <div id="lens-host"></div>
+      <div id="zoomtools">
+        <button class="btn" data-z="in" title="Zoom in (+)" aria-label="Zoom in">+</button>
+        <button class="btn" data-z="out" title="Zoom out (−)" aria-label="Zoom out">−</button>
+        <button class="btn" data-z="fit" title="Fit (0)" aria-label="Fit to window">⤢</button>
+        <button class="btn" data-z="full" title="Full screen (f)" aria-label="Full screen">⛶</button>
+      </div>
+      <div id="minimap" aria-hidden="true" hidden></div>
+      <div id="legend" hidden></div>
+      <div id="tip" hidden></div>
+    </section>
+    <aside id="card" aria-label="Detail" hidden>
+      <div class="head"><h2 id="card-title"></h2><div id="card-sub"></div>
+        <button class="close" id="card-close" aria-label="Close detail (Esc)">×</button></div>
+      <div class="body" id="card-body"></div>
+    </aside>
+  </div>
+  <div id="toast" role="status" hidden></div>
+  <div id="copybox" hidden><div role="dialog" aria-label="Fix prompt">
+    <h2>Fix prompt</h2>
+    <p>The clipboard is not reachable from this page. Select the text and copy it, then paste it into Claude Code.</p>
+    <textarea id="copybox-text" readonly spellcheck="false"></textarea>
+    <button class="btn" id="copybox-close">Close</button>
+  </div></div>
+  <div id="help" hidden><div role="dialog" aria-label="Keyboard shortcuts">
+    <h2>Keyboard</h2>
+    <table>
+      <tr><td><kbd>/</kbd></td><td>search; <kbd>Enter</kbd> / <kbd>Shift</kbd>+<kbd>Enter</kbd> next / previous match</td></tr>
+      <tr><td><kbd>1</kbd>–<kbd>5</kbd></td><td>switch lens</td></tr>
+      <tr><td><kbd>i</kbd></td><td>issues dock; <kbd>↑</kbd> <kbd>↓</kbd> walk the issues</td></tr>
+      <tr><td><kbd>+</kbd> <kbd>−</kbd> <kbd>0</kbd></td><td>zoom in, out, fit</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>release focus, close the card</td></tr>
+      <tr><td><kbd>l</kbd> <kbd>t</kbd> <kbd>f</kbd></td><td>legend, theme, full screen</td></tr>
+      <tr><td><kbd>c</kbd> <kbd>v</kbd> <kbd>n</kbd></td><td>Diff lens: changes + 1 hop, change list, next changed slice</td></tr>
+      <tr><td>Copy</td><td>issues dock: a prompt for Claude Code that hands each issue to the essentials command owning its fix</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>Enter</kbd></td><td>Metro lens: show the focused station or line on the Atlas (or double-click it)</td></tr>
+    </table>
+    <p>The address bar holds the whole view: copy it to share exactly what you see.</p>
+    <button class="btn" id="help-close">Close</button>
+  </div></div>
+</div>
+
+<script>
+'use strict';
+const ATLAS = /* __ATLAS_DATA__ */ null;
+
+/* ==========================================================================================
+   SLICE ATLAS — page shell and the lens API (contract C6)
+   ==========================================================================================
+
+   The page draws; it derives nothing. Every process, issue, lineage entry, diff entry and
+   coordinate arrives precomputed in ATLAS (the C2 data, with C3 coordinates under
+   ATLAS.layout). A lens filters, draws and navigates over that data and nothing else.
+
+   ------------------------------------------------------------------------------------------
+   1. Files and assembly
+   ------------------------------------------------------------------------------------------
+   A lens is one file, references/slice/atlas/lens-<n>-<name>.js. slice-index.py atlas inlines
+   every lens file, in filename order, into the second <script> element of this page, so:
+     - wrap the file in an IIFE: (function () { 'use strict'; … Atlas.registerLens({…}); })();
+       Declare nothing global. All lenses share one <script>: a syntax error in one file kills
+       all of them, so run `node --check` on the file before handing it in.
+     - never write the character sequence that closes a script element inside the file (not
+       even in a string or comment); build such a string by concatenation if ever needed.
+     - no network, no storage, no timers that outlive unmount(), no literal colours.
+
+   ------------------------------------------------------------------------------------------
+   2. Registration
+   ------------------------------------------------------------------------------------------
+   Atlas.registerLens({
+     id:     'atlas',             // unique, [a-z]+; the hash value lens=<id>
+     label:  'Atlas',             // tab text
+     key:    '1',                 // keyboard shortcut and tab order ('1'…'9'), unique
+     css:    '…',                 // optional: lens-only CSS, injected once, with every lens's, on the first mount. Tokens only.
+     mount(ctx),                  // build into ctx.el; called each time the lens is shown
+     unmount(),                   // release listeners/timers; the shell then empties ctx.el and
+                                  // destroys the lens's viewports
+     focus(target, opts) → bool,  // §4; return false when this lens cannot show target
+     canFocus?(target) → bool,    // cheap check without mounting; default: mount and try focus()
+     search?(query) → Set<key>|null,   // §6
+     legend?() → Node,            // lens legend; the shell owns the panel and the toggle
+     minimap?() → Shape[],        // §5
+     cardExtra?(target) → Node|null,   // appended to the detail card while this lens is active
+     api?: {…}                    // shared with other lenses as Atlas.getLens(id).api
+   })
+   Missing mount/unmount/focus, a bad id, a duplicate id or key → console.error, not registered.
+   An exception thrown from mount() is caught; the lens area shows its message.
+
+   ------------------------------------------------------------------------------------------
+   3. ctx — what mount(ctx) receives (a fresh object per mount)
+   ------------------------------------------------------------------------------------------
+   ctx.data                 ATLAS, read-only. ctx.layout === ATLAS.layout (may be null).
+   ctx.el                   the lens container: an absolutely positioned <div> filling the stage.
+   ctx.index                lookups built once at boot (read-only results):
+       .slice(id)              current slice row, else the removed row of ATLAS.diff (ghost), else null
+       .isGhost(id)            true when id exists only as a removed row of ATLAS.diff
+       .message(type, name)    messages[] entry (type 'command'|'event'), or null
+       .process(id)  .context(id)
+       .processesOf(sliceId)   [process] that list the slice, in process sort order
+       .slicesOf(bc)           [slice] of a context, by id
+       .publishers(evt) .consumers(evt)       slice ids (consumers = consumes ∪ projections[].from)
+       .handlers(cmd)   .dispatchers(cmd)     slice ids
+       .issue(id)              Issue or null; the id of a per-slice issue folded into a context issue
+                               (listed in its `members`) resolves to that context issue
+   ctx.diff                 null without ATLAS.diff, else:
+       .state(sliceId)         'added' | 'removed' | 'changed' | null
+       .changes(sliceId)       [{field, added, removed, from, to}] of a changed slice, else []
+       .edgeState(fromKey, toKey, kind)   'added' | 'removed' | null, on the nodeKeys of C2
+                               (slice:<id>, cmd:<Name>, evt:<Name>); falls back to from+to when the
+                               kinds differ
+       .isNewIssue(issueId)    bool
+   ctx.issuesFor(target, {deep}?) → Issue[]
+                            issues whose target has the same kind and id. deep: true adds, for a
+                            context, the issues of its slices and processes; for a process, those
+                            of its slices. Order: (level, id), as in the data.
+   ctx.levelOf(issues) → 'error'|'warn'|'info'|null      the worst level present
+   ctx.openCard(target, {issue?, anchor?})
+                            opens the detail card. issue: an issue id to scroll to and flash;
+                            anchor: 'scenario:<name>' | 'readModel:<Name>' | 'message:<type>:<Name>'.
+   ctx.closeCard()
+   ctx.markIssue(issueId)   selects the issue exactly as a click in the dock does: the dock row,
+                            hash issue=, focus(target, {issue}) on this lens (or the first lens that
+                            can show it), and the card opened at the issue text.
+   ctx.focusTarget(target, {lens}?)  as a click on a link in the card: hash focus=, lens focus, card.
+                            lens: switch to that lens first (Metro's double-click → Atlas).
+                            A target the data does not hold — here, in openCard, from the hash, the
+                            dock or search Enter — toasts "Not in this map: <targetKey>", and nothing
+                            is focused or opened.
+   ctx.setHash(partial)     merges keys into the URL hash (replaceState: no history entry, no
+                            hashchange). A null or '' value removes the key. Shell-owned keys:
+                            lens, z, at, focus, issue, q, theme. A lens's own keys are prefixed
+                            with its id (diff.only=1). Unknown keys survive and are ignored.
+   ctx.getHash() → {key: string}
+   ctx.onHash(fn)           fn(state) after the user changes the hash (typing, back/forward); the
+                            shell has applied lens / q / issue / focus / at / theme by then.
+   ctx.createViewport(opts) → Viewport (§5). The last one created is the lens's main viewport: the
+                            zoom buttons, the + − 0 keys, the minimap and hash at= drive it.
+   ctx.tip(event, content) / ctx.hideTip()
+                            hover card at the pointer; content: a string (set as text) or a Node.
+   ctx.preview(target, note?) → Node | null
+                            the detail pane's content for a focus target, compact, for ctx.tip;
+                            also { kind: 'scenario', slice, name }. note: a line under it (what a
+                            click does). Cached per (target, note); null for an unknown target.
+   ctx.toast(text)
+   ctx.match(query, ...strings) → bool
+                            the shared matcher: every whitespace-separated term of query occurs,
+                            case-insensitively, in the joined strings.
+   ctx.sliceHay(slice) → string    the searchable text of a slice (id, name, bc, kind, summary,
+                            endpoints, messages, write targets, read models, flows, external system)
+   ctx.svg(tag, attrs?, text?)  SVG element factory;  ctx.html(tag, className?, text?)  HTML factory.
+                            Both set text with textContent. Never put data into innerHTML — the
+                            one exception, slices[].doc, is rendered by the shell.
+   ctx.util                 { arr, clamp, trunc, humanise, nameOf, fmtSchedule, MIN_TEXT_PX }
+   ctx.procColor(process) → 'var(--pN)'   N = process.color (0…11)
+   ctx.theme() → 'light'|'dark'    the resolved theme; ctx.onTheme(fn) on change. The CSS tokens
+                            follow on their own; only drawing that bakes a colour needs this.
+
+   ------------------------------------------------------------------------------------------
+   4. Targets, focus, hash
+   ------------------------------------------------------------------------------------------
+   A target is C2's issue-target shape: { kind: 'slice'|'message'|'process'|'context', id,
+   part? }. Message ids are '<type>:<Name>' (event:OrderPlaced). part names a piece of the
+   target — 'scenario:<name>', 'readModel:<Model>.<column>', 'endpoint:<METHOD> <path>',
+   'consumes:<Event>', … — draw the marker on that piece when you draw one, else on the target.
+   Atlas.targetKey(t) → string and Atlas.parseTarget(s) → target convert to the hash form:
+     slice '<id>' · message 'msg:<type>:<Name>' · process 'proc:<id>' · context 'ctx:<id>'
+   focus(target, opts), opts = { issue: Issue|null, level: int|null (hash z), animate: bool }:
+   fly the camera to the target, select it, and when opts.issue is set draw an error marker on
+   target.part (else on the target). focus(null, …) releases focus and clears the marker (Esc).
+   Return false, changing nothing, when the lens does not draw the target; the shell then tries
+   the other lenses, the Atlas lens first.
+   Hash: #lens=atlas&z=2&at=cx,cy,k&focus=<key>&issue=<id>&q=<query>&theme=dark. On load the
+   shell mounts lens=, applies q=, then issue= (wins) or focus= (unknown id → a "not in this map"
+   toast) or at= (camera). z= is the lens's level of detail: the lens writes it with
+   setHash({z}) when it changes and honours opts.level in focus(). The shell writes at=,
+   debounced, from the main viewport; do not write per frame.
+
+   ------------------------------------------------------------------------------------------
+   5. Viewport, text size, minimap
+   ------------------------------------------------------------------------------------------
+   const vp = ctx.createViewport({ svg, world, bounds, minScale?, maxScale?, onChange? })
+     svg      an <svg class="lens-svg"> in ctx.el;  world  a <g> in it holding all that pans/zooms;
+     bounds   {x,y,w,h} of the drawing in world units (user-space px; the C3 coordinates).
+     minScale  zoom-out floor; half the fit scale is always allowed, so pass the scale your
+               coarsest level needs (the Atlas lens passes LOD_L1 / 2). maxScale default 4.
+     onChange(view)        at most once per animation frame after any change, and once on create.
+   screen = world × k + t;  view = { k, x, y, w, h }: the visible world rectangle at scale k.
+   vp.view()   vp.fit(rect?, {pad, animate})   vp.flyTo(rect, {pad, minScale, maxScale, animate})
+   vp.zoomBy(factor, sx?, sy?) (screen anchor, default the centre)   vp.setView({cx, cy, k})
+   vp.centerOn(x, y)   vp.screenToWorld(sx, sy) → [x, y]   vp.size() → {w, h}   vp.bounds()
+   vp.wasDrag() → true while the click that ends a pan or pinch is dispatched: return early from
+   click handlers when it is true.   vp.destroy() (the shell calls it on unmount).
+   Pan: drag (mouse, pen, one finger). Zoom: wheel or trackpad pinch toward the pointer, two-finger
+   pinch, + − 0. The viewport never takes pointer capture on the <svg>: capture retargets the
+   pointerup, the click then lands on the <svg> instead of the element pressed, and every element
+   click handler silently stops firing. A press becomes a drag only past 4 px.
+   Text is never drawn below Atlas.MIN_TEXT_PX (11) screen px. A constant-size label uses
+   font-size = px / k; text whose world size × k would fall below 11 is not drawn — the level of
+   detail drops instead. Every shape inside svg.lens-svg has vector-effect: non-scaling-stroke,
+   so stroke widths are screen px.
+   minimap() returns shapes in the main viewport's world coordinates:
+     [{ x, y, w, h, cls: 'ctx'|'seg'|'card', p?: 0…11 (process colour) }]
+   The shell draws them once per mount and the visible rectangle on every change; a click or a
+   drag in the minimap centres the viewport there.
+
+   ------------------------------------------------------------------------------------------
+   6. Search, legend, card, issues dock
+   ------------------------------------------------------------------------------------------
+   search(query): dim what does not match in your drawing and return the matching targets as a
+   Set of target keys (§4); query '' → undim and return null. The shell counts them; Enter and
+   Shift+Enter call focus(parseTarget(key)) on them in sorted order.
+   legend(): a Node, shown under the lens name. Use the shell's .lg rows (.sw swatch, .ln line,
+   .dt dot) styled with tokens.
+   The detail card is the shell's: slices (manifest fields, payloads with the identity first,
+   read-model tables, scenarios, invariants, issues, the CLAUDE.md doc), messages, processes and
+   contexts. cardExtra(target) appends a lens's own section.
+   The issues dock is the shell's: grouped by level then context, filtered by level and code;
+   selecting a row runs focus(target, {issue}) on the lens that draws it.
+
+   ------------------------------------------------------------------------------------------
+   7. Shared drawing vocabulary (shell stylesheet; use these classes, not new colours)
+   ------------------------------------------------------------------------------------------
+   sticky  <g class="st r-<role>"> with <rect class="bg" rx="4"> and <text>. role: trigger |
+           command | view | event | external | automation | error. Modifiers: portal, removed
+           (a diff ghost), added, changed, sel, dim.
+   edge    <path class="ed k-<kind>">, kind: handles | publishes | feeds | dispatches | external.
+           Modifiers: cross, added, removed, hi, hi-in, hi-out, dim. Arrowheads: a <marker> whose
+           child has class "arrow".
+   status  .dot-error .dot-warn .dot-info (fills); .mark (the issue-marker outline);
+           .mark-badge and text.mark-badge-t (the "!" disc and its glyph).
+   ========================================================================================== */
+
+const Atlas = (() => {
+  const MIN_TEXT_PX = 11;
+  const PREVIEW_ISSUES = 3;        // issues a hover preview lists before "· 3 of N"
+  const plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'));
+  const SHELL_KEYS = ['lens', 'z', 'at', 'focus', 'issue', 'q', 'theme'];
+  const LEVELS = ['error', 'warn', 'info'];
+  const LEVEL_LABEL = { error: 'Errors', warn: 'Warnings', info: 'Info' };
+  const HASH_AT_DEBOUNCE_MS = 250;
+  const SEARCH_DEBOUNCE_MS = 120;
+  const FLY_MS = 380;
+  const NARROW = '(max-width: 760px)';
+
+  const D = ATLAS;
+  const lenses = [];
+  const injectedCss = new Set();
+  let active = null;          // { lens, ctx, vp, vps: [], hashFns: [], themeFns: [] }
+  let index = null;
+  let hashState = {};
+  let themeMode = 'auto';
+  const search = { q: '', keys: [], pos: -1 };
+  const dock = { levels: new Set(LEVELS), code: '', selected: null, visible: [] };
+  let toastTimer = 0, atTimer = 0, searchTimer = 0;
+  let suppressHashEvent = false;
+
+  /* ---------------- small utilities ---------------- */
+  const $ = (s) => document.querySelector(s);
+  const arr = (v) => Array.isArray(v) ? v : (v == null ? [] : [v]);
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const trunc = (s, n) => { s = String(s == null ? '' : s); return n <= 0 ? '' : (s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s); };
+  const humanise = (s) => String(s || '').replace(/[_-]+/g, ' ');
+  const nameOf = (v) => (v && typeof v === 'object') ? (v.name != null ? String(v.name) : String(v)) : String(v);
+  const byStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+  /** A slice's schedule (C2: the manifest object, or null; a plain string from older data) as one line. */
+  function fmtSchedule(sc) {
+    if (sc == null || sc === '') return '';
+    if (typeof sc !== 'object') return String(sc);
+    const parts = [];
+    if (sc.cron) parts.push('cron ' + sc.cron);
+    if (sc.fixedDelay) parts.push('every ' + sc.fixedDelay);
+    if (sc.initialDelay) parts.push('first after ' + sc.initialDelay);
+    if (sc.timeZone) parts.push(sc.timeZone);
+    if (sc.note) parts.push(sc.note);
+    return parts.join(' · ');
+  }
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  function svg(tag, attrs, text) {
+    const n = document.createElementNS(SVGNS, tag);
+    if (attrs) for (const k in attrs) if (attrs[k] != null) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  function html(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  function match(q, ...parts) {
+    const terms = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return true;
+    const hay = parts.join(' ').toLowerCase();
+    return terms.every(t => hay.includes(t));
+  }
+  const rank = (lvl) => { const i = LEVELS.indexOf(lvl); return i < 0 ? 3 : i; };
+  const media = (q) => !!(window.matchMedia && window.matchMedia(q).matches);
+  const cssEsc = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&');
+
+  /* ---------------- targets ---------------- */
+  function targetKey(t) {
+    if (!t) return '';
+    if (t.kind === 'message') return 'msg:' + t.id;
+    if (t.kind === 'process') return 'proc:' + t.id;
+    if (t.kind === 'context') return 'ctx:' + t.id;
+    return String(t.id);
+  }
+  function parseTarget(s) {
+    s = String(s || '');
+    if (!s) return null;
+    if (s.startsWith('msg:')) return { kind: 'message', id: s.slice(4), part: null };
+    if (s.startsWith('proc:')) return { kind: 'process', id: s.slice(5), part: null };
+    if (s.startsWith('ctx:')) return { kind: 'context', id: s.slice(4), part: null };
+    return { kind: 'slice', id: s, part: null };
+  }
+  const splitMsg = (id) => { const i = String(id).indexOf(':'); return i < 0 ? ['event', String(id)] : [id.slice(0, i), id.slice(i + 1)]; };
+  function targetExists(t) {
+    if (!t || !index) return false;
+    if (t.kind === 'slice') return !!index.slice(t.id);
+    if (t.kind === 'message') { const [ty, n] = splitMsg(t.id); return !!index.message(ty, n) || index.messageNames.has(ty + ':' + n); }
+    if (t.kind === 'process') return !!index.process(t.id);
+    if (t.kind === 'context') return !!index.context(t.id);
+    return false;
+  }
+  /** True, after a "Not in this map: <key>" toast, when t names nothing in the data. Every path that
+      focuses or opens a target asks this first: the hash, ctx.focusTarget / ctx.openCard, the
+      issues dock and search Enter. */
+  function notInMap(t) {
+    if (!t || targetExists(t)) return false;
+    toast('Not in this map: ' + targetKey(t));
+    return true;
+  }
+  function targetLabel(t) {
+    if (!t) return '';
+    if (t.kind === 'message') { const [ty, n] = splitMsg(t.id); return ty + ' ' + n; }
+    if (t.kind === 'process') { const p = index.process(t.id); return 'process ' + (p ? p.name : t.id); }
+    if (t.kind === 'context') return 'context ' + t.id;
+    return String(t.id);
+  }
+
+  /* ---------------- index ---------------- */
+  function buildIndex() {
+    const slices = new Map(), ghosts = new Map(), messages = new Map(), processes = new Map(), contexts = new Map();
+    const procsOf = new Map(), byBc = new Map(), pubs = new Map(), cons = new Map(), hand = new Map(), disp = new Map();
+    const issues = new Map(), byTarget = new Map(), messageNames = new Set();
+    const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); const a = m.get(k); if (!a.includes(v)) a.push(v); };
+    arr(D.slices).forEach(s => {
+      slices.set(s.id, s);
+      push(byBc, s.bc, s);
+      arr(s.publishes).forEach(e => push(pubs, nameOf(e), s.id));
+      arr(s.consumes).forEach(e => push(cons, nameOf(e), s.id));
+      arr(s.projections).forEach(p => arr(p && p.from).forEach(e => push(cons, nameOf(e), s.id)));
+      arr(s.handles).forEach(c => push(hand, nameOf(c), s.id));
+      arr(s.dispatches).forEach(c => push(disp, nameOf(c), s.id));
+    });
+    const diff = D.diff || null;
+    if (diff && diff.slices) arr(diff.slices.removed).forEach(s => { if (s && s.id && !slices.has(s.id)) ghosts.set(s.id, s); });
+    arr(D.messages).forEach(m => messages.set(m.type + ':' + m.name, m));
+    arr(D.flows).forEach(f => messageNames.add('event:' + f.event));
+    hand.forEach((_, c) => messageNames.add('command:' + c));
+    disp.forEach((_, c) => messageNames.add('command:' + c));
+    arr(D.processes).forEach(p => { processes.set(p.id, p); arr(p.sliceIds).forEach(id => push(procsOf, id, p)); });
+    arr(D.contexts).forEach(c => contexts.set(c.id, c));
+    arr(D.issues).forEach(i => { issues.set(i.id, i); const t = i.target || {}; push(byTarget, t.kind + '|' + t.id, i); });
+    // The diff names per-slice issues even where this map folded them into one for the context.
+    arr(D.issues).forEach(i => arr(i.members).forEach(sid => { const m = i.code + ':' + sid; if (!issues.has(m)) issues.set(m, i); }));
+    const changed = new Map();
+    const added = new Set(diff && diff.slices ? arr(diff.slices.added) : []);
+    if (diff && diff.slices) arr(diff.slices.changed).forEach(c => changed.set(c.id, arr(c.fields)));
+    const eAdd = new Set(), eRem = new Set(), pAdd = new Set(), pRem = new Set();
+    if (diff && diff.edges) {
+      arr(diff.edges.added).forEach(e => { eAdd.add(e.from + '>' + e.to + '>' + e.kind); pAdd.add(e.from + '>' + e.to); });
+      arr(diff.edges.removed).forEach(e => { eRem.add(e.from + '>' + e.to + '>' + e.kind); pRem.add(e.from + '>' + e.to); });
+    }
+    const newIssues = new Set();
+    if (diff && diff.issues) arr(diff.issues.new).forEach(id => { newIssues.add(id); const i = issues.get(id); if (i) newIssues.add(i.id); });
+    index = {
+      slice: (id) => slices.get(id) || ghosts.get(id) || null,
+      isGhost: (id) => !slices.has(id) && ghosts.has(id),
+      message: (type, name) => messages.get(type + ':' + name) || null,
+      process: (id) => processes.get(id) || null,
+      context: (id) => contexts.get(id) || null,
+      processesOf: (id) => (procsOf.get(id) || []).slice(),
+      slicesOf: (bc) => (byBc.get(bc) || []).slice().sort((a, b) => byStr(a.id, b.id)),
+      publishers: (e) => (pubs.get(e) || []).slice().sort(),
+      consumers: (e) => (cons.get(e) || []).slice().sort(),
+      handlers: (c) => (hand.get(c) || []).slice().sort(),
+      dispatchers: (c) => (disp.get(c) || []).slice().sort(),
+      issue: (id) => issues.get(id) || null,
+      byTarget, messageNames
+    };
+    index.diff = diff ? {
+      state: (id) => added.has(id) ? 'added' : (ghosts.has(id) && !slices.has(id)) ? 'removed' : changed.has(id) ? 'changed' : null,
+      changes: (id) => (changed.get(id) || []).slice(),
+      edgeState: (from, to, kind) => {
+        if (eAdd.has(from + '>' + to + '>' + kind)) return 'added';
+        if (eRem.has(from + '>' + to + '>' + kind)) return 'removed';
+        if (pAdd.has(from + '>' + to)) return 'added';
+        if (pRem.has(from + '>' + to)) return 'removed';
+        return null;
+      },
+      isNewIssue: (id) => newIssues.has(id)
+    } : null;
+  }
+
+  function issuesFor(t, opts) {
+    if (!t || !index) return [];
+    const out = (index.byTarget.get(t.kind + '|' + t.id) || []).slice();
+    if (opts && opts.deep) {
+      const seen = new Set(out.map(i => i.id));
+      const add = (list) => (list || []).forEach(i => { if (!seen.has(i.id)) { seen.add(i.id); out.push(i); } });
+      if (t.kind === 'context') {
+        index.slicesOf(t.id).forEach(s => add(index.byTarget.get('slice|' + s.id)));
+        arr(D.processes).filter(p => arr(p.bcs).includes(t.id)).forEach(p => add(index.byTarget.get('process|' + p.id)));
+      } else if (t.kind === 'process') {
+        const p = index.process(t.id);
+        if (p) arr(p.sliceIds).forEach(id => add(index.byTarget.get('slice|' + id)));
+      }
+      out.sort((a, b) => rank(a.level) - rank(b.level) || byStr(a.id, b.id));
+    }
+    return out;
+  }
+  const levelOf = (list) => { let best = null; arr(list).forEach(i => { if (best == null || rank(i.level) < rank(best)) best = i.level; }); return best; };
+  function issueBc(i) {
+    const t = i.target || {};
+    if (t.kind === 'slice') { const s = index.slice(t.id); return s ? s.bc : '—'; }
+    if (t.kind === 'context') return t.id;
+    if (t.kind === 'process') { const p = index.process(t.id); return p && arr(p.bcs).length ? p.bcs[0] : '—'; }
+    if (t.kind === 'message') {
+      const [ty, n] = splitMsg(t.id);
+      const ids = ty === 'command' ? index.handlers(n).concat(index.dispatchers(n)) : index.publishers(n).concat(index.consumers(n));
+      const s = ids.length ? index.slice(ids[0]) : null;
+      return s ? s.bc : '—';
+    }
+    return '—';
+  }
+  function sliceHay(s) {
+    if (!s) return '';
+    return [s.id, s.name, s.bc, s.kind, s.summary, s.status, s.externalSystem, fmtSchedule(s.schedule),
+      arr(s.endpoints).map(e => e.method + ' ' + e.path).join(' '),
+      ['handles', 'serves', 'publishes', 'consumes', 'dispatches', 'writes', 'owns'].map(k => arr(s[k]).map(nameOf).join(' ')).join(' '),
+      arr(s.projections).map(p => arr(p && p.from).map(nameOf).join(' ')).join(' '),
+      arr(s.readModels).map(r => r.name).join(' '), arr(s.flows).join(' ')].filter(Boolean).join(' ');
+  }
+
+  /* ---------------- hash ---------------- */
+  function parseHash() {
+    const out = {};
+    const h = (location.hash || '').replace(/^#/, '');
+    if (!h) return out;
+    h.split('&').forEach(kv => {
+      if (!kv) return;
+      const i = kv.indexOf('=');
+      let k = i < 0 ? kv : kv.slice(0, i), v = i < 0 ? '' : kv.slice(i + 1);
+      try { k = decodeURIComponent(k); v = decodeURIComponent(v.replace(/\+/g, ' ')); } catch (e) { /* keep raw */ }
+      out[k] = v;
+    });
+    return out;
+  }
+  function hashString(state) {
+    const keys = Object.keys(state).filter(k => state[k] != null && state[k] !== '');
+    const pos = (k) => { const i = SHELL_KEYS.indexOf(k); return i < 0 ? 99 : i; };
+    keys.sort((a, b) => pos(a) - pos(b) || byStr(a, b));
+    return keys.map(k => encodeURIComponent(k) + '=' + encodeURIComponent(String(state[k])).replace(/%3A/gi, ':').replace(/%2C/gi, ',')).join('&');
+  }
+  function setHash(partial) {
+    const next = Object.assign({}, hashState);
+    for (const k in partial) {
+      const v = partial[k];
+      if (v == null || v === '') delete next[k]; else next[k] = String(v);
+    }
+    hashState = next;
+    const s = hashString(next);
+    if (s === (location.hash || '').replace(/^#/, '')) return;
+    try { history.replaceState(null, '', s ? '#' + s : location.pathname + location.search); }
+    catch (e) { suppressHashEvent = true; location.hash = s; }
+  }
+  const zOf = (h) => (h && h.z != null && h.z !== '' && !isNaN(+h.z)) ? +h.z : null;
+  function onHashChange() {
+    if (suppressHashEvent) { suppressHashEvent = false; return; }
+    const prev = hashState;
+    const h = parseHash();
+    hashState = h;
+    if ((h.theme || 'auto') !== themeMode) applyTheme(h.theme || 'auto', false);
+    if (h.lens && (!active || h.lens !== active.lens.id) && getLens(h.lens)) { mountLens(h.lens, h); return; }
+    if ((h.q || '') !== search.q) { $('#q').value = h.q || ''; runSearch(h.q || '', false); }
+    if (h.issue && h.issue !== prev.issue) selectIssue(h.issue, { fromHash: true, level: zOf(h) });
+    else if (h.focus && h.focus !== prev.focus) focusTarget(parseTarget(h.focus), { level: zOf(h) });
+    else if (h.at && h.at !== prev.at) applyAt(h.at);
+    if (active) active.hashFns.forEach(fn => { try { fn(Object.assign({}, h)); } catch (e) { console.error(e); } });
+  }
+  function applyAt(at) {
+    if (!active || !active.vp || !at) return false;
+    const p = String(at).split(',').map(Number);
+    if (p.length !== 3 || p.some(v => !isFinite(v)) || p[2] <= 0) return false;
+    active.vp.setView({ cx: p[0], cy: p[1], k: p[2] });
+    return true;
+  }
+  function writeAt(view) {
+    clearTimeout(atTimer);
+    atTimer = setTimeout(() => {
+      setHash({ at: Math.round(view.x + view.w / 2) + ',' + Math.round(view.y + view.h / 2) + ',' + (+view.k.toPrecision(3)) });
+    }, HASH_AT_DEBOUNCE_MS);
+  }
+
+  /* ---------------- viewport ---------------- */
+  function createViewport(opts) {
+    const el = opts.svg, world = opts.world;
+    let bounds = Object.assign({ x: 0, y: 0, w: 1000, h: 800 }, opts.bounds || {});
+    let k = 1, tx = 0, ty = 0;
+    let raf = 0, anim = 0, destroyed = false, suppressClick = false;
+    const listeners = [];
+    const on = (t, ev, fn, o) => { t.addEventListener(ev, fn, o); listeners.push([t, ev, fn, o]); };
+    const size = () => {
+      const r = el.getBoundingClientRect();
+      return { w: r.width || el.clientWidth || 800, h: r.height || el.clientHeight || 600 };
+    };
+    const fitScale = (rect, pad) => {
+      const s = size();
+      return Math.min((s.w - 2 * pad) / Math.max(1, rect.w), (s.h - 2 * pad) / Math.max(1, rect.h));
+    };
+    const minK = () => Math.max(1e-4, Math.min(opts.minScale != null ? opts.minScale : Infinity, fitScale(bounds, 16) * 0.5));
+    const maxK = () => opts.maxScale != null ? opts.maxScale : 4;
+    const view = () => { const s = size(); return { k, x: -tx / k, y: -ty / k, w: s.w / k, h: s.h / k }; };
+    function notify() {
+      if (raf || destroyed) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (destroyed) return;
+        const v = view();
+        if (opts.onChange) { try { opts.onChange(v); } catch (e) { console.error(e); } }
+        if (active && active.vp === api) { drawMinimapView(v); writeAt(v); }
+      });
+    }
+    function apply() {
+      world.setAttribute('transform', 'translate(' + tx.toFixed(2) + ',' + ty.toFixed(2) + ') scale(' + k.toPrecision(6) + ')');
+      notify();
+    }
+    function cancelAnim() { if (anim) { cancelAnimationFrame(anim); anim = 0; } }
+    function setView(v) {
+      cancelAnim();
+      const s = size();
+      k = clamp(v.k, minK(), maxK());
+      tx = s.w / 2 - v.cx * k; ty = s.h / 2 - v.cy * k;
+      apply();
+    }
+    function zoomBy(f, sx, sy) {
+      cancelAnim();
+      const s = size();
+      if (sx == null) { sx = s.w / 2; sy = s.h / 2; }
+      const wx = (sx - tx) / k, wy = (sy - ty) / k;
+      k = clamp(k * f, minK(), maxK());
+      tx = sx - wx * k; ty = sy - wy * k;
+      apply();
+    }
+    function flyTo(rect, o) {
+      o = o || {};
+      const pad = o.pad != null ? o.pad : 32;
+      let nk = fitScale(rect, pad);
+      if (o.maxScale != null) nk = Math.min(nk, o.maxScale);
+      if (o.minScale != null) nk = Math.max(nk, o.minScale);
+      nk = clamp(nk, minK(), maxK());
+      const target = { cx: rect.x + rect.w / 2, cy: rect.y + rect.h / 2, k: nk };
+      if (o.animate === false || media('(prefers-reduced-motion: reduce)')) { setView(target); return; }
+      cancelAnim();
+      const s = size();
+      const from = { cx: (s.w / 2 - tx) / k, cy: (s.h / 2 - ty) / k, k };
+      const t0 = performance.now();
+      const step = (now) => {
+        const t = Math.min(1, (now - t0) / FLY_MS);
+        const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        const sz = size();
+        k = Math.exp(Math.log(from.k) + (Math.log(target.k) - Math.log(from.k)) * e);
+        tx = sz.w / 2 - (from.cx + (target.cx - from.cx) * e) * k;
+        ty = sz.h / 2 - (from.cy + (target.cy - from.cy) * e) * k;
+        apply();
+        anim = t < 1 ? requestAnimationFrame(step) : 0;
+      };
+      anim = requestAnimationFrame(step);
+    }
+    function fit(rect, o) { o = o || {}; flyTo(rect || bounds, { pad: o.pad != null ? o.pad : 24, animate: o.animate === true, minScale: minK() }); }
+    function centerOn(x, y) { setView({ cx: x, cy: y, k }); }
+
+    /* Pan and pinch. Never setPointerCapture on the <svg> (API §5). */
+    const pts = new Map();
+    let drag = null, pinch = null;
+    on(el, 'pointerdown', (e) => {
+      if (e.button != null && e.button > 0) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      cancelAnim();
+      if (pts.size === 1) drag = { x: e.clientX, y: e.clientY, tx, ty, moved: false };
+      else if (pts.size === 2) {
+        const [a, b] = Array.from(pts.values());
+        const r = el.getBoundingClientRect();
+        pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, k, mx: (a.x + b.x) / 2 - r.left, my: (a.y + b.y) / 2 - r.top, tx, ty };
+        drag = null;
+      }
+    });
+    on(el, 'pointermove', (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && pts.size >= 2) {
+        const [a, b] = Array.from(pts.values());
+        const wx = (pinch.mx - pinch.tx) / pinch.k, wy = (pinch.my - pinch.ty) / pinch.k;
+        k = clamp(pinch.k * (Math.hypot(a.x - b.x, a.y - b.y) / pinch.d), minK(), maxK());
+        tx = pinch.mx - wx * k; ty = pinch.my - wy * k;
+        suppressClick = true;
+        apply();
+        return;
+      }
+      if (!drag) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (!drag.moved) {
+        if (Math.abs(dx) + Math.abs(dy) < 4) return;   // still a click, not a drag
+        drag.moved = true;
+        el.classList.add('dragging');
+        hideTip();
+      }
+      tx = drag.tx + dx; ty = drag.ty + dy;
+      apply();
+    });
+    const end = (e) => {
+      if ((drag && drag.moved) || pinch) { suppressClick = true; setTimeout(() => { suppressClick = false; }, 0); }
+      pts.delete(e.pointerId);
+      if (pts.size < 2) pinch = null;
+      if (pts.size === 0) drag = null;
+      el.classList.remove('dragging');
+    };
+    on(el, 'pointerup', end);
+    on(el, 'pointercancel', end);
+    on(el, 'pointerleave', (e) => { end(e); hideTip(); });
+    on(el, 'wheel', (e) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+      const f = Math.exp(-e.deltaY * unit * (e.ctrlKey ? 0.01 : 0.0015));
+      zoomBy(clamp(f, 0.5, 2), e.clientX - r.left, e.clientY - r.top);
+    }, { passive: false });
+    let ro = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      let last = size();
+      ro = new ResizeObserver(() => {
+        const s = size();
+        tx += (s.w - last.w) / 2; ty += (s.h - last.h) / 2; last = s;
+        apply();
+      });
+      ro.observe(el);
+    }
+    const api = {
+      view, fit, flyTo, zoomBy, setView, centerOn, size,
+      bounds: () => Object.assign({}, bounds),
+      setBounds: (b) => { bounds = Object.assign({}, b); },
+      screenToWorld: (sx, sy) => [(sx - tx) / k, (sy - ty) / k],
+      wasDrag: () => suppressClick,
+      destroy: () => {
+        destroyed = true; cancelAnim(); if (raf) cancelAnimationFrame(raf);
+        listeners.forEach(([t, ev, fn, o]) => t.removeEventListener(ev, fn, o));
+        if (ro) ro.disconnect();
+      }
+    };
+    if (active) { active.vps.push(api); active.vp = api; }
+    fit(bounds, { animate: false });
+    return api;
+  }
+
+  /* ---------------- minimap ---------------- */
+  let mm = null;
+  function drawMinimap() {
+    const host = $('#minimap');
+    host.textContent = '';
+    mm = null;
+    host.hidden = true;
+    if (!active || !active.vp || typeof active.lens.minimap !== 'function') return;
+    let shapes;
+    try { shapes = arr(active.lens.minimap()); } catch (e) { console.error(e); shapes = []; }
+    if (!shapes.length) return;
+    const b = active.vp.bounds();
+    const pad = Math.max(b.w, b.h) * 0.02;
+    const s = svg('svg', { viewBox: (b.x - pad) + ' ' + (b.y - pad) + ' ' + (b.w + 2 * pad) + ' ' + (b.h + 2 * pad), preserveAspectRatio: 'xMidYMid meet' });
+    shapes.forEach(sh => {
+      const r = svg('rect', { x: sh.x, y: sh.y, width: sh.w, height: sh.h, class: 'mm-' + (sh.cls || 'card') });
+      if (sh.p != null) r.style.fill = 'var(--p' + ((((sh.p | 0) % 12) + 12) % 12) + ')';
+      s.append(r);
+    });
+    const vr = svg('rect', { class: 'mm-view', x: 0, y: 0, width: 0, height: 0 });
+    s.append(vr);
+    host.append(s);
+    host.hidden = media(NARROW);
+    mm = { svg: s, view: vr };
+    drawMinimapView(active.vp.view());
+    const toWorld = (e) => {
+      const m = s.getScreenCTM && s.getScreenCTM();
+      if (!m || !s.createSVGPoint) return null;
+      const pt = s.createSVGPoint();
+      pt.x = e.clientX; pt.y = e.clientY;
+      const p = pt.matrixTransform(m.inverse());
+      return [p.x, p.y];
+    };
+    let down = false;
+    const go = (e) => { const p = toWorld(e); if (p && active && active.vp) active.vp.centerOn(p[0], p[1]); };
+    s.addEventListener('pointerdown', (e) => { down = true; go(e); });
+    s.addEventListener('pointermove', (e) => { if (down) go(e); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => s.addEventListener(ev, () => { down = false; }));
+  }
+  function drawMinimapView(v) {
+    if (!mm) return;
+    mm.view.setAttribute('x', v.x); mm.view.setAttribute('y', v.y);
+    mm.view.setAttribute('width', Math.max(0, v.w)); mm.view.setAttribute('height', Math.max(0, v.h));
+  }
+
+  /* ---------------- tip, toast ---------------- */
+  function tip(ev, content) {
+    const t = $('#tip'), stage = $('#stage');
+    t.textContent = '';
+    if (content == null) { t.hidden = true; return; }
+    if (typeof content === 'string') t.textContent = content; else t.append(content);
+    t.classList.toggle('rich', !!(content.classList && content.classList.contains('rich')));
+    t.hidden = false;
+    const r = stage.getBoundingClientRect();
+    let x = ((ev && ev.clientX) || 0) - r.left + 14, y = ((ev && ev.clientY) || 0) - r.top + 14;
+    const w = t.offsetWidth || 260, h = t.offsetHeight || 80;
+    if (x + w > r.width - 8) x = Math.max(8, x - w - 28);
+    if (y + h > r.height - 8) y = Math.max(8, y - h - 28);
+    t.style.left = x + 'px'; t.style.top = y + 'px';
+  }
+  function hideTip() { const t = $('#tip'); if (t) t.hidden = true; }
+  function toast(msg) {
+    const t = $('#toast');
+    t.textContent = msg; t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, 3200);
+  }
+
+  /* ---------------- theme ---------------- */
+  function resolvedTheme() {
+    if (themeMode === 'light' || themeMode === 'dark') return themeMode;
+    return media('(prefers-color-scheme: dark)') ? 'dark' : 'light';
+  }
+  function applyTheme(mode, write) {
+    themeMode = (mode === 'light' || mode === 'dark') ? mode : 'auto';
+    const root = document.documentElement;
+    if (themeMode === 'auto') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', themeMode);
+    $('#btn-theme').textContent = 'Theme: ' + themeMode;
+    if (write) setHash({ theme: themeMode === 'auto' ? null : themeMode });
+    if (active) active.themeFns.forEach(fn => { try { fn(resolvedTheme()); } catch (e) { console.error(e); } });
+  }
+  function cycleTheme() { applyTheme(themeMode === 'auto' ? 'light' : themeMode === 'light' ? 'dark' : 'auto', true); }
+
+  /* ---------------- lenses ---------------- */
+  function registerLens(def) {
+    const bad = !def || typeof def.id !== 'string' || !/^[a-z]+$/.test(def.id) || typeof def.mount !== 'function' ||
+      typeof def.unmount !== 'function' || typeof def.focus !== 'function';
+    if (bad) { console.error('Atlas.registerLens: an id of [a-z]+ and mount, unmount and focus are required', def); return false; }
+    if (lenses.some(l => l.id === def.id || (def.key && l.key === def.key))) {
+      console.error('Atlas.registerLens: duplicate id or key', def.id, def.key); return false;
+    }
+    lenses.push(def);
+    lenses.sort((a, b) => byStr(String(a.key || '9'), String(b.key || '9')) || byStr(a.id, b.id));
+    return true;
+  }
+  function getLens(id) { return lenses.find(l => l.id === id) || null; }
+
+  function makeCtx(host) {
+    const st = active;
+    return {
+      data: D, layout: D.layout || null, el: host, index, diff: index.diff,
+      issuesFor, levelOf,
+      openCard: (t, o) => { if (!notInMap(t)) openCard(t, o); }, closeCard: () => closeCard(),
+      markIssue: (id) => selectIssue(id, {}), focusTarget: (t, o) => focusTarget(t, { lens: o && o.lens }),
+      setHash, getHash: () => Object.assign({}, hashState),
+      onHash: (fn) => { st.hashFns.push(fn); },
+      createViewport, tip, hideTip, preview, toast, match, sliceHay, svg, html,
+      util: { arr, clamp, trunc, humanise, nameOf, fmtSchedule, MIN_TEXT_PX },
+      procColor: (p) => 'var(--p' + (((((p && p.color) | 0) % 12) + 12) % 12) + ')',
+      theme: resolvedTheme, onTheme: (fn) => { st.themeFns.push(fn); }
+    };
+  }
+
+  function unmountActive() {
+    if (!active) return;
+    try { active.lens.unmount(); } catch (e) { console.error(e); }
+    active.vps.forEach(v => { try { v.destroy(); } catch (e) { console.error(e); } });
+    $('#lens-host').textContent = '';
+    hideTip();
+    active = null;
+  }
+
+  function mountLens(id, state) {
+    const lens = getLens(id) || lenses[0];
+    if (!lens) return;
+    unmountActive();
+    // Every lens's CSS, not only this one's: a lens may draw with another's board (Diff draws the Atlas
+    // lens's), and a page opened straight on it would otherwise paint that board with SVG's black default.
+    lenses.forEach(l => {
+      if (!l.css || injectedCss.has(l.id)) return;
+      const st = document.createElement('style');
+      st.textContent = l.css;
+      document.head.append(st);
+      injectedCss.add(l.id);
+    });
+    const host = html('div', 'lens-root');
+    host.dataset.lens = lens.id;
+    $('#lens-host').append(host);
+    active = { lens, ctx: null, vp: null, vps: [], hashFns: [], themeFns: [] };
+    active.ctx = makeCtx(host);
+    document.querySelectorAll('#lenses .btn').forEach(b => b.setAttribute('aria-selected', String(b.dataset.lens === lens.id)));
+    try { lens.mount(active.ctx); }
+    catch (e) {
+      console.error(e);
+      host.textContent = '';
+      host.append(html('p', 'lens-msg', 'The ' + (lens.label || lens.id) + ' lens failed to draw: ' + ((e && e.message) || e)));
+    }
+    setHash({ lens: lens.id });
+    renderLegend();
+    drawMinimap();
+    $('#zoomtools').hidden = !active.vp;
+    state = state || {};
+    if (search.q) runSearch(search.q, false);
+    // The level comes from the hash as it was asked for: the lens has already written its own z while mounting.
+    if (state.issue && !index.issue(state.issue)) { toast('Issue not in this map: ' + state.issue); setHash({ issue: null }); }
+    if (state.issue && index.issue(state.issue)) selectIssue(state.issue, { fromHash: true, level: zOf(state), noSwitch: true });
+    else if (state.focus) focusTarget(parseTarget(state.focus), { level: zOf(state), animate: false, noSwitch: true });
+    else if (state.at) applyAt(state.at);
+  }
+
+  function tryFocus(lens, t, opts) {
+    try { return !!lens.focus(t, opts); } catch (e) { console.error(e); return false; }
+  }
+  /** Focus on the active lens, else on the first lens (Atlas first) that can show the target. */
+  function focusOnSomeLens(t, opts) {
+    if (!active) return false;
+    if (tryFocus(active.lens, t, opts)) return true;
+    if (opts.noSwitch) return false;
+    const order = lenses.slice().sort((a, b) => (a.id === 'atlas' ? 0 : 1) - (b.id === 'atlas' ? 0 : 1));
+    for (const l of order) {
+      if (l === active.lens) continue;
+      if (typeof l.canFocus === 'function') { let ok = false; try { ok = !!l.canFocus(t); } catch (e) { ok = false; } if (!ok) continue; }
+      mountLens(l.id, {});
+      if (tryFocus(active.lens, t, opts)) return true;
+    }
+    // Nothing draws it: release the previous selection so a stale marker does not point elsewhere.
+    tryFocus(active.lens, null, { issue: null, level: null, animate: false });
+    return false;
+  }
+  function focusTarget(t, o) {
+    o = o || {};
+    if (!t) return;
+    if (notInMap(t)) { setHash({ focus: null }); return; }
+    if (o.lens && getLens(o.lens) && (!active || active.lens.id !== o.lens)) mountLens(o.lens, {});
+    setHash({ focus: targetKey(t), issue: null });
+    selectDockRow(null);
+    const ok = focusOnSomeLens(t, { issue: null, level: o.level != null ? o.level : null, animate: o.animate !== false, noSwitch: o.noSwitch });
+    if (!ok) toast('Not drawn in this lens: ' + targetLabel(t));
+    openCard(t, {});
+  }
+  function releaseFocus() {
+    if (active) tryFocus(active.lens, null, { issue: null, level: null, animate: false });
+    closeCard();
+    selectDockRow(null);
+    setHash({ focus: null, issue: null });
+  }
+
+  /* ---------------- issues dock ---------------- */
+  function renderDockHead() {
+    const counts = { error: 0, warn: 0, info: 0 };
+    arr(D.issues).forEach(i => { if (counts[i.level] != null) counts[i.level]++; });
+    const top = $('#issue-counts');
+    top.textContent = '';
+    LEVELS.forEach(l => {
+      if (!counts[l]) return;
+      const s = html('span', 'lvl lvl-' + l);
+      s.append(html('i'), document.createTextNode(String(counts[l])));
+      s.title = counts[l] + ' ' + LEVEL_LABEL[l].toLowerCase();
+      top.append(s);
+    });
+    const lv = $('#levels');
+    lv.textContent = '';
+    LEVELS.forEach(l => {
+      const b = html('button', 'chip');
+      b.setAttribute('aria-pressed', String(dock.levels.has(l)));
+      b.append(html('i', 'lvl-' + l), document.createTextNode(LEVEL_LABEL[l] + ' ' + counts[l]));
+      b.addEventListener('click', () => {
+        if (dock.levels.has(l)) dock.levels.delete(l); else dock.levels.add(l);
+        b.setAttribute('aria-pressed', String(dock.levels.has(l)));
+        renderDockList();
+      });
+      lv.append(b);
+    });
+    const sel = $('#codes');
+    sel.textContent = '';
+    const codes = new Map();
+    arr(D.issues).forEach(i => codes.set(i.code, (codes.get(i.code) || 0) + 1));
+    const all = html('option', null, 'all codes'); all.value = ''; sel.append(all);
+    Array.from(codes.keys()).sort().forEach(c => { const o = html('option', null, c + ' (' + codes.get(c) + ')'); o.value = c; sel.append(o); });
+    sel.value = dock.code;
+    sel.addEventListener('change', () => { dock.code = sel.value; renderDockList(); });
+    renderCopyFix(counts);
+  }
+  /* ---------------- fix prompt (the dock's Copy) ----------------
+     The map repairs nothing; Copy hands each issue to the command that owns its repair, as a prompt
+     for Claude Code. The route comes from the data (issue.fix, slice_atlas.py FIX_ROUTES); this only
+     words it. The prompt opens with prose, so a paste never runs its first line as a slash command. */
+  const FIX_GROUPS = [
+    { route: 'repair', title: 'Repair the manifests — YAML that does not parse and machine-derived fields.',
+      cmd: (bc) => ['/essentials:slice-check', bc, '--fix-manifests'].filter(Boolean).join(' ') },
+    { route: 'audit', title: 'Audit — these need a judgement (a stale manifest or code that is wrong). Run the audit and act on its findings for them.',
+      cmd: (bc) => ['/essentials:slice-check', bc].filter(Boolean).join(' ') },
+    { route: 'author', title: 'Author the human-owned manifest fields `flow:` and `scenarios:`, which `--fix-manifests` never writes. ' +
+      'Run the command below for these slices: flow and scenarios are human-owned, so it drafts them from evidence in the code and tests and confirms each group with me before writing. ' +
+      'For a test that does not resolve, write the test or correct `test:`; for a `given` event nothing publishes, say whether a slice is missing or the scenario is wrong.',
+      cmd: (bc) => ['/essentials:slice-enrich', bc ? '--bc ' + bc : ''].filter(Boolean).join(' ') }
+  ];
+  function fixOf(i) {
+    const f = i.fix || {};
+    let bc = f.bc;
+    if (!bc && i.target && i.target.kind === 'slice') { const s = index.slice(i.target.id); bc = s && s.bc; }
+    if (!bc && i.target && i.target.kind === 'context') bc = i.target.id;
+    return { route: f.route || 'audit', bc: bc || null };
+  }
+  function fixPrompt(levels) {
+    const list = arr(D.issues).filter(i => levels.includes(i.level));
+    if (!list.length) return '';
+    const meta = D.meta || {};
+    const counts = LEVELS.map(l => [l, list.filter(i => i.level === l).length]).filter(x => x[1]);
+    const word = { error: ['error', 'errors'], warn: ['warning', 'warnings'], info: ['info', 'info'] };
+    const lines = ['Resolve these ' + plural(list.length, 'Slice Atlas issue') + ' (' +
+      counts.map(([l, n]) => n + ' ' + word[l][n === 1 ? 0 : 1]).join(', ') + ') in ' + (meta.root || '.') +
+      (meta.sha ? ' @ ' + meta.sha : '') + ', using the essentials plugin. Each group names the command that owns the fix. ' +
+      'Work through the groups in order: a repaired manifest can clear later issues.', ''];
+    const line = (i) => {
+      const t = i.target || {};
+      return '   - ' + i.level + ' · ' + (t.id || '?') + (t.part ? ' [' + t.part + ']' : '') + ' — ' + i.text + '  (' + i.code + ')';
+    };
+    let n = 0;
+    FIX_GROUPS.forEach(g => {
+      const mine = list.filter(i => fixOf(i).route === g.route);
+      if (!mine.length) return;
+      lines.push(++n + '. ' + g.title);
+      if (g.cmd) {
+        const byBc = new Map();
+        mine.forEach(i => { const bc = fixOf(i).bc || ''; if (!byBc.has(bc)) byBc.set(bc, []); byBc.get(bc).push(i); });
+        Array.from(byBc.keys()).sort().forEach(bc => {
+          lines.push('   Run `' + g.cmd(bc) + '` for:');
+          byBc.get(bc).forEach(i => lines.push(line(i)));
+        });
+      } else mine.forEach(i => lines.push(line(i)));
+      lines.push('');
+    });
+    lines.push('Then run `/essentials:slice-map-html` again and confirm these issues are gone.');
+    return lines.join('\n');
+  }
+  function copyText(text, what) {
+    const done = () => toast('Copied ' + what + ' — paste it into Claude Code');
+    const legacy = () => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.append(ta); ta.select();
+        const ok = !!(document.execCommand && document.execCommand('copy'));
+        ta.remove();
+        return ok;
+      } catch (e) { return false; }
+    };
+    const box = () => {
+      $('#copybox-text').value = text;
+      $('#copybox').hidden = false;
+      $('#copybox-text').focus(); $('#copybox-text').select();
+    };
+    const fallback = () => { if (legacy()) done(); else box(); };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, fallback); return; }
+    } catch (e) { /* fall through */ }
+    fallback();
+  }
+  function renderCopyFix(counts) {
+    const row = $('#copyfix');
+    row.textContent = '';
+    const total = counts.error + counts.warn + counts.info;
+    if (!total) return;
+    row.append(html('span', 'lbl', 'Copy fix prompt'));
+    const sets = [['All', LEVELS, total], ['Errors', ['error'], counts.error], ['Warnings', ['warn'], counts.warn], ['Info', ['info'], counts.info]];
+    sets.forEach(([label, levels, n]) => {
+      const b = html('button', 'btn', label + ' ' + n);
+      b.disabled = !n;
+      b.title = n ? 'Copy a prompt for Claude Code that hands ' + (n === 1 ? 'this issue' : 'these ' + n + ' issues') +
+        ' to the essentials command owning each fix' : 'nothing at this level';
+      b.addEventListener('click', () => copyText(fixPrompt(levels), 'a fix prompt for ' + plural(n, 'issue')));
+      row.append(b);
+    });
+  }
+  function renderDockList() {
+    const list = $('#issues');
+    list.textContent = '';
+    const visible = arr(D.issues).filter(i => dock.levels.has(i.level) && (!dock.code || i.code === dock.code));
+    dock.visible = [];
+    if (!visible.length) {
+      list.append(html('p', 'lens-msg', arr(D.issues).length ? 'No issue matches the filter.' : 'No issues. The map grades nothing; issues are annotations.'));
+      return;
+    }
+    LEVELS.forEach(l => {
+      const mine = visible.filter(i => i.level === l);
+      if (!mine.length) return;
+      list.append(html('h3', null, LEVEL_LABEL[l] + ' · ' + mine.length));
+      const groups = new Map();
+      mine.forEach(i => { const bc = issueBc(i); if (!groups.has(bc)) groups.set(bc, []); groups.get(bc).push(i); });
+      Array.from(groups.keys()).sort().forEach(bc => {
+        list.append(html('h4', null, bc));
+        groups.get(bc).forEach(i => {
+          dock.visible.push(i.id);
+          const isNew = index.diff && index.diff.isNewIssue(i.id);
+          const b = html('button', 'iss lvl-' + i.level + (dock.selected === i.id ? ' sel' : '') + (isNew ? ' new' : ''));
+          b.setAttribute('role', 'option');
+          b.setAttribute('aria-selected', String(dock.selected === i.id));
+          b.dataset.id = i.id;
+          const part = i.target && i.target.part ? ' · ' + i.target.part : '';
+          b.append(html('span', 't', i.text), html('span', 'c', i.code + ' · ' + targetLabel(i.target) + part));
+          b.addEventListener('click', () => selectIssue(i.id, {}));
+          list.append(b);
+        });
+      });
+    });
+  }
+  function selectDockRow(id) {
+    dock.selected = id;
+    document.querySelectorAll('#issues .iss').forEach(b => {
+      const on = b.dataset.id === id;
+      b.classList.toggle('sel', on);
+      b.setAttribute('aria-selected', String(on));
+      if (on && b.scrollIntoView && !$('#dock').hidden) b.scrollIntoView({ block: 'nearest' });
+    });
+  }
+  function selectIssue(id, o) {
+    o = o || {};
+    const iss = index.issue(id);
+    if (!iss) { toast('Issue not in this map: ' + id); setHash({ issue: null }); return; }
+    id = iss.id;
+    selectDockRow(id);
+    if (notInMap(iss.target)) {
+      // The issue is real but names something the map does not hold: keep the row, draw nothing.
+      setHash({ issue: id, focus: null });
+      if (active) tryFocus(active.lens, null, { issue: null, level: null, animate: false });
+      closeCard();
+      return;
+    }
+    setHash({ issue: id, focus: targetKey(iss.target) });
+    const ok = focusOnSomeLens(iss.target, { issue: iss, level: o.level != null ? o.level : null, animate: !o.fromHash, noSwitch: o.noSwitch });
+    if (!ok && !o.noSwitch) toast('No lens draws ' + targetLabel(iss.target));
+    openCard(iss.target, { issue: id });
+  }
+  function walkIssues(dir) {
+    if (!dock.visible.length) return;
+    let i = dock.visible.indexOf(dock.selected);
+    i = i < 0 ? (dir > 0 ? 0 : dock.visible.length - 1) : clamp(i + dir, 0, dock.visible.length - 1);
+    selectIssue(dock.visible[i], {});
+  }
+  function toggleDock(force) {
+    const d = $('#dock');
+    const show = force != null ? force : d.hidden;
+    d.hidden = !show;
+    $('#btn-issues').setAttribute('aria-pressed', String(show));
+    if (show && dock.selected) selectDockRow(dock.selected);
+  }
+
+  /* ---------------- detail card ---------------- */
+  function section(title) { const s = html('section'); if (title) s.append(html('h3', null, title)); return s; }
+  function link(text, t) {
+    const b = html('button', 'lnk mono', text);
+    b.addEventListener('click', () => focusTarget(t, {}));
+    return b;
+  }
+  function kv(rows) {
+    const dl = html('dl', 'kv');
+    rows.forEach(([k, v]) => {
+      if (v == null || v === '' || (Array.isArray(v) && !v.length)) return;
+      const dd = html('dd');
+      if (v instanceof Node) dd.append(v); else dd.textContent = Array.isArray(v) ? v.join('\n') : String(v);
+      dl.append(html('dt', null, k), dd);
+    });
+    return dl;
+  }
+  function linkList(ids, mk) {
+    const f = document.createDocumentFragment();
+    ids.forEach((id, i) => { if (i) f.append(document.createTextNode('\n')); f.append(mk(id)); });
+    return f;
+  }
+  const sliceLinks = (ids) => ids.length ? linkList(ids, id => link(id, { kind: 'slice', id })) : null;
+  function issueRows(list, total) {
+    const s = section('Issues' + (total > list.length ? ' · ' + list.length + ' of ' + total : ''));
+    list.forEach(i => {
+      const r = html('div', 'issue-row lvl-' + i.level);
+      r.dataset.issue = i.id;
+      r.tabIndex = 0;
+      const isNew = index.diff && index.diff.isNewIssue(i.id);
+      r.append(html('span', null, i.text), html('span', 'c', i.level + ' · ' + i.code + (i.target && i.target.part ? ' · ' + i.target.part : '') + (isNew ? ' · new in this change' : '')));
+      r.addEventListener('click', () => selectIssue(i.id, {}));
+      r.addEventListener('keydown', (e) => { if (e.key === 'Enter') selectIssue(i.id, {}); });
+      s.append(r);
+    });
+    return s;
+  }
+  function withText(w) {
+    const keys = w ? Object.keys(w).sort() : [];
+    return keys.map(k => k + ': ' + JSON.stringify(w[k])).join('\n');
+  }
+  function stepChip(st) {
+    const type = (st && st.type) || 'event';
+    const c = html('span', 'stp s-' + type);
+    c.append(document.createTextNode(type === 'schedule' ? '⏱ schedule' : (st.name || type)));
+    const w = withText(st && st.with);
+    if (w) c.append(html('small', null, w));
+    c.title = type;
+    return c;
+  }
+  function scenarioBlock(sc) {
+    const b = html('div', 'scn');
+    b.dataset.anchor = 'scenario:' + sc.name;
+    const nm = html('div', 'nm');
+    nm.append(html('span', null, sc.name));
+    const tr = sc.testResolved || {};
+    if (tr.status === 'found') { const t = html('span', 'badge ok', '✓ test'); t.title = (tr.path || '') + (tr.line ? ':' + tr.line : ''); nm.append(t); }
+    else if (tr.status === 'missing') { const t = html('span', 'badge warn', '⚠ test missing'); t.title = sc.test || ''; nm.append(t); }
+    else if (sc.test) nm.append(html('span', 'badge', 'test not checked'));
+    b.append(nm);
+    const g = html('div', 'g');
+    const row = (label, nodes) => { const d = html('div'); nodes.forEach(n => d.append(n)); g.append(html('span', null, label), d); };
+    row('given', arr(sc.given).length ? arr(sc.given).map(stepChip) : [html('span', 'stp s-nothing', 'no history')]);
+    if (sc.when) row('when', [stepChip(sc.when)]);
+    const th = sc.then || { kind: 'nothing' };
+    if (th.kind === 'steps') row('then', arr(th.steps).map(stepChip));
+    else if (th.kind === 'error') {
+      const c = html('span', 'stp s-error', '✗ ' + (th.error || 'error'));
+      if (th.message) c.append(html('small', null, th.message));
+      row('then', [c]);
+    } else if (th.kind === 'readModel') {
+      const rows = arr(th.rows);
+      const cols = [];
+      rows.forEach(r => Object.keys(r || {}).forEach(k => { if (!cols.includes(k)) cols.push(k); }));
+      const wrap = html('div', 'tbl');
+      const t = html('table');
+      t.append(html('caption', null, (th.readModel || 'read model') + (rows.length ? '' : ' — empty')));
+      if (cols.length) {
+        const hr = html('tr'); cols.forEach(c => hr.append(html('th', null, c)));
+        const thead = html('thead'); thead.append(hr); t.append(thead);
+        const tb = html('tbody');
+        rows.forEach(r => { const tr2 = html('tr'); cols.forEach(c => tr2.append(html('td', null, r && r[c] != null ? String(r[c]) : ''))); tb.append(tr2); });
+        t.append(tb);
+      }
+      wrap.append(t);
+      row('then', [wrap]);
+    } else row('then', [html('span', 'stp s-nothing', 'nothing emitted')]);
+    b.append(g);
+    if (sc.test) b.append(html('div', 'note', 'test: ' + sc.test + (tr.path ? '  →  ' + tr.path + (tr.line ? ':' + tr.line : '') : '')));
+    if (sc.note) b.append(html('div', 'note', sc.note));
+    return b;
+  }
+  /** One scenario as a line: its name, then given → when → then by step name. */
+  function scenarioLine(sc) {
+    const d = html('div', 'scl');
+    const step = (st) => st && st.type === 'schedule' ? '⏱' : (st && st.name) || '?';
+    const th = sc.then || { kind: 'nothing' };
+    const then = th.kind === 'steps' ? arr(th.steps).map(step).join(', ')
+      : th.kind === 'error' ? '✗ ' + (th.error || 'error')
+      : th.kind === 'readModel' ? (th.readModel || 'read model') + ' · ' + plural(arr(th.rows).length, 'row')
+      : 'nothing';
+    const given = arr(sc.given).length ? arr(sc.given).map(step).join(', ') : '∅';
+    d.append(html('b', null, sc.name), html('span', 'mono', given + ' → ' + (sc.when ? step(sc.when) : '?') + ' → ' + then));
+    return d;
+  }
+  function messageBlock(type, name, role) {
+    const m = index.message(type, name);
+    const b = html('div', 'msg t-' + type);
+    b.dataset.anchor = 'message:' + type + ':' + name;
+    const head = html('div');
+    head.append(link(name, { kind: 'message', id: type + ':' + name }), html('span', 'role', role));
+    b.append(head);
+    if (m) {
+      const ul = html('ul');
+      const idf = m.identity ? String(m.identity) : null;
+      if (idf) { const li = html('li', 'id', idf); li.title = 'identity'; ul.append(li); }
+      arr(m.fields).filter(f => String(f) !== idf).forEach(f => ul.append(html('li', null, String(f))));
+      if (ul.childNodes.length) b.append(ul);
+    }
+    return b;
+  }
+  function readModelTable(rm) {
+    const wrap = html('div', 'tbl');
+    wrap.dataset.anchor = 'readModel:' + rm.name;
+    const t = html('table');
+    t.append(html('caption', null, rm.name + (rm.store ? ' · ' + rm.store : '')));
+    const cols = arr(rm.columns).map(c => typeof c === 'string' ? { name: c } : (c || {}));
+    const hr = html('tr'); ['Column', 'Type', 'Note'].forEach(h => hr.append(html('th', null, h)));
+    const thead = html('thead'); thead.append(hr); t.append(thead);
+    const tb = html('tbody');
+    cols.forEach(c => { const r = html('tr'); r.dataset.anchor = 'readModel:' + rm.name + '.' + c.name; r.append(html('td', null, c.name), html('td', null, c.type || ''), html('td', null, c.note || '')); tb.append(r); });
+    if (!cols.length) { const r = html('tr'); const td = html('td', null, 'no columns recorded'); td.colSpan = 3; r.append(td); tb.append(r); }
+    t.append(tb); wrap.append(t);
+    return wrap;
+  }
+  const fmtEndpoint = (e) => e.method + ' ' + e.path + (e.auth ? '   [' + e.auth + ']' : '');
+  function fmtChange(c) {
+    const parts = [];
+    arr(c.added).forEach(a => parts.push('+' + a));
+    arr(c.removed).forEach(r => parts.push('−' + r));
+    if (c.from != null || c.to != null) parts.push(String(c.from) + ' → ' + String(c.to));
+    return c.field + ': ' + parts.join(' ');
+  }
+
+  /* The detail renderers write into any (body, sub) pair: the pane, or a hover preview (o.compact),
+     which keeps the facts and drops what only a reader of the pane needs — the CLAUDE.md, every
+     scenario in full, the location beyond its path. */
+  function sliceCard(s, body, sub, o) {
+    o = o || {};
+    const ghost = index.isGhost(s.id);
+    [s.kind, s.status, s.bc, s.lane, s.language, s.tier].filter(Boolean).forEach(t => sub.append(html('span', 'badge', t)));
+    arr(s.flows).forEach(f => sub.append(html('span', 'badge', 'flow: ' + f)));
+    if (s.error) sub.append(html('span', 'badge err', 'manifest did not parse'));
+    const ds = index.diff ? index.diff.state(s.id) : null;
+    if (ds) sub.append(html('span', 'badge ' + (ds === 'added' ? 'ok' : ds === 'removed' ? 'err' : 'warn'), ds));
+    if (ghost) body.append(html('div', 'ghostnote', 'Removed by this change — drawn as a ghost at its old position.'));
+    if (s.summary) body.append(html('p', 'sum', s.summary));
+    const procs = index.processesOf(s.id);
+    if (procs.length) {
+      const sec = section('Processes');
+      procs.forEach((p, i) => { if (i) sec.append(document.createTextNode('   ')); sec.append(link(p.name + (p.declared ? '' : ' (derived)'), { kind: 'process', id: p.id })); });
+      body.append(sec);
+    }
+    const iss = issuesFor({ kind: 'slice', id: s.id });
+    if (iss.length) body.append(issueRows(o.compact ? iss.slice(0, PREVIEW_ISSUES) : iss, iss.length));
+    if (ds === 'changed') {
+      const sec = section('Changed in this change');
+      const ul = html('ul', 'changes');
+      index.diff.changes(s.id).forEach(c => ul.append(html('li', null, fmtChange(c))));
+      sec.append(ul); body.append(sec);
+    }
+    const trows = [['endpoints', arr(s.endpoints).map(fmtEndpoint)], ['schedule', fmtSchedule(s.schedule) || null],
+      ['external', s.externalSystem ? s.externalSystem + (s.direction ? ' (' + s.direction + ')' : '') : null]];
+    if (trows.some(r => r[1] && (!Array.isArray(r[1]) || r[1].length))) { const sec = section('Trigger'); sec.append(kv(trows)); body.append(sec); }
+    const msgs = section('Messages and payloads');
+    const seen = new Set();
+    const addMsg = (type, list, role) => arr(list).map(nameOf).forEach(n => {
+      const key = type + ':' + n + ':' + role;
+      if (seen.has(key)) return;
+      seen.add(key);
+      msgs.append(messageBlock(type, n, role));
+    });
+    addMsg('command', s.handles, 'handles');
+    addMsg('event', s.publishes, 'publishes');
+    addMsg('event', s.consumes, 'consumes');
+    arr(s.projections).forEach(p => addMsg('event', p && p.from, 'projects' + (p && p.name ? ' · ' + p.name : '')));
+    addMsg('command', s.dispatches, 'dispatches');
+    if (arr(s.serves).length) msgs.append(kv([['serves', arr(s.serves).map(nameOf)]]));
+    if (msgs.childNodes.length > 1) body.append(msgs);
+    const reads = arr(s.reads).map(r => nameOf(r) + (r && r.via ? '  via ' + r.via : '') + (r && r.external ? '  (external)' : ''));
+    const srows = [['writes', arr(s.writes).map(nameOf)], ['owns', arr(s.owns).map(nameOf)], ['reads', reads]];
+    if (srows.some(r => r[1].length)) { const sec = section('State'); sec.append(kv(srows)); body.append(sec); }
+    if (arr(s.readModels).length) {
+      const sec = section('Read model');
+      arr(s.readModels).forEach(rm => sec.append(readModelTable(rm)));
+      body.append(sec);
+    }
+    const scs = arr(s.scenarios);
+    const scSec = section(scs.length ? 'Scenarios · ' + scs.length : 'Scenarios');
+    if (scs.length) scs.forEach(sc => scSec.append(o.compact ? scenarioLine(sc) : scenarioBlock(sc)));
+    else scSec.append(html('p', 'sum', 'No scenarios declared.'));
+    body.append(scSec);
+    if (arr(s.invariants).length || arr(s.tests).length) {
+      const sec = section('Invariants and tests');
+      sec.append(kv([['invariants', arr(s.invariants).map(i => (i.id ? i.id + '  ' : '') + (i.text || '') + (i.enforcedBy ? '  → ' + i.enforcedBy : ''))],
+        ['tests', arr(s.tests).join(', ')]]));
+      body.append(sec);
+    }
+    if (s.doc && !o.compact) {
+      const sec = section('CLAUDE.md');
+      const d = html('div', 'doc');
+      d.innerHTML = s.doc;   // the one innerHTML: converted and escaped in Python to the design §9.4 subset
+      sec.append(d); body.append(sec);
+    }
+    const loc = section('Location');
+    loc.append(kv(o.compact ? [['path', s.path], ['owner', s.owner]]
+      : [['path', s.path], ['package', s.package], ['files', arr(s.files)], ['owner', s.owner], ['supersedes', s.supersedes]]));
+    body.append(loc);
+  }
+  function messageCard(t, body, sub) {
+    const [type, name] = splitMsg(t.id);
+    const m = index.message(type, name);
+    sub.append(html('span', 'badge', type));
+    if (m && m.version != null) sub.append(html('span', 'badge', 'v' + m.version));
+    if (m && m.summary) body.append(html('p', 'sum', m.summary));
+    const iss = issuesFor(t);
+    if (iss.length) body.append(issueRows(iss));
+    if (m) {
+      const sec = section('Payload');
+      sec.append(messageBlock(type, name, type));
+      sec.append(kv([['declared in', m.declaredIn], ['idempotency', m.idempotencyKey], ['schema', m.schema]]));
+      body.append(sec);
+    } else body.append(html('p', 'sum', 'No payload facts for this message.'));
+    const sec = section('Slices');
+    sec.append(type === 'command'
+      ? kv([['dispatched by', sliceLinks(index.dispatchers(name))], ['handled by', sliceLinks(index.handlers(name)) || 'no handler']])
+      : kv([['published by', sliceLinks(index.publishers(name)) || 'no publisher — dangling'], ['consumed by', sliceLinks(index.consumers(name))]]));
+    body.append(sec);
+  }
+  function processCard(p, body, sub) {
+    sub.append(html('span', 'badge', p.declared ? 'declared flow' : 'derived'));
+    arr(p.bcs).forEach(b => sub.append(html('span', 'badge', b)));
+    const sw = html('span', 'badge', 'colour ' + ((p.color | 0) % 12));
+    sw.style.borderColor = 'var(--p' + ((p.color | 0) % 12) + ')';
+    sw.style.borderWidth = '2px';
+    sub.append(sw);
+    if (!p.declared) body.append(html('p', 'sum', 'Derived from cause and effect: no slice in it declares flow: for it.'));
+    const iss = issuesFor({ kind: 'process', id: p.id }, { deep: true });
+    if (iss.length) body.append(issueRows(iss));
+    const sec = section('Slices, in causal order');
+    const entries = new Set(arr(p.entries));
+    const ol = html('ol', 'changes');
+    arr(p.sliceIds).forEach(id => { const li = html('li'); li.append(link(id, { kind: 'slice', id })); if (entries.has(id)) li.append(document.createTextNode('  ▶ entry')); ol.append(li); });
+    sec.append(ol); body.append(sec);
+    if (arr(p.links).length) {
+      const ls = section('Links');
+      arr(p.links).forEach(l => {
+        const d = html('div'), q = index.process(l.to);
+        d.append(link('→ ' + (q ? q.name : l.to), { kind: 'process', id: l.to }), document.createTextNode('  via ' + arr(l.via).join(', ')));
+        ls.append(d);
+      });
+      body.append(ls);
+    }
+  }
+  function contextCard(c, body, sub) {
+    [c.lane, c.language, c.tier].filter(Boolean).forEach(t => sub.append(html('span', 'badge', t)));
+    arr(c.owners).forEach(o => sub.append(html('span', 'badge', o)));
+    const iss = issuesFor({ kind: 'context', id: c.id }, { deep: true });
+    if (iss.length) body.append(issueRows(iss));
+    const sl = index.slicesOf(c.id);
+    const counts = {};
+    sl.forEach(s => { counts[s.kind] = (counts[s.kind] || 0) + 1; });
+    const sec = section('Slices · ' + sl.length);
+    sec.append(html('p', 'sum', Object.keys(counts).sort().map(k => counts[k] + ' ' + k).join(' · ')));
+    sec.append(kv([['slices', sliceLinks(sl.map(s => s.id))]]));
+    body.append(sec);
+    const ps = arr(D.processes).filter(p => arr(p.bcs).includes(c.id));
+    if (ps.length) {
+      const pp = section('Processes');
+      ps.forEach(p => { const d = html('div'); d.append(link(p.name + (p.declared ? '' : ' (derived)'), { kind: 'process', id: p.id })); pp.append(d); });
+      body.append(pp);
+    }
+  }
+  function openCard(t, o) {
+    o = o || {};
+    if (!t || !targetExists(t)) return;
+    const card = $('#card'), body = $('#card-body');
+    $('#card-title').textContent = t.kind === 'slice' ? t.id : targetLabel(t);
+    $('#card-sub').textContent = '';
+    body.textContent = '';
+    renderTarget(t, body, $('#card-sub'), {});
+    if (active && typeof active.lens.cardExtra === 'function') {
+      try { const x = active.lens.cardExtra(t); if (x) body.append(x); } catch (e) { console.error(e); }
+    }
+    card.hidden = false;
+    let anchor = null;
+    if (o.issue) anchor = body.querySelector('[data-issue="' + cssEsc(o.issue) + '"]');
+    if (!anchor && o.anchor) anchor = body.querySelector('[data-anchor="' + cssEsc(o.anchor) + '"]');
+    if (anchor) {
+      if (anchor.scrollIntoView) anchor.scrollIntoView({ block: 'center' });
+      anchor.classList.remove('flash'); void anchor.offsetWidth; anchor.classList.add('flash');
+    } else body.scrollTop = 0;
+  }
+  function closeCard() { $('#card').hidden = true; }
+  function renderTarget(t, body, sub, o) {
+    if (t.kind === 'slice') sliceCard(index.slice(t.id), body, sub, o);
+    else if (t.kind === 'message') messageCard(t, body, sub, o);
+    else if (t.kind === 'process') processCard(index.process(t.id), body, sub, o);
+    else if (t.kind === 'context') contextCard(index.context(t.id), body, sub, o);
+  }
+  /* Hover previews: the detail pane's content, compact, for ctx.tip. t is a focus target, or
+     { kind: 'scenario', slice, name } for one scenario's given / when / then. note is the lens's
+     line under it (what a click does). Built once per (target, note) — the data never changes
+     under a page — so a mousemove only repositions. */
+  const previews = new Map();
+  function preview(t, note) {
+    if (!t) return null;
+    const key = t.kind + '|' + (t.id || t.slice + '|' + t.name) + '|' + (note || '');
+    if (previews.has(key)) return previews.get(key);
+    let out = null;
+    if (t.kind === 'scenario') {
+      const s = index.slice(t.slice);
+      const sc = s && arr(s.scenarios).find(x => x.name === t.name);
+      if (sc) {
+        out = html('div', 'rich');
+        const head = html('div', 'rhead');
+        head.append(html('b', null, t.slice), html('span', 'badge', 'scenario'));
+        out.append(head, scenarioBlock(sc));
+      }
+    } else if (targetExists(t)) {
+      out = html('div', 'rich');
+      const head = html('div', 'rhead'), sub = html('div', 'rsub'), body = html('div', 'rbody');
+      head.append(html('b', null, t.kind === 'slice' ? t.id : targetLabel(t)));
+      renderTarget(t, body, sub, { compact: true });
+      out.append(head, sub, body);
+    }
+    if (out && note) out.append(html('div', 'rnote', note));
+    previews.set(key, out);
+    return out;
+  }
+
+  /* ---------------- search ---------------- */
+  function runSearch(q, write) {
+    search.q = q;
+    search.pos = -1;
+    let keys = null;
+    if (active && typeof active.lens.search === 'function') {
+      try { keys = active.lens.search(q); } catch (e) { console.error(e); keys = null; }
+    }
+    search.keys = keys ? Array.from(keys).sort() : [];
+    $('#qcount').textContent = q ? (search.keys.length + ' match' + (search.keys.length === 1 ? '' : 'es')) : '';
+    if (write) setHash({ q: q || null });
+  }
+  function nextMatch(dir) {
+    if (!search.keys.length) return;
+    search.pos = (search.pos + dir + search.keys.length) % search.keys.length;
+    const t = parseTarget(search.keys[search.pos]);
+    $('#qcount').textContent = (search.pos + 1) + ' / ' + search.keys.length;
+    if (notInMap(t)) { setHash({ focus: null }); return; }
+    if (active && !tryFocus(active.lens, t, { issue: null, level: null, animate: true })) toast('Not drawn in this lens: ' + targetLabel(t));
+    setHash({ focus: targetKey(t), issue: null });
+  }
+
+  /* ---------------- legend ---------------- */
+  function renderLegend() {
+    const lg = $('#legend');
+    lg.textContent = '';
+    if (!active) return;
+    lg.append(html('h3', null, active.lens.label || active.lens.id));
+    if (typeof active.lens.legend === 'function') {
+      try { const n = active.lens.legend(); if (n) lg.append(n); } catch (e) { console.error(e); }
+    }
+    lg.append(html('h3', null, 'Issues'));
+    LEVELS.forEach(l => {
+      const r = html('div', 'lg'), d = html('span', 'dt');
+      d.style.background = 'var(--' + (l === 'error' ? 'err' : l) + ')';
+      r.append(d, document.createTextNode(l === 'error' ? 'error' : l === 'warn' ? 'warning' : 'info — an annotation, not a defect'));
+      lg.append(r);
+    });
+  }
+  function toggleLegend(force) {
+    const lg = $('#legend');
+    const show = force != null ? force : lg.hidden;
+    lg.hidden = !show;
+    $('#btn-legend').setAttribute('aria-pressed', String(show));
+  }
+
+  /* ---------------- chrome, keyboard, boot ---------------- */
+  function fullscreen() {
+    const app = $('#app');
+    if (document.fullscreenElement) { if (document.exitFullscreen) document.exitFullscreen(); return; }
+    if (!app.requestFullscreen) { toast('Full screen is not available here'); return; }
+    const p = app.requestFullscreen();
+    if (p && p.catch) p.catch(() => toast('Full screen was refused (a file:// page may not ask for it)'));
+  }
+  function renderChrome() {
+    const meta = D.meta || {};
+    const title = 'Slice Atlas' + (meta.project ? ' — ' + meta.project : '');
+    $('#title').textContent = title;
+    document.title = title;
+    if (meta.app && meta.app.index) {          // one page of several (slice-index.py atlas --per-app)
+      const back = $('#app-index');
+      back.href = String(meta.app.index);
+      back.textContent = '← all applications';
+      back.title = 'Application ' + meta.app.id + ' (' + meta.app.root + ') — back to the index of every application';
+      back.hidden = false;
+    }
+    const prov = [(meta.root || '.') + ' @ ' + (meta.sha || 'not-versioned'),
+      (meta.sliceCount != null ? meta.sliceCount : arr(D.slices).length) + ' slices',
+      (meta.bcCount != null ? meta.bcCount : arr(D.contexts).length) + ' contexts',
+      arr(D.processes).length + ' processes'];
+    if (D.diff && D.diff.before) prov.push('diff vs ' + [D.diff.before.ref, D.diff.before.sha].filter(Boolean).join(' '));
+    $('#prov').textContent = prov.join(' · ');
+    $('#prov').title = prov.join('\n') + (meta.generatedBy ? '\n' + meta.generatedBy : '');
+    const nav = $('#lenses');
+    nav.textContent = '';
+    lenses.forEach(l => {
+      const b = html('button', 'btn', l.label || l.id);
+      b.setAttribute('role', 'tab');
+      b.setAttribute('aria-selected', 'false');
+      b.dataset.lens = l.id;
+      if (l.key) { b.append(html('kbd', null, l.key)); b.title = (l.label || l.id) + ' (' + l.key + ')'; }
+      b.addEventListener('click', () => { if (!active || active.lens.id !== l.id) switchLens(l.id); });
+      nav.append(b);
+    });
+    const incomplete = +meta.incomplete || 0;
+    if (incomplete > 0) {
+      const bn = $('#banner');
+      bn.textContent = 'Map incomplete: ' + incomplete + ' manifest' + (incomplete === 1 ? '' : 's') +
+        ' did not parse. Each is drawn as a red error card in its context — select this banner to list them.';
+      bn.hidden = false;
+      bn.addEventListener('click', () => { dock.code = 'map-parse-error'; $('#codes').value = dock.code; renderDockList(); toggleDock(true); });
+    }
+  }
+  function switchLens(id) {
+    const keep = hashState.issue ? { issue: hashState.issue } : hashState.focus ? { focus: hashState.focus } : {};
+    setHash({ at: null, z: null });
+    mountLens(id, keep);
+  }
+  function wire() {
+    $('#btn-issues').addEventListener('click', () => toggleDock());
+    $('#dock-close').addEventListener('click', () => toggleDock(false));
+    $('#btn-legend').addEventListener('click', () => toggleLegend());
+    $('#btn-theme').addEventListener('click', cycleTheme);
+    $('#btn-help').addEventListener('click', () => { $('#help').hidden = false; $('#help-close').focus(); });
+    $('#help-close').addEventListener('click', () => { $('#help').hidden = true; });
+    $('#copybox-close').addEventListener('click', () => { $('#copybox').hidden = true; });
+    $('#copybox').addEventListener('click', (e) => { if (e.target === $('#copybox')) $('#copybox').hidden = true; });
+    $('#help').addEventListener('click', (e) => { if (e.target === $('#help')) $('#help').hidden = true; });
+    $('#card-close').addEventListener('click', releaseFocus);
+    document.querySelectorAll('#zoomtools .btn').forEach(b => b.addEventListener('click', () => {
+      if (b.dataset.z === 'full') { fullscreen(); return; }
+      const vp = active && active.vp;
+      if (!vp) return;
+      if (b.dataset.z === 'in') vp.zoomBy(1.4); else if (b.dataset.z === 'out') vp.zoomBy(1 / 1.4); else vp.fit(null, { animate: true });
+    }));
+    const q = $('#q');
+    q.value = search.q;
+    q.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(q.value.trim(), true), SEARCH_DEBOUNCE_MS); });
+    q.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault(); clearTimeout(searchTimer);
+        if (q.value.trim() !== search.q) runSearch(q.value.trim(), true);
+        nextMatch(e.shiftKey ? -1 : 1);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        if (q.value) { q.value = ''; runSearch('', true); } else q.blur();
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      const k = e.key;
+      if (k === '/') { e.preventDefault(); q.focus(); q.select(); return; }
+      if (k === 'Escape') {
+        if (!$('#copybox').hidden) { $('#copybox').hidden = true; return; }
+        if (!$('#help').hidden) { $('#help').hidden = true; return; }
+        releaseFocus(); return;
+      }
+      if (k === '?') { $('#help').hidden = !$('#help').hidden; return; }
+      if (/^[1-9]$/.test(k)) { const l = lenses.find(x => x.key === k); if (l && (!active || active.lens.id !== l.id)) switchLens(l.id); return; }
+      if (k === 'i') { toggleDock(); return; }
+      if (k === 'l') { toggleLegend(); return; }
+      if (k === 't') { cycleTheme(); return; }
+      if (k === 'f') { fullscreen(); return; }
+      if ((k === 'ArrowDown' || k === 'ArrowUp') && !$('#dock').hidden) { e.preventDefault(); walkIssues(k === 'ArrowDown' ? 1 : -1); return; }
+      const vp = active && active.vp;
+      if (!vp) return;
+      if (k === '+' || k === '=') vp.zoomBy(1.4);
+      else if (k === '-' || k === '_') vp.zoomBy(1 / 1.4);
+      else if (k === '0') vp.fit(null, { animate: true });
+    });
+    window.addEventListener('hashchange', onHashChange);
+    if (window.matchMedia) {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      const fn = () => { if (themeMode === 'auto') applyTheme('auto', false); };
+      if (mq.addEventListener) mq.addEventListener('change', fn); else if (mq.addListener) mq.addListener(fn);
+    }
+  }
+
+  function boot() {
+    if (!D) {
+      document.body.textContent = '';
+      const n = html('div', 'notice');
+      n.append(html('h1', null, 'Slice Atlas'),
+        html('p', null, 'This page has not been rendered: slice-index.py atlas fills in the map of a project, and /essentials:slice-map-html runs it.'));
+      document.body.append(n);
+      return;
+    }
+    buildIndex();
+    hashState = parseHash();
+    if (!hashState.lens && !hashState.focus && !hashState.issue) hashState = Object.assign(initialState(), hashState);
+    search.q = hashState.q || '';
+    renderChrome();
+    renderDockHead();
+    renderDockList();
+    wire();
+    applyTheme(hashState.theme || 'auto', false);
+    if (!lenses.length) { $('#lens-host').append(html('p', 'lens-msg', 'No lens is registered in this page.')); return; }
+    if (hashState.issue && !media(NARROW)) toggleDock(true);
+    const first = getLens('atlas') ? 'atlas' : lenses[0].id;
+    if (hashState.lens && !getLens(hashState.lens)) toast('Not in this page: lens ' + hashState.lens + ' — showing ' + (getLens(first).label || first));
+    mountLens(getLens(hashState.lens) ? hashState.lens : first, hashState);
+  }
+  /** The view slice-index.py atlas --lens / --focus / --bc asked for (meta.initial), as hash keys;
+      used only when the hash names no lens, focus or issue. --focus may be a slice, process or
+      issue id, or already a hash target key; --bc opens on that context. */
+  function initialState() {
+    const ini = (D.meta && D.meta.initial) || {};
+    const out = {};
+    if (ini.lens) out.lens = String(ini.lens);
+    const f = ini.focus ? String(ini.focus) : '';
+    if (f && index.issue(f)) out.issue = f;
+    else if (f && !targetExists(parseTarget(f)) && index.process(f)) out.focus = 'proc:' + f;
+    else if (f && !targetExists(parseTarget(f)) && index.context(f)) out.focus = 'ctx:' + f;
+    else if (f) out.focus = f;                     // a stale id toasts "Not in this map" when focused
+    else if (ini.bc) out.focus = 'ctx:' + ini.bc;
+    return out;
+  }
+
+  return {
+    registerLens, getLens, boot, parseTarget, targetKey, MIN_TEXT_PX,
+    util: { arr, clamp, trunc, humanise, nameOf, fmtSchedule, svg, html, match }
+  };
+})();
+</script>
+<script>
+/* __ATLAS_LENSES__ */
+</script>
+<script>
+Atlas.boot();
+</script>
+</body>
+</html>

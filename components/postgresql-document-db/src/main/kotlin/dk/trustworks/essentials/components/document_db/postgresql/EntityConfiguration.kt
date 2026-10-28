@@ -27,12 +27,14 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.time.ZonedDateTime
 import kotlin.reflect.KClass
+import kotlin.reflect.KVisibility
 import kotlin.reflect.KMutableProperty1
 import kotlin.reflect.KProperty1
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.jvm.javaField
+import kotlin.reflect.jvm.isAccessible
 import kotlin.reflect.jvm.javaGetter
 import kotlin.reflect.jvm.jvmErasure
 
@@ -55,15 +57,40 @@ class EntityConfiguration<ID, T : VersionedEntity<ID, T>>(private val entityClas
 
     fun tableName(tableName: String) = apply {
         log.info("Resolved Entity '{}' table name '{}'", entityClass.qualifiedName, tableName)
-        PostgresqlUtil.checkIsValidTableOrColumnName(tableName)
+        PostgresqlUtil.checkIsValidTableOrColumnName(tableName, "@DocumentEntity(tableName) of ${entityClass.qualifiedName}")
         this.tableName = tableName
     }
 
     fun idProperty(idProperty: KProperty1<T, ID>) = apply {
         log.info("Resolved Entity '{}' @Id property '{}'", entityClass.simpleName, idProperty)
-        PostgresqlUtil.checkIsValidTableOrColumnName(idProperty.name)
+        checkIsValidJsonPropertyName(idProperty.name, "${entityClass.simpleName}.${idProperty.name}")
+        makeIdPropertyAccessible(idProperty)
         this.idProperty = idProperty
         this.idPropertyType = idProperty.returnType.classifier as? KClass<*>
+    }
+
+    /**
+     * The repository reads (and, for a `null` String id on `save`, writes) the `@Id` property reflectively on every
+     * `save`/`update`/`delete`. A non-public one - typically a Java `@Id private OrderId id` field - would otherwise pass
+     * configuration and then fail every one of those calls with an `IllegalCallableAccessException`, so it is made
+     * accessible here, once. If the JVM refuses (e.g. a package of a named module that isn't opened), a non-public
+     * property fails here, naming the entity and the property, instead of on first use.
+     */
+    private fun makeIdPropertyAccessible(idProperty: KProperty1<T, ID>) {
+        try {
+            idProperty.isAccessible = true
+        } catch (e: RuntimeException) {
+            if (idProperty.visibility == KVisibility.PUBLIC) {
+                // Public: reflective access may still work as it did before - keep the old behaviour, but say why if it doesn't
+                log.warn("Could not make Entity '{}' @Id property '{}' accessible: {}", entityClass.qualifiedName, idProperty.name, e.toString())
+                return
+            }
+            throw IllegalStateException(
+                "Entity '${entityClass.qualifiedName}' @Id property '${idProperty.name}' is ${idProperty.visibility?.name?.lowercase() ?: "not public"} " +
+                    "and cannot be made accessible for reflective reads: ${e.message}. Make the @Id property public, or open its package for deep reflection.",
+                e
+            )
+        }
     }
 
     fun isValueClassWrappingString(kClass: KClass<*>?): Boolean {
@@ -77,7 +104,7 @@ class EntityConfiguration<ID, T : VersionedEntity<ID, T>>(private val entityClas
 
     fun versionProperty(versionProperty: KProperty1<T, Version>) =
         apply {
-            PostgresqlUtil.checkIsValidTableOrColumnName(versionProperty.name)
+            checkIsValidJsonPropertyName(versionProperty.name, "${entityClass.simpleName}.${versionProperty.name}")
             val readWriteableVersionProperty = versionProperty as? KMutableProperty1<T, Version>
                 ?: throw IllegalStateException("The '${VERSION_PROPERTY_NAME}' property '${versionProperty}' is read-only")
             this.versionProperty = readWriteableVersionProperty
@@ -85,7 +112,7 @@ class EntityConfiguration<ID, T : VersionedEntity<ID, T>>(private val entityClas
 
     fun lastUpdatedProperty(lastUpdatedProperty: KProperty1<T, ZonedDateTime>) =
         apply {
-            PostgresqlUtil.checkIsValidTableOrColumnName(lastUpdatedProperty.name)
+            checkIsValidJsonPropertyName(lastUpdatedProperty.name, "${entityClass.simpleName}.${lastUpdatedProperty.name}")
             val readWriteableVersionProperty = lastUpdatedProperty as? KMutableProperty1<T, ZonedDateTime>
                 ?: throw IllegalStateException("The '${LAST_UPDATED_PROPERTY_NAME}' property '${lastUpdatedProperty}' is read-only")
             this.lastUpdatedProperty = readWriteableVersionProperty
@@ -93,7 +120,7 @@ class EntityConfiguration<ID, T : VersionedEntity<ID, T>>(private val entityClas
 
     fun addIndexedProperty(property: KProperty1<T, *>) = apply {
         log.info("Adding Entity '{}' indexed property '{}'", entityClass.simpleName, property)
-        PostgresqlUtil.checkIsValidTableOrColumnName(property.name)
+        checkIsValidJsonPropertyName(property.name, "${entityClass.simpleName}.${property.name}")
         this.indexedProperties.add(property)
     }
 
@@ -169,7 +196,12 @@ class EntityConfiguration<ID, T : VersionedEntity<ID, T>>(private val entityClas
         }
 
         /**
-         * Check [KProperty1.name] and sub property names of the [KProperty1.returnType] properties, using [KClass.memberProperties], recursively using [PostgresqlUtil.checkIsValidTableOrColumnName]
+         * Check [KProperty1.name] and sub property names of the [KProperty1.returnType] properties, using [KClass.memberProperties], recursively.
+         *
+         * Each name is a JSON property name, so it is checked for the identifier character class and length only - see
+         * [checkIsValidJsonPropertyName] for why the SQL reserved-keyword list does not apply (it still applies to the table name).
+         * Value classes, Kotlin/Java built-in types, collections/maps and any `java.*` type are checked by name but not recursed into:
+         * their members are not the entity author's naming choice.
          *
          * ** Security notice**
          * The [dk.trustworks.essentials.components.document_db.postgresql.PostgresqlDocumentDbRepository] instance created,
@@ -178,7 +210,7 @@ class EntityConfiguration<ID, T : VersionedEntity<ID, T>>(private val entityClas
          * using [dk.trustworks.essentials.components.document_db.postgresql.EntityConfiguration.checkPropertyNames], since the table name and JSON property names will be used in SQL string concatenations,
          * which exposes the components (such as [dk.trustworks.essentials.components.document_db.postgresql.PostgresqlDocumentDbRepository]) to SQL injection attacks.
          *
-         * This method attempts to check all property name against [dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.checkIsValidTableOrColumnName]
+         * This method attempts to check all property names against [checkIsValidJsonPropertyName]
          *
          * This method is not provide exhaustive protection and may overlook properties that should have been checked.
          *
@@ -191,8 +223,20 @@ class EntityConfiguration<ID, T : VersionedEntity<ID, T>>(private val entityClas
          * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.
          */
         fun <T> checkPropertyNames(property: KProperty1<T, *>, propertyContext: List<String> = listOf(), alreadyCheckedTypes: MutableSet<KClass<*>> = mutableSetOf()) {
+            checkPropertyNames(property, propertyContext, alreadyCheckedTypes) { name, context -> checkIsValidJsonPropertyName(name, context) }
+        }
+
+        /**
+         * [checkPropertyNames] with the name check passed in, so tests can observe which names - in which context - are checked.
+         */
+        internal fun <T> checkPropertyNames(
+            property: KProperty1<T, *>,
+            propertyContext: List<String>,
+            alreadyCheckedTypes: MutableSet<KClass<*>>,
+            checkName: (name: String, context: String) -> Unit
+        ) {
             val context = (propertyContext + property.name).joinToString(separator = ".")
-            PostgresqlUtil.checkIsValidTableOrColumnName(property.name, context)
+            checkName(property.name, context)
             val classifier = property.returnType.classifier
             val propertyType = if (classifier is KClass<*>) classifier else {
                 log.debug(
@@ -207,7 +251,8 @@ class EntityConfiguration<ID, T : VersionedEntity<ID, T>>(private val entityClas
 
             if (propertyType.isValue ||
                 isKotlinOrJavaBuiltInType(propertyType) ||
-                isKotlinCollectionOrMapType(propertyType)
+                isKotlinCollectionOrMapType(propertyType) ||
+                isJavaPlatformType(propertyType)
             ) {
                 if (log.isDebugEnabled) {
                     log.debug(
@@ -225,8 +270,16 @@ class EntityConfiguration<ID, T : VersionedEntity<ID, T>>(private val entityClas
             alreadyCheckedTypes.add(propertyType)
             val subPropertyContext =  propertyContext + property.name
             propertyType.memberProperties.forEach { memberProperty ->
-                checkPropertyNames(memberProperty as KProperty1<Any, *>, subPropertyContext, alreadyCheckedTypes)
+                checkPropertyNames(memberProperty as KProperty1<Any, *>, subPropertyContext, alreadyCheckedTypes, checkName)
             }
+        }
+
+        /**
+         * A `java.*` type (`java.net.URI`, `java.util.Optional`, ...). Its members are JDK implementation details - neither the
+         * entity author's naming choice nor, in general, what the JSON serializer writes - so [checkPropertyNames] does not recurse into them.
+         */
+        private fun isJavaPlatformType(type: KClass<*>): Boolean {
+            return type.java.name.startsWith("java.")
         }
 
         /**

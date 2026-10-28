@@ -17,6 +17,7 @@ A template can reach a version only through `{{pin:…}}`, so no version lives i
 Usage
 -----
     init-render.py --answers F --out DIR [--workspace-out WDIR] [--preserve PATH]...
+                                                      F may be `-`: the answers JSON on standard input
     init-render.py --host <lang>-<db> --out DIR      slice-compile host from tests/golden/init/hosts.json
     init-render.py --answers F --tree                 print the serialized tree
     init-render.py --answers F --hooks                the post-render commands to run, as JSON
@@ -46,12 +47,16 @@ Exit codes
     1   a check failed (invariant, golden diff, self-test)
     2   could not run (bad answers, unknown placeholder or pin, malformed template or manifest,
         target directory not empty)
+    4   the target cannot be written (EROFS, EACCES: a read-only mount, a sandbox that allows no
+        writes). Checked before the first write, so nothing is written. There is no --emit: a whole
+        project, with its executable bits and the build that follows, needs a writable directory
 """
 
 from __future__ import annotations
 
 import argparse
 import difflib
+import errno
 import itertools
 import json
 import os
@@ -107,6 +112,38 @@ EXECUTABLE_NAMES = frozenset({"mvnw"})
 
 class RenderError(Exception):
     """The render cannot proceed (exit 2)."""
+
+
+class Unwritable(RenderError):
+    """A target this process cannot write (exit 4), found before anything was written."""
+
+
+def unwritable(paths) -> str | None:
+    """The first of `paths` this process cannot write, as "PATH: ERRNO (reason)", or None. Probed, not
+    asked of os.access, which a sandbox can answer yes to and then refuse the write: an existing file is
+    opened for update without truncating it; for any other path a probe file is created and removed in
+    the path itself when it is a directory, else in its nearest existing ancestor. Shared with
+    init-report.py."""
+    probed = set()
+    for path in paths:
+        path = Path(os.path.abspath(path))
+        try:
+            if path.is_file():
+                with open(path, "r+b"):
+                    pass
+                continue
+            d = path if path.is_dir() else path.parent
+            while not d.exists() and d != d.parent:
+                d = d.parent
+            if d in probed:
+                continue
+            probed.add(d)
+            fd, probe = tempfile.mkstemp(prefix=".essentials-probe-", dir=d)
+            os.close(fd)
+            os.unlink(probe)
+        except OSError as exc:
+            return f"{path}: {errno.errorcode.get(exc.errno, exc.errno)} ({exc.strerror})"
+    return None
 
 
 # --------------------------------------------------------------------------------------------
@@ -592,11 +629,14 @@ def _prepare_target(root: Path, preserve: set[str], strict: bool) -> None:
         raise RenderError(f"{root} is not empty ({name}); name kept files with --preserve")
 
 
-def _write(root: Path, rel: str, entry: Entry, side_render: bool) -> str:
+def _target(root: Path, rel: str, side_render: bool) -> Path:
     path = root / rel
-    if path.exists() and side_render:
-        rel = rel + ".essentials-init"
-        path = root / rel
+    return path.with_name(path.name + ".essentials-init") if path.exists() and side_render else path
+
+
+def _write(root: Path, rel: str, entry: Entry, side_render: bool) -> str:
+    path = _target(root, rel, side_render)
+    rel = path.relative_to(root).as_posix()
     path.parent.mkdir(parents=True, exist_ok=True)
     if entry.copy_src is not None:
         data = (PLUGIN_ROOT / entry.copy_src).read_bytes()
@@ -612,14 +652,20 @@ def write_project(entries: list[Entry], out: Path, workspace_out: Path | None, p
     _prepare_target(out, keep, strict=True)
     if workspace_out is not None:
         _prepare_target(workspace_out, set(), strict=False)
-    out.mkdir(parents=True, exist_ok=True)
+    plan = []
     for e in entries:
         if e.workspace:
             if workspace_out is not None:
-                _write(workspace_out, e.path, e, side_render=True)
+                plan.append((workspace_out, e, True))
             continue
-        preserved = e.path in keep and (out / e.path).exists()
-        _write(out, e.path, e, side_render=preserved)
+        plan.append((out, e, e.path in keep and (out / e.path).exists()))
+    refused = unwritable([out, *(_target(root, e.path, side) for root, e, side in plan)])
+    if refused:
+        raise Unwritable(f"cannot write {refused} — nothing written; /essentials:init needs a target "
+                         "directory this shell can write")
+    out.mkdir(parents=True, exist_ok=True)
+    for root, e, side in plan:
+        _write(root, e.path, e, side_render=side)
 
 
 # --------------------------------------------------------------------------------------------
@@ -874,6 +920,8 @@ def cmd_update_golden(src: Sources, golden: Path) -> int:
 # --------------------------------------------------------------------------------------------
 
 def self_test() -> int:
+    import contextlib
+    import io
     import unittest
 
     pins_md = (
@@ -1101,6 +1149,33 @@ def self_test() -> int:
             self.assertEqual((out / "README.md.essentials-init").read_text(), "r\n")
             self.assertEqual((self.dir / "ws" / "CLAUDE.md.essentials-init").read_text(), "w\n")
 
+        @unittest.skipIf(os.geteuid() == 0, "root writes through file modes")
+        def test_unwritable_target_writes_nothing(self):
+            src = self.assets({"files": [{"src": "README.md", "dst": "README.md"},
+                                         {"src": "WS.md", "dst": "CLAUDE.md", "root": "workspace"}]},
+                              {"README.md": "r\n", "WS.md": "w\n"})
+            entries = render_project(answers, src)
+            ws = self.dir / "ws"
+            ws.mkdir()
+            ws.chmod(0o555)  # empty, so the tmp cleanup still removes it
+            for out, workspace in ((ws / "proj", None), (self.dir / "proj", ws)):
+                with self.subTest(out=out), self.assertRaises(Unwritable) as raised:
+                    write_project(entries, out, workspace, [])
+                self.assertIn("EACCES", str(raised.exception))
+                self.assertFalse(out.exists())
+                self.assertEqual(list(ws.iterdir()), [])
+
+        def test_answers_from_stdin(self):
+            stdin = sys.stdin
+            sys.stdin = io.StringIO(json.dumps(answers))
+            try:
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    code = main(["--answers", "-", "--hooks"])
+            finally:
+                sys.stdin = stdin
+            self.assertEqual(code, 0)
+            self.assertIn("maven-wrapper", out.getvalue())
+
         def test_combinations(self):
             combos = list(all_combinations())
             self.assertEqual(len(combos), 72)
@@ -1118,7 +1193,7 @@ def self_test() -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Render an Essentials project from the plugin templates.")
     mode = ap.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--answers", type=Path, help="answers JSON")
+    mode.add_argument("--answers", type=Path, help="answers JSON, or - for standard input")
     mode.add_argument("--host", help="slice-compile host id from hosts.json, e.g. java-pg-event-sourced")
     mode.add_argument("--self-test", action="store_true")
     mode.add_argument("--all-combinations", action="store_true")
@@ -1162,11 +1237,12 @@ def main(argv=None) -> int:
                 raise RenderError(f"unknown host {args.host!r}; hosts: {', '.join(sorted(hosts))}")
             answers, title = hosts[args.host], args.host
         else:
+            stdin = str(args.answers) == "-"
             try:
-                answers = json.loads(args.answers.read_text(encoding="utf-8"))
+                answers = json.loads(sys.stdin.read() if stdin else args.answers.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 raise RenderError(f"cannot read answers {args.answers}: {exc}")
-            title = args.answers.name
+            title = "answers.json" if stdin else args.answers.name
         if args.hooks:
             json.dump(render_hooks(answers, src), sys.stdout, indent=2)
             print()
@@ -1182,7 +1258,7 @@ def main(argv=None) -> int:
         return 0
     except RenderError as exc:
         print(f"init-render: {exc}", file=sys.stderr)
-        return 2
+        return 4 if isinstance(exc, Unwritable) else 2
 
 
 if __name__ == "__main__":

@@ -1,0 +1,13 @@
+schemaVersion: "1.3"
+slice: depot.record_collection
+kind: command
+bc: depot
+owner: depot-team
+status: live
+summary: Record that a parcel was collected.
+generator: essentials
+language: java
+handles: [RecordCollection]
+writes: [Parcel]
+tests:
+  unit: { present: false }

@@ -60,13 +60,10 @@ class ShardOwnedOrderedIdleCostIT {
     private static final Duration WINDOW = Duration.ofSeconds(3);
 
     private static final ShardOwnerSettings STEADY_SWEEP =
-            new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
-                                   Duration.ofSeconds(10),
-                                   SWEEP,                    // sweepInterval
-                                   1_000, 8, Duration.ofMillis(500),
-                                   SWEEP,                    // maxSweepInterval: no backoff
-                                   2, Duration.ofSeconds(5), Duration.ofSeconds(30),
-                                   Duration.ofSeconds(60));
+            ShardOwnerSettings.builder()
+                              .setSweepInterval(SWEEP)
+                              .setMaxSweepInterval(SWEEP) // no backoff
+                              .build();
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();

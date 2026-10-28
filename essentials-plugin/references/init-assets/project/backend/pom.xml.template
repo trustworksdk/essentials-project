@@ -144,6 +144,12 @@
             <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
+        <dependency>
+            <!-- {{why:S2.1:org.objenesis:objenesis}} -->
+            <groupId>org.objenesis</groupId>
+            <artifactId>objenesis</artifactId>
+            <version>${objenesis.version}</version>
+        </dependency>
 <!-- IF web=webmvc -->
         <dependency>
             <!-- {{why:S2.1:reactor-core}} -->

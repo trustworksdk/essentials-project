@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.queue.shardowned.adapter;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
@@ -26,9 +27,11 @@ import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
 // Message and QueuedMessage. Those three are written out in full wherever an engine one is meant, so
 // that no reader has to work out which namespace a bare name came from.
 import dk.trustworks.essentials.components.queue.shardowned.spi.DeadLetter;
+import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueue;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueues;
 import dk.trustworks.essentials.components.queue.shardowned.spi.QueueDepth;
+import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
 import javax.sql.DataSource;
@@ -36,6 +39,7 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChain.sortInterceptorsByOrder;
@@ -59,9 +63,15 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * transaction. {@code Inboxes.handleMessage} opens its own {@code UnitOfWork} inside the handler, so
  * nothing changes for it.
  * <p>
- * Enqueueing <em>is</em> transactional. With a {@link HandleAwareUnitOfWork} in progress the messages
- * are written on that unit of work's own connection, so they commit or roll back with the caller's
- * work. That is the Outbox's entire purpose and it is preserved exactly.
+ * Enqueueing <em>is</em> transactional. The enqueue runs inside
+ * {@link UnitOfWorkFactory#withUnitOfWork(dk.trustworks.essentials.shared.functional.CheckedFunction)}, as
+ * {@code PostgresqlDurableQueues} does, and the messages are written on that {@link HandleAwareUnitOfWork}'s own
+ * connection, so they commit or roll back with the caller's work. That joins an Essentials {@code UnitOfWork} in
+ * progress <em>and</em> a plain Spring transaction ({@code @Transactional}, {@code TransactionTemplate}) when the
+ * factory is Spring-aware. Until 0.60.1 only an already-bound {@code UnitOfWork} was joined, so under a plain Spring
+ * transaction the enqueue committed on its own and survived a rollback. Outside any transaction the factory starts a
+ * unit of work and commits it. Built without a {@link UnitOfWorkFactory}, every enqueue commits on its own, and the
+ * builder says so once at WARN.
  *
  * <h2>Queue entry ids carry the queue name</h2>
  * See {@link QueueEntryIdCodec}. Ids minted here look like {@code orders:u-3-1042}, and an id from a
@@ -94,7 +104,9 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * Two consequences worth knowing before writing one:
  * <ul>
  *     <li><b>{@link GetNextMessageReadyForDelivery} is never intercepted</b>, because it throws
- *         (below). It is the one operation of the twenty-one an interceptor cannot observe here.</li>
+ *         (below). Together with {@code ReleaseUndeliveredMessage} (next item) it is an operation an interceptor cannot observe here.</li>
+ *     <li><b>{@code ReleaseUndeliveredMessage} is not intercepted as such</b>: this class inherits the default of {@link DurableQueues},
+ *         which falls back to {@code retryMessage}, so an interceptor sees a {@code RetryMessage} instead.</li>
  *     <li><b>A {@code HandleQueuedMessage} interceptor receives the partial message.</b> On the
  *         delivery path the engine hands over {@code (key, payload, payloadType)} only, so
  *         {@link ShardOwnedQueuedMessage#getId()} and {@code getTotalDeliveryAttempts()} throw rather
@@ -149,13 +161,52 @@ public class ShardOwnedDurableQueues implements DurableQueues {
 
     private final List<DurableQueuesInterceptor> interceptors = new CopyOnWriteArrayList<>();
 
-    private volatile boolean started;
+    /**
+     * Whether a consumer may start: once this reads false, neither {@link #start()}'s loop nor {@link #doConsumeFromQueue}
+     * starts another consumer, and one whose start was already under way when it went false is stopped once that start
+     * returns. Set by {@link #start()} before it starts the consumers and cleared by {@link #stop()} and a failed start
+     * before they stop them. {@link #doConsumeFromQueue} registers a consumer before it reads this; it and {@link #start()}'s
+     * loop read it before each consumer's start, and again once that start has returned - the second time, when it reads
+     * false, under the consumer's lifecycle lock ({@link #stopConsumerStartedPastAStop}), so a {@link #start()} that set it
+     * again meanwhile is not undone.
+     * <p>
+     * It does not say that no consumer is running. While {@link #stop()} or a failed start is stopping the consumers, the
+     * ones it has not reached yet are still running although this already reads false. A consumer whose start was still
+     * subscribing when the stop gave up waiting for it ({@link ShardOwnedDurableQueueConsumer#stop()}) is not started, but
+     * the lanes its queue's {@code consume()} has already started may deliver until that start has stopped them. And a
+     * critical error escaping {@link #start()} leaves this reading true over whatever that start had started.
+     */
+    private final AtomicBoolean started = new AtomicBoolean();
+
+    /**
+     * What a test does as a consumer is about to be started ({@link StartHook}); {@link StartHook#NONE} unless a test passed
+     * one to the constructor. Fixed at construction, so nothing can swap it while consumers start.
+     */
+    private final StartHook startHook;
+
+    private final AtomicBoolean warnedAboutUnitOfWorkWithoutConnection = new AtomicBoolean();
+
+    private final EnqueueOutsideUnitOfWorkGuard enqueueOutsideUnitOfWorkGuard = new EnqueueOutsideUnitOfWorkGuard(ShardOwnedDurableQueues.class);
 
     ShardOwnedDurableQueues(MessageQueues queues,
                             JSONSerializer jsonSerializer,
                             UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory,
                             DataSource dataSource,
                             int autoRegisterShardCount) {
+        this(queues, jsonSerializer, unitOfWorkFactory, dataSource, autoRegisterShardCount, StartHook.NONE);
+    }
+
+    /**
+     * @param startHook what a test does as a consumer is about to be started ({@link StartHook}); {@link StartHook#NONE}
+     *                  outside tests
+     */
+    ShardOwnedDurableQueues(MessageQueues queues,
+                            JSONSerializer jsonSerializer,
+                            UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory,
+                            DataSource dataSource,
+                            int autoRegisterShardCount,
+                            StartHook startHook) {
+        this.startHook = requireNonNull(startHook, "No startHook provided");
         this.queues = requireNonNull(queues, "No queues provided");
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer provided");
         this.unitOfWorkFactory = unitOfWorkFactory;
@@ -164,6 +215,16 @@ public class ShardOwnedDurableQueues implements DurableQueues {
         requireTrue(autoRegisterShardCount == 0 || dataSource != null,
                     "autoRegisterShardCount needs a dataSource to register with");
         requireTrue(autoRegisterShardCount >= 0, "autoRegisterShardCount must not be negative");
+        if (unitOfWorkFactory == null) {
+            log.warn("ShardOwnedDurableQueues was built without a UnitOfWorkFactory: every enqueue commits on its own connection "
+                     + "and is NOT rolled back with the caller's transaction, so an Outbox on this engine is not transactional. "
+                     + "Call setUnitOfWorkFactory(...) on the builder - from 0.61 the builder will require one.");
+            EssentialsRunReport.addToCurrent(EssentialsRunReport.Finding.warn(
+                    "ShardOwnedDurableQueues",
+                    "built without a UnitOfWorkFactory: every enqueue commits on its own connection and is NOT rolled back with the caller's transaction, "
+                            + "so an Outbox on this engine is not transactional",
+                    "Call setUnitOfWorkFactory(...) on ShardOwnedDurableQueuesBuilder - from 0.61 the builder requires one"));
+        }
     }
 
     public static ShardOwnedDurableQueuesBuilder builder() {
@@ -172,21 +233,81 @@ public class ShardOwnedDurableQueues implements DurableQueues {
 
     // ------------------------------------------------------------- lifecycle
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Starts every consumer or none. A consumer's start that fails with anything but a critical error
+     * ({@link Exceptions#isCriticalError}) - a {@link DurableQueueException} for a failed subscription, or a
+     * {@code QueueObserver}'s non-critical {@code Error} for an acquisition, say - stops every consumer, each one even when
+     * an earlier one's stop throws, and escapes as it was thrown, with every stop's failure added to it as suppressed
+     * ({@link Exceptions#forEachCollectingFailures}). This then reports itself not started, so a later {@code start()}
+     * runs again. It used to start them one after the other and stop at the first throw, which left the consumers after
+     * it unstarted while this reported itself started. A critical error - a start's, escaping untouched with nothing
+     * stopped, or a stop's, ending the stopping at once with the start's failure added to it as suppressed - leaves this
+     * started, so a {@link #stop()} still stops what it left running.
+     * <p>
+     * Does nothing when this is already started, as {@code PostgresqlDurableQueues.start()} does: starting the consumers
+     * again would, on a failure, stop the ones that had been running all along. A consumer stopped through its own
+     * {@link DurableQueueConsumer#stop()} is started again by its own {@link DurableQueueConsumer#start()}, or by this
+     * after a {@link #stop()}.
+     * <p>
+     * This reports itself started from the moment the start begins, so a consumer {@code consumeFromQueue} adds
+     * meanwhile starts itself rather than being missed by the loop below. A failed start reports itself not started
+     * before it stops the consumers, so one added while it stops them does not start.
+     * <p>
+     * A {@link #stop()} called while this is still starting the consumers ends the start: this starts no consumer once it
+     * reads itself stopped, and stops the one whose start returned after the stop, as {@code consumeFromQueue} does
+     * ({@link #stopConsumerStartedPastAStop}). The start used to go on through every consumer, so a stop that came while
+     * one consumer's start was held up - in its queue's {@code consume()}, by a network partition, say - and that gave up
+     * waiting for it, returned before the start reached the consumers after it; the start then started them, consuming
+     * while this reported itself not started, with no stop to come if that stop was the application's shutdown.
+     */
     @Override
     public void start() {
-        started = true;
-        consumers.values().forEach(ShardOwnedDurableQueueConsumer::start);
+        if (!started.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            for (var consumer : consumers.values()) {
+                if (!started.get()) {
+                    break;
+                }
+                startHook.beforeStartingConsumer(consumer.queueName());
+                consumer.start();
+                if (stopConsumerStartedPastAStop(consumer)) {
+                    break;
+                }
+            }
+        } catch (RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            started.set(false);
+            Exceptions.forEachCollectingFailures(consumers.values(), ShardOwnedDurableQueueConsumer::stop, e);
+            throw e;
+        }
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Every consumer is stopped even when an earlier one's stop throws - a {@code QueueObserver} failing for a release,
+     * say, with a {@code RuntimeException} or a non-critical {@code Error} such as a test double's {@code AssertionError} -
+     * and the first such failure is thrown, as it was thrown, once all of them have stopped, the others added to it as
+     * suppressed ({@link Exceptions#forEachThenThrowFirst}). Stopping at the first throw left the consumers after it
+     * running, and this reporting itself started. Only a critical error ({@link Exceptions#isCriticalError}) ends the
+     * stopping at once; this reports itself stopped then too.
+     * <p>
+     * This reports itself stopped from the moment the stop begins, so a consumer {@code consumeFromQueue} adds while the
+     * consumers are being stopped does not start.
+     */
     @Override
     public void stop() {
-        consumers.values().forEach(ShardOwnedDurableQueueConsumer::stop);
-        started = false;
+        started.set(false);
+        Exceptions.forEachThenThrowFirst(consumers.values(), ShardOwnedDurableQueueConsumer::stop);
     }
 
     @Override
     public boolean isStarted() {
-        return started;
+        return started.get();
     }
 
     // ------------------------------------------------------------ properties
@@ -194,6 +315,27 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public Optional<UnitOfWorkFactory<? extends UnitOfWork>> getUnitOfWorkFactory() {
         return Optional.ofNullable(unitOfWorkFactory);
+    }
+
+    /**
+     * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@link UnitOfWork} or Spring transaction?
+     * Default {@code false}: such an enqueue commits on its own, and each call site's first one is logged at WARN. In Spring Boot:
+     * {@value EnqueueOutsideUnitOfWorkGuard#REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}. See {@link EnqueueOutsideUnitOfWorkGuard}.
+     * Without a {@link UnitOfWorkFactory} every enqueue is outside one, so requiring it then fails every enqueue - the
+     * builder refuses that combination.
+     *
+     * @param requireActiveUnitOfWorkForEnqueue {@code true} to throw {@link NoActiveUnitOfWorkException} instead
+     */
+    public void setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+        enqueueOutsideUnitOfWorkGuard.setRequireActiveUnitOfWork(requireActiveUnitOfWorkForEnqueue);
+    }
+
+    /**
+     * @return whether an enqueue outside a {@link UnitOfWork} or Spring transaction fails - see
+     * {@link #setRequireActiveUnitOfWorkForEnqueue(boolean)}
+     */
+    public boolean isRequireActiveUnitOfWorkForEnqueue() {
+        return enqueueOutsideUnitOfWorkGuard.isRequireActiveUnitOfWork();
     }
 
     @Override
@@ -256,6 +398,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public QueueEntryId queueMessage(QueueMessage operation) {
         requireNonNull(operation, "No operation provided");
+        enqueueOutsideUnitOfWorkGuard.checkEnqueue(operation.getQueueName(), unitOfWorkFactory);
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -268,6 +411,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public List<QueueEntryId> queueMessages(QueueMessages operation) {
         requireNonNull(operation, "No operation provided");
+        enqueueOutsideUnitOfWorkGuard.checkEnqueue(operation.getQueueName(), unitOfWorkFactory);
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -289,9 +433,48 @@ public class ShardOwnedDurableQueues implements DurableQueues {
         var queue    = resolve(queueName);
         var messages = messagesToQueue.stream().map(message -> toEngineMessage(message, delay)).toList();
 
-        var ids = onQueue(queueName, "queue " + messages.size() + " message(s) on '" + queueName + "'",
-                          () -> enqueueInCurrentUnitOfWork(queue, messages));
+        var what     = "queue " + messages.size() + " message(s) on '" + queueName + "'";
+
+        List<MessageId> ids;
+        if (unitOfWorkFactory == null) {
+            ids = onQueue(queueName, what, () -> queue.enqueue(messages));
+        } else {
+            try {
+                // withUnitOfWork, not getCurrentUnitOfWork(): it joins an Essentials UnitOfWork already bound AND a plain
+                // Spring transaction (@Transactional / TransactionTemplate) nothing has bound one to yet - the Spring-aware
+                // factories create one for that transaction. Outside any transaction it starts a UnitOfWork and commits it.
+                ids = unitOfWorkFactory.withUnitOfWork(unitOfWork -> unitOfWork instanceof HandleAwareUnitOfWork handleAwareUnitOfWork
+                                                                     ? onQueue(queueName, what, () -> enqueueWakingAfterCommit(queue, handleAwareUnitOfWork, messages))
+                                                                     : enqueueOnOwnConnection(queue, queueName, what, messages, unitOfWork));
+            } catch (UnitOfWorkException e) {
+                // withUnitOfWork wraps whatever the enqueue threw. The queue-naming DurableQueueException is what this
+                // adapter has always thrown for a failed enqueue, so callers keep getting it.
+                if (e.getCause() instanceof DurableQueueException durableQueueException) {
+                    throw durableQueueException;
+                }
+                throw e;
+            }
+        }
         return ids.stream().map(id -> QueueEntryIdCodec.encode(queueName, id)).toList();
+    }
+
+    /**
+     * The unit of work in progress carries no JDBC connection (it is not a {@link HandleAwareUnitOfWork} - a MongoDB
+     * one, say), so the enqueue cannot join it and commits on the engine's own connection. Said once, at WARN: it is a
+     * wiring mistake the application can fix, and a rollback will not undo these rows.
+     */
+    private List<MessageId> enqueueOnOwnConnection(MessageQueue queue,
+                                                   QueueName queueName,
+                                                   String what,
+                                                   List<dk.trustworks.essentials.components.queue.shardowned.spi.Message> messages,
+                                                   UnitOfWork unitOfWork) {
+        if (warnedAboutUnitOfWorkWithoutConnection.compareAndSet(false, true)) {
+            log.warn("[{}] The UnitOfWork in progress ({}) is not a HandleAwareUnitOfWork, so the shard-owned engine cannot write "
+                     + "on its connection: this and every later such enqueue commits on its own and is NOT rolled back with the "
+                     + "caller's work. Configure a HandleAwareUnitOfWorkFactory (JDBI) over the engine's DataSource. Logged once.",
+                     queueName, unitOfWork.getClass().getName());
+        }
+        return onQueue(queueName, what, () -> queue.enqueue(messages));
     }
 
     /**
@@ -334,21 +517,128 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                 .proceed();
     }
 
+    /**
+     * Registers the consumer, and starts it when this is started.
+     * <p>
+     * A start that fails with anything but a critical error ({@link Exceptions#isCriticalError}) retires the consumer
+     * ({@link ShardOwnedDurableQueueConsumer#retire()}) and deregisters it before its failure escapes, so
+     * {@code consumeFromQueue} for the same queue can be called again; left registered, it refused that until the whole
+     * {@code DurableQueues} was stopped. Retired, because the consumer was registered - and so visible to a concurrent
+     * {@link #start()}'s loop - from before its start: that loop may have taken it already, and its start of the consumer,
+     * after this one failed, used to subscribe a consumer nothing reached any more - no {@link #stop()}, no caller, since
+     * {@code consumeFromQueue} threw - while a retried {@code consumeFromQueue} registered a second consumer on the queue.
+     * Retiring stops a subscription such a start has already made, and keeps one from starting it later. What that stop
+     * throws is added to the start's failure as suppressed. A critical error escapes untouched, as from {@link #start()}.
+     * <p>
+     * The consumer is registered before {@link #started} is read, and {@link #start()} and {@link #stop()} set it before
+     * they go over the consumers. So a start or stop either finds the consumer when it goes over them, or has set the flag
+     * before it is read here. A stop that clears it after it was read here finds the consumer, and stops it; but that stop
+     * may run before the consumer's start has begun subscribing, find nothing to stop, and the start then subscribe. Which
+     * is why the flag is read again once the start has returned, and the consumer stopped when it has gone false
+     * ({@link #stopConsumerStartedPastAStop}).
+     */
     private DurableQueueConsumer doConsumeFromQueue(ConsumeFromQueue operation) {
         var queueName = operation.getQueueName();
-        var existing  = consumers.get(queueName);
-        if (existing != null) {
-            throw new IllegalStateException("There is already a consumer on queue '" + queueName + "' in this process. "
-                                                    + "Two consumers for one queue would register as two instances and each be "
-                                                    + "allowed half its shards.");
+        if (consumers.containsKey(queueName)) {
+            throw alreadyConsuming(queueName);
         }
         var consumer = new ShardOwnedDurableQueueConsumer(operation, resolve(queueName), jsonSerializer,
                                                           this::stopConsuming, this::handleWithInterceptors);
-        consumers.put(queueName, consumer);
-        if (started) {
-            consumer.start();
+        if (consumers.putIfAbsent(queueName, consumer) != null) {
+            throw alreadyConsuming(queueName);
+        }
+        if (started.get()) {
+            try {
+                startHook.beforeStartingAddedConsumer(queueName);
+                consumer.start();
+            } catch (RuntimeException | Error e) {
+                Exceptions.rethrowIfCriticalError(e);
+                try {
+                    Exceptions.forEachCollectingFailures(List.of(consumer), failed -> {
+                        startHook.beforeRetiringAddedConsumer(queueName);
+                        failed.retire();
+                    }, e);
+                } finally {
+                    consumers.remove(queueName, consumer);
+                }
+                throw e;
+            }
+            stopConsumerStartedPastAStop(consumer);
         }
         return consumer;
+    }
+
+    private static IllegalStateException alreadyConsuming(QueueName queueName) {
+        return new IllegalStateException("There is already a consumer on queue '" + queueName + "' in this process. "
+                                                 + "Two consumers for one queue would register as two instances and each be "
+                                                 + "allowed half its shards.");
+    }
+
+    /**
+     * Called once a consumer's start - {@code consumeFromQueue}'s or {@link #start()}'s - has returned: stop the consumer
+     * if this was stopped meanwhile, or a failed {@link #start()} marked it not started, and say whether it was. It stays
+     * registered, so the next {@link #start()} starts it.
+     * <p>
+     * A {@link #started} that reads true needs nothing more: a stop that clears it later finds the consumer started, and
+     * stops it. One that reads false is read again under the consumer's lifecycle lock, and the consumer stopped only when
+     * it still reads false there ({@link ShardOwnedDurableQueueConsumer#stopIf}): a {@link #start()} that set it again
+     * meanwhile has either started the consumer already, or starts it again once this stop has let go of the lock. A plain
+     * stop after the read could undo such a start, leaving this reporting itself started with the consumer stopped, and the
+     * next {@code start()} doing nothing.
+     * <p>
+     * Whatever the consumer's stop throws is logged at WARN rather than thrown: the consumer is registered and stopped
+     * either way (a consumer's stop throws only once its subscription has stopped), and the caller did not ask for the stop.
+     *
+     * @return whether this read itself not started, the consumer then stopped
+     */
+    private boolean stopConsumerStartedPastAStop(ShardOwnedDurableQueueConsumer consumer) {
+        if (started.get()) {
+            return false;
+        }
+        try {
+            return consumer.stopIf(() -> !started.get());
+        } catch (RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            log.warn("Consumer '{}' on queue '{}' finished starting after ShardOwnedDurableQueues was stopped, or after a failed "
+                             + "start() had marked it not started, and then failed to stop. "
+                             + "It stays registered and is started by the next start()",
+                     consumer.consumerName(), consumer.queueName(), e);
+            return true;
+        }
+    }
+
+    /**
+     * What a test does as a consumer is about to be started, or retired after its start failed, to hold the thread at a
+     * point no real start can be made to stop at: between reading {@code started} and starting the consumer, or between
+     * the failed start and retiring the consumer. Passed to the package-private constructor and fixed for this object's
+     * life; every one built otherwise has {@link #NONE}, which does nothing. What {@link #beforeStartingAddedConsumer} or
+     * {@link #beforeStartingConsumer} throws escapes as the consumer's start would.
+     */
+    interface StartHook {
+        StartHook NONE = new StartHook() { };
+
+        /**
+         * Told the queue of a consumer {@code consumeFromQueue} has registered, and read {@code started} true for, just
+         * before it starts the consumer.
+         */
+        default void beforeStartingAddedConsumer(QueueName queueName) {
+        }
+
+        /**
+         * Told the queue of a consumer {@code start()}'s loop has read {@code started} true for, just before it starts
+         * the consumer.
+         */
+        default void beforeStartingConsumer(QueueName queueName) {
+        }
+
+        /**
+         * Told the queue of a consumer whose start {@code consumeFromQueue} has seen fail, just before it retires the
+         * consumer ({@link ShardOwnedDurableQueueConsumer#retire()}) - after the failed start has let go of the consumer's
+         * lifecycle lock, so a concurrent {@code start()}'s loop may take that lock first. What it throws is added to the
+         * start's failure as suppressed, and the consumer is then neither retired nor registered.
+         */
+        default void beforeRetiringAddedConsumer(QueueName queueName) {
+        }
     }
 
     /**
@@ -789,8 +1079,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     }
 
     /**
-     * Enqueue in the {@link UnitOfWork} in progress, waking the owners after it commits; without one the engine
-     * commits the batch itself and wakes them after that.
+     * Enqueue in {@code unitOfWork}, waking the owners after it commits.
      * <p>
      * Not with the engine's in-transaction notification: a transaction that sends {@code NOTIFY} takes, at commit, a
      * lock every notifying transaction in the cluster shares and holds it through its WAL flush, so every enqueueing
@@ -798,12 +1087,8 @@ public class ShardOwnedDurableQueues implements DurableQueues {
      * demo's peaks. The wake-up is registered before the rows are written, so a unit of work that cannot carry the
      * callback gets the in-transaction notification instead.
      */
-    private List<dk.trustworks.essentials.components.queue.shardowned.spi.MessageId> enqueueInCurrentUnitOfWork(
-            MessageQueue queue, List<dk.trustworks.essentials.components.queue.shardowned.spi.Message> messages) throws SQLException {
-        var unitOfWork = currentHandleAwareUnitOfWork();
-        if (unitOfWork == null) {
-            return queue.enqueue(messages);
-        }
+    private List<MessageId> enqueueWakingAfterCommit(MessageQueue queue, HandleAwareUnitOfWork unitOfWork,
+                                                     List<dk.trustworks.essentials.components.queue.shardowned.spi.Message> messages) throws SQLException {
         var connection = unitOfWork.handle().getConnection();
         var wakeUp     = new PendingWakeUp(queue);
         try {
@@ -822,7 +1107,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
      */
     private static final class PendingWakeUp {
         private final MessageQueue                                                              queue;
-        private volatile List<dk.trustworks.essentials.components.queue.shardowned.spi.MessageId> ids = List.of();
+        private volatile List<MessageId> ids = List.of();
 
         private PendingWakeUp(MessageQueue queue) {
             this.queue = queue;
@@ -869,19 +1154,6 @@ public class ShardOwnedDurableQueues implements DurableQueues {
             return false;
         }
     };
-
-    /**
-     * The {@link HandleAwareUnitOfWork} in progress, or {@code null} if there is none.
-     */
-    private HandleAwareUnitOfWork currentHandleAwareUnitOfWork() {
-        if (unitOfWorkFactory == null) {
-            return null;
-        }
-        return unitOfWorkFactory.getCurrentUnitOfWork()
-                                .filter(HandleAwareUnitOfWork.class::isInstance)
-                                .map(HandleAwareUnitOfWork.class::cast)
-                                .orElse(null);
-    }
 
     /**
      * The JDBC connection of the {@link UnitOfWork} in progress, or {@code null} if there is none.

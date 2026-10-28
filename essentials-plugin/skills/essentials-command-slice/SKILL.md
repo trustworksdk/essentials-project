@@ -215,8 +215,25 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py render --lang <language> -
 ```
 
 Exit 2 means nothing was written: relay the message (an existing slice directory, a lane that does
-not match the BC's directories, the Kotlin aggregate lane, a template drift) and stop. The family is
-`command` on the decider lane, `command_service_entity` on the service-entity lane and
+not match the BC's directories, the Kotlin aggregate lane, a template drift) and stop.
+
+**Exit 4 means the shell may not write the project** (a read-only filesystem, or a sandbox that lets
+the Write tool write but not Bash). Nothing was written. Do not stop, and never render a file by hand;
+take the emit fallback (`slice-authoring.md` §4b):
+
+1. Run the same command with `--emit` added, once. It writes nothing; its JSON report lists every file
+   in `files` with `path` (relative to `<projectRoot>`), `action` and `content`. If the output is too
+   large to read whole, run it again with `--only <path>` for each path in `files`: that prints the one
+   file's content, raw.
+2. Write every file with the Write tool at `<projectRoot>/<path>`, `content` verbatim: no edit, and no
+   TODO filled on the way. Never import or patch `render-slice.py`.
+3. Then run the same command with `verify` in place of `render` and without `--emit`. Exit 0: the slice is
+   rendered; go on from the emitted report as after a plain render. Exit 1 names each file `missing` or
+   `differs`: report them and stop. Never repair one by hand.
+
+Say in the final report, in one line, that the files were written through the emit fallback.
+
+The family is `command` on the decider lane, `command_service_entity` on the service-entity lane and
 `command_aggregate` on the aggregate lane; the tables below are what it writes.
 
 **Decider lane — `templates/<language>/command/`:**

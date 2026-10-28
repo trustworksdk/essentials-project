@@ -60,6 +60,10 @@ jobs:
       - name: ESS id catalogue (LLM/LLM-traps.md)
         run: scripts/plugin-check.sh step ess-ids --base HEAD^1
 
+      # The release-notes conversion and reset skeleton prepare-release.py writes; nothing else exercises it between releases.
+      - name: prepare-release self-test
+        run: scripts/plugin-check.sh step prepare-release
+
       # Claude Code updates an installed plugin only when plugin.json's version string changes, so a plugin change
       # without a new version never reaches a user. An LLM/ edit counts: it regenerates references/llm/.
       - name: Plugin version moves with the plugin
@@ -72,14 +76,23 @@ jobs:
       - name: Slice manifest lint (slice-lint.py)
         run: scripts/plugin-check.sh step slice-lint
 
+      - name: Slice manifest pre-commit hook (test_pre_commit_hook.py)
+        run: scripts/plugin-check.sh step lint-hook
+
       - name: Slice templates render to the committed goldens (render-slice.py)
         run: scripts/plugin-check.sh step render-slice
 
       - name: Slice source facts (slice-source.py)
         run: scripts/plugin-check.sh step slice-source
 
-      - name: Slice index and graph (slice-index.py)
+      - name: Slice index, graph and atlas data (slice-index.py)
         run: scripts/plugin-check.sh step slice-index
+
+      - name: Slice Atlas layout (slice_atlas_layout.py)
+        run: scripts/plugin-check.sh step slice-atlas-layout
+
+      - name: Slice enrich (slice-enrich.py)
+        run: scripts/plugin-check.sh step slice-enrich
 
       - name: Slice law views per lane and kind (slice-law.py)
         run: scripts/plugin-check.sh step slice-law
@@ -93,6 +106,9 @@ jobs:
 
       - name: Review signatures (review-scan.py)
         run: scripts/plugin-check.sh step review-scan
+
+      - name: Release-move notes (migration-plan.py)
+        run: scripts/plugin-check.sh step migration-plan
 
       - name: Docs search (search.sh)
         run: scripts/plugin-check.sh step docs-search
@@ -134,9 +150,10 @@ jobs:
           echo "chrome-headless-shell $CHROME_VERSION"
           echo "path=$RUNNER_TEMP/chrome-headless-shell-linux64/chrome-headless-shell" >> "$GITHUB_OUTPUT"
 
-      # The slice-map page's layout is JavaScript; the check runs it in the browser and parses the DOM it leaves.
+      # The slice-map and Slice Atlas pages draw in JavaScript; the check runs them in the browser and parses the DOM
+      # they leave (the Atlas page is built first with slice-index.py atlas, so uv is needed too).
       # Exit 3 means "no Chrome, skipped", which locally is a notice and here is a failure.
-      - name: slice-map page renders (render-check.py)
+      - name: slice-map and Slice Atlas pages render (render-check.py)
         env:
           PLUGIN_CHECK_CHROME: ${{ steps.chrome.outputs.path }}
         run: scripts/plugin-check.sh step render-check
@@ -153,7 +170,19 @@ jobs:
       - name: Every example module is excluded from the release
         run: python3 scripts/check-release-exclusions.py
 
-  # Full build including Testcontainers-backed integration tests.
+  # The context-guard hook (.claude/hooks/context-guard.sh) sizes each agent's context window and hands its saved state
+  # back after compaction; nothing else exercises it, so a regression would only show as a missed or wrong warning in a
+  # live session. bash and jq (both on the runner), seconds.
+  context-guard:
+    name: context-guard hook
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: context-guard window sizing, restore and snapshot (test-context-guard.sh)
+        run: bash scripts/test-context-guard.sh
+
+  # Integration tests only (-DskipUTs): the `unit` job below runs every unit test, on this JDK too, so running them
+  # here again only lengthened the critical path. The unit and integration layers report in separate jobs.
   verify:
     name: verify (JDK ${{ matrix.java-version }})
     strategy:
@@ -181,25 +210,15 @@ jobs:
           docker pull apache/kafka-native:4.3.1
 
       - name: Build with Maven
-        run: mvn -B verify --file pom.xml -DskipDependencyCheck=true
+        run: mvn -B verify --file pom.xml -DskipDependencyCheck=true -DskipUTs
 
       - name: Upload JUnit test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: junit-results-jdk${{ matrix.java-version }}
-          path: |
-            **/target/surefire-reports/
-            **/target/failsafe-reports/
+          path: '**/target/failsafe-reports/'
           retention-days: 2
-
-      - name: Test Summary · Unit
-        if: always()
-        uses: test-summary/action@37b508cfee6d4d080eedd00b5bb240a6a784a6a5 # v2.6
-        with:
-          paths: '**/target/surefire-reports/TEST-*.xml'
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Test Summary · Integration
         if: always()
@@ -209,13 +228,14 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
 
-  # Compile + unit tests only on the JDKs newer than the baseline. No Docker, so these finish in a couple of minutes.
+  # Compile + unit tests on every supported JDK, the baseline 25 included (`verify` skips them). No Docker, so these
+  # finish in a couple of minutes, which is also when a unit-test failure shows.
   unit:
     name: unit (JDK ${{ matrix.java-version }})
     strategy:
       fail-fast: false
       matrix:
-        java-version: [ '26', '27' ]
+        java-version: [ '25', '26', '27' ]
     runs-on: ubuntu-latest
 
     steps:
@@ -250,10 +270,11 @@ jobs:
   # cells and the slice templates and fixtures on rendered host projects. In parallel with `verify`, whose wall clock
   # stays untouched. The generated projects depend on DEV-SNAPSHOT artifacts, which are not on Central, so this job
   # installs the reactor subset they name once and hands it on as an artifact. The subset is read from the init pom
-  # templates, so a template that starts using another module installs it without a workflow edit. Each scaffold job
-  # keeps its own Maven cache (key: its job id), so none of them replaces the one `verify` restores.
-  # These jobs call scripts/plugin-scaffold.sh directly rather than `plugin-check.sh scaffold`: that wrapper is the local
-  # entry point (full reactor install, then both modes), and CI has its own subset install, artifact hand-off and caches.
+  # templates (scripts/plugin-scaffold.sh modules), so a template that starts using another module installs it without
+  # a workflow edit. Each scaffold job keeps its own Maven cache (key: its job id), so none of them replaces the one
+  # `verify` restores. These jobs call scripts/plugin-scaffold.sh directly rather than `plugin-check.sh scaffold`: that
+  # wrapper is the local entry point (the same subset install, then every case in one queue), and CI has its artifact
+  # hand-off and caches.
   scaffold-install:
     name: scaffold · install the reactor subset
     runs-on: ubuntu-latest
@@ -271,21 +292,12 @@ jobs:
           key: scaffold-m2-${{ github.job }}-${{ hashFiles('**/pom.xml') }}
           restore-keys: scaffold-m2-${{ github.job }}-
 
+      # The subset and the Maven command live in scripts/plugin-scaffold.sh (`modules`, `install`), which
+      # `plugin-check.sh scaffold` runs locally too.
       - name: Install the modules the generated projects depend on
         run: |
-          modules=$(python3 - <<'PY'
-          import re
-          ids = set()
-          for f in ("pom.xml.template", "backend/pom.xml.template"):
-              text = open("essentials-plugin/references/init-assets/project/" + f).read()
-              for block in re.findall(r"<dependency>(.*?)</dependency>", text, re.S):
-                  if "<groupId>dk.trustworks.essentials" in block:
-                      ids.update(re.findall(r"<artifactId>([\w.-]+)</artifactId>", block))
-          print(",".join(":" + a for a in sorted(ids)))
-          PY
-          )
-          echo "modules: $modules (and what they need, -am)"
-          mvn -B -ntp install -DskipTests -DskipDependencyCheck=true -am -pl "$modules"
+          echo "modules: $(scripts/plugin-scaffold.sh modules) (and what they need, -am)"
+          scripts/plugin-scaffold.sh install
           tar -C ~/.m2/repository -cf "$RUNNER_TEMP/essentials-reactor.tar" dk/trustworks/essentials
           # Not cached: the next run installs fresh ones.
           rm -rf ~/.m2/repository/dk/trustworks/essentials

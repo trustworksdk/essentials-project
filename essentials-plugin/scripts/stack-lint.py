@@ -26,6 +26,11 @@ project's release is `facts.essentialsVersion` (its `essentials.version` propert
 Essentials dependency's version, else `--essentials-version`), and `facts.essentialsBehind` is
 null when that release is unknown or not a version number.
 
+The frontend checks (S7, S8) read the paths `orval.config.*` names — output target, schemas and mutator —
+and accept any tooling's build-time variable read. `facts.frontendTooling` (`vite`, `next`, `cra`, `other`;
+null without a frontend) only chooses the variable spelling a fix text names. A config whose paths are
+computed rather than written leaves the checks that need them in `notRun`.
+
 Usage
 -----
     stack-lint.py [ROOT] [options]
@@ -56,6 +61,7 @@ Standard library only.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -98,7 +104,7 @@ MONGO_MOVED["spring.data.mongodb.uuid-representation"] = "spring.mongodb.represe
 MONGO_MOVED["spring.data.mongodb.grid-fs-database"] = "spring.data.mongodb.gridfs.database"
 # Looked up by relaxed-binding form (see norm_key).
 MONGO_MOVED = {re.sub(r"[-_]", "", k.lower()): v for k, v in MONGO_MOVED.items()}
-# Declaring these instead of a starter is how a context ends up half-configured (contract :75).
+# Declaring these instead of a starter is how a context ends up half-configured (contract :87).
 LOOSE_COMPONENTS = {
     "postgresql-queue", "postgresql-distributed-fenced-lock", "postgresql-event-store",
     "spring-postgresql-event-store", "springdata-mongo-queue", "springdata-mongo-distributed-fenced-lock",
@@ -155,108 +161,125 @@ RULES_LIST = [
     Rule("s1-kotlin-compiler-floor", "S1", "Blocking",
          [("C", 55, "application runs on"), ("K", 38, "The compiler floor is nonetheless")],
          "kotlin.version below the Kotlin compiler floor stack-pins.md states", target_only=True),
+    # Patch floors within a supported line: a lag, not a break, so Advisory and never target-only — the
+    # application runs on the line it is on, and the move is offered on its own (upgrade Step 4).
+    Rule("s1-boot-patch", "S1", "Advisory", [("C", 62, "at least the Spring Boot patch release")],
+         "Spring Boot on the line stack-pins.md targets but below its patch release",
+         "root pom.xml spring-boot.version: the patch the Essentials build is tested on"),
+    Rule("s1-kotlin-patch", "S1", "Advisory",
+         [("C", 64, "`kotlin.version` pin: those are the releases"), ("K", 38, "The compiler floor is nonetheless")],
+         "kotlin.version at or above the compiler floor but below the stack-pins.md pin",
+         "root pom.xml kotlin.version: the compiler the Essentials build uses"),
     # S2 ---------------------------------------------------------------------------------------
-    Rule("s2-one-starter", "S2", "Blocking", [("C", 68, "MUST pick exactly one persistence profile"),
-                                              ("C", 80, "declaring the *components* individually")],
+    Rule("s2-one-starter", "S2", "Blocking", [("C", 75, "MUST pick exactly one persistence profile"),
+                                              ("C", 87, "declaring the *components* individually")],
          "no persistence starter, or starters of two profiles"),
-    Rule("s2-redundant-starter", "S2", "Advisory", [("C", 79, "Declaring both is")],
+    Rule("s2-redundant-starter", "S2", "Advisory", [("C", 86, "Declaring both is")],
          "the event-store starter and the PostgreSQL starter both declared"),
     Rule("s2-eventsourced-aggregates", "S2", "Blocking",
-         [("C", 88, "`eventsourced-aggregates`; on Kotlin also `kotlin-eventsourcing`")],
+         [("C", 95, "`eventsourced-aggregates`; on Kotlin also `kotlin-eventsourcing`")],
          "eventsourced-aggregates not declared on pg-event-sourced (optional in the starter, so not transitive)",
          "components/spring-boot-starter-postgresql-event-store/pom.xml:105-110 (<optional>true</optional>)"),
     Rule("s2-kotlin-eventsourcing", "S2", "Blocking",
-         [("C", 88, "`eventsourced-aggregates`; on Kotlin also `kotlin-eventsourcing`")],
+         [("C", 95, "`eventsourced-aggregates`; on Kotlin also `kotlin-eventsourcing`")],
          "kotlin-eventsourcing not declared on a Kotlin pg-event-sourced project (no starter depends on it)",
          "no starter POM names kotlin-eventsourcing (components/spring-boot-starter-*/pom.xml)"),
     Rule("s2-kotlin-eventsourcing-on-java", "S2", "Should-fix",
-         [("C", 91, "A Java project must not carry `kotlin-eventsourcing`")],
+         [("C", 98, "A Java project must not carry `kotlin-eventsourcing`")],
          "kotlin-eventsourcing declared on a Java project, whose decider family lives in eventsourced-aggregates"),
     Rule("s2-document-db", "S2", "Advisory",
-         [("C", 89, "`postgresql-document-db`, when read models use the document store")],
+         [("C", 96, "`postgresql-document-db`, when read models use the document store")],
          "postgresql-document-db not declared on a Postgres profile (no starter depends on it)",
          "components/spring-boot-starter-postgresql/pom.xml, …-event-store/pom.xml: no postgresql-document-db"),
-    Rule("s2-mongo-keys", "S2", "Blocking", [("C", 140, "connection properties are `spring.mongodb.*`")],
+    Rule("s2-mongo-keys", "S2", "Blocking", [("C", 148, "connection properties are `spring.mongodb.*`")],
          "a spring.data.mongodb.* key, unbound in Boot 4",
          "LLM/LLM-spring-boot-starter-modules.md:684"),
     # S2.1 -------------------------------------------------------------------------------------
-    Rule("s2.1-jdbc-starter", "S2.1", "Blocking", [("C", 113, "`spring-boot-starter-jdbc`")],
+    Rule("s2.1-jdbc-starter", "S2.1", "Blocking", [("C", 120, "`spring-boot-starter-jdbc`")],
          "spring-boot-starter-jdbc missing on a Postgres profile",
          "components/spring-boot-starter-postgresql/pom.xml:46-49 (provided)"),
-    Rule("s2.1-postgresql-driver", "S2.1", "Blocking", [("C", 114, "`org.postgresql:postgresql`")],
+    Rule("s2.1-postgresql-driver", "S2.1", "Blocking", [("C", 121, "`org.postgresql:postgresql`")],
          "PostgreSQL JDBC driver missing on a Postgres profile",
          "components/spring-boot-starter-postgresql/pom.xml:157-160 (provided)"),
-    Rule("s2.1-jdbi", "S2.1", "Blocking", [("C", 115, "`jdbi3-core`, `jdbi3-postgres`")],
+    Rule("s2.1-jdbi", "S2.1", "Blocking", [("C", 122, "`jdbi3-core`, `jdbi3-postgres`")],
          "jdbi3-core / jdbi3-postgres missing on a Postgres profile",
          "components/spring-boot-starter-postgresql/pom.xml:147-154 (provided)"),
-    Rule("s2.1-kotlin-stdlib", "S2.1", "Blocking", [("C", 116, "`kotlin-stdlib-jdk8`, `kotlin-reflect`")],
+    Rule("s2.1-kotlin-stdlib", "S2.1", "Blocking", [("C", 123, "`kotlin-stdlib-jdk8`, `kotlin-reflect`")],
          "kotlin-stdlib missing on a Postgres profile (either language)",
          "components/postgresql-document-db/pom.xml:50-52 (provided)"),
-    Rule("s2.1-kotlin-reflect", "S2.1", "Blocking", [("C", 116, "`kotlin-stdlib-jdk8`, `kotlin-reflect`")],
+    Rule("s2.1-kotlin-reflect", "S2.1", "Blocking", [("C", 123, "`kotlin-stdlib-jdk8`, `kotlin-reflect`")],
          "kotlin-reflect missing on a Postgres profile (either language)",
          "components/postgresql-document-db/pom.xml:44-46 (provided)"),
-    Rule("s2.1-data-mongodb", "S2.1", "Blocking", [("C", 117, "`spring-boot-starter-data-mongodb`")],
+    Rule("s2.1-data-mongodb", "S2.1", "Blocking", [("C", 124, "`spring-boot-starter-data-mongodb`")],
          "spring-boot-starter-data-mongodb missing on the mongo profile",
          "components/spring-boot-starter-mongodb/pom.xml:46-49 (provided)"),
-    Rule("s2.1-jackson3-databind", "S2.1", "Blocking", [("C", 118, "`tools.jackson.core:jackson-databind`")],
+    Rule("s2.1-jackson3-databind", "S2.1", "Blocking", [("C", 125, "`tools.jackson.core:jackson-databind`")],
          "Jackson 3 databind missing on an application with no Boot web or Jackson starter",
          "components/spring-boot-starter-postgresql/pom.xml:141-144 (provided)"),
-    Rule("s2.1-reactor-core", "S2.1", "Blocking", [("C", 119, "`reactor-core`")],
+    Rule("s2.1-objenesis", "S2.1", "Blocking", [("C", 126, "`org.objenesis:objenesis`")],
+         "objenesis missing: context startup fails (Essentials 0.60.0: the first read of a persisted object fails)",
+         "immutable-jackson3/pom.xml:48-53 (provided)"),
+    Rule("s2.1-reactor-core", "S2.1", "Blocking", [("C", 127, "`reactor-core`")],
          "reactor-core missing on a non-WebFlux application",
          "components/spring-boot-starter-postgresql/pom.xml:128-130 (provided)"),
-    Rule("s2.1-scope", "S2.1", "Blocking", [("C", 131, "compile scope in the application")],
+    Rule("s2.1-scope", "S2.1", "Blocking", [("C", 139, "compile scope in the application")],
          "an S2.1 dependency declared provided/test/system — not on the runtime classpath"),
-    Rule("s2.1-runtime-scope", "S2.1", "Advisory", [("C", 131, "compile scope in the application")],
+    Rule("s2.1-runtime-scope", "S2.1", "Advisory", [("C", 139, "compile scope in the application")],
          "an S2.1 dependency declared at runtime scope instead of compile"),
     # S3 ---------------------------------------------------------------------------------------
-    Rule("s3.1-jackson2-essentials-module", "S3.1", "Blocking", [("C", 172, "`immutable-jackson` are gone")],
+    Rule("s3.1-jackson2-essentials-module", "S3.1", "Blocking", [("C", 180, "`immutable-jackson` are gone")],
          "a Jackson 2 Essentials module (types-jackson / immutable-jackson) declared",
          "root pom.xml modules: only types-jackson3 / immutable-jackson3 are built"),
     # 0.50.0: both starter POMs declare com.fasterxml.jackson.core:jackson-databind `provided`, and
     # EssentialsComponentsConfiguration / EventStoreConfiguration.jsonSerializer take
     # List<com.fasterxml.jackson.databind.Module> (javap on the 0.50.0 jars).
-    Rule("s3.1-jackson2-databind", "S3.1", "Advisory", [("C", 174, "No Essentials artifact needs Jackson 2's")],
+    Rule("s3.1-jackson2-databind", "S3.1", "Advisory", [("C", 182, "No Essentials artifact needs Jackson 2's")],
          "Jackson 2 jackson-databind declared; nothing in Essentials uses it", target_only=True),
-    Rule("s3.3-own-json-mapper", "S3.3", "Blocking", [("C", 195, "replaces Boot's `JsonMapper` with its own bean")],
+    # Not mechanical: removing the override can change what else resolves (a library that wanted that Jackson).
+    Rule("s3.1-jackson3-override", "S3.1", "Should-fix", [("C", 191, "to a newer Jackson 3 minor")],
+         "Jackson 3 overridden to a newer minor than the one Spring Boot manages and Essentials is tested on",
+         "docs/ROADMAP-0.6x.md DU-1: on 3.2 WireFormatProbes' missing-primitive probe stops reporting; "
+         "EssentialsObjectMappersWireFormatDeviationsTest fails"),
+    Rule("s3.3-own-json-mapper", "S3.3", "Blocking", [("C", 210, "replaces Boot's `JsonMapper` with its own bean")],
          "a JsonMapper bean that does not register EssentialTypesJacksonModule"),
     Rule("s3.4-jackson-module-kotlin", "S3.4", "Blocking",
-         [("C", 197, "Kotlin types are covered by neither mapper"),
+         [("C", 212, "Kotlin types are covered by neither mapper"),
           ("K", 76, "`tools.jackson.module:jackson-module-kotlin`")],
          "Kotlin project without Jackson 3 jackson-module-kotlin"),
     Rule("s3.4-persistence-serializer", "S3.4", "Blocking",
-         [("C", 185, "comes from your own `JSONSerializer` / `JSONEventSerializer` bean"),
+         [("C", 200, "comes from your own `JSONSerializer` / `JSONEventSerializer` bean"),
           ("K", 84, "its **type is the load-bearing part**")],
          "Kotlin project without its own persistence serializer bean carrying KotlinModule",
          "EventStoreConfiguration.java:567-571 and postgresql EssentialsComponentsConfiguration.java:472-477 "
          "(@ConditionalOnMissingBean, back off by type); EssentialsObjectMappers.java:54"),
     Rule("s3.5-java-parameters", "S3.5", "Blocking",
-         [("C", 206, "Compile with parameter names retained"), ("J", 19, "`maven-compiler-plugin` with `-parameters`"),
+         [("C", 221, "Compile with parameter names retained"), ("J", 19, "`maven-compiler-plugin` with `-parameters`"),
           ("K", 31, "still carry `-parameters`")],
          "javac does not retain parameter names",
          "spring-boot-starter-parent pom: maven-compiler-plugin <parameters>true</parameters>"),
     Rule("s3.5-kotlin-allopen", "S3.5", "Blocking",
-         [("C", 206, "Compile with parameter names retained"), ("K", 18, "`spring` compiler plugin")],
+         [("C", 221, "Compile with parameter names retained"), ("K", 18, "`spring` compiler plugin")],
          "kotlin-maven-plugin without the all-open spring compiler plugin"),
     Rule("s3.5-kotlin-jsr305", "S3.5", "Blocking",
-         [("C", 206, "Compile with parameter names retained"), ("K", 26, "`-Xjsr305=strict`")],
+         [("C", 221, "Compile with parameter names retained"), ("K", 26, "`-Xjsr305=strict`")],
          "kotlin-maven-plugin without -Xjsr305=strict"),
     Rule("s3.5-kotlin-param-property", "S3.5", "Blocking",
-         [("C", 206, "Compile with parameter names retained"),
+         [("C", 221, "Compile with parameter names retained"),
           ("K", 27, "`-Xannotation-default-target=param-property`")],
          "kotlin-maven-plugin without -Xannotation-default-target=param-property"),
     # S4 ---------------------------------------------------------------------------------------
-    Rule("s4-configurer-missing", "S4", "Blocking", [("C", 218, "auto-configures nothing")],
+    Rule("s4-configurer-missing", "S4", "Blocking", [("C", 236, "auto-configures nothing")],
          "types-spring-web declared but no Essentials web configurer imported",
          "types-spring-web has no META-INF (no AutoConfiguration.imports)"),
-    Rule("s4-configurer-count", "S4", "Blocking", [("C", 224, "whichever web stack you are on")],
+    Rule("s4-configurer-count", "S4", "Blocking", [("C", 242, "whichever web stack you are on")],
          "more than one Essentials web configurer imported"),
-    Rule("s4-configurer-web-mismatch", "S4", "Blocking", [("C", 224, "whichever web stack you are on")],
+    Rule("s4-configurer-web-mismatch", "S4", "Blocking", [("C", 242, "whichever web stack you are on")],
          "the imported configurer is for the other web stack",
          "EssentialsWebFluxConfigurer.java:47 implements WebFluxConfigurer; "
          "EssentialsWebMvcConfigurer.java:51 implements WebMvcConfigurer"),
     Rule("s4-typed-edge-unregistered", "S4", "Blocking",
-         [("C", 216, "MUST if any endpoint takes a semantic type"),
-          ("C", 240, "a missing converter surfaces as HTTP **500**"),
+         [("C", 234, "MUST if any endpoint takes a semantic type"),
+          ("C", 258, "a missing converter surfaces as HTTP **500**"),
           ("J", 79, "`types-spring-web` and the `@Import`")],
          "an endpoint parameter typed as a SingleValueType only the Essentials converter can bind, "
          "with that converter unregistered",
@@ -264,118 +287,135 @@ RULES_LIST = [
          "String->JSR310SingleValueType); spring-core 7.0.9 ObjectToObjectConverter binds a String "
          "constructor or static valueOf/of/from(String) itself"),
     Rule("s4-typed-edge-convention", "S4", "Should-fix",
-         [("C", 228, "Import it whenever a Java `SingleValueType` id is at the edge"),
+         [("C", 246, "Import it whenever a Java `SingleValueType` id is at the edge"),
           ("J", 79, "`types-spring-web` and the `@Import`")],
          "an endpoint parameter typed as a SingleValueType that binds today only through Spring's String route, "
          "with the Essentials converter unregistered",
          "spring-core 7.0.9 ObjectToObjectConverter: static valueOf/of/from(String), then a String constructor"),
     Rule("s4-types-spring-web-missing", "S4", "Advisory",
-         [("C", 218, "auto-configures nothing"), ("J", 79, "`types-spring-web` and the `@Import`")],
+         [("C", 236, "auto-configures nothing"), ("J", 79, "`types-spring-web` and the `@Import`")],
          "Java web application without types-spring-web"),
     # S5 ---------------------------------------------------------------------------------------
-    Rule("s5-document-db-factory", "S5", "Should-fix", [("C", 274, "`DocumentDbRepositoryFactory` bean built from")],
+    Rule("s5-document-db-factory", "S5", "Should-fix", [("C", 292, "`DocumentDbRepositoryFactory` bean built from")],
          "postgresql-document-db declared but no DocumentDbRepositoryFactory bean",
          "DocumentDbRepository.kt:536 (plain class, no auto-configuration)"),
-    Rule("s5-mongo-document-db", "S5", "Should-fix", [("C", 275, "on the `mongo` profile there is no such thing")],
+    Rule("s5-mongo-document-db", "S5", "Should-fix", [("C", 293, "on the `mongo` profile there is no such thing")],
          "postgresql-document-db declared on the mongo profile"),
     # 0.50.0: EssentialsComponentsProperties.java:286 binds durable-queues.transactional-mode.
-    Rule("s5-transactional-mode", "S5", "Should-fix", [("C", 270, "binds to nothing")],
+    Rule("s5-transactional-mode", "S5", "Should-fix", [("C", 288, "binds to nothing")],
          "essentials.durable-queues.transactional-mode in configuration",
          "docs/MIGRATION-0.60.md:542; EssentialsComponentsProperties.java:292-303 (no such field)",
          target_only=True),
-    Rule("s5-aggregate-declarations", "S5", "Should-fix", [("C", 280, "`EssentialsAggregateDeclarations`")],
+    Rule("s5-aggregate-declarations", "S5", "Should-fix", [("C", 298, "`EssentialsAggregateDeclarations`")],
          "an aggregate policy annotation on a class no EssentialsAggregateDeclarations bean declares",
          "AggregateSnapshotPolicy.java:38-40, AggregateClosingBooksPolicy.java:38 (@Target TYPE); "
          "EssentialsAggregateDeclarations.java:49; LLM/LLM-eventsourced-aggregates.md:671-674"),
     # S7 ---------------------------------------------------------------------------------------
-    Rule("s7-spec-generation", "S7", "Advisory", [("C", 317, "generated from the code, never hand-written")],
+    Rule("s7-spec-generation", "S7", "Advisory", [("C", 335, "generated from the code, never hand-written")],
          "nothing generates contracts/openapi.json: no test writing it from /v3/api-docs, no springdoc maven plugin"),
-    Rule("s7-contract-file", "S7", "Advisory", [("C", 319, "checked-in `contracts/openapi.json`")],
+    Rule("s7-contract-file", "S7", "Advisory", [("C", 337, "checked-in `contracts/openapi.json`")],
          "no committed spec: the frontend generator's input, or contracts/openapi.json, does not exist"),
     Rule("s7-frontend-input", "S7", "Advisory",
-         [("C", 319, "checked-in `contracts/openapi.json`"),
-          ("F", 66, "target: '../contracts/openapi.json'")],
+         [("C", 337, "checked-in `contracts/openapi.json`"),
+          ("F", 71, "target: '../contracts/openapi.json'")],
          "the frontend generator reads a live /v3/api-docs URL instead of the committed spec"),
+    Rule("s7-forked-pipeline", "S7", "Advisory",
+         [("C", 347, "The forked-app shape fails"), ("C", 346, "a DB-less spec-export profile")],
+         "left over from the forked-app spec pipeline: springdoc-openapi-maven-plugin, a spring-boot-maven-plugin "
+         "start/stop execution, or an application-openapi config"),
+    Rule("s7-key-order", "S7", "Advisory",
+         [("C", 338, "keys sorted (`springdoc.writer-with-order-by-keys:")],
+         "springdoc runs without springdoc.writer-with-order-by-keys: true, so the committed spec's key order "
+         "follows the code"),
     # 0.50.0: types-spring-web has no SingleValueTypeModelConverter (jar listing; the tag's source tree).
-    Rule("s7-model-converter", "S7", "Advisory", [("C", 337, "`SingleValueTypeModelConverter` as a bean")],
+    Rule("s7-model-converter", "S7", "Advisory", [("C", 355, "`SingleValueTypeModelConverter` as a bean")],
          "springdoc runs but SingleValueTypeModelConverter is not registered: the spec types semantic ids as objects",
          "types-spring-web/src/main/java/dk/trustworks/essentials/types/spring/web/SingleValueTypeModelConverter.java "
          "(a swagger-core ModelConverter; no auto-configuration in types-spring-web)", target_only=True),
     # S8 ---------------------------------------------------------------------------------------
     Rule("s8-embedded-cors", "S8", "Should-fix",
-         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 191, "Do not configure CORS")],
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+          ("F", 197, "Do not configure CORS")],
          "embedded frontend with a CORS configuration"),
     Rule("s8-embedded-base-url", "S8", "Should-fix",
-         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 194, "Do not set an API base URL")],
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+          ("F", 200, "Do not set an API base URL")],
          "embedded frontend with an API base URL set"),
     Rule("s8-embedded-spa-filter", "S8", "Should-fix",
-         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 145, "A SPA fallback filter")],
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+          ("F", 151, "A SPA fallback filter")],
          "embedded frontend without a SPA fallback to index.html"),
     Rule("s8-embedded-static-copy", "S8", "Should-fix",
-         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 135, "`maven-resources-plugin` copies `frontend/dist`")],
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+          ("F", 141, "`maven-resources-plugin` copies `frontend/dist`")],
          "embedded frontend whose build output is not copied into static resources"),
     Rule("s8-standalone-base-url", "S8", "Blocking",
-         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 256, "configured *and consumed*")],
-         "standalone frontend whose fetch mutator does not prefix VITE_API_BASE_URL"),
+         [("C", 379, "fetch mutator Orval's config names reads and prefixes"),
+          ("F", 264, "configured *and consumed*")],
+         "standalone frontend whose fetch mutator does not prefix a build-time base-URL variable onto the request"),
     Rule("s8-standalone-cors-source", "S8", "Blocking",
-         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 208, "expressed as a `CorsConfigurationSource` bean")],
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+          ("F", 214, "expressed as a `CorsConfigurationSource` bean")],
          "standalone frontend and no CorsConfigurationSource bean"),
     Rule("s8-standalone-cors-webfilter", "S8", "Should-fix",
-         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 212, "Expose the source, not a standalone `CorsWebFilter`")],
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+          ("F", 218, "Expose the source, not a standalone `CorsWebFilter`")],
          "CORS applied by a standalone CorsWebFilter/CorsFilter bean"),
     Rule("s8-standalone-cors-value", "S8", "Blocking",
-         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 240, "Bind the origin list with `@ConfigurationProperties`, never `@Value`")],
-         "CORS origins bound with @Value"),
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+          ("F", 246, "Bind the origin list with `@ConfigurationProperties`, never `@Value`")],
+         "CORS origins bound with @Value to a key configured as a list"),
+    Rule("s8-standalone-cors-value-scalar", "S8", "Should-fix",
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+          ("F", 246, "Bind the origin list with `@ConfigurationProperties`, never `@Value`"),
+          ("F", 251, "breaks the day someone")],
+         "CORS origins bound with @Value to a scalar, or to a key no application* file sets"),
     Rule("s8-standalone-cors-wildcard", "S8", "Blocking",
-         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 209, "`allowCredentials = true` **cannot**")],
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+          ("F", 215, "`allowCredentials = true` **cannot**")],
          "wildcard origin combined with allowCredentials"),
     Rule("s8-standalone-dead-spa", "S8", "Advisory",
-         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 277, "SPA filter is dead code in this mode")],
+         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+          ("F", 295, "SPA filter is dead code in this mode")],
          "standalone frontend with a backend SPA fallback"),
     Rule("s8-generated-gitignore", "S8", "Should-fix",
-         [("C", 351, "contract-first pipeline of S7"),
-          ("F", 76, "`generated/` and `model/` must not be committed")],
+         [("C", 369, "contract-first pipeline of S7"),
+          ("F", 82, "`generated/` and `model/` must not be committed")],
          "the generated API client is not git-ignored"),
     # S9 ---------------------------------------------------------------------------------------
     Rule("s9-admin-spi", "S9", "Should-fix",
-         [("C", 368, "`EssentialsAuthenticatedUser` and `EssentialsSecurityProvider`")],
+         [("C", 401, "`EssentialsAuthenticatedUser` and `EssentialsSecurityProvider`")],
          "an admin starter without the two security SPIs",
          "shared/src/main/java/dk/trustworks/essentials/shared/security/"
          "{EssentialsSecurityProvider,EssentialsAuthenticatedUser}.java"),
     # S10 --------------------------------------------------------------------------------------
-    Rule("s10-tc1-coordinates", "S10", "Advisory", [("C", 383, "The 1.x coordinates no longer resolve")],
+    Rule("s10-tc1-coordinates", "S10", "Advisory", [("C", 416, "The 1.x coordinates no longer resolve")],
          "a Testcontainers 1.x artifact coordinate",
          "~/.m2 org/testcontainers/testcontainers-{postgresql,mongodb} at the testcontainers-bom pin"),
-    Rule("s10-tc-package", "S10", "Advisory", [("C", 408, "`org.testcontainers.postgresql.PostgreSQLContainer`")],
+    Rule("s10-tc-package", "S10", "Advisory", [("C", 441, "`org.testcontainers.postgresql.PostgreSQLContainer`")],
          "a container class imported from the deprecated org.testcontainers.containers package",
          "testcontainers-postgresql jar at the pin: org.testcontainers.containers.PostgreSQLContainer is "
          "@Deprecated, org.testcontainers.postgresql.PostgreSQLContainer is not generic (javap); "
          "likewise testcontainers-mongodb MongoDBContainer"),
     Rule("s10-webtestclient-package", "S10", "Advisory",
-         [("C", 400, "`@AutoConfigureWebTestClient` is no longer in")],
+         [("C", 433, "`@AutoConfigureWebTestClient` is no longer in")],
          "@AutoConfigureWebTestClient imported from its Boot 3 package"),
-    Rule("s10-failsafe", "S10", "Advisory", [("C", 381, "Failsafe runs those during `verify`")],
+    Rule("s10-failsafe", "S10", "Advisory", [("C", 414, "Failsafe runs those during `verify`")],
          "integration tests present but maven-failsafe-plugin is not bound",
          "spring-boot-starter-parent pom: failsafe is in pluginManagement only"),
     # S11 --------------------------------------------------------------------------------------
-    Rule("s11-skip-frontend", "S11", "Should-fix", [("C", 432, "**`skip-frontend` profile** must exist")],
+    Rule("s11-skip-frontend", "S11", "Should-fix", [("C", 465, "**`skip-frontend` profile** must exist")],
          "frontend-maven-plugin without a skip-frontend profile"),
-    Rule("s11-boot-parent", "S11", "Advisory", [("C", 425, "`spring-boot-starter-parent` is the parent POM")],
+    Rule("s11-boot-parent", "S11", "Advisory", [("C", 458, "`spring-boot-starter-parent` is the parent POM")],
          "the reactor does not inherit spring-boot-starter-parent"),
+    Rule("s11-maven-wrapper", "S11", "Advisory", [("C", 469, "**Maven wrapper**, where the project has one")],
+         "the Maven wrapper downloads a Maven below the stack-pins.md pin",
+         "root .mvn/wrapper/maven-wrapper.properties distributionUrl"),
 ]
 RULES = {r.check: r for r in RULES_LIST}
 # Slugs that were emitted once and are retired: never reuse one for a different check. The forked-app
-# spec pipeline they checked is no longer a contract shape (S7 generates the spec from an integration test).
+# spec pipeline they checked is no longer a contract shape (S7 generates the spec from an integration test);
+# s7-forked-pipeline reports what a project still carries of it.
 RETIRED_CHECKS = {"s7-start-stop", "s7-openapi-profile"}
 
 
@@ -716,23 +756,180 @@ def strip_comments(text: str, hash_comments=False):
     return "".join(out)
 
 
+# A build-time environment read, in any frontend tooling's spelling: Vite's `import.meta.env.VITE_…`, Next.js's
+# `process.env.NEXT_PUBLIC_…`, Create React App's `process.env.REACT_APP_…`, dot or bracket form.
+ENV_READ = r"(?:import\.meta\.env|process\.env)(?:\.\w+|\[\s*['\"]\w+['\"]\s*\])"
+
+
 def base_url_consumed(ts_text: str):
-    """True when VITE_API_BASE_URL is read and the read prefixes a request URL.
+    """True when a build-time environment variable is read and the read prefixes a request URL.
 
     Accepts the read inline (`${import.meta.env.VITE_API_BASE_URL}…`), through a constant
-    (`const BASE = import.meta.env.VITE_API_BASE_URL ?? ''` … `${BASE}${url}`), or through a function
+    (`const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? ''` … `${BASE}${url}`), or through a function
     (`const baseUrl = (): string => import.meta.env.VITE_API_BASE_URL ?? ''` … `${baseUrl()}${url}`,
-    `function baseUrl() { return import.meta.env.VITE_API_BASE_URL }`); the use is `${X}`/`${X()}` or `X + …`."""
+    `function baseUrl() { return process.env['REACT_APP_API_BASE_URL'] }`); the use is `${X}`/`${X()}` or
+    `X + …`. Which variable is read is the tooling's business (ENV_READ); a read that prefixes nothing is not
+    consumption."""
     text = strip_comments(ts_text)
-    if re.search(r"\$\{\s*import\.meta\.env\.VITE_API_BASE_URL", text):
+    if re.search(r"\$\{\s*" + ENV_READ, text):
         return True
     decl = re.compile(r"\b(?:const|let|var|function)\s+(\w+)"
-                      r"((?:(?!\b(?:const|let|var|function)\s)[\s\S]){0,200}?)"
-                      r"import\.meta\.env\.VITE_API_BASE_URL\b")
+                      r"((?:(?!\b(?:const|let|var|function)\s)[\s\S]){0,200}?)" + ENV_READ)
     for m in decl.finditer(text):
         v = re.escape(m.group(1))
         use = rf"\$\{{\s*{v}\s*(?:\(\s*\))?\s*\}}|\b{v}\s*(?:\(\s*\))?\s*\+"
         if re.search(use, text[m.end():]):
+            return True
+    return False
+
+
+# The base-URL variable each frontend tooling's convention names, read the way that tooling inlines it at build
+# time. Only fix texts use it: the check itself accepts any ENV_READ.
+BASE_URL_ENV = {
+    "vite": ("Vite", "import.meta.env.VITE_API_BASE_URL"),
+    "next": ("Next.js", "process.env.NEXT_PUBLIC_API_BASE_URL"),
+    "cra": ("Create React App", "process.env.REACT_APP_API_BASE_URL"),
+}
+
+
+def frontend_tooling(d: Path):
+    """'next' | 'cra' | 'vite' | 'other' for a frontend directory, from package.json's dependencies and the
+    tooling's own config file. Next first: a Next.js app may carry vite for its tests (vitest)."""
+    deps = {}
+    try:
+        pkg = json.loads((d / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pkg = {}
+    if isinstance(pkg, dict):
+        for k in ("dependencies", "devDependencies"):
+            if isinstance(pkg.get(k), dict):
+                deps.update(pkg[k])
+    try:
+        names = {f.name for f in d.iterdir()}
+    except OSError:
+        names = set()
+    if "next" in deps or any(n.startswith("next.config.") for n in names):
+        return "next"
+    if "react-scripts" in deps:
+        return "cra"
+    if "vite" in deps or any(n.startswith("vite.config.") for n in names):
+        return "vite"
+    return "other"
+
+
+def _own_keys(text, lb):
+    """The object literal opening at `lb`, with everything nested inside it masked by NULs (offsets and newlines
+    kept, and never read as whitespace), so a key search finds only that object's own keys."""
+    rb = _balanced(text, lb, "{", "}")
+    out, depth = [], 0
+    for c in text[lb:rb]:
+        if c == "{":
+            depth += 1
+        keep = depth <= 1 or c == "\n"
+        if c == "}":
+            depth -= 1
+        out.append(c if keep else "\0")
+    return "".join(out), rb
+
+
+_LITERAL = r"(['\"`])([^'\"`\n$]+)\1"
+
+
+def orval_config(raw: str):
+    """{'inputs', 'targets', 'schemas', 'mutators': [(value, line)], 'readable': bool} — the string literals of an
+    Orval config's input target, output target, output schemas and output.override.mutator path (or a mutator
+    given as a bare string). `readable` is False when the outputs cannot be read that way: none at all, or a
+    target, schemas or mutator that is computed rather than written (`path.join(…)`, an imported constant),
+    which only running the config resolves. The inputs are read either way."""
+    text = strip_comments(raw)
+    literal = re.compile(_LITERAL)
+    got = {"inputs": [], "targets": [], "schemas": [], "mutators": [], "readable": True}
+
+    def line(i):
+        return text.count("\n", 0, i) + 1
+
+    def key_at(lb, key):
+        """Offset of the value of `key` among the own keys of the object opening at `lb`, or None."""
+        own, _ = _own_keys(text, lb)
+        m = re.search(rf"\b{key}\s*:\s*", own)
+        return lb + m.end() if m else None
+
+    def literal_at(at, nested_key=None):
+        """(value, line) of the literal at `at` — or, for an object there, of its `nested_key` — else None."""
+        lm = literal.match(text, at)
+        if lm:
+            return lm.group(2), line(lm.start(2))
+        if nested_key and text.startswith("{", at):
+            inner = key_at(at, nested_key)
+            return literal_at(inner) if inner is not None else None
+        return None
+
+    for kind in ("input", "output"):
+        end = 0
+        for m in re.finditer(rf"\b{kind}\s*:\s*", text):
+            if m.start() < end:
+                continue
+            lb = m.end()
+            if not text.startswith("{", lb):
+                value = literal_at(lb)
+                if value:
+                    got["inputs" if kind == "input" else "targets"].append(value)
+                elif kind == "output":
+                    got["readable"] = False
+                continue
+            end = _balanced(text, lb, "{", "}")
+            at = key_at(lb, "target")
+            target = literal_at(at) if at is not None else None
+            if kind == "input":
+                if target:
+                    got["inputs"].append(target)
+                continue
+            if target is None:
+                got["readable"] = False
+                continue
+            got["targets"].append(target)
+            at = key_at(lb, "schemas")
+            if at is not None:
+                schemas = literal_at(at, "path")
+                if schemas is None:
+                    got["readable"] = False
+                    continue
+                got["schemas"].append(schemas)
+            ov = key_at(lb, "override")
+            at = key_at(ov, "mutator") if ov is not None and text.startswith("{", ov) else None
+            if at is not None:
+                mutator = literal_at(at, "path")
+                if mutator is None:
+                    got["readable"] = False
+                    continue
+                got["mutators"].append(mutator)
+    got["readable"] = got["readable"] and bool(got["targets"])
+    return got
+
+
+def gitignore_covers(rel: str, patterns):
+    """True when a .gitignore holding `patterns` ignores the path `rel` (posix, relative to that .gitignore's
+    directory) or a directory above it. As git reads them: a pattern with a slash before its end (`/p`,
+    `src/p`) is anchored to the .gitignore's directory, one without (`p`, `p/`) matches a name at any depth,
+    and globs are fnmatch's. A trailing `/` is dropped — the outputs checked are directories. Negations
+    (`!p`) are not evaluated: a path re-included by one still counts as ignored."""
+    parts = [x for x in rel.split("/") if x not in ("", ".")]
+    prefixes = ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+    for raw in patterns:
+        p = raw.strip()
+        if not p or p.startswith(("#", "!")):
+            continue
+        p = p.rstrip("/")
+        if p.startswith("**/"):
+            p = p[3:]
+            if "/" in p and any(fnmatch.fnmatchcase(x, p) or fnmatch.fnmatchcase(x, "*/" + p) for x in prefixes):
+                return True
+        if not p:
+            continue
+        if "/" in p:
+            if any(fnmatch.fnmatchcase(x, p.lstrip("/")) for x in prefixes):
+                return True
+        elif any(fnmatch.fnmatchcase(x, p) for x in parts):
             return True
     return False
 
@@ -826,6 +1023,43 @@ def config_keys(path: Path):
     except (OSError, UnicodeDecodeError):
         return []
     return properties_keys(text) if path.suffix == ".properties" else yaml_keys(text)
+
+
+def config_shapes(path: Path):
+    """{relaxed-binding key: ('sequence' | 'scalar' | 'mapping', line)} for one configuration file.
+
+    A key is a sequence when its value is a flow sequence (`[a, b]`), when it has no value and the next content
+    line is a `- ` item at its indentation or deeper (a YAML block sequence), or when it is written indexed
+    (`key[0]`, as `.properties` spells a list). Spring binds a sequence as indexed keys only, so `@Value` on the
+    bare key does not see it."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}
+    yaml = path.suffix != ".properties"
+    lines = text.splitlines()
+    out = {}
+    for key, value, no, own in (yaml_keys(text) if yaml else properties_keys(text)):
+        indexed = re.match(r"^(.*?)\[\d+\]", key)
+        if indexed:
+            out.setdefault(norm_key(indexed.group(1)), ("sequence", no))
+            continue
+        if value is not None:
+            out.setdefault(norm_key(key), ("sequence" if value.startswith("[") else "scalar", no))
+            continue
+        shape = "mapping"
+        if yaml:
+            raw = lines[no - 1]
+            indent = raw.find(own) if own in raw else len(raw) - len(raw.lstrip())
+            for nxt in lines[no:]:
+                body = re.sub(r"(^|\s)#.*$", "", nxt).rstrip()
+                if not body.strip():
+                    continue
+                if re.match(r"^\s*-(\s|$)", body) and len(body) - len(body.lstrip()) >= indent:
+                    shape = "sequence"
+                break
+        out.setdefault(norm_key(key), (shape, no))
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1011,6 +1245,7 @@ class Lint:
         self.app = starter_poms[0] if starter_poms else ess[0].pom
         self.app_deps = [d for d in self.app.deps if d.scope != "import"]
         self.facts, self.fact_source = {}, {}
+        self._orval = {}
         self._facts(overrides)
         self.main = [s for s in self._sources(self.app.dir, "main")]
         self.tests = [s for s in self._sources(self.root, "test")]
@@ -1059,6 +1294,13 @@ class Lint:
                 out.append(f)
         return out
 
+    def orval(self, d: Path):
+        """[(config path, orval_config(...))] for each orval.config.* in a frontend directory."""
+        if d not in self._orval:
+            self._orval[d] = [(cfg, orval_config(cfg.read_text(encoding="utf-8", errors="replace")))
+                              for cfg in sorted(d.glob("orval.config.*"))]
+        return self._orval[d]
+
     def _facts(self, ov):
         plugins = {p.val("artifactId") for pom in self.p.poms for p in pom.plugins}
         if ov.get("language"):
@@ -1093,6 +1335,12 @@ class Lint:
             fe = ("embedded" if "frontend-maven-plugin" in plugins
                   else "standalone" if self.frontend_dirs else "none")
             self.facts["frontend"], self.fact_source["frontend"] = fe, "detected"
+        # The tooling of the frontend Orval generates into (else the first package.json): it names the base-URL
+        # variable's convention in fix texts; no check depends on it.
+        orval_dirs = [d for d in self.frontend_dirs if self.orval(d)]
+        fe_dir = (orval_dirs or self.frontend_dirs or [None])[0]
+        self.facts["frontendTooling"] = (frontend_tooling(fe_dir) if fe_dir is not None
+                                         and self.facts["frontend"] != "none" else None)
         # The Essentials release the project pins, against the one stack-pins.md targets. Unresolvable here
         # (inherited from a parent outside the project, or a BOM) is None: pass --essentials-version.
         if ov.get("essentials_version"):
@@ -1122,14 +1370,25 @@ class Lint:
         pom = self.app
         ext = self.p.external_parent(pom)
         boot_parent = ext if ext and ext[0] == BOOT and ext[1] == "spring-boot-starter-parent" else None
-        boot_version, boot_where = None, None
+        boot_version, boot_where, boot_ops = None, None, None
+        target = self.pins["spring-boot-starter-parent"]
         if boot_parent:
             top = self.p.chain(pom)[-1]
             boot_version, boot_where = self.p.resolve(top, boot_parent[2]), (top.rel, top.parent[3])
+            if boot_parent[2] and "${" not in boot_parent[2]:
+                boot_ops = [{"op": "set-parent-version", "pom": top.rel, "line": top.parent[3], "groupId": BOOT,
+                             "artifactId": "spring-boot-starter-parent", "from": boot_parent[2], "to": target}]
         else:
             for d in self.p.all_deps(managed=True):
                 if d.g == BOOT and d.a == "spring-boot-dependencies" and d.scope == "import":
                     boot_version, boot_where = self.p.resolve(d.pom, d.v), (d.pom.rel, d.line)
+                    ref = re.fullmatch(r"\$\{([^}]+)\}", (d.v or "").strip())
+                    pv, ppom, _ = self.p.prop(d.pom, ref.group(1)) if ref else (None, None, None)
+                    boot_ops = ([{"op": "set-property", "pom": ppom.rel, "name": ref.group(1), "from": pv,
+                                  "to": target}] if ref and ppom is not None and pv and "${" not in pv
+                                else [{"op": "set-dependency-version", "pom": d.pom.rel, "line": d.line,
+                                       "groupId": BOOT, "artifactId": d.a, "from": d.v, "to": target}]
+                                if d.v and "${" not in d.v else None)
             self.add("s11-boot-parent", self.p.chain(pom)[-1].rel, None,
                      "the reactor does not inherit spring-boot-starter-parent, so the Boot plugin and compiler "
                      "defaults the contract assumes are absent",
@@ -1137,11 +1396,19 @@ class Lint:
         self.facts["bootVersion"] = boot_version
         want = ".".join(self.pins["spring-boot-starter-parent"].split(".")[:2])
         if boot_version is None or boot_where is None:
-            self.skip(["s1-boot-line"], "no spring-boot-starter-parent or spring-boot-dependencies import found")
+            self.skip(["s1-boot-line", "s1-boot-patch"],
+                      "no spring-boot-starter-parent or spring-boot-dependencies import found")
         elif ".".join(boot_version.split(".")[:2]) != want:
             self.add("s1-boot-line", boot_where[0], boot_where[1],
                      f"Spring Boot {boot_version} — Essentials targets the {want}.x line; other lines are unsupported",
-                     f"move the Boot version to the {want}.x line (stack-pins.md), as a deliberate upgrade")
+                     f"move the Boot version to the {want}.x line (stack-pins.md), as a deliberate upgrade",
+                     boot_ops)
+        elif version_below(boot_version, target):
+            self.add("s1-boot-patch", boot_where[0], boot_where[1],
+                     f"Spring Boot {boot_version} is on the {want}.x line but below {target}, the patch the Essentials "
+                     "build is tested on; an earlier patch manages dependency releases without the security fixes "
+                     "a later one carries",
+                     f"raise the Boot version to {target} (stack-pins.md)", boot_ops)
         # Java baseline: java.version (spring-boot-starter-parent feeds maven.compiler.release from it)
         floor_m = re.match(r"\d+", self.pins["java.version"])
         if floor_m is None:
@@ -1213,7 +1480,8 @@ class Lint:
                      ops, mechanical=has_prop)
 
     def _kotlin_floor(self, pom, java_floor):
-        """kotlin.version (or kotlin-maven-plugin's own <version>) below the floor stack-pins.md states."""
+        """kotlin.version (or kotlin-maven-plugin's own <version>) below the floor stack-pins.md states
+        (s1-kotlin-compiler-floor), or at or above it but below the kotlin.version pin (s1-kotlin-patch)."""
         want = self.pins["kotlin.floor"]
         v, where, line = self.p.prop(pom, "kotlin.version")
         plugin_version = None
@@ -1227,25 +1495,15 @@ class Lint:
                     if resolved and "${" not in resolved:
                         v, where, line, plugin_version = resolved, p, node.line, node.text.strip()
         if v is None or where is None:
-            self.skip(["s1-kotlin-compiler-floor"],
+            self.skip(["s1-kotlin-compiler-floor", "s1-kotlin-patch"],
                       "no kotlin.version property and no kotlin-maven-plugin <version> in the project — the "
                       "parent's managed Kotlin applies")
             return
         have = version_tuple(v)
         if have is None:
-            self.skip(["s1-kotlin-compiler-floor"], f"Kotlin version `{v}` is not a version number")
+            self.skip(["s1-kotlin-compiler-floor", "s1-kotlin-patch"], f"Kotlin version `{v}` is not a version number")
             return
-        if not version_below(".".join(str(x) for x in have[:2]), want):
-            return
-        # The floor exists because a compiler below it cannot target the Java baseline. A project whose own
-        # java.version is already there does not compile today, whatever Essentials release it pins.
-        java_v, _, _ = self.p.prop(pom, "java.version")
-        java_m = re.fullmatch(r"(?:1\.)?(\d+)", (java_v or "").strip())
-        holds_now = java_m is not None and int(java_m.group(1)) >= java_floor
         pin = self.pins["kotlin.version"]
-        message = (f"Kotlin {v} is below the compiler floor {want}: a compiler older than {want} cannot "
-                   f"target JVM {java_floor}"
-                   + (f", and java.version is {java_v}, so the Kotlin sources do not compile" if holds_now else ""))
         if plugin_version is not None:
             ops = [{"op": "replace-text", "file": where.rel, "line": line,
                     "from": f"<version>{plugin_version}</version>", "to": f"<version>{pin}</version>"}]
@@ -1253,6 +1511,22 @@ class Lint:
         else:
             ops = [{"op": "set-property", "pom": where.rel, "name": "kotlin.version", "from": v, "to": pin}]
             fix = f"raise kotlin.version to {pin}, the stack-pins.md pin"
+        if not version_below(".".join(str(x) for x in have[:2]), want):
+            # At or above the floor: the project compiles, so below the pin is a lag (Advisory), never both.
+            if version_below(v, pin):
+                self.add("s1-kotlin-patch", where.rel, line,
+                         f"Kotlin {v} is at or above the compiler floor {want} but below {pin}, the compiler the "
+                         "Essentials build uses",
+                         fix, ops, mechanical=False)
+            return
+        # The floor exists because a compiler below it cannot target the Java baseline. A project whose own
+        # java.version is already there does not compile today, whatever Essentials release it pins.
+        java_v, _, _ = self.p.prop(pom, "java.version")
+        java_m = re.fullmatch(r"(?:1\.)?(\d+)", (java_v or "").strip())
+        holds_now = java_m is not None and int(java_m.group(1)) >= java_floor
+        message = (f"Kotlin {v} is below the compiler floor {want}: a compiler older than {want} cannot "
+                   f"target JVM {java_floor}"
+                   + (f", and java.version is {java_v}, so the Kotlin sources do not compile" if holds_now else ""))
         self.add("s1-kotlin-compiler-floor", where.rel, line, message, fix, ops, mechanical=False,
                  target_only=not holds_now)
 
@@ -1364,6 +1638,7 @@ class Lint:
             rows.append(("s2.1-jackson3-databind", [("tools.jackson.core", "jackson-databind")]))
         if web != "webflux":
             rows.append(("s2.1-reactor-core", [("io.projectreactor", "reactor-core")]))
+        rows.append(("s2.1-objenesis", [("org.objenesis", "objenesis")]))
         anchor = next((d.line for d in self.app_deps
                        if d.g == ESS_COMPONENTS and d.a in STARTERS), None)
         for check, alts in rows:
@@ -1372,7 +1647,8 @@ class Lint:
             if not found:
                 self.add(check, rel, anchor,
                          f"{g}:{a} is not declared — the starter declares it `provided`, so nothing brings it; "
-                         "compiles, then fails at context startup",
+                         + ("compiles, then fails at context startup (on Essentials 0.60.0: at the first read of a persisted object)"
+                            if check == "s2.1-objenesis" else "compiles, then fails at context startup"),
                          f"add {g}:{a} (compile scope) to {rel}",
                          [{"op": "add-dependency", "pom": rel, "groupId": g, "artifactId": a, "scope": None}])
                 continue
@@ -1407,6 +1683,7 @@ class Lint:
                          "remove it unless a non-Essentials library needs it",
                          [{"op": "remove-dependency", "pom": d.pom.rel, "line": d.line, "groupId": d.g,
                            "artifactId": d.a}], mechanical=False)
+        self._jackson3_override()
         # S3.3: an own JsonMapper bean without EssentialTypesJacksonModule
         for s in self.main:
             pats = [r"\bfun\s+\w+\s*\([^)]*\)\s*:\s*(?:tools\.jackson\.databind\.json\.)?JsonMapper\b",
@@ -1471,6 +1748,54 @@ class Lint:
                      f"declare your own {want} bean built on "
                      "EssentialsObjectMappers.createJackson3ObjectMapper(KotlinModule…)",
                      mechanical=False)
+
+    def _jackson3_override(self):
+        """S3.1: Jackson 3 overridden above the minor stack-pins.md's `Jackson 3` row names (the one Boot manages).
+
+        Read: the `jackson-bom.version` property Boot's parent reads, and the version of any `tools.jackson*`
+        dependency or managed dependency (the `tools.jackson:jackson-bom` import included). A version taken from
+        a property is reported once, where the property is set."""
+        row = next((v for k, v in self.pins.items() if k.startswith("Jackson 3")), "")
+        m = re.search(r"(\d+)\.(\d+)\.x", row)
+        if m is None:
+            self.skip(["s3.1-jackson3-override"], "stack-pins.md has no `Jackson 3` row naming the managed minor")
+            return
+        tested = (int(m.group(1)), int(m.group(2)))
+        ess = ".".join(self.pins["essentials.version"].split(".")[:2])
+        sites = {}
+
+        def above(value):
+            t = version_tuple(value)
+            return t is not None and len(t) >= 2 and t[:2] > tested
+
+        for pom in self.p.poms:
+            if "jackson-bom.version" in pom.props:
+                raw, line = pom.props["jackson-bom.version"]
+                resolved = self.p.resolve(pom, raw)
+                if above(resolved):
+                    sites.setdefault((pom.rel, line), f"jackson-bom.version is {resolved}")
+        for d in list(self.p.all_deps()) + list(self.p.all_deps(managed=True)):
+            if not (d.g == "tools.jackson" or d.g.startswith("tools.jackson.")) or not d.v:
+                continue
+            raw = d.v.strip()
+            resolved = self.p.resolve(d.pom, raw)
+            if not above(resolved):
+                continue
+            ref = re.fullmatch(r"\$\{([^}]+)\}", raw)
+            _, where, line = self.p.prop(d.pom, ref.group(1)) if ref else (None, None, None)
+            if ref and where is not None:
+                sites.setdefault((where.rel, line), f"{ref.group(1)} is {resolved}, the version of {d.g}:{d.a}")
+            else:
+                sites.setdefault((d.pom.rel, d.line), f"{d.g}:{d.a} is versioned {resolved}")
+        for (rel, line), what in sorted(sites.items(), key=lambda s: (s[0][0], s[0][1] or 0)):
+            message = (f"{what}, a newer Jackson 3 minor than Spring Boot manages; Essentials {ess}.x is built "
+                       f"and tested on the Jackson {tested[0]}.{tested[1]}.x Spring Boot manages")
+            if tested < (3, 2):
+                message += (". From Jackson 3.2 on, a primitive record component absent from the document reads as "
+                            "0/false even with FAIL_ON_NULL_FOR_PRIMITIVES enabled, so "
+                            "EssentialsObjectMappers.findWireFormatDeviations stops reporting that drift")
+            self.add("s3.1-jackson3-override", rel, line, message,
+                     "remove the override and let Spring Boot manage Jackson 3", mechanical=False)
 
     def s3_5(self):
         pom = self.app
@@ -1737,24 +2062,24 @@ class Lint:
                      "client generated from contracts/openapi.json types the ids wrongly",
                      "register types-spring-web's SingleValueTypeModelConverter as a @Bean (e.g. in "
                      "config/EssentialsWebConfig)", mechanical=False)
-        configs = [cfg for d in self.frontend_dirs for cfg in sorted(d.glob("orval.config.*"))]
-        for cfg in configs:
-            text = strip_comments(cfg.read_text(encoding="utf-8", errors="replace"))
-            m = re.search(r"input\s*:\s*\{[^}]*?target\s*:\s*['\"]([^'\"]+)['\"]", text, re.S) or \
-                re.search(r"input\s*:\s*['\"]([^'\"]+)['\"]", text)
-            if not m:
+        if springdoc:
+            self._key_order(springdoc[0])
+        self._forked_pipeline()
+        configs = [(cfg, parsed) for d in self.frontend_dirs for cfg, parsed in self.orval(d)]
+        for cfg, parsed in configs:
+            if not parsed["inputs"]:
                 continue
-            line = text.count("\n", 0, m.start(1)) + 1
-            if re.match(r"https?://", m.group(1)):
+            target, line = parsed["inputs"][0]
+            if re.match(r"https?://", target):
                 self.add("s7-frontend-input", self.p.rel(cfg), line,
-                         f"orval reads {m.group(1)} — the client is built from whatever backend is running, not "
+                         f"orval reads {target} — the client is built from whatever backend is running, not "
                          "from the committed spec",
                          "point input.target at the committed ../contracts/openapi.json",
-                         [{"op": "replace-text", "file": self.p.rel(cfg), "line": line, "from": m.group(1),
+                         [{"op": "replace-text", "file": self.p.rel(cfg), "line": line, "from": target,
                            "to": "../contracts/openapi.json"}], mechanical=False)
-            elif not (cfg.parent / m.group(1)).exists():
+            elif not (cfg.parent / target).exists():
                 self.add("s7-contract-file", self.p.rel(cfg), line,
-                         f"orval reads {m.group(1)}, which does not exist — the frontend build has no contract",
+                         f"orval reads {target}, which does not exist — the frontend build has no contract",
                          "run the backend's verify once and commit the generated contracts/openapi.json",
                          mechanical=False)
         if not configs and self.facts["web"] not in ("none", None):
@@ -1762,6 +2087,65 @@ class Lint:
                 self.add("s7-contract-file", "contracts/openapi.json", None,
                          "no committed contracts/openapi.json — other components have no contract to consume",
                          "run verify once and commit the generated contracts/openapi.json", mechanical=False)
+
+    def _key_order(self, springdoc):
+        """springdoc.writer-with-order-by-keys: true in the application's main configuration."""
+        found, main_cfg = None, None
+        for f in self.config_files(include_test=False):
+            if re.fullmatch(r"application\.(ya?ml|properties)", f.name) and main_cfg is None:
+                main_cfg = f
+            for key, value, line, _ in config_keys(f):
+                if norm_key(key) == norm_key("springdoc.writer-with-order-by-keys"):
+                    found = found or (f, line, value or "")
+        if found and found[2].strip("'\" ").lower() == "true":
+            return
+        why = ("springdoc writes contracts/openapi.json in declaration order, so the committed spec changes when "
+               "code moves rather than when the API does")
+        if found:
+            f, line, value = found
+            self.add("s7-key-order", self.p.rel(f), line, f"springdoc.writer-with-order-by-keys is {value!r} — {why}",
+                     "set it to true",
+                     [{"op": "replace-text", "file": self.p.rel(f), "line": line, "from": value, "to": "true"}]
+                     if value else None)
+        elif main_cfg is not None:
+            self.add("s7-key-order", self.p.rel(main_cfg), None,
+                     f"springdoc.writer-with-order-by-keys is not set — {why}",
+                     f"add springdoc.writer-with-order-by-keys: true to {self.p.rel(main_cfg)}", mechanical=False)
+        else:
+            self.add("s7-key-order", self.app.rel, springdoc.line,
+                     f"springdoc.writer-with-order-by-keys is not set — {why}",
+                     "add springdoc.writer-with-order-by-keys: true to application.yml", mechanical=False)
+
+    def _forked_pipeline(self):
+        """What is left of the forked-app spec pipeline S7 replaced, whether or not a test now writes the spec:
+        left in the build, it still starts the application around a fetch and overwrites the committed file."""
+        for pom in self.p.poms:
+            for pl in pom.plugins:
+                artifact = pl.val("artifactId")
+                if artifact == "springdoc-openapi-maven-plugin":
+                    self.add("s7-forked-pipeline", pom.rel, pl.line,
+                             "springdoc-openapi-maven-plugin fetches /v3/api-docs from an application the build forks; "
+                             "it cannot serve the spec once an endpoint's beans need the database, and the build "
+                             "stays green on the previous one",
+                             "remove the plugin; the integration test that writes contracts/openapi.json replaces it",
+                             mechanical=False)
+                elif artifact == "spring-boot-maven-plugin":
+                    for ex in pl.all("executions/execution"):
+                        goals = sorted({g.text.strip() for g in ex.all("goals/goal")} & {"start", "stop"})
+                        if goals:
+                            self.add("s7-forked-pipeline", pom.rel, ex.line,
+                                     f"spring-boot-maven-plugin execution {ex.val('id') or '(no id)'} runs "
+                                     f"{'/'.join(goals)}: it forks the application around the build's spec fetch",
+                                     "remove the execution, and any execution whose output only it read (e.g. a "
+                                     "build-helper reserve-network-port)", mechanical=False)
+        for f in self.p.files:
+            parts = f.relative_to(self.root).parts
+            if re.fullmatch(r"application-openapi\.(ya?ml|properties)", f.name) and "resources" in parts:
+                self.add("s7-forked-pipeline", self.p.rel(f), None,
+                         "an `openapi` profile configuration — the database-less spec-export profile the forked app "
+                         "was started with",
+                         "delete it, and every activation of the profile (@Profile(\"openapi\"), "
+                         "spring.profiles.active=openapi)", mechanical=False)
 
     # -- S8 / S11 --------------------------------------------------------------------------------
 
@@ -1789,10 +2173,11 @@ class Lint:
             for d in fe_dirs:
                 for env in sorted(d.glob(".env*")):
                     for no, raw in enumerate(env.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-                        m = re.match(r"^\s*(?:export\s+)?VITE_API_BASE_URL\s*=\s*(.*)$", raw)
-                        if m and m.group(1).strip().strip("'\""):
+                        m = re.match(r"^\s*(?:export\s+)?((?:VITE|NEXT_PUBLIC|REACT_APP)_\w*API_(?:BASE_)?URL)"
+                                     r"\s*=\s*(.*)$", raw)
+                        if m and m.group(2).strip().strip("'\""):
                             self.add("s8-embedded-base-url", self.p.rel(env), no,
-                                     "VITE_API_BASE_URL is set in an embedded build; relative /api paths are "
+                                     f"{m.group(1)} is set in an embedded build; relative /api paths are "
                                      "correct by construction", "delete the line",
                                      [{"op": "replace-text", "file": self.p.rel(env), "line": no,
                                        "from": raw, "to": ""}], mechanical=False)
@@ -1826,6 +2211,11 @@ class Lint:
                      "standalone frontend and no CorsConfigurationSource bean — cross-origin calls are refused",
                      "publish a CorsConfigurationSource bean with the frontend's real origins, and http.cors {}",
                      mechanical=False)
+        shapes = {}
+        for f in self.config_files(include_test=False):
+            for key, (shape, line) in config_shapes(f).items():
+                if key not in shapes or (shape == "sequence" and shapes[key][0] != "sequence"):
+                    shapes[key] = (shape, self.p.rel(f), line)
         for s in self.main:
             for line, m in s.find(r"\b(?:new\s+)?(CorsWebFilter|CorsFilter)\s*\("):
                 self.add("s8-standalone-cors-webfilter", s.rel, line,
@@ -1833,9 +2223,7 @@ class Lint:
                          "publish the CorsConfigurationSource instead and enable http.cors {}", mechanical=False)
             for line, m in s.find(r"@(?:field:)?Value\s*\(\s*\"\\?\$\{([^}\"]*)\}"):
                 if re.search(r"cors|origin", m.group(1), re.I):
-                    self.add("s8-standalone-cors-value", s.rel, line,
-                             f"@Value(\"${{{m.group(1)}}}\") cannot bind a YAML list — startup fails to resolve it",
-                             "bind the origins with a @ConfigurationProperties class", mechanical=False)
+                    self._cors_value(s, line, m.group(1), shapes)
             if s.has(r"allowCredentials\s*=\s*true|setAllowCredentials\s*\(\s*true\s*\)|allowCredentials\s*\(\s*true"):
                 for line, _ in s.find(r"(?:allowedOrigins\s*=\s*\w*\(?\s*|[Aa]llowedOrigins?\s*\(\s*"
                                       r"(?:\w+\.of\s*\(\s*|listOf\s*\(\s*)?)\"\*\""):
@@ -1846,39 +2234,101 @@ class Lint:
             self.add("s8-standalone-dead-spa", s.rel, line,
                      "backend SPA fallback in a standalone build — the static host serves the SPA; this is dead code",
                      "remove the SPA filter; configure the rewrite on the static host", mechanical=False)
-        consumed = False
-        mutators = []
+        self._base_url()
+
+    def _base_url(self):
+        """The Orval mutator — the path each orval.config.* names, else a custom-fetch.ts by name — prefixes a
+        build-time environment read onto the request URL."""
+        mutators, computed = [], []
         for d in self.frontend_dirs:
-            mutators += [f for f in self.p.files if f.name == "custom-fetch.ts" and d in f.parents]
-        for f in mutators:
-            consumed = consumed or base_url_consumed(f.read_text(encoding="utf-8", errors="replace"))
-        if not consumed:
-            where = self.p.rel(mutators[0]) if mutators else (
-                self.p.rel(self.frontend_dirs[0]) if self.frontend_dirs else None)
-            self.add("s8-standalone-base-url", where, None,
-                     "no fetch mutator prefixes import.meta.env.VITE_API_BASE_URL — the generated client's relative "
-                     "paths resolve against the static host and 404",
-                     "in custom-fetch.ts: const BASE = import.meta.env.VITE_API_BASE_URL ?? ''; fetch(`${BASE}${url}`)",
-                     mechanical=False)
+            for cfg, parsed in self.orval(d):
+                if not parsed["readable"]:
+                    computed.append(self.p.rel(cfg))
+                for value, _ in parsed["mutators"]:
+                    base = os.path.normpath(cfg.parent / value)
+                    hit = next((Path(base + ext) for ext in ("", ".ts", ".tsx", ".js") if Path(base + ext).is_file()),
+                               None)
+                    if hit is not None and hit not in mutators:
+                        mutators.append(hit)
+        if not mutators:
+            mutators = [f for d in self.frontend_dirs for f in self.p.files
+                        if f.name == "custom-fetch.ts" and d in f.parents]
+        if not mutators and computed:
+            self.skip(["s8-standalone-base-url"],
+                      f"{', '.join(computed)}: the mutator path is computed, not written as a string, and no "
+                      "custom-fetch.ts exists — only running the config finds the mutator")
+            return
+        if any(base_url_consumed(f.read_text(encoding="utf-8", errors="replace")) for f in mutators):
+            return
+        where = self.p.rel(mutators[0]) if mutators else (
+            self.p.rel(self.frontend_dirs[0]) if self.frontend_dirs else None)
+        tooling = self.facts.get("frontendTooling")
+        convention = BASE_URL_ENV.get(tooling or "")
+        name = mutators[0].name if mutators else "the Orval mutator"
+        self.add("s8-standalone-base-url", where, None,
+                 "no fetch mutator prefixes a build-time API base URL (an import.meta.env.* / process.env.* read) "
+                 "onto the request URL — the generated client's relative paths resolve against the static host "
+                 "and 404",
+                 (f"in {name}: const BASE = {convention[1]} ?? ''; fetch(`${{BASE}}${{url}}`) "
+                  f"({convention[0]}'s spelling of the variable)" if convention else f"in {name}: read the API base URL from the build-time variable your tooling inlines "
+                  "and prefix it: fetch(`${BASE}${url}`)"),
+                 mechanical=False)
+
+    def _cors_value(self, s, line, placeholder, shapes):
+        """@Value on a CORS origins key: Blocking when the key is a sequence in configuration (it binds as indexed
+        keys only), Should-fix when it is a scalar or set in no application* file."""
+        key, _, default = placeholder.partition(":")
+        shape = shapes.get(norm_key(key.strip()))
+        if shape and shape[0] == "sequence":
+            where = f"{shape[1]}:{shape[2]}"
+            consequence = (f"so the placeholder silently binds its default {default!r}" if ":" in placeholder
+                           else "so startup fails to resolve the placeholder")
+            self.add("s8-standalone-cors-value", s.rel, line,
+                     f"@Value(\"${{{placeholder}}}\"): {key} is a list ({where}), which binds only as indexed keys "
+                     f"({key}[0]) — {consequence}",
+                     "bind the origins with a @ConfigurationProperties class", mechanical=False)
+            return
+        found = (f"a scalar at {shape[1]}:{shape[2]}" if shape and shape[0] == "scalar"
+                 else "set in no application* file")
+        self.add("s8-standalone-cors-value-scalar", s.rel, line,
+                 f"@Value(\"${{{placeholder}}}\"): {key} is {found}. A comma-separated scalar binds, but the "
+                 "day it is written as a YAML list the placeholder stops resolving",
+                 "bind the origins with a @ConfigurationProperties class", mechanical=False)
 
     def _gitignore(self, fe_dirs):
         for d in fe_dirs:
-            if not list(d.glob("orval.config.*")):
+            outputs = []
+            for cfg, parsed in self.orval(d):
+                if not parsed["readable"]:
+                    self.skip(["s8-generated-gitignore"],
+                              f"{self.p.rel(cfg)}: an output path is computed, not written as a string — only "
+                              "running the config resolves it")
+                    continue
+                for value, _ in parsed["targets"] + parsed["schemas"]:
+                    out = Path(os.path.normpath(cfg.parent / value))
+                    if (self.root in out.parents) and out not in outputs:
+                        outputs.append(out)
+            if not outputs:
                 continue
-            patterns = []
+            ignores = []
             for g in [d] + [p for p in d.parents if self.root in p.parents or p == self.root]:
                 gi = g / ".gitignore"
                 if gi.is_file():
-                    patterns += [l.strip() for l in gi.read_text(encoding="utf-8", errors="replace").splitlines()]
-            for sub in ("generated", "model"):
-                # `src/shared/api/<sub>/` (any prefix), or a bare `<sub>/` that ignores every such directory
-                if not any(re.search(rf"(^|/)src/shared/api/{sub}/?$", p) or p.strip("/") == sub
-                           for p in patterns if p and not p.startswith("#")):
-                    self.add("s8-generated-gitignore", self.p.rel(d / ".gitignore"), None,
-                             f"src/shared/api/{sub}/ is not git-ignored — generated client code gets committed",
-                             f"add src/shared/api/{sub}/ to {self.p.rel(d / '.gitignore')}",
-                             [{"op": "append-line", "file": self.p.rel(d / ".gitignore"),
-                               "text": f"src/shared/api/{sub}/"}])
+                    ignores.append((g, gi.read_text(encoding="utf-8", errors="replace").splitlines()))
+            for out in outputs:
+                if any(gitignore_covers(out.relative_to(g).as_posix(), pats) for g, pats in ignores if g in out.parents):
+                    continue
+                gi_rel = self.p.rel(d / ".gitignore")
+                # A file target (Orval's single mode) is ignored as the file; a directory with a trailing slash.
+                entry = (out.relative_to(d).as_posix() if d in out.parents else None)
+                if entry is not None and out.suffix not in (".ts", ".tsx", ".js", ".mjs", ".cjs"):
+                    entry += "/"
+                shown = entry or self.p.rel(out)
+                self.add("s8-generated-gitignore", gi_rel, None,
+                         f"{shown} is not git-ignored — generated client code gets committed",
+                         f"add {shown} to {gi_rel}" if entry else
+                         f"git-ignore {shown} (it lies outside {self.p.rel(d)})",
+                         [{"op": "append-line", "file": gi_rel, "text": entry}] if entry else None)
 
     # -- S9 / S10 --------------------------------------------------------------------------------
 
@@ -1926,6 +2376,42 @@ class Lint:
                          "declare maven-failsafe-plugin with the integration-test and verify goals",
                          mechanical=False)
 
+    # -- S11 -------------------------------------------------------------------------------------
+    # s11-boot-parent is decided in s1 (it needs the Boot parent lookup) and s11-skip-frontend in s8.
+
+    def s11(self):
+        """The Maven the project's wrapper downloads, against the stack-pins.md Maven pin.
+
+        Read straight from the root's .mvn/wrapper/maven-wrapper.properties: `.mvn` is in SKIP_DIRS, so the
+        project walk never lists it. No wrapper is not a finding — the project builds with whatever mvn runs it."""
+        pin = self.pins.get("Maven", "")
+        if version_tuple(pin) is None:
+            self.skip(["s11-maven-wrapper"], "stack-pins.md has no Maven pin")
+            return
+        props = self.root / ".mvn" / "wrapper" / "maven-wrapper.properties"
+        if not props.is_file():
+            self.skip(["s11-maven-wrapper"], "no .mvn/wrapper/maven-wrapper.properties: the project has no Maven wrapper")
+            return
+        rel = self.p.rel(props)
+        for n, raw in enumerate(props.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if not re.match(r"\s*distributionUrl\s*[=:]", raw):
+                continue
+            m = re.search(r"apache-maven/([^/\s]+)/apache-maven-\1-bin\.zip", raw)
+            if m is None:
+                self.skip(["s11-maven-wrapper"],
+                          f"{rel}:{n} distributionUrl names no apache-maven/<version>/apache-maven-<version>-bin.zip")
+                return
+            have = m.group(1)
+            if version_below(have, pin):
+                self.add("s11-maven-wrapper", rel, n,
+                         f"the Maven wrapper downloads Maven {have}; the Essentials build and /essentials:init run "
+                         f"{pin}",
+                         f"point distributionUrl at Maven {pin} (stack-pins.md)",
+                         [{"op": "replace-text", "file": rel, "line": n, "from": m.group(0),
+                           "to": f"apache-maven/{pin}/apache-maven-{pin}-bin.zip"}])
+            return
+        self.skip(["s11-maven-wrapper"], f"{rel} has no distributionUrl")
+
     def run(self):
         self.s1()
         self.s2()
@@ -1938,6 +2424,7 @@ class Lint:
         self.s8()
         self.s9()
         self.s10()
+        self.s11()
         self.facts["appPom"] = self.app.rel
         v, _, _ = self.p.prop(self.app, "java.version")
         self.facts["javaVersion"] = v
@@ -1963,7 +2450,9 @@ def report_text(lint, anchors, quiet, out):
         print(f"stack-lint {lint.root}", file=out)
         print("  facts: " + " · ".join(
             f"{k}={f.get(k) or 'unknown'}{'' if src.get(k) != 'flag' else ' (flag)'}"
-            for k in ("language", "db", "web", "frontend")) + f" · app={f.get('appPom')}", file=out)
+            for k in ("language", "db", "web", "frontend"))
+              + (f" · tooling={f['frontendTooling']}" if f.get("frontendTooling") else "")
+              + f" · app={f.get('appPom')}", file=out)
         print(f"  essentials: {f.get('essentialsVersion') or 'unknown'}"
               f"{' (flag)' if src.get('essentialsVersion') == 'flag' else ''}"
               f" · target {f.get('targetEssentialsVersion')}"

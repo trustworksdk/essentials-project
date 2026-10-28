@@ -51,6 +51,14 @@ class PostgresqlDurableQueuesClaimPlanIT {
     private static final int       CLAIM_LIMIT     = 128;
     private static final Pattern   JOIN_FILTER     = Pattern.compile("\"Join Filter\":\\s*\"([^\"]*)\"");
     private static final Pattern   JOIN_ON_ID      = Pattern.compile("\\bid = \\w+\\.id\\b");
+    private static final Pattern   PRIMARY_KEY_ARRAY_LOOKUP =
+            Pattern.compile("\"Index Name\":\\s*\"" + QUEUE_TABLE + "_pkey\",[^}]*?\"Index Cond\":\\s*\"\\(id = ANY ");
+    /**
+     * A Sort or Incremental Sort node with {@code next_delivery_ts} among its sort keys, capturing the rows it returned
+     */
+    private static final Pattern   SORT_ON_NEXT_DELIVERY_TS =
+            Pattern.compile("\"Node Type\":\\s*\"(?:Incremental )?Sort\",[^\\[]*?\"Actual Rows\":\\s*([0-9.]+),[^\\[]*?\"Sort Key\":\\s*\\[[^\\]]*next_delivery_ts");
+    private static final Pattern   ROWS_REMOVED_BY_JOIN_FILTER = Pattern.compile("\"Rows Removed by Join Filter\":\\s*([0-9.]+)");
 
     /**
      * The claim shape before the fix, kept as a control: if it no longer degrades, the test has not recreated
@@ -128,19 +136,71 @@ class PostgresqlDurableQueuesClaimPlanIT {
         assertThat(joinFiltersOnId(plan)).as(plan).isEmpty();
     }
 
-    private void createStaleStatistics(java.util.function.IntFunction<Message> messageFactory, QueueName queueName) {
-        queue(messageFactory, queueName);
+    /**
+     * The opt-in batched fetch joined on {@code id} twice - the candidates to the locking scan, and the locked rows to
+     * the {@code UPDATE} - and took 37.6 s for one poll over two queues of 20 000 messages each before it selected by
+     * primary-key array too.
+     */
+    @Test
+    void the_batched_claim_does_not_join_on_id_when_statistics_say_the_queue_is_empty() {
+        createStaleStatistics(() -> {
+            queue(i -> Message.of("payload-" + i), UNORDERED_QUEUE);
+            queue(i -> OrderedMessage.of("payload-" + i, "key-" + (i % 2_000), i / 2_000), ORDERED_QUEUE);
+        });
+
+        var legacyPlan = explainAnalyze(LEGACY_UNORDERED_CLAIM, UNORDERED_QUEUE);
+        assumeThat(joinFiltersOnId(legacyPlan))
+                .as("control: the legacy claim must degrade, or the stale statistics were not recreated")
+                .isNotEmpty();
+
+        var batchedSql = durableQueues.getDurableQueuesSql()
+                                      .buildBatchedSqlStatement(Map.of(),
+                                                                Map.of(UNORDERED_QUEUE, CLAIM_LIMIT, ORDERED_QUEUE, CLAIM_LIMIT),
+                                                                List.of(UNORDERED_QUEUE, ORDERED_QUEUE));
+        var plan = explainAnalyze(batchedSql);
+
+        // The per-key NOT EXISTS barrier has a join filter of its own (on key and key_order), which is not
+        // what this test guards
+        assertThat(joinFiltersOnId(plan)).as(plan).isEmpty();
+        assertThat(PRIMARY_KEY_ARRAY_LOOKUP.matcher(plan).results().count())
+                .as("both the locking scan and the UPDATE must select their rows by primary-key array: " + plan)
+                .isEqualTo(2);
+        assertThat(plan).as("the claim must still claim a full batch for each queue").contains("\"Actual Rows\": " + 2 * CLAIM_LIMIT);
+
+        // The statement numbered every eligible message of every queue in one ROW_NUMBER() window ordered by
+        // next_delivery_ts, which sorted the whole backlog - 40 000 rows here - on every poll. Each queue's candidates
+        // are now taken under a LIMIT of its slots, so every sort on next_delivery_ts hands on at most one queue's slots.
+        var nextDeliverySortRows = SORT_ON_NEXT_DELIVERY_TS.matcher(plan).results()
+                                                           .map(result -> Double.parseDouble(result.group(1)))
+                                                           .toList();
+        assertThat(nextDeliverySortRows).as("the plan sorts candidates on next_delivery_ts: " + plan).isNotEmpty();
+        assertThat(nextDeliverySortRows).as("every sort on next_delivery_ts is bounded by the slots: " + plan)
+                                        .allMatch(rows -> rows <= CLAIM_LIMIT);
+        // Nor does any join compare rows of the queue with each other: joined back to the table on key and key_order,
+        // the ordered heads were planned as a nested loop over the whole queue and discarded 20 million rows (5 s)
+        var rowsRemovedByJoinFilter = ROWS_REMOVED_BY_JOIN_FILTER.matcher(plan).results()
+                                                                 .mapToDouble(result -> Double.parseDouble(result.group(1)))
+                                                                 .sum();
+        assertThat(rowsRemovedByJoinFilter).as("rows removed by join filters: " + plan).isLessThanOrEqualTo(MESSAGES);
+    }
+
+    private void createStaleStatistics(Runnable queueBacklog) {
+        queueBacklog.run();
         jdbi.useHandle(handle -> {
             handle.execute("DELETE FROM " + QUEUE_TABLE);
             handle.execute("ANALYZE " + QUEUE_TABLE);
         });
-        queue(messageFactory, queueName);
+        queueBacklog.run();
 
         var reltuples = jdbi.withHandle(handle -> handle.createQuery("SELECT reltuples FROM pg_class WHERE relname = :table")
                                                         .bind("table", QUEUE_TABLE)
                                                         .mapTo(Double.class)
                                                         .one());
         assertThat(reltuples).as("precondition: the statistics must say the table is empty").isEqualTo(0d);
+    }
+
+    private void createStaleStatistics(java.util.function.IntFunction<Message> messageFactory, QueueName queueName) {
+        createStaleStatistics(() -> queue(messageFactory, queueName));
     }
 
     private void queue(java.util.function.IntFunction<Message> messageFactory, QueueName queueName) {
@@ -167,6 +227,21 @@ class PostgresqlDurableQueuesClaimPlanIT {
                              .bind("limit", CLAIM_LIMIT)
                              .mapTo(String.class)
                              .one();
+            } finally {
+                handle.rollback();
+            }
+        });
+    }
+
+    private String explainAnalyze(DurableQueuesSql.BatchedSqlResult batchedSql) {
+        return jdbi.withHandle(handle -> {
+            handle.begin();
+            try {
+                var query = handle.createQuery("EXPLAIN (ANALYZE, FORMAT JSON) " + batchedSql.getSql())
+                                  .bind("now", Instant.now());
+                batchedSql.getSingleValueBindings().forEach(query::bind);
+                batchedSql.getListBindings().forEach(query::bindList);
+                return query.mapTo(String.class).one();
             } finally {
                 handle.rollback();
             }

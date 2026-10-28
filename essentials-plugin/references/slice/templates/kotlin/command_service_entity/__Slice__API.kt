@@ -19,18 +19,21 @@ import org.springframework.web.bind.annotation.RestController
  * (§ The read side on this lane).
  *
  * The command IS the contract (§R2) — no adapter layer, no mapper. `{{Slice}}Request` carries only
- * the fields the client actually sends, because the id is generated here; that is *assembly*.
+ * the fields the client actually sends: the id of the {{Entity}} to change, and the change. This
+ * slice changes an existing {{Entity}} — the handler loads it — so the id comes from the client,
+ * never from `{{Aggregate}}Id.random()`, which would name a row that does not exist. Turning the
+ * request into the command is *assembly*.
  */
 @RestController
 @RequestMapping("{{apiPath}}")
 class {{Slice}}API(private val commandBus: CommandBus) {
 
-    data class {{Slice}}Request(val placeholder: String)
+    data class {{Slice}}Request(val {{aggregate}}Id: String, val placeholder: String)
     data class {{Slice}}Response(val {{aggregate}}Id: String)
 
     @PostMapping
     fun {{sliceCamel}}(@RequestBody body: {{Slice}}Request): {{Slice}}Response {
-        val id = {{Aggregate}}Id.random()
+        val id = {{Aggregate}}Id.of(body.{{aggregate}}Id)
         commandBus.send<Any?, {{Command}}>({{Command}}(id, body.placeholder))
         return {{Slice}}Response(id.value)
     }

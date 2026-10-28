@@ -1,6 +1,6 @@
 # Kotlin EventSourcing - LLM Reference
 
-> LLM-optimized reference. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/kotlin-eventsourcing/README.md).
+> LLM-optimized reference. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/kotlin-eventsourcing/README.md).
 
 ## Quick Facts
 
@@ -8,7 +8,7 @@
 - **Purpose**: Kotlin-native functional event sourcing (Decider/Evolver patterns)
 - **Status**: WORK-IN-PROGRESS (experimental API)
 - **Key deps**: `kotlin-stdlib`, `kotlin-reflect` (all `provided` scope), EventStore, CommandBus
-- **Java equiv**: [eventsourced-aggregates](./LLM-eventsourced-aggregates.md) `EventStreamDecider`
+- **Not a Java equivalent**: Kotlin `Decider<C,E>`/`Evolver` is its own family. Java's `EventStreamDecider`/`EventStreamEvolver` and typed-error `Decider<C,E,ERR,S>` in [eventsourced-aggregates](./LLM-eventsourced-aggregates.md) look similar but are different types with their own adapters; the three are not interchangeable and do not compose
 
 ```xml
 <dependency>
@@ -431,7 +431,7 @@ fun `Custom assertions`() {
 | `ExpectToFailWithAnExceptionButNoneWasThrown` | Expected exception, none thrown |
 | `ActualExceptionIsNotEqualToExpectedException` | Wrong exception |
 
-**Test reference**: [`GivenWhenThenScenarioTest.kt`](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/kotlin-eventsourcing/src/test/kotlin/dk/trustworks/essentials/components/kotlin/eventsourcing/test/GivenWhenThenScenarioTest.kt)
+**Test reference**: [`GivenWhenThenScenarioTest.kt`](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/kotlin-eventsourcing/src/test/kotlin/dk/trustworks/essentials/components/kotlin/eventsourcing/test/GivenWhenThenScenarioTest.kt)
 
 ## Query State from EventStore
 
@@ -627,7 +627,7 @@ Components allow customization of table/column/index/function names used with **
 
 ⚠️ **Sanitize input**: `AggregateType` used in SQL string concatenation.
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/kotlin-eventsourcing/README.md#security) for full details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/kotlin-eventsourcing/README.md#security) for full details.
 
 **Required actions**:
 - Generate aggregate IDs with `RandomIdGenerator.generate()` or `UUID.randomUUID()`

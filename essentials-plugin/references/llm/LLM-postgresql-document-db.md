@@ -1,6 +1,6 @@
 # postgresql-document-db - LLM Reference
 
-> WORK-IN-PROGRESS - Kotlin-first document database using PostgreSQL JSONB with type-safe queries, optimistic locking, and automatic schema management. A dedicated Java interop surface is available - see [Java Interop](#java-interop). For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-document-db/README.md).
+> WORK-IN-PROGRESS - Kotlin-first document database using PostgreSQL JSONB with type-safe queries, optimistic locking, and automatic schema management. A dedicated Java interop surface is available - see [Java Interop](#java-interop). For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-document-db/README.md).
 
 Base package: `dk.trustworks.essentials.components.document_db`
 
@@ -52,7 +52,7 @@ Base package: `dk.trustworks.essentials.components.document_db`
 | Query conditions | `Condition<E>` | Type-safe WHERE clauses |
 | Indexes | `@Indexed`, `Index<E>` | Performance via GIN indexes on JSONB properties |
 | Custom repositories | `DelegatingDocumentDbRepository<E, ID>` | Base class for domain-specific repositories |
-| Exception | `OptimisticLockingException` | Thrown on version conflict during update |
+| Exception | `OptimisticLockingException` | Thrown on version conflict during `save`/`update`; unchecked (`RuntimeException`) since 0.60.1, so Java can `catch` it by name |
 
 ## Entity Definition
 
@@ -60,7 +60,7 @@ Base package: `dk.trustworks.essentials.components.document_db`
 1. Implement `VersionedEntity<ID, SELF_TYPE>`
 2. `@DocumentEntity("table_name")` annotation
 3. `@Id` annotation on ID property
-4. ID must be `String`, `StringValueType`, or use `createForCompositeId(entityClass, idSerializer)`
+4. ID must be `String`, `StringValueType`, a Java `CharSequenceType` (`createForCharSequenceTypeId`), or use `createForCompositeId(entityClass, idSerializer)`
 
 ### Basic Entity Pattern
 
@@ -139,6 +139,10 @@ value class Version(override val value: Long) : LongValueType<Version> {
 }
 ```
 
+`version` and `lastUpdated` are the property names `VersionedEntity` declares, and the repository looks them up by those names when it is created. A Kotlin entity overrides them as `var`s. A `JavaVersionedEntity` reaches them through `getVersionValue()`/`setVersionValue(long)` and `getLastUpdated()`/`setLastUpdated(...)`, so its backing fields may have any name (the JSON document then carries the field names; the table's `version`/`last_updated` columns do not change).
+
+`save` overwrites the entity's `version` with its `initialVersion` argument (`Version.ZERO` by default) and sets `lastUpdated` to now; `update` does the same with the next version. Both properties must therefore be mutable: a read-only one fails repository creation with `IllegalStateException` ("… is read-only").
+
 ## Repository Setup
 
 ### Factory Creation
@@ -185,6 +189,7 @@ fun kotlinModule() = KotlinModule.Builder()
 |--------|----------|---------|
 | `create(entityClass)` | `StringValueType` ID (recommended) | `factory.create(Order::class)` |
 | `createForStringId(entityClass)` | Plain `String` ID | `factory.createForStringId(Product::class)` |
+| `createForCharSequenceTypeId(entityClass)` | Java `CharSequenceType` ID (since 0.60.1) | `factory.createForCharSequenceTypeId(OrderView.class)` |
 | `createForCompositeId(entityClass, idSerializer)` | Composite/custom ID | See [Composite ID Pattern](#composite-id-pattern) |
 
 ```kotlin
@@ -228,7 +233,7 @@ class DocumentDbConfig {
 | `update(entity)` | Modify existing | Entity w/ `version++` | Checks version, throws `OptimisticLockingException` |
 | `update(entity, nextVersion)` | Update with explicit version | Entity w/ specified version | Alternative to auto-increment |
 | `findById(id)` | Nullable lookup | `Entity?` | Safe when might not exist |
-| `getById(id)` | Required lookup | `Entity` | Throws if missing |
+| `getById(id)` | Required lookup | `Entity` | Throws `DocumentEntityNotFoundException` if missing |
 | `existsById(id)` | Existence check | `Boolean` | No entity loading |
 | `deleteById(id)` | Delete by ID | `Unit` | No-op if missing |
 | `delete(entity)` | Delete by entity | `Unit` | Uses entity ID |
@@ -254,7 +259,7 @@ val updated = repo.update(saved)  // version=1
 
 // Read
 val found = repo.findById(orderId)  // null if missing
-val required = repo.getById(orderId)  // throws if missing
+val required = repo.getById(orderId)  // throws DocumentEntityNotFoundException if missing
 
 // Batch operations
 val orders = listOf(order1, order2, order3)
@@ -283,6 +288,11 @@ fun on(event: ProductAddedToOrder, message: OrderedMessage) {
   does not reject an event that was already applied. The skip check above is what makes the projection
   idempotent.
 - `Version` is a Kotlin value class with a constructor and no `of()` factory: `Version(message.order)`.
+- ⚠️ **Deleting a projection row deletes its version too.** The version lives in the row, so once
+  `deleteById`/`delete` has run, a redelivered *older* event finds no row and the skip check has nothing to
+  compare with: a handler that creates the view when `findById` returns `null` re-creates it. Where redelivery
+  matters, soft-delete instead (a `deleted` flag written with `update(view, Version(message.order))`), or keep
+  a tombstone row whose version is the deleting event's order.
 
 ## Query API
 
@@ -438,14 +448,19 @@ Every factory method has a Java-friendly `Class<T>` overload beside its `KClass<
 |---|---|
 | `createForStringId(Class<ENTITY>)` | a plain `String` |
 | `create(Class<ENTITY>)` | a Kotlin `StringValueType` (value class) |
-| `createForCompositeId(Class<ENTITY>, IdSerializer<ID>)` | anything else (incl. Java `CharSequenceType` IDs) |
+| `createForCharSequenceTypeId(Class<ENTITY>)` | a Java `CharSequenceType` (since 0.60.1; stored as its `toString()`) |
+| `createForCompositeId(Class<ENTITY>, IdSerializer<ID>)` | anything else |
 | `createForCompositeId(Class<ENTITY>, java.util.function.Function<ID, String>)` | anything else — lambda form, most idiomatic from Java |
 
 ```java
 DocumentDbRepository<JavaProduct, String> repo = factory.createForStringId(JavaProduct.class);
+DocumentDbRepository<OrderView, OrderId> views =        // OrderId extends CharSequenceType<OrderId>
+    factory.createForCharSequenceTypeId(OrderView.class);
 DocumentDbRepository<Patient, PatientId> patients =
     factory.createForCompositeId(Patient.class, PatientId::toString);
 ```
+
+Do not call `create(...)` with a raw type for a `CharSequenceType` id: it compiles, then fails at runtime with a `ClassCastException`, because `create` serializes the id as a Kotlin `StringValueType`. Before 0.60.1, use `createForCompositeId(View.class, OrderId::toString)` instead; it stores the same value.
 
 ### CRUD: `long` version overloads
 
@@ -497,15 +512,18 @@ Index<JavaProduct> index = Index.fromPaths("idx_name_city", "name", "address.cit
 
 ### Java gotchas
 
-- ⚠️ **The `@Id` field must be `public`.** `EntityConfiguration` resolves `@Id` through Kotlin reflection over `memberProperties`. For a Java class the property is synthesised from the **field**, so the repository reads it by direct field access — *not* by calling `getId()` — and does not make it accessible. A `private` `@Id` makes the first `save`/`update`/`delete` throw Kotlin's `IllegalCallableAccessException` (wrapping `IllegalAccessException`). Nothing fails at repository creation, so inside a message handler it surfaces only as a failing/dead-lettered message and a projection that never populates.
+- **The `@Id` field is read as a field, not through `getId()`.** `EntityConfiguration` resolves `@Id` through Kotlin reflection over `memberProperties`. For a Java class the property is synthesised from the **field**, so the repository reads it by direct field access. Since 0.60.1 the repository makes a non-public `@Id` accessible when it is created, so `@Id private OrderId id;` works. If the JVM refuses (a package of a named module that is not opened), repository creation fails with an `IllegalStateException` naming the entity and the field.
 
-  `version` and `lastUpdated` escape this because they are declared on `JavaVersionedEntity`/`VersionedEntity` as Kotlin properties with real getter methods, so their `KProperty1` getter is a method call, not a field read. The rule: **Kotlin-declared property → method call; Java-declared field → field read.**
+  ⚠️ **On 0.60.0 and earlier the `@Id` field must be `public`.** There a `private` `@Id` passes repository creation and makes every `save`/`update`/`delete` throw Kotlin's `IllegalCallableAccessException`, so in a message handler it surfaces only as dead-lettered messages and a projection that never populates.
+
+  `version` and `lastUpdated` never had this problem: they are declared on `JavaVersionedEntity`/`VersionedEntity` as Kotlin properties with real getter methods, so their `KProperty1` getter is a method call, not a field read.
 
 - ⚠️ **A pure-Java module must declare `kotlin-stdlib-jdk8` and `kotlin-reflect` itself.** This module declares both in `provided` scope, so they are **not** transitive. Java code needs them at *compile* time regardless: `createForStringId` and the `Condition` DSL expose `KClass`/`KProperty1` overloads that javac must resolve in order to select the `Class`-based one. Without them the build fails with `cannot access kotlin.reflect.KClass`.
+- ⚠️ **A multi-argument constructor is an implicit creator under Jackson 3.** Jackson 3 uses any multi-argument constructor as a properties-based creator, even when a no-arg constructor exists. A parameter that is not a stored property (a convenience constructor taking a `Product` and copying its fields) receives `null` on every read, so `findById`/`getById`/queries fail or return a half-populated entity — while `save`/`update` keep succeeding. Put `@JsonCreator` on the persistence constructor (the no-arg one, for a field-populated entity), or `@JsonIgnore` on the convenience constructor (`com.fasterxml.jackson.annotation`). `ConstructorDetector.EXPLICIT_ONLY` does not help. Rule in full: [LLM-foundation.md § JSONSerializer](./LLM-foundation.md#jsonserializer).
 - ⚠️ **`@DocumentEntity` takes a named argument from Java**: `@DocumentEntity(tableName = "java_products")`, not the positional Kotlin form `@DocumentEntity("orders")`.
 - ⚠️ **Initialise the version field to `Version.NOT_SAVED_YET_VALUE`**, matching the Kotlin default `Version.NOT_SAVED_YET`, so an unsaved entity reads as unsaved. `save()` overwrites the version with its `initialVersion` argument, so this is a marker, not what `save()` checks.
 - ⚠️ **`@Indexed` only works on top-level properties** (see [Indexing](#indexing)). Nested paths need `addIndexByPaths` / `Index.fromPaths`.
-- ⚠️ **Path strings are concatenated into SQL.** Every path segment is validated with `PostgresqlUtil.checkIsValidTableOrColumnName`, the same defence as table and property names — and with the same limits. Never build a path from user input. See [Security](#security).
+- ⚠️ **Path strings are concatenated into SQL.** Every path segment is validated like an entity property name: identifier characters (`[A-Za-z_][A-Za-z0-9_]*`) and at most 63 characters. Never build a path from user input. See [Security](#security).
 
 ## Custom Repositories
 
@@ -584,7 +602,7 @@ CREATE INDEX idx_orders_city ON orders USING gin ((data->'address'->>'city'));
 ### How It Works
 1. Entity has `version` (starts at `Version.ZERO` after `save()`)
 2. `update()` checks: `WHERE id = :id AND version = :currentVersion`
-3. If version mismatch → `OptimisticLockingException`
+3. If version mismatch → `OptimisticLockingException` (a `RuntimeException`: Java catches it by name, and Spring `@Transactional` rolls back on it)
 4. On success → version incremented
 
 ### Version States
@@ -685,7 +703,7 @@ class DocumentsRepository(factory: DocumentDbRepositoryFactory)
   ```
 - ⚠️ **`Version` has no `of()`**: it is a Kotlin value class — construct it, `Version(message.order)`. From Java use the `long` overloads and `Version.NOT_SAVED_YET_VALUE` / `Version.ZERO_VALUE`.
 - ⚠️ **Path-string queries compare as text**: `lt("price", "1000.00")` compares the JSON value as text, so numeric and temporal ranges (and `orderBy(path, …)`) order wrongly. Pass a `DbType` — `lt("price", "1000.00", DbType.NUMERIC)`, `orderBy("price", DbType.NUMERIC, Order.ASC)` — to emit a `CAST`.
-- ⚠️ **findById vs getById**: `findById()` returns `null` when not found; `getById()` is `findById(id)!!` and throws `NullPointerException`. In a projector whose view may not exist yet (created by an event from another stream, or not yet created), use `findById()` and handle the `null`.
+- ⚠️ **findById vs getById**: `findById()` returns `null` when not found; `getById()` throws `DocumentEntityNotFoundException`, which names the entity class and the id (since 0.60.1; before that a bare `NullPointerException` from `findById(id)!!`). It extends `NullPointerException`, so a `catch` for the old NPE still matches. In a projector whose view may not exist yet (created by an event from another stream, or not yet created), use `findById()` and handle the `null`.
 
 ## Security
 
@@ -696,16 +714,18 @@ Table names (`@DocumentEntity`), property names, and index names are used in SQL
 > ⚠️ **SQL Injection Risk**: `@DocumentEntity.tableName`, entity property names, and `Index.name` are used in SQL statements via string concatenation.
 
 **Mitigations:**
-- `PostgresqlUtil.checkIsValidTableOrColumnName()` validates at startup
-- `EntityConfiguration.checkPropertyNames()` validates property names
+- `PostgresqlUtil.checkIsValidTableOrColumnName()` validates the table name and `Index.name` at startup, including the SQL reserved-keyword list (an error names the keyword when that is the cause)
+- `EntityConfiguration.checkPropertyNames()` validates property names (recursively, but not into `java.*` types) and every JSON path segment: identifier characters, at most 63 characters
 - Provides basic defense but NOT complete protection
+
+**Property names may be SQL reserved words (since 0.60.1).** `order`, `user`, `values`, `key`, `path`, `group`, ... are accepted as property names and path segments: a property name reaches SQL only as a quoted JSON path segment (`data->>'order'`), inside a JDBI bind name (`:order__0`, replaced by `?` before PostgreSQL parses the statement) or as the suffix of a prefixed index name (`idx_<table>_order`). On 0.60.0 and earlier they fail repository creation with `InvalidTableOrColumnNameException` — rename the property, or (Java) the field. The table name still must not be a reserved word.
 
 **Developer Responsibility:**
 - Only use table/index/property names from controlled sources
 - NEVER derive from external/untrusted input
 - Validate all entity definitions during development
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-document-db/README.md#security) for details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-document-db/README.md#security) for details.
 
 ### What Validation Does NOT Protect Against
 
@@ -727,7 +747,7 @@ See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.
 
 ## See Also
 
-- [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-document-db/README.md) - Full documentation with motivation and deep dives
+- [README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/postgresql-document-db/README.md) - Full documentation with motivation and deep dives
 - [LLM-foundation](./LLM-foundation.md) - UnitOfWork, PostgresqlUtil
 - [LLM-types](./LLM-types.md) - SingleValueType pattern
 - [LLM-types-jdbi](./LLM-types-jdbi.md) - JDBI type registration

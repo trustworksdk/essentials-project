@@ -27,6 +27,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForLong;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -131,22 +132,12 @@ class ShardOwnedMultiQueueCostIT {
 
     /** Transactions committed against this database — a fair proxy for queries, since every read runs autocommit. */
     private long transactions() throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT xact_commit + xact_rollback FROM pg_stat_database WHERE datname = current_database()");
-             var resultSet = statement.executeQuery()) {
-            resultSet.next();
-            return resultSet.getLong(1);
-        }
+        return queryForLong(dataSource, "Reading the transaction count of the current database from pg_stat_database",
+                            "SELECT xact_commit + xact_rollback FROM pg_stat_database WHERE datname = current_database()");
     }
 
     private static ShardOwnerSettings settings() {
-        var defaults = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(), defaults.ackFlushInterval(),
-                                      defaults.chaseDelay(), defaults.holeExpiry(), defaults.sweepInterval(),
-                                      defaults.maxHolesPerChase(),
-                                      defaults.keyConcurrency(), defaults.pollBackstop(), Duration.ofSeconds(30), PUMP_THREADS,
-                                      defaults.shedGrace(), Duration.ofMillis(30000), Duration.ofSeconds(60));
+        return ShardOwnerSettings.builder().setPumpThreads(PUMP_THREADS).build();
     }
 
     private static int liveThreads() {

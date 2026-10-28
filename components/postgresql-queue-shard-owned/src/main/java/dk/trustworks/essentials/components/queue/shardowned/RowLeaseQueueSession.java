@@ -135,10 +135,11 @@ public final class RowLeaseQueueSession implements QueueSession {
         requireNonNull(id, "No id provided");
         try (var connection = dataSource.getConnection()) {
             // Hand it straight back rather than waiting out the lease: the caller has told us it is
-            // not working on it any more, so holding it hidden would be a delay with no purpose.
-            storage.scheduleRetry(connection, ShardOwnedSchema.UNORDERED_TABLE, id.shard(), id.sequence(),
-                                  1, 0L);
-            storage.releaseSessionRow(connection, id.shard(), id.sequence(), fence);
+            // not working on it any more, so holding it hidden would be a delay with no purpose. The
+            // attempt is counted on the row's own count, and only while this session still holds the row.
+            if (!storage.failSessionRow(connection, id.shard(), id.sequence(), fence)) {
+                log.warn("Session {}: the failure of {} was not recorded - its lease had lapsed", fence, id);
+            }
         }
         shardBySeq.remove(id.sequence());
     }

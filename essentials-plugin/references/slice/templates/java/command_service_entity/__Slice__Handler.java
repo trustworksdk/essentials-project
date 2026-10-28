@@ -7,7 +7,6 @@ import dk.trustworks.essentials.reactive.EventBus;
 import dk.trustworks.essentials.reactive.command.AnnotatedCommandHandler;
 import dk.trustworks.essentials.reactive.command.CmdHandler;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * The decision component for THIS slice (rules/slice-design.md §R1).
@@ -28,10 +27,12 @@ import org.springframework.transaction.annotation.Transactional;
  * switched off, because disabling it silently unwires every handler in the application
  * (§ Wiring is part of done).
  *
- * TRANSACTION — {@code @Transactional} spans the load, the mutation and the save, so the entity's
- * invariant is enforced against a row the transaction owns. Publish inside it too: on this lane the
- * event is an integration fact about a change that has committed, and an {@code EventBus} publish is
- * in-process.
+ * TRANSACTION — no {@code @Transactional} here. The {@code CommandBus} already hands the command to
+ * this handler inside a unit of work (the starter's {@code UnitOfWorkControllingCommandBusInterceptor}),
+ * and that unit of work is a Spring-managed transaction the repository joins, so the load, the
+ * mutation, the save and the publish run in one. {@code @Transactional} would make Spring proxy this
+ * class, and {@code AnnotatedCommandHandler.handle} is final: the bus would call it on the proxy, whose
+ * fields are never initialised, and every command would fail with a {@code NullPointerException}.
  */
 @Component
 public class {{Slice}}Handler extends AnnotatedCommandHandler {
@@ -45,7 +46,6 @@ public class {{Slice}}Handler extends AnnotatedCommandHandler {
     }
 
     @CmdHandler
-    @Transactional
     public void handle({{Command}} cmd) {
         var {{entity}} = {{entity}}s.findById(cmd.id().toString())
                 .orElseThrow(() -> new IllegalArgumentException("No {{Entity}} " + cmd.id().toString()));

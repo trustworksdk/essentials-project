@@ -42,6 +42,6 @@ Shared IT logic is in `components/foundation/src/test/.../fencedlock/DBFencedLoc
 - `INSERT ... ON CONFLICT DO NOTHING` used for initial lock row — means first writer wins; `updateLockInDB` uses optimistic CAS on `(last_issued_fence_token, lock_last_confirmed_ts)` to prevent split-brain
 - Release sets `locked_by_lockmanager_instance_id = NULL` (not delete) — row persists; token monotonically increases across owner changes; FIRST_TOKEN = 1, UNINITIALIZED = -1
 - `releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation = false` (default) — on DB IO failure, locks stay locally held; set `true` only if fail-fast is preferred over retain-until-timeout
-- `lockManagerInstanceId` defaults to machine hostname — collisions possible in containers; always set explicitly in k8s/container deployments
+- `lockManagerInstanceId` defaults to `<hostname>:<pid>` (bare hostname before 0.60.1); starter property `essentials.fenced-lock-manager.instance-id` sets a stable one. `confirmLockInDB` matches on the id recorded on the lock + token, so mixed old/new id schemes in a rolling upgrade stay safe
 - `PostgresPlugin` must be installed on the `Jdbi` instance before use (see IT setup)
 - Scope is intra-service only — all nodes must share same PostgreSQL database

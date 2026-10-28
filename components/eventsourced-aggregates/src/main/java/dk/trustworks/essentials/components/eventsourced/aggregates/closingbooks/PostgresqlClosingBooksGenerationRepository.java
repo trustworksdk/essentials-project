@@ -34,6 +34,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
 
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.addColumnUnlessPresent;
+import static dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaStatements.createIndexUnlessPresent;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.bind;
@@ -176,19 +178,26 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
                                                     """, arg("tableName", tableName)),
                                                // Added after the table shipped without it, so existing installations get it here rather than only via
                                                // CREATE TABLE. NULL means "eligible for scanning now", which is what every pre-existing row should be.
-                                               bind("""
-                                                    ALTER TABLE {:tableName}
-                                                    ADD COLUMN IF NOT EXISTS next_scan_ts TIMESTAMP WITH TIME ZONE
-                                                    """, arg("tableName", tableName))),
+                                               // Only when missing: ADD COLUMN IF NOT EXISTS alone locks the table exclusively on every start - see
+                                               // PostgresqlSchemaStatements
+                                               addColumnUnlessPresent(tableName,
+                                                                      "next_scan_ts",
+                                                                      bind("""
+                                                                           ALTER TABLE {:tableName}
+                                                                           ADD COLUMN IF NOT EXISTS next_scan_ts TIMESTAMP WITH TIME ZONE
+                                                                           """, arg("tableName", tableName)))),
                        SchemaChange.repeatable("generation-one-open-index",
                                                tableName,
-                                               bind("""
-                                                    CREATE UNIQUE INDEX IF NOT EXISTS {:indexName}
-                                                    ON {:tableName} (aggregate_type, logical_aggregate_id)
-                                                    WHERE state = 'OPEN'
-                                                    """,
-                                                    arg("indexName", oneOpenGenerationIndexName),
-                                                    arg("tableName", tableName))));
+                                               // Only when missing: CREATE INDEX IF NOT EXISTS alone locks the table on every start - see PostgresqlSchemaStatements
+                                               createIndexUnlessPresent(tableName,
+                                                                        oneOpenGenerationIndexName,
+                                                                        bind("""
+                                                                             CREATE UNIQUE INDEX IF NOT EXISTS {:indexName}
+                                                                             ON {:tableName} (aggregate_type, logical_aggregate_id)
+                                                                             WHERE state = 'OPEN'
+                                                                             """,
+                                                                             arg("indexName", oneOpenGenerationIndexName),
+                                                                             arg("tableName", tableName)))));
     }
 
     /**

@@ -15,7 +15,9 @@
  */
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlEmitSchemaApplier;
 import dk.trustworks.essentials.components.foundation.schema.*;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
 import org.slf4j.*;
 import org.springframework.beans.factory.*;
 import org.springframework.boot.SpringApplication;
@@ -64,6 +66,29 @@ public final class EssentialsSchemaHarnessRunner implements SmartInitializingSin
         contributors.orderedStream().filter(distinct::add).forEach(found::add);
         log.info("Schema mode '{}': {} schema contributor(s)", mode.name().toLowerCase(Locale.ROOT), found.size());
         new EssentialsSchemaHarness(applier, context.getIfAvailable(SchemaContext::empty), found).apply();
+        addRunReportNote(found.size());
+    }
+
+    /**
+     * The RN-5 notes for the startup report: what {@code emit} and {@code validate} cover, and what they cannot
+     */
+    private void addRunReportNote(int contributors) {
+        var registerAtStartup = "Register every AggregateType and schema-owning component at start-up (as singleton beans or in their component's configuration), " +
+                "not from an ApplicationRunner, a @Lazy bean or on demand, and re-run the emit mode after adding one";
+        if (mode == SchemaMode.EMIT) {
+            var scriptFile = applier instanceof PostgresqlEmitSchemaApplier emitApplier ? "'" + emitApplier.getScriptFile().toAbsolutePath() + "'" : "the script";
+            EssentialsRunReport.addToCurrent(EssentialsRunReport.Finding.info(
+                    "essentials.schema.mode=emit",
+                    "the schema of " + contributors + " contributor(s) is written to " + scriptFile + (exitAfterEmit ? " and the application stops once started" : "") +
+                            "; it covers what was registered during start-up only",
+                    registerAtStartup));
+        } else if (mode == SchemaMode.VALIDATE) {
+            EssentialsRunReport.addToCurrent(EssentialsRunReport.Finding.info(
+                    "essentials.schema.mode=validate",
+                    "the schema of " + contributors + " contributor(s) was validated against the ledger; an AggregateType registered later is validated when it is " +
+                            "registered and fails with a SchemaValidationException naming it if its table is not in the ledger",
+                    registerAtStartup));
+        }
     }
 
     @Override
@@ -71,7 +96,14 @@ public final class EssentialsSchemaHarnessRunner implements SmartInitializingSin
         if (mode != SchemaMode.EMIT || !exitAfterEmit) {
             return;
         }
-        log.info("Schema mode 'emit': the script is written - stopping the application");
+        if (applier instanceof PostgresqlEmitSchemaApplier emitApplier) {
+            log.info("Schema mode 'emit': the script is written to '{}' - stopping the application. It covers what was registered by now; " +
+                             "anything registered later - from an ApplicationRunner, a @Lazy bean or on demand - is not in it",
+                     emitApplier.getScriptFile().toAbsolutePath());
+            emitApplier.exitTriggered();
+        } else {
+            log.info("Schema mode 'emit': the script is written - stopping the application");
+        }
         System.exit(SpringApplication.exit(event.getApplicationContext(), () -> 0));
     }
 }

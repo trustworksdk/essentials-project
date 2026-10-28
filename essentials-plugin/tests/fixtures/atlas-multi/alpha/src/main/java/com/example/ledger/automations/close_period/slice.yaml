@@ -1,0 +1,15 @@
+schemaVersion: "1.4"
+slice: ledger.close_period
+kind: automation
+bc: ledger
+owner: ledger-team
+status: live
+summary: Close the period once an entry crosses it.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+consumes: [EntryPosted]
+dispatches: [ClosePeriod]
+tests:
+  unit: { present: false }

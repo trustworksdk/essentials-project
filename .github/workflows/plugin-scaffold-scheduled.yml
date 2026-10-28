@@ -35,23 +35,12 @@ jobs:
           key: scaffold-m2-${{ github.job }}-${{ hashFiles('**/pom.xml', 'essentials-plugin/references/stack/stack-pins.md') }}
           restore-keys: scaffold-m2-${{ github.job }}-
 
-      # The same subset as maven.yml's scaffold-install, read the same way from the init pom templates.
+      # The same subset and command as maven.yml's scaffold-install: scripts/plugin-scaffold.sh modules / install.
       - name: Install the modules the generated projects depend on
         id: install
         run: |
-          modules=$(python3 - <<'PY'
-          import re
-          ids = set()
-          for f in ("pom.xml.template", "backend/pom.xml.template"):
-              text = open("essentials-plugin/references/init-assets/project/" + f).read()
-              for block in re.findall(r"<dependency>(.*?)</dependency>", text, re.S):
-                  if "<groupId>dk.trustworks.essentials" in block:
-                      ids.update(re.findall(r"<artifactId>([\w.-]+)</artifactId>", block))
-          print(",".join(":" + a for a in sorted(ids)))
-          PY
-          )
-          echo "modules: $modules (and what they need, -am)"
-          mvn -B -ntp install -DskipTests -DskipDependencyCheck=true -am -pl "$modules"
+          echo "modules: $(scripts/plugin-scaffold.sh modules) (and what they need, -am)"
+          scripts/plugin-scaffold.sh install
 
       - name: Pre-pull the database images the generated projects use
         run: |

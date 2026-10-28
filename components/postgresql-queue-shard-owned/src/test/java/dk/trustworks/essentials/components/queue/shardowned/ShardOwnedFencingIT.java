@@ -16,16 +16,22 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.*;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -114,6 +120,215 @@ class ShardOwnedFencingIT {
     }
 
     /**
+     * One of the two ways out of {@link LeasedOwner.LeaseRow#ENDED_ROW_HELD} that do not go through
+     * {@link LeasedOwner#onLeaseEnded} (the other, a takeover attempt charge refused by its fence, is
+     * {@code ShardOwnedTakeoverAttemptsIT}'s): the owner's own acknowledgement flush is refused by its fence, and the
+     * owner moves itself to {@code RELEASED}.
+     * {@code stop()} ends every held owner keeping its row and then flushes the acknowledgements of those that were
+     * serving, so a successor that took the unit in between fences that flush out. From either state the flush ran in,
+     * the owner must then stop counting the unit as this instance's, and nothing may move it back.
+     */
+    @ParameterizedTest(name = "{0} lane, flushed while {1}")
+    @CsvSource({"unordered, HELD", "unordered, ENDED_ROW_HELD", "ordered, HELD", "ordered, ENDED_ROW_HELD"})
+    void an_owner_whose_acknowledgement_flush_is_fenced_out_no_longer_holds_its_lease_row(String lane, LeasedOwner.LeaseRow flushedIn) throws Exception {
+        var storage = new ShardOwnedStorage(dataSource, QUEUE_ID);
+        var payload = "a".getBytes(StandardCharsets.UTF_8);
+        try (var connection = dataSource.getConnection()) {
+            if ("ordered".equals(lane)) {
+                storage.enqueueOrderedBatch(connection, 0, List.of(new ShardOwnedStorage.OrderedPayload("key-1", 1L, payload, 1)));
+            } else {
+                storage.enqueueBatch(connection, 0, List.of(payload), 1);
+            }
+        }
+        var grant = storage.acquireLeaseGrant(lane, 0, "instance-1", 60_000L).orElseThrow();
+
+        var metrics = new ShardOwnerMetrics();
+        var handled = new AtomicInteger();
+        var owner   = owner(lane, storage, grant, metrics, handled);
+        try (var connection = dataSource.getConnection()) {
+            owner.onTakeover(connection);
+            // Handled inline, on this thread; the flush interval is out of the pass's reach, so the acknowledgement stays pending.
+            Awaitility.await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(10))
+                      .until(() -> {
+                          owner.pumpOnce(connection);
+                          return handled.get() == 1;
+                      });
+        }
+        assertThat(remaining(storage, lane)).as("handled, not yet acknowledged").isEqualTo(1L);
+        assertThat(metrics.fencedOutAcks.sum()).isZero();
+
+        if (flushedIn == LeasedOwner.LeaseRow.ENDED_ROW_HELD) {
+            owner.endKeepingLeaseRow();
+        }
+        assertThat(owner.leaseRow()).isEqualTo(flushedIn);
+
+        // A successor takes the unit: the lease expires and another instance acquires it, bumping the fence.
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "UPDATE " + ShardOwnedSchema.LEASE_TABLE + " SET lease_until = now() - interval '1 second'"
+                     + " WHERE queue_id = ? AND lane = ? AND shard = 0")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, lane);
+            assertThat(statement.executeUpdate()).isOne();
+        }
+        assertThat(storage.acquireLease(lane, 0, "instance-2", 60_000L).orElseThrow()).isGreaterThan(grant.fence());
+
+        try (var connection = dataSource.getConnection()) {
+            owner.flushOnStop(connection);
+        }
+
+        assertThat(metrics.fencedOutAcks.sum()).as("the flush was refused by the fence").isEqualTo(1L);
+        assertThat(remaining(storage, lane)).as("left for the successor").isEqualTo(1L);
+        assertThat(owner.leaseRow()).as("the row names the successor now").isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+        assertThat(owner.leaseHeld()).isFalse();
+        assertThat(owner.holdsLeaseRow()).as("no longer counted as this instance's").isFalse();
+
+        owner.endKeepingLeaseRow();
+        assertThat(owner.leaseRow()).as("a released row is never held again").isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+        assertThat(owner.holdsLeaseRow()).isFalse();
+    }
+
+    /**
+     * An owner whose row this instance has released itself ({@code ShardOwnedQueue.releaseLeaseRows}: the row first, then
+     * the owner {@code RELEASED}) and that flushes an acknowledgement after that - a stop's budget thread whose flush
+     * returns once the unit it kept was given up and released on request, the handler having returned meanwhile. The fence
+     * refuses the delete, as it must, but that is no lost lease: nothing counts it in {@code fencedOutAcks} and nothing
+     * WARNs "lease lost". It did both, pointing an operator at a fault that did not happen.
+     */
+    @ParameterizedTest(name = "{0} lane")
+    @ValueSource(strings = {"unordered", "ordered"})
+    void an_owner_whose_acknowledgement_flush_is_refused_after_this_instance_released_its_row_reports_no_lost_lease(String lane) throws Exception {
+        var storage = new ShardOwnedStorage(dataSource, QUEUE_ID);
+        var payload = "a".getBytes(StandardCharsets.UTF_8);
+        try (var connection = dataSource.getConnection()) {
+            if ("ordered".equals(lane)) {
+                storage.enqueueOrderedBatch(connection, 0, List.of(new ShardOwnedStorage.OrderedPayload("key-1", 1L, payload, 1)));
+            } else {
+                storage.enqueueBatch(connection, 0, List.of(payload), 1);
+            }
+        }
+        var grant = storage.acquireLeaseGrant(lane, 0, "instance-1", 60_000L).orElseThrow();
+
+        var metrics     = new ShardOwnerMetrics();
+        var handled     = new AtomicInteger();
+        var owner       = owner(lane, storage, grant, metrics, handled);
+        var logged      = new ListAppender<ILoggingEvent>();
+        var ownerLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("ordered".equals(lane) ? OrderedShardOwner.class : ShardOwner.class);
+        logged.start();
+        ownerLogger.addAppender(logged);
+        try {
+            try (var connection = dataSource.getConnection()) {
+                owner.onTakeover(connection);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(10))
+                          .until(() -> {
+                              owner.pumpOnce(connection);
+                              return handled.get() == 1;
+                          });
+            }
+            assertThat(remaining(storage, lane)).as("premise: handled, not yet acknowledged").isEqualTo(1L);
+
+            // As a stop ends it, and as releaseLeaseRows gives the row up: the row first, then the owner.
+            owner.endKeepingLeaseRow();
+            assertThat(storage.releaseFencedLeases(lane, Map.of(0, grant.fence()), "instance-1")).as("premise: the row is released").isOne();
+            owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
+            assertThat(owner.leaseRow()).isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+
+            try (var connection = dataSource.getConnection()) {
+                owner.flushOnStop(connection);
+            }
+
+            assertThat(remaining(storage, lane)).as("the fence refused the acknowledgement of the released row").isEqualTo(1L);
+            assertThat(metrics.fencedOutAcks.sum()).as("a refusal of a row this instance released is no fenced-out acknowledgement").isZero();
+            assertThat(logged.list).extracting(ILoggingEvent::getFormattedMessage)
+                                   .as("nor logged as a lost lease")
+                                   .noneMatch(message -> message.contains("lease lost"));
+            assertThat(owner.leaseRow()).isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+        } finally {
+            ownerLogger.detachAppender(logged);
+        }
+    }
+
+    /**
+     * The same, but with a release of the row whose answer this instance never received ({@code ShardOwnedQueue.releaseLeaseRows}
+     * marks the owner {@code markReleaseInDoubt()} and rethrows): the statement went through on the server, the owner stays
+     * where it was, as far as this instance knows still holding its row. Its next acknowledgement flush is refused by the
+     * fence; that is the instance's own release, not a lost lease - no {@code fencedOutAcks}, no "lease lost" WARN.
+     */
+    @ParameterizedTest(name = "{0} lane")
+    @ValueSource(strings = {"unordered", "ordered"})
+    void an_owner_whose_acknowledgement_flush_is_refused_after_a_release_of_its_row_in_doubt_reports_no_lost_lease(String lane) throws Exception {
+        var storage = new ShardOwnedStorage(dataSource, QUEUE_ID);
+        var payload = "a".getBytes(StandardCharsets.UTF_8);
+        try (var connection = dataSource.getConnection()) {
+            if ("ordered".equals(lane)) {
+                storage.enqueueOrderedBatch(connection, 0, List.of(new ShardOwnedStorage.OrderedPayload("key-1", 1L, payload, 1)));
+            } else {
+                storage.enqueueBatch(connection, 0, List.of(payload), 1);
+            }
+        }
+        var grant = storage.acquireLeaseGrant(lane, 0, "instance-1", 60_000L).orElseThrow();
+
+        var metrics     = new ShardOwnerMetrics();
+        var handled     = new AtomicInteger();
+        var owner       = owner(lane, storage, grant, metrics, handled);
+        var logged      = new ListAppender<ILoggingEvent>();
+        var ownerLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("ordered".equals(lane) ? OrderedShardOwner.class : ShardOwner.class);
+        logged.start();
+        ownerLogger.addAppender(logged);
+        try {
+            try (var connection = dataSource.getConnection()) {
+                owner.onTakeover(connection);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(10))
+                          .until(() -> {
+                              owner.pumpOnce(connection);
+                              return handled.get() == 1;
+                          });
+            }
+            assertThat(remaining(storage, lane)).as("premise: handled, not yet acknowledged").isEqualTo(1L);
+
+            // As a stop ends it; the release goes through on the server, but its answer is never received, so
+            // releaseLeaseRows marks the owner and rethrows, without ending it.
+            owner.endKeepingLeaseRow();
+            assertThat(storage.releaseFencedLeases(lane, Map.of(0, grant.fence()), "instance-1")).as("premise: the row is released").isOne();
+            owner.markReleaseInDoubt();
+            assertThat(owner.leaseRow()).as("premise: as far as this instance knows, the row is still its own")
+                                        .isEqualTo(LeasedOwner.LeaseRow.ENDED_ROW_HELD);
+
+            try (var connection = dataSource.getConnection()) {
+                owner.flushOnStop(connection);
+            }
+
+            assertThat(remaining(storage, lane)).as("the fence refused the acknowledgement of the released row").isEqualTo(1L);
+            assertThat(metrics.fencedOutAcks.sum()).as("a refusal after this instance's own release is no fenced-out acknowledgement").isZero();
+            assertThat(logged.list).extracting(ILoggingEvent::getFormattedMessage)
+                                   .as("nor logged as a lost lease")
+                                   .noneMatch(message -> message.contains("lease lost"));
+            assertThat(owner.leaseRow()).isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+        } finally {
+            ownerLogger.detachAppender(logged);
+        }
+    }
+
+    private static LeasedOwner owner(String lane, ShardOwnedStorage storage, ShardOwnedStorage.LeaseGrant grant, ShardOwnerMetrics metrics,
+                                     AtomicInteger handled) {
+        // An acknowledgement batch size and flush interval no pump pass reaches, so the acknowledgement is still pending
+        // when flushOnStop runs.
+        var settings = ShardOwnerSettings.builder().setAckBatchSize(1_000).setAckFlushInterval(Duration.ofDays(36_500)).build();
+        var policy = RedeliveryPolicy.fixed(Duration.ofSeconds(1), 3);
+        if ("ordered".equals(lane)) {
+            return new OrderedShardOwner(storage, 0, grant.fence(), settings, (id, key, payload, type) -> handled.incrementAndGet(),
+                                         metrics, policy, "instance-1", new ShardWakeup(), HandlerDispatch.inline(),
+                                         grant.previousOwnerReleased());
+        }
+        return new ShardOwner(storage, 0, grant.fence(), settings, (id, payload, type) -> handled.incrementAndGet(), metrics, policy,
+                              new ShardWakeup(), "instance-1", HandlerDispatch.inline(), grant.previousOwnerReleased());
+    }
+
+    private static long remaining(ShardOwnedStorage storage, String lane) throws Exception {
+        return "ordered".equals(lane) ? storage.countOrderedRemaining(0) : storage.countRemaining(0);
+    }
+
+    /**
      * The heartbeat has to keep a long-running owner's lease alive. Without it a slow handler would
      * lose its shard to the expiry sweep while it is still working perfectly well.
      */
@@ -121,9 +336,12 @@ class ShardOwnedFencingIT {
     void a_working_owner_keeps_its_lease_alive() throws Exception {
         var received = new java.util.concurrent.CopyOnWriteArrayList<String>();
         // A lease TTL of 900ms, so several renewals must happen inside the test window.
-        var shortLease = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
-                                                Duration.ofMillis(300), Duration.ofMillis(100),
-                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
+        var shortLease = ShardOwnerSettings.builder()
+                                           .setHoleExpiry(Duration.ofMillis(300))
+                                           .setSweepInterval(Duration.ofMillis(100))
+                                           .setPollBackstop(Duration.ofMillis(50))
+                                           .setLeaseTtl(Duration.ofMillis(1000))
+                                           .build();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
             queue.startConsuming((messageId, payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
@@ -146,6 +364,93 @@ class ShardOwnedFencingIT {
             assertThat((Long) queue.metrics().snapshot().get("fencedOutAcks"))
                     .as("a renewed owner must never be fenced out")
                     .isZero();
+        }
+    }
+
+    /**
+     * The heartbeat's lease check finding a serving owner's unit taken counts one lost lease. The owner counts it, as the
+     * call that moves its lease row to {@code RELEASED}; the lease check counts nothing itself, or the loss is counted
+     * twice. Nothing else finds this loss first: the owner took the unit over cleanly (its lease row was never held
+     * before), so its takeover charges nothing, and no message is enqueued, so it has nothing to acknowledge.
+     */
+    @ParameterizedTest(name = "{0} lane")
+    @ValueSource(strings = {"unordered", "ordered"})
+    void a_serving_owners_unit_the_lease_check_finds_taken_is_counted_lost_once(String lane) throws Exception {
+        // leaseTtl 1s: the heartbeat, and so the lease check, runs every 333 ms.
+        var shortLease = ShardOwnerSettings.builder()
+                                           .setHoleExpiry(Duration.ofMillis(300))
+                                           .setSweepInterval(Duration.ofMillis(100))
+                                           .setPollBackstop(Duration.ofMillis(50))
+                                           .setLeaseTtl(Duration.ofMillis(1000))
+                                           .build();
+
+        try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
+            if ("ordered".equals(lane)) {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, shortLease, SHARD_COUNT);
+            } else {
+                queue.startConsuming((messageId, payload, payloadType) -> { }, shortLease, SHARD_COUNT);
+            }
+            Awaitility.await("instance-1 holds unit 0").atMost(Duration.ofSeconds(20))
+                      .until(() -> "instance-1".equals(ownerOf(lane, 0)));
+            var metrics = queue.metrics();
+            assertThat(metrics.leasesLost.sum()).as("premise: nothing lost yet").isZero();
+            var fence = fenceOf(lane, 0);
+
+            // Another instance takes unit 0 under a new fence, as a takeover after a missed heartbeat would.
+            takeAs(lane, 0, "instance-2");
+
+            Awaitility.await("the lease check finds unit 0 taken").atMost(Duration.ofSeconds(20))
+                      .until(() -> metrics.leasesLost.sum() > 0);
+            // instance-2 has no membership row, so it reads as gone and a later rebalance takes the unit back: by then the
+            // lease check that found the loss has finished with it.
+            Awaitility.await("instance-1 takes unit 0 back").atMost(Duration.ofSeconds(20))
+                      .until(() -> "instance-1".equals(ownerOf(lane, 0)) && fenceOf(lane, 0) > fence + 1);
+
+            assertThat(metrics.leasesLost.sum()).as("one loss, counted once").isEqualTo(1L);
+            assertThat(metrics.fencedOutAcks.sum()).as("premise: no acknowledgement found the loss").isZero();
+        }
+    }
+
+    private void takeAs(String lane, int shard, String instanceId) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("UPDATE " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " SET owner = ?, lease_until = NULL, fence = fence + 1"
+                                                                 + " WHERE queue_id = ? AND lane = ? AND shard = ?")) {
+            statement.setString(1, instanceId);
+            statement.setShort(2, QUEUE_ID);
+            statement.setString(3, lane);
+            statement.setInt(4, shard);
+            assertThat(statement.executeUpdate()).as("premise: unit %d has a lease row", shard).isEqualTo(1);
+        }
+    }
+
+    /**
+     * The instance unit {@code shard}'s lease row names, {@code null} when it names none or there is no row.
+     */
+    private String ownerOf(String lane, int shard) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT owner FROM " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " WHERE queue_id = ? AND lane = ? AND shard = ?")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, lane);
+            statement.setInt(3, shard);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getString(1) : null;
+            }
+        }
+    }
+
+    private long fenceOf(String lane, int shard) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT fence FROM " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " WHERE queue_id = ? AND lane = ? AND shard = ?")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, lane);
+            statement.setInt(3, shard);
+            try (var resultSet = statement.executeQuery()) {
+                assertThat(resultSet.next()).as("premise: unit %d has a lease row", shard).isTrue();
+                return resultSet.getLong(1);
+            }
         }
     }
 }

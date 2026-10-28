@@ -1,6 +1,6 @@
 # EventSourced Aggregates - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/eventsourced-aggregates/README.md).
+> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/eventsourced-aggregates/README.md).
 
 ## Quick Facts
 - **Base package**: `dk.trustworks.essentials.components.eventsourced.aggregates`
@@ -31,16 +31,22 @@
 
 ## Pattern Selection
 
-| Pattern | State | Testing | Best For |
-|---------|-------|---------|----------|
-| **EventStreamDecider** | Immutable, event stream | Given-When-Then | Event Modeling, functional, slicing |
-| **Decider** | Immutable, external | Result types | Typed errors, enterprise |
-| **Modern AggregateRoot** | Mutable, internal | Unit tests | OOP, Spring Boot |
-| **Modern + WithState** | Mutable, separated | Unit tests | Complex state separation |
-| **FlexAggregate** | Immutable, internal | Functional | Explicit event control |
-| **Classic AggregateRoot** | Mutable, requires Event base | Unit tests | Legacy (avoid for new) |
+| Pattern | State | Testing | Snapshots | Best For |
+|---------|-------|---------|-----------|----------|
+| **EventStreamDecider** | Immutable, event stream | Given-When-Then | **No** - full stream per command | Event Modeling, functional, slicing |
+| **Decider** | Immutable, external | Result types | Yes (`deciderBasedCommandHandler`) | Typed errors, enterprise |
+| **Modern AggregateRoot** | Mutable, internal | Unit tests | Yes (`StatefulAggregateRepository`) | OOP, Spring Boot |
+| **Modern + WithState** | Mutable, separated | Unit tests | Yes (`StatefulAggregateRepository`) | Complex state separation |
+| **FlexAggregate** | Immutable, internal | Functional | **No** - full stream per load | Explicit event control |
+| **Classic AggregateRoot** | Mutable, requires Event base | Unit tests | Yes (`StatefulAggregateRepository`) | Legacy (avoid for new) |
 
 All `StatefulAggregate` patterns use `StatefulAggregateRepository`.
+
+**Snapshots** reach only the `StatefulAggregateRepository` (`setAggregateSnapshotRepository(...)` on its builder) and
+the typed-error `Decider` (the `AggregateSnapshotRepository` argument of `CommandHandler.deciderBasedCommandHandler`).
+`EventStreamDeciderCommandHandlerAdapter` takes no `AggregateSnapshotRepository` and fetches the aggregate's whole
+stream on every command, and so do `FlexAggregateRepository` and Kotlin's `DeciderCommandHandlerAdapter`. For a long
+stream on those patterns, keep the stream short instead ([Closing the Books](#closing-the-books)).
 
 ---
 
@@ -205,6 +211,30 @@ public class EventSourcingConfig {
 }
 ```
 
+Each command type must be handled by exactly one command handler on the `CommandBus`, or every send of it fails
+(`MultipleCommandHandlersFoundException`, or the adapter's "Multiple deciders found"). Since 0.60.1 an overlap is
+reported at startup, but registration never fails because of it: an overlap that is never sent keeps working.
+
+The command types checked are the ones a decider declares: `implements EventStreamDecider<CreateOrder, …>`, or the
+concrete permitted subtypes of a sealed one (`EventStreamDeciderCommandHandlerAdapter.handledCommandTypes()`).
+
+- **Another command handler already handles the type** (another adapter, or an `@CmdHandler`): the `CommandBus` WARNs
+  as the adapter is registered (see `CommandBus` in [reactive](./LLM-reactive.md)). The configurator adds the overlap to
+  the `EssentialsRunReport`, and also WARNs itself when the bus is not an `AbstractCommandBus`.
+- **Two deciders of the same adapter handle the type**: the bus sees only one handler, the adapter, so the configurator
+  WARNs about this case itself.
+
+A handler registered *after* the configurator is warned about by the bus alone. The adapter's `toString()` names its
+`AggregateType` and deciders, so the exception's handler list is readable.
+
+Since 0.60.1 the configurator also WARNs at construction for every concrete command a **sealed** command type permits
+(walked recursively via `getPermittedSubclasses()`) that no command handler on the bus handles - every send of it would
+fail with `NoCommandHandlerFoundException`. Checked: the command type of a `HandlesCommandsThatInheritFromCommandType`
+aggregate configuration, and a decider's own `COMMAND` type argument when sealed. Every handler the bus lists counts
+(`CommandBus.getCommandHandlers()`): adapters of earlier configurators and `@CmdHandler`s registered before. A command
+handled only by a handler registered later is still reported. Seal the command root type
+(`sealed interface OrderCommand permits ...`) to get the check.
+
 ### Command Sending
 
 **Dependencies from other modules**:
@@ -224,6 +254,43 @@ public class OrderService {
     }
 }
 ```
+
+**Rejections.** A decider that throws rolls back: `UnitOfWorkControllingCommandBusInterceptor` runs the handler in
+`withUnitOfWork`, so its own writes are discarded, an outer `UnitOfWork` it joined is marked rollback-only even if the
+caller catches the exception, and under `sendAndDontWait` the command is redelivered (details:
+[LLM-reactive.md § When a handler throws](./LLM-reactive.md#when-a-handler-throws-rejections)). Throw for a failure.
+A business rejection that must persist is an outcome: emit a rejection event, which is appended and which `send()`
+returns.
+
+```java
+public Optional<OrderEvent> handle(ConfirmOrder cmd, List<OrderEvent> events) {
+    if (/* not confirmable */) return Optional.of(new OrderConfirmationRejected(cmd.orderId(), "no lines"));
+    return Optional.of(new OrderConfirmed(cmd.orderId()));
+}
+
+var result = (OrderEvent) commandBus.send(new ConfirmOrder(orderId));
+if (result instanceof OrderConfirmationRejected rejected) { /* 409/422 with rejected.reason() */ }
+```
+
+**Getting the appended `GlobalEventOrder`** (since 0.60.1): `send` returns the event, not the `PersistedEvent`. Wrap
+the send in `AppendedEvents.recordDuring(...)` (`postgresql-event-store`, package
+`dk.trustworks.essentials.components.eventsourced.eventstore.postgresql`) to receive the `PersistedEvent`s appended
+during it - e.g. to await a processor with `awaitProcessed` (see `LLM-postgresql-event-store.md`, *Awaiting a
+processor*):
+
+```java
+var recorded = AppendedEvents.recordDuring(() -> commandBus.send(new CreateOrder(orderId, customerId)));
+OrderCreated event = (OrderCreated) recorded.result();                    // what send returned
+orderViewProcessor.awaitProcessed(recorded.lastAppendedEvent().orElseThrow(), Duration.ofSeconds(10));
+```
+
+It records at the event store, so it works for every appender - `EventStreamDecider`, decider `CommandHandler`,
+`StatefulAggregateRepository`, `FlexAggregateRepository`, Kotlin deciders, direct `appendToStream` - once per event.
+Scoped to the calling thread (a `ScopedValue`): it sees `send`, not `sendAsync`/`sendAndDontWait` (their handler runs
+on another thread); appends of synchronous subscribers on that thread during the action are included. Recordings nest.
+A repository that appends at commit is recorded only when its `UnitOfWork` commits during the action: with the
+`UnitOfWorkControllingCommandBusInterceptor` the events are committed when `send` returns; inside an outer
+`UnitOfWork`, nothing lazy is appended until it commits - record around that commit, and await only after it.
 
 ### Testing with GivenWhenThenScenario
 
@@ -257,7 +324,7 @@ void shouldRejectInvalidTransition() {
     scenario
         .given(new OrderCreated(orderId, customerId))
         .when(new ShipOrder(orderId))
-        .thenThrows(IllegalStateException.class);
+        .thenFailsWithExceptionType(IllegalStateException.class);
 }
 
 @Test
@@ -409,6 +476,10 @@ unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
     result.fold(error -> handleError(error), events -> handleSuccess(events));
 });
 ```
+
+⚠️ A `HandlerResult.error(...)` does not throw, but the `CommandHandler` marks the active `UnitOfWork` rollback-only
+(ignored for a transaction Spring manages), so every other write in that `UnitOfWork` is discarded too. A rejection that must persist is returned as an event
+(`HandlerResult.events(new OrderRejected(...))`), not as an error.
 
 **Test refs**: `DeciderTest`, `DeciderBasedCommandHandlerIT`
 
@@ -705,6 +776,8 @@ registers the descriptors before configuration validation runs. The aggregate ty
 - `JSONSerializer` / `EssentialsObjectMappers` from [foundation](./LLM-foundation.md) (Jackson 3; value types via [types-jackson3](./LLM-types-jackson.md), immutables via [immutable-jackson3](./LLM-immutable-jackson.md))
 
 Optimize loading for aggregates with many events. Snapshots save state at EventOrder N, then only load events after N.
+
+Used by `StatefulAggregateRepository` and the typed-error `Decider` only - `EventStreamDecider` and `FlexAggregate` always load the full stream (see [Pattern Selection](#pattern-selection)).
 
 ### When to Use
 | Scenario | Without | With |
@@ -1130,7 +1203,7 @@ Components allow customization of table/column/index/function names via **String
 - Never use unsanitized user input for table names, columns, `AggregateType`, or IDs
 - Validate all configuration at startup
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/eventsourced-aggregates/README.md#security) for details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.1/components/eventsourced-aggregates/README.md#security) for details.
 
 ### What Validation Does NOT Protect Against
 

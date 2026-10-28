@@ -16,10 +16,14 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedStorage.OrderedPayload;
+import dk.trustworks.essentials.components.queue.shardowned.spi.RedeliveryRequested;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
@@ -29,6 +33,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForLong;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -42,7 +47,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  *     whole backlog.</li>
  *     <li>A message whose handler takes the process down every time is dead-lettered once those charges reach
  *     the policy's limit - it never fails, so nothing else would ever park it.</li>
+ *     <li>A redelivery the handler asked for is not counted, so however often it asked, the next unclean takeover
+ *     charges the message one attempt and does not dead-letter it.</li>
+ *     <li>The charge is fenced: an owner whose lease has already moved on when its pump first takes it over charges
+ *     nothing, so the successor's in-flight rows are not charged a second time, and the owner reads as having lost
+ *     its lease and is counted in {@code leasesLost}. An owner that {@code stop()} had already ended, and whose row it
+ *     released, charges nothing either and is neither warned about nor counted. An owner that still holds its lease
+ *     and finds nothing to charge keeps it.</li>
  * </ul>
+ * Which rows a takeover charges, exactly: {@code ShardOwnedTakeoverChargeIT}.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ShardOwnedTakeoverAttemptsIT {
@@ -54,11 +67,12 @@ class ShardOwnedTakeoverAttemptsIT {
     /**
      * Defaults, except for a short lease, so a takeover after a crash does not wait out a production TTL
      */
-    private static final ShardOwnerSettings SHORT_LEASE = new ShardOwnerSettings(500, 200,
-                                                                                Duration.ofMillis(1), Duration.ofMillis(2),
-                                                                                Duration.ofMillis(300), Duration.ofMillis(100),
-                                                                                1_000, 8, Duration.ofMillis(100), Duration.ofSeconds(30), 2,
-                                                                                Duration.ofSeconds(5), LEASE_TTL, Duration.ofSeconds(60));
+    private static final ShardOwnerSettings SHORT_LEASE = ShardOwnerSettings.builder()
+                                                                            .setHoleExpiry(Duration.ofMillis(300))
+                                                                            .setSweepInterval(Duration.ofMillis(100))
+                                                                            .setPollBackstop(Duration.ofMillis(100))
+                                                                            .setLeaseTtl(LEASE_TTL)
+                                                                            .build();
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();
@@ -229,6 +243,41 @@ class ShardOwnedTakeoverAttemptsIT {
     }
 
     @Test
+    void redeliveries_a_handler_requested_never_bring_a_message_closer_to_a_takeover_dead_letter() throws Exception {
+        var deliveries = new AtomicInteger();
+        var handled    = new AtomicInteger();
+        var policy     = RedeliveryPolicy.fixed(Duration.ofMillis(10), 3);
+        var requests   = 5;
+
+        var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1");
+        try {
+            first.startConsuming((messageId, payload, payloadType) -> {
+                if (deliveries.incrementAndGet() <= requests) {
+                    throw new RedeliveryRequested(Duration.ofMillis(10));
+                }
+                // Then the process goes down in the middle of the next delivery
+                awaitUninterruptibly(crashedHandlersRelease, null);
+            }, SHORT_LEASE, SHARD_COUNT, policy);
+            first.enqueue(List.of(bytes("asks-to-wait")), 1);
+            Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> deliveries.get() == requests + 1);
+            first.stopAbruptly();
+            Thread.sleep(LEASE_TTL.toMillis() + 200);
+
+            try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-2")) {
+                second.startConsuming((messageId, payload, payloadType) -> handled.incrementAndGet(), SHORT_LEASE, SHARD_COUNT, policy);
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(handled.get()).isEqualTo(1));
+                assertThat(second.deadLetterCount())
+                        .as("%s requested redeliveries against a policy of 3 attempts, then one unclean takeover: one attempt charged", requests)
+                        .isZero();
+                assertThat(second.remaining()).isZero();
+            }
+        } finally {
+            crashedHandlersRelease.countDown();
+            first.close();
+        }
+    }
+
+    @Test
     void an_ordered_message_that_crashes_every_owner_is_dead_lettered_and_blocks_its_key() throws Exception {
         var deliveries = new AtomicInteger();
         var delivered  = new CopyOnWriteArrayList<String>();
@@ -272,13 +321,237 @@ class ShardOwnedTakeoverAttemptsIT {
         }
     }
 
-    private long countOccupiedShards() throws Exception {
-        try (var connection = dataSource.getConnection();
-             var statement = connection.createStatement();
-             var resultSet = statement.executeQuery("SELECT count(DISTINCT shard) FROM " + ShardOwnedSchema.UNORDERED_TABLE)) {
-            resultSet.next();
-            return resultSet.getLong(1);
+    @Test
+    void an_unordered_owner_whose_lease_was_taken_before_its_takeover_charges_nothing() throws Exception {
+        var policy = RedeliveryPolicy.fixed(Duration.ofSeconds(1), 2);
+        try (var connection = dataSource.getConnection()) {
+            storage().enqueueBatch(connection, 0, List.of(bytes("a"), bytes("b"), bytes("c")), 1);
         }
+        var stale     = takeUncleanly("unordered", "instance-1");
+        // instance-1 has no membership row, so it counts as gone and its lease is taken under a new fence
+        var successor = storage().acquireLeaseGrant("unordered", 0, "instance-2", LEASE_TTL.toMillis()).orElseThrow();
+        assertThat(successor.fence()).isGreaterThan(stale.fence());
+
+        var successorMetrics = new ShardOwnerMetrics();
+        var successorOwner = new ShardOwner(storage(), 0, successor.fence(), ShardOwnerSettings.defaults(), (id, payload, type) -> { },
+                                            successorMetrics, policy, new ShardWakeup(), "instance-2", HandlerDispatch.inline(),
+                                            successor.previousOwnerReleased());
+        var staleMetrics = new ShardOwnerMetrics();
+        var staleOwner = new ShardOwner(storage(), 0, stale.fence(), ShardOwnerSettings.defaults(), (id, payload, type) -> { },
+                                        staleMetrics, policy, new ShardWakeup(), "instance-1", HandlerDispatch.inline(),
+                                        stale.previousOwnerReleased());
+
+        try (var connection = dataSource.getConnection()) {
+            // The successor is delivering: its charge has landed
+            successorOwner.onTakeover(connection);
+            assertThat(successorMetrics.takeoverAttemptBumps.sum()).as("the control: the rows are chargeable").isEqualTo(3);
+            // ... and then the superseded owner's pump runs its takeover
+            staleOwner.onTakeover(connection);
+        }
+
+        assertThat(staleMetrics.takeoverAttemptBumps.sum()).as("refused by the fence").isZero();
+        assertThat(attemptsOf(ShardOwnedSchema.UNORDERED_TABLE)).as("charged once, by the successor").containsOnly(1);
+        assertThat(staleOwner.leaseRow()).as("a refused charge is a lost lease, as on the ack path").isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+        assertThat(staleMetrics.leasesLost.sum()).as("counted as lost: the queue's lease check skips an owner already RELEASED").isEqualTo(1L);
+        assertThat(successorOwner.leaseHeld()).isTrue();
+        assertThat(successorMetrics.leasesLost.sum()).isZero();
+    }
+
+    @Test
+    void an_ordered_owner_whose_lease_was_taken_before_its_takeover_charges_nothing() throws Exception {
+        var policy = RedeliveryPolicy.fixed(Duration.ofSeconds(1), 2);
+        insertOrdered("key-1", 0, 1);
+        insertOrdered("key-2", 0, 2);
+        var stale     = takeUncleanly("ordered", "instance-1");
+        // instance-1 has no membership row, so it counts as gone and its lease is taken under a new fence
+        var successor = storage().acquireLeaseGrant("ordered", 0, "instance-2", LEASE_TTL.toMillis()).orElseThrow();
+        assertThat(successor.fence()).isGreaterThan(stale.fence());
+
+        var successorMetrics = new ShardOwnerMetrics();
+        var successorOwner = new OrderedShardOwner(storage(), 0, successor.fence(), ShardOwnerSettings.defaults(), (id, key, payload, type) -> { },
+                                                   successorMetrics, policy, "instance-2", new ShardWakeup(), HandlerDispatch.inline(),
+                                                   successor.previousOwnerReleased());
+        var staleMetrics = new ShardOwnerMetrics();
+        var staleOwner = new OrderedShardOwner(storage(), 0, stale.fence(), ShardOwnerSettings.defaults(), (id, key, payload, type) -> { },
+                                               staleMetrics, policy, "instance-1", new ShardWakeup(), HandlerDispatch.inline(),
+                                               stale.previousOwnerReleased());
+
+        try (var connection = dataSource.getConnection()) {
+            successorOwner.onTakeover(connection);
+            assertThat(successorMetrics.takeoverAttemptBumps.sum()).as("the control: the rows are chargeable").isEqualTo(2);
+            staleOwner.onTakeover(connection);
+        }
+
+        assertThat(staleMetrics.takeoverAttemptBumps.sum()).as("refused by the fence").isZero();
+        assertThat(attemptsOf(ShardOwnedSchema.ORDERED_TABLE)).as("charged once, by the successor").containsOnly(1);
+        assertThat(staleOwner.leaseRow()).as("a refused charge is a lost lease, as on the ack path").isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+        assertThat(staleMetrics.leasesLost.sum()).as("counted as lost: the queue's lease check skips an owner already RELEASED").isEqualTo(1L);
+        assertThat(successorOwner.leaseHeld()).isTrue();
+        assertThat(successorMetrics.leasesLost.sum()).isZero();
+    }
+
+    /**
+     * The other way a lease moves on before {@code onTakeover} runs: {@code stop()} ended the owner and released its row
+     * (adoptIntoRun's window). The successor then takes the unit cleanly and charges nothing itself, so a late unfenced
+     * charge by the stale owner would be the only charge, and nothing else would expose it.
+     */
+    @Test
+    void an_unordered_owner_whose_unit_was_released_by_stop_before_its_takeover_charges_nothing() throws Exception {
+        var policy = RedeliveryPolicy.fixed(Duration.ofSeconds(1), 2);
+        try (var connection = dataSource.getConnection()) {
+            storage().enqueueBatch(connection, 0, List.of(bytes("a"), bytes("b"), bytes("c")), 1);
+        }
+        var stale        = takeUncleanly("unordered", "instance-1");
+        var staleMetrics = new ShardOwnerMetrics();
+        var staleOwner = new ShardOwner(storage(), 0, stale.fence(), ShardOwnerSettings.defaults(), (id, payload, type) -> { },
+                                        staleMetrics, policy, new ShardWakeup(), "instance-1", HandlerDispatch.inline(),
+                                        stale.previousOwnerReleased());
+
+        assertWarnsNothingWhenEndedAndReleasedBeforeItsTakeover(ShardOwner.class, "unordered", stale, staleOwner, staleMetrics,
+                                                                ShardOwnedSchema.UNORDERED_TABLE);
+    }
+
+    /**
+     * {@link #an_unordered_owner_whose_unit_was_released_by_stop_before_its_takeover_charges_nothing} on the ordered lane.
+     */
+    @Test
+    void an_ordered_owner_whose_unit_was_released_by_stop_before_its_takeover_charges_nothing() throws Exception {
+        var policy = RedeliveryPolicy.fixed(Duration.ofSeconds(1), 2);
+        insertOrdered("key-1", 0, 1);
+        insertOrdered("key-2", 0, 2);
+        var stale        = takeUncleanly("ordered", "instance-1");
+        var staleMetrics = new ShardOwnerMetrics();
+        var staleOwner = new OrderedShardOwner(storage(), 0, stale.fence(), ShardOwnerSettings.defaults(), (id, key, payload, type) -> { },
+                                               staleMetrics, policy, "instance-1", new ShardWakeup(), HandlerDispatch.inline(),
+                                               stale.previousOwnerReleased());
+
+        assertWarnsNothingWhenEndedAndReleasedBeforeItsTakeover(OrderedShardOwner.class, "ordered", stale, staleOwner, staleMetrics,
+                                                                ShardOwnedSchema.ORDERED_TABLE);
+    }
+
+    /**
+     * End {@code staleOwner} as {@code stop()} does and release its row, let instance-2 take the unit cleanly, then run the
+     * stale owner's takeover: it must charge nothing, end {@code RELEASED} without a WARN, and count no lost lease.
+     */
+    private void assertWarnsNothingWhenEndedAndReleasedBeforeItsTakeover(Class<?> ownerType, String lane, ShardOwnedStorage.LeaseGrant stale,
+                                                                         LeasedOwner staleOwner, ShardOwnerMetrics staleMetrics,
+                                                                         String table) throws Exception {
+        var logged      = new ListAppender<ILoggingEvent>();
+        var ownerLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ownerType);
+        var ownerLevel  = ownerLogger.getLevel();
+        logged.start();
+        ownerLogger.addAppender(logged);
+        // The ended owner's refused charge is logged at DEBUG only
+        ownerLogger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            staleOwner.endKeepingLeaseRow();
+            assertThat(storage().releaseFencedLeases(lane, Map.of(0, stale.fence()), "instance-1")).as("premise: stop() released the row").isEqualTo(1);
+            var successor = storage().acquireLeaseGrant(lane, 0, "instance-2", LEASE_TTL.toMillis()).orElseThrow();
+            assertThat(successor.previousOwnerReleased()).as("premise: a clean handover, so the successor charges nothing itself").isTrue();
+
+            try (var connection = dataSource.getConnection()) {
+                staleOwner.onTakeover(connection);
+            }
+
+            assertThat(staleMetrics.takeoverAttemptBumps.sum()).as("refused by the fence").isZero();
+            assertThat(attemptsOf(table)).as("nobody charged a clean handover").containsOnly(0);
+            assertThat(staleOwner.leaseRow()).isEqualTo(LeasedOwner.LeaseRow.RELEASED);
+            assertThat(staleMetrics.leasesLost.sum()).as("its own queue released the row: not a lost lease").isZero();
+            assertThat(logged.list).filteredOn(event -> event.getLevel() == ch.qos.logback.classic.Level.WARN)
+                                   .extracting(ILoggingEvent::getFormattedMessage)
+                                   .as("an owner that had already ended is not warned about")
+                                   .isEmpty();
+            assertThat(logged.list).filteredOn(event -> event.getLevel() == ch.qos.logback.classic.Level.DEBUG)
+                                   .extracting(ILoggingEvent::getFormattedMessage)
+                                   .as("premise: the charge was refused, and the owner read as already ended")
+                                   .anySatisfy(message -> assertThat(message).contains("takeover charge rejected under fence " + stale.fence()
+                                                                                               + "; the owner had already stopped"));
+        } finally {
+            ownerLogger.detachAppender(logged);
+            ownerLogger.setLevel(ownerLevel);
+        }
+    }
+
+    @Test
+    void an_unordered_owner_that_takes_an_empty_shard_uncleanly_keeps_its_lease() throws Exception {
+        var grant   = takeUncleanly("unordered", "instance-1");
+        var metrics = new ShardOwnerMetrics();
+        var owner = new ShardOwner(storage(), 0, grant.fence(), ShardOwnerSettings.defaults(), (id, payload, type) -> { },
+                                   metrics, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 2), new ShardWakeup(), "instance-1",
+                                   HandlerDispatch.inline(), grant.previousOwnerReleased());
+
+        try (var connection = dataSource.getConnection()) {
+            owner.onTakeover(connection);
+        }
+
+        assertThat(metrics.takeoverAttemptBumps.sum()).as("nothing to charge").isZero();
+        assertThat(owner.leaseRow()).as("charging nothing under a lease still held is not a lost lease").isEqualTo(LeasedOwner.LeaseRow.HELD);
+        assertThat(owner.leaseHeld()).isTrue();
+    }
+
+    @Test
+    void an_ordered_owner_that_takes_an_empty_unit_uncleanly_keeps_its_lease() throws Exception {
+        var grant   = takeUncleanly("ordered", "instance-1");
+        var metrics = new ShardOwnerMetrics();
+        var owner = new OrderedShardOwner(storage(), 0, grant.fence(), ShardOwnerSettings.defaults(), (id, key, payload, type) -> { },
+                                          metrics, RedeliveryPolicy.fixed(Duration.ofSeconds(1), 2), "instance-1", new ShardWakeup(),
+                                          HandlerDispatch.inline(), grant.previousOwnerReleased());
+
+        try (var connection = dataSource.getConnection()) {
+            owner.onTakeover(connection);
+        }
+
+        assertThat(metrics.takeoverAttemptBumps.sum()).as("nothing to charge").isZero();
+        assertThat(owner.leaseRow()).as("charging nothing under a lease still held is not a lost lease").isEqualTo(LeasedOwner.LeaseRow.HELD);
+        assertThat(owner.leaseHeld()).isTrue();
+    }
+
+    private ShardOwnedStorage storage() {
+        return new ShardOwnedStorage(dataSource, QUEUE_ID);
+    }
+
+    /**
+     * Take unit 0 of {@code lane} for {@code instanceId} from a holder that did not release it: an instance with no
+     * membership row, which counts as gone.
+     */
+    private ShardOwnedStorage.LeaseGrant takeUncleanly(String lane, String instanceId) throws Exception {
+        var storage = storage();
+        storage.acquireLease(lane, 0, "crashed-before-" + instanceId, LEASE_TTL.toMillis()).orElseThrow();
+        var grant = storage.acquireLeaseGrant(lane, 0, instanceId, LEASE_TTL.toMillis()).orElseThrow();
+        assertThat(grant.previousOwnerReleased()).as("an unclean takeover, which owes a charge").isFalse();
+        return grant;
+    }
+
+    private void insertOrdered(String key, long keyOrder, long seq) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "INSERT INTO " + ShardOwnedSchema.ORDERED_TABLE + " (queue_id, shard, msg_key, key_order, seq, payload, payload_type, attempts)"
+                             + " VALUES (?, 0, ?, ?, ?, '\\x00'::bytea, 1, 0)")) {
+            statement.setShort(1, QUEUE_ID);
+            statement.setString(2, key);
+            statement.setLong(3, keyOrder);
+            statement.setLong(4, seq);
+            statement.executeUpdate();
+        }
+    }
+
+    private List<Integer> attemptsOf(String table) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT attempts FROM " + table + " WHERE queue_id = ? AND shard = 0")) {
+            statement.setShort(1, QUEUE_ID);
+            try (var resultSet = statement.executeQuery()) {
+                var attempts = new ArrayList<Integer>();
+                while (resultSet.next()) {
+                    attempts.add(resultSet.getInt(1));
+                }
+                assertThat(attempts).as("rows on unit 0 of " + table).isNotEmpty();
+                return attempts;
+            }
+        }
+    }
+
+    private long countOccupiedShards() throws Exception {
+        return queryForLong(dataSource, "Counting the occupied shards", "SELECT count(DISTINCT shard) FROM " + ShardOwnedSchema.UNORDERED_TABLE);
     }
 
     private void enqueueBacklog(int messages) throws Exception {

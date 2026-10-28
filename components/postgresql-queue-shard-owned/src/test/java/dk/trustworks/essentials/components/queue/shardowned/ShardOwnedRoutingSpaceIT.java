@@ -29,6 +29,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
 import static org.assertj.core.api.Assertions.*;
 
 /**
@@ -242,14 +243,7 @@ class ShardOwnedRoutingSpaceIT {
 
     /** Short lease and heartbeat, so rebalancing across many instances converges inside the test. */
     private static ShardOwnerSettings fastLease() {
-        var defaults = ShardOwnerSettings.defaults();
-        return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(),
-                                      defaults.ackFlushInterval(), defaults.chaseDelay(),
-                                      defaults.holeExpiry(), defaults.sweepInterval(),
-                                      defaults.maxHolesPerChase(), defaults.keyConcurrency(),
-                                      defaults.pollBackstop(), defaults.maxSweepInterval(),
-                                      defaults.pumpThreads(), Duration.ofSeconds(2),
-                                      Duration.ofSeconds(2), defaults.watermarkCap());
+        return ShardOwnerSettings.builder().setShedGrace(Duration.ofSeconds(2)).setLeaseTtl(Duration.ofSeconds(2)).build();
     }
 
     /**
@@ -338,18 +332,11 @@ class ShardOwnedRoutingSpaceIT {
 
         // Seeded against the queue's own space, or the extra units would have no lease row and could
         // never be owned.
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE
-                     + " WHERE queue_id = ? AND lane = 'ordered'")) {
-            statement.setShort(1, registered.queueId());
-            try (var resultSet = statement.executeQuery()) {
-                resultSet.next();
-                assertThat(resultSet.getInt(1))
-                        .as("every unit of the wider space needs a lease row")
-                        .isEqualTo(wider);
-            }
-        }
+        assertThat(queryForInt(dataSource, "Counting the ordered lease rows of queue " + registered.queueId(),
+                               "SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE + " WHERE queue_id = ? AND lane = 'ordered'",
+                               registered.queueId()))
+                .as("every unit of the wider space needs a lease row")
+                .isEqualTo(wider);
 
         // And a key routes into the wider space, not the default one.
         var key = keyRoutedDifferentlyBy(wider);

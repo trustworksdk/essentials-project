@@ -16,7 +16,10 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql;
 
+import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
+import dk.trustworks.essentials.components.foundation.json.*;
+import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.health.DurableQueuesHealthIndicator;
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
@@ -24,6 +27,7 @@ import dk.trustworks.essentials.components.foundation.postgresql.stats.Postgresq
 import dk.trustworks.essentials.components.foundation.scheduler.api.*;
 import dk.trustworks.essentials.components.foundation.ttl.TTLJob;
 import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
+import dk.trustworks.essentials.shared.network.Network;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -40,6 +44,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.awaitility.Awaitility.waitAtMost;
 
 @Testcontainers
 public class StarterAutoConfigurationIT {
@@ -109,10 +114,14 @@ public class StarterAutoConfigurationIT {
 
             assertThat(ctx).hasSingleBean(SchedulerApi.class);
             SchedulerApi schedulerApi = ctx.getBean(SchedulerApi.class);
-            List<ApiExecutorJob> executorJobs = schedulerApi.getExecutorJobs("principal", 0, 10);
-            assertThat(executorJobs)
-                    .as("TestTtlJob must have been registered with the scheduler")
-                    .isNotEmpty();
+            // getExecutorJobs reads the scheduled-jobs table, and the scheduler writes a job there only once it holds its
+            // fenced lock - acquired asynchronously, on the lock manager's thread, after the context has started
+            waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                List<ApiExecutorJob> executorJobs = schedulerApi.getExecutorJobs("principal", 0, 10);
+                assertThat(executorJobs)
+                        .as("TestTtlJob must have been registered with the scheduler")
+                        .isNotEmpty();
+            });
         });
     }
 
@@ -124,6 +133,68 @@ public class StarterAutoConfigurationIT {
                     EssentialsComponentsProperties props = ctx.getBean(EssentialsComponentsProperties.class);
                     assertThat(props.isImmutableJacksonModuleEnabled()).isTrue();
                 });
+    }
+
+    /**
+     * {@code essentials.immutable-jackson-module-enabled} defaults to {@code true} for the persistence mapper only (N-11,
+     * 0.60.1). Spring Boot's web {@code JsonMapper} keeps the 0.60.0 behaviour: the module bean - and with it the web
+     * mapper's Objenesis fallback - exists only when the property is set to {@code true} explicitly, because on the web
+     * mapper it changes HTTP request binding (a body Jackson cannot construct gets null fields instead of a 400).
+     */
+    @Test
+    void by_default_the_immutable_jackson_module_is_on_for_the_persistence_mapper_only() {
+        contextRunner.run(ctx -> {
+            assertThat(ctx).doesNotHaveBean(EssentialsImmutableJacksonModule.class);
+            assertThat(persistenceMapperOf(ctx).registeredModules()).hasAtLeastOneElementOfType(EssentialsImmutableJacksonModule.class);
+        });
+    }
+
+    @Test
+    void an_explicit_true_puts_the_immutable_jackson_module_on_both_the_web_and_the_persistence_mapper() {
+        contextRunner
+                .withPropertyValues("essentials.immutable-jackson-module-enabled=true")
+                .run(ctx -> {
+                    assertThat(ctx).hasSingleBean(EssentialsImmutableJacksonModule.class);
+                    assertThat(persistenceMapperOf(ctx).registeredModules()).hasAtLeastOneElementOfType(EssentialsImmutableJacksonModule.class);
+                });
+    }
+
+    @Test
+    void an_explicit_false_removes_the_immutable_jackson_module_from_both_and_leaves_the_wire_format_alone() {
+        contextRunner
+                .withPropertyValues("essentials.immutable-jackson-module-enabled=false")
+                .run(ctx -> {
+                    assertThat(ctx).doesNotHaveBean(EssentialsImmutableJacksonModule.class);
+                    var persistenceMapper = persistenceMapperOf(ctx);
+                    assertThat(persistenceMapper.registeredModules()).noneMatch(EssentialsImmutableJacksonModule.class::isInstance);
+                    assertThat(EssentialsObjectMappers.findWireFormatDeviations(persistenceMapper)).isEmpty();
+                });
+    }
+
+    private static tools.jackson.databind.ObjectMapper persistenceMapperOf(org.springframework.context.ApplicationContext ctx) {
+        return ((Jackson3JSONSerializer) ctx.getBean(JSONSerializer.class)).getObjectMapper();
+    }
+
+    @Test
+    void the_fenced_lock_manager_instance_id_defaults_to_hostname_and_pid() {
+        contextRunner.run(ctx -> assertThat(ctx.getBean(FencedLockManager.class).getLockManagerInstanceId())
+                .isEqualTo(Network.hostName() + ":" + ProcessHandle.current().pid()));
+    }
+
+    @Test
+    void the_fenced_lock_manager_instance_id_is_bound_from_properties() {
+        contextRunner
+                .withPropertyValues("essentials.fenced-lock-manager.instance-id=order-service-node-a")
+                .run(ctx -> assertThat(ctx.getBean(FencedLockManager.class).getLockManagerInstanceId())
+                        .isEqualTo("order-service-node-a"));
+    }
+
+    @Test
+    void requiring_a_unit_of_work_for_enqueue_is_off_by_default_and_bound_from_properties() {
+        contextRunner.run(ctx -> assertThat(ctx.getBean(PostgresqlDurableQueues.class).isRequireActiveUnitOfWorkForEnqueue()).isFalse());
+        contextRunner
+                .withPropertyValues("essentials.durable-queues.require-active-unit-of-work-for-enqueue=true")
+                .run(ctx -> assertThat(ctx.getBean(PostgresqlDurableQueues.class).isRequireActiveUnitOfWorkForEnqueue()).isTrue());
     }
 
     @Test

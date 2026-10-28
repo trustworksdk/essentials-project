@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: shipping.order_status
 kind: view
 bc: shipping
@@ -7,6 +7,7 @@ status: live
 summary: Answer where a shipping order stands, by list, by id, or filtered by status.
 generator: essentials
 language: java
+lane: aggregate
 
 serves: [ListOrders, GetOrderStatus, FindOrdersByStatus]
 endpoints:
@@ -17,11 +18,32 @@ reads:
   - { name: OrderStatusView }
 projections:
   - name: OrderStatusProjection
+    aggregateTypes: [ShippingOrders]
     from: [ShippingOrderRegistered, OrderShipped]
     consistency: eventual
     store: document-db
 forbidden:
   - cross-slice-internal:shipping
+tier: cqrs-es
+flow: shipping-order
+scenarios:
+  - name: order status view follows the shipping order lifecycle
+    given:
+      - event: ShippingOrderRegistered
+      - event: OrderShipped
+    then:
+      readModel: OrderStatusView
+      rows:
+        - status: SHIPPED
+    test: OrderStatusViewIT#order_status_view_follows_the_shipping_order_lifecycle
+  - name: orders can be filtered by status
+    given:
+      - event: ShippingOrderRegistered
+    then:
+      readModel: OrderStatusView
+      rows:
+        - status: REGISTERED
+    test: OrderStatusViewIT#orders_can_be_filtered_by_status
 tests:
   unit: { present: false }
   integration: { present: true }

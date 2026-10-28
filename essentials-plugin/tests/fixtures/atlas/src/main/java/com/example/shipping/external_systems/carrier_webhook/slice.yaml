@@ -1,0 +1,28 @@
+schemaVersion: "1.4"
+slice: shipping.carrier_webhook
+kind: translation
+bc: shipping
+owner: shipping-team
+status: live
+summary: Turn the carrier's delivery notices into events.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+externalSystem: carrier
+direction: inbound
+consumes: [DeliveryNotice]
+publishes: [ShipmentDelivered]
+maps:
+  - { from: DeliveryNotice, to: ShipmentDelivered }
+scenarios:
+  - name: records a delivery
+    when: { external: DeliveryNotice, with: { trackingId: t-9 } }
+    then:
+      - event: ShipmentDelivered
+        with: { orderId: o-1, deliveredAt: "2026-10-08T10:00:00Z" }
+forbidden:
+  - cross-slice-internal:shipping
+tests:
+  unit: { present: false }
+  integration: { present: false }

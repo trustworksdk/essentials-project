@@ -17,16 +17,19 @@
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.views.account_balance;
 
 import dk.trustworks.essentials.components.document_db.DocumentDbRepository;
+import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.Application;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.TestConfiguration;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.Account;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.Accounts;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.events.AccountDeposited;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountNumber;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AllowOverdrawingBalance;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.TransactionId;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.ValueDate;
 import dk.trustworks.essentials.types.Amount;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
@@ -46,8 +49,8 @@ import static dk.trustworks.essentials.spring.examples.postgresql.cqrs.ExampleTe
 
 /**
  * Covers the {@code banking.account_balance} view slice: that the projection catches up, that it folds
- * deposits and withdrawals into a running balance, and that redelivering an already-applied event does not
- * double-count.
+ * deposits and withdrawals into a running balance, that a later deposit adds to it, and that redelivering an
+ * already-applied event does not double-count.
  */
 @SpringBootTest(classes = {Application.class, TestConfiguration.class})
 @Testcontainers
@@ -78,6 +81,9 @@ public class AccountBalanceViewIT {
     private DocumentDbRepository<AccountBalanceView, String> accountBalanceRepository;
 
     @Autowired
+    private AccountBalanceProjection accountBalanceProjection;
+
+    @Autowired
     private UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory;
 
     @Test
@@ -104,38 +110,65 @@ public class AccountBalanceViewIT {
 
     @Test
     void the_projection_is_idempotent_when_an_event_is_redelivered() {
-        var accountId = AccountId.random();
+        var accountId     = AccountId.random();
+        var transactionId = TransactionId.random();
 
         unitOfWorkFactory.usingUnitOfWork(uow -> {
             var account = accounts.openNewAccount(new Account(accountId, AccountNumber.of("001987654")));
+            account.depositToday(Amount.of("40"), transactionId);
+        });
+
+        awaitBalance(accountId, Amount.of("40"));
+
+        // The version stored on the row is the EventOrder of the last event projected, here the deposit. Hand
+        // the projection that same deposit again, with that same order, as a redelivery would: the handler
+        // compares the order against the row's version and must leave the balance at 40 rather than add another
+        // 40 -- which is what makes at-least-once delivery safe here.
+        var depositOrder = findView(accountId).getVersionValue();
+        var deposit      = new AccountDeposited(accountId, Amount.of("40"), ValueDate.today(), transactionId);
+
+        unitOfWorkFactory.usingUnitOfWork(uow -> accountBalanceProjection.on(deposit,
+                                                                             OrderedMessage.of(deposit,
+                                                                                               accountId.toString(),
+                                                                                               depositOrder)));
+
+        var afterRedelivery = findView(accountId);
+        assertThat(afterRedelivery.getBalance()).isEqualTo(Amount.of("40"));
+        assertThat(afterRedelivery.getVersionValue()).isEqualTo(depositOrder);
+    }
+
+    @Test
+    void a_later_deposit_adds_to_the_projected_balance() {
+        var accountId = AccountId.random();
+
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            var account = accounts.openNewAccount(new Account(accountId, AccountNumber.of("001456789")));
             account.depositToday(Amount.of("40"), TransactionId.random());
         });
 
-        // Wait for the balance, not just for the row: AccountOpened creates the row with a zero balance and the
-        // deposit is projected as a separate event, so waiting only for non-null can observe a balance of 0
-        Awaitility.waitAtMost(Duration.ofSeconds(15))
-                  .untilAsserted(() -> {
-                      var view = findView(accountId);
-                      assertThat(view).isNotNull();
-                      assertThat(view.getBalance()).isEqualTo(Amount.of("40"));
-                  });
-
-        var afterFirstDelivery = findView(accountId);
-
-        // The version stored on the row is the projected event's EventOrder, and every handler compares
-        // against it before writing. Re-projecting the same stream must therefore be a no-op rather than
-        // adding another 40 -- which is what makes at-least-once delivery safe here.
-        var versionAfterFirstDelivery = afterFirstDelivery.getVersionValue();
+        awaitBalance(accountId, Amount.of("40"));
+        var versionAfterFirstDeposit = findView(accountId).getVersionValue();
 
         unitOfWorkFactory.usingUnitOfWork(uow -> {
             var account = accounts.getAccount(accountId);
             account.depositToday(Amount.of("10"), TransactionId.random());
         });
 
-        Awaitility.waitAtMost(Duration.ofSeconds(15))
-                  .untilAsserted(() -> assertThat(findView(accountId).getBalance()).isEqualTo(Amount.of("50")));
+        awaitBalance(accountId, Amount.of("50"));
+        assertThat(findView(accountId).getVersionValue()).isGreaterThan(versionAfterFirstDeposit);
+    }
 
-        assertThat(findView(accountId).getVersionValue()).isGreaterThan(versionAfterFirstDelivery);
+    /**
+     * Waits for the balance, not just for the row: AccountOpened creates the row with a zero balance and each
+     * deposit is projected as a separate event, so waiting only for non-null can observe an earlier balance.
+     */
+    private void awaitBalance(AccountId accountId, Amount expected) {
+        Awaitility.waitAtMost(Duration.ofSeconds(15))
+                  .untilAsserted(() -> {
+                      var view = findView(accountId);
+                      assertThat(view).isNotNull();
+                      assertThat(view.getBalance()).isEqualTo(expected);
+                  });
     }
 
     private AccountBalanceView findView(AccountId accountId) {

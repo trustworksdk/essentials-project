@@ -1,0 +1,278 @@
+{
+ "crossReads": [],
+ "diff": null,
+ "flows": [
+  {
+   "bc": "orders",
+   "crossContext": false,
+   "dangling": false,
+   "event": "OrderPlaced",
+   "from": [
+    "orders.place_order"
+   ],
+   "to": [
+    "orders.order_list"
+   ]
+  }
+ ],
+ "issues": [],
+ "lineage": {
+  "fields": {},
+  "technicalColumns": []
+ },
+ "messages": [],
+ "meta": {
+  "atlasVersion": 1
+ },
+ "processes": [
+  {
+   "bcs": [
+    "orders"
+   ],
+   "color": 0,
+   "declared": false,
+   "entries": [
+    "orders.place_order"
+   ],
+   "id": "~orders.place_order",
+   "links": [],
+   "name": "place order",
+   "sliceIds": [
+    "orders.order_list",
+    "orders.place_order"
+   ]
+  },
+  {
+   "bcs": [
+    "?"
+   ],
+   "color": 5,
+   "declared": false,
+   "entries": [],
+   "id": "~unattached:?",
+   "links": [],
+   "name": "unattached ?",
+   "sliceIds": [
+    "misc/oddly_placed"
+   ]
+  },
+  {
+   "bcs": [
+    "orders"
+   ],
+   "color": 1,
+   "declared": false,
+   "entries": [],
+   "id": "~unattached:orders",
+   "links": [],
+   "name": "unattached orders",
+   "sliceIds": [
+    "orders/use_cases/cancel_order"
+   ]
+  }
+ ],
+ "slices": [
+  {
+   "bc": "orders",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [
+    {
+     "auth": "user",
+     "method": "POST",
+     "path": "/api/orders"
+    }
+   ],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [
+    "PlaceOrder"
+   ],
+   "id": "orders.place_order",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "place_order",
+   "owner": "orders-team",
+   "owns": [],
+   "package": null,
+   "path": "orders/use_cases/place_order",
+   "projections": [],
+   "publishes": [
+    "OrderPlaced"
+   ],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": [
+    "Order"
+   ]
+  },
+  {
+   "bc": "orders",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [],
+   "id": "orders.order_list",
+   "invariants": [],
+   "kind": "view",
+   "lane": "decider",
+   "language": "java",
+   "name": "order_list",
+   "owner": "orders-team",
+   "owns": [
+    "OrderList"
+   ],
+   "package": null,
+   "path": "orders/views/order_list",
+   "projections": [
+    {
+     "from": [
+      "OrderPlaced"
+     ],
+     "name": "P"
+    }
+   ],
+   "publishes": [],
+   "readModels": [],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  },
+  {
+   "bc": null,
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "error": true,
+   "externalSystem": null,
+   "files": [],
+   "flags": [
+    {
+     "level": "error",
+     "text": "slice.yaml is not valid YAML (line 3)"
+    }
+   ],
+   "flows": [],
+   "handles": [],
+   "id": "orders/use_cases/cancel_order",
+   "invariants": [],
+   "kind": null,
+   "lane": null,
+   "language": null,
+   "name": "cancel_order",
+   "owner": null,
+   "owns": [],
+   "package": null,
+   "path": "orders/use_cases/cancel_order",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": null,
+   "summary": null,
+   "supersedes": null,
+   "tests": [],
+   "tier": null,
+   "writes": []
+  },
+  {
+   "bc": null,
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "error": true,
+   "externalSystem": null,
+   "files": [],
+   "flags": [
+    {
+     "level": "error",
+     "text": "slice.yaml is not valid YAML (line 3)"
+    }
+   ],
+   "flows": [],
+   "handles": [],
+   "id": "misc/oddly_placed",
+   "invariants": [],
+   "kind": null,
+   "lane": null,
+   "language": null,
+   "name": "oddly_placed",
+   "owner": null,
+   "owns": [],
+   "package": null,
+   "path": "misc/oddly_placed",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": null,
+   "summary": null,
+   "supersedes": null,
+   "tests": [],
+   "tier": null,
+   "writes": []
+  }
+ ],
+ "writers": [
+  {
+   "bcs": [
+    "orders"
+   ],
+   "flag": null,
+   "kind": "aggregate",
+   "slices": [
+    "orders.place_order"
+   ],
+   "target": "Order"
+  },
+  {
+   "bcs": [
+    "orders"
+   ],
+   "flag": null,
+   "kind": "read-model",
+   "slices": [
+    "orders.order_list"
+   ],
+   "target": "OrderList"
+  }
+ ]
+}

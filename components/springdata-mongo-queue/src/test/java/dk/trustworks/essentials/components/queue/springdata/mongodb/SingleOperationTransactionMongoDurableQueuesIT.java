@@ -124,7 +124,6 @@ class SingleOperationTransactionMongoDurableQueuesIT extends DurableQueuesIT<Mon
         assertThat(nextMessage).isPresent();
         assertThat((CharSequence) nextMessage.get().getId()).isEqualTo(addedMessageId);
         assertThat(nextMessage.get().getMessage()).isEqualTo(message1);
-        System.out.println("DeliveryTimestamp: " + nextMessage.get().getDeliveryTimestamp());
 
         // Confirm the message is marked as being handled
         assertThat(durableQueues.getNextMessageReadyForDelivery(queueName)).isEmpty();

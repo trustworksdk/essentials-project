@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.foundation.fencedlock;
 
 import dk.trustworks.essentials.reactive.LocalEventBus;
 
+import java.util.List;
+
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 public interface FencedLockEvents {
@@ -65,6 +67,46 @@ public interface FencedLockEvents {
         public String toString() {
             return "FencedLockManagerStopped{" +
                     "lockManager=" + lockManager +
+                    '}';
+        }
+    }
+
+    /**
+     * Is published on the {@link LocalEventBus} by a {@link DBFencedLockManager} when its scheduled lock confirmation has ended
+     * (in practice on a critical error - see the class javadoc of {@link DBFencedLockManager}, "Errors"), after it has
+     * released every lock it held locally. From then on {@link FencedLockManager#isLockConfirmationEnded()} returns
+     * <code>true</code> and the lock manager acquires no lock, although {@link FencedLockManager#isStarted()} is still
+     * <code>true</code>, until it is stopped and started again (or the application is restarted).
+     * Published once per end of the confirmation, on the lock confirmation thread.
+     */
+    class LockConfirmationEnded implements FencedLockEvents {
+        public final FencedLockManager lockManager;
+        /**
+         * What ended the scheduled lock confirmation
+         */
+        public final Throwable         failure;
+        /**
+         * The names of the locks the lock manager held, and released locally, as the confirmation ended
+         */
+        public final List<LockName>    releasedLocks;
+
+        public LockConfirmationEnded(FencedLockManager lockManager, Throwable failure, List<LockName> releasedLocks) {
+            this.lockManager = requireNonNull(lockManager, "No lockManager instance provided");
+            this.failure = requireNonNull(failure, "No failure provided");
+            this.releasedLocks = List.copyOf(requireNonNull(releasedLocks, "No releasedLocks provided"));
+        }
+
+        @Override
+        public FencedLockManager getLockManager() {
+            return lockManager;
+        }
+
+        @Override
+        public String toString() {
+            return "LockConfirmationEnded{" +
+                    "lockManager=" + lockManager +
+                    ", failure=" + failure +
+                    ", releasedLocks=" + releasedLocks +
                     '}';
         }
     }

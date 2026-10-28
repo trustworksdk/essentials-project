@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.queue.shardowned;
 
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.operations.*;
+import dk.trustworks.essentials.shared.Exceptions;
+import dk.trustworks.essentials.shared.concurrent.Locks;
 import dk.trustworks.essentials.shared.interceptor.*;
 
 import org.slf4j.*;
@@ -26,9 +28,10 @@ import javax.sql.DataSource;
 import java.sql.*;
 import java.time.*;
 import java.util.*;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
-import java.util.function.Consumer;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 
@@ -93,12 +96,144 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     private volatile ShardWakeupNotifier ownNotifier;
 
-    private final List<ShardOwnedQueue>         consumers          = new ArrayList<>();
     /**
-     * False until something is actually running. It used to be seeded {@code true}, so a queue that
-     * had never consumed reported itself started and the first {@link #start()} was a no-op.
+     * Added to and removed from only under {@link #lifecycleLock} - removed from by a {@link Subscription#unsubscribe()}
+     * ({@link #deregister}), or by the holder of the lock it handed that to ({@link #letGoOfLifecycle}) - and copy-on-write
+     * so a {@link #stop()} that did not get the lock, and {@link #statistics()}, can read it while a {@code consume()} adds
+     * to it.
+     */
+    private final List<ShardOwnedQueue>         consumers          = new CopyOnWriteArrayList<>();
+    /**
+     * Whether the queue is started: by {@link #start()}, or by a {@link #consume} made while no subscription is
+     * registered ({@link #consumers} empty - so again once every subscription has been unsubscribed). False until then
+     * - it used to be seeded {@code true}, so a queue that had never consumed reported itself started and the first
+     * {@link #start()} was a no-op - and again after a {@link #stop()}, until the next {@code start()}. A
+     * {@link Subscription#start()}, or a
+     * {@code consume()} after a {@code stop()} left other subscriptions stopped, starts its own lanes and leaves it as it
+     * is, so a later {@code start()} still starts those others. It decides what {@code start()} does and what
+     * {@link #isStarted()} reads, never what a {@code stop()} stops: that is every registered consumer.
      */
     private final AtomicBoolean                 started            = new AtomicBoolean();
+    /**
+     * Held across the whole of {@link #consume}'s registration and starts, {@link #start()}, a {@link Subscription#start()}
+     * and {@link #stop()}, so they run one at a time. A lock rather than {@code consumers}' monitor, which it used to be,
+     * because a stop must be able to stop waiting for it: a {@code consume()} or a start holds it across its consumers'
+     * starts, which register the instance and lease units on the database, and nothing in this queue bounds those - a
+     * statement caught by a network partition blocks until the driver's {@code socketTimeout}, and without one
+     * indefinitely. A {@code stop()} waiting on the monitor never reached the 2 s budget each
+     * {@link ShardOwnedQueue#stop()} keeps to. It now waits up to {@link ShardOwnedQueue#SHUTDOWN_BUDGET} for this lock,
+     * on an interrupted thread not at all, and then stops without it ({@link #stopWhileStarting}); what the holder still
+     * owes the stop, it does itself before it lets go ({@link #letGoOfLifecycle}). A stop on the holder's own thread
+     * never takes it again ({@link #stopFromInsideTheHolder}). Who holds it and whether that holder owes a stop is one
+     * value, {@link #holder}.
+     */
+    private final ReentrantLock                 lifecycleLock      = new ReentrantLock();
+    /**
+     * Guards {@link #holder}, {@link #beingStarted}, {@link #stopsWithoutLock}, {@link #toDeregister},
+     * {@link #subscriptionIndexes}, {@link #heldIndexes} and {@link #endingLanes}. Held for a few reads and writes of them only, never across a start or a stop.
+     */
+    private final Object                        handOver           = new Object();
+    /**
+     * What the holder of {@link #lifecycleLock} is doing, and whether it owes a stop: {@link Holder#NONE} while nobody
+     * holds it, and just after a holder took it or just before it lets go. The one value every stop, start and the holder
+     * itself decides the hand-over from ({@link Holder}), moved only along its diagram ({@link #moveHolder}).
+     */
+    private       Holder                        holder             = Holder.NONE;
+    /**
+     * The lane consumers of every {@code consume()} holding {@link #lifecycleLock} that has not yet registered its pair
+     * in {@link #consumers} - it does so once its starts return: a stop that did not get the lock stops them too, so the
+     * one still leasing hands the stop's work to its start, which then adopts nothing it leases. More than one pair when a
+     * {@link QueueObserver} told of an acquisition calls {@code consume()} on the thread of a {@code consume()} still
+     * starting, holding the lock reentrantly: each {@code consume()} adds its own pair and takes out only that pair once
+     * it has registered it, or failed, so the outer pair stays here until the outer {@code consume()} registers it. It
+     * used to be one field the nested {@code consume()} overwrote with its own pair and never set back, so a stop that
+     * gave up waiting from then on did not stop the outer pair, and its unordered lane leased and dispatched after that
+     * stop had returned, until the outer {@code consume()} stopped every consumer before it let go.
+     */
+    private final List<ShardOwnedQueue>         beingStarted       = new ArrayList<>();
+    /**
+     * Stops that did not get {@link #lifecycleLock} and are still stopping consumers. The holder waits for them before it
+     * lets go, so none of them stops a consumer a later {@code start()} or {@code consume()} has just started.
+     */
+    private       int                           stopsWithoutLock;
+    /**
+     * Subscriptions whose {@link Subscription#unsubscribe()} found {@link #lifecycleLock} held, past
+     * {@link ShardOwnedQueue#SHUTDOWN_BUDGET} or on the holder's own thread: the holder - a {@link #start()} going over
+     * {@link #consumers} - may still reach their lanes, which it starts no more from the moment that unsubscribe retired
+     * them ({@link #startEachOrUndo}), so it removes them from {@code consumers}, stops them again, and gives their
+     * subscription index back before it lets go ({@link #letGoOfLifecycle}). Whatever the holder started before the
+     * retirement is stopped by whichever of the two stops, the unsubscribe's or the holder's, gets there first; the other
+     * does nothing.
+     */
+    private final List<Deregistration>          toDeregister       = new ArrayList<>();
+    /**
+     * The subscription index of every subscription this queue has handed out and not yet ended: reserved by
+     * {@link #consume}, given back when it fails without registering anything or when its subscription has been
+     * unsubscribed and both its lanes stopped - unless a lane kept an ordered unit it has not handed back yet, or its
+     * hand-back to the database is still running and may still deregister the id, see {@link #heldIndexes}. A {@code consume()} takes the lowest
+     * index free, so the instance id a subscription registers under ({@link #consume}) is the caller's verbatim again
+     * once every earlier subscription has ended, rather than one more suffix per subscription the process ever made.
+     */
+    private final BitSet                        subscriptionIndexes = new BitSet();
+    /**
+     * Subscription indexes still set in {@link #subscriptionIndexes} after their subscription ended - unsubscribed, or a
+     * {@code consume()} that failed - because their instance id is still in use on the database
+     * ({@link #releaseSubscriptionIndex}). Two reasons, either enough:
+     * <ul>
+     *     <li>A lane kept an ordered unit on stop, and has not handed it back yet: the key it kept the unit for is still in
+     *     its handler, or has left it and the lane is still flushing the unit's acknowledgements and releasing its lease
+     *     row, or failed to, which {@link #reserveSubscriptionIndex} has the lane retry
+     *     ({@link ShardOwnedQueue#keptOrderedUnitAwaited()}). The unit's lease row names the id, and a new pair
+     *     registering under it would take the unit at once: it could start the key beside that handler, or, the handler
+     *     returned, charge an attempt and deliver again what the handler acknowledged. Asked of the old lanes, which know
+     *     when the unit is handed back - not timed by a lease TTL, which it used to be: that is when another instance id may
+     *     take the unit; as a hold it was too short for a handler that runs longer, and kept the id out of use for nothing
+     *     once one that returns sooner had returned. Bounded by the queue's {@code stuckHandlerTimeout}
+     *     ({@link ShardOwnerSettings}) instead: once the key has been in its handler longer, the lanes stop waiting for it,
+     *     and the next pair registering under the id takes the unit over under a new fence - the message delivered again,
+     *     possibly beside the handler still running. A subscription that is only stopped keeps its index, and its lanes,
+     *     restarted by a queue {@link #start()} or a {@link Subscription#start()}, ask their kept owners the same before
+     *     they take the unit; a new pair's lanes have none to ask.</li>
+     *     <li>A lane's hand-back to the database is still running on a thread its stop gave up waiting for, and may still
+     *     delete the id's membership row ({@link ShardOwnedQueue#handBackMayStillDeregister()}): a new pair registering
+     *     under the id meanwhile could lose its row to it, its units then read as ownerless by every other instance until
+     *     its next heartbeat. Not a hand-back whose stop kept an ordered unit, which never gets to that deletion: the
+     *     reason above holds the id for such a stop, and only until it ends - its unit handed back, or given up past
+     *     {@code stuckHandlerTimeout}, or, while it still waits for that hand-back's flush, past
+     *     {@link ShardOwnedQueue#stopFlushGiveUpAfter}. Each wait of the hand-back for
+     *     the database is bounded by the queue's {@code leaseTtl}, or by {@link ShardOwnedQueue#SHUTDOWN_BUDGET} when that
+     *     is longer, unless the connection's own network timeout is shorter (the network timeout {@code ShardOwnedQueue}'s
+     *     {@code withinShutdownBudget} sets, or leaves as it is), so a hand-back held
+     *     up by a connection that does not answer ends, and stops holding the id, once each of its statements has had that
+     *     long.</li>
+     * </ul>
+     * The next {@code consume()} registers under another index meanwhile. {@link #reserveSubscriptionIndex} frees the
+     * ones that are due.
+     */
+    private final Map<Integer, HeldIndex>       heldIndexes         = new HashMap<>();
+    /**
+     * The lanes of every subscription that has ended - unsubscribed, or a {@code consume()} that failed without
+     * registering it - whose subscription index {@link #releaseSubscriptionIndex} has not yet given back or held
+     * ({@link #heldIndexes}): from before they leave {@link #consumers} ({@link Subscription#unsubscribe()}), or in the
+     * same step as they leave {@link #beingStarted} (a failed {@code consume()}), and taken out under {@link #handOver} in the same step that gives the index
+     * back or holds it, so a lane is never in none of them while {@link #releaseKeptOrderedUnit} looks. For an
+     * unsubscribe that gap is the whole of the lanes' stops, each draining for up to its {@code shedGrace} and then
+     * waiting up to {@link ShardOwnedQueue#SHUTDOWN_BUDGET} for its hand-back, and in it
+     * the ordered lane's stop keeps a unit whose key is still in its handler, and logs the WARN that says so unless its
+     * hand-back outlasts that budget: a release on request reacting to that WARN found no lane to ask, and answered as if
+     * this instance kept no such unit. A failed {@code consume()}'s pair is stopped while still in {@link #beingStarted}
+     * and is here only from then until {@code consume()} gives back or holds its index. A critical error ({@link Exceptions#isCriticalError})
+     * from a stop leaves the lanes here for good, as it leaves their index reserved: a lane may still be running under the
+     * id, and may still keep a unit worth releasing.
+     */
+    private final List<ShardOwnedQueue>         endingLanes         = new ArrayList<>();
+    /**
+     * What a test does once a {@code consume()}, a {@link #start()} or a {@link Subscription#start()} has taken
+     * {@link #lifecycleLock}; {@link LifecycleHook#NONE} unless a test passed one to the builder
+     * ({@link PostgresqlMessageQueueBuilder#setLifecycleHook}). Fixed at construction, so nothing can swap it while the
+     * queue runs.
+     */
+    private final LifecycleHook                 lifecycleHook;
     private final List<QueueObserver>           observers          = new CopyOnWriteArrayList<>();
     /**
      * Sorted by {@link InterceptorOrder} on registration rather than on every call: the sort is
@@ -114,12 +249,6 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * of them. Shards are the unit of parallelism; the enqueue has to actually use them.
      */
     private final AtomicInteger                 enqueueShardCursor = new AtomicInteger();
-    /**
-     * Distinguishes subscriptions of one process from each other in the membership table. The first
-     * uses the caller's instance id verbatim, so the ordinary single-consumer case has the id the
-     * caller chose.
-     */
-    private final AtomicInteger                 subscriptionCount  = new AtomicInteger();
 
     public static PostgresqlMessageQueueBuilder builder() {
         return new PostgresqlMessageQueueBuilder();
@@ -132,6 +261,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         this.instanceId = requireNonNull(instanceId, "No instanceId provided");
         this.settings = ShardOwnerSettings.defaults();
         this.runtime = null;
+        this.lifecycleHook = LifecycleHook.NONE;
         this.storage = new ShardOwnedStorage(dataSource, queueId);
     }
 
@@ -151,6 +281,18 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     PostgresqlMessageQueue(DataSource dataSource, short queueId, int shardCount, String instanceId,
                            ShardOwnerSettings settings, ShardRuntime runtime) {
+        this(dataSource, queueId, shardCount, instanceId, settings, runtime, LifecycleHook.NONE);
+    }
+
+    /**
+     * @param runtime       the runtime this queue's consumers run on, or null to borrow the one shared per
+     *                      {@code DataSource}
+     * @param lifecycleHook what a test does once a start has taken the lifecycle lock ({@link LifecycleHook});
+     *                      {@link LifecycleHook#NONE} outside tests
+     */
+    PostgresqlMessageQueue(DataSource dataSource, short queueId, int shardCount, String instanceId,
+                           ShardOwnerSettings settings, ShardRuntime runtime, LifecycleHook lifecycleHook) {
+        this.lifecycleHook = requireNonNull(lifecycleHook, "No lifecycleHook provided");
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
         this.queueId = queueId;
         this.shardCount = shardCount;
@@ -202,9 +344,10 @@ public final class PostgresqlMessageQueue implements MessageQueue {
 
     /**
      * The registered observers as a single one, reading the list live so an observer registered after
-     * {@link #consume} still sees events. Handed to the engine, which has no notion of a list.
+     * {@link #consume} still sees events. Handed to the engine, which has no notion of a list. Package-private so
+     * {@code TakeoverStalledFanOutTest} can drive it without a database.
      */
-    private final QueueObserver fanOut = new QueueObserver() {
+    final QueueObserver fanOut = new QueueObserver() {
         @Override
         public void deliveryFailed(String key, int attempt, Throwable cause) {
             notifyObservers(observer -> observer.deliveryFailed(key, attempt, cause));
@@ -223,6 +366,19 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         @Override
         public void shardOwnershipChanged(int shard, boolean acquired) {
             notifyObservers(observer -> observer.shardOwnershipChanged(shard, acquired));
+        }
+
+        /**
+         * Every observer is told even when an earlier one throws: the engine catches this callback (see
+         * {@link QueueObserver#takeoverStalled}), so stopping at the first throw would leave the observers after it
+         * with a stall they never hear about, or one that never ends. The first exception is rethrown as it was thrown
+         * once all have been told, for the engine to log, the later ones added to it as suppressed
+         * ({@link Exceptions#forEachThenThrowFirst}). A non-critical {@code Error} (an {@code AssertionError}, say) is
+         * treated the same way; a critical one (VirtualMachineError, LinkageError) propagates at once.
+         */
+        @Override
+        public void takeoverStalled(MessageId.Lane lane, int shard, boolean stalled) {
+            Exceptions.forEachThenThrowFirst(observers, observer -> observer.takeoverStalled(lane, shard, stalled));
         }
     };
 
@@ -594,9 +750,48 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // — invisible to every test that finished before the first rebalance.
         //
         // A second consume() on the same queue is a genuinely separate competing consumer, so that
-        // one does get its own identity.
-        var subscription       = subscriptionCount.getAndIncrement();
-        var consumerInstanceId = subscription == 0 ? instanceId : instanceId + "-" + subscription;
+        // one does get its own identity. The index is the lowest no live subscription holds: one
+        // given back by a failed consume() or an unsubscribed subscription is taken again, so a caller
+        // that unsubscribes and consumes anew keeps its instance id instead of a new suffix each time -
+        // unless the old pair kept an ordered unit on stop that it has not handed back yet, as that
+        // unit's lease names the id, or its stop gave up waiting for its hand-back to the database
+        // and that may still deregister the id (heldIndexes): taking the id then would start the key
+        // beside its running handler, or take the unit back as from a crashed owner once that handler
+        // has returned, or lose the new pair's membership row to that late deregistration.
+        var subscriptionIndex = reserveSubscriptionIndex();
+        var attempt           = new SubscribeAttempt();
+        try {
+            return subscribe(handler, options, policy, subscriptionIndex, attempt);
+        } finally {
+            if (!attempt.registered) {
+                // Nothing registered and nothing running: a failed start has stopped both lanes. A stop like an
+                // unsubscribe's, with what it may leave behind under the id: the ordered lane's stop keeps a unit whose key
+                // is still in its handler - a QueueObserver throwing for that lane's acquisition escapes its start once it
+                // has dispatched - and either lane's hand-back may outlast its stop's budget.
+                releaseSubscriptionIndex(subscriptionIndex, attempt.lanes, "a failed consume()");
+            }
+        }
+    }
+
+    /**
+     * What {@link #subscribe} tells {@link #consume} about its attempt, on the consuming thread alone: the pair once
+     * built, and whether it is registered - also by a critical error escaping its starts - after which the subscription
+     * index is the pair's until it is unsubscribed. {@code consume()} gives the index back only when it is not, and
+     * holds it ({@link #releaseSubscriptionIndex}) on what the pair's stops left behind.
+     */
+    private static final class SubscribeAttempt {
+        private List<ShardOwnedQueue> lanes = List.of();
+        private boolean               registered;
+    }
+
+    /**
+     * The whole of {@link #consume} once the subscription index is reserved: build the pair, start it and register it.
+     * Sets {@code attempt}'s lanes once the pair is built and its {@code registered} once the pair is in
+     * {@link #consumers}, so {@code consume()} gives the index back only when it is not.
+     */
+    private Subscription subscribe(MessageHandler handler, ConsumerOptions options, RedeliveryPolicy policy, int subscriptionIndex,
+                                   SubscribeAttempt attempt) {
+        var consumerInstanceId = consumerInstanceId(subscriptionIndex);
 
         // The engine reports retries, dead letters and shard ownership from the places that know the
         // attempt count and the fence; handing it the observer fan-out is what makes those reachable.
@@ -641,6 +836,15 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                             }
                                         },
                                          settings, options.maxShards(), policy);
+        // The pair shares one membership row (one instance id), and its lifetime is the pair's: each lane's stop deletes it
+        // only when it kept no ordered unit itself and the other lane no longer needs it - neither running, nor draining,
+        // nor keeping an ordered unit whose key is still in a handler, nor handing a unit one of its stops kept back (a
+        // hand-back or release on request still holding that unit's lease row). So the lane stopping last deletes it when neither
+        // kept a unit; a unit kept by either leaves it to age out a lease TTL later (ShardOwnedQueue.shareMembershipWith says why the lanes decide it and not this queue). The unordered lane, stopped
+        // first, used to delete it while the ordered lane still served or went on to keep units, which any other instance
+        // could then take at once.
+        unorderedConsumer.shareMembershipWith(orderedConsumer);
+        orderedConsumer.shareMembershipWith(unorderedConsumer);
         // Registration, the started flag and the two start() calls are ONE critical section, and the
         // same lock start() and stop() take. Guarding only the list left two holes.
         //
@@ -656,16 +860,54 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // unordered consumer nobody had a handle to, and a caller retrying consume() took the next
         // subscription index, so the process registered as two instances and fairShare stranded half
         // of both lanes — the exact failure the per-subscription identity below exists to avoid.
+        // A critical error is the exception: it stops nothing, so whatever it left running is
+        // registered, for a stop() to reach (below) - a stop() stops every registered consumer.
         //
-        // Calling consume() starts the queue if it was not already started, which is what every
-        // caller of this contract expects and what the tests rely on.
-        synchronized (consumers) {
+        // A consume() made while no subscription is registered starts the queue, which is what every
+        // caller of this contract expects and what the tests rely on. Any other starts its own pair only: it leaves a started queue
+        // started, and a queue a stop() left with other subscriptions stopped NOT started, so a later
+        // start() still starts those. Marking it started there made that start() return at once with
+        // the other subscriptions consuming nothing while isStarted() read true.
+        //
+        // The one exception to the critical section is a stop() that waited its budget for it, or
+        // was interrupted: it stops the queue without the lock (stopWhileStarting), this pair
+        // included. The starts below then stop at the first one not yet begun, the pair is still
+        // registered, and letGoOfLifecycle stops every consumer again and leaves the queue not
+        // started - as if the stop had come right after this consume(). Called on the thread of a
+        // stop, or of a holder owing a stop, doing the stop it owes or stopping what its failed start
+        // started (an observer told of a release, or of an acquisition after it stopped the queue),
+        // this starts neither lane: it registers the pair, leaves the queue not started, for a later
+        // start(), and says so at WARN - the Subscription it returns reads isStarted() false and
+        // nothing else would tell the caller.
+        var pair = List.of(unorderedConsumer, orderedConsumer);
+        attempt.lanes = pair;
+        holdLifecycle(Holder.STARTING, "consume");
+        try {
+            lifecycleHook.afterLockTaken("consume");
+            var startsNothingInside = outerHolderThatLetsNothingStart();
+            synchronized (handOver) {
+                beingStarted.addAll(pair);
+            }
+            // Read before the starts: whether no other subscription is registered, which alone marks the queue started
+            // (above). The competing-consumer WARN below asks what is registered once the starts have run instead: a
+            // QueueObserver told of this pair's first acquisition can call consume() on this thread, and that pair is
+            // registered by the time this one is.
+            var firstSubscription = consumers.isEmpty();
             try {
-                unorderedConsumer.start();
-                orderedConsumer.start();
-            } catch (RuntimeException e) {
-                unorderedConsumer.stop();
-                orderedConsumer.stop();
+                startEachOrUndo(pair, Holder.UNDOING_A_SUBSCRIPTION_START);
+            } catch (RuntimeException | Error e) {
+                // A non-critical failure has stopped both lanes, and nothing is registered (above). A critical error may
+                // have left one running - a QueueObserver throwing it for the unordered lane's acquisition escapes that
+                // lane's start with the lane running - so the pair is registered, and a stop() or close() still reaches
+                // it. Unregistered, nothing did. The queue is marked as a consume() that succeeds marks it (above).
+                if (Exceptions.isCriticalError(e)) {
+                    consumers.add(unorderedConsumer);
+                    consumers.add(orderedConsumer);
+                    attempt.registered = true;
+                    if (firstSubscription) {
+                        markStartedUnlessHolderLetsNothingStart();
+                    }
+                }
                 throw e;
             }
             // A competing consumer is legal and occasionally wanted, but the common reason for a
@@ -677,9 +919,12 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             // of what a single subscription would. This is the only place that can tell.
             //
             // Reported on what is actually registered rather than on the subscription index: a
-            // consume() whose start() threw leaves nothing running but has already taken an index,
-            // and warning about a competing consumer that does not exist sends the reader after the
-            // wrong failure.
+            // subscription unsubscribed leaves nothing registered, and warning about a competing
+            // consumer that does not exist sends the reader after the wrong failure. A stopped
+            // subscription still counts - the queue's start() starts it again. Read here, after the
+            // starts, not from firstSubscription: a consume() an observer made while this pair was
+            // starting found nothing registered and stayed quiet, so the two competing subscriptions
+            // are warned about only from here.
             if (!consumers.isEmpty()) {
                 log.warn("Queue {} already has {} consumer(s) registered in this process; instance '{}' is being added as "
                                  + "another COMPETING consumer, so each of them owns a share of the units and counts as a separate "
@@ -689,10 +934,40 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             }
             consumers.add(unorderedConsumer);
             consumers.add(orderedConsumer);
-            started.set(true);
+            attempt.registered = true;
+            if (firstSubscription) {
+                markStartedUnlessHolderLetsNothingStart();
+            }
+            if (startsNothingInside != null) {
+                log.warn("Instance {} registered a subscription of queue {} under instance id '{}' WITHOUT starting it: consume() was "
+                                 + "called on the thread of {} - by a QueueObserver, from inside that call - where nothing starts. "
+                                 + "The subscription consumes nothing until the queue's start(), or its own start(), is called "
+                                 + "once that call has returned",
+                         instanceId, queueId, consumerInstanceId, startsNothingInside.describeAsAnOuterHolder());
+            }
+        } finally {
+            // This pair only, and only once it is registered (consumers has it from here, for a stop to reach) or its
+            // failed starts are undone: called by an observer on the thread of a consume() still starting, this lets go of
+            // the lock reentrantly while that consume()'s pair is still being started, and a stop that gives up waiting
+            // meanwhile must still find that pair here.
+            // A pair not registered has ended, its failed starts undone: its lanes go to endingLanes in the same step, so a
+            // release on request still asks them until consume() gives the index back or holds it.
+            synchronized (handOver) {
+                beingStarted.removeAll(pair);
+                if (!attempt.registered) {
+                    endingLanes.addAll(pair);
+                }
+            }
+            letGoOfLifecycle();
         }
 
         return new Subscription() {
+            /**
+             * Set by {@link #unsubscribe()}, before it takes the pair out of the queue; read by {@link #start()} under the
+             * queue's lifecycle lock.
+             */
+            private final AtomicBoolean unsubscribed = new AtomicBoolean();
+
             /**
              * Units held across <b>both</b> lanes.
              * <p>
@@ -716,16 +991,126 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                 return orderedConsumer.shardsHeld();
             }
 
+            /**
+             * Starts each lane not yet running, and on a failure stops only the lanes this start started: a start of
+             * either lane that fails with anything but a critical error ({@link Exceptions#isCriticalError}) stops
+             * every lane this call started - both when neither was running - and escapes as it was thrown, with any
+             * failure of those stops added to it as suppressed ({@link #startEachOrUndo}). A lane that was running
+             * before this call is left running, as it was, so {@link #isStarted()} reads true only when one was; a
+             * later {@code start()} runs again. It used to start them one after the other and stop at the first throw:
+             * a {@link QueueObserver} throwing for the unordered lane's acquisition left that lane running and the
+             * ordered lane never started. A critical error escapes untouched, with nothing stopped; the queue's
+             * {@code stop()} and {@code close()} still reach a lane it left running, as they reach every registered
+             * consumer.
+             * <p>
+             * Starts this subscription's lanes only, and leaves the queue marked as it was: after the queue's
+             * {@code stop()}, the queue stays not started, so its {@code start()} still starts every subscription that stop
+             * stopped, this one's lanes doing nothing the second time. It used to mark the queue started, and the queue's
+             * {@code start()}, finding it started, returned at once: every other subscription stayed stopped, consuming
+             * nothing, while the queue's {@code isStarted()} read true. The queue's {@code stop()} and {@code close()} stop
+             * these lanes whether the queue is marked started or not.
+             * <p>
+             * Runs under the queue's lifecycle lock, one at a time with the queue's {@code consume()}, {@code start()} and
+             * {@code stop()}. Called while a {@code consume()} or start of the queue is still starting its consumers, this
+             * waits for it, as the queue's {@code start()} does; and a queue {@code stop()} that gave up waiting for this
+             * one is handled as it is for the queue's {@code start()}: this starts neither lane it has not begun, stops
+             * every consumer of the queue again once the one it is starting returns, and leaves the queue not started. It
+             * used to take none of that, and the queue's {@code stop()} stopped consumers only when the queue was marked
+             * started: a {@code start()} after the queue's {@code stop()} brought both lanes back, and every later
+             * {@code stop()} or {@code close()} of the queue, finding it not started, stopped nothing, so the lanes leased,
+             * heartbeated and dispatched until the process exited.
+             * <p>
+             * Called on the thread of a queue {@code stop()}, or of a {@code consume()} or start owing a stop or doing the
+             * stop it owes - by a {@link QueueObserver} told of a release, or of an acquisition after it stopped the queue -
+             * this starts neither lane, leaves the queue not started, as the queue's {@code start()} does there, and logs a
+             * WARN saying so: that stop is stopping every consumer. So it does on the thread of a {@code consume()} or start
+             * stopping the consumers its failed start started: that start is about to fail. It logs that WARN with a lane,
+             * or both, running too: the outer call may be about to stop them.
+             * <p>
+             * Throws {@link IllegalStateException}, starting nothing, once the subscription has been
+             * {@link #unsubscribe() unsubscribed}: its lanes are no longer the queue's, and no stop of the queue would reach
+             * them.
+             */
             @Override
             public void start() {
-                unorderedConsumer.start();
-                orderedConsumer.start();
+                holdLifecycle(Holder.STARTING, "start a subscription of");
+                try {
+                    lifecycleHook.afterLockTaken("start a subscription of");
+                    // Read under the lock, which unsubscribe() takes, or hands to the holder, to deregister the pair. A start
+                    // that read it false just before an unsubscribe that then handed the pair to it starts no lane from the
+                    // moment the unsubscribe retired them (startEachOrUndo); a lane it started before, or a lane start
+                    // already under way, is ended by the unsubscribe's stop or by this holder's, whichever comes first.
+                    if (unsubscribed.get()) {
+                        throw new IllegalStateException("The subscription of queue " + queueId + " under instance '" + consumerInstanceId
+                                                                + "' has been unsubscribed and cannot be started again; consume() anew");
+                    }
+                    var startsNothingInside = outerHolderThatLetsNothingStart();
+                    if (startsNothingInside != null) {
+                        // startEachOrUndo would start nothing either. Said at WARN whatever the lanes are doing, as nothing
+                        // else tells the caller: a lane running now may be one the outer call is about to stop (a stop, an
+                        // owed stop, a queue start()'s undo), which a start from another thread would start again once that
+                        // call had let go of the lock.
+                        log.warn("Instance {} started neither lane of the subscription of queue {} under instance id '{}': its "
+                                         + "start() was called on the thread of {} - by a QueueObserver, from inside that call - where "
+                                         + "nothing starts. Call it again once that call has returned",
+                                 instanceId, queueId, consumerInstanceId, startsNothingInside.describeAsAnOuterHolder());
+                        return;
+                    }
+                    // The queue stays marked as it was, whatever this does: a non-critical failure has stopped the lanes this
+                    // started, and a lane a critical error left running is registered, which is all a stop() or close() needs.
+                    startEachOrUndo(pair, Holder.UNDOING_A_SUBSCRIPTION_START);
+                } finally {
+                    letGoOfLifecycle();
+                }
             }
 
+            /**
+             * Stops this subscription's two lanes only, without the queue's lifecycle lock, and leaves the queue marked as
+             * it was: a {@code stop()} of the queue still stops them, each lane's stop doing nothing the second time. The
+             * subscription stays registered with the queue, whose {@code start()} starts it again; {@link #unsubscribe()},
+             * and {@link #close()}, which calls it, end it.
+             */
             @Override
             public void stop() {
-                unorderedConsumer.stop();
-                orderedConsumer.stop();
+                stopEach(pair);
+            }
+
+            /**
+             * {@inheritDoc}
+             * <p>
+             * Retires both lanes ({@link ShardOwnedQueue#retire()}), so no start reaching them from then on starts them, takes
+             * the pair out of the queue's registered consumers under the queue's lifecycle lock, then stops both lanes, as
+             * {@link #stop()} does, so whatever started them before is stopped. Bounded as the queue's {@code stop()} is: a
+             * {@code consume()} or start of the queue that holds the lock past {@link ShardOwnedQueue#SHUTDOWN_BUDGET} - on
+             * an interrupted thread, at once - is left to take them out before it lets go of the lock, starting neither of
+             * them from the retirement on as it goes over the registered consumers, and this stops them meanwhile without it
+             * ({@link #deregister}); a lane that holder started before the retirement is stopped by whichever of the two
+             * stops gets there first. It used to start them, after this had returned, and stop them again only as it let
+             * go. The instance id the pair registered under is given back once its lanes have stopped, for the next
+             * {@code consume()} - once the unit has been handed back when a lane's stop kept an ordered unit because a key
+             * was still in its handler, as that unit's lease names the id, and only once a lane's hand-back to the database
+             * that its stop gave up waiting for has finished, when it may still deregister the id ({@link #heldIndexes}).
+             * What a lane's stop throws escapes, once both have stopped, as from {@link #stop()}; the subscription is
+             * unsubscribed either way.
+             */
+            @Override
+            public void unsubscribe() {
+                if (!unsubscribed.compareAndSet(false, true)) {
+                    return;
+                }
+                // Before the lanes leave the queue and are stopped: a start that still goes over them - the holder of the
+                // lifecycle lock, when deregister hands them to it, or this subscription's start() that read unsubscribed
+                // just before it was set - starts neither from here on; one already under way, or one that holder started
+                // before, is ended by the stop below, or by the holder's own should it get there first.
+                unorderedConsumer.retire();
+                orderedConsumer.retire();
+                // Before they leave consumers: a release on request asks them until their index is given back or held.
+                synchronized (handOver) {
+                    endingLanes.addAll(pair);
+                }
+                var deregistration = new Deregistration(pair, subscriptionIndex);
+                deregister(deregistration);
+                deregistration.stopLanes();
             }
 
             @Override
@@ -733,6 +1118,276 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                 return unorderedConsumer.isStarted() || orderedConsumer.isStarted();
             }
         };
+    }
+
+    /**
+     * The lowest subscription index no live subscription holds and no ended one still holds for its instance id's use on
+     * the database ({@link #heldIndexes}), now reserved ({@link #subscriptionIndexes}).
+     * <p>
+     * First, each held index's lanes review their kept units and then hand back what they can, in that order
+     * ({@link ShardOwnedQueue#reviewAndHandBackKeptUnits()}). The review ({@link ShardOwnedQueue#reviewStuckKeptUnits()}) gives
+     * up, for good and with a WARN, one whose key has been in its handler longer than the queue's
+     * {@code stuckHandlerTimeout}, once the stop that kept it has flushed it ({@code ShardOwnedQueue.KeptUnit.Phase.STOP_FLUSHING}),
+     * and one kept longer than {@link ShardOwnedQueue#stopFlushGiveUpAfter} whose stop has still not flushed it, so
+     * {@link HeldIndex#isDue()} below need only read.
+     * The hand-backs retry an ordered unit a stop of theirs kept whose key has left its handler - one just given up with
+     * no key in a handler included, handed back in this pass rather than taken over by this {@code consume()}: the lanes of an
+     * ended subscription never run again, so this is the only retry of a hand-back that failed as the key left its
+     * handler. The index stays held until one succeeds, or finds the unit taken by another instance once the old
+     * instance's liveness lapsed: given back after a failed hand-back, the next {@code consume()} took the unit as from a
+     * crashed owner, charging an attempt and delivering again the message the handler had handled. Both outside
+     * {@link #handOver}, which is held for a few reads and writes only: a hand-back waits for the database, and a review
+     * takes each kept owner's lock and logs.
+     */
+    private int reserveSubscriptionIndex() {
+        List<HeldIndex> stillHeld;
+        synchronized (handOver) {
+            stillHeld = List.copyOf(heldIndexes.values());
+        }
+        for (var index : stillHeld) {
+            for (var lane : index.lanes()) {
+                lane.reviewAndHandBackKeptUnits();
+            }
+        }
+        synchronized (handOver) {
+            var held = heldIndexes.entrySet().iterator();
+            while (held.hasNext()) {
+                var entry = held.next();
+                if (entry.getValue().isDue()) {
+                    subscriptionIndexes.clear(entry.getKey());
+                    held.remove();
+                }
+            }
+            var index = subscriptionIndexes.nextClearBit(0);
+            subscriptionIndexes.set(index);
+            return index;
+        }
+    }
+
+    /**
+     * Give back the index of a subscription that has ended - unsubscribed, or a {@code consume()} that failed without
+     * registering it - once every stop of its {@code lanes} owed has returned. At once, unless the instance id is still in
+     * use on the database ({@link #heldIndexes}): only once every ordered unit a lane's stop kept has been handed back,
+     * which the lane does once the key it was kept for has left its handler
+     * ({@link ShardOwnedQueue#keptOrderedUnitAwaited()}) - or its key has been in its handler longer than the queue's
+     * {@code stuckHandlerTimeout}, or the unit has been released on request ({@link #releaseKeptOrderedUnit}) - and no
+     * lane's hand-back that may still deregister the id is running ({@link ShardOwnedQueue#handBackMayStillDeregister()}:
+     * the hand-back of a stop that kept a unit never deregisters, so one hung in its flush does not hold the id past the
+     * unit), which {@link #reserveSubscriptionIndex} asks the lanes each time,
+     * once it has had them review their kept units and retry a hand-back of such a unit that failed. Reviewed here first
+     * too ({@link ShardOwnedQueue#reviewStuckKeptUnits()}), so a unit whose key is past that bound, once the stop that kept
+     * it has flushed it, already does not hold the index.
+     *
+     * @param ended what ended, for the log: {@code "an unsubscribed subscription"} or {@code "a failed consume()"}
+     */
+    private void releaseSubscriptionIndex(int index, List<ShardOwnedQueue> lanes, String ended) {
+        lanes.forEach(ShardOwnedQueue::reviewStuckKeptUnits);
+        var keptUnitNotHandedBack = lanes.stream().anyMatch(ShardOwnedQueue::keptOrderedUnitAwaited);
+        var handBackMayDeregister = lanes.stream().anyMatch(ShardOwnedQueue::handBackMayStillDeregister);
+        // Out of endingLanes in the same step that frees or holds the index: releaseKeptOrderedUnit then finds them in
+        // heldIndexes, or every unit they kept was handed back, released or given up on, and they are not asked.
+        if (!keptUnitNotHandedBack && !handBackMayDeregister) {
+            synchronized (handOver) {
+                endingLanes.removeAll(lanes);
+                subscriptionIndexes.clear(index);
+            }
+            return;
+        }
+        synchronized (handOver) {
+            endingLanes.removeAll(lanes);
+            heldIndexes.put(index, new HeldIndex(lanes));
+        }
+        // One line per hold, naming every reason it has and what ends it: both reasons must have passed (HeldIndex.isDue).
+        String until;
+        String because;
+        if (keptUnitNotHandedBack && handBackMayDeregister) {
+            until = "until the handler of the key it kept an ordered unit for has returned and the unit has been handed back, which "
+                    + "each consume() of the queue retries should it fail, or that key has been in its handler longer than "
+                    + "stuckHandlerTimeout (" + settings.stuckHandlerTimeout() + "), or the unit has been released on request "
+                    + "(releaseKeptOrderedUnit), and the hand-back of its lanes to the database has finished";
+            because = "it kept an ordered unit whose key was still in a handler, and the unit's lease names that id, so a "
+                      + "subscription registering under it would take the unit at once and could start the key beside that handler, or, once it "
+                      + "has returned, charge an attempt and deliver the handled message again; "
+                      + "and the stop of its lanes gave up waiting for their hand-back, which may still deregister that id";
+        } else if (keptUnitNotHandedBack) {
+            until = "until the handler of the key it kept an ordered unit for has returned and the unit has been handed back, which "
+                    + "each consume() of the queue retries should it fail, or that key has been in its handler longer than "
+                    + "stuckHandlerTimeout (" + settings.stuckHandlerTimeout() + "), or the unit has been released on request "
+                    + "(releaseKeptOrderedUnit)";
+            because = "it kept an ordered unit whose key was still in a handler, and the unit's lease names that id, so a "
+                      + "subscription registering under it would take the unit at once and could start the key beside that handler, or, once it "
+                      + "has returned, charge an attempt and deliver the handled message again";
+        } else {
+            until = "until the hand-back of its lanes to the database has finished";
+            because = "the stop of its lanes gave up waiting for that hand-back, which may still deregister that id";
+        }
+        log.info("Instance {} keeps the instance id '{}' of {} of queue {} out of use {}: {}. A consume() of the queue before then "
+                         + "registers under another instance id",
+                 instanceId, consumerInstanceId(index), ended, queueId, until, because);
+    }
+
+    /**
+     * An index in {@link #heldIndexes}: free again once every ordered unit a stop of its {@code lanes} kept has been
+     * handed back, and no hand-back of theirs that may still deregister the id is running - both asked of the lanes, which
+     * alone know.
+     * {@link #isDue()} only reads, under {@link #handOver}: the review that gives a unit up past the queue's
+     * {@code stuckHandlerTimeout} runs before, outside it ({@link #reserveSubscriptionIndex}). Reading, it still takes each
+     * kept owner's lock briefly, to read the owner's in-flight count.
+     */
+    private record HeldIndex(List<ShardOwnedQueue> lanes) {
+        private boolean isDue() {
+            return lanes.stream().noneMatch(lane -> lane.keptOrderedUnitAwaited() || lane.handBackMayStillDeregister());
+        }
+    }
+
+    /**
+     * The instance id the lanes of the subscription holding {@code subscriptionIndex} register under: the caller's for
+     * index 0, suffixed with the index for any other.
+     */
+    private String consumerInstanceId(int subscriptionIndex) {
+        return subscriptionIndex == 0 ? instanceId : instanceId + "-" + subscriptionIndex;
+    }
+
+    /**
+     * Take an unsubscribed subscription's lanes out of {@link #consumers}, under {@link #lifecycleLock}, so that no later
+     * {@link #start()} - which goes over {@code consumers} under that lock - reaches them. Waits for the lock up to
+     * {@link ShardOwnedQueue#SHUTDOWN_BUDGET}, as {@link #stop()} does, and on an interrupted thread not at all. Past
+     * that, or on the thread already holding the lock - a {@link QueueObserver} told of an acquisition or a release -
+     * it hands them to the holder ({@link #toDeregister}), which may still go over them but starts neither from then on,
+     * as the caller has retired them ({@link #startEachOrUndo}), and takes them out and stops them again before it lets
+     * go ({@link #letGoOfLifecycle}). The caller stops them either way ({@link Deregistration#stopLanes}); a lane the
+     * holder started before the retirement is stopped by whichever of the two stops gets there first.
+     * <p>
+     * Deregisters the pair from this queue, not the instance id from the database: the pair's membership row is deleted
+     * by a lane's own stop, and only when that stop kept no ordered unit and the other lane no longer needs the row - it
+     * is not running, not still draining, its last stop kept no ordered unit, and no hand-back of a unit one of its stops
+     * kept is still releasing that unit ({@link ShardOwnedQueue#shareMembershipWith}).
+     * A unit kept by either lane's stop therefore leaves the row to age out a lease TTL after the last heartbeat, even
+     * when the other lane stops after it keeping nothing. Only the lanes know when their stops have finished - a lane's stop may hand its work to a start still running, and
+     * its hand-back may outlast {@link ShardOwnedQueue#SHUTDOWN_BUDGET} - which is why that is not done here.
+     */
+    private void deregister(Deregistration deregistration) {
+        if (lifecycleLock.isHeldByCurrentThread()) {
+            synchronized (handOver) {
+                deregistration.handOverToTheHolder();
+            }
+            return;
+        }
+        boolean locked;
+        var     interrupted = false;
+        try {
+            locked = lifecycleLock.tryLock(ShardOwnedQueue.SHUTDOWN_BUDGET.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            // Restored, so the caller still sees it; each lane's stop then does not wait for its start either.
+            Thread.currentThread().interrupt();
+            locked = false;
+            interrupted = true;
+        }
+        while (!locked) {
+            synchronized (handOver) {
+                if (holder != Holder.NONE) {
+                    // Every holder passes letGoOfLifecycle's last check, which takes these, under handOver before it says
+                    // the lock is free (NONE): it cannot let go without them.
+                    deregistration.handOverToTheHolder();
+                    var heldBy = holder.isAStart() ? "a consume() or start() of the queue, or a start() of one of its subscriptions"
+                                                   : "a stop() of the queue";
+                    if (interrupted) {
+                        log.warn("Instance {} was interrupted while its unsubscribe of one of the subscriptions of queue {} waited "
+                                         + "for the queue's lifecycle lock, held by {}: that holder starts neither of the subscription's "
+                                         + "lanes from now on, and takes them out of the queue before it lets go",
+                                 instanceId, queueId, heldBy);
+                    } else {
+                        log.warn("Instance {} gave up waiting {} for the lifecycle lock of queue {} to unsubscribe one of its "
+                                         + "subscriptions, held by {}: that holder starts neither of the subscription's lanes from now on, and "
+                                         + "takes them out of the queue before it lets go",
+                                 instanceId, ShardOwnedQueue.SHUTDOWN_BUDGET, queueId, heldBy);
+                    }
+                    return;
+                }
+            }
+            // Holder.NONE: whoever holds the lock has just taken it, or is just letting go of it.
+            locked = tryLockAfterAHandOver();
+        }
+        try {
+            // No holder value: held for this removal alone, which a stop or start waiting for the lock reads as NONE - a
+            // holder that has just taken the lock or is about to let go of it.
+            consumers.removeAll(deregistration.lanes);
+        } finally {
+            lifecycleLock.unlock();
+        }
+    }
+
+    /**
+     * An unsubscribed subscription on its way out: its two lanes and its subscription index, which goes back to
+     * {@link #subscriptionIndexes} - the instance id the lanes registered under then free for the next {@link #consume}
+     * - once every stop of the lanes owed has returned: the unsubscribe's own, and, when it handed the deregistration to
+     * the holder of {@link #lifecycleLock}, that holder's too. Given back earlier, a {@code consume()} could start a pair
+     * under the same instance id while one of those stops was still releasing the old pair's units and deregistering
+     * that id. A stop returning does not mean its database work is done, though: each lane's stop waits for its hand-back
+     * - flushing acknowledgements, releasing lease rows, deregistering the id - no longer than
+     * {@link ShardOwnedQueue#SHUTDOWN_BUDGET}, and the abandoned thread may deregister the id later; so the index stays
+     * held until no lane's hand-back that may still deregister it is running
+     * ({@link ShardOwnedQueue#handBackMayStillDeregister()}, {@link #heldIndexes}). A critical error ({@link Exceptions#isCriticalError}) from a stop may leave a lane running
+     * under the id, so the index is kept then. A stop that kept an ordered unit because a key was still in its handler
+     * leaves the unit's lease row naming the id, so the index is given back only once the unit has been handed back,
+     * which the lane does once that key has left its handler, and {@link #reserveSubscriptionIndex} retries should that
+     * fail, or until that key has been in its handler longer than the queue's {@code stuckHandlerTimeout}
+     * ({@link ShardOwnedQueue#keptOrderedUnitAwaited()}, {@link #releaseSubscriptionIndex}): a pair registering
+     * under the id before then would take that unit at once. Asked
+     * of the lanes when the index is wanted, not of each stop as it returns: either of the two stops - the unsubscribe's
+     * or the holder's - may find a lane already stopped by the other, and a lane remembers what any of its stops kept
+     * until the unit has been handed back.
+     */
+    private final class Deregistration {
+        private final List<ShardOwnedQueue> lanes;
+        private final int                   subscriptionIndex;
+        private final AtomicInteger         stopsToGo = new AtomicInteger(1);
+
+        private Deregistration(List<ShardOwnedQueue> lanes, int subscriptionIndex) {
+            this.lanes = lanes;
+            this.subscriptionIndex = subscriptionIndex;
+        }
+
+        /**
+         * Under {@link #handOver}: leave taking the lanes out to the holder, which stops them once more.
+         */
+        private void handOverToTheHolder() {
+            stopsToGo.incrementAndGet();
+            toDeregister.add(this);
+        }
+
+        /**
+         * The unsubscribe's stop of both lanes, which throws what {@link #stopEach} throws once both have stopped.
+         */
+        private void stopLanes() {
+            try {
+                stopEach(lanes);
+            } catch (RuntimeException | Error e) {
+                // stopEach has stopped both lanes before it throws anything but a critical error.
+                if (!Exceptions.isCriticalError(e)) {
+                    stopped();
+                }
+                throw e;
+            }
+            stopped();
+        }
+
+        /**
+         * One owed stop of both lanes has returned; the last gives the subscription index back
+         * ({@link #releaseSubscriptionIndex}).
+         */
+        private void stopped() {
+            if (stopsToGo.decrementAndGet() == 0) {
+                releaseSubscriptionIndex(subscriptionIndex, lanes, "an unsubscribed subscription");
+            }
+        }
+    }
+
+    /**
+     * The lane consumers registered with this queue, in registration order - two per subscription not unsubscribed.
+     */
+    List<ShardOwnedQueue> registeredConsumers() {
+        return List.copyOf(consumers);
     }
 
     /**
@@ -821,7 +1476,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
 
     /**
      * Summed across this process's subscriptions to the queue. Zero when this instance consumes none
-     * of it.
+     * of it. An unsubscribed subscription ({@link Subscription#unsubscribe()}) is no longer one of them, and its counts
+     * leave the sum with it.
      * <p>
      * <b>Per distinct metrics object, not per consumer.</b> {@link #consume} gives a subscription's
      * two lane consumers <em>one</em> {@code ShardOwnerMetrics} between them — deliberately, since a
@@ -864,16 +1520,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
 
     @Override
     public QueueStatistics statistics() {
-        synchronized (consumers) {
-            var counted = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<ShardOwnerMetrics, Boolean>());
-            var total   = QueueStatistics.NONE;
-            for (var consumer : consumers) {
-                if (counted.add(consumer.metrics())) {
-                    total = total.plus(consumer.metrics().statistics());
-                }
+        // No lock: consumers is copy-on-write, and the lifecycle lock is held across a consume()'s
+        // database work, which would hold a metrics scrape up with it.
+        var counted = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<ShardOwnerMetrics, Boolean>());
+        var total   = QueueStatistics.NONE;
+        for (var consumer : consumers) {
+            if (counted.add(consumer.metrics())) {
+                total = total.plus(consumer.metrics().statistics());
             }
-            return total;
         }
+        return total;
     }
 
     @Override
@@ -1004,6 +1660,58 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         return restored;
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Asks the lanes of every subscription registered now ({@link #consumers}) or still being started by a
+     * {@code consume()}, or having its failed starts undone ({@link #beingStarted}), of every unsubscribed one while its
+     * lanes' stops are still under way and of a failed {@code consume()}'s pair until its index is given back or held
+     * ({@link #endingLanes}), and of every ended one whose instance id
+     * is still held because a lane of it kept a unit ({@link #heldIndexes}); each releases only a unit its own stop kept,
+     * and only when it runs under {@code instanceId} ({@code ShardOwnedQueue.releaseKeptOrderedUnit}). A request made while an unsubscribe was still stopping the lanes -
+     * after the ordered lane's stop had kept the unit, before the stops had returned - used to reach no lane and come back
+     * empty. An ended subscription whose index this
+     * queue has given back already is not asked: each unit it kept was handed back, released, or given up on past
+     * {@code stuckHandlerTimeout} - and one given up on is taken over by the next subscription registering under its
+     * instance id, or by another instance once that id's liveness lapses. A held index freed by the release is given back
+     * by the next {@code consume()} ({@link #reserveSubscriptionIndex}).
+     * <p>
+     * One subscription at most runs under {@code instanceId} among the lanes asked: each takes an index of its own
+     * ({@link #reserveSubscriptionIndex}), which is given back only once its lanes are neither in {@link #endingLanes} nor
+     * in {@link #heldIndexes}. So a {@link SQLException} from its release - its unit then left kept - is thrown as it is,
+     * and nothing another subscription kept could have been released beside it.
+     * <p>
+     * {@link KeptUnitReleases#answeredBy()} is this queue's own instance id, then that of each lane asked that differs from
+     * it, in the order the lanes were asked.
+     */
+    @Override
+    public KeptUnitReleases releaseKeptOrderedUnit(String instanceId, int unit) throws SQLException {
+        requireTrue(instanceId != null && !instanceId.isBlank(), "No instanceId provided - the instance id the WARN that reported the unit kept names");
+        var units = orderedUnits();
+        requireTrue(unit >= 0 && unit < units, "unit must be from 0 to " + (units - 1) + ", the queue's ordered units, but was " + unit);
+        // All four read in one step under handOver, so no lane is between two of them: a consume() takes its pair out of
+        // beingStarted once it is in consumers or, failed, in the same step that puts it in endingLanes; an unsubscribe puts
+        // a lane in endingLanes before it takes it out of consumers; and a lane leaves endingLanes in the step that puts it
+        // in heldIndexes or frees its index.
+        var lanes = new LinkedHashSet<ShardOwnedQueue>();
+        synchronized (handOver) {
+            lanes.addAll(consumers);
+            lanes.addAll(beingStarted);
+            lanes.addAll(endingLanes);
+            heldIndexes.values().forEach(held -> lanes.addAll(held.lanes()));
+        }
+        // This queue's own id first, so even a process running no subscription of the queue names itself.
+        var answeredBy = new LinkedHashSet<String>();
+        answeredBy.add(this.instanceId);
+        lanes.forEach(lane -> answeredBy.add(lane.instanceId()));
+        var releases = new ArrayList<KeptUnitRelease>();
+        for (var lane : lanes) {
+            // A lane under another instance id answers empty without touching anything.
+            lane.releaseKeptOrderedUnit(instanceId, unit).ifPresent(releases::add);
+        }
+        return new KeptUnitReleases(List.copyOf(answeredBy), releases);
+    }
+
     @Override
     public long purge() throws SQLException {
         return storage.purge();
@@ -1015,6 +1723,44 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * Restarts consumers this queue created and then stopped. A queue that has never had a consumer
      * has nothing to start, and enqueueing and reading depth never required it — matching
      * {@code DurableQueues}, where the lifecycle governs the consuming side.
+     * <p>
+     * Starts every consumer or none. A consumer's start that fails with anything but a critical error
+     * ({@link Exceptions#isCriticalError}) - a {@link QueueObserver} throwing for an acquisition, say, which escapes that
+     * consumer's start with the consumer running - stops every consumer this start started and escapes as it was thrown, with
+     * any failure of those stops added to it as suppressed; the queue is then not started, so a later {@code start()}
+     * runs again. It used to start them one after the other and stop at the first throw, which left the consumers
+     * before it running, the ones after it never started, and the queue reporting itself started, so a second
+     * {@code start()} did nothing. A critical error escapes untouched and the queue stays started; a {@link #stop()}
+     * still stops what it left running, as it stops every registered consumer: a start's critical error stops nothing,
+     * and a stop's while undoing a failed start leaves the consumers after it unstopped.
+     * <p>
+     * On a queue marked started, this does nothing. A {@link Subscription#start()}, and a {@link #consume} other than the
+     * queue's first, start their own lanes and leave the queue marked as it was, so after a {@link #stop()} this still
+     * starts every consumer that stop stopped; a consumer such a start has already started again stays running, its
+     * start doing nothing the second time. It stays running when this start fails too: a failure with anything but a
+     * critical error stops only the consumers this start started, and leaves the queue not started
+     * ({@link #startEachOrUndo}). It used to stop every consumer, the subscription started on its own and already
+     * consuming included, and nothing started it again.
+     * <p>
+     * A {@link #stop()} that gave up waiting for this start stops the queue without it. This start then starts none of
+     * the consumers it has not begun yet, stops every consumer again once the one it is starting returns, and returns
+     * with the queue not started.
+     * <p>
+     * Called on the thread of a {@code stop()}, or of a {@code consume()} or start owing a stop or doing the stop it owes
+     * - by a {@link QueueObserver} told of a release, say - this does nothing but log a WARN saying so: that stop is
+     * stopping every consumer and leaves the queue not started. So it does on the thread of a {@code consume()} or start
+     * stopping the consumers its failed start started ({@link #startEachOrUndo}). It used to mark the queue started and
+     * start every consumer while that stop was still stopping them, which left the queue marked started, the consumers
+     * before the observer's running and the ones after it stopped. One case returns there with no WARN: a queue marked
+     * started, on the thread of a {@code consume()} or {@link Subscription#start()} undoing its failed start, which leaves
+     * a started queue started - this returns at once, as from any thread. On the thread of a {@code start()} undoing its
+     * own failed start the queue reads started too, marked by that start, but that start unmarks it as it fails, so this
+     * logs a WARN saying so.
+     * <p>
+     * Called while an earlier {@link #consume} or {@code start()} is still starting its consumers - after such a stop
+     * returned, say - this waits for it, as {@code consume()} does: as long as that start's statements take, which
+     * nothing in this queue bounds. Once it has waited {@link ShardOwnedQueue#SHUTDOWN_BUDGET}, it logs one WARN naming
+     * the queue and the instance, and goes on waiting.
      */
     @Override
     public void start() {
@@ -1022,11 +1768,69 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // in which stop() had already declared the queue stopped but had not stopped anything, so a
         // concurrent consume() could observe the flag, set it back, and leave the two states
         // disagreeing about which consumers were running.
-        synchronized (consumers) {
-            if (!started.compareAndSet(false, true)) {
+        holdLifecycle(Holder.STARTING, "start");
+        try {
+            lifecycleHook.afterLockTaken("start");
+            // Under handOver, and not while the holder lets nothing start, as consume() sets it
+            // (markStartedUnlessHolderLetsNothingStart). A stop that did not get the lock, moving this start to STOP_OWED, has
+            // already marked the queue not started and may have returned; setting the flag after it made isStarted() read
+            // true until letGoOfLifecycle, which does that stop's work, cleared it again. And a start called on the thread
+            // of a holder stopping every consumer (FINISHING_OWED_STOP, STOPPING), or the ones its failed start started
+            // (UNDOING_A_QUEUE_START, UNDOING_A_SUBSCRIPTION_START) - by an observer told of a release - set it and started
+            // every consumer while that holder was still stopping them: the queue ended marked started, with the consumers
+            // before the observer's running and the ones after it stopped.
+            //
+            // On the thread of a holder that lets nothing start, this starts nothing and says so at WARN, as nothing else
+            // tells the caller, with one exception: a queue marked started inside the undo of a consume() or a
+            // Subscription.start() (UNDOING_A_SUBSCRIPTION_START), which leaves it started - returned at once, as from any
+            // thread. Every other such holder has marked the queue not started (a stop, an owed stop), but a start() undoing
+            // its own failed start (UNDOING_A_QUEUE_START) marked it started itself and unmarks it as that failure escapes:
+            // that queue ends not started, so it is warned about. With starts nested on this thread (an observer told of an
+            // acquisition calling one inside another), the holder names the innermost: its failure is the one that moved
+            // the holder (startEachOrUndo), and a start inside that undo starts nothing, so none can fail deeper.
+            Holder  startsNothingInside;
+            boolean insideAFailingQueueStart = false;
+            synchronized (handOver) {
+                startsNothingInside = outerHolderThatLetsNothingStart();
+                if (startsNothingInside == null) {
+                    if (holder.letsNothingStart() || !started.compareAndSet(false, true)) {
+                        return;
+                    }
+                } else if (started.get()) {
+                    if (startsNothingInside != Holder.UNDOING_A_QUEUE_START) {
+                        return;
+                    }
+                    insideAFailingQueueStart = true;
+                }
+            }
+            if (insideAFailingQueueStart) {
+                log.warn("Instance {} did not start queue {}: start() was called on the thread of a start() of the queue stopping the "
+                                 + "consumers its failed start started - by a QueueObserver, from inside that call - where nothing "
+                                 + "starts. The queue reads started until that start() fails, which marks it not started unless it "
+                                 + "fails with a critical error. Call it again once that call has returned",
+                         instanceId, queueId);
                 return;
             }
-            consumers.forEach(ShardOwnedQueue::start);
+            if (startsNothingInside != null) {
+                log.warn("Instance {} did not start queue {}: start() was called on the thread of {} - by a QueueObserver, from "
+                                 + "inside that call - where nothing starts, and the queue stays not started. Call it again once "
+                                 + "that call has returned",
+                         instanceId, queueId, startsNothingInside.describeAsAnOuterHolder());
+                return;
+            }
+            try {
+                startEachOrUndo(consumers, Holder.UNDOING_A_QUEUE_START);
+            } catch (RuntimeException | Error e) {
+                // A non-critical failure has stopped every consumer this start started, and left running the ones already
+                // started before it (a Subscription.start(), a later consume()). A critical error - the start's, or a stop's
+                // while undoing it - may have left some running, so the queue stays started; a stop() reaches them either way.
+                if (!Exceptions.isCriticalError(e)) {
+                    started.set(false);
+                }
+                throw e;
+            }
+        } finally {
+            letGoOfLifecycle();
         }
     }
 
@@ -1035,24 +1839,753 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * <p>
      * The consumers stay registered so {@link #start()} can bring them back — that is what
      * {@code Lifecycle} means by restartable, and clearing them here made a restarted queue silently
-     * consume nothing. Each consumer releases its shard leases on the way down, so a successor picks
+     * consume nothing. Only {@link Subscription#unsubscribe()} takes a subscription's consumers out.
+     * Each consumer releases its shard leases on the way down, so a successor picks
      * them up immediately rather than waiting out the lease.
+     * <p>
+     * Stops every registered consumer whether the queue is marked started or not - one a {@link Subscription#start()}
+     * or a later {@link #consume} started after an earlier stop, with the queue left not started, included - each one
+     * already stopped doing nothing. It used to stop them only when the queue was marked started, which is why such a
+     * start had to mark the queue started; that made the queue's {@link #start()} return at once with every other
+     * subscription stopped.
+     * <p>
+     * Every consumer is stopped even when an earlier one's stop throws - a {@link QueueObserver} failing for a release,
+     * say, with a {@code RuntimeException} or a non-critical {@code Error} - and the first such failure is thrown as it
+     * was thrown once all of them have stopped, the others added to it as suppressed. A critical error
+     * ({@link Exceptions#isCriticalError}) propagates at once, leaving the consumers after it unstopped.
+     * <p>
+     * Called while a {@link #consume}, a {@link #start()} or a {@link Subscription#start()} on another thread is still
+     * starting its consumers - which registers the instance and leases units on the database, and nothing in this queue
+     * bounds that - this waits for it up to the 2 s {@link ShardOwnedQueue#SHUTDOWN_BUDGET}, and no longer; on an
+     * interrupted thread not at all, returning with the interrupt flag still set. Past that, the queue is not started from
+     * then on, and this stops every registered consumer and the pair a {@code consume()} is starting without waiting for
+     * it: the consumer still leasing waits for its start up to its own 2 s budget and then hands this stop's work to it
+     * ({@link ShardOwnedQueue#stop()}), the others stop as usual, and one not started yet has nothing to stop. That
+     * {@code consume()} or start then starts none of the consumers it had not begun, stops every consumer again once its
+     * starts have returned - logging at WARN rather than throwing what a {@link QueueObserver} throws meanwhile, since this
+     * stop's caller has already returned - and leaves the queue not started; a {@code consume()} still registers its pair
+     * and returns its {@link Subscription}. A stop called while another stop holds the lock past the budget returns at
+     * once: that stop is stopping every consumer, and nothing can start one before it is done.
+     * <p>
+     * A stop that gave up waiting so returns <b>before</b> the consumer still leasing has released its units and
+     * deregistered the instance ({@link ShardOwnedQueue#stop()}), though {@link #isStarted()} is false from then on. A
+     * {@link #start()} or {@code consume()} called afterwards waits for the {@code consume()} or start still
+     * running. And closing the {@code DataSource} before that call returns leaves the release and the deregistration to
+     * fail against a closed pool: the units stay unserved until this instance's membership row is older than the lease
+     * TTL, as after a crash. Stopping a {@code ShardRuntime} passed to {@code setRuntime} before then costs the drain
+     * instead: the release and the deregistration go through the queue's {@code DataSource} and still succeed, but
+     * handlers still running on units that consumer adopted before the stop are no longer waited for, so their
+     * acknowledgements may be lost and those messages redelivered.
+     * <p>
+     * Called on the thread of a {@code consume()}, a {@link #start()} or a {@link Subscription#start()} of this queue
+     * still starting its consumers - a {@link QueueObserver} told of an acquisition, say - this marks the queue not
+     * started and returns without stopping anything itself: that start then starts none of the consumers it had not
+     * begun, and stops every consumer before it returns, leaving the queue not started, as after a stop that gave up
+     * waiting for it. Called on the thread of a stop, from an observer told of a release, it does nothing: that stop is
+     * stopping every consumer.
      */
     @Override
     public void stop() {
-        // Before the started check: a queue that only produces is never started, and its queued wake-ups still go out
+        // First, whatever the lifecycle holds: a queue that only produces is never started, and its queued wake-ups still go out
         var own = ownNotifier;
         if (own != null) {
             own.flushAndStop(Duration.ofSeconds(2));
         }
-        synchronized (consumers) {
-            if (!started.compareAndSet(true, false)) {
+        if (lifecycleLock.isHeldByCurrentThread()) {
+            stopFromInsideTheHolder();
+            return;
+        }
+        var     interrupted = false;
+        boolean locked;
+        try {
+            locked = lifecycleLock.tryLock(ShardOwnedQueue.SHUTDOWN_BUDGET.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            // Restored, so the caller still sees it; each consumer's stop below then does not wait for its start either.
+            Thread.currentThread().interrupt();
+            interrupted = true;
+            locked = false;
+        }
+        while (!locked) {
+            Holder                heldBy;
+            List<ShardOwnedQueue> toStop = List.of();
+            synchronized (handOver) {
+                heldBy = holder;
+                if (heldBy.isAStart()) {
+                    moveHolder(Holder.STOP_OWED);
+                    stopsWithoutLock++;
+                    started.set(false);
+                    toStop = registeredAndBeingStarted();
+                }
+            }
+            if (heldBy.isAStart()) {
+                stopWhileStarting(toStop, interrupted);
                 return;
             }
-            consumers.forEach(ShardOwnedQueue::stop);
+            if (heldBy == Holder.STOPPING) {
+                return;
+            }
+            // Holder.NONE: whoever holds the lock has just taken it, or is just letting go of it. The queue may still be
+            // started, so take the lock and look, a few milliseconds at a time, parked; returning here, as on STOPPING,
+            // could leave it running.
+            locked = tryLockAfterAHandOver();
+        }
+        markHeld(Holder.STOPPING);
+        try {
+            // Every consumer, not only when the queue is marked started: a Subscription.start() or a later consume() after an
+            // earlier stop runs its lanes with the queue left not started.
+            started.set(false);
+            stopEach(consumers);
+        } finally {
+            letGoOfLifecycle();
         }
     }
 
+    /**
+     * A {@link #stop()} on the thread that holds {@link #lifecycleLock} - a {@link QueueObserver} told of an acquisition
+     * while a {@code consume()} or a start starts its consumers, or of a release while a stop stops them. Inside a start
+     * it is owed exactly as a stop that did not get the lock is ({@link #stopWhileStarting}), less the stopping, which
+     * that start does before it returns ({@link #letGoOfLifecycle}); {@link #stopsWithoutLock} is left alone, as the
+     * holder would wait for itself. Inside a stop there is nothing left to do. It used to take the lock again, reentrantly,
+     * and do what a stop holding it does: nothing inside a {@code consume()}, which then marked the queue started; and
+     * inside a start, stop every consumer, after which the start went on to start the ones after the observer's, with the
+     * queue marked not started, so no later {@code stop()} reached them.
+     */
+    private void stopFromInsideTheHolder() {
+        synchronized (handOver) {
+            if (holder.isAStart()) {
+                moveHolder(Holder.STOP_OWED);
+                started.set(false);
+            }
+        }
+    }
+
+    /**
+     * How long a {@link #stop()} that read {@link Holder#NONE} waits for {@link #lifecycleLock} before it reads
+     * {@link #holder} again. Short, because the lock may meanwhile have passed to a start, which the stop must stop without
+     * the lock rather than wait for; a lock let go of meanwhile is taken without waiting out the rest.
+     */
+    private static final Duration HAND_OVER_WAIT = Duration.ofMillis(10);
+
+    /**
+     * Wait up to {@link #HAND_OVER_WAIT} for {@link #lifecycleLock}, parked rather than spinning, through
+     * {@link Locks#tryLockDeferringPendingInterrupt}: an interrupt pending on entry does not cut the wait short, one
+     * arriving during it ends the wait without the lock ({@code false}) and the caller reads {@link #holder} again. Either
+     * way the flag is set again afterwards, so the stop leaves it set as it found or got it, and each consumer's stop still
+     * sees it.
+     */
+    private boolean tryLockAfterAHandOver() {
+        return Locks.tryLockDeferringPendingInterrupt(lifecycleLock, HAND_OVER_WAIT);
+    }
+
+    /**
+     * Move {@link #holder} to {@code target} if {@link Holder}'s diagram has an edge from where it stands to there
+     * ({@link Holder#canMoveTo}), else leave it where it is. Under {@link #handOver}, which this takes; a caller that reads
+     * the holder and moves it as one step holds it already. Every move of the holder goes through here, so the rule lives
+     * once, as {@link ShardOwnedQueue}'s {@code Run.advanceTo} keeps it for a run's phase.
+     * <p>
+     * A move to where the holder stands is no move, and says nothing: a second stop that did not get the lock, or a second
+     * on the holder's own thread, asks for the {@link Holder#STOP_OWED} the first left. Any other move off the diagram is
+     * a bug in this queue's lifecycle - the caller goes on as though the holder had moved, so a stop it owed may never be
+     * done - and is logged at ERROR, naming the queue, both holders and, through the stack trace, the caller; the holder
+     * stays where it is, as {@code Run.advanceTo} leaves a phase. A caller whose move may rightly not apply (the end of an
+     * undo after a stop arrived, {@link #startEachOrUndo}) reads the holder first and asks only for a move it can make.
+     */
+    void moveHolder(Holder target) {
+        requireNonNull(target, "No target holder provided");
+        synchronized (handOver) {
+            var previous = holder;
+            if (previous.canMoveTo(target)) {
+                holder = target;
+            } else if (previous != target) {
+                log.error("Instance {}: the holder of the lifecycle lock of queue {} was asked to move from {} to {}, which Holder's "
+                                  + "diagram has no edge for, and stays at {}. This is a bug in the queue's lifecycle: the caller "
+                                  + "goes on as though the holder had moved, and a stop it owes may never be done",
+                          instanceId, queueId, previous, target, previous,
+                          new IllegalStateException("Holder of queue " + queueId + " asked to move from " + previous + " to " + target));
+            }
+        }
+    }
+
+    /**
+     * What the holder of {@link #lifecycleLock} is doing now ({@link #holder}), read under {@link #handOver}.
+     */
+    Holder holder() {
+        synchronized (handOver) {
+            return holder;
+        }
+    }
+
+    /**
+     * What the holder of {@link #lifecycleLock} is doing, and whether it owes a stop - one value, read under
+     * {@link #handOver} and moved only by {@link #moveHolder}, along the edges below, so a {@link #stop()} that did not get
+     * the lock, a stop on the holder's own thread, the holder's starts ({@link #holderLetsNothingStart},
+     * {@link #markStartedUnlessHolderLetsNothingStart}) and its letting go ({@link #letGoOfLifecycle}) each decide from it.
+     * {@link #stopsWithoutLock} and {@link #beingStarted} are data beside it, not part of the decision.
+     * <pre>
+     *   NONE -------------------------&gt; STARTING | STOPPING
+     *   STARTING ---------------------&gt; UNDOING_A_QUEUE_START | UNDOING_A_SUBSCRIPTION_START | STOP_OWED | NONE
+     *   UNDOING_A_QUEUE_START --------&gt; STARTING | STOP_OWED   (STOP_OWED: a stop arriving meanwhile)
+     *   UNDOING_A_SUBSCRIPTION_START -&gt; STARTING | STOP_OWED   (STOP_OWED: a stop arriving meanwhile)
+     *   STOP_OWED --------------------&gt; FINISHING_OWED_STOP | NONE   (NONE: a critical error escaping the holder)
+     *   FINISHING_OWED_STOP ----------&gt; STOP_OWED | NONE             (STOP_OWED: a stop arriving meanwhile)
+     *   STOPPING ---------------------&gt; NONE
+     * </pre>
+     * A stop that did not get the lock stops every consumer itself, counted in {@link #stopsWithoutLock}; the holder waits
+     * for those stops, then stops every consumer again ({@link #FINISHING_OWED_STOP}), and is owed again by a stop arriving
+     * meanwhile, so it repeats the stopping. Which start is undoing is part of the value, not a flag beside it: the
+     * {@code startEachOrUndo} of a queue {@code start()} moves to {@link #UNDOING_A_QUEUE_START}, that of a
+     * {@code consume()} or a {@link Subscription#start()} to {@link #UNDOING_A_SUBSCRIPTION_START}, and a {@code start()}
+     * called inside the undo tells the two apart by it. The adapter's {@code ShardOwnedDurableQueueConsumer}, whose stop
+     * without the lock stops nothing and which undoes no start of its own, has five of these values, without either
+     * undoing one and without that last edge.
+     * <p>
+     * Not forward-only, as {@code ShardOwnedQueue}'s {@code Run.Phase} is: that phase belongs to one run, a fresh object
+     * per start, while this queue has no per-start object to hang a phase on - this describes whoever holds the lock now,
+     * and goes back to {@link #NONE} as each holder lets go. A reentrant hold (an observer starting the queue from inside a
+     * {@code consume()}) does not move it ({@link #markHeld}); inside a holder that lets nothing start
+     * ({@link #letsNothingStart}), such a hold starts nothing and does not mark the queue started.
+     */
+    enum Holder {
+        /**
+         * Nobody holds the lock, or a holder has just taken it or is about to let go of it: the stop tries the lock again,
+         * a few milliseconds at a time, parked; a start waiting for it says nothing yet, and reads it again one
+         * {@link ShardOwnedQueue#SHUTDOWN_BUDGET} later ({@link #holdLifecycle}).
+         */
+        NONE,
+        /**
+         * A {@code consume()}, a {@code start()} or a {@link Subscription#start()} starting its consumers, owing no stop. A
+         * stop that did not get the lock, or one on this holder's thread, moves it to {@link #STOP_OWED}.
+         */
+        STARTING,
+        /**
+         * A holder of the {@link #STARTING} kind whose queue {@code start()} failed, stopping the consumers that start
+         * started ({@link #startEachOrUndo}), and back to {@code STARTING} once they are stopped. With starts nested on the
+         * holder's thread (a {@link QueueObserver} told of an acquisition calling one), it is the innermost start that
+         * failed: the one that moved the holder here; a start inside the undo starts nothing, so none can fail deeper.
+         * Nothing may start a consumer or mark the queue started meanwhile ({@link #letsNothingStart}): a start on the
+         * holder's own thread - from a {@link QueueObserver} told of the release of a unit the undo gives up - started
+         * every consumer, the ones being stopped included, and could mark the queue started for a start that then failed.
+         * That queue {@code start()} marked the queue started itself and unmarks it as its failure escapes, so a queue
+         * {@code start()} called inside this undo, finding the queue marked started, still logs a WARN that it started
+         * nothing ({@link #start()}). A stop that did not get the lock, or one on this holder's thread, moves it to
+         * {@link #STOP_OWED}, as from {@code STARTING}.
+         */
+        UNDOING_A_QUEUE_START,
+        /**
+         * As {@link #UNDOING_A_QUEUE_START}, for a failed {@code consume()} or {@link Subscription#start()}: stopping the
+         * consumers that start started, and back to {@link #STARTING} once they are stopped. Neither marks a started queue
+         * not started, so a queue {@code start()} called inside this undo, finding the queue marked started, returns at
+         * once with no WARN, as from any thread. It used to be one value with {@code UNDOING_A_QUEUE_START}, told apart by
+         * a flag beside the holder that each of the three starts set and restored by hand around its own starts.
+         */
+        UNDOING_A_SUBSCRIPTION_START,
+        /**
+         * A holder of the {@link #STARTING} kind owes a stop: the queue is marked not started, and the holder starts none of
+         * the consumers it has not begun, never marks the queue started, and once its starts have returned waits for the
+         * stops still stopping without the lock and stops every consumer again ({@link #FINISHING_OWED_STOP}). Also reached
+         * from {@link #FINISHING_OWED_STOP}, by a stop arriving while the holder does an owed stop: it does one more.
+         */
+        STOP_OWED,
+        /**
+         * The holder doing the stop it owed ({@link #letGoOfLifecycle}): stopping every consumer again, the queue marked not
+         * started. A stop arriving meanwhile is owed again, as while {@link #STARTING}, and the holder repeats the stopping.
+         */
+        FINISHING_OWED_STOP,
+        /** A {@code stop()}, which stops every consumer: the stop has nothing left to do. */
+        STOPPING;
+
+        /**
+         * Whether the holder is a {@code consume()}, a {@code start()} or a {@link Subscription#start()} - starting,
+         * undoing a failed start, owing a stop, or doing it - so a stop that does not take the lock is owed by it.
+         */
+        boolean isAStart() {
+            return this == STARTING || isUndoingAStart() || this == STOP_OWED || this == FINISHING_OWED_STOP;
+        }
+
+        /**
+         * Whether the holder is stopping the consumers a failed start of its own started: {@link #UNDOING_A_QUEUE_START}
+         * or {@link #UNDOING_A_SUBSCRIPTION_START}.
+         */
+        boolean isUndoingAStart() {
+            return this == UNDOING_A_QUEUE_START || this == UNDOING_A_SUBSCRIPTION_START;
+        }
+
+        /**
+         * Whether the diagram above has an edge from this holder to {@code target}: from {@link #NONE} to
+         * {@link #STARTING} and {@link #STOPPING}; from {@code STARTING} to {@link #UNDOING_A_QUEUE_START},
+         * {@link #UNDOING_A_SUBSCRIPTION_START}, {@link #STOP_OWED} and {@code NONE}; from each of the two undoing ones to
+         * {@code STARTING} and {@code STOP_OWED}; from {@code STOP_OWED} to {@link #FINISHING_OWED_STOP} and
+         * {@code NONE}; from {@code FINISHING_OWED_STOP} to {@code STOP_OWED} and {@code NONE}; from {@code STOPPING} to
+         * {@code NONE} alone. Staying where it is is not an edge.
+         */
+        boolean canMoveTo(Holder target) {
+            return switch (this) {
+                case NONE -> target == STARTING || target == STOPPING;
+                case STARTING -> target.isUndoingAStart() || target == STOP_OWED || target == NONE;
+                case UNDOING_A_QUEUE_START, UNDOING_A_SUBSCRIPTION_START -> target == STARTING || target == STOP_OWED;
+                case STOP_OWED -> target == FINISHING_OWED_STOP || target == NONE;
+                case FINISHING_OWED_STOP -> target == STOP_OWED || target == NONE;
+                case STOPPING -> target == NONE;
+            };
+        }
+
+        /**
+         * Whether the holder leaves the queue not started when it lets go: it owes a stop ({@link #STOP_OWED}), is doing
+         * the stop it owed ({@link #FINISHING_OWED_STOP}), or is a stop ({@link #STOPPING}). Nothing may start a consumer
+         * or mark the queue started meanwhile - a start on the holder's own thread, from a {@link QueueObserver} told of
+         * an acquisition or a release, included: that holder stops, or is stopping, every consumer, so what such a start
+         * began would be stopped again, or left running past the consumers the holder stops after it with the queue
+         * marked started.
+         */
+        boolean stopsTheQueue() {
+            return this == STOP_OWED || this == FINISHING_OWED_STOP || this == STOPPING;
+        }
+
+        /**
+         * Whether nothing may start a consumer or mark the queue started while this holder holds the lock: it leaves the
+         * queue not started ({@link #stopsTheQueue}), or is stopping the consumers a failed start of its own started
+         * ({@link #isUndoingAStart}). A start on the holder's own thread - a {@link QueueObserver} told of an acquisition
+         * or a release calling {@code start()}, {@code consume()} or {@link Subscription#start()} - then starts nothing,
+         * and a {@code consume()} there registers its pair unstarted; each logs a WARN saying so, but for a queue
+         * {@code start()} on a queue a {@code consume()} or {@link Subscription#start()} undoing its failed start
+         * ({@link #UNDOING_A_SUBSCRIPTION_START}) leaves marked started ({@link #outerHolderThatLetsNothingStart}).
+         */
+        boolean letsNothingStart() {
+            return stopsTheQueue() || isUndoingAStart();
+        }
+
+        /**
+         * This holder, as the WARN of a start made on its thread that it lets nothing start names it
+         * ({@link #outerHolderThatLetsNothingStart}): what holds the lock, and why nothing starts there.
+         */
+        String describeAsAnOuterHolder() {
+            return switch (this) {
+                case STOPPING -> "a stop() of the queue, stopping every consumer";
+                case STOP_OWED -> "a consume() or start() of the queue, or a start() of one of its subscriptions, owing a stop: it "
+                                  + "stops every consumer before it returns";
+                case FINISHING_OWED_STOP -> "a consume() or start() of the queue, or a start() of one of its subscriptions, doing a "
+                                            + "stop it owed: stopping every consumer";
+                case UNDOING_A_QUEUE_START -> "a start() of the queue stopping the consumers its failed start started";
+                case UNDOING_A_SUBSCRIPTION_START -> "a consume() of the queue, or a start() of one of its subscriptions, stopping "
+                                                     + "the consumers its failed start started";
+                case NONE, STARTING -> "a holder of the queue's lifecycle lock (" + this + ")";
+            };
+        }
+    }
+
+    /**
+     * What a test does once a start has taken {@link #lifecycleLock}, to reach a moment no real start can be made to hold:
+     * a {@code start()} that holds the lock and has not yet looked at the {@link #holder}, which a {@link #stop()} from
+     * another thread, giving up waiting for the lock, moves to {@link Holder#STOP_OWED}. Passed at construction, through
+     * the builder's package-private {@link PostgresqlMessageQueueBuilder#setLifecycleHook}, and fixed for the queue's
+     * life; every queue built otherwise has {@link #NONE}, which does nothing.
+     */
+    interface LifecycleHook {
+        LifecycleHook NONE = new LifecycleHook() { };
+
+        /**
+         * Told which call has just taken {@link #lifecycleLock} - {@code "consume"}, {@code "start"} or
+         * {@code "start a subscription of"}, as in the WARN of a call waiting for the lock - before it does anything
+         * under it; also for a call holding it reentrantly, on the thread of the holder. Blocking here holds that call
+         * with the lock held and the holder {@link Holder#STARTING} (or whatever the outer holder is), so a {@code stop()}
+         * on another thread waits its {@link ShardOwnedQueue#SHUTDOWN_BUDGET} and then stops without the lock
+         * ({@link #stopWhileStarting}). What it throws escapes the call, which lets go of the lock as on any failure.
+         */
+        default void afterLockTaken(String operation) {
+        }
+    }
+
+    /**
+     * Take {@link #lifecycleLock}, waiting as long as it takes, for a {@code consume()}, a {@code start()} or a
+     * {@link Subscription#start()}: a stop holding it is bounded by each consumer's own stop, and a start holding it is
+     * what this start has to wait for. That start is not bounded: its consumers' database work blocks as long as a
+     * statement does, and after a {@link #stop()} that gave up waiting for it, it stops every consumer again before it
+     * lets go ({@link #letGoOfLifecycle}). So the wait, like a plain {@code lock()}, goes on through the thread's
+     * interrupt, but it is not silent: once it has waited {@link ShardOwnedQueue#SHUTDOWN_BUDGET}, it logs one WARN
+     * saying what holds the lock.
+     *
+     * @param operation {@code "consume"}, {@code "start"} or {@code "start a subscription of"}, the call waiting, for
+     *                  the WARN
+     */
+    private void holdLifecycle(Holder what, String operation) {
+        Locks.lockWarningOnce(lifecycleLock, ShardOwnedQueue.SHUTDOWN_BUDGET, () -> {
+            Holder heldBy;
+            synchronized (handOver) {
+                heldBy = holder;
+            }
+            if (heldBy == Holder.NONE) {
+                // The holder has just taken the lock, or is just letting go of it - nothing to say yet: asked again one budget later.
+                return false;
+            }
+            if (heldBy.isAStart()) {
+                log.warn("Instance {} has waited at least {} and is still waiting to {} queue {}: an earlier consume() or start() of "
+                                 + "the queue, or start() of one of its subscriptions, is still starting its consumers - "
+                                 + "registering the instance and leasing its units, and, if a stop gave up waiting for "
+                                 + "it, stopping every consumer again once those statements return. Nothing in this "
+                                 + "queue bounds that wait: a statement that hangs ends at the driver's socketTimeout, "
+                                 + "and without one never",
+                         instanceId, ShardOwnedQueue.SHUTDOWN_BUDGET, operation, queueId);
+            } else {
+                log.warn("Instance {} has waited at least {} and is still waiting to {} queue {}: a stop of the queue is still "
+                                 + "stopping its consumers",
+                         instanceId, ShardOwnedQueue.SHUTDOWN_BUDGET, operation, queueId);
+            }
+            return true;
+        });
+        markHeld(what);
+    }
+
+    private void markHeld(Holder what) {
+        // A reentrant hold (an observer starting the queue from inside a consume(), say) leaves the outer holder's word. A
+        // stop never holds the lock reentrantly: on the holder's thread it is owed instead (stopFromInsideTheHolder).
+        if (lifecycleLock.getHoldCount() == 1) {
+            moveHolder(what);
+        }
+    }
+
+    /**
+     * Let go of {@link #lifecycleLock}, first doing what a {@link #stop()} that did not get it left to this holder: wait
+     * for that stop to finish stopping consumers, so it cannot stop one a later start begins, then stop every consumer
+     * again - what this holder started after the stop, and a {@code consume()}'s pair, registered since - and leave the
+     * queue not started. Repeated while another such stop arrives meanwhile. And what a
+     * {@link Subscription#unsubscribe()} that did not get the lock left to it ({@link #deregister}): take that
+     * subscription's lanes out of {@link #consumers}, and stop them again - this holder starts neither from the moment
+     * that unsubscribe retired them ({@link #startEachOrUndo}), but a lane it started before then is stopped by this
+     * stop or by the unsubscribe's own, whichever gets there first - repeated while another such unsubscribe arrives
+     * meanwhile.
+     */
+    private void letGoOfLifecycle() {
+        if (lifecycleLock.getHoldCount() > 1) {
+            lifecycleLock.unlock();
+            return;
+        }
+        var done = false;
+        try {
+            while (!done) {
+                List<Deregistration> deregistered = List.of();
+                var                  owesAStop    = false;
+                // The last check and saying the lock is free are one step: a stop finding the holder still a start in
+                // between would owe a stop nobody does, and an unsubscribe handing its lanes over would leave them
+                // registered.
+                synchronized (handOver) {
+                    awaitStopsWithoutLock();
+                    if (holder == Holder.STOP_OWED) {
+                        moveHolder(Holder.FINISHING_OWED_STOP);
+                        started.set(false);
+                        owesAStop = true;
+                    } else if (!toDeregister.isEmpty()) {
+                        deregistered = List.copyOf(toDeregister);
+                        toDeregister.clear();
+                        for (var deregistration : deregistered) {
+                            consumers.removeAll(deregistration.lanes);
+                        }
+                    } else {
+                        moveHolder(Holder.NONE);
+                        beingStarted.clear();
+                        done = true;
+                    }
+                }
+                if (owesAStop) {
+                    stopForAStopThatDidNotWait();
+                } else if (!deregistered.isEmpty()) {
+                    stopForAnUnsubscribeThatDidNotWait(deregistered);
+                }
+            }
+        } finally {
+            if (!done) {
+                // Only a critical error from the stopping gets here. The lanes of an unsubscribed subscription still leave
+                // the queue, or a later start() starts them with nothing holding them.
+                synchronized (handOver) {
+                    moveHolder(Holder.NONE);
+                    beingStarted.clear();
+                    for (var deregistration : toDeregister) {
+                        consumers.removeAll(deregistration.lanes);
+                    }
+                    toDeregister.clear();
+                }
+            }
+            lifecycleLock.unlock();
+        }
+    }
+
+    /**
+     * Stop the lanes of subscriptions unsubscribed while this holder had the lock, now taken out of {@link #consumers},
+     * again. This holder started neither of them from the moment their unsubscribe retired them
+     * ({@link ShardOwnedQueue#retire()}); a lane it started before then is stopped by whichever of this stop and the
+     * unsubscribe's own gets there first, and the other does nothing - or waits for the stop still under way. Either way
+     * this counts as one of the stops the subscription index waits for ({@link Deregistration#stopped}). Logged
+     * at WARN rather than thrown, as the holder's caller did not ask for it; that unsubscribe stops both lanes itself and
+     * throws its own failure.
+     */
+    private void stopForAnUnsubscribeThatDidNotWait(List<Deregistration> deregistered) {
+        for (var deregistration : deregistered) {
+            try {
+                stopEach(deregistration.lanes);
+            } catch (RuntimeException | Error e) {
+                Exceptions.rethrowIfCriticalError(e);
+                log.warn("Stopping a lane of queue {} (instance {}) failed while taking out a subscription whose unsubscribe() left "
+                                 + "taking out its lanes to this holder of the queue's lifecycle lock. That unsubscribe stops the "
+                                 + "lanes itself, so this is logged rather than thrown",
+                         queueId, instanceId, e);
+            }
+            deregistration.stopped();
+        }
+    }
+
+    /**
+     * Under {@link #handOver}. Bounded by those stops: each consumer's {@link ShardOwnedQueue#stop()} waits at most its
+     * 2 s budget for a start, and its drain and release have budgets of their own.
+     */
+    private void awaitStopsWithoutLock() {
+        var interrupted = false;
+        while (stopsWithoutLock > 0) {
+            try {
+                handOver.wait();
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * How many {@link #stop()}s that did not get {@link #lifecycleLock} are still stopping consumers
+     * ({@link #stopsWithoutLock}), read under {@link #handOver}.
+     */
+    int stopsWithoutLock() {
+        synchronized (handOver) {
+            return stopsWithoutLock;
+        }
+    }
+
+    private void stopForAStopThatDidNotWait() {
+        try {
+            stopEach(consumers);
+        } catch (RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            log.warn("Stopping a consumer of queue {} (instance {}) failed while finishing a stop() that did not wait for its start. "
+                             + "That stop has returned, so this is logged rather than thrown; every consumer has still been stopped",
+                     queueId, instanceId, e);
+        }
+    }
+
+    /**
+     * Under {@link #handOver}: every registered consumer, then the pair of every {@code consume()} still starting
+     * ({@link #beingStarted}) - an observer's {@code consume()} on the thread of one still starting, and that one.
+     */
+    private List<ShardOwnedQueue> registeredAndBeingStarted() {
+        var all = new ArrayList<ShardOwnedQueue>(consumers);
+        for (var consumer : beingStarted) {
+            if (!all.contains(consumer)) {
+                all.add(consumer);
+            }
+        }
+        return all;
+    }
+
+    /**
+     * Whether the holder of {@link #lifecycleLock} lets nothing start ({@link Holder#letsNothingStart}): it owes a stop,
+     * does the stop it owed, is a stop, or is stopping what its failed start started. Read under {@link #handOver}.
+     */
+    private boolean holderLetsNothingStart() {
+        synchronized (handOver) {
+            return holder.letsNothingStart();
+        }
+    }
+
+    /**
+     * For a {@code consume()}, a {@code start()} or a {@link Subscription#start()} that has just taken
+     * {@link #lifecycleLock}: the holder, when this call holds the lock reentrantly - made on the holder's own thread, by
+     * a {@link QueueObserver} told of an acquisition or a release - and that holder lets nothing start
+     * ({@link Holder#letsNothingStart}); else {@code null}. Such a call starts nothing, and its caller - the observer -
+     * has no other way to learn it, so the call logs a WARN, bar one case: a queue {@code start()} finding the queue
+     * marked started inside the undo of a {@code consume()} or {@link Subscription#start()}, which leaves it started
+     * ({@link Holder#UNDOING_A_SUBSCRIPTION_START}). A release
+     * that a lane's own failed start tells, before it escapes to {@link #startEachOrUndo}, comes while the holder is still
+     * {@link Holder#STARTING}: a call made from it gets {@code null} and starts as from an acquisition. The holder cannot
+     * move to a holder that lets a start through before this call returns: only its own thread, which is in this call,
+     * moves it back. A call that is itself the holder is not asked about - a stop on another thread that gave up waiting
+     * for it says so itself.
+     */
+    private Holder outerHolderThatLetsNothingStart() {
+        if (lifecycleLock.getHoldCount() < 2) {
+            return null;
+        }
+        synchronized (handOver) {
+            return holder.letsNothingStart() ? holder : null;
+        }
+    }
+
+    /**
+     * Mark the queue started, for a {@code consume()} made while no subscription was registered, holding
+     * {@link #lifecycleLock}, unless
+     * the holder lets nothing start ({@link Holder#letsNothingStart}). A stop owed ({@link Holder#STOP_OWED}) has
+     * already marked the queue not started, and may have returned; {@link #letGoOfLifecycle} marks it not started again
+     * only once it has waited for that stop's stopping, so marking it here made {@link #isStarted()} read true in between.
+     * Called on the thread of a holder that is stopping every consumer ({@link Holder#FINISHING_OWED_STOP},
+     * {@link Holder#STOPPING}), or the ones its failed start started ({@link Holder#isUndoingAStart}) - from a
+     * {@link QueueObserver} told of a release - marking it left the queue started once that holder had stopped them.
+     * Under {@link #handOver}, where a stop that did not get the lock marks it, so such a stop arriving after this check
+     * still finds the flag set and clears it.
+     */
+    private void markStartedUnlessHolderLetsNothingStart() {
+        synchronized (handOver) {
+            if (!holder.letsNothingStart()) {
+                started.set(true);
+            }
+        }
+    }
+
+    /**
+     * A {@link #stop()} that did not get {@link #lifecycleLock} from a {@code consume()}, a {@code start()} or a
+     * {@link Subscription#start()} still starting its consumers: it has marked the stop owed and the queue not started,
+     * and now stops {@code toStop} without waiting for the holder.
+     */
+    private void stopWhileStarting(List<ShardOwnedQueue> toStop, boolean interrupted) {
+        try {
+            if (interrupted) {
+                log.warn("Instance {} was interrupted while its stop of queue {} waited for a consume() or start() of "
+                                 + "the queue, or a start() of one of its subscriptions, still starting its consumers, and "
+                                 + "stopped the queue without it. Each consumer still leasing does the stop's work itself once "
+                                 + "its statements return, and that consume() or start() stops every consumer again",
+                         instanceId, queueId);
+            } else {
+                log.warn("Instance {} gave up waiting {} for a consume() or start() of queue {}, or a start() of one "
+                                 + "of its subscriptions, still starting its consumers, and stopped the queue without it. Each "
+                                 + "consumer still leasing does the stop's work itself once its statements return, and that "
+                                 + "consume() or start() stops every consumer again",
+                         instanceId, ShardOwnedQueue.SHUTDOWN_BUDGET, queueId);
+            }
+            stopEach(toStop);
+        } finally {
+            synchronized (handOver) {
+                stopsWithoutLock--;
+                handOver.notifyAll();
+            }
+        }
+    }
+
+    /**
+     * Stop every one of {@code consumers}, each one even when an earlier one's stop throws, and then throw the first
+     * failure as it was thrown, the others added to it as suppressed ({@link Exceptions#forEachThenThrowFirst}). A
+     * consumer's stop throws only after it has done all of its stopping, when the {@link QueueObserver} it tells of a
+     * release, last, throws - a {@code RuntimeException} or a non-critical {@code Error} such as a test double's
+     * {@code AssertionError}; only a critical error ({@link Exceptions#isCriticalError}) ends the loop at once. The fan-out
+     * observer is shared by every consumer of this queue, so stopping at the first throw left the consumers after it
+     * started: still leasing, heartbeating and dispatching after the queue reported itself stopped, and a second
+     * {@code stop()} found the queue already stopped.
+     */
+    private static void stopEach(List<ShardOwnedQueue> consumers) {
+        Exceptions.forEachThenThrowFirst(consumers, ShardOwnedQueue::stop);
+    }
+
+    /**
+     * Start every one of {@code consumers}, in order, or start none of them: a start that fails with anything but a
+     * critical error ({@link Exceptions#isCriticalError}) stops every consumer this call started - those it started
+     * before the failure, and the one that failed - each one even when an earlier one's stop throws, and then escapes as
+     * it was thrown, with every stop's failure added to it as suppressed, never thrown in its place
+     * ({@link Exceptions#forEachCollectingFailures}). A {@code RuntimeException} and a non-critical {@code Error} count
+     * alike: a {@link QueueObserver} that throws either for an acquisition escapes a consumer's start with that consumer
+     * running, and its fan-out observer is shared by every consumer of this queue. A start's critical error escapes
+     * untouched, with nothing stopped, as a consumer's own start leaves it; a stop's critical error ends the stopping at
+     * once and escapes, with the start's failure added to it as suppressed.
+     * <p>
+     * A consumer already started when this reaches it - a subscription started on its own ({@link Subscription#start()},
+     * or a later {@code consume()}) before the queue's {@code start()} - is left running on such a failure, as are those
+     * after the failed one, which this has not reached: this call started none of them, and its failure is not theirs.
+     * It used to stop every one of {@code consumers}, so a queue {@code start()} failing on one subscription stopped
+     * another the caller had started and was consuming, which then stayed stopped, nothing restarting it.
+     * <p>
+     * While it stops them, the holder - the caller - reads {@code undoing}: {@link Holder#UNDOING_A_QUEUE_START} for a
+     * queue {@code start()}, {@link Holder#UNDOING_A_SUBSCRIPTION_START} for a {@code consume()} or a
+     * {@link Subscription#start()}. So a start on this thread, from a {@link QueueObserver} told of the release of a unit
+     * one of those stops gives up, starts nothing and marks nothing ({@link Holder#letsNothingStart}), and a queue
+     * {@code start()} there tells from the holder which kind of start is undoing. It read {@link Holder#STARTING}, and
+     * such a {@code start()} marked the queue started and started every consumer, those being stopped included, for a
+     * start that then failed. With starts nested on this thread, the innermost failing one moves the holder: a start
+     * inside its undo starts nothing, so none fails deeper, and the holder is back at {@code STARTING} when the outer
+     * start goes on. A stop arriving meanwhile moves the holder to {@link Holder#STOP_OWED} as during the starts, and
+     * the holder stays there.
+     * <p>
+     * Starts none of {@code consumers} after the moment the holder of the lifecycle lock lets nothing start
+     * ({@link #holderLetsNothingStart}). That holder is the caller - a {@code consume()}, a {@code start()} or a
+     * {@link Subscription#start()} - owing a stop ({@link Holder#STOP_OWED}) to a stop that did not get the lock
+     * ({@link #stopWhileStarting}) or to one on the caller's own thread, from a {@link QueueObserver} told of an
+     * acquisition ({@link #stopFromInsideTheHolder}): it stops every consumer again before it lets go of the lock
+     * ({@link #letGoOfLifecycle}). Or, for a caller holding the lock reentrantly - called by an observer told of a
+     * release - a holder stopping every consumer ({@link Holder#FINISHING_OWED_STOP}, {@link Holder#STOPPING}) or the
+     * ones its failed start started ({@link Holder#isUndoingAStart}): this then starts nothing at all.
+     * <p>
+     * Starts none of {@code consumers} that a {@link Subscription#unsubscribe()} has retired
+     * ({@link ShardOwnedQueue#retire()}) - one that did not get the lock, or was called on the caller's thread, left
+     * taking them out to the caller ({@link #toDeregister}) - and a retired lane's own start does nothing either, should
+     * the unsubscribe retire it after the check here. This used to start them, so after that {@code unsubscribe()} had
+     * returned they leased units and delivered to the handler its caller had let go of, until the caller let go of the
+     * lock.
+     *
+     * @param consumers the consumers to start
+     * @param undoing   the holder this moves to while it stops what it started: {@link Holder#UNDOING_A_QUEUE_START}
+     *                  for the queue's {@link #start()}, {@link Holder#UNDOING_A_SUBSCRIPTION_START} for a
+     *                  {@code consume()} or a {@link Subscription#start()}
+     */
+    private void startEachOrUndo(List<ShardOwnedQueue> consumers, Holder undoing) {
+        requireTrue(undoing.isUndoingAStart(), "Not a holder undoing a start: " + undoing);
+        // Iterated as a snapshot (consumers is copy-on-write): a consume() an observer makes on this thread meanwhile starts
+        // and registers its own pair, which this did not start.
+        var startedHere = new ArrayList<ShardOwnedQueue>(consumers.size());
+        try {
+            for (var consumer : consumers) {
+                if (holderLetsNothingStart()) {
+                    return;
+                }
+                if (consumer.isRetired()) {
+                    // A lane of a subscription unsubscribed while this holder had the lock, which takes it out before it
+                    // lets go: its start would do nothing, after waiting for the unsubscribe's stop of it.
+                    continue;
+                }
+                if (!consumer.isStarted()) {
+                    // Before its start, which may leave it running when it throws (an observer failing for an acquisition).
+                    startedHere.add(consumer);
+                }
+                consumer.start();
+            }
+        } catch (RuntimeException | Error e) {
+            Exceptions.rethrowIfCriticalError(e);
+            boolean undoes;
+            synchronized (handOver) {
+                // Only from STARTING: a holder a stop has already reached (STOP_OWED, on this thread or another, during the
+                // starts) stops every consumer once its starts return, which is the undo and more.
+                undoes = holder == Holder.STARTING;
+                if (undoes) {
+                    moveHolder(undoing);
+                }
+            }
+            try {
+                Exceptions.forEachCollectingFailures(startedHere, ShardOwnedQueue::stop, e);
+            } finally {
+                if (undoes) {
+                    synchronized (handOver) {
+                        // Back to STARTING, unless a stop arriving meanwhile has moved it to STOP_OWED, which it then stays at.
+                        if (holder == undoing) {
+                            moveHolder(Holder.STARTING);
+                        }
+                    }
+                }
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Whether the queue is marked started ({@link #started}), not whether any consumer runs: after a {@link #stop()}, a
+     * {@link Subscription#start()} or a later {@link #consume} runs its own lanes with this reading false. A
+     * {@code Lifecycle} manager that stops only a bean reporting itself started therefore leaves those lanes running;
+     * stop the queue whatever this reads - see {@link MessageQueue}'s class javadoc.
+     */
     @Override
     public boolean isStarted() {
         return started.get();

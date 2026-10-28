@@ -1,1 +1,2 @@
-{ "name": "shop-frontend", "private": true, "scripts": { "build": "vite build" } }
+{ "name": "shop-frontend", "private": true, "scripts": { "build": "vite build" },
+  "devDependencies": { "vite": "*" } }

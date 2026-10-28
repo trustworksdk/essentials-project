@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: shipping.order_management
 kind: translation
 bc: shipping
@@ -7,15 +7,19 @@ status: live
 summary: Anti-corruption boundary to the order-management system over Kafka, in both directions.
 generator: essentials
 language: java
+lane: aggregate
 
 externalSystem: order_management
 direction: both
 consumes: [OrderAccepted, OrderShipped]
+dispatches: [ShipOrder]
 maps:
   - { from: OrderAccepted, to: ShipOrder }
   - { from: OrderShipped, to: ExternalOrderShipped }
 forbidden:
   - cross-slice-internal:shipping
+tier: cqrs-es
+flow: shipping-order
 tests:
   unit: { present: false }
   integration: { present: true }

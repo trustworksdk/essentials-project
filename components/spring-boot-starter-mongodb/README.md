@@ -112,7 +112,7 @@ All beans use `@ConditionalOnMissingBean` for easy overriding.
 | Bean | Condition | Description |
 |------|-----------|-------------|
 | `EssentialTypesJacksonModule` | Always | Jackson support for Essentials semantic types |
-| `EssentialsImmutableJacksonModule` | Objenesis on classpath + `essentials.immutable-jackson-module-enabled=true` | Jackson support for immutable objects without default constructor |
+| `EssentialsImmutableJacksonModule` | Objenesis on classpath + `essentials.immutable-jackson-module-enabled=true` set explicitly (puts it on Spring Boot's web `JsonMapper`; the persistence `JSONSerializer` has it by default) | Jackson support for immutable objects without default constructor |
 | `JSONSerializer` (`Jackson3JSONSerializer`) | Always | `EssentialsObjectMappers.createJSONSerializer()` — the canonical persistence mapper. Define your own `JSONSerializer` bean to add modules; the starter does not pick up `JacksonModule` beans for persistence |
 
 ### MongoDB Integration
@@ -171,19 +171,12 @@ essentials.durable-queues.verbose-tracing=false
 | Property | Default | Description                                                                   |
 |----------|---------|-------------------------------------------------------------------------------|
 | `shared-queue-collection-name` | `durable_queues` | MongoDB collection for messages. **See [Security](#security)** |
-| `message-handling-timeout` | `30s` | Timeout before unacknowledged message is redelivered (single-op mode only)    |
+| `message-handling-timeout` | `30s` | Timeout before an unacknowledged message is redelivered                       |
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor when no messages found                                         |
 | `max-polling-interval` | `2s` | Maximum polling delay                                                         |
 | `verbose-tracing` | `false` | Include all operations in traces (not just top-level)                         |
 
-**Transactional Modes:**
-
-| Mode | Description | Recommended |
-|------|-------------|-------------|
-| `single-operation-transaction` | Queue operations execute without transactions; uses timeout-based message acknowledgment | **Yes** |
-| `fully-transactional` | Queue operations share the parent `UnitOfWork` transaction | No |
-
-> ⚠️ **Warning:** `fully-transactional` mode causes issues with retries and dead letter handling because when an exception occurs, the transaction is marked for rollback and retry counts are never increased. Use `single-operation-transaction` for reliable message processing.
+**Removed in 0.60.0:** `transactional-mode`. Every queue operation runs in its own transaction (what `single-operation-transaction` did); there is no mode to choose. Since 0.60.1 the starter logs an ERROR at startup for each removed `essentials.*` property still set, and the configuration metadata marks them as errors for the IDE. See [MIGRATION-0.60](../../docs/MIGRATION-0.60.md#transactionalmode-is-retired).
 
 ### EventBus Configuration
 
@@ -252,7 +245,7 @@ essentials.immutable-jackson-module-enabled=true
 | `life-cycles.start-life-cycles` | `true` | **true**: Automatically call `start()` on all `Lifecycle` beans (FencedLockManager, DurableQueues, etc.) when ApplicationContext starts, and `stop()` on shutdown.  <br/>**false**: You must manually start/stop Lifecycle beans. |
 | `life-cycles.shutdown-timeout` | `10s` | Time budget for stopping every `Lifecycle` bean on shutdown. Database cleanup during shutdown (releasing fenced locks, saving resume points, unscheduling jobs) gets one short attempt and is skipped once the database proves unreachable; a bean still stopping when the budget is spent is abandoned so the application can exit. Locks and leases left behind expire on their own. |
 | `reactive-bean-post-processor-enabled` | `true` | **true**: Auto-register `EventHandler` beans with `EventBus` and `CommandHandler` beans with `CommandBus`.  <br/>**false**: You must manually register handlers with their buses.                                                 |
-| `immutable-jackson-module-enabled` | `true` | **true**: Enable `EssentialsImmutableJacksonModule` for deserializing immutable objects (requires Objenesis).  <br/>**false**: Disable even if Objenesis is available.                                                                 |
+| `immutable-jackson-module-enabled` | `true` | **true** (default): register `EssentialsImmutableJacksonModule` for deserializing immutable objects (requires Objenesis) in the persistence `JSONSerializer`. Spring Boot's web `JsonMapper` gets it only when the property is set to `true` explicitly, because there a request body Jackson cannot construct would bind with `null` fields instead of failing with a 400. <br/>**false**: leave it out of both, even if Objenesis is available; only reading changes, the JSON written is identical. Before 0.60.1 the persistence mapper ignored the property. |
 
 ---
 

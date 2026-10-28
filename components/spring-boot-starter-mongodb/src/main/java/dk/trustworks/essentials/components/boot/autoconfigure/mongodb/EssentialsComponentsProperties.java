@@ -85,26 +85,33 @@ public class EssentialsComponentsProperties {
     private final DurableQueues                         durableQueues                    = new DurableQueues();
     private final LifeCycleProperties                   lifeCycles                       = new LifeCycleProperties();
     private final MicrometerTaggingProperties           tracingProperties                = new MicrometerTaggingProperties();
+    /**
+     * Register EssentialsImmutableJacksonModule (Objenesis fallback for types Jackson cannot construct; reading only). The
+     * default true applies to the Essentials persistence serializer; Spring Boot's web JsonMapper gets the module only
+     * when this is set to true explicitly. false leaves it out of both.
+     */
     private       boolean                               immutableJacksonModuleEnabled    = true;
     private final ReactiveProperties                    reactive                         = new ReactiveProperties();
     private       boolean                               reactiveBeanPostProcessorEnabled = true;
     private final EssentialsComponentsMetricsProperties metrics                          = new EssentialsComponentsMetricsProperties();
 
     /**
-     * Should the EssentialsImmutableJacksonModule be included in the ObjectMapper configuration - default is true<br>
-     * Setting this value to false will not include the EssentialsImmutableJacksonModule, in the ObjectMapper configuration, even if Objenesis is on the classpath
+     * Should the EssentialsImmutableJacksonModule (Objenesis fallback for types Jackson cannot construct) be registered -
+     * default is true for the persistence mapper (the Essentials {@code JSONSerializer}/{@code JSONEventSerializer}).<br>
+     * Spring Boot's web {@code JsonMapper} gets the module only when this is set to {@code true} explicitly, because there
+     * it changes HTTP request binding. {@code false} leaves it out of both, even if Objenesis is on the classpath; only
+     * reading changes, the JSON written is identical.
      *
-     * @return Should the EssentialsImmutableJacksonModule be included in the ObjectMapper configuration
+     * @return Should the EssentialsImmutableJacksonModule be registered (persistence mapper; web mapper only when set explicitly)
      */
     public boolean isImmutableJacksonModuleEnabled() {
         return immutableJacksonModuleEnabled;
     }
 
     /**
-     * Should the EssentialsImmutableJacksonModule be included in the ObjectMapper configuration - default is true<br>
-     * Setting this value to false will not include the EssentialsImmutableJacksonModule, in the ObjectMapper configuration, even if Objenesis is on the classpath
+     * Should the EssentialsImmutableJacksonModule be registered - see {@link #isImmutableJacksonModuleEnabled()}
      *
-     * @param immutableJacksonModuleEnabled Should the EssentialsImmutableJacksonModule be included in the ObjectMapper configuration
+     * @param immutableJacksonModuleEnabled Should the EssentialsImmutableJacksonModule be registered (persistence mapper; web mapper only when set explicitly)
      */
     public void setImmutableJacksonModuleEnabled(boolean immutableJacksonModuleEnabled) {
         this.immutableJacksonModuleEnabled = immutableJacksonModuleEnabled;
@@ -234,6 +241,8 @@ public class EssentialsComponentsProperties {
 
         private boolean verboseTracing = false;
 
+        private boolean requireActiveUnitOfWorkForEnqueue = false;
+
         /**
          * Settings for the {@link DurableQueuesHealthIndicator}, which reports dead-letter counts on
          * {@code /actuator/health}.
@@ -260,6 +269,31 @@ public class EssentialsComponentsProperties {
          */
         public void setVerboseTracing(boolean verboseTracing) {
             this.verboseTracing = verboseTracing;
+        }
+
+        /**
+         * Should an enqueue ({@code queueMessage}/{@code queueMessages}, and so {@code Outbox.sendMessage} and
+         * {@code DurableLocalCommandBus.sendAndDontWait}) FAIL when it runs outside a {@code UnitOfWork} or Spring
+         * transaction? Property {@code essentials.durable-queues.require-active-unit-of-work-for-enqueue}, default {@code false}.
+         * <p>
+         * Such an enqueue commits on its own and is not rolled back with any business work around it. With this {@code false}
+         * it goes ahead and each call site's first one is logged at WARN with its stack trace (up to 32 call sites per {@code DurableQueues}); with {@code true} it
+         * throws {@code NoActiveUnitOfWorkException} and nothing is queued. {@code Inbox.addMessageReceived} starts a
+         * {@code UnitOfWork} itself and is unaffected.
+         *
+         * @return whether an enqueue outside a unit of work or transaction fails
+         */
+        public boolean isRequireActiveUnitOfWorkForEnqueue() {
+            return requireActiveUnitOfWorkForEnqueue;
+        }
+
+        /**
+         * See {@link #isRequireActiveUnitOfWorkForEnqueue()}.
+         *
+         * @param requireActiveUnitOfWorkForEnqueue {@code true} to make an enqueue outside a unit of work or transaction fail
+         */
+        public void setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+            this.requireActiveUnitOfWorkForEnqueue = requireActiveUnitOfWorkForEnqueue;
         }
 
         /**
@@ -458,6 +492,30 @@ public class EssentialsComponentsProperties {
         private Duration lockConfirmationInterval                                       = Duration.ofSeconds(4);
         private String   fencedLocksCollectionName                                      = MongoFencedLockStorage.DEFAULT_FENCED_LOCKS_COLLECTION_NAME;
         private boolean  releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation = false;
+        private String   instanceId;
+
+        /**
+         * The lock manager's instance id: what the lock table, the admin API ({@code lockedByLockManagerInstanceId}) and the
+         * logs report as a lock's holder, and what {@code isLockedByThisLockManagerInstance} compares against. It must be
+         * unique per running application instance.
+         * <p>
+         * Property: {@code essentials.fenced-lock-manager.instance-id}. Unset (the default), it is {@code <hostname>:<pid>}
+         * - see {@link dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManagerSettings#defaultLockManagerInstanceId()}.
+         * Set it where a stable, readable id matters, e.g. to the pod name.
+         *
+         * @return the configured instance id, or {@code null} to use {@code <hostname>:<pid>}
+         */
+        public String getInstanceId() {
+            return instanceId;
+        }
+
+        /**
+         * @param instanceId the lock manager's instance id, or {@code null} to use {@code <hostname>:<pid>}
+         * @see #getInstanceId()
+         */
+        public void setInstanceId(String instanceId) {
+            this.instanceId = instanceId;
+        }
 
         /**
          * @return Should {@link FencedLock}'s acquired by this {@link dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager} be released in case calls to {@link FencedLockStorage#confirmLockInDB(DBFencedLockManager, UnitOfWork, DBFencedLock, OffsetDateTime)} fails

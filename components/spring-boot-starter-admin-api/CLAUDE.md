@@ -22,7 +22,7 @@ Consumer-facing docs: `docs/openapi/README.md`.
 | `AdminApiPaths` | Base-path constants; `BASE_PATH_PLACEHOLDER` is the `@RequestMapping` value every controller uses |
 | `AdminApiPrincipalResolver` | Only security touch point — `EssentialsAuthenticatedUser` → principal, throws `AdminApiUnauthenticatedException` when unauthenticated |
 | `AdminApiExceptionHandler` | `@RestControllerAdvice` scoped by `basePackageClasses` → contract statuses + `Error` body |
-| `AdminApiJacksonModule` | Jackson **3** serializers: `CharSequenceType` → string, `NumberType` → number |
+| `AdminApiJacksonModule` | Jackson **3** serializers: `CharSequenceType` → string, `NumberType` → number, shard-owned engine's `spi.QueueName` (a record, not a `CharSequenceType`) → string. A new value type outside those bases needs a serializer here **and** a mapping in `EssentialsValueTypeModelConverter`, or it goes out as `{"value":…}` |
 | `EssentialsAdminApiAutoConfiguration` | Declares every controller as a bean; all `@ConditionalOnMissingBean` **and** `@ConditionalOnBean` of their own SPI, so a subsystem the application does not run costs its endpoints rather than the whole context. The 4 aggregate controllers additionally sit in a nested `@ConditionalOnClass` config. `essentialsAdminApiSurfaceSummary` logs served-vs-skipped areas at startup |
 | `<Tag>Controller` ×11 | One per contract tag; each method = one contract operation |
 

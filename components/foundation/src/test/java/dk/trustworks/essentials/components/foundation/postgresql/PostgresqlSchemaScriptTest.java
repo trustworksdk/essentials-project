@@ -70,6 +70,32 @@ class PostgresqlSchemaScriptTest {
                         .contains("COMMIT;");
     }
 
+    @Test
+    void the_header_lists_what_the_script_covers_with_each_objects_description() {
+        var text = script.render(List.of(set("postgresql-event-store",
+                                             SchemaChange.repeatable("event-stream-table", "orders_events", "SELECT 1").describedAs("AggregateType 'Orders'"),
+                                             SchemaChange.repeatable("event-stream-tenant-index", "orders_events", "SELECT 2").describedAs("AggregateType 'Orders'"),
+                                             SchemaChange.repeatable("event-stream-table", "products_events", "SELECT 3").describedAs("AggregateType 'Products'")),
+                                         set("postgresql-queue", SchemaChange.repeatable("queue-table", "durable_queues", "SELECT 4"))),
+                                 "host");
+
+        assertThat(text).contains("-- Contents:\n" +
+                                          "--   postgresql-event-store: orders_events (AggregateType 'Orders'), products_events (AggregateType 'Products')\n" +
+                                          "--   postgresql-queue: durable_queues\n");
+        assertThat(text.indexOf("-- Contents:")).isLessThan(text.indexOf("BEGIN;"));
+        assertThat(text).contains("-- event-stream-table on orders_events (repeatable) - AggregateType 'Orders'\n")
+                        .contains("-- queue-table on durable_queues (repeatable)\n");
+    }
+
+    @Test
+    void an_addition_lists_what_it_covers() {
+        var text = script.renderAddition(List.of(set("postgresql-event-store",
+                                                     SchemaChange.repeatable("event-stream-table", "orders_events", "SELECT 1").describedAs("AggregateType 'Orders'"))));
+
+        assertThat(text).contains("-- Contents:\n--   postgresql-event-store: orders_events (AggregateType 'Orders')\n");
+        assertThat(text.indexOf("-- Contents:")).isLessThan(text.indexOf("BEGIN;"));
+    }
+
     private static SchemaChangeSet set(String moduleId, SchemaChange... changes) {
         return new SchemaChangeSet(moduleId, SchemaOrder.ORDER_APPLICATION, List.of(changes));
     }

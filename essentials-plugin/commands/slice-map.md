@@ -4,11 +4,11 @@ description: >
   Render the structure of a project that already follows the slice law — bounded contexts and their
   slices, the event flow that connects them, who writes what and who reads across a boundary, and an
   index from HTTP endpoint to the slice that serves it. Built from the slice.yaml manifests, so it is
-  cheap and complete. Prints by default; --html emits a single self-contained page for a browser.
-  Strictly read-only.
+  cheap and complete. Prints by default; --md writes the report to a file. The page for a browser is
+  /essentials:slice-map-html. Strictly read-only.
 user-invocable: true
 allowed-tools: [Read, Bash, Glob, Grep, Write]
-argument-hint: "[<path>] [--bc <name>] [--html <file>] [--md <file>] [--view contexts|graph|flow|data|endpoints]"
+argument-hint: "[<path>] [--bc <name>] [--md <file>] [--view contexts|graph|flow|data|endpoints]"
 ---
 
 # /essentials:slice-map
@@ -25,7 +25,8 @@ The manifests already carry the whole graph — `handles`, `serves`, `publishes`
 method body, which is what makes a whole-project map affordable. The manifest algebra runs in
 `scripts/slice-index.py`, and the few facts a manifest does not carry (package, file list, payloads,
 read-model columns, and the two source divergence checks) come from `scripts/slice-source.py`. This
-command runs both and writes the report.
+command runs both and writes the report. `/essentials:slice-map-html` runs the same scripts and writes
+the Slice Atlas page instead; it shares Steps 1–4 below.
 
 **Read-only. Writes no source, no manifests, and nothing the user did not name a path for.**
 
@@ -35,20 +36,15 @@ command runs both and writes the report.
 |---|---|
 | `<path>` | Module or source root. Default: the resolved package root |
 | `--bc <name>` | Restrict to one bounded context |
-| `--html <file>` | Also render a self-contained HTML page at a **user-supplied** path |
-| `--md <file>` | Also write the text report as Markdown at a user-supplied path |
+| `--md <file>` | Also write the text report as Markdown at a user-supplied path, with the Write tool (a shell redirect fails where Bash may not write) |
+| `--html [<file>]` | **Retired.** The page is `/essentials:slice-map-html`. Given the flag, say the page moved there and run that command's steps with `<file>` as its `--out`, so an old habit still works |
 | `--view <name>` | Print one section only: `contexts` (default), `graph`, `flow`, `data`, `endpoints` |
 
 `graph` is the message-flow view — **commands in → slice → events out → the slices that react**, plus
 the commands an automation dispatches and the external systems a translation slice bridges. In the
-terminal it prints as indented chains; in `--html` it is a pannable, zoomable, queryable node graph.
-It is the same data as `flow` laid out as a graph rather than as rows, so a chain that crosses four
-slices reads as one path instead of four lookups.
-
-If `--html` is given with **no** path, propose `target/slice-map.html` (or `build/slice-map.html` on
-Gradle) — a build directory is already git-ignored, which suits a one-off view you are going to throw
-away — and **ask before writing**. Never choose the path silently: this plugin owns no directory, and
-that is deliberate (`CLAUDE.md` design invariants).
+terminal it prints as indented chains; on the page of `/essentials:slice-map-html` it is the Atlas
+board. It is the same data as `flow` laid out as a graph rather than as rows, so a chain that crosses
+four slices reads as one path instead of four lookups.
 
 ## Step 1 — Terrain and the redirect
 
@@ -70,16 +66,16 @@ creates them.
 
 ## Step 2 — Read the manifests and the source facts, by script
 
-Three script runs produce everything Steps 2–4 need. Run them over the same `<root>` from the same
-working directory. The two `slice-source.py` documents go to a temporary directory outside the project
-(`mktemp -d`), never into the project, which this command does not write to:
+Three script runs produce everything Steps 2–4 need, in one command over the same `<root>` from the
+same working directory. The two `slice-source.py` documents reach `map` by process substitution, so
+nothing is written anywhere — no temporary directory, and never the project, which this command does
+not write to:
 
 ```bash
-tmp=$(mktemp -d)
-uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --json          > "$tmp/facts.json"
-uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --check --json  > "$tmp/check.json"
 uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-index.py map <root> \
-    --source-facts "$tmp/facts.json" --source-check "$tmp/check.json" [--bc <name>]
+    --source-facts <(uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --json) \
+    --source-check <(uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --check --json) \
+    [--bc <name>]
 ```
 
 All three carry their pinned `pyyaml` in inline script metadata, which `uv run --script` installs.
@@ -87,6 +83,8 @@ Which runner applies is the `uv` line of `"${CLAUDE_PLUGIN_ROOT}/scripts/doctor.
 first: `ok` ⇒ `uv run --script` as above; `FALLBACK` or `PARTIAL` ⇒ `python3 <script>` in its place,
 which uses the `pyyaml` already installed; `MISSING` (no `uv`, and no `python3` 3.11+ with `pyyaml`) ⇒
 `slice-index.py` cannot run: stop, as for exit 2 below, and quote doctor's lines for what to install.
+`uv run --script` can also fail where doctor said `ok`, for want of a writable cache (a read-only
+filesystem, a sandbox that allows no writes): rerun with `python3 <script>` for all three.
 The output of `map` is the data contract of Step 6, complete. **Take it as it is.** Do not re-read the
 manifests to re-derive a field, and do not add a node, edge or flag the script did not emit.
 
@@ -94,10 +92,10 @@ manifests to re-derive a field, and do not add a node, edge or flag the script d
 |---|---|---|
 | `slice-index.py map` | 0 | the map is complete |
 | | 1 | at least one manifest did not parse. It is still in the map, as a broken row with an `error` flag. Report it (below) |
-| | 2 | could not run (no `pyyaml`, bad root, unreadable facts file). Stop and say why. Do not build the map by hand |
+| | 2 | could not run (no `pyyaml`, bad root, unreadable facts). Stop and say why. Do not build the map by hand — except "`--source-facts …` is empty": that `slice-source.py` run wrote no JSON (its exit 2, below) |
 | | 3 | no `slice.yaml` under the root: the Step 1 redirect to `/essentials:slice-discover` |
 | `slice-source.py` | 0, 1, 3 | JSON was written: pass it to `map` (1 and 3 are the audit's findings and gaps, which `map` turns into flags) |
-| | 2 | no JSON (no `pyyaml` for `--check`, or a bad root). Run `map` without that `--source-…` flag and say so. `package`, `files`, payloads and read-model columns are then `null`/`[]`, and the two source divergence checks read **not checked** |
+| | 2 | no JSON (no `pyyaml` for `--check`, or a bad root): `map` exits 2 naming that flag's input as empty, after `slice-source.py`'s own stderr. Run `map` without that `--source-…` flag and say so. `package`, `files`, payloads and read-model columns are then `null`/`[]`, and the two source divergence checks read **not checked** |
 
 What the scripts read, so you can explain the map:
 
@@ -170,8 +168,9 @@ explain it. None of it is yours to recompute.
 - **Message graph** — `handles` gives command → slice, `consumes` and `projections[].from` give
   event → slice, `publishes` gives slice → event, `dispatches` gives slice → command, and a translation's
   `externalSystem` + `direction` gives the inbound and/or outbound edge. Every node and every edge comes
-  from a declared field; nothing is inferred, or the map stops being a map. The page builds this graph
-  from `slices[]` itself (Step 6), and `slice-index.py graph` builds the same one for the terminal. Nodes
+  from a declared field; nothing is inferred, or the map stops being a map. `slice-index.py graph`
+  builds this graph for the terminal, and `slice-index.py atlas` derives the Atlas page's edges from the
+  same `slices[]` in the same run, so the two cannot drift. Nodes
   are ranked by longest path from a source, so a chain reads left to right, and the walk is guarded
   against cycles: a saga that loops back is legal and must not hang the layout.
 
@@ -205,7 +204,9 @@ explain it. None of it is yours to recompute.
 ## Step 4 — Divergence check (light, and honest about being light)
 
 This map renders what the manifests **declare**. Manifests drift. A handful of cheap checks separate a
-map from a fiction. The scripts run these, and only these, and put the result on the slice as a flag:
+map from a fiction. The scripts run these, and only these. Each result is an entry of `issues[]` with a
+stable id (`<code>:<target>[:<part>]`), and the eight divergence checks also stay on the slice as a
+flag:
 
 | Check | Flag when | From |
 |---|---|---|
@@ -218,18 +219,36 @@ map from a fiction. The scripts run these, and only these, and put the result on
 | Twin pairing | A `supersedes:` naming a slice that does not exist, or a superseded slice not at `status: deprecated` | `slice-index.py` |
 | Dangling consume | An event in `consumes` **or `projections[].from`** that nothing in scope `publishes` | `slice-index.py` |
 
+The two optional manifest fields of schema 1.4 — `flow:` and `scenarios:` (`manifest-guide.md` §3) — and
+the payloads `slice-source.py` reads add six more. They need other manifests or the source, which is why
+they are the map's and not the lint gate's: `slice-lint.py` (gate `1(d) scenario`) checks a scenario
+against its own manifest, these check it against the rest of the project. All six are annotations, and
+none is on a slice's `flags`:
+
+| Check | Issue when | Level · code |
+|---|---|---|
+| Read-model column sourced | A column of a view's read model matches no field of any event in its `projections[].from` ∪ `consumes`. Names compare normalised (case, `_` and `-` ignored, so `order_id` = `orderId`); a translation's `maps[]` rename is honoured; the technical columns `id`, `version`, `createdAt`, `updatedAt`, `lastModified`, `etag` are skipped. A heuristic on names, so `info` — the audit stays the precise one. Not checked when an inbound event's payload is unknown | `info` · `completeness-unsourced-column` |
+| Scenario `given` published | A `given` event that no slice in scope `publishes` | `warn` · `scenario-given-unpublished` |
+| Scenario fields known | A `with` key that is no payload field of its message, or a `rows` key that is no column of the read model. Not checked without source facts | `info` · `scenario-unknown-field` |
+| Scenario test resolves | A `test:` that names no test under the module's test roots. Not checked without `slice-source.py`'s test index | `warn` · `scenario-test-missing` |
+| Scenario shape | A scenario that does not have the schema's shape, kept as far as it parses | `warn` · `scenario-malformed` |
+| Adoption | A slice with no `flow:` (grouped into a journey by cause and effect instead), or with no scenarios. Once per context, with a count, when it holds for most of a context's slices. Point at `/essentials:slice-enrich --bc <bc>`, which drafts both from the code's cause and effect and the slice's tests and writes only what a person accepts | `info` · `flow-undeclared`, `scenario-none` |
+
 **A "not checked" flag is not a pass.** When `slice-source.py` could not verify a check (a handler in an
 anonymous class, a route served by a WebFlux `RouterFunction`, a file it could not read), the slice
 carries an `info` flag `not checked — <gate>: <reason>`. Report it as not checked, never fold it into
 "no divergence". The same applies to both source checks when `slice-source.py` did not run at all.
 
-**Stop there.** This is not `/essentials:slice-check` and must not grow into it: no R1–R5 gates, no
-wiring check, no handler-shape check, no repository-surface check. `slice-source.py --check` also
-reports gate 14 and the other gate-6 findings. They are the audit's, `map` ignores them, and so does
-this report. Anything beyond the table above belongs to the audit, and the report says so — name the
-command rather than half-doing its job.
+**Stop there.** The two tables above are closed: eight divergence checks, the completeness rule and the
+scenario and adoption checks, and nothing else. This is not `/essentials:slice-check` and must not grow
+into it: no R1–R5 gates, no wiring check, no handler-shape check, no repository-surface check, no
+severities. `slice-source.py --check` also reports gate 14 and the other gate-6 findings. They are the
+audit's, `map` ignores them, and so does this report. Anything beyond the tables belongs to the audit,
+and the report says so — name the command rather than half-doing its job.
 
-Flags are rendered as annotations on the map, never as severities. This command grades nothing.
+`info`, `warn` and `error` say how sure the check is and how loud to be, not how bad the slice is: every
+issue is an annotation on the map, never a severity. This command grades nothing, and neither does the
+page.
 
 ## Step 5 — Print the report
 
@@ -274,31 +293,16 @@ cross-context reads with their `via:` reader interface.
 **Endpoints** — method, path, slice id, kind, auth, and the slice directory. This is the *"where is X
 implemented"* answer and it is worth printing even when the rest is skipped.
 
-Close with what was in scope and what was skipped (`notes[]`), and with every divergence flag.
+Close with what was in scope and what was skipped (`notes[]`), and with `issues[]`: grouped by level,
+then by code, each with its target. A context-level adoption entry is one line with its count, never
+one line per slice, and names `/essentials:slice-enrich --bc <bc>` as the way to catch up.
 
-## Step 6 — `--html`
+## Step 6 — The data contract
 
-```bash
-uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-index.py html <root> --out <path> \
-    --source-facts "$tmp/facts.json" --source-check "$tmp/check.json" [--bc <name>]
-```
-
-The script substitutes the `map` JSON for the single line
-
-```js
-const SLICE_MAP = /* __SLICE_MAP_DATA__ */ null;
-```
-
-of `${CLAUDE_PLUGIN_ROOT}/references/slice/slice-map-template.html` and writes the result to `--out`,
-changing nothing else in the template. The page is self-contained by design — no CDN, no fonts, no
-fetch — so it opens from `file://` on a machine with no network. It exits 1 and **writes nothing** when a
-manifest did not parse (see *Refuse to render an incomplete map* below).
-
-### The data contract
-
-The template consumes exactly this shape, and `slice-index.py map` emits it: every key, with `[]` or
-`null` rather than an omitted one. Slices may also carry `lane`, `dependsOn` and, on a broken row,
-`error: true`; the template ignores keys it does not read.
+`slice-index.py map` emits exactly this shape, and every reader takes it as it is: this report, the
+`html` page below, and `slice-index.py atlas`, which adds its own keys on top (the end of this step).
+Every key is present, with `[]` or `null` rather than an omitted one. Slices may also carry `lane`,
+`dependsOn` and, on a broken row, `error: true`; a reader ignores keys it does not read.
 
 ```json
 {
@@ -365,12 +369,51 @@ made-up shape.
 `planned | live | deprecated | shadowed`; `flags[].level` one of `info | warn | error`. The template
 colours by those values and falls back gracefully on an unknown one.
 
-The page derives the graph from `slices[]` itself — there is no separate `graph` key to emit. That is
-deliberate: two representations of the same edges would drift, and the one in the JSON would win
-silently. `flows[]` stays because it carries the `crossContext` and `dangling` results, which
-`slice-index.py` computes and the renderer does not.
+There is no `graph` key: the `html` page derives the graph from `slices[]` itself, and `atlas` derives
+its layout's edges from `slices[]` in the same run. Two representations of the same edges would drift,
+and the one in the JSON would win silently. `flows[]` stays because it carries the `crossContext` and
+`dangling` results, which `slice-index.py` computes and the renderer does not.
 
-**The HTML page's five views are Contexts, Graph, Flow, Data, Endpoints.** The graph:
+**The Atlas keys.** `map` also emits, after the keys above, what the Atlas checks of Step 4 need
+(computed by `scripts/slice_atlas.py`, whose docstring defines each shape):
+
+| Key | What it carries |
+|---|---|
+| `slices[].flows` | the declared `flow:` as a list; `[]` when absent |
+| `slices[].scenarios` | `scenarios:` normalised — `{name, given: [Step], when: Step \| null, then, test, testResolved: {status: found \| missing \| not-checked, path, line}, note}`, a Step `{type: event \| command \| query \| state \| external \| schedule, name, with}`, `then` one of `{kind: steps, steps}`, `{kind: error, error, message}`, `{kind: nothing}`, `{kind: readModel, readModel, rows}`; `[]` when absent |
+| `slices[].schedule` | the automation's `schedule` (`cron`, `fixedDelay`, `initialDelay`, `timeZone`, `note`); `null` when absent |
+| `slices[].doc` | the slice's `CLAUDE.md` converted to a fixed safe HTML subset, every character escaped first; `null` when absent |
+| `processes` | journeys: `{id, name, declared, color, bcs, sliceIds (causal order), entries, links: [{to, via}]}` — a declared `flow:` name, a derived `~<entry slice id>`, or `~unattached:<bc>` |
+| `issues` | every Step 4 result: `{id, code, level, text, target: {kind: slice \| message \| process \| context, id, part}, source: map \| source \| atlas, fix: {route: repair \| audit \| author, bc}}`, sorted by level then id. `fix` names who owns the repair — `slice_atlas.py` `FIX_ROUTES`; the page's Copy words it, the map repairs nothing. A context issue folded by the aggregation rule (`flow-undeclared`, `scenario-none`) also carries `members: [slice id]`, the slices it stands for — the diff compares per slice, and the page resolves a per-slice id `<code>:<slice id>` to it — and `memberText`, the per-slice wording the Diff lens names such an id with |
+| `lineage` | `{fields: {normalised field name: ["msg:<type>:<Name>" \| "rm:<ReadModel>"]}, technicalColumns}` |
+
+`atlas` alone adds `diff` (`null` without a baseline; added, removed and changed slices, added and
+removed edges, new and fixed issues), `layout` (the coordinates of every lens, from
+`scripts/slice_atlas_layout.py`) and, under `meta`, `atlasVersion`, `generatedBy`, `incomplete` (the
+number of manifests that did not parse) and `initial` (the lens, focus and context the page opens on).
+
+### The `html` page
+
+`/essentials:slice-map-html` writes the Atlas; no command writes this page any more. `slice-index.py
+html` still does — a single-graph page a script can publish — and `render-check.py` keeps it working:
+
+```bash
+uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-index.py html <root> --out <path> \
+    --source-facts <(…slice-source.py <root> --json) --source-check <(…slice-source.py <root> --check --json) [--bc <name>]
+```
+
+The script substitutes the `map` JSON for the single line
+
+```js
+const SLICE_MAP = /* __SLICE_MAP_DATA__ */ null;
+```
+
+of `${CLAUDE_PLUGIN_ROOT}/references/slice/slice-map-template.html` and writes the result to `--out`,
+changing nothing else in the template. The page is self-contained by design — no CDN, no fonts, no
+fetch — so it opens from `file://` on a machine with no network. It exits 1 and **writes nothing** when a
+manifest did not parse (see *Refuse to render an incomplete map* below).
+
+**Its five views are Contexts, Graph, Flow, Data, Endpoints.** The graph:
 
 - **pans and zooms** — drag, scroll wheel toward the cursor, `+`/`−`, and fit-to-window;
 - **maximises** — `⛶` fills the screen through the Fullscreen API, falling back to a fixed-position
@@ -392,18 +435,21 @@ silently. `flows[]` stays because it carries the `crossContext` and `dangling` r
   from the drawing rather than dimming them, because the point of filtering to *automations only* is to
   see what is left, not to see it faintly. The query box dims instead, and the two compose.
 
-**Refuse to render an incomplete map into HTML.** `slice-index.py html` exits 1 and writes nothing
-when a manifest failed to parse. Say so in the terminal report, name the manifests, and offer the
-announced `--repair-braced-paths` rerun when every failure is an unquoted braced path. A page that
-silently omits a slice is the one output here that can mislead without being wrong.
+**Refuse to render an incomplete map into HTML — on this page.** `slice-index.py html` exits 1 and
+writes nothing when a manifest failed to parse. Say so, name the manifests, and offer the announced
+`--repair-braced-paths` rerun when every failure is an unquoted braced path. A page that silently omits
+a slice is the one output here that can mislead without being wrong. The Atlas does the opposite for
+the same reason: it writes the page, draws each unparsed manifest as a red error card under a "map
+incomplete" banner, and exits 1 — there the omission is the most visible thing on the page
+(`/essentials:slice-map-html` Step 4).
 
 ## Out of scope — state these if asked
 
 - **Audits nothing.** No R1–R5 gates and no severities — `/essentials:slice-check` owns that.
 - **Infers nothing.** Every node comes from a manifest — `/essentials:slice-discover` owns inference.
 - **Writes no source and no manifests.** Drift is reported, never repaired.
-- **Owns no directory.** `--html` / `--md` take a path from the user; the command may suggest one and
-  must ask before writing it.
+- **Owns no directory.** `--md` takes a path from the user; the command may suggest one and must ask
+  before writing it. The page is `/essentials:slice-map-html`'s, under the same rule.
 - Not a dependency or architecture report.
 
 ## Verification fixture
@@ -411,7 +457,8 @@ silently omits a slice is the one output here that can mislead without being wro
 The scripts carry the checks. `tests/scripts/test_slice_index.py` pins the map, the terminal graph and
 the locate queries against goldens in `tests/slice-index/golden/`, over a saga cycle, a `supersedes`
 twin, a generated 60-context estate and the real fixtures. `tests/scripts/test_slice_source.py` pins the
-source facts, and `tests/fixtures/slice-map/render-check.py` renders the page in headless Chrome. By
+source facts, `tests/scripts/test_slice_atlas.py` the Atlas keys, and
+`tests/fixtures/slice-map/render-check.py` renders both pages in headless Chrome. By
 fixture: `tests/fixtures/service-entity/` should reproduce its declared slices with no divergence flags
 except the ones its `TEST-GUIDE.md` records as deliberate. `tests/fixtures/worked-example/`'s `orders`
 context is the full chain: `PlaceOrder → place_order → OrderPlaced → {order_list, screen_order,

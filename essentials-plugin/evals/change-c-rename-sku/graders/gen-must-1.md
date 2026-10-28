@@ -5,5 +5,5 @@ type: llm
 
 The agent received this change request in a software project: "Rename the order's `sku` field to `productCode` everywhere.". Grade its final reply.
 
-PASS if the reply shows this: Decomposes the rename into per-slice changes in a stated order: the producer first (PlaceOrder and OrderPlaced in place_order), then the reactors (the order_list read model and projection, the warehouse translator), then the API surface (change-procedure §5.9).
+PASS if the reply shows this: Decomposes the rename into per-slice changes in a stated order: the event and the producing place_order slice first (OrderPlaced and PlaceOrder, in either order), then the reactors (the order_list read model and projection, the warehouse translator) (change-procedure §5.9). PlaceOrder is also the HTTP request body, so its API change belongs to the producer step; it need not be a separate last step.
 FAIL otherwise.

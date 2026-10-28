@@ -1,0 +1,3 @@
+{ "name": "shop-web", "private": true, "scripts": { "build": "next build", "test": "vitest" },
+  "dependencies": { "next": "*", "react": "*", "react-dom": "*" },
+  "devDependencies": { "orval": "*", "vite": "*", "vitest": "*" } }
