@@ -50,5 +50,11 @@
       "rule": "personal-notes",
       "glob": "essentials-plugin/tests/slice-golden/**/render.json"
     }
+  ],
+  "allowRules": [
+    {
+      "rule": "secrets-config",
+      "glob": "essentials-plugin/references/stack/migrations/0.60-to-0.60.json"
+    }
   ]
 }
