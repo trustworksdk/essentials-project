@@ -376,6 +376,20 @@ every check passed; the full report goes to `target/load-driver/load-<run>.json`
   (`/test/attempts`, read with a streaming parser - hundreds of thousands per run), the source's own delivery counts
   (`dead` must stay 0 or catch-up had to cover it), and `acceptedDamaged`: damaged copies we answered `2xx`, by event
   type and damage. A run adds a check per fault kind, so a run whose faults never happened cannot pass.
+- **`--fault=F-5`**: reconciliation breaks seeded by the simulators themselves (`simulators/compose.breaks.yml`), so
+  the driver changes nothing at run time. After the drain `ReconciliationBreaks` compares, per statement, our breaks
+  with the simulators' `/test/clearing/breaks` and `/test/statements/breaks`, and the open cases with the breaks.
+  Its four checks replace "no open reconciliation case": breaks seeded, every seeded break found one for one and none
+  invented, a case for every break of a statement followed by a close (cases open at the next close, so the last
+  day's breaks have none yet), no case without a break. Needs the simulators started with the break settings -
+  `run-faults.sh F-5` does that. Smoke run 2026-10-28 (200 customers, 3 business days, before the 0.60.1 merge): 79
+  breaks found one for one, 76 due a case and 76 cases, all 10 checks pass. The full 10-day run is still to do.
+- **`./run-faults.sh <none|F-1|F-5> [driver arguments]`** runs one fault on a database (`trading_faults`) and
+  simulators of its own: recreates the exchange and gateway containers with their two volumes only (never `down -v`),
+  recreates the database and its CDC slot, starts one instance with plain `java` from `target/classes` (C2, not
+  `spring-boot:run`), waits for an authenticated operator call, runs `run-load.sh` with the decided fault profile
+  (2 000 customers, 1 000 active, 100/s with 300/s at opens, 10 business days) and stops the instance. Exit code is
+  the driver's. App log and driver output in `target/faults/`. Compile the module first; it does not.
 
 ### Baseline, 2026-10-23, devcontainer, `compose,simulators`, simulators 0.6.0, one instance, one sample each
 

@@ -35,7 +35,9 @@ import java.util.*;
  * @param businessDays        closes to run for
  * @param maxInFlight         concurrent customer actions; above it an action is skipped and counted, not queued
  * @param fault               {@code none}, or the fault of design phase 6 §10 to run under the load: {@code F-1} damaged,
- *                            duplicated and reordered webhook copies from both simulators for the whole run
+ *                            duplicated and reordered webhook copies from both simulators for the whole run; {@code F-5}
+ *                            reconciliation breaks seeded by the simulators (started with them by {@code run-faults.sh}),
+ *                            each found one for one and turned into a case
  */
 public record LoadDriverSettings(List<String> baseUrls,
                                  String exchangeUrl,
@@ -65,7 +67,7 @@ public record LoadDriverSettings(List<String> baseUrls,
                                  String runToken,
                                  String reportDirectory,
                                  String fault) {
-    static final Set<String> FAULTS = Set.of("none", "F-1");
+    static final Set<String> FAULTS = Set.of("none", "F-1", "F-5");
 
 
     public static LoadDriverSettings fromArguments(String[] args) {

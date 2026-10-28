@@ -65,6 +65,7 @@ public final class LoadDriver {
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2, Thread.ofPlatform().daemon().name("load-driver-", 0).factory());
     private volatile List<Customer>        activeToday = List.of();
     private long                           closeCursor;
+    private volatile LocalDate             lastClosed;
     private final Map<LocalDate, Instant>  cutoffs   = new HashMap<>();
     private ZoneId                         calendarZone;
     private Instant                        clockReading;
@@ -158,11 +159,15 @@ public final class LoadDriver {
         var openCases = http.json(http.operatorGet("REPORT", base() + "/api/admin/reconciliation/cases?state=OPEN"));
         var missing   = http.json(http.operatorGet("REPORT", base() + "/api/admin/reconciliation/missing-statements"));
         Map<String, Object> faultEvidence = null;
-        if (!settings.fault().equals("none")) {
+        ReconciliationBreaks.Result breaks = null;
+        if (settings.fault().equals("F-1")) {
             faults.clearDeliveryFaults();
             faultEvidence = faults.evidence();
+        } else if (settings.fault().equals("F-5")) {
+            breaks = new ReconciliationBreaks(http, base(), settings.exchangeUrl(), settings.gatewayUrl()).compare(lastClosed);
+            faultEvidence = breaks.evidence();
         }
-        return report(report, openCases, missing, faultEvidence, loadSeconds);
+        return report(report, openCases, missing, faultEvidence, breaks, loadSeconds);
     }
 
     // ---- the exchange's calendar and clock
@@ -309,6 +314,10 @@ public final class LoadDriver {
             }
             for (var event : events) {
                 closeCursor = Math.max(closeCursor, event.path("sequence").asLong());
+                var date = event.path("payload").path("businessDate").asString(null);
+                if (date != null && (lastClosed == null || LocalDate.parse(date).isAfter(lastClosed))) {
+                    lastClosed = LocalDate.parse(date);
+                }
                 closes++;
             }
         }
@@ -538,7 +547,8 @@ public final class LoadDriver {
                              pendingPayments(report), stats.counter("skipped:driver-saturated"));
     }
 
-    private boolean report(JsonNode server, JsonNode openCases, JsonNode missing, Map<String, Object> faultEvidence, double loadSeconds) throws IOException {
+    private boolean report(JsonNode server, JsonNode openCases, JsonNode missing, Map<String, Object> faultEvidence, ReconciliationBreaks.Result breaks,
+                           double loadSeconds) throws IOException {
         var deadLetters = 0L;
         for (var queue : server.path("queues").properties()) {
             deadLetters += queue.getValue().path("deadLetters").asLong();
@@ -549,10 +559,15 @@ public final class LoadDriver {
         checks.put("every fill booked", orders.path("fillsNotBooked").asLong() == 0);
         checks.put("every payment reached its outcome", pendingPayments(server) == 0);
         checks.put("no dead letters", deadLetters == 0);
-        checks.put("no open reconciliation case", openCases.isArray() && openCases.isEmpty());
+        if (breaks == null) {
+            checks.put("no open reconciliation case", openCases.isArray() && openCases.isEmpty());
+        } else {
+            // Seeded breaks must become cases; the comparison says which, and that there are no others
+            checks.putAll(breaks.checks());
+        }
         checks.put("no missing statement", missing.isArray() && missing.isEmpty());
         checks.put("driver never saturated", stats.counter("skipped:driver-saturated") == 0);
-        if (faultEvidence != null) {
+        if (settings.fault().equals("F-1")) {
             // A fault run proves nothing unless the faults happened
             for (var kind : List.of("duplicate", "missing", "null", "held")) {
                 checks.put("fault " + kind + " injected", SimulatorFaults.total(faultEvidence, kind) > 0);
