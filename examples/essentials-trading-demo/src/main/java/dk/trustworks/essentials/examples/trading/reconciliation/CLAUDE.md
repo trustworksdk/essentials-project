@@ -17,7 +17,9 @@ phase 5 adds the clearinghouse's statements against `orders`' executions, missin
 - **Only the firm's statements**: the subscription and the catch-up read (`participant`, SR-39) both ask for them.
   Unfiltered, the log carries the liquidity provider's `CS:<date>:LP` too; `ClearingStatements` still drops a foreign one.
 - **Bank matching is by `endToEndId` and `paymentId`** and entry kind: the gateway's phantom entry copies a real
-  entry's `endToEndId` and amount under a payment that does not exist. Amounts stored unsigned.
+  entry's `endToEndId` and amount under a payment that does not exist. Amounts stored unsigned. Both directions: the
+  phantom may copy an entry the gateway also omitted, so the missing-entry check needs `paymentId` too, or the copy
+  hides the omission (`PhantomOfAnOmittedEntryIT`).
 - **Clearing matching is by `executionId`**; a statement's trades belong to its business date as an execution belongs
   to its `tradeDate`. A phantom line has a fresh `executionId`. A changed price shows as a changed amount.
 - **Obligations are checked against the statement's own lines, not our executions.** The clearinghouse nets them from

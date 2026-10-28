@@ -15,6 +15,7 @@
  */
 package dk.trustworks.essentials.examples.trading._demo_harness.load_driver;
 
+import dk.trustworks.essentials.examples.trading.reconciliation.types.CaseState;
 import tools.jackson.databind.JsonNode;
 
 import java.time.LocalDate;
@@ -110,10 +111,13 @@ final class ReconciliationBreaks {
             compare("bank " + statementId, ours, theirs, mismatches, seeded, found);
         }
 
+        // Per state: the unfiltered list is capped at the newest 500, a full run opens more than that
         var cases = new HashSet<String>();
-        for (var c : get(brokerageUrl + "/api/admin/reconciliation/cases")) {
-            if (!c.path("kind").asString().equals("MISSING_STATEMENT")) {
-                cases.add(c.path("statementId").asString() + "|" + c.path("kind").asString() + "|" + c.path("reference").asString());
+        for (var state : CaseState.values()) {
+            for (var c : get(brokerageUrl + "/api/admin/reconciliation/cases?state=" + state)) {
+                if (!c.path("kind").asString().equals("MISSING_STATEMENT")) {
+                    cases.add(c.path("statementId").asString() + "|" + c.path("kind").asString() + "|" + c.path("reference").asString());
+                }
             }
         }
         var withoutCase  = new TreeSet<>(withCases);

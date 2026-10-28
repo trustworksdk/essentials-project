@@ -34,6 +34,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <p>
  * An entry is ours only if both its {@code endToEndId} and its {@code paymentId} are: a bank's phantom entry can copy a
  * real one's reference and amount under a payment that does not exist (the gateway's seeded {@code PHANTOM_ENTRY}).
+ * Both directions apply that rule: a phantom copied from an entry the bank also omitted is an unknown entry, and does
+ * not stand in for the omitted one, which is still missing.
  */
 @Service
 public class BankStatementBreaksQuery {
@@ -122,6 +124,7 @@ public class BankStatementBreaksQuery {
                                                                               WHERE p.currency = :currency AND (p.completed_on = :businessDate OR p.returned_on = :businessDate)
                                                                                 AND NOT EXISTS (SELECT 1 FROM bank_statement_entry e
                                                                                                 WHERE e.statement_id = :statementId AND e.end_to_end_id = p.reference
+                                                                                                  AND (p.payment_id IS NULL OR e.payment_id = p.payment_id)
                                                                                                   AND e.kind = CASE WHEN p.completed_on = :businessDate THEN p.kind ELSE p.kind || '_RETURN' END)
                                                                               ORDER BY p.reference
                                                                               """)

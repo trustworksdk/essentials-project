@@ -382,8 +382,8 @@ every check passed; the full report goes to `target/load-driver/load-<run>.json`
   Its four checks replace "no open reconciliation case": breaks seeded, every seeded break found one for one and none
   invented, a case for every break of a statement followed by a close (cases open at the next close, so the last
   day's breaks have none yet), no case without a break. Needs the simulators started with the break settings -
-  `run-faults.sh F-5` does that. Smoke run 2026-10-28 (200 customers, 3 business days, before the 0.60.1 merge): 79
-  breaks found one for one, 76 due a case and 76 cases, all 10 checks pass. The full 10-day run is still to do.
+  `run-faults.sh F-5` does that. Results: "After the 0.60.1 merge" below. Cases are read one state at a time: the
+  unfiltered `/api/admin/reconciliation/cases` returns only the newest 500.
 - **`./run-faults.sh <none|F-1|F-5> [driver arguments]`** runs one fault on a database (`trading_faults`) and
   simulators of its own: recreates the exchange and gateway containers with their two volumes only (never `down -v`),
   recreates the database and its CDC slot, starts one instance with plain `java` from `target/classes` (C2, not
@@ -663,7 +663,7 @@ got a snapshot and every load replayed the whole history. Same profile as above,
   that ran them (`rush-prof.sh`, `sweep.sh`, `JfrHot.java`); the exchange's `/test/reset` takes minutes after a full
   run, so the runner recreates only the two simulator containers and their own volumes instead.
 
-### Faults under load: F-1, damaged webhook copies, 2026-10-27
+### Faults under load: F-1, damaged webhook copies, 2026-10-27 (before the 0.60.1 merge)
 
 Design phase 6 §10. One instance, C2, the 300/s profile for 10 business days, fresh database and simulators,
 `--fault=F-1`: duplicates 0.3, `missing` 0.2 and `null` 0.1 on one random leaf, copies held 500 ms at 0.3, on every
@@ -699,3 +699,28 @@ With the schema check (same profile, one run):
 - **The cost is retries, under fault injection only**: three times the refusals, each waiting out the simulator's
   backoff, so submitted → filled p99 goes from ~1.1 s to ~2.5 s. Source-side dead letters stay 0 - every refused
   delivery got through on a later attempt. A producer that keeps its own contract never pays it.
+
+### After the 0.60.1 merge, 2026-10-28 - re-baseline and F-5
+
+Everything above was measured before 0.60.1 (`af8984db`) was merged into this branch. 0.60.1 changed the queue engine
+for correctness, so the same profiles were run again on the merged code: one instance, C2, `run-faults.sh` (2 000
+customers, 1 000 active, 100/s with 300/s at opens, 10 business days), fresh database and simulators per run.
+
+| Run | Orders | Placed → booked p50 / p99 | Checks |
+|---|---|---|---|
+| no fault, a / b / c | 48 807 / 49 228 / 49 717 | 217 / 480, 209 / 367, 217 / 436 ms | all 7 pass, each run |
+| F-1, a / b / c | 49 597 / 49 081 / 49 534 | 365 / 2 632, 406 / 2 547, 369 / 2 480 ms | all 11 pass, each run |
+| F-5, `pm-f5-b` | 49 776 | 212 / 368 ms | all 10 pass |
+
+- **The merge moved nothing beyond the spread.** Before it: no fault ~210 / ~370 ms (7 days, so not like for like),
+  F-1 with the schema check 324 / 2 661 ms (one run).
+- **F-5 found every seeded break one for one**: 1 726 breaks - 838 omitted, 421 quantity and 417 price changes and 11
+  phantom trades on the clearing statements; 14 omitted, 14 changed and 11 phantom entries on the bank statements -
+  and a case for each of the 1 726 by the close after its statement. Latency is the no-fault run's: the breaks cost
+  nothing on the order path.
+- **The first full F-5 run (`pm-f5-a`) failed two checks, one of them a real defect.** 3 of 17 omitted bank entries
+  went unreported: the gateway's phantom entry can be a copy of the very entry it omitted - same `endToEndId`, kind and
+  amount, a payment that does not exist - and the missing-entry query matched by reference and kind only, so the copy
+  stood in for the original. It now requires the `paymentId` as well, as the unknown-entry rule already did
+  (`PhantomOfAnOmittedEntryIT`). The second failure was the driver's: it read the unfiltered case list, which stops at
+  500, against 1 721 cases due.
