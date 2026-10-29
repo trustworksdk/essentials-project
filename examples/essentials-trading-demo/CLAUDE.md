@@ -99,10 +99,15 @@ for; one instance exercises none of its ownership, rebalancing or fencing.
   silently. It now always bumps, so each takeover fences the other process out: ownership churns
   between the two, in-flight messages are redelivered on every flip, and the `acknowledgement rejected`
   WARNs are the symptom. Safer, still wrong — give each process its own id.
-- **A second instance looks idle, and is not.** Measured with two: `trading-events` splits 34 units
-  each, nothing unowned. But the four projection queues are consumed by `demo-1` alone, because
-  `EventProcessor`/`ViewEventProcessor` take *exclusive* subscriptions behind fenced locks — one
-  instance runs each projection cluster-wide, by design.
+- **Every instance handles the event processors' inboxes; the views stay on one.** An `EventProcessor`'s
+  subscription is exclusive (fenced lock), but its inbox - where its `@MessageHandler`s run - defaults to
+  `SingleGlobalConsumer`, a second lock, so with two instances every handler ran on whichever started first. The
+  demo's six processors (`ExchangeOrderRouter`, `OrderLedgerProcessor`, `PaymentRouter`, the funding and settlement
+  ledger processors, `InstrumentRiskApprovalProcessor`) override `getInboxMessageConsumptionMode()` to
+  `GlobalCompetingConsumers`: the shard-owned engine keeps one aggregate's messages in order across instances, so both
+  share the work - measured 6 202 / 6 495 router and 10 639 / 11 221 ledger deliveries, 0 order violations
+  (`_demo_harness/CLAUDE.md`, F-3 on two instances). Not safe on `PostgresqlDurableQueues`, which orders per node.
+  `ViewEventProcessor`s (the projections) remain one instance cluster-wide, by design.
 - **The status endpoint is cluster-wide; the statistics endpoint is per-instance.** Both instances
   report `ordered 64/64` because all 64 units have an owner *somewhere*, not because each holds 64.
   The console says so on each card now.

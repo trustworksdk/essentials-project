@@ -18,6 +18,7 @@ package dk.trustworks.essentials.examples.trading.funding.external_systems.payme
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
+import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.MessageConsumptionMode;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.AccountId;
 import dk.trustworks.essentials.examples.trading.funding.aggregates.*;
@@ -60,6 +61,16 @@ public class PaymentRouter extends EventProcessor {
     @Override
     public String getProcessorName() {
         return "PaymentRouter";
+    }
+
+    /**
+     * Every instance handles this processor's inbox, not only the one holding its lock: on the shard-owned engine one
+     * aggregate's messages stay in order across instances (one owner per unit, fenced), so only the subscription has to
+     * be exclusive. On {@code PostgresqlDurableQueues}, which keeps order on one node only, this would not be safe.
+     */
+    @Override
+    protected MessageConsumptionMode getInboxMessageConsumptionMode() {
+        return MessageConsumptionMode.GlobalCompetingConsumers;
     }
 
     @Override

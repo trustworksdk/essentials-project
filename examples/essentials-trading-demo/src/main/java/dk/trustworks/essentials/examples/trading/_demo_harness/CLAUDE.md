@@ -745,6 +745,7 @@ customers, 1 000 active, 100/s with 300/s at opens, 10 business days), fresh dat
 | F-3, instance killed (down 44.6 s), `pm-f3-a` | 46 826 | 237 / 16 857 ms | all 10 pass |
 | F-3, 2 instances, instance 2 killed for 60 s, `pm-f3-2i-k2` | 44 999 | 274 / 29 492 ms | all 10 pass |
 | F-3, 2 instances, instance 1 killed for 60 s, `pm-f3-2i-k1` | 43 662 | 286 / 48 282 ms | all 10 pass |
+| F-3, 2 instances, inboxes competing, instance 1 killed for 60 s, `pm-f3-2i-gc-k1` | 44 490 | 291 / 48 515 ms | all 10 pass |
 | F-4 exchange, restart (down 10.8 s), `pm-f4x-r2` | 51 953 | 217 / 12 440 ms | all 11 pass |
 | F-4 exchange, held down 30 s (down 40.9 s), `pm-f4x-h2` | 53 373 | 216 / 43 355 ms | all 11 pass |
 | F-4 gateway, restart (down 0.2 s), `pm-f4g-r` | 49 734 | 214 / 510 ms | all 10 pass |
@@ -813,8 +814,15 @@ customers, 1 000 active, 100/s with 300/s at opens, 10 business days), fresh dat
   their attempts up and 219 behind them on the same keys followed. With one instance everything stops together, the
   settlement inbox included. Its backoff now grows to ~7 minutes (`settlement/CLAUDE.md`); both full runs had no dead
   letters.
-- **Open: a later instance gets only 306 of the 2 244 units, every time** - before and after a kill, whichever started
-  last (2 112 ordered units, 33 queues x 64, and 132 unordered). The ordered lane sheds by draining, never by releasing
-  (engine `CLAUDE.md`), so under steady load it may never hand units to a newcomer. Not investigated; the engine's,
-  not the demo's. Likewise every fenced lock - every exclusive processor - sits on whichever instance started first, and
-  moves as one block on a crash.
+- **A later instance got only 306 of the 2 244 units - not an engine fault.** The engine splits every queue both
+  instances consume evenly (32 of 64 ordered units and 2 of 4 unordered shards each); instance 2 consumed 9 of the 33
+  queues (9 x 34 = 306). The other 24 had a consumer only on the first instance: 15 `ViewEventProcessor` queues
+  (exclusive by design) and 9 `EventProcessor` inboxes, whose `SingleGlobalConsumer` default puts every handler behind
+  a second fenced lock - on whichever instance started first. With the six processors on `GlobalCompetingConsumers`
+  (demo `CLAUDE.md`), instance 2 holds 510 units and there are 35 fenced locks instead of 41; F-3 killing instance 1
+  (`pm-f3-2i-gc-k1`): 44 490 orders, all 10 checks pass, 0 key-order warnings on our keys. Sampled live in a
+  no-fault two-instance run (`gc-split`), each inbox's deliveries split about evenly (router 6 202 / 6 495, order
+  ledger 10 639 / 11 221, settlement ledger 4 206 / 4 223, payment router 45 / 44) with 0 order violations. The order
+  ledger's inbox retried ~300 deliveries per instance (all succeeded) - not compared with one instance yet.
+- **Still open: every fenced lock sits on whichever instance started first** and moves as one block on a crash - now
+  the 35 subscription and view locks.
