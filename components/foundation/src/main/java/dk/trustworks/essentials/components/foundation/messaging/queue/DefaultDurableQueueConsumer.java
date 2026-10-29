@@ -62,6 +62,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
     private volatile boolean                               started;
     private final    ScheduledExecutorService              scheduler;
     private final    DURABLE_QUEUES                        durableQueues;
+    private final    HandlerTimeoutOverrun                 handlerTimeoutOverrun = new HandlerTimeoutOverrun();
     private final    Consumer<DurableQueueConsumer>        removeDurableQueueConsumer;
     private final    UOW_FACTORY                           unitOfWorkFactory;
     private final    QueuePollingOptimizer                 queuePollingOptimizer;
@@ -522,6 +523,8 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                 var redeliveryDelay = consumeFromQueue.getRedeliveryPolicy().calculateNextRedeliveryDelay(queuedMessage.getRedeliveryAttempts());
                 return retryMessage(queuedMessage, e, redeliveryDelay);
             }
+        } finally {
+            handlerTimeoutOverrun.check(queueName, handlerStartedAtNanos, durableQueues.maxUnservedAfterInstanceLoss());
         }
     }
 

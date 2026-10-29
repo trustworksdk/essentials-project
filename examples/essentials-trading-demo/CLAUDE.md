@@ -92,8 +92,8 @@ for; one instance exercises none of its ownership, rebalancing or fencing.
 - **The queue load generator, when on, runs on every instance** (`trading-demo.queue-load.enabled`, off by default since
   the real flows run on the engine) by design — it is also the queue's consumer. Safe because each instance produces under its own ordered key prefix; see `_demo_harness/CLAUDE.md`.
 
-- **A distinct `instance-id` is not optional.** The engine defaults it to the hostname — right on a
-  container platform, wrong for two processes on one machine. They would register as *one* instance,
+- **A distinct `instance-id` is not optional.** The engine defaults it to `<hostname>:<pid>` since 0.60.1 (the bare
+  hostname before - what this note was written against), wrong only where processes share both. They would register as *one* instance,
   and `acquireLease` accepts a unit whose `owner` already equals the asking instance. It used to do so
   *without bumping the fence*, so both processes owned every unit and delivered the same messages
   silently. It now always bumps, so each takeover fences the other process out: ownership churns

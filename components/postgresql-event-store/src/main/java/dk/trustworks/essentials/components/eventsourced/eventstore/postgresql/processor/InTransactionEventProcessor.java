@@ -67,8 +67,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * This guarantees the preservation of the chronological sequence of events for each individual aggregate, maintaining data integrity and consistency.<br>
  * <br>
  * Details:<br>
- * Instead of manually subscribing to the underlying {@link EventStore} using the {@link EventStoreSubscriptionManager}, which requires you to provide your own error and retry handling,
- * you can use the {@link InTransactionEventProcessor} to subscribe to one or more {@link EventStore} event streams, while providing you with error and retry handling using the common {@link RedeliveryPolicy} concept
+ * Instead of manually subscribing to the underlying {@link EventStore} using the {@link EventStoreSubscriptionManager},
+ * you can use the {@link InTransactionEventProcessor} to subscribe to one or more {@link EventStore} event streams. There is no
+ * redelivery: a handler runs inside the appending transaction, so a handler that throws fails the append it runs in
  * <p>
  * You must override {@link #reactsToEventsRelatedToAggregateTypes()} to specify which EventSourced {@link AggregateType} event-streams the {@link EventProcessor} should subscribe to.<br>
  * The {@link InTransactionEventProcessor} will set up an (optionally exclusive) synchronous in-transaction {@link EventStoreSubscription} for each {@link AggregateType} and will forward any

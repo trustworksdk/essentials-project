@@ -64,8 +64,9 @@ public record FencedLockManagerSettings(String lockManagerInstanceId,
         requireNonNull(lockManagerInstanceId, "No lockManagerInstanceId provided - use FencedLockManagerSettings.builder() to default it to hostname:pid");
         requireNonNull(lockTimeOut, "No lockTimeOut value provided");
         requireNonNull(lockConfirmationInterval, "No lockConfirmationInterval value provided");
-        if (lockConfirmationInterval.compareTo(lockTimeOut) >= 1) {
-            throw new IllegalArgumentException(msg("lockConfirmationInterval {} duration MUST not be larger than the lockTimeOut {} duration, because locks will then always timeout",
+        // Strictly shorter, as documented: confirming exactly at the timeout loses the lock whenever a confirmation is late
+        if (lockConfirmationInterval.compareTo(lockTimeOut) >= 0) {
+            throw new IllegalArgumentException(msg("lockConfirmationInterval {} duration MUST be shorter than the lockTimeOut {} duration, because locks will otherwise time out",
                                                    lockConfirmationInterval,
                                                    lockTimeOut));
         }

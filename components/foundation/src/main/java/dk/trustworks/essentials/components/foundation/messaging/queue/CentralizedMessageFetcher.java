@@ -44,6 +44,7 @@ import static dk.trustworks.essentials.components.foundation.messaging.queue.Con
 public class CentralizedMessageFetcher implements Lifecycle {
     private static final Logger log = LoggerFactory.getLogger(CentralizedMessageFetcher.class);
     private final DurableQueues                                              durableQueues;
+    private final ConcurrentMap<QueueName, HandlerTimeoutOverrun>            handlerTimeoutOverruns = new ConcurrentHashMap<>();
     /**
      * The poll thread. {@link #stop()} shuts it down for prompt shutdown, so {@link #start()} creates a new one
      */
@@ -523,6 +524,8 @@ public class CentralizedMessageFetcher implements Lifecycle {
                               retryEx);
                 }
             } finally {
+                handlerTimeoutOverruns.computeIfAbsent(queueName, name -> new HandlerTimeoutOverrun())
+                                      .check(queueName, handlerStartedAtNanos, durableQueues.maxUnservedAfterInstanceLoss());
                 releaseOrderedKey(queueName, message);
                 registration.activeWorkers.decrementAndGet();
                 refillIfSaturated(registration);

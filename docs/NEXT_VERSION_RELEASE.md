@@ -297,12 +297,31 @@ units, fenced locks from 41 to 35, and each inbox's deliveries split about evenl
 ledger 10 679 / 10 509) with 0 ordering violations. Killing the instance that held every lock lost nothing. The order
 ledger's inbox retried 2.9 % of its deliveries on two instances against 2.0 % on one, all successfully.
 
+
+### 2.8 A handler that outlasts `message-handling-timeout` is logged (foundation, `postgresql-queue`)
+
+On `PostgresqlDurableQueues` and MongoDB a delivery older than `message-handling-timeout` (30 s) is taken back as stuck
+and delivered again - also when its handler is merely slow and still running, so two attempts run at once (for an
+ordered message, the same key in two threads). Nothing said so above DEBUG. Now:
+
+- A handler that returns after more than the timeout logs a WARN naming the queue, how long it ran and the setting - at
+  most once a minute per queue, every occurrence counted. It fires only when the overlap was possible.
+- `PostgresqlDurableQueues` logs the messages it takes back at INFO (was DEBUG): either a consumer died with them in
+  hand - normal recovery - or the WARN above says a handler ran too long.
+
+The shard-owned engine already warned for its equivalent (a handler outlasting `leaseTtl`).
+
+Related: an `EventProcessor` with more than 4 inbox consumer threads (`getNumberOfParallelInboxMessageConsumers()`) says
+so at start, at INFO - each thread holds a pooled connection while it handles a message, so the connection pool has to
+fit them together with every other processor's threads and the queue engine's pumps.
+
 ---
 
 ## 3. Bug fixes
 
 | Area | Fix | Commit |
 |---|---|---|
+| Fenced locks | `FencedLockManagerSettings` accepted a `lockConfirmationInterval` equal to `lockTimeOut`, though documented as "strictly shorter": confirming exactly at the timeout loses the lock whenever a confirmation is late. Equal values are now refused at start - a configuration with them fails until the interval is shortened | - |
 | Event store (PostgreSQL) | Concurrent gap give-ups could deadlock. Every subscriber of an aggregate type records the same rolled-back global orders as permanent gaps, at about the same time, as they share the give-up timeout. `PostgresqlEventStreamGapHandler` inserted them in whatever order its rows came back in, so two subscribers inserting overlapping orders in different orders could deadlock. PostgreSQL resolves that only after `deadlock_timeout` (1 s by default), and a CDC subscription's delivery waits on its give-up meanwhile. In the trading demo this happened 1-2 times per run as shipped, and 37 times in one run, stalling settlement for 40 s, once a different plan returned the rows in heap order. Permanent gaps are now inserted in ascending order on every path (range give-up, per-order give-up, promotion), so concurrent give-ups cannot form a cycle. | `8b43e61c` |
 | Aggregates (Spring Boot) | Policies on declared aggregates were ignored by repositories built at startup - see §1.1.2. | `162761f8` |
 

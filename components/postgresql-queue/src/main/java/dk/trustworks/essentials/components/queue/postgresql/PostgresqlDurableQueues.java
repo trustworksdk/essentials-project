@@ -1424,7 +1424,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                        .bind("now", now)
                                                        .execute();
                 if (numberOfChanges > 0) {
-                    log.debug("[{}] Reset {} messages stuck marked as isBeingDelivered", queueName, numberOfChanges);
+                    // INFO: either a consumer died with these in hand (normal recovery), or a handler outlasted the timeout
+                    // and is now running beside a second delivery - the consumer's own WARN says which
+                    log.info("[{}] Took back {} message(s) whose delivery was older than the message-handling-timeout ({} ms) " +
+                                     "and redelivered them", queueName, numberOfChanges, messageHandlingTimeoutMs);
                 } else {
                     log.debug("[{}] Didn't find any messages being stuck marked as isBeingDelivered", queueName);
                 }
@@ -1960,9 +1963,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                .execute();
 
         if (numberOfChanges > 0) {
-            log.debug("Reset {} messages stuck marked as isBeingDelivered across queues: {}",
-                      numberOfChanges,
-                      queuesToReset);
+            log.info("Took back {} message(s) whose delivery was older than the message-handling-timeout ({} ms) and redelivered them, across queues: {}",
+                     numberOfChanges,
+                     messageHandlingTimeoutMs,
+                     queuesToReset);
         } else {
             log.debug("No stuck messages found across queues: {}", queuesToReset);
         }
