@@ -822,7 +822,11 @@ customers, 1 000 active, 100/s with 300/s at opens, 10 business days), fresh dat
   (demo `CLAUDE.md`), instance 2 holds 510 units and there are 35 fenced locks instead of 41; F-3 killing instance 1
   (`pm-f3-2i-gc-k1`): 44 490 orders, all 10 checks pass, 0 key-order warnings on our keys. Sampled live in a
   no-fault two-instance run (`gc-split`), each inbox's deliveries split about evenly (router 6 202 / 6 495, order
-  ledger 10 639 / 11 221, settlement ledger 4 206 / 4 223, payment router 45 / 44) with 0 order violations. The order
-  ledger's inbox retried ~300 deliveries per instance (all succeeded) - not compared with one instance yet.
+  ledger 10 639 / 11 221, settlement ledger 4 206 / 4 223, payment router 45 / 44) with 0 order violations.
+- **Two instances retry a little more, nothing else.** Same load on one instance (`gc-single`), sampled at the same
+  point: the order ledger's inbox retried 412 of 20 737 deliveries (2.0 %) against 624 of 21 860 (2.9 %) on two, the
+  settlement ledger's 6 of 8 536 against 27 of 8 429; all succeeded, 0 order violations either way. Different orders of
+  one account share its stream, so consumers conflict on it already inside one JVM; 2 x 8 of them across two do so
+  ~1.4x as often. One run each.
 - **Still open: every fenced lock sits on whichever instance started first** and moves as one block on a crash - now
   the 35 subscription and view locks.
