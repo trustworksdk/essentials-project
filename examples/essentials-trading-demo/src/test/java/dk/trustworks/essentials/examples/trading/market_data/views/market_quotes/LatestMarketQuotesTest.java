@@ -30,7 +30,7 @@ class LatestMarketQuotesTest {
     private static final Instant      NOW  = Instant.parse("2030-01-07T15:00:00Z");
 
     private static MarketQuote quote(String ask, long sequence, Instant receivedAt) {
-        return new MarketQuote(ACME, Money.of("99.95", CurrencyCode.USD), Money.of(ask, CurrencyCode.USD), null, sequence, receivedAt, false);
+        return new MarketQuote(ACME, Money.of("99.95", CurrencyCode.USD), Money.of(ask, CurrencyCode.USD), null, 0, sequence, receivedAt, false);
     }
 
     private static LatestMarketQuotes quotes(Clock clock) {
@@ -67,5 +67,16 @@ class LatestMarketQuotesTest {
         quotes.received(quote("100.10", 3, NOW)); // the exchange's snapshot confirming it
 
         assertThat(quotes.bestAsk(ACME)).contains(Money.of("100.10", CurrencyCode.USD));
+    }
+
+    @Test
+    void a_new_epoch_replaces_the_old_one_whatever_its_sequence() {
+        // The exchange numbers mdSequence from 1 every time it starts; the feed starts an epoch per subscription
+        var quotes = quotes(Clock.fixed(NOW, ZoneOffset.UTC));
+        quotes.received(new MarketQuote(ACME, Money.of("99.95", CurrencyCode.USD), Money.of("100.10", CurrencyCode.USD), null, 1, 500_000, NOW, false));
+        quotes.received(new MarketQuote(ACME, Money.of("99.95", CurrencyCode.USD), Money.of("100.20", CurrencyCode.USD), null, 2, 3, NOW, false));
+        quotes.received(new MarketQuote(ACME, Money.of("99.95", CurrencyCode.USD), Money.of("100.30", CurrencyCode.USD), null, 1, 500_001, NOW, false));
+
+        assertThat(quotes.bestAsk(ACME)).contains(Money.of("100.20", CurrencyCode.USD));
     }
 }

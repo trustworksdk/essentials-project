@@ -52,11 +52,11 @@ public class LatestMarketQuotes implements MarketQuotes {
     }
 
     /**
-     * An older {@code mdSequence} never replaces a newer one. The same one does: it is the feed confirming a quote that
+     * An older quote ({@link MarketQuote#isOlderThan}) never replaces a newer one. The same one does: it is the feed confirming a quote that
      * has not changed, which keeps a quiet book fresh ({@link ExchangeMarketQuoteFeed} re-reads the exchange's snapshot).
      */
     void received(MarketQuote quote) {
-        quotes.merge(quote.instrumentId(), quote, (current, offered) -> offered.mdSequence() >= current.mdSequence() ? offered : current);
+        quotes.merge(quote.instrumentId(), quote, (current, offered) -> offered.isOlderThan(current) ? current : offered);
     }
 
     @Override

@@ -38,6 +38,9 @@ everything else: their command type, their one API file, their handler and their
   `LatestMarketQuotes` lets an *equal* `mdSequence` refresh a quote. Stale means "the exchange stopped confirming it",
   not "the price did not move" - otherwise a quiet book (a closed market, live prices) refuses every market buy `422`.
 - **An empty side (`bestBid`/`bestAsk` null) publishes nothing**; the last quote goes stale rather than be trusted.
+- **`mdSequence` restarts at 1 whenever the exchange starts**, so it orders quotes only within one run of the exchange.
+  Every subscription starts an epoch; quotes are ordered by (epoch, `mdSequence`) (`MarketQuote.isOlderThan`). By
+  sequence alone a restarted exchange's quotes were all "older" and every quote stayed stale for good (phase 6 F-4).
   `reference` messages are not quoted - the price source's price is not the market's.
 - **It replaced the `InstrumentPrice` aggregate** (D19, removed in phase 3), together with its `initialize_price`
   and `update_price` slices, `views/latest_price` and the harness's price-path benchmark. Prices are a high-rate

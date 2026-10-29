@@ -30,6 +30,7 @@ import java.net.http.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -48,6 +49,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <em>changes</em>, so the snapshot is also read every half of {@code trading-demo.market-data.stale-after}: a quiet
  * book stays fresh as long as the exchange keeps confirming it, and goes stale only when the exchange stops answering.
  * {@link LatestMarketQuotes} lets a message with the same {@code mdSequence} refresh a quote for that reason.
+ * <p>
+ * The exchange numbers {@code mdSequence} from 1 every time it starts, so a sequence is comparable only within one run
+ * of the exchange. Every subscription therefore starts a new epoch, and quotes are ordered by epoch, then sequence: the
+ * snapshot read after a resubscription always replaces what the previous connection knew, and a periodic snapshot
+ * begun before a resubscription is discarded. Ordered by sequence alone, a restarted exchange's quotes were all
+ * "older" than the last one before the restart, and every quote stayed stale for the rest of the run (phase 6 F-4).
  */
 @Component
 @ConditionalOnProperty(prefix = "trading-demo.simulators.exchange", name = "base-url")
@@ -61,14 +68,22 @@ public class ExchangeMarketQuoteFeed implements MarketQuoteFeed, SmartLifecycle 
     private final HttpClient                      http;
     private final List<Consumer<MarketQuote>>     listeners = new CopyOnWriteArrayList<>();
     private final Map<InstrumentId, Top>          tops      = new ConcurrentHashMap<>();
+    private final AtomicLong                      epoch     = new AtomicLong();
     private volatile ScheduledExecutorService     snapshots;
     private volatile Thread                       reader;
     private volatile boolean                      running;
 
     /**
-     * One instrument's latest known top of book and last trade, and the {@code mdSequence} they are as of.
+     * One instrument's latest known top of book and last trade, and the epoch and {@code mdSequence} they are as of.
      */
-    private record Top(Money bid, Money ask, Money last, long mdSequence) {
+    private record Top(Money bid, Money ask, Money last, long epoch, long mdSequence) {
+        /**
+         * Whether a message of {@code epoch} and {@code sequence} is newer than this; {@code orSame} for a snapshot,
+         * which confirms the quote it repeats.
+         */
+        boolean isOlderThan(long epoch, long sequence, boolean orSame) {
+            return this.epoch != epoch ? this.epoch < epoch : orSame ? mdSequence <= sequence : mdSequence < sequence;
+        }
     }
 
     public ExchangeMarketQuoteFeed(SimulatorProperties simulators, MarketQuotesProperties properties, ObjectMapper objectMapper) {
@@ -89,7 +104,7 @@ public class ExchangeMarketQuoteFeed implements MarketQuoteFeed, SmartLifecycle 
         running = true;
         reader = Thread.ofPlatform().name("exchange-market-data").daemon().start(this::readStreamUntilStopped);
         snapshots = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("exchange-market-data-snapshot").daemon().factory());
-        snapshots.scheduleWithFixedDelay(this::readSnapshot, snapshotInterval.toMillis(), snapshotInterval.toMillis(), TimeUnit.MILLISECONDS);
+        snapshots.scheduleWithFixedDelay(() -> readSnapshot(epoch.get()), snapshotInterval.toMillis(), snapshotInterval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     @Override
@@ -148,15 +163,16 @@ public class ExchangeMarketQuoteFeed implements MarketQuoteFeed, SmartLifecycle 
             response.body().close();
             throw new IllegalStateException("market-data stream answered " + response.statusCode());
         }
-        log.info("Subscribed to the exchange's market-data stream at {}", exchange);
-        readSnapshot();
+        var connection = epoch.incrementAndGet();
+        log.info("Subscribed to the exchange's market-data stream at {} (epoch {})", exchange, connection);
+        readSnapshot(connection);
         try (var lines = response.body()) {
             var event = new StringBuilder();
             var data  = new StringBuilder();
             for (var iterator = lines.iterator(); iterator.hasNext() && running; ) {
                 var line = iterator.next();
                 if (line.isEmpty()) {
-                    dispatch(event.toString(), data.toString());
+                    dispatch(event.toString(), data.toString(), connection);
                     event.setLength(0);
                     data.setLength(0);
                 } else if (line.startsWith("event:")) {
@@ -173,15 +189,15 @@ public class ExchangeMarketQuoteFeed implements MarketQuoteFeed, SmartLifecycle 
         log.info("The exchange's market-data stream ended");
     }
 
-    private void dispatch(String event, String data) {
+    private void dispatch(String event, String data, long connection) {
         if (data.isEmpty()) {
             return;
         }
         try {
             var json = objectMapper.readTree(data);
             switch (event) {
-                case "quote" -> onQuote(json);
-                case "trade" -> onTrade(json);
+                case "quote" -> onQuote(json, connection);
+                case "trade" -> onTrade(json, connection);
                 default -> {
                     // reference: the price source's price, not the market's
                 }
@@ -191,29 +207,32 @@ public class ExchangeMarketQuoteFeed implements MarketQuoteFeed, SmartLifecycle 
         }
     }
 
-    private void onQuote(JsonNode quote) {
+    private void onQuote(JsonNode quote, long connection) {
         var instrumentId = InstrumentId.of(quote.get("instrumentId").asString());
         var sequence     = quote.get("mdSequence").asLong();
-        tops.compute(instrumentId, (id, current) -> newer(current, sequence)
-                                                    ? new Top(price(quote.get("bestBid")), price(quote.get("bestAsk")), current != null ? current.last() : null, sequence)
+        tops.compute(instrumentId, (id, current) -> current == null || current.isOlderThan(connection, sequence, false)
+                                                    ? new Top(price(quote.get("bestBid")), price(quote.get("bestAsk")), current != null ? current.last() : null, connection, sequence)
                                                     : current);
-        publish(instrumentId, sequence);
+        publish(instrumentId, connection, sequence);
     }
 
-    private void onTrade(JsonNode trade) {
+    private void onTrade(JsonNode trade, long connection) {
         var instrumentId = InstrumentId.of(trade.get("instrumentId").asString());
         var sequence     = trade.get("mdSequence").asLong();
         var last         = usd(trade.get("price").asString());
-        tops.compute(instrumentId, (id, current) -> newer(current, sequence)
-                                                    ? new Top(current != null ? current.bid() : null, current != null ? current.ask() : null, last, sequence)
+        tops.compute(instrumentId, (id, current) -> current == null || current.isOlderThan(connection, sequence, false)
+                                                    ? new Top(current != null ? current.bid() : null, current != null ? current.ask() : null, last, connection, sequence)
                                                     : current);
-        publish(instrumentId, sequence);
+        publish(instrumentId, connection, sequence);
     }
 
     /**
      * The snapshot of every instrument: resynchronises after a (re)subscription, and confirms a quiet book.
      */
-    private void readSnapshot() {
+    /**
+     * @param connection the epoch the snapshot is read in; it is dropped if a resubscription started a newer one
+     */
+    private void readSnapshot(long connection) {
         try {
             var response = http.send(HttpRequest.newBuilder(exchange.resolve("/api/marketdata")).timeout(snapshotInterval).GET().build(),
                                      HttpResponse.BodyHandlers.ofByteArray());
@@ -226,10 +245,10 @@ public class ExchangeMarketQuoteFeed implements MarketQuoteFeed, SmartLifecycle 
                 var sequence     = instrument.get("mdSequence").asLong();
                 var lastTrade    = instrument.get("lastTrade");
                 var last         = lastTrade == null || lastTrade.isNull() ? null : usd(lastTrade.get("price").asString());
-                tops.compute(instrumentId, (id, current) -> current == null || sequence >= current.mdSequence()
-                                                            ? new Top(price(instrument.get("bestBid")), price(instrument.get("bestAsk")), last, sequence)
+                tops.compute(instrumentId, (id, current) -> current == null || current.isOlderThan(connection, sequence, true)
+                                                            ? new Top(price(instrument.get("bestBid")), price(instrument.get("bestAsk")), last, connection, sequence)
                                                             : current);
-                publish(instrumentId, sequence);
+                publish(instrumentId, connection, sequence);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -238,17 +257,13 @@ public class ExchangeMarketQuoteFeed implements MarketQuoteFeed, SmartLifecycle 
         }
     }
 
-    private void publish(InstrumentId instrumentId, long sequence) {
+    private void publish(InstrumentId instrumentId, long connection, long sequence) {
         var top = tops.get(instrumentId);
-        if (top == null || top.mdSequence() != sequence || top.bid() == null || top.ask() == null) {
+        if (top == null || top.epoch() != connection || top.mdSequence() != sequence || top.bid() == null || top.ask() == null) {
             return;
         }
-        var quote = new MarketQuote(instrumentId, top.bid(), top.ask(), top.last(), sequence, Instant.now(), false);
+        var quote = new MarketQuote(instrumentId, top.bid(), top.ask(), top.last(), connection, sequence, Instant.now(), false);
         listeners.forEach(listener -> listener.accept(quote));
-    }
-
-    private static boolean newer(Top current, long sequence) {
-        return current == null || sequence > current.mdSequence();
     }
 
     private static Money price(JsonNode side) {

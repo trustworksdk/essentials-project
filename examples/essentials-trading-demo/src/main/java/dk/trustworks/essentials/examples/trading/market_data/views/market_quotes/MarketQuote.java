@@ -25,12 +25,15 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * One instrument's top of book as the exchange's market-data feed last reported it (SR-12/SR-13). {@code mdSequence}
- * is the feed's per-instrument sequence, monotonic; an older one never replaces a newer one.
+ * is the feed's per-instrument sequence, monotonic within one {@code epoch}: the exchange numbers each instrument's
+ * messages from 1 every time it starts, so the feed starts a new epoch on every (re)subscription. Quotes are ordered by
+ * epoch, then sequence ({@link #isOlderThan}); an older one never replaces a newer one.
  */
 public record MarketQuote(InstrumentId instrumentId,
                           Money bid,
                           Money ask,
                           Money last,
+                          long epoch,
                           long mdSequence,
                           Instant receivedAt,
                           boolean stale) {
@@ -42,6 +45,10 @@ public record MarketQuote(InstrumentId instrumentId,
     }
 
     MarketQuote asStale() {
-        return new MarketQuote(instrumentId, bid, ask, last, mdSequence, receivedAt, true);
+        return new MarketQuote(instrumentId, bid, ask, last, epoch, mdSequence, receivedAt, true);
+    }
+
+    boolean isOlderThan(MarketQuote other) {
+        return epoch != other.epoch ? epoch < other.epoch : mdSequence < other.mdSequence;
     }
 }

@@ -102,6 +102,7 @@ public class SyntheticMarketQuoteFeed implements MarketQuoteFeed, SmartLifecycle
                                         Money.of(bid, currency),
                                         Money.of(ask, currency),
                                         Money.of(mid.setScale(2, RoundingMode.HALF_UP), currency),
+                                        0,
                                         sequences.merge(id, 1L, Long::sum),
                                         now,
                                         false);

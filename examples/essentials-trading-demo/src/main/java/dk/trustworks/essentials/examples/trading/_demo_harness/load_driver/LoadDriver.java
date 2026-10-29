@@ -71,8 +71,10 @@ public final class LoadDriver {
     private Instant                        clockReading;
     private long                           clockReadAt;
     private double                         clockSpeed;
-    private Instant                        outageOpened; // F-2's window, on the driver's clock
-    private Instant                        outageClosed;
+    private volatile Instant               faultOpened; // a fault window (F-2, F-4), on the driver's clock
+    private volatile Instant               faultClosed;
+    private volatile Instant               targetDown;  // F-4: when the restarted simulator stopped answering
+    private volatile Instant               quotesBack;  // F-4 on the exchange: every instrument quoted again after it
 
     LoadDriver(LoadDriverSettings settings) {
         this.settings = settings;
@@ -110,7 +112,7 @@ public final class LoadDriver {
         var lastTick    = System.nanoTime();
         var lastPoll    = 0L;
         var wasOpen     = tradingOpen();
-        var outageLoggedClosed = false;
+        var faultLoggedClosed = false;
         var orderCredit = 0.0;
         var payCredit   = 0.0;
         while (closes < settings.businessDays()) {
@@ -131,13 +133,17 @@ public final class LoadDriver {
             var open = tradingOpen();
             if (open && !wasOpen) {
                 dayStarted = now; // the open: a business day's window begins
-                if (settings.fault().equals("F-2") && outageOpened == null && closes == settings.faultAtDay() - 1) {
-                    openWebhookOutage();
+                if (faultOpened == null && closes == settings.faultAtDay() - 1) {
+                    if (settings.fault().equals("F-2")) {
+                        openWebhookOutage();
+                    } else if (settings.fault().equals("F-4")) {
+                        openSimulatorRestart();
+                    }
                 }
             }
-            if (outageClosed != null && !outageLoggedClosed && Instant.now().isAfter(outageClosed)) {
-                outageLoggedClosed = true;
-                log("fault window closed (F-2); %s", progress());
+            if (faultClosed != null && !faultLoggedClosed && Instant.now().isAfter(faultClosed)) {
+                faultLoggedClosed = true;
+                log("fault window closed (%s); %s", settings.fault(), progress());
             }
             wasOpen = open;
             var inBurst = dayStarted >= 0 && (now - dayStarted) / 1e6 < settings.burstFraction() * dayMillis;
@@ -177,6 +183,8 @@ public final class LoadDriver {
             faultEvidence = faults.evidence();
         } else if (settings.fault().equals("F-2")) {
             faultEvidence = webhookOutageEvidence(report);
+        } else if (settings.fault().equals("F-4")) {
+            faultEvidence = simulatorRestartEvidence(report);
         } else if (settings.fault().equals("F-5")) {
             breaks = new ReconciliationBreaks(http, base(), settings.exchangeUrl(), settings.gatewayUrl()).compare(lastClosed);
             faultEvidence = breaks.evidence();
@@ -202,7 +210,11 @@ public final class LoadDriver {
     }
 
     private void readClock() {
-        var clock = http.json(http.plainGet("EXCHANGE_CLOCK", settings.exchangeUrl() + "/api/clock"));
+        var answer = http.plainGet("EXCHANGE_CLOCK", settings.exchangeUrl() + "/api/clock");
+        if (!answer.ok()) {
+            return; // the exchange is restarting (F-4): keep extrapolating the last reading
+        }
+        var clock = http.json(answer);
         clockReading = Instant.parse(clock.path("now").asString());
         clockSpeed = clock.path("speed").asDouble(1);
         clockReadAt = System.nanoTime();
@@ -487,6 +499,9 @@ public final class LoadDriver {
                     quotes.remove(instrument);
                 }
             }
+            if (targetDown != null && faultClosed != null && quotesBack == null && quotes.size() == settings.instruments().size()) {
+                quotesBack = Instant.now();
+            }
         } catch (RuntimeException e) {
             stats.count("quote-refresh-failed");
         }
@@ -587,12 +602,21 @@ public final class LoadDriver {
                 checks.put("fault " + kind + " injected", SimulatorFaults.total(faultEvidence, kind) > 0);
             }
         } else if (settings.fault().equals("F-2")) {
-            checks.put("webhook outage opened", outageOpened != null);
+            checks.put("webhook outage opened", faultOpened != null);
             checks.put("webhooks refused during the outage", ((Number) faultEvidence.get("refused")).longValue() > 0);
             checks.put("simulators saw the refusals", ((Number) faultEvidence.get("answered503")).longValue() > 0);
             // Deliveries the simulators gave up on can only arrive through catch-up: needs simulators/compose.outage.yml
             checks.put("simulators dead-lettered deliveries", ((Number) faultEvidence.get("dead")).longValue() > 0);
             checks.put("booked p99 under 10 s from 30 s to 2 min after the outage", (Boolean) faultEvidence.get("recovered"));
+        } else if (settings.fault().equals("F-4")) {
+            checks.put("simulator went down", targetDown != null);
+            checks.put("simulator came back", faultClosed != null);
+            checks.put("booked p99 under 10 s from 30 s to 2 min after it came back", (Boolean) faultEvidence.get("recovered"));
+            if (settings.faultTarget().equals("exchange")) {
+                // Without quotes market buys are refused and limits are not placed: the run goes on at a fraction of its rate
+                checks.put("every instrument quoted again within 30 s of the exchange answering",
+                           quotesBack != null && Duration.between(faultClosed, quotesBack).toSeconds() <= 30);
+            }
         }
 
         var result = new LinkedHashMap<String, Object>();
@@ -632,8 +656,8 @@ public final class LoadDriver {
     // ---- F-2, the webhook outage
 
     private void openWebhookOutage() {
-        outageOpened = Instant.now();
-        outageClosed = outageOpened.plus(settings.faultDuration());
+        faultOpened = Instant.now();
+        faultClosed = faultOpened.plus(settings.faultDuration());
         for (var baseUrl : settings.baseUrls()) {
             var opened = http.operatorPost("FAULTS", baseUrl + "/api/admin/webhook-outage?seconds=" + settings.faultDuration().toSeconds(), Map.of());
             if (!opened.ok()) {
@@ -652,7 +676,7 @@ public final class LoadDriver {
     private Map<String, Object> webhookOutageEvidence(JsonNode server) {
         var subscriptions = faults.evidence();
         var evidence      = new LinkedHashMap<String, Object>();
-        evidence.put("window", outageOpened == null ? "never opened" : outageOpened + " - " + outageClosed);
+        evidence.put("window", faultOpened == null ? "never opened" : faultOpened + " - " + faultClosed);
         var refused = 0L;
         for (var baseUrl : settings.baseUrls()) {
             refused += http.json(http.operatorGet("FAULTS", baseUrl + "/api/admin/webhook-outage")).path("refused").asLong();
@@ -660,14 +684,71 @@ public final class LoadDriver {
         evidence.put("refused", refused);
         evidence.put("answered503", SimulatorFaults.totalAnswered(subscriptions, "503"));
         evidence.put("dead", SimulatorFaults.totalDead(subscriptions));
-        var recovered = outageOpened != null;
+        recovery(server, evidence);
+        evidence.put("subscriptions", subscriptions);
+        return evidence;
+    }
+
+    // ---- F-4, a simulator restarted
+
+    /**
+     * Only announces the window: {@code run-faults.sh} restarts the container on this line (design §10.4, Q-9). A
+     * watcher times the outage from the simulator's {@code /health} and closes the window once it answers again.
+     */
+    private void openSimulatorRestart() {
+        faultOpened = Instant.now();
+        var health = (settings.faultTarget().equals("exchange") ? settings.exchangeUrl() : settings.gatewayUrl()) + "/health";
+        log("fault window open (F-4 %s): restart the %s now; %s", settings.faultTarget(), settings.faultTarget(), progress());
+        Thread.ofPlatform().daemon().name("load-driver-f4-watch").start(() -> {
+            var deadline = System.nanoTime() + Duration.ofMinutes(5).toNanos();
+            while (System.nanoTime() < deadline) {
+                var up = http.plainGet("FAULT_HEALTH", health).ok();
+                if (!up && targetDown == null) {
+                    targetDown = Instant.now();
+                    log("fault F-4: the %s stopped answering", settings.faultTarget());
+                } else if (up && targetDown != null) {
+                    faultClosed = Instant.now();
+                    log("fault F-4: the %s answers again after %.1f s", settings.faultTarget(), Duration.between(targetDown, faultClosed).toMillis() / 1000.0);
+                    return;
+                }
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+            log("fault F-4: the %s did not %s within 5 minutes", settings.faultTarget(), targetDown == null ? "go down" : "come back");
+        });
+    }
+
+    /**
+     * The restart's times, and the recovery from the moment the simulator answered again.
+     */
+    private Map<String, Object> simulatorRestartEvidence(JsonNode server) {
+        var evidence = new LinkedHashMap<String, Object>();
+        evidence.put("target", settings.faultTarget());
+        evidence.put("windowOpened", String.valueOf(faultOpened));
+        evidence.put("down", String.valueOf(targetDown));
+        evidence.put("up", String.valueOf(faultClosed));
+        evidence.put("downSeconds", targetDown == null || faultClosed == null ? -1 : Duration.between(targetDown, faultClosed).toMillis() / 1000.0);
+        evidence.put("quotesBack", String.valueOf(quotesBack));
+        recovery(server, evidence);
+        return evidence;
+    }
+
+    /**
+     * Design §10.2's recovery: the placement buckets' booked p99 from the window's opening to 2 minutes after it closed,
+     * and {@code recovered} - every bucket placed from 30 s to 2 minutes after the close booked its p99 under 10 s.
+     */
+    private void recovery(JsonNode server, Map<String, Object> evidence) {
+        var recovered = faultOpened != null && faultClosed != null;
         var curve     = new ArrayList<String>();
-        if (outageOpened != null) {
-            var recoveredFrom = outageClosed.plusSeconds(30);
+        if (recovered) {
+            var recoveredFrom = faultClosed.plusSeconds(30);
             for (var bucket : server.path("buckets")) {
                 var start = Instant.parse(bucket.path("start").asString());
                 var p99   = bucket.path("p99BookedMs").asDouble();
-                if (start.isBefore(outageOpened.minusSeconds(10)) || start.isAfter(outageClosed.plusSeconds(120))) {
+                if (start.isBefore(faultOpened.minusSeconds(10)) || start.isAfter(faultClosed.plusSeconds(120))) {
                     continue;
                 }
                 curve.add(String.format(Locale.ROOT, "%s %.0f ms", start, p99));
@@ -678,8 +759,6 @@ public final class LoadDriver {
         }
         evidence.put("recovered", recovered);
         evidence.put("bookedP99Curve", curve);
-        evidence.put("subscriptions", subscriptions);
-        return evidence;
     }
 
     // ---- helpers

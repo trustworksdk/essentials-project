@@ -6,6 +6,9 @@
 #   ./run-faults.sh none                 # the same run without a fault, for comparison
 #   ./run-faults.sh F-1                  # damaged, duplicated and reordered webhook copies
 #   ./run-faults.sh F-2                  # every webhook answered 503 for 60 s from the open of business day 4
+#   ./run-faults.sh F-4                  # the exchange restarted at the open of business day 4
+#   ./run-faults.sh F-4 --fault-target=gateway   # the payment-gateway instead
+#   ./run-faults.sh F-4 --fault-duration=PT30S  # held down 30 s (stop, wait, start) instead of a plain restart
 #   ./run-faults.sh F-5                  # seeded reconciliation breaks (simulators/compose.breaks.yml)
 #   ./run-faults.sh F-1 --business-days=3 --population=500   # extra arguments go to the driver and win
 #
@@ -20,6 +23,9 @@
 #      (_demo_harness/CLAUDE.md) - and waits until the operator can log in.
 #   4. runs ./run-load.sh with the decided fault profile (Q-10): 2 000 customers, 1 000 active, 100 orders/s with 300/s
 #      at each open, 10 business days.
+#      For F-4 it restarts the simulator when the driver prints its `fault window open` line: `docker restart`, or with
+#      --fault-duration=PT<n>S `docker stop`, n seconds, `docker start`. A plain restart is as long as the container's
+#      shutdown: the exchange ignores SIGTERM (10 s, Docker's stop timeout), the gateway stops in a fraction of a second.
 #   5. stops the instance. The exit code is the driver's: 0 only if every check passed.
 #
 # Needs PostgreSQL and the simulator images (compose `simulators` profile) and a compiled module
@@ -27,7 +33,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-FAULT="${1:?usage: run-faults.sh <none|F-1|F-2|F-5> [driver arguments]}"
+FAULT="${1:?usage: run-faults.sh <none|F-1|F-2|F-4|F-5> [driver arguments]}"
 shift
 RUN="${RUN_TOKEN:-$(echo "$FAULT" | tr -d '-' | tr 'A-Z' 'a-z')$(date +%H%M%S)}"
 DB=trading_faults
@@ -43,6 +49,28 @@ fi
 COMPOSE+=(--profile simulators)
 mkdir -p "$OUT"
 log() { echo "$(date +%T) [$RUN] $*"; }
+TARGET=exchange
+HOLD_DOWN=
+for arg in "$@"; do
+  if [[ $arg == --fault-target=* ]]; then TARGET=${arg#--fault-target=}; fi
+  if [[ $arg =~ ^--fault-duration=PT([0-9]+)S$ ]]; then HOLD_DOWN=${BASH_REMATCH[1]}; fi
+done
+CONTAINER=essentials-trading-demo-$([[ $TARGET == gateway ]] && echo payment-gateway || echo exchange)
+
+# Passes the driver's output through; F-4's window line restarts the target simulator, in the background
+act_on_fault_window() {
+  while IFS= read -r line; do
+    echo "$line"
+    if [[ $FAULT == F-4 && $line == *"fault window open (F-4"* ]]; then
+      if [[ -z $HOLD_DOWN ]]; then
+        (log "fault F-4: restarting $CONTAINER"; docker restart "$CONTAINER" >/dev/null; log "fault F-4: $CONTAINER restarted") &
+      else
+        (log "fault F-4: stopping $CONTAINER for ${HOLD_DOWN}s"; docker stop "$CONTAINER" >/dev/null; sleep "$HOLD_DOWN"
+         docker start "$CONTAINER" >/dev/null; log "fault F-4: $CONTAINER started") &
+      fi
+    fi
+  done
+}
 
 log "recreating the simulators"
 "${COMPOSE[@]}" stop exchange payment-gateway >/dev/null 2>&1 || true
@@ -80,7 +108,7 @@ done
 log "running the load with fault $FAULT"
 set +e
 ./run-load.sh --population=2000 --active-per-day=1000 --orders-per-second=100 --burst-orders-per-second=300 \
-  --business-days=10 --max-in-flight=2048 --fault="$FAULT" --run-token="$RUN" "$@" 2>&1 | tee "$OUT/driver-$RUN.txt"
+  --business-days=10 --max-in-flight=2048 --fault="$FAULT" --run-token="$RUN" "$@" 2>&1 | act_on_fault_window | tee "$OUT/driver-$RUN.txt"
 status=${PIPESTATUS[0]}
 set -e
 log "driver exit $status; report target/load-driver/load-$RUN.json"

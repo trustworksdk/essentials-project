@@ -393,7 +393,13 @@ every check passed; the full report goes to `target/load-driver/load-<run>.json`
   booked p99 under 10 s from 30 s to 2 minutes after the window. `run-faults.sh F-2` starts the simulators with
   `simulators/compose.outage.yml`: `webhooks.max_attempts` 4 instead of 10. Their backoff starts at 500 ms and doubles
   (cap 300 s, jitter), so by default a delivery lives ~4 minutes and a 60 s outage dead-letters nothing.
-- **`./run-faults.sh <none|F-1|F-2|F-5> [driver arguments]`** runs one fault on a database (`trading_faults`) and
+- **`--fault=F-4`** (`--fault-target=exchange|gateway`): at the open of business day `--fault-at-day` the driver prints
+  `fault window open (F-4 <target>)`, on which `run-faults.sh` restarts that simulator's container - `docker restart`,
+  or with `--fault-duration=PT<n>S` `docker stop`, n seconds, `docker start`. The driver times the outage from the
+  simulator's `/health`. Its checks: the simulator went down, came back, booked p99 under 10 s from 30 s to 2 minutes
+  after, and for the exchange every instrument quoted again within 30 s. A plain restart lasts as long as the
+  container's shutdown: the exchange ignores SIGTERM (Docker's 10 s stop timeout), the gateway stops in 0.2 s.
+- **`./run-faults.sh <none|F-1|F-2|F-4|F-5> [driver arguments]`** runs one fault on a database (`trading_faults`) and
   simulators of its own: recreates the exchange and gateway containers with their two volumes only (never `down -v`),
   recreates the database and its CDC slot, starts one instance with plain `java` from `target/classes` (C2, not
   `spring-boot:run`), waits for an authenticated operator call, runs `run-load.sh` with the decided fault profile
@@ -720,6 +726,10 @@ customers, 1 000 active, 100/s with 300/s at opens, 10 business days), fresh dat
 | no fault, a / b / c | 48 807 / 49 228 / 49 717 | 217 / 480, 209 / 367, 217 / 436 ms | all 7 pass, each run |
 | F-1, a / b / c | 49 597 / 49 081 / 49 534 | 365 / 2 632, 406 / 2 547, 369 / 2 480 ms | all 11 pass, each run |
 | F-2, `pm-f2-b` | 49 675 | 227 / 5 017 ms | all 12 pass |
+| F-4 exchange, restart (down 10.8 s), `pm-f4x-r2` | 51 953 | 217 / 12 440 ms | all 11 pass |
+| F-4 exchange, held down 30 s (down 40.9 s), `pm-f4x-h2` | 53 373 | 216 / 43 355 ms | all 11 pass |
+| F-4 gateway, restart (down 0.2 s), `pm-f4g-r` | 49 734 | 214 / 510 ms | all 10 pass |
+| F-4 gateway, held down 30 s (down 30.2 s), `pm-f4g-h` | 49 056 | 214 / 560 ms | all 10 pass |
 | F-5, `pm-f5-b` | 49 776 | 212 / 368 ms | all 10 pass |
 
 - **The merge moved nothing beyond the spread.** Before it: no fault ~210 / ~370 ms (7 days, so not like for like),
@@ -748,3 +758,18 @@ customers, 1 000 active, 100/s with 300/s at opens, 10 business days), fresh dat
 - `demo-instruments` dead-letters its 11 listings at every F-2 start: the simulators deliver them before the instance
   is up (no answer at all), and with 4 attempts they die before it comes. Catch-up delivers them; the default budget
   outlasts the start.
+- **F-4 found a defect that every check missed: after an exchange restart the brokerage had no quotes for the rest of
+  the run.** The first two exchange runs passed all 10 checks with 20 151 and 24 033 orders against ~49 000: orders
+  placed per business day fell from ~5 300 to ~800 after the restart, as market buys were refused and limits not
+  placed for want of a quote. The exchange numbers `mdSequence` from 1 every time it starts (its OpenAPI says so),
+  and `ExchangeMarketQuoteFeed` and `LatestMarketQuotes` ordered quotes by sequence alone, so every quote after the
+  restart was "older" than the last one before it. The feed now starts an epoch per subscription and orders by
+  (epoch, sequence) (`market_data/CLAUDE.md`), and F-4 checks that every instrument is quoted again within 30 s of
+  the exchange answering: 0.4-0.5 s in both reruns, which then placed the full ~52 000 orders.
+- **An exchange outage costs its own length on the order path.** Orders placed while it is down queue behind the
+  router's 8 consumers, each holding one order for its 1.75 s retry budget; most wait out the outage and go out when
+  it ends (placed → submitted p99 12 s for a 10.8 s outage, 43 s for 40.9 s), the rest are rejected
+  `EXCHANGE_UNAVAILABLE` with their hold released, as designed (48 and 184). Booked p99 per 10 s bucket is back to
+  ~340 ms in the first bucket after the exchange answers.
+- **A gateway restart barely registers.** 0.2 s down touched no payment; held down 30 s, the payment router met the
+  unavailable gateway 17 times and every payment still reached its outcome. The order path is untouched either way.
