@@ -9,8 +9,8 @@ targets, with a `-N` suffix for plugin-only releases.
   only owners that signalled or came due, and one horizon probe per pass; the event-store reference the
   `EventProcessor` batched forward; the foundation reference `JSONSerializer.readProperties` and
   `resolveClass`. The `InboxConfig.builder()` examples compile: that builder's methods take no `set` prefix.
-  The event-store reference describes the opt-in `essentials.eventstore.event-processors.competing-inbox-consumers`
-  (every instance handles an `EventProcessor`'s inbox where the queue keeps key order across instances).
+  The event-store reference describes `PartitionedEventProcessor` (handlers on every instance, on a queue that keeps
+  key order across instances) and the start-up refusal of competing inbox consumers on a per-node queue.
   No skill, rule or script changed.
 
 ## 0.60.1 — targets Essentials 0.60.1

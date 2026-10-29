@@ -550,32 +550,31 @@ Switching either way keeps the processor's resume point and fenced lock (same su
 `SubscriptionErrorPolicy` applies to the batch as a whole, and an override of `forwardEventToInbox` still applies to
 each event in it.
 
-#### Several instances: who runs the handlers (opt-in `competing-inbox-consumers`)
+#### Several instances: `PartitionedEventProcessor`
 
 The subscription is exclusive, and by default so is the inbox: `SingleGlobalConsumer` puts the `@MessageHandler`s behind
-a fenced lock of their own (`Inbox:<processorName>`), so with several instances they all run on whichever instance holds
-that lock - usually the first one started. On the shard-owned queue engine, which keeps an ordered key in order across
-instances, every instance can handle the inbox instead. Opt-in, off by default:
+a fenced lock of their own (`Inbox:<processorName>`), so with several instances they all run on the instance holding
+that lock - usually the first one started. To run them on every instance, extend `PartitionedEventProcessor` instead of
+`EventProcessor`:
 
-```yaml
-essentials:
-  eventstore:
-    event-processors:
-      competing-inbox-consumers: true
+```java
+public class OrderLedgerProcessor extends PartitionedEventProcessor {
+    public OrderLedgerProcessor(EventProcessorDependencies dependencies) { super(dependencies); }
+    // getProcessorName(), reactsToEventsRelatedToAggregateTypes() and @MessageHandler methods as for an EventProcessor
+}
 ```
 
-(Without Spring: `EventProcessorDependencies.builder()...setCompetingInboxConsumers(true)`.) A processor that does not
-override `getInboxMessageConsumptionMode()` then uses `GlobalCompetingConsumers` where
-`Inboxes.keepsKeyOrderAcrossInstances()` is `true` (the shard-owned adapter), and stays on `SingleGlobalConsumer` with a
-start-up WARN where it is not (`PostgresqlDurableQueues`, MongoDB) - one aggregate's events are always handled in order.
-
-- Turn it on only for processors whose handlers may run on several instances at once, for different aggregates: not for
-  one keeping in-memory state across aggregates, or calling something that takes one caller only. Override
-  `getInboxMessageConsumptionMode()` to `SingleGlobalConsumer` to keep such a processor on one instance.
-- Never return `GlobalCompetingConsumers` from the override on queues that do not keep key order across instances: one
-  aggregate's events can then be handled out of order on two instances. `start()` WARNs about it.
-- Handlers of different aggregates writing one shared stream (an account all orders book against) conflict on it a
-  little more often across instances; the inbox redelivers them as usual.
+- **What it does:** one instance reads and forwards (batched, `getForwardBatchSize()` default 100); every instance handles
+  its share of the aggregates; one aggregate's events stay in order.
+- **What it does not do:** keep order across aggregates; or start where `Inboxes.keepsKeyOrderAcrossInstances()` is
+  `false` (`PostgresqlDurableQueues`, MongoDB) - `start()` throws. It needs the shard-owned engine
+  (`essentials.shard-owned-queue.durable-queues-enabled=true`) in every environment, tests included.
+  `getInboxMessageConsumptionMode()` is final.
+- **Be aware:** handlers run on several instances at once. Not for a handler with in-memory state across aggregates, or
+  one calling something that takes one caller only - keep those on `EventProcessor`. Handlers of different aggregates
+  writing one shared stream conflict on it more often (redelivered). Handlers must be idempotent.
+- An `EventProcessor` that overrides `getInboxMessageConsumptionMode()` to `GlobalCompetingConsumers` on a queue without
+  cross-instance key order refuses to start (since 0.61): it could handle one aggregate's events out of order.
 
 #### Blocking I/O in a handler: `UnitOfWorkMode.NONE`
 

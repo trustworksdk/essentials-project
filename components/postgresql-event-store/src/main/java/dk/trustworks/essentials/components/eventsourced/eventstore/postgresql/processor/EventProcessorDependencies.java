@@ -32,14 +32,6 @@ public final class EventProcessorDependencies {
     public final Inboxes                         inboxes;
     public final DurableLocalCommandBus          commandBus;
     public final List<MessageHandlerInterceptor> messageHandlerInterceptors;
-    /**
-     * Opt-in, {@code false} by default: when {@code true}, an {@link EventProcessor} that does not override
-     * {@link EventProcessor#getInboxMessageConsumptionMode()} consumes its {@link Inbox} with
-     * {@link MessageConsumptionMode#GlobalCompetingConsumers} - every instance handles it - provided
-     * {@link Inboxes#keepsKeyOrderAcrossInstances()}. Otherwise it stays on {@link MessageConsumptionMode#SingleGlobalConsumer}.
-     * Set with {@link EventProcessorDependenciesBuilder#setCompetingInboxConsumers(boolean)}.
-     */
-    public final boolean                         competingInboxConsumers;
 
     public static EventProcessorDependenciesBuilder builder() {
         return new EventProcessorDependenciesBuilder();
@@ -53,21 +45,5 @@ public final class EventProcessorDependencies {
         this.inboxes = requireNonNull(inboxes, "No inboxes provided");
         this.commandBus = requireNonNull(commandBus, "No commandBus provided");
         this.messageHandlerInterceptors = requireNonNull(messageHandlerInterceptors, "No messageHandlerInterceptors provided");
-        this.competingInboxConsumers = false;
-    }
-
-    /**
-     * The builder's constructor: {@link #builder()} is the way to set {@code competingInboxConsumers}.
-     */
-    EventProcessorDependencies(EventStoreSubscriptionManager eventStoreSubscriptionManager,
-                               Inboxes inboxes,
-                               DurableLocalCommandBus commandBus,
-                               List<MessageHandlerInterceptor> messageHandlerInterceptors,
-                               boolean competingInboxConsumers) {
-        this.eventStoreSubscriptionManager = requireNonNull(eventStoreSubscriptionManager, "No eventStoreSubscriptionManager provided");
-        this.inboxes = requireNonNull(inboxes, "No inboxes provided");
-        this.commandBus = requireNonNull(commandBus, "No commandBus provided");
-        this.messageHandlerInterceptors = requireNonNull(messageHandlerInterceptors, "No messageHandlerInterceptors provided");
-        this.competingInboxConsumers = competingInboxConsumers;
     }
 }

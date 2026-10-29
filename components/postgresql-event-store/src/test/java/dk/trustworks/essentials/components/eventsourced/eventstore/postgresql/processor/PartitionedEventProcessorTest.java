@@ -32,20 +32,20 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.function.Consumer;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * Which {@link MessageConsumptionMode} an {@link EventProcessor} consumes its {@link Inbox} with, and what it says about it
- * at start: {@link MessageConsumptionMode#SingleGlobalConsumer} unless the opt-in
- * {@link EventProcessorDependencies#competingInboxConsumers} is set AND the {@link Inboxes} keep key order across instances;
- * a processor's own override decides for itself, with a WARN where that is unsafe.
+ * {@link PartitionedEventProcessor}: every instance consumes the {@link Inbox}, forwarding is batched, and it refuses to
+ * start on {@link Inboxes} that do not keep key order across instances. An {@link EventProcessor} overriding
+ * {@link EventProcessor#getInboxMessageConsumptionMode()} to {@link MessageConsumptionMode#GlobalCompetingConsumers} is
+ * held to the same rule; its default stays {@link MessageConsumptionMode#SingleGlobalConsumer}.
  * <p>
  * Mocks throughout, so no database is involved. The shard-owned engine's side - that two instances really keep a key in
- * order - is pinned by the engine's own ordering ITs.
+ * order - is pinned by the engine's own ordering ITs and measured in the trading demo.
  */
-class EventProcessorCompetingInboxConsumersTest {
+class PartitionedEventProcessorTest {
     private static final AggregateType THINGS = AggregateType.of("Things");
 
     private ListAppender<ILoggingEvent> logAppender;
@@ -55,84 +55,82 @@ class EventProcessorCompetingInboxConsumersTest {
         logAppender = new ListAppender<>();
         logAppender.start();
         // The processors log under their runtime class, so the anonymous overrides below too: every one is nested in this class
-        ((Logger) LoggerFactory.getLogger(EventProcessorCompetingInboxConsumersTest.class)).addAppender(logAppender);
+        ((Logger) LoggerFactory.getLogger(PartitionedEventProcessorTest.class)).addAppender(logAppender);
     }
 
     @AfterEach
     void detachLogAppender() {
-        ((Logger) LoggerFactory.getLogger(EventProcessorCompetingInboxConsumersTest.class)).detachAppender(logAppender);
+        ((Logger) LoggerFactory.getLogger(PartitionedEventProcessorTest.class)).detachAppender(logAppender);
     }
 
     @Test
-    void without_the_opt_in_the_inbox_has_a_single_global_consumer_even_where_key_order_is_kept() {
+    void a_partitioned_processor_lets_every_instance_consume_its_inbox_where_key_order_is_kept() {
+        var inboxes   = inboxes(true);
+        var processor = new ThingsPartitionedProcessor(inboxes);
+
+        processor.start();
+
+        assertThat(processor.isStarted()).isTrue();
+        assertThat(consumptionModeOf(inboxes)).isEqualTo(MessageConsumptionMode.GlobalCompetingConsumers);
+        assertThat(logged(Level.INFO)).anyMatch(message -> message.contains("Inbox consumed with GlobalCompetingConsumers"));
+    }
+
+    @Test
+    void a_partitioned_processor_forwards_in_batches_by_default() {
+        assertThat(new ThingsPartitionedProcessor(inboxes(true)).getForwardBatchSize()).isEqualTo(PartitionedEventProcessor.DEFAULT_FORWARD_BATCH_SIZE);
+    }
+
+    @Test
+    void a_partitioned_processor_refuses_to_start_where_key_order_is_not_kept_across_instances() {
+        var inboxes   = inboxes(false);
+        var processor = new ThingsPartitionedProcessor(inboxes);
+
+        assertThatThrownBy(processor::start).isInstanceOf(IllegalStateException.class)
+                                            .hasMessageContaining("does not keep an ordered message key in order across instances")
+                                            .hasMessageContaining("essentials.shard-owned-queue.durable-queues-enabled");
+        assertThat(processor.isStarted()).isFalse();
+        verify(inboxes, never()).getOrCreateInbox(any(InboxConfig.class), any(Consumer.class));
+    }
+
+    @Test
+    void an_event_processor_has_a_single_global_consumer_by_default_even_where_key_order_is_kept() {
         var inboxes = inboxes(true);
 
-        new ThingsEventProcessor(dependencies(inboxes, false)).start();
+        new ThingsEventProcessor(inboxes).start();
 
         assertThat(consumptionModeOf(inboxes)).isEqualTo(MessageConsumptionMode.SingleGlobalConsumer);
-        assertThat(logged(Level.WARN)).isEmpty();
         assertThat(logged(Level.INFO)).noneMatch(message -> message.contains("GlobalCompetingConsumers"));
     }
 
     @Test
-    void with_the_opt_in_and_inboxes_that_keep_key_order_every_instance_consumes_the_inbox() {
-        var inboxes = inboxes(true);
-
-        new ThingsEventProcessor(dependencies(inboxes, true)).start();
-
-        assertThat(consumptionModeOf(inboxes)).isEqualTo(MessageConsumptionMode.GlobalCompetingConsumers);
-        assertThat(logged(Level.INFO)).anyMatch(message -> message.contains("Inbox consumed with GlobalCompetingConsumers"));
-        assertThat(logged(Level.WARN)).isEmpty();
-    }
-
-    @Test
-    void with_the_opt_in_and_inboxes_that_do_not_keep_key_order_it_stays_on_a_single_global_consumer_and_says_why() {
-        var inboxes = inboxes(false);
-
-        new ThingsEventProcessor(dependencies(inboxes, true)).start();
-
-        assertThat(consumptionModeOf(inboxes)).isEqualTo(MessageConsumptionMode.SingleGlobalConsumer);
-        assertThat(logged(Level.WARN)).singleElement()
-                                      .satisfies(message -> assertThat(message).contains("Competing inbox consumers were enabled")
-                                                                               .contains("staying on SingleGlobalConsumer"));
-    }
-
-    @Test
-    void an_override_choosing_competing_consumers_where_key_order_is_not_kept_is_honoured_with_a_warning() {
-        var inboxes = inboxes(false);
-
-        new ThingsEventProcessor(dependencies(inboxes, false)) {
+    void an_event_processor_overriding_to_competing_consumers_where_key_order_is_not_kept_refuses_to_start() {
+        var inboxes   = inboxes(false);
+        var processor = new ThingsEventProcessor(inboxes) {
             @Override
             protected MessageConsumptionMode getInboxMessageConsumptionMode() {
                 return MessageConsumptionMode.GlobalCompetingConsumers;
             }
-        }.start();
+        };
 
-        assertThat(consumptionModeOf(inboxes)).isEqualTo(MessageConsumptionMode.GlobalCompetingConsumers);
-        assertThat(logged(Level.WARN)).singleElement()
-                                      .satisfies(message -> assertThat(message).contains("can be handled out of order"));
+        assertThatThrownBy(processor::start).isInstanceOf(IllegalStateException.class)
+                                            .hasMessageContaining("could be handled out of order");
+        assertThat(processor.isStarted()).isFalse();
     }
 
     @Test
-    void an_override_choosing_a_single_global_consumer_wins_over_the_opt_in() {
-        var inboxes = inboxes(true);
-
-        new ThingsEventProcessor(dependencies(inboxes, true)) {
+    void an_event_processor_overriding_to_competing_consumers_where_key_order_is_kept_starts() {
+        var inboxes   = inboxes(true);
+        var processor = new ThingsEventProcessor(inboxes) {
             @Override
             protected MessageConsumptionMode getInboxMessageConsumptionMode() {
-                return MessageConsumptionMode.SingleGlobalConsumer;
+                return MessageConsumptionMode.GlobalCompetingConsumers;
             }
-        }.start();
+        };
 
-        assertThat(consumptionModeOf(inboxes)).isEqualTo(MessageConsumptionMode.SingleGlobalConsumer);
-        assertThat(logged(Level.WARN)).isEmpty();
-    }
+        processor.start();
 
-    @Test
-    void the_dependencies_public_constructor_leaves_the_opt_in_off() {
-        var dependencies = new EventProcessorDependencies(subscriptionManager(), inboxes(true), mock(DurableLocalCommandBus.class), List.of());
-
-        assertThat(dependencies.competingInboxConsumers).isFalse();
+        assertThat(processor.isStarted()).isTrue();
+        assertThat(consumptionModeOf(inboxes)).isEqualTo(MessageConsumptionMode.GlobalCompetingConsumers);
     }
 
     // -------------------------------------------------------------------------------------------------------------------
@@ -151,21 +149,13 @@ class EventProcessorCompetingInboxConsumersTest {
         return config.getValue().getMessageConsumptionMode();
     }
 
-    private static EventProcessorDependencies dependencies(Inboxes inboxes, boolean competingInboxConsumers) {
-        return EventProcessorDependencies.builder()
-                                         .setEventStoreSubscriptionManager(subscriptionManager())
-                                         .setInboxes(inboxes)
-                                         .setCommandBus(mock(DurableLocalCommandBus.class))
-                                         .setCompetingInboxConsumers(competingInboxConsumers)
-                                         .build();
-    }
-
     private static EventStoreSubscriptionManager subscriptionManager() {
         // An AwaitedGapInspector, so start() logs no unrelated WARN
         var eventStore = mock(EventStore.class, withSettings().extraInterfaces(AwaitedGapInspector.class));
         doReturn(mock(EventStoreUnitOfWorkFactory.class)).when(eventStore).getUnitOfWorkFactory();
         var subscriptionManager = mock(EventStoreSubscriptionManager.class,
-                                       invocation -> invocation.getMethod().getName().equals("exclusivelySubscribeToAggregateEventsAsynchronously") ?
+                                       // Both subscribe paths: the partitioned processor forwards in batches
+                                       invocation -> invocation.getMethod().getName().startsWith("exclusively") ?
                                                      mock(EventStoreSubscription.class) : RETURNS_DEFAULTS.answer(invocation));
         when(subscriptionManager.getEventStore()).thenReturn(eventStore);
         return subscriptionManager;
@@ -181,14 +171,38 @@ class EventProcessorCompetingInboxConsumersTest {
         return inboxes;
     }
 
+    private static EventProcessorDependencies dependencies(Inboxes inboxes) {
+        return EventProcessorDependencies.builder()
+                                         .setEventStoreSubscriptionManager(subscriptionManager())
+                                         .setInboxes(inboxes)
+                                         .setCommandBus(mock(DurableLocalCommandBus.class))
+                                         .build();
+    }
+
     static class ThingsEventProcessor extends EventProcessor {
-        ThingsEventProcessor(EventProcessorDependencies dependencies) {
-            super(dependencies);
+        ThingsEventProcessor(Inboxes inboxes) {
+            super(dependencies(inboxes));
         }
 
         @Override
         public String getProcessorName() {
             return "ThingsEventProcessor";
+        }
+
+        @Override
+        protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
+            return List.of(THINGS);
+        }
+    }
+
+    static class ThingsPartitionedProcessor extends PartitionedEventProcessor {
+        ThingsPartitionedProcessor(Inboxes inboxes) {
+            super(dependencies(inboxes));
+        }
+
+        @Override
+        public String getProcessorName() {
+            return "ThingsPartitionedProcessor";
         }
 
         @Override

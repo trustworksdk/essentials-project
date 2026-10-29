@@ -1,26 +1,32 @@
 # EF-2 — Key-Partitioned Event Processing on the Shard-Owned Queue Engine
 
-**Status:** design proposal, not implemented. No code has changed. Nothing in §8 is decided yet.
-**Modules:** `components/postgresql-event-store` (package `…postgresql.processor`), small additive changes in
-`components/foundation` (`DurableQueues`), `components/postgresql-queue-shard-owned(-adapter)` and
-`spring-boot-starter-postgresql-event-store`.
-**Driven by:** EF-2 in `examples/essentials-trading-demo/docs/EXPANSION_PLAN.md` § "Essentials features this plan
-needs", and the measurements in "The ledger load scenario (phase 1)" at the end of
-`examples/essentials-trading-demo/src/main/java/dk/trustworks/essentials/examples/trading/_demo_harness/CLAUDE.md`.
+**Status (2026-10-29):** partly built. What is built is opt-in and measured; what is left is a proposal for the views,
+with the decisions in §8 open.
+**Modules:** `components/postgresql-event-store` (package `…postgresql.processor`), `components/foundation`
+(`DurableQueues`, `Inboxes`), `components/postgresql-queue-shard-owned(-adapter)`, `spring-boot-starter-postgresql-event-store`.
+**Driven by:** EF-2 in `examples/essentials-trading-demo/docs/EXPANSION_PLAN.md`, and the trading demo's load and fault
+runs (`_demo_harness/CLAUDE.md` in that module).
 
-On the shard-owned engine, an `Inbox` in `GlobalCompetingConsumers` mode splits keys across instances and keeps
-per-key order cluster-wide (2 instances, 0 conflicts, `liveInstances: 2`). `EventProcessor` and `ViewEventProcessor`
-never use that: each runs on one instance cluster-wide, and the demo's account views top out around 700–800 events/s.
-They trail a 20 000-command run by 13–25 s. EF-2 asks for a processing mode where every instance handles a
-processor's events, partitioned by aggregate id through the engine's ordered lane, instead of one lock holder doing
-all of it.
+## At a glance
 
-**In short:** the exclusive part that is fundamental is the *reader*, meaning the event-store subscription with its
-one resume point. The *handling* does not have to be exclusive. The recommended design (§4) keeps one exclusive reader
-per processor and makes it a thin, **batched** forwarder into the shard-owned ordered lane. Handling runs on every
-instance. It is a new class, not a behaviour change. Before building it, two things must be measured (§5). The first
-is whether the reader alone is already the ceiling. If it is, competing consumers will not help without batching.
-The second is that a configuration-only variant of the idea can be run on the demo today.
+Every event processor has one **reader**: the event-store subscription with its one resume point. That has to stay
+exclusive. What does not have to be exclusive is the **handling** - the `@MessageHandler`s or the view's SQL - which is
+where the time goes. EF-2 is about running the handling on every instance while one instance reads.
+
+| | Status | Where |
+|---|---|---|
+| `EventProcessor`: handlers on every instance (option (a0) below) | **Built** as the class `PartitionedEventProcessor`, measured with two instances | Release notes 0.61 §2.7, `docs/event-processor-specializations.md` |
+| Capability flag: does the queue keep one key in order across instances? | **Built**: `DurableQueues.keepsKeyOrderAcrossInstances()` / `Inboxes.keepsKeyOrderAcrossInstances()`, `true` only for the shard-owned adapter | foundation, adapter |
+| `EventProcessor`: batched forward from the reader to the inbox | **Built** (`getForwardBatchSize()`), measured | §5 "Batched forward, built and measured" |
+| `ViewEventProcessor`: batched handling (one unit of work per batch) | **Built** (`getDirectHandlingBatchSize()`), measured | `docs/view-event-processor-batched-handling.md` |
+| `ViewEventProcessor`: handling on every instance (option (a1)) | **Proposal**: §4, decisions §8 | this document |
+| Spreading the fenced locks: whole processors over instances, on every queue engine (option (d)) | **Open option** (§3.5), decision §8 | this document |
+
+Which queue implementation an application runs decides how much of this it can use at all: §3.6. In short, only an
+engine that keeps one key in order across instances - today the shard-owned engine - can spread handling over
+instances. On the others (`PostgresqlDurableQueues`, MongoDB, and the planned multi-table replacement for
+`PostgresqlDurableQueues`, as it is expected to work) the batching helps, and the only way to spread work over instances
+is to spread whole processors - option (d), spreading the fenced locks, which works on every engine.
 
 ---
 
@@ -104,6 +110,25 @@ holds:
 | Inbox consumer parallelism 1 | Incidental | A default (`EventProcessor.java:439-441`). The adapter passes it straight into `ConsumerOptions.parallelConsumers` (`ShardOwnedDurableQueueConsumer.java:181-187`) |
 | View update and ack commit together | **Already not true** on the shard-owned engine | `ViewEventProcessor.java:138-140` relies on it. On this engine acks never enlist in the caller's transaction (adapter `CLAUDE.md:30`), so queued view handling is already at-least-once |
 
+### 1.7 Where the locks land, measured
+
+Measured in the trading demo with two instances (`_demo_harness/CLAUDE.md`, "F-3 on two instances"), before the
+competing-inbox opt-in existed:
+
+- **Every fenced lock sat on the instance that started first: 41 of 41.** A lock manager's acquirer takes any free lock
+  on its next tick (every `lockConfirmationInterval`, 4 s there), so the first instance to start takes them all before
+  the second one is up. That put every exclusive processor - 15 views, 6 event-processor readers - and, through the
+  `SingleGlobalConsumer` inbox locks, every event processor's handlers on one instance.
+- **The second instance got 306 of the 2 244 shard-owned units**, a fair half of only the 9 queues it consumed at all.
+  The engine balances every queue its instances share; the other 24 had a consumer on the lock holder only.
+- **A crash moves the whole block.** Killing the lock holder: the survivor took all 41 locks 11-13 s after the kill
+  (the 15 s lock timeout), and every exclusive processor paused for that long at once.
+
+With the six event processors' handlers on competing consumers, they run on both instances (deliveries split
+6 194 / 6 124 for the order router, 0 ordering violations), the inbox locks are gone (41 → 35), and the second
+instance holds 510 units. What remains concentrated is the 15 views and the 6 readers: (d) in §3.5 would spread them as
+whole processors on any engine, (a1) in §4 the views' handling on the shard-owned engine.
+
 ---
 
 ## 2. The problem, stated precisely
@@ -126,80 +151,184 @@ is the class the measurements are about.
 
 ## 3. Options
 
-### 3.1 Option (a) — one exclusive reader that forwards, handling on every instance
+### 3.1 Option (a0) — `PartitionedEventProcessor`: event-processor handlers on every instance (built)
 
-The reader keeps today's lock, subscriber id and resume point. It does nothing but turn events into ordered messages
-(key = aggregate id, order = `EventOrder`) and enqueue them on the shard-owned ordered lane. Every instance consumes
-that queue, and the engine assigns each key's unit to exactly one instance at a time (§8 of the engine doc). Per-key
-order then comes from the engine, not from the lock.
+The reader keeps its lock, subscriber id and resume point and forwards each event to the processor's `Inbox` as an
+ordered message (key = aggregate id, order = `EventOrder`). With `GlobalCompetingConsumers` every instance consumes
+that inbox, and the shard-owned engine gives each key's unit to one instance at a time, so per-key order comes from
+the engine instead of the inbox lock. Built as the class `PartitionedEventProcessor` (release notes §2.7,
+`docs/event-processor-specializations.md`): mode fixed, forwarding batched by default, and it refuses to start where
+`Inboxes.keepsKeyOrderAcrossInstances()` is `false`. A global opt-in property was built first and removed before
+release: the contract belongs in the class a processor extends, not in configuration.
 
-**(a0) Configuration-only, today.** This is `EventProcessor` with an overridden `getInboxMessageConsumptionMode()`
-(`EventProcessor.java:429`) returning `GlobalCompetingConsumers`, plus `getNumberOfParallelInboxMessageConsumers()`
-(`:439`) above 1, on `essentials.shard-owned-queue.durable-queues-enabled=true`. Every part already exists: the
-reader is exclusive (`:314`), the forward is keyed by aggregate id with `EventOrder` as the order (`:416-419`), the
-adapter now carries `key_order` through delivery (adapter `CLAUDE.md`, first gotcha), and `GlobalCompetingConsumers`
-starts a consumer on every instance (`Inboxes.java:291-294`). What (a0) keeps from today:
+Pros:
+- Spreads the expensive part of an `EventProcessor` - its handlers - over every instance; measured evenly split, 0
+  ordering violations, nothing lost when the lock holder was killed.
+- The choice is visible in the code (the superclass) and cannot be configured into something unsafe.
+- Combines with the batched forward (on by default), which removes most of the reader's per-event cost.
+- Every processor keeps its semantics otherwise, including `UnitOfWorkMode.NONE`.
 
-- the per-event forwarding transaction on the reader (§1.5),
-- the re-read of every event by reference on the consumer,
-- `EventProcessor` semantics (no inline path, `UnitOfWorkMode.NONE` allowed).
+Cons:
+- Handlers run on several instances at once (for different aggregates). A handler keeping in-memory state across
+  aggregates, or calling a downstream that takes one caller, must stay an `EventProcessor`.
+- Cross-aggregate order is gone (it already was with more than one consumer thread).
+- Handlers of different aggregates that write one shared stream conflict more often (order ledger: 2.0 % → 2.9 % of
+  deliveries retried with two instances; all succeeded).
+- Ties the processor to an engine with cross-instance key order in every environment, tests included.
+- Only `EventProcessor`s; the views stay on one instance.
 
-**(a1) Batched forwarder (the proposal).** This is the same topology with a reader built for throughput: a
-processor-level `FencedLock` (as `ViewEventProcessor` already does) guarding a **batched** non-exclusive subscription
-(`batchSubscribeToAggregateEventsAsynchronously`). Each batch goes out with one `queueMessages` call in the batch's
-own unit of work. The shard-owned enqueue is a multi-row insert in one explicit transaction
-(`components/postgresql-queue-shard-owned/CLAUDE.md:36`). The batch's resume point advances only after the batch
-commits, and its gap fills are acknowledged in that unit of work (`BatchedPersistedEventSubscriber.java:63`). Two
-choices are open (§8 Q2): whether messages carry the event payload instead of a reference, which would remove the
-consumer's re-read, and whether handling is view-shaped (one unit of work per message) or `EventProcessor`-shaped.
+### 3.2 Option (a1) — key-partitioned views: one batched reader, view handling on every instance (proposal)
 
-Per-key order holds end to end. Events of one aggregate cannot commit out of `EventOrder`, because optimistic
-concurrency serialises them. One reader enqueues them in subscription order, in sequential transactions, so a key's
-`key_order` values commit in ascending order. That is the producer rule the engine requires
-(`docs/durable-queue-shard-owned.md:580`, harness `CLAUDE.md:97-103`). Gaps in `key_order`, from events the processor
-has no handler for, are allowed: "a key advances through the `key_order` values that are present".
+The same topology for views, as a new class (working name `KeyPartitionedViewEventProcessor`): the view's own
+`FencedLock` guards a **batched** non-exclusive subscription that only forwards each batch into the shard-owned ordered
+lane, in one `queueMessages` call per batch, with the resume point. Every instance consumes the queue and runs the
+view's handlers. Details in §4.
 
-### 3.2 Option (b) — per-partition readers with their own resume points
+Per-key order holds end to end: events of one aggregate cannot commit out of `EventOrder` (optimistic concurrency), one
+reader enqueues them in subscription order in sequential transactions, so a key's `key_order` values commit ascending -
+the producer rule the engine requires (`docs/durable-queue-shard-owned.md:580`). Gaps in `key_order` (events the view
+has no handler for) are allowed.
+
+Pros:
+- Spreads the work that is still concentrated after (a0): the views' SQL, about half of a view's per-event cost
+  (§5 M1).
+- The reader becomes a thin, batched forwarder, which removes the per-event transaction that is the views' ceiling
+  today (§1.5).
+- Failover pauses only the reader; handling of keys on surviving instances goes on.
+- Resume point, subscriber id and lock name stay, so a view can switch over and keep its place.
+
+Cons:
+- **Per-aggregate order only.** A view that today sees one aggregate type's events in commit order loses
+  cross-aggregate order (§6 lists the views that break).
+- **Latency:** the inline path (handle on the reader thread) is given up; event-to-view becomes reader commit → owner
+  → handler, a few ms p99 across processes.
+- **More duplicates:** reader re-forward after an unclean failover, engine redelivery when a unit moves, and the ack not
+  committing with the view update. The Version = EventOrder guard becomes a requirement.
+- **Reset needs cross-instance coordination** (§4.4), the weakest part of the design.
+- **Needs an idempotent ordered enqueue,** or a re-forward after a crash collides with the ordered lane's primary key
+  (§3.8, IT-4).
+- Shard-owned engine only (§3.6).
+
+### 3.3 Option (b) — per-partition readers with their own resume points
 
 Split each aggregate type into N partitions by `hash(aggregate_id) mod N`. Each partition gets its own subscriber id
-(for example `Proc:Accounts#3/16`), its own resume point and its own lock, and is read by whichever instance holds
-that lock. It is additive at the storage level, since the subscriber id carries the partition. It costs a lot:
+(e.g. `Proc:Accounts#3/16`), resume point and lock, read by whichever instance holds that lock.
 
-- **Read amplification.** Every partition reader scans the whole global order and discards (N−1)/N of it, unless the
-  event tables get a partition-expression index. That is a schema change for every aggregate type, in every
-  application.
-- **Balancing.** `FencedLockManager` has no fair share; the first instance up takes all N locks. The fair-share
-  membership that would balance them is internal to the queue engine (`ShardOwnedQueue`, package-private).
-- **Changing N** moves aggregates between partitions and therefore between resume points: a stop-the-world
-  migration, the outage-shaped step the engine design rejected for its own `shardCount`
-  (`components/postgresql-queue-shard-owned/CLAUDE.md:156`).
-- **Gap handling and CDC wake-ups** multiply by N, and reset has to coordinate N cursors.
+Pros:
+- Removes the single-reader ceiling, the only option that does.
+- Works on any queue implementation: order comes from the partition's single reader, not from the queue.
 
-It removes the single-reader ceiling, and it is the only option that does. It should be considered only if §5 shows a
-batched single reader cannot keep up.
+Cons:
+- **Read amplification:** every partition reader scans the whole global order and discards (N−1)/N of it, unless the
+  event tables get a partition-expression index - a schema change for every aggregate type in every application.
+- **Balancing:** N locks per processor, and `FencedLockManager` has no fair share - the first instance up takes all of
+  them (§1.7). It needs lock balancing such as (d), §3.5.
+- **Changing N** moves aggregates between resume points: a stop-the-world migration.
+- Gap handling, CDC wake-ups and reset all multiply by N.
 
-### 3.3 Option (c) — CDC-driven fan-out
+Only worth it if a batched single reader cannot keep up (§5).
 
-In INBOX delivery mode every node's dispatcher publishes events to its local `CdcEventBus` (`docs/cdc.md` §10.3–10.4).
-Each node could handle only the keys it "owns". That only moves (b)'s problems somewhere else: ownership has to come
-from somewhere, and correctness still needs a durable per-partition resume point, because CDC is a delivery
-accelerator over the event store and not a source of truth (`docs/cdc.md` §1). CDC is also off by default and falls
-back to polling when it is not delivering. A processing mode cannot depend on it. **Rejected as a foundation.** CDC
-stays useful underneath (a) for reader latency.
+### 3.4 Option (c) — CDC-driven fan-out
 
-### 3.4 Comparison
+Every node's CDC dispatcher publishes events to its local `CdcEventBus` (`docs/cdc.md` §10.3-10.4); each node would
+handle only the keys it "owns".
 
-| | (a0) config today | (a1) batched forwarder | (b) per-partition readers | (c) CDC fan-out |
+Pros:
+- Low latency: no extra queue hop.
+
+Cons:
+- Ownership still has to come from somewhere, and correctness still needs a durable per-partition resume point: CDC is
+  a delivery accelerator over the event store, not a source of truth (`docs/cdc.md` §1) - so it inherits (b)'s costs.
+- CDC is off by default and falls back to polling; a processing mode cannot depend on it.
+
+**Rejected as a foundation.** CDC stays useful underneath (a0)/(a1) for reader latency.
+
+### 3.5 Option (d) — spread the fenced locks (open)
+
+Leave every processor exclusive and spread the locks - and so whole processors - over the instances. It is independent
+of the queue engine, so it is the one way to spread work over instances on `PostgresqlDurableQueues`, MongoDB and the
+planned replacement, and it complements (a0)/(a1) on the shard-owned engine (it also places the views and the readers
+those leave on one instance).
+
+**Sketch (opt-in, in `DBFencedLockManager`):**
+
+- **Membership without a new table.** Each lock manager holds one lock of its own, `__member:<instanceId>`, confirmed
+  on the same tick as every other lock and gone after the lock timeout when the instance dies. The live instances are
+  the confirmed `__member:*` rows of `fenced_locks` - today's schema and mechanics.
+- **Preferred owner per lock** by rendezvous hashing of the lock name over the live instances: every instance computes
+  the same answer, and an instance joining or leaving changes the preferred owner of only ~1/N of the locks.
+- **Acquire:** a free lock goes to its preferred owner; a non-preferred instance takes it only if the preferred owner
+  has not within a grace (a tick or two), so a lock is never left unserved.
+- **Rebalance (optional, rate-limited):** an instance releases a lock whose preferred owner is another *live* instance,
+  at most one lock per interval, so a membership change trickles locks over instead of moving them all at once.
+
+**What it costs: a pause per move.** An exclusive processor cannot move in place. The old holder finishes its event,
+saves the resume point and releases; the new one takes the lock on its next acquirer tick (up to
+`lockConfirmationInterval`), reads the resume point and resubscribes (with CDC, a catch-up first). A few seconds without
+handling, per processor per move. Rendezvous hashing bounds the moves to ~1/N of the locks per membership change, and
+only locks whose preferred owner is alive ever move; a rolling deploy of N pods moves each lock at most out and back.
+
+Pros:
+- Works on every queue engine and for every processor type, views included; no change to any processor's semantics or
+  ordering contract.
+- Even spread at start-up and on scale-out, whatever the start order; a crash spreads the dead instance's processors
+  over all survivors instead of one, so less load lands on any one instance (§1.7: today the whole block moves).
+- No schema change (membership rides on lock rows); opt-in, so nothing changes for anyone who does not turn it on.
+
+Cons:
+- A pause of a few seconds per moved processor, on every membership change - the price of the even spread. Bounded and
+  rate-limited, not avoidable.
+- Spreads whole processors only: one busy view is still one thread on one instance (that is (a1)'s job).
+- A new behaviour in the central `FencedLockManager`, with the timing cases that come with it: a preferred owner that
+  is slow to start, flapping membership (hysteresis needed), and two managers disagreeing on membership for a tick.
+
+A cheaper variant without membership - an instance holding more locks waits longer before taking a free one - was
+looked at and set aside: it spreads only locks that are free while several instances already run, and instances start
+seconds apart, so the first one up still takes most locks; making the back-off long enough to bridge that would delay
+a single instance's own start-up.
+
+### 3.6 What each queue implementation can use
+
+Whether handling can run on several instances depends on one property of the queue: does it deliver one key's ordered
+messages in order when several instances consume the queue? That is `DurableQueues.keepsKeyOrderAcrossInstances()`.
+On an engine without it, a key's messages go to whichever node claims them, and two nodes can hold two of a key's
+messages at once - so ordered messages need a single consumer (`Inboxes` javadoc, `SingleGlobalConsumer`).
+
+| | `PostgresqlDurableQueues` | Shard-owned engine | MongoDB (`MongoDurableQueues`) | Planned multi-table replacement for `PostgresqlDurableQueues` (expected, no design yet) |
 |---|---|---|---|---|
-| Removes the handler ceiling | Yes | Yes | Yes | Yes |
-| Removes the reader ceiling | **No**: one transaction per event | Mostly: one transaction per batch | Yes | Only with (b)'s machinery |
-| Resume point model | Unchanged | Unchanged | N per processor | N per processor |
-| Rebalancing | Engine (drain-shed) | Engine | New, lock-based | New |
-| Reset | Cross-instance quiesce needed | Same | Same, × N | Same |
-| Requires CDC | No | No | No | Yes |
-| New public API | None | One class, one capability flag | Large | Large |
+| Key order across instances | No (per node) | **Yes** (one owner per unit, fenced) | No (per node) | Expected no (per node), assignment model unchanged |
+| (a0) `PartitionedEventProcessor` | Refuses to start | **Yes** | Refuses | Refuses - unless the design adds cross-instance key order |
+| (a1) partitioned views | Refuses to start | **Yes** | Refuses | Refuses - same condition |
+| Batched forward (`EventProcessor`) | Yes | Yes | Yes | Yes |
+| Batched view handling (`ViewEventProcessor`) | Yes | Yes | Yes | Yes |
+| (b) per-partition readers | Would work (order from the reader) | Would work | Would work | Would work |
+| (d) spread the fenced locks | **Yes** - the one way to spread work here | Yes, complements (a0)/(a1) | **Yes** | **Yes** |
+| What spreads over instances today | Unordered competing consumers only; every exclusive processor on the first instance up | Event-processor handlers (opt-in), every competing inbox; views and readers stay on one | As `PostgresqlDurableQueues` | As `PostgresqlDurableQueues` |
 
-### 3.5 Trade-offs common to every option
+Two consequences:
+
+- **Build (a1) against the capability, never against the shard-owned engine by type.** The capability is what the
+  design needs, so any engine that later answers `true` - the planned replacement included, if its design ever gives
+  a key one owner across instances - gets (a0) and (a1) without a change here. Answering `true` is a promise: one
+  owner per key at a time, and a former owner fenced out of acknowledging.
+- **For applications on a per-node engine, EF-2's spreading does not apply.** What they get is the batching (forward and
+  view handling), which raises each processor's single-instance rate, and - if built - (d), which spreads whole
+  processors. If the planned replacement is meant to scale *one* processor over instances, that is a requirement on its
+  design: cross-instance key order, or partitioned readers (b).
+
+### 3.7 Comparison
+
+| | (a0) competing inboxes | (a1) partitioned views | (b) partition readers | (c) CDC fan-out | (d) spread locks |
+|---|---|---|---|---|---|
+| Status | Built (class) | Proposal | Not pursued | Rejected | Open |
+| Spreads handling over instances | `EventProcessor`s | Views | Yes | Yes | Whole processors only |
+| Removes the reader ceiling | With the batched forward, mostly | Mostly (batched) | Yes | Only with (b)'s machinery | No |
+| Needs cross-instance key order | Yes | Yes | No | No | No - works on every engine |
+| Resume point model | Unchanged | Unchanged | N per processor | N per processor | Unchanged |
+| Ordering contract | Per aggregate | Per aggregate | Per aggregate | Per aggregate | Unchanged |
+| New public API | Class + capability (shipped) | One class, idempotent enqueue | Large | Large | An opt-in on the lock manager |
+
+### 3.8 Trade-offs common to (a0) and (a1)
 
 - **Ordering.** Per aggregate only, as §2 says.
 - **At-least-once, with more sources of duplicates than today.** Duplicates come from three places: the reader
@@ -235,8 +364,9 @@ stays useful underneath (a) for reader latency.
 
 ## 4. Recommendation
 
-Build **(a1)** as a new class. Treat **(a0)** as the experiment that justifies it (§5). Do not build (b) or (c)
-unless the measurements force it.
+(a0) is done (`PartitionedEventProcessor`, §3.1). For the views, build **(a1)** as a new class, gated on the capability that now exists.
+Do not build (b) or (c) unless the measurements force it. (d) is independent of (a1) and decided separately (§8). The batching that (a1) relies on already exists on both
+processor types, so what is left is the class, the idempotent ordered enqueue and the reset story.
 
 ### 4.1 What is added (all additive)
 
@@ -244,12 +374,12 @@ unless the measurements force it.
 |---|---|---|
 | `KeyPartitionedViewEventProcessor` (working name) | `postgresql-event-store`, `…processor` | Extends `AbstractEventProcessor`. Takes the existing `ViewEventProcessorDependencies` (`ViewEventProcessor.java:100-106`), so no new dependencies bean is needed. Same subscriber id scheme, so a projection switched over keeps its resume point |
 | Batched forwarding | same | Processor lock + `batchSubscribeToAggregateEventsAsynchronously` + one `queueMessages` per batch. Batch size and max latency are overridable protected methods |
-| Capability check on the queue engine | `foundation`, `DurableQueues` | `default boolean guaranteesClusterWideKeyOrder() { return false; }`, overridden `true` by `ShardOwnedDurableQueues`. The processor refuses to start without it, because on `PostgresqlDurableQueues` competing consumers break key order (`Inboxes.java:53-55`) |
+| Capability check on the queue engine | **Exists**: `DurableQueues.keepsKeyOrderAcrossInstances()` / `Inboxes.keepsKeyOrderAcrossInstances()` (shipped with (a0)) | The processor refuses to start without it, because on a per-node engine competing consumers break key order. (a0) falls back instead; a class whose name promises partitioning should refuse |
 | Idempotent ordered enqueue | engine SPI + adapter | A key/order already present counts as success. New method or option; existing enqueue semantics are unchanged |
 | Reset epoch | processor + message metadata | §4.4 |
 | Docs | `LLM/LLM-postgresql-event-store.md` "Choose Processor" table, a new row; `LLM-traps.md` a new ESS id for "partitioned ⇒ per-aggregate order only" | Plugin `version` bump, per root `CLAUDE.md` |
 
-Existing processors, `EventProcessor`'s defaults and the inbox modes do not change.
+Existing processors and `ViewEventProcessor`'s behaviour do not change.
 
 ### 4.2 How a projection opts in
 
@@ -578,7 +708,7 @@ again, which the batch then removes. The demo now runs 8 / 8 / 8, pool 40, batch
 decision rule above this is the single-instance half of (a1) - batched forwarding - on its own; the cross-instance half
 still cannot be measured here.
 
-Two hazards to watch during M3/M4. Kill the reader's instance with `kill -9` mid-run to see the PK collision in §3.5,
+Two hazards to watch during M3/M4. Kill the reader's instance with `kill -9` mid-run to see the PK collision in §3.8,
 or show that it does not happen. And compare per-key order against the exact `EventOrder` sequence, not `isSorted()`
 (the trap recorded in adapter `CLAUDE.md`, first gotcha).
 
@@ -591,7 +721,7 @@ or show that it does not happen. And compare per-key order against the exact `Ev
 | Projections that depend on **cross-aggregate order** (a parent row written by aggregate X before a child row from Y; "latest N across all accounts" feeds) | Missing parent or FK failures, a feed out of order | Do not use the mode for them. The class name and the LLM table say "per-aggregate order only". Handlers that need a parent should tolerate its absence (upsert, or retry with a retryable exception) |
 | Views that **read-modify-write shared rows** (totals across accounts, per-instrument aggregates fed by many accounts) | Lost updates under concurrent instances, or hot-row lock contention that erases the gain | Key the row by the aggregate, or update it atomically (`UPDATE … SET x = x + ?`) with an idempotency guard. The demo's account views are keyed by account (`AccountActivityProjection.java` PK `(account_stream_id, event_order)`) and are good candidates; `PositionsProjection`'s per-account version row is too |
 | **Aggregate ids that collide across aggregate types** in one processor | The key is the aggregate id alone (`EventProcessor.java:416-417`). Two types sharing an id share a key, and equal `EventOrder`s hit the ordered PK | Qualify the key with the aggregate type in the new class. Note: this already applies to a multi-type `EventProcessor` on this engine today |
-| Duplicate forward after reader crash | Reader stops on the ordered PK (§3.5) | Idempotent ordered enqueue (§4.1) |
+| Duplicate forward after reader crash | Reader stops on the ordered PK (§3.8) | Idempotent ordered enqueue (§4.1) |
 | `FENCED_LOCK_TOKEN` metadata | `ViewEventProcessor` stamps queued messages with the lock token (`ViewEventProcessor.java:177-178`). Partitioned handlers have none | Do not stamp it. Document that handlers cannot fence on it |
 | Lag invisible in the admin UI | `ApiSubscription` (`EssentialsAdminApiSpec.java:113`, `:152-169`) is keyed `(subscriberId, aggregateType)`, describes the **reader**, and is reported per instance ("null when not running in this instance"). The handler side shows only as a shard-owned queue (`/shard-owned-queues/{queueName}/status`). There is no processor-level entity and no reset operation in the spec | v1: no new admin operation. Document "lag = reader lag + queue depth" and name the processor's queue predictably (`<processorName>:queue`, as `ViewEventProcessor.java:149`). A processor-level status would be the three-place change (SPI, spec mapping, controller) and is deferred (Q6) |
 | Long handlers | A handler outlasting `leaseTtl` can overlap a successor on the same key (`components/postgresql-queue-shard-owned/CLAUDE.md:99`) | Same rule as any ordered-lane consumer. `handlersOutlastingLease` is the signal |
@@ -617,7 +747,7 @@ or show that it does not happen. And compare per-key order against the exact `Ev
 | IT-1 Two instances, steady load | Every event handled ≥ 1, the view equals a single-instance replay, per-key order **exact**, both instances handle (`orderedUnitsHeld` > 0 on each), `orderViolations` = 0 |
 | IT-2 Rebalance under load | Third instance joins, then one leaves gracefully. No key has two handlers at once, asserted at the moment of overlap with handler-side timestamps, not afterwards; nothing lost |
 | IT-3 Reader failover, graceful | Reader lock moves; no event re-forwarded; no gap |
-| IT-4 Reader failover, unclean | Reader instance killed mid-batch. Re-forwarded events either hit the idempotent enqueue or are handled twice and absorbed by the guard; the reader **does not stop** (reproducer for §3.5, run first against today's `EventProcessor`) |
+| IT-4 Reader failover, unclean | Reader instance killed mid-batch. Re-forwarded events either hit the idempotent enqueue or are handled twice and absorbed by the guard; the reader **does not stop** (reproducer for §3.8, run first against today's `EventProcessor`) |
 | IT-5 Fencing | A reader that has lost its lock but still holds a batch (paused past `leaseTtl`): its late forward is a duplicate and nothing worse |
 | IT-6 Reset with in-flight handlers | Two instances, slow handlers, reset mid-run: the final view equals a fresh replay |
 | IT-7 Dead letter | A poison event blocks only its key; other keys progress; `resurrectKey` replays in order |
@@ -629,27 +759,45 @@ Give leases headroom over handler time in IT-2/IT-5, or the test measures a live
 
 ---
 
-## 8. Open questions for the maintainer
+## 8. Open decisions
 
-1. **Is per-aggregate order an acceptable contract for a view processor at all**, given that `ViewEventProcessor` is
-   effectively commit-ordered today? Or should the mode exist only on the `EventProcessor` side (a0, documented),
-   with no new view class?
-2. **Payload or reference in the forwarded message?** A payload removes one read per event on the consumer. In exchange
-   it makes every queue row and its WAL as large as the event (how payload size drives the engine's per-message cost
-   is measured in `components/postgresql-queue-shard-owned/CLAUDE.md:86`). A reference keeps the queue small and the
-   event store authoritative.
-3. **Key qualification.** Qualify the key with the aggregate type in the new class (safe, but differs from
-   `EventProcessor`), or keep the bare id and document the collision?
-4. **Reset across instances.** Is the epoch plus "wait one `leaseTtl`" acceptable, or should reset be allowed only
-   while the processor is stopped cluster-wide (an admin precondition)?
-5. **Idempotent ordered enqueue.** Is it an SPI addition to `MessageQueue` (frozen at release: additive only,
-   default method), or is it handled inside the adapter? And should it be fixed for today's `EventProcessor` on this
-   engine independently of EF-2, if IT-4 reproduces it?
-6. **Admin representation.** Is "reader subscription + queue status" enough for v1, or does a partitioned processor
-   need its own entity in `EssentialsAdminApiSpec` (with the three-place sync)?
-7. **Migration of an existing projection.** Switching a `ViewEventProcessor` to the new class keeps its subscriber
-   id and resume point. Should it also reuse `<name>:lock` and `<name>:queue`, so a rolling deploy mixes old inline
-   handlers and new partitioned ones safely (old nodes already queue behind a key with queued work), or should it
-   require a clean stop?
-8. **Scope of the capability flag.** Is `guaranteesClusterWideKeyOrder()` on `DurableQueues` the right place, or
-   should the processor simply require `ShardOwnedDurableQueues` by type?
+Answered since the first version of this document:
+
+- **Where the capability lives** (old Q8): on `DurableQueues`/`Inboxes` as `keepsKeyOrderAcrossInstances()`, not by
+  type - shipped with (a0).
+- **Should the mode exist only on the `EventProcessor` side** (old Q1, second half): it exists there now, as
+  `PartitionedEventProcessor`. What remains is whether views get it too (`PartitionedViewEventProcessor`).
+- **Class or setting:** a class per contract (`docs/event-processor-specializations.md`).
+
+Still open, with a recommendation each:
+
+0. **Spread the fenced locks ((d), §3.5)?** It is the only way to spread work over instances on the per-node engines
+   (`PostgresqlDurableQueues`, MongoDB, the planned replacement), and on the shard-owned engine it also places the views
+   and readers. *Recommendation:* worth building, opt-in, independently of (a1). First a prototype in
+   `DBFencedLockManager` (membership lock, rendezvous preferred owner, grace on acquire; rebalancing off at first),
+   measured with three instances in the demo: lock spread after start-up, after a kill, and through a rolling restart,
+   with the pause per move. Then rebalancing, rate-limited, if the prototype holds.
+
+1. **Do views get per-aggregate-only order at all ((a1) yes or no)?** `ViewEventProcessor` is effectively
+   commit-ordered today. *Recommendation:* yes, as a separate class whose name says it, for views keyed by aggregate
+   (the demo's account views are); never by changing `ViewEventProcessor`. Decide after the planned queue
+   replacement's design says whether it will answer the capability - if it will not, (a1) serves shard-owned users only,
+   which may still be enough.
+2. **Payload or reference in the forwarded message?** *Recommendation:* reference, as `EventProcessor` does: it keeps
+   queue rows and their WAL small and the event store authoritative; revisit only if the consumer's re-read shows up in
+   a profile.
+3. **Key qualification:** qualify the key with the aggregate type in the new class, or keep the bare id?
+   *Recommendation:* qualify in the new class (no collision between two aggregate types sharing an id), and document
+   the existing collision for multi-type `EventProcessor`s.
+4. **Reset across instances:** epoch plus waiting one `leaseTtl`, or reset only while the processor is stopped
+   cluster-wide? *Recommendation:* the admin precondition (stopped cluster-wide) for v1 - simple and obviously
+   correct; the epoch only if resets under load turn out to be needed.
+5. **Idempotent ordered enqueue** ("already present ⇒ success"): SPI addition (additive default method) or inside the
+   adapter, and should it be fixed for today's `EventProcessor` on this engine anyway? *Recommendation:* first run
+   IT-4 against today's `EventProcessor`. The two-instance kill of the lock holder in the demo (§1.7) passed, which
+   is suggestive, not proof.
+6. **Admin representation:** is "reader subscription + queue status" enough for v1? *Recommendation:* yes; a
+   processor-level entity is the three-place admin change and can wait.
+7. **Migrating an existing view:** reuse `<name>:lock` and `<name>:queue` so a rolling deploy can mix old and new nodes,
+   or require a clean stop? *Recommendation:* a clean stop for v1 - mixing inline and partitioned handlers of one view
+   is the hardest case to reason about.

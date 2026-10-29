@@ -583,7 +583,6 @@ public class EventStoreConfiguration {
      *                                      doesn't handle message retry, etc.
      * @param commandBus                    The {@link CommandBus} where any {@link Handler} or {@link CmdHandler} annotated methods in the subclass of the {@link AbstractEventProcessor} will be registered
      * @param messageHandlerInterceptors    The {@link MessageHandlerInterceptor}'s that will intercept calls to the {@link MessageHandler} annotated methods.<br>
-     * @param eventStoreProperties          {@code essentials.eventstore.event-processors.competing-inbox-consumers}
      * @return {@link EventProcessorDependencies}
      */
     @Bean
@@ -591,15 +590,11 @@ public class EventStoreConfiguration {
     public EventProcessorDependencies eventProcessorDependencies(EventStoreSubscriptionManager eventStoreSubscriptionManager,
                                                                  Inboxes inboxes,
                                                                  DurableLocalCommandBus commandBus,
-                                                                 List<MessageHandlerInterceptor> messageHandlerInterceptors,
-                                                                 EssentialsEventStoreProperties eventStoreProperties) {
-        return EventProcessorDependencies.builder()
-                                         .setEventStoreSubscriptionManager(eventStoreSubscriptionManager)
-                                         .setInboxes(inboxes)
-                                         .setCommandBus(commandBus)
-                                         .setMessageHandlerInterceptors(messageHandlerInterceptors)
-                                         .setCompetingInboxConsumers(eventStoreProperties.getEventProcessors().isCompetingInboxConsumers())
-                                         .build();
+                                                                 List<MessageHandlerInterceptor> messageHandlerInterceptors) {
+        return new EventProcessorDependencies(eventStoreSubscriptionManager,
+                                              inboxes,
+                                              commandBus,
+                                              messageHandlerInterceptors);
     }
 
     /**
