@@ -19,7 +19,6 @@ package dk.trustworks.essentials.examples.trading.market_data.use_cases.risk_app
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorDependencies;
-import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.MessageConsumptionMode;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.messaging.UnitOfWorkMode;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
@@ -89,16 +88,6 @@ public class InstrumentRiskApprovalProcessor extends EventProcessor {
     @Override
     public String getProcessorName() {
         return "InstrumentRiskApprovalProcessor";
-    }
-
-    /**
-     * Every instance handles this processor's inbox, not only the one holding its lock: on the shard-owned engine one
-     * aggregate's messages stay in order across instances (one owner per unit, fenced), so only the subscription has to
-     * be exclusive. On {@code PostgresqlDurableQueues}, which keeps order on one node only, this would not be safe.
-     */
-    @Override
-    protected MessageConsumptionMode getInboxMessageConsumptionMode() {
-        return MessageConsumptionMode.GlobalCompetingConsumers;
     }
 
     @Override
