@@ -46,6 +46,7 @@ import java.util.*;
  * @param faultAtDay          the business day a fault with a window opens it in, at that day's open (day 1 is the first)
  * @param faultDuration       how long a fault with a window keeps it open
  * @param faultTarget         F-4's simulator: {@code exchange} or {@code gateway}
+ * @param faultInstance       F-3's instance, 1-based into {@code baseUrls}
  */
 public record LoadDriverSettings(List<String> baseUrls,
                                  String exchangeUrl,
@@ -77,7 +78,8 @@ public record LoadDriverSettings(List<String> baseUrls,
                                  String fault,
                                  int faultAtDay,
                                  Duration faultDuration,
-                                 String faultTarget) {
+                                 String faultTarget,
+                                 int faultInstance) {
     static final Set<String> FAULTS = Set.of("none", "F-1", "F-2", "F-3", "F-4", "F-5");
 
 
@@ -120,7 +122,8 @@ public record LoadDriverSettings(List<String> baseUrls,
                 take(values, "fault", "none"),
                 Integer.parseInt(take(values, "fault-at-day", "4")),
                 Duration.parse(take(values, "fault-duration", "PT60S")),
-                take(values, "fault-target", "exchange"));
+                take(values, "fault-target", "exchange"),
+                Integer.parseInt(take(values, "fault-instance", "1")));
         if (!values.isEmpty()) {
             throw new IllegalArgumentException("Unknown settings: " + values.keySet());
         }
@@ -132,6 +135,9 @@ public record LoadDriverSettings(List<String> baseUrls,
         }
         if (!Set.of("exchange", "gateway").contains(settings.faultTarget)) {
             throw new IllegalArgumentException("fault-target must be exchange or gateway, got '" + settings.faultTarget + "'");
+        }
+        if (settings.faultInstance < 1 || settings.faultInstance > settings.baseUrls.size()) {
+            throw new IllegalArgumentException("fault-instance must name one of the " + settings.baseUrls.size() + " base-urls (1-based)");
         }
         if (settings.activePerDay > settings.population) {
             throw new IllegalArgumentException("active-per-day must not exceed population");

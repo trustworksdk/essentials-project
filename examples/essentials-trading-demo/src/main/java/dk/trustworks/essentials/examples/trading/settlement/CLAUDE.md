@@ -19,7 +19,10 @@ reported, and trades settle only through the ledger's operator endpoint.
 - **The account comes from `settlement`'s own projection of `orders`' `OrderFilled`** (`views/fills`). A report for a
   fill not projected yet - or a correction before its completion - throws `SettlementNotYetRecordable` (not an
   `IllegalArgumentException`), so `Settlement:Reports` redelivers it. A report for an execution this database never had
-  (the exchange kept an older run's state) ends as a dead letter after 50 attempts: reset both together.
+  (the exchange kept an older run's state) ends as a dead letter after 50 attempts (~7 minutes): reset both together.
+  The backoff grows (200 ms doubling to 10 s) so it outlasts a failover: the fill comes through `Orders:ExchangeReports`,
+  whose units on a dead instance stay unserved for the 30 s lease TTL. A fixed 200 ms (10 s in all) dead-lettered 438
+  reports when one of two instances was killed.
 - **Subscription `demo-settlement`** in `simulators/exchange.yaml`, participant-filtered to the firm (SR-19): either
   side of a settlement involving us. Keep its `event_types` and `SettlementEventTranslation.EVENT_TYPES` in step.
 

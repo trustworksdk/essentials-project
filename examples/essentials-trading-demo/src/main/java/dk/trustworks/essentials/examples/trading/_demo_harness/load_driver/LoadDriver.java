@@ -142,8 +142,8 @@ public final class LoadDriver {
                         openSimulatorRestart();
                     } else if (settings.fault().equals("F-3")) {
                         faultOpened = Instant.now();
-                        log("fault window open (F-3): kill the instance now; %s", progress());
-                        watchOutage("instance", base() + "/actuator/health");
+                        log("fault window open (F-3 instance %d): kill it now; %s", settings.faultInstance(), progress());
+                        watchOutage("instance " + settings.faultInstance(), settings.baseUrls().get(settings.faultInstance() - 1) + "/actuator/health");
                     }
                 }
             }
@@ -761,7 +761,7 @@ public final class LoadDriver {
      */
     private Map<String, Object> simulatorRestartEvidence(JsonNode server) {
         var evidence = new LinkedHashMap<String, Object>();
-        evidence.put("target", settings.fault().equals("F-3") ? "instance" : settings.faultTarget());
+        evidence.put("target", settings.fault().equals("F-3") ? "instance " + settings.faultInstance() + " of " + settings.baseUrls().size() : settings.faultTarget());
         evidence.put("placementsRetried", stats.counter("placement-retried:no-answer"));
         evidence.put("skippedInWindow", stats.counter("skipped:driver-saturated-in-fault-window"));
         evidence.put("windowOpened", String.valueOf(faultOpened));

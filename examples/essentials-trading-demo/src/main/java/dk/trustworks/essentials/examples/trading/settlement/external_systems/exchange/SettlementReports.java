@@ -34,6 +34,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * consumed ({@link SettlementEventTranslation}). Reports for one execution that collide on its stream fail one unit of
  * work and the loser is redelivered; a report that cannot be recorded yet is redelivered too, so the policy allows
  * many attempts.
+ * <p>
+ * "Not yet" is {@code orders}' fill, which reaches {@code views/fills} through {@code Orders:ExchangeReports} - a
+ * shard-owned queue. When an instance dies, the units it owned stay unserved for the engine's lease TTL (30 s) before
+ * another instance takes them, and a report whose fill is on one of them waits that long. The backoff therefore grows
+ * (200 ms doubling to 10 s, ~7 minutes over the 50 attempts): a fixed 200 ms gave 10 s, and a two-instance run dead-
+ * lettered 219 reports, and 219 more behind them, when one instance was killed (phase 6 F-3).
  */
 @Component
 public class SettlementReports {
@@ -60,7 +66,8 @@ public class SettlementReports {
                                                         .inboxName(INBOX_NAME)
                                                         .messageConsumptionMode(MessageConsumptionMode.GlobalCompetingConsumers)
                                                         .numberOfParallelMessageConsumers(2)
-                                                        .redeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(200), MAX_ATTEMPTS))
+                                                        .redeliveryPolicy(RedeliveryPolicy.exponentialBackoff(Duration.ofMillis(200), Duration.ofMillis(200), 2.0,
+                                                                                                             Duration.ofSeconds(10), MAX_ATTEMPTS))
                                                         .build(),
                                              this::record);
         }

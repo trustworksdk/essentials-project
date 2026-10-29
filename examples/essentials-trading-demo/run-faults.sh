@@ -7,6 +7,9 @@
 #   ./run-faults.sh F-1                  # damaged, duplicated and reordered webhook copies
 #   ./run-faults.sh F-2                  # every webhook answered 503 for 60 s from the open of business day 4
 #   ./run-faults.sh F-3                  # the instance SIGKILLed at the open of business day 4, started 10 s later
+#   ./run-faults.sh F-3 --instances=2    # two instances (8080, 8081); the second is killed (--fault-instance=1: the first)
+#   ./run-faults.sh F-3 --instances=2 --fault-duration=PT60S  # started again 60 s after the kill, past the 30 s
+#                                                             # lease TTL, so the survivor takes the dead one's units
 #   ./run-faults.sh F-4                  # the exchange restarted at the open of business day 4
 #   ./run-faults.sh F-4 --fault-target=gateway   # the payment-gateway instead
 #   ./run-faults.sh F-4 --fault-duration=PT30S  # held down 30 s (stop, wait, start) instead of a plain restart
@@ -53,10 +56,22 @@ mkdir -p "$OUT"
 log() { echo "$(date +%T) [$RUN] $*"; }
 TARGET=exchange
 HOLD_DOWN=
+INSTANCES=1
+KILL=
+DRIVER_ARGS=()
 for arg in "$@"; do
   if [[ $arg == --fault-target=* ]]; then TARGET=${arg#--fault-target=}; fi
   if [[ $arg =~ ^--fault-duration=PT([0-9]+)S$ ]]; then HOLD_DOWN=${BASH_REMATCH[1]}; fi
+  if [[ $arg == --fault-instance=* ]]; then KILL=${arg#--fault-instance=}; fi
+  if [[ $arg == --instances=* ]]; then INSTANCES=${arg#--instances=}; continue; fi # the script's, not the driver's
+  DRIVER_ARGS+=("$arg")
 done
+# Design §6 / Q-8: with two, kill the one that is not the simulators' webhook target unless told otherwise
+if [[ -z $KILL ]]; then KILL=$INSTANCES; DRIVER_ARGS+=("--fault-instance=$KILL"); fi
+BASE_URLS=$(for n in $(seq 1 "$INSTANCES"); do printf 'http://localhost:%d,' $((8079 + n)); done)
+BASE_URLS=${BASE_URLS%,}
+# Instance n's log and pid file; instance 1 keeps the single-instance names
+suffix() { [[ $1 == 1 ]] && echo "" || echo "-$1"; }
 CONTAINER=essentials-trading-demo-$([[ $TARGET == gateway ]] && echo payment-gateway || echo exchange)
 
 # Passes the driver's output through; F-4's window line restarts the target simulator, in the background
@@ -64,8 +79,13 @@ act_on_fault_window() {
   while IFS= read -r line; do
     echo "$line"
     if [[ $FAULT == F-3 && $line == *"fault window open (F-3"* ]]; then
-      (log "fault F-3: kill -9 the instance (pid $(cat "$OUT/app-$RUN.pid"))"; kill -9 "$(cat "$OUT/app-$RUN.pid")"; sleep 10
-       log "fault F-3: starting the instance again"; start_instance; log "fault F-3: started (pid $(cat "$OUT/app-$RUN.pid"))") &
+      (ownership "before the kill"
+       log "fault F-3: kill -9 instance $KILL (pid $(cat "$OUT/app-$RUN$(suffix "$KILL").pid"))"; kill -9 "$(cat "$OUT/app-$RUN$(suffix "$KILL").pid")"
+       sleep "${HOLD_DOWN:-10}"
+       ownership "${HOLD_DOWN:-10} s after the kill"
+       log "fault F-3: starting instance $KILL again"; start_instance "$KILL"; log "fault F-3: started (pid $(cat "$OUT/app-$RUN$(suffix "$KILL").pid"))"
+       wait_for_instance "$KILL"; sleep 30
+       ownership "30 s after it answered again") &
     fi
     if [[ $FAULT == F-4 && $line == *"fault window open (F-4"* ]]; then
       if [[ -z $HOLD_DOWN ]]; then
@@ -94,46 +114,72 @@ if [[ ! -f $classpath_file || pom.xml -nt $classpath_file ]]; then
   mvn -q dependency:build-classpath -Dmdep.outputFile="$classpath_file" -Dmdep.includeScope=runtime >/dev/null
 fi
 
-# F-3 starts it a second time, into the same log, under the same instance id (Q-8: one instance first)
+# Instance n: port 8079+n, instance id demo-n. F-3 starts one a second time, into the same log, under the same id.
+# With two, each is capped at 3 GB of heap: by default a JVM may take 40 % of the machine, and three JVMs (two instances
+# and the driver) beside PostgreSQL's cache do not fit that.
 start_instance() {
-  "$JAVA" -Dserver.port=8080 -cp "target/classes:$(cat "$classpath_file")" \
+  local n=$1 heap=()
+  if [[ $INSTANCES -gt 1 ]]; then heap=(-Xmx3g); fi
+  "$JAVA" "${heap[@]}" -Dserver.port=$((8079 + n)) -cp "target/classes:$(cat "$classpath_file")" \
     dk.trustworks.essentials.examples.trading.TradingDemoApplication \
     --spring.profiles.active=compose,simulators --spring.docker.compose.enabled=false \
     --spring.datasource.url="jdbc:postgresql://localhost:5432/$DB" \
-    --essentials.shard-owned-queue.instance-id=demo-1 >> "$OUT/app-$RUN.log" 2>&1 &
-  echo $! > "$OUT/app-$RUN.pid"
+    --essentials.shard-owned-queue.instance-id=demo-$n >> "$OUT/app-$RUN$(suffix "$n").log" 2>&1 &
+  echo $! > "$OUT/app-$RUN$(suffix "$n").pid"
 }
 
-log "starting the instance"
-: > "$OUT/app-$RUN.log"
-start_instance
-# The pid lives in a file: F-3 restarts the instance from inside a pipeline, whose subshell cannot set the script's variables
-stop_instance() {
-  local pid; pid=$(cat "$OUT/app-$RUN.pid")
-  kill -TERM "$pid" 2>/dev/null || return 0
-  for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || return 0; sleep 1; done
-}
-trap stop_instance EXIT
-APP=$(cat "$OUT/app-$RUN.pid")
 # /login answers before the seeded users exist; an operator call answers only once they do
-for _ in $(seq 1 180); do
-  if [[ $(curl -s -o /dev/null -w '%{http_code}' -u operator@demo.local:operator-demo-password 'localhost:8080/api/admin/load-report?runPrefix=none' || true) == 200 ]]; then
-    break
-  fi
-  kill -0 $APP 2>/dev/null || { log "the instance died; see $OUT/app-$RUN.log"; exit 1; }
-  sleep 1
+wait_for_instance() {
+  local n=$1
+  for _ in $(seq 1 180); do
+    if [[ $(curl -s -o /dev/null -w '%{http_code}' -u operator@demo.local:operator-demo-password "localhost:$((8079 + n))/api/admin/load-report?runPrefix=none" || true) == 200 ]]; then
+      return 0
+    fi
+    kill -0 "$(cat "$OUT/app-$RUN$(suffix "$n").pid")" 2>/dev/null || { log "instance $n died; see $OUT/app-$RUN$(suffix "$n").log"; return 1; }
+    sleep 1
+  done
+  return 1
+}
+
+# Who owns what: the shard-owned engine's units per owner (and the highest fence), the fenced locks - which hold the
+# exclusive event processors - per lock manager (host:pid), and the instances' pids to read those against
+ownership() {
+  local pids=""
+  for n in $(seq 1 "$INSTANCES"); do pids+="demo-$n=$(cat "$OUT/app-$RUN$(suffix "$n").pid") "; done
+  log "ownership, $1: pids $pids| units $($PSQL -d $DB -c "select coalesce(owner, '-') || ' ' || count(*) || ' (fence max ' || max(fence) || ')' from shard_queue_lease group by owner order by owner" | tr '\n' ';') | locks $($PSQL -d $DB -c "select locked_by_lockmanager_instance_id || ' ' || count(*) from fenced_locks where locked_by_lockmanager_instance_id is not null group by locked_by_lockmanager_instance_id order by 1" | tr '\n' ';')"
+}
+
+# Pids live in files: F-3 restarts an instance from inside a pipeline, whose subshell cannot set the script's variables
+stop_instances() {
+  for n in $(seq 1 "$INSTANCES"); do kill -TERM "$(cat "$OUT/app-$RUN$(suffix "$n").pid")" 2>/dev/null || true; done
+  for n in $(seq 1 "$INSTANCES"); do
+    local pid; pid=$(cat "$OUT/app-$RUN$(suffix "$n").pid")
+    for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+  done
+}
+trap stop_instances EXIT
+
+for n in $(seq 1 "$INSTANCES"); do
+  log "starting instance $n"
+  : > "$OUT/app-$RUN$(suffix "$n").log"
+  start_instance "$n"
+  wait_for_instance "$n" || exit 1
 done
 
 log "running the load with fault $FAULT"
 set +e
 ./run-load.sh --population=2000 --active-per-day=1000 --orders-per-second=100 --burst-orders-per-second=300 \
-  --business-days=10 --max-in-flight=2048 --fault="$FAULT" --run-token="$RUN" "$@" 2>&1 | act_on_fault_window | tee "$OUT/driver-$RUN.txt"
+  --business-days=10 --max-in-flight=2048 --base-urls="$BASE_URLS" --fault="$FAULT" --run-token="$RUN" "${DRIVER_ARGS[@]}" 2>&1 \
+  | act_on_fault_window | tee "$OUT/driver-$RUN.txt"
 status=${PIPESTATUS[0]}
 set -e
 # The engine's per-key ordering warnings: on UUID keys they are the simulators' events, reordered on the network
 # (integration/CLAUDE.md); on our own ids (LD-..., LDA-...) they would be the brokerage's (F-3's "none beyond the network's")
-ordering=$(grep -c "is being delivered key_order" "$OUT/app-$RUN.log" || true)
-ours=$(grep "is being delivered key_order" "$OUT/app-$RUN.log" | grep -cvE "key '[0-9a-f]{8}-[0-9a-f]{4}-" || true)
+if [[ $FAULT == F-3 ]]; then ownership "at the end"; fi
+logs=("$OUT"/app-"$RUN".log)
+for n in $(seq 2 "$INSTANCES"); do logs+=("$OUT/app-$RUN-$n.log"); done
+ordering=$(cat "${logs[@]}" | grep -c "is being delivered key_order" || true)
+ours=$(cat "${logs[@]}" | grep "is being delivered key_order" | grep -cvE "key '[0-9a-f]{8}-[0-9a-f]{4}-" || true)
 log "key-order warnings: $ordering, on our own keys: $ours"
 log "driver exit $status; report target/load-driver/load-$RUN.json"
 exit "$status"

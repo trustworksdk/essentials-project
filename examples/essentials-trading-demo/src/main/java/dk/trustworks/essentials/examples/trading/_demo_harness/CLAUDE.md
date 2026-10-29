@@ -400,7 +400,15 @@ every check passed; the full report goes to `target/load-driver/load-<run>.json`
   in again on its `401`, and skips inside a fault window and 30 s after it count apart
   (`skipped:driver-saturated-in-fault-window`). Its checks: the instance went down, came back, booked p99 under 10 s
   from 30 s to 2 minutes after. `run-faults.sh` ends every run with the engine's key-order warnings, split into UUID
-  keys (the simulators' events, reordered on the network) and our own ids.
+  keys (the simulators' events, reordered on the network) and our own ids. `--fault-duration` is how long the instance
+  stays down (default 10 s).
+- **`run-faults.sh --instances=2`** (script only, not passed to the driver) starts `demo-1` on 8080 and `demo-2` on
+  8081, each `-Xmx3g`, logs `app-<run>.log` / `app-<run>-2.log`; the driver pins customers to both. F-3 then kills
+  instance 2 (not the simulators' webhook target, design §6) unless `--fault-instance=1`, and logs ownership - the
+  engine's units per owner with their highest fence, and the fenced locks per lock manager (`host:pid`) - before the
+  kill, after it, 30 s after the instance answers again and at the end. Keep it down past the engine's 30 s lease TTL
+  (`--fault-duration=PT60S`) or it takes its own units back before the survivor can. Correctness evidence only: both
+  JVMs share the 8 cores, so its latency says nothing about scaling.
 - **`--fault=F-4`** (`--fault-target=exchange|gateway`): at the open of business day `--fault-at-day` the driver prints
   `fault window open (F-4 <target>)`, on which `run-faults.sh` restarts that simulator's container - `docker restart`,
   or with `--fault-duration=PT<n>S` `docker stop`, n seconds, `docker start`. The driver times the outage from the
@@ -735,6 +743,8 @@ customers, 1 000 active, 100/s with 300/s at opens, 10 business days), fresh dat
 | F-1, a / b / c | 49 597 / 49 081 / 49 534 | 365 / 2 632, 406 / 2 547, 369 / 2 480 ms | all 11 pass, each run |
 | F-2, `pm-f2-b` | 49 675 | 227 / 5 017 ms | all 12 pass |
 | F-3, instance killed (down 44.6 s), `pm-f3-a` | 46 826 | 237 / 16 857 ms | all 10 pass |
+| F-3, 2 instances, instance 2 killed for 60 s, `pm-f3-2i-k2` | 44 999 | 274 / 29 492 ms | all 10 pass |
+| F-3, 2 instances, instance 1 killed for 60 s, `pm-f3-2i-k1` | 43 662 | 286 / 48 282 ms | all 10 pass |
 | F-4 exchange, restart (down 10.8 s), `pm-f4x-r2` | 51 953 | 217 / 12 440 ms | all 11 pass |
 | F-4 exchange, held down 30 s (down 40.9 s), `pm-f4x-h2` | 53 373 | 216 / 43 355 ms | all 11 pass |
 | F-4 gateway, restart (down 0.2 s), `pm-f4g-r` | 49 734 | 214 / 510 ms | all 10 pass |
@@ -790,3 +800,21 @@ customers, 1 000 active, 100/s with 300/s at opens, 10 business days), fresh dat
   reordered on the network, 1 100-1 300 in runs without a kill - and none on our own ids: the restart, under the same
   instance id, took its leases back without delivering one of our keys out of order (Q-8: one instance; the
   two-instance run, where the survivor takes the units over, is §6's first).
+- **F-3 on two instances: the survivor takes everything, and nothing is lost.** Killed for 60 s, past the lease TTL:
+  with instance 2 killed, instance 1 held all 2 244 units within the minute (fence 1 -> 3); with instance 1 killed -
+  which held every one of the 41 fenced locks, so every exclusive processor - instance 2 took all 41 locks 11-13 s
+  after the kill (the 15 s lock timeout) and all the units. The restarted instance got units back (fence bumped again).
+  Every order, fill and payment reached its outcome, no dead letters, 0 key-order warnings on our own keys (2 389 and
+  2 730 on the simulators'). Booked p99 per 10 s bucket back to ~340-420 ms within ~40 s of the instance answering
+  again (it answered 94-108 s after the kill: 60 s down plus start-up on a loaded machine).
+- **The two-instance smoke found a defect the one-instance run could not: 438 settlement reports dead-lettered.** A
+  report waits for its fill, which comes through `Orders:ExchangeReports`; the dead instance's units of that queue stay
+  unserved for the 30 s lease TTL, and `Settlement:Reports` retried for only 10 s (200 ms x 50) - 219 reports used
+  their attempts up and 219 behind them on the same keys followed. With one instance everything stops together, the
+  settlement inbox included. Its backoff now grows to ~7 minutes (`settlement/CLAUDE.md`); both full runs had no dead
+  letters.
+- **Open: a later instance gets only 306 of the 2 244 units, every time** - before and after a kill, whichever started
+  last (2 112 ordered units, 33 queues x 64, and 132 unordered). The ordered lane sheds by draining, never by releasing
+  (engine `CLAUDE.md`), so under steady load it may never hand units to a newcomer. Not investigated; the engine's,
+  not the demo's. Likewise every fenced lock - every exclusive processor - sits on whichever instance started first, and
+  moves as one block on a crash.
