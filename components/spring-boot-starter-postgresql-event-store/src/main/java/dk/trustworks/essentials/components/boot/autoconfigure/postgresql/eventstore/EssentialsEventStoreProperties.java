@@ -78,6 +78,8 @@ public class EssentialsEventStoreProperties {
 
     private final CausationProperties causation = new CausationProperties();
 
+    private final EventProcessorProperties eventProcessors = new EventProcessorProperties();
+
     /**
      * Should the Tracing produces only include all operations or only top level operations (default false)
      *
@@ -286,6 +288,15 @@ public class EssentialsEventStoreProperties {
      */
     public CausationProperties getCausation() {
         return causation;
+    }
+
+    /**
+     * {@code EventProcessor}s built from the starter's {@code EventProcessorDependencies}
+     *
+     * @return the {@link EventProcessorProperties}
+     */
+    public EventProcessorProperties getEventProcessors() {
+        return eventProcessors;
     }
 
     /**
@@ -948,6 +959,47 @@ public class EssentialsEventStoreProperties {
          */
         public void setIndexEnabled(boolean indexEnabled) {
             this.indexEnabled = indexEnabled;
+        }
+    }
+
+    /**
+     * {@code EventProcessor}s built from the starter's {@code EventProcessorDependencies}.
+     * <p>
+     * <b>YAML example:</b>
+     * <pre>{@code
+     * essentials:
+     *   eventstore:
+     *     event-processors:
+     *       competing-inbox-consumers: true
+     * }</pre>
+     */
+    public static class EventProcessorProperties {
+        private boolean competingInboxConsumers = false;
+
+        /**
+         * Do every instance's {@code EventProcessor}s handle their {@code Inbox} (default {@code false})
+         *
+         * @return whether competing inbox consumers are enabled
+         */
+        public boolean isCompetingInboxConsumers() {
+            return competingInboxConsumers;
+        }
+
+        /**
+         * Opt-in (default {@code false}): an {@code EventProcessor} that does not override
+         * {@code getInboxMessageConsumptionMode()} consumes its {@code Inbox} with {@code GlobalCompetingConsumers}, so its
+         * {@code @MessageHandler}s run on every instance instead of the one holding the inbox's lock - but only where the
+         * queue implementation keeps an ordered message key in order across instances (the shard-owned queue engine);
+         * elsewhere it stays on {@code SingleGlobalConsumer} and says so at start. Subscriptions stay exclusive.
+         * <p>
+         * Enable it only for processors whose handlers may run on several instances at once (for different aggregates):
+         * none relying on in-memory state across aggregates or on being a downstream's only caller. Handlers of different
+         * aggregates that write one shared stream conflict on it a little more often (retried).
+         *
+         * @param competingInboxConsumers enable competing inbox consumers where the queue keeps key order across instances
+         */
+        public void setCompetingInboxConsumers(boolean competingInboxConsumers) {
+            this.competingInboxConsumers = competingInboxConsumers;
         }
     }
 

@@ -318,6 +318,17 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     }
 
     /**
+     * {@code true}: an ordered message's key maps to one ordered unit, a unit has one owner cluster-wide (a lease, renewed
+     * by the owner's heartbeat), and an owner that lost its lease is fenced out of acknowledging. So competing consumers
+     * on several instances still deliver a key in {@code key_order}; a unit only changes owner by draining, or after its
+     * owner stopped renewing for the lease TTL.
+     */
+    @Override
+    public boolean keepsKeyOrderAcrossInstances() {
+        return true;
+    }
+
+    /**
      * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@link UnitOfWork} or Spring transaction?
      * Default {@code false}: such an enqueue commits on its own, and each call site's first one is logged at WARN. In Spring Boot:
      * {@value EnqueueOutsideUnitOfWorkGuard#REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}. See {@link EnqueueOutsideUnitOfWorkGuard}.

@@ -21,6 +21,8 @@ and two lock waits removed.
   repositories built at startup (§1.1.2), and the default snapshot interval is 1000 events (§1.1.3).
 - Handler dispatch (`shared`): every aggregate event applied and every handler call no longer builds log messages that
   trace logging is off for.
+- Event processors (opt-in): on the shard-owned engine, every instance can handle an `EventProcessor`'s inbox instead of
+  the one holding its lock (§2.7).
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1). The
 shard-owned adapter writes a new message format, and **0.60.x and this release must not run side by side against the
@@ -228,6 +230,42 @@ Measured in the trading demo (one instance, market-open rushes of 300 orders/s, 
 the JVM's CPU samples while trading fell by almost half, from ~19 % to ~11 %, and the JVM took ~9 % fewer samples in
 total. Aggregate rehydration fell from ~22 % to ~17 % of the samples. Latency was unchanged within the spread, because the
 demo is not CPU-bound at that load.
+
+### 2.7 `EventProcessor`: every instance can handle the inbox, opt-in (`postgresql-event-store`, foundation, shard-owned adapter, Spring Boot starter)
+
+An `EventProcessor`'s subscription is exclusive, and so, by default, is its `Inbox`, where its `@MessageHandler`s run:
+`SingleGlobalConsumer` takes a fenced lock of its own, so with several instances every handler of every processor runs on
+whichever instance took the locks first - typically the first one started. That default is required on
+`PostgresqlDurableQueues`, which keeps an ordered key in order on one node only. The shard-owned engine keeps it in order
+across instances (one owner per unit, fenced), so there the handlers can run on every instance.
+
+New, and off unless you turn it on:
+
+```yaml
+essentials:
+  eventstore:
+    event-processors:
+      competing-inbox-consumers: true   # default false
+```
+
+or `EventProcessorDependencies.builder().setCompetingInboxConsumers(true)` without Spring. A processor that does not
+override `getInboxMessageConsumptionMode()` then consumes its inbox with `GlobalCompetingConsumers` - but only where the
+new `DurableQueues.keepsKeyOrderAcrossInstances()` / `Inboxes.keepsKeyOrderAcrossInstances()` is `true` (the shard-owned
+adapter; `false` by default, so `PostgresqlDurableQueues` and MongoDB). Elsewhere the processor stays on
+`SingleGlobalConsumer` and logs one WARN at start saying why. A processor's own override still decides; one that chooses
+`GlobalCompetingConsumers` on queues that do not keep key order now gets a WARN at start (it always risked handling one
+aggregate's events out of order on two instances).
+
+Before you turn it on: the handlers then run on several instances at once, for different aggregates. Keep it off - or
+override `getInboxMessageConsumptionMode()` to `SingleGlobalConsumer` - for a processor whose handlers keep in-memory
+state across aggregates, or call something that must have one caller only. Handlers of different aggregates that write
+one shared stream conflict on it a little more often; the inbox retries them as before.
+
+Measured in the trading demo (two instances in one 8-core container, so correctness, not scaling): a second instance
+went from 306 to 510 of the 2 244 shard-owned units, fenced locks from 41 to 35, and each processor inbox's deliveries
+split about evenly (order router 6 202 / 6 495, order ledger 10 639 / 11 221) with 0 ordering violations. Killing the
+instance that held every lock lost nothing. The order ledger's inbox retried 2.9 % of its deliveries on two instances
+against 2.0 % on one, all successfully.
 
 ---
 

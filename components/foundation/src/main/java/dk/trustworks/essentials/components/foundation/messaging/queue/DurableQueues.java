@@ -274,6 +274,27 @@ public interface DurableQueues extends Lifecycle {
     }
 
     /**
+     * Whether this implementation delivers one {@link OrderedMessage#getKey()}'s messages in
+     * {@link OrderedMessage#getOrder()} even when several instances (processes) consume the same queue as competing
+     * consumers.
+     * <p>
+     * Most implementations coordinate ordered delivery within one {@link DurableQueues} instance only, so in a cluster an
+     * ordered queue needs a single consumer ({@link MessageConsumptionMode#SingleGlobalConsumer} for an {@link Inbox}).
+     * An implementation that gives each key a single owner across instances - and fences a former owner out - can
+     * answer {@code true}, letting every instance consume the queue without reordering a key. Callers use it to decide
+     * whether competing consumers are safe for ordered messages ({@code EventProcessor}'s opt-in to competing inbox
+     * consumers).
+     * <p>
+     * Answer {@code true} only for a guarantee, never for a likelihood: a caller acting on it gives up the single consumer.
+     *
+     * @return {@code true} if a key's ordered messages stay in order across competing consumers on several instances;
+     * {@code false} by default
+     */
+    default boolean keepsKeyOrderAcrossInstances() {
+        return false;
+    }
+
+    /**
      * Start an asynchronous message consumer.<br>
      * Note: There can only be one {@link DurableQueueConsumer} per {@link QueueName} per {@link DurableQueues} instance<br>
      * Log levels of interest:

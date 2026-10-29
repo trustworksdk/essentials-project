@@ -550,6 +550,33 @@ Switching either way keeps the processor's resume point and fenced lock (same su
 `SubscriptionErrorPolicy` applies to the batch as a whole, and an override of `forwardEventToInbox` still applies to
 each event in it.
 
+#### Several instances: who runs the handlers (opt-in `competing-inbox-consumers`)
+
+The subscription is exclusive, and by default so is the inbox: `SingleGlobalConsumer` puts the `@MessageHandler`s behind
+a fenced lock of their own (`Inbox:<processorName>`), so with several instances they all run on whichever instance holds
+that lock - usually the first one started. On the shard-owned queue engine, which keeps an ordered key in order across
+instances, every instance can handle the inbox instead. Opt-in, off by default:
+
+```yaml
+essentials:
+  eventstore:
+    event-processors:
+      competing-inbox-consumers: true
+```
+
+(Without Spring: `EventProcessorDependencies.builder()...setCompetingInboxConsumers(true)`.) A processor that does not
+override `getInboxMessageConsumptionMode()` then uses `GlobalCompetingConsumers` where
+`Inboxes.keepsKeyOrderAcrossInstances()` is `true` (the shard-owned adapter), and stays on `SingleGlobalConsumer` with a
+start-up WARN where it is not (`PostgresqlDurableQueues`, MongoDB) - one aggregate's events are always handled in order.
+
+- Turn it on only for processors whose handlers may run on several instances at once, for different aggregates: not for
+  one keeping in-memory state across aggregates, or calling something that takes one caller only. Override
+  `getInboxMessageConsumptionMode()` to `SingleGlobalConsumer` to keep such a processor on one instance.
+- Never return `GlobalCompetingConsumers` from the override on queues that do not keep key order across instances: one
+  aggregate's events can then be handled out of order on two instances. `start()` WARNs about it.
+- Handlers of different aggregates writing one shared stream (an account all orders book against) conflict on it a
+  little more often across instances; the inbox redelivers them as usual.
+
 #### Blocking I/O in a handler: `UnitOfWorkMode.NONE`
 
 A `@MessageHandler` method runs inside a `UnitOfWork` by default — i.e. holding a pooled connection with an open transaction. For a handler that blocks on an external system (HTTP, SOAP, SFTP, a slow gRPC call) that connection sits in `idle in transaction` for the whole round trip, one per parallel consumer, writing nothing. Declare such a handler `UnitOfWorkMode.NONE` and wrap only the database work that follows it:

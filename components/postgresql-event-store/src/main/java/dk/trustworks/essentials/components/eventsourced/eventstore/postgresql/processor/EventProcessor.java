@@ -216,6 +216,7 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     protected final Logger log = LoggerFactory.getLogger(this.getClass());
 
     private final Inboxes                       inboxes;
+    private final boolean                       competingInboxConsumers;
     private       Consumer<Message>             inboxMessageHandlerDelegate;
     private       Inbox                         inbox;
     private       PatternMatchingMessageHandler patternMatchingInboxMessageHandlerDelegate;
@@ -232,7 +233,8 @@ public abstract class EventProcessor extends AbstractEventProcessor {
         this(requireNonNull(eventProcessorDependencies, "No eventProcessorDependencies provided").eventStoreSubscriptionManager,
              eventProcessorDependencies.inboxes,
              eventProcessorDependencies.commandBus,
-             eventProcessorDependencies.messageHandlerInterceptors);
+             eventProcessorDependencies.messageHandlerInterceptors,
+             eventProcessorDependencies.competingInboxConsumers);
     }
 
     /**
@@ -253,8 +255,17 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                              Inboxes inboxes,
                              DurableLocalCommandBus commandBus,
                              List<MessageHandlerInterceptor> messageHandlerInterceptors) {
+        this(eventStoreSubscriptionManager, inboxes, commandBus, messageHandlerInterceptors, false);
+    }
+
+    private EventProcessor(EventStoreSubscriptionManager eventStoreSubscriptionManager,
+                           Inboxes inboxes,
+                           DurableLocalCommandBus commandBus,
+                           List<MessageHandlerInterceptor> messageHandlerInterceptors,
+                           boolean competingInboxConsumers) {
         super(eventStoreSubscriptionManager, commandBus, messageHandlerInterceptors);
         this.inboxes = requireNonNull(inboxes, "No inboxes instance provided");
+        this.competingInboxConsumers = competingInboxConsumers;
     }
 
     /**
@@ -311,9 +322,11 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                 warnOnceIfEventStoreIsNoAwaitedGapInspector();
                 UnhandledEventTypes.logHandledMessageTypes(processorName, this);
                 unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingInboxMessageHandlerDelegate, UnhandledEventTypes.Reporting.DEBUG);
+                var inboxMessageConsumptionMode = getInboxMessageConsumptionMode();
+                logInboxConsumptionMode(processorName, inboxMessageConsumptionMode);
                 inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
                                                             .inboxName(InboxName.of(processorName))
-                                                            .messageConsumptionMode(getInboxMessageConsumptionMode())
+                                                            .messageConsumptionMode(inboxMessageConsumptionMode)
                                                             .numberOfParallelMessageConsumers(getNumberOfParallelInboxMessageConsumers())
                                                             .redeliveryPolicy(getInboxRedeliveryPolicy())
                                                             .build(),
@@ -537,12 +550,43 @@ public abstract class EventProcessor extends AbstractEventProcessor {
 
     /**
      * Get the {@link MessageConsumptionMode} used by the consume event messages forwarded to the underlying {@link Inbox}<br>
-     * Default is {@link MessageConsumptionMode#SingleGlobalConsumer}
+     * Default is {@link MessageConsumptionMode#SingleGlobalConsumer}: one instance cluster-wide runs the {@code @MessageHandler}s,
+     * behind a {@code FencedLock} of the {@link Inbox}'s own. With the opt-in
+     * {@link EventProcessorDependencies#competingInboxConsumers} it is {@link MessageConsumptionMode#GlobalCompetingConsumers} -
+     * every instance handles the {@link Inbox} - where {@link Inboxes#keepsKeyOrderAcrossInstances()}, so one aggregate's
+     * events are still handled in order. The subscription stays exclusive either way.
+     * <p>
+     * Override it to decide per processor. Returning {@link MessageConsumptionMode#GlobalCompetingConsumers} on {@link Inboxes}
+     * that do not keep key order across instances lets one aggregate's events be handled out of order on two instances;
+     * {@link #start()} logs a WARN for it.
      *
      * @return the {@link MessageConsumptionMode} used by the consume event messages forwarded to the underlying {@link Inbox}
      */
     protected MessageConsumptionMode getInboxMessageConsumptionMode() {
-        return MessageConsumptionMode.SingleGlobalConsumer;
+        return competingInboxConsumers && inboxes.keepsKeyOrderAcrossInstances()
+               ? MessageConsumptionMode.GlobalCompetingConsumers
+               : MessageConsumptionMode.SingleGlobalConsumer;
+    }
+
+    /**
+     * Says, once per start, what the inbox consumption mode means here when it is not the plain default: competing consumers
+     * in use, opted into but unavailable, or chosen where key order across instances is not kept.
+     */
+    private void logInboxConsumptionMode(String processorName, MessageConsumptionMode mode) {
+        var keepsKeyOrder = inboxes.keepsKeyOrderAcrossInstances();
+        if (mode == MessageConsumptionMode.GlobalCompetingConsumers && !keepsKeyOrder) {
+            log.warn("[{}] Inbox consumed with GlobalCompetingConsumers, but {} does not keep an ordered message key in order across "
+                             + "instances: with more than one instance, one aggregate's events can be handled out of order. Use "
+                             + "SingleGlobalConsumer, or a queue implementation that keeps key order across instances",
+                     processorName, inboxes.getClass().getSimpleName());
+        } else if (mode == MessageConsumptionMode.GlobalCompetingConsumers) {
+            log.info("[{}] Inbox consumed with GlobalCompetingConsumers: every instance handles it, one aggregate's events stay in order",
+                     processorName);
+        } else if (competingInboxConsumers && !keepsKeyOrder) {
+            log.warn("[{}] Competing inbox consumers were enabled, but {} does not keep an ordered message key in order across "
+                             + "instances: staying on SingleGlobalConsumer, one instance handles the Inbox",
+                     processorName, inboxes.getClass().getSimpleName());
+        }
     }
 
     /**
