@@ -393,13 +393,21 @@ every check passed; the full report goes to `target/load-driver/load-<run>.json`
   booked p99 under 10 s from 30 s to 2 minutes after the window. `run-faults.sh F-2` starts the simulators with
   `simulators/compose.outage.yml`: `webhooks.max_attempts` 4 instead of 10. Their backoff starts at 500 ms and doubles
   (cap 300 s, jitter), so by default a delivery lives ~4 minutes and a 60 s outage dead-letters nothing.
+- **`--fault=F-3`**: at the open of business day `--fault-at-day` the driver prints `fault window open (F-3)`, on which
+  `run-faults.sh` sends the instance `kill -9`, waits 10 s and starts it again (same instance id, same log, pid in
+  `target/faults/app-<run>.pid`). The driver times the outage from `/actuator/health`; a placement that gets no answer
+  is sent again with the same `orderId` every 500 ms (Q-7 - `PlaceOrder` ignores an id it has), a lost session logs
+  in again on its `401`, and skips inside a fault window and 30 s after it count apart
+  (`skipped:driver-saturated-in-fault-window`). Its checks: the instance went down, came back, booked p99 under 10 s
+  from 30 s to 2 minutes after. `run-faults.sh` ends every run with the engine's key-order warnings, split into UUID
+  keys (the simulators' events, reordered on the network) and our own ids.
 - **`--fault=F-4`** (`--fault-target=exchange|gateway`): at the open of business day `--fault-at-day` the driver prints
   `fault window open (F-4 <target>)`, on which `run-faults.sh` restarts that simulator's container - `docker restart`,
   or with `--fault-duration=PT<n>S` `docker stop`, n seconds, `docker start`. The driver times the outage from the
   simulator's `/health`. Its checks: the simulator went down, came back, booked p99 under 10 s from 30 s to 2 minutes
   after, and for the exchange every instrument quoted again within 30 s. A plain restart lasts as long as the
   container's shutdown: the exchange ignores SIGTERM (Docker's 10 s stop timeout), the gateway stops in 0.2 s.
-- **`./run-faults.sh <none|F-1|F-2|F-4|F-5> [driver arguments]`** runs one fault on a database (`trading_faults`) and
+- **`./run-faults.sh <none|F-1|F-2|F-3|F-4|F-5> [driver arguments]`** runs one fault on a database (`trading_faults`) and
   simulators of its own: recreates the exchange and gateway containers with their two volumes only (never `down -v`),
   recreates the database and its CDC slot, starts one instance with plain `java` from `target/classes` (C2, not
   `spring-boot:run`), waits for an authenticated operator call, runs `run-load.sh` with the decided fault profile
@@ -726,6 +734,7 @@ customers, 1 000 active, 100/s with 300/s at opens, 10 business days), fresh dat
 | no fault, a / b / c | 48 807 / 49 228 / 49 717 | 217 / 480, 209 / 367, 217 / 436 ms | all 7 pass, each run |
 | F-1, a / b / c | 49 597 / 49 081 / 49 534 | 365 / 2 632, 406 / 2 547, 369 / 2 480 ms | all 11 pass, each run |
 | F-2, `pm-f2-b` | 49 675 | 227 / 5 017 ms | all 12 pass |
+| F-3, instance killed (down 44.6 s), `pm-f3-a` | 46 826 | 237 / 16 857 ms | all 10 pass |
 | F-4 exchange, restart (down 10.8 s), `pm-f4x-r2` | 51 953 | 217 / 12 440 ms | all 11 pass |
 | F-4 exchange, held down 30 s (down 40.9 s), `pm-f4x-h2` | 53 373 | 216 / 43 355 ms | all 11 pass |
 | F-4 gateway, restart (down 0.2 s), `pm-f4g-r` | 49 734 | 214 / 510 ms | all 10 pass |
@@ -773,3 +782,11 @@ customers, 1 000 active, 100/s with 300/s at opens, 10 business days), fresh dat
   ~340 ms in the first bucket after the exchange answers.
 - **A gateway restart barely registers.** 0.2 s down touched no payment; held down 30 s, the payment router met the
   unavailable gateway 17 times and every payment still reached its outcome. The order path is untouched either way.
+- **F-3: a killed instance loses nothing.** `kill -9` at the open of day 4, started again 10 s later; it answered
+  44.6 s after the kill (start-up ~35 s). The driver resent 44 301 placements that got no answer and skipped 1 355
+  actions in the window; every order, fill and payment reached its outcome, no dead letters. Orders placed in the
+  outage reached the brokerage when it came back: booked p99 per 10 s bucket 25.5 s, 22.5 s, 13.5 s, 5.5 s, 8.3 s,
+  then ~330 ms from 25 s after it answered. 1 412 key-order warnings, all on UUID keys - the simulators' events
+  reordered on the network, 1 100-1 300 in runs without a kill - and none on our own ids: the restart, under the same
+  instance id, took its leases back without delivering one of our keys out of order (Q-8: one instance; the
+  two-instance run, where the survivor takes the units over, is §6's first).

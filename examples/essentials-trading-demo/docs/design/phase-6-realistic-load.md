@@ -217,7 +217,8 @@ switch), F-4 and F-3 (process control). Each lands with a run recorded in `_demo
 
 F-3 and F-4 need process control the driver should not have. A `run-faults.sh <F-n>` beside `run-load.sh`: recreates
 the database and the simulators (with F-5's settings when asked), starts the instance with the full JIT as a plain
-`java` child of the script - so `$!` is its pid and no pid file is needed -, starts the driver, and on its `fault window open` line kills and restarts the
+`java` child of the script - its pid kept in `target/faults/app-<run>.pid`, because F-3 starts it again from inside the
+pipeline that reads the driver's output, whose subshell cannot hand `$!` back -, starts the driver, and on its `fault window open` line kills and restarts the
 instance or restarts a simulator. It leaves the user's demo database alone, as the profiling runs do.
 
 ### 10.5 Not in this section

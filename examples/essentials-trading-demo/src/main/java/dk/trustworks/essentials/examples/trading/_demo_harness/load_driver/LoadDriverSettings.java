@@ -37,7 +37,9 @@ import java.util.*;
  * @param fault               {@code none}, or the fault of design phase 6 §10 to run under the load: {@code F-1} damaged,
  *                            duplicated and reordered webhook copies from both simulators for the whole run; {@code F-2}
  *                            every instance answers its webhooks {@code 503} for {@code faultDuration} from the open of
- *                            business day {@code faultAtDay}; {@code F-4} {@code run-faults.sh} restarts the
+ *                            business day {@code faultAtDay}; {@code F-3} {@code run-faults.sh} kills the instance
+ *                            ({@code SIGKILL}) at the open of business day {@code faultAtDay} and starts it again 10 s
+ *                            later; {@code F-4} {@code run-faults.sh} restarts the
  *                            {@code faultTarget} simulator at the open of business day {@code faultAtDay}; {@code F-5}
  *                            reconciliation breaks seeded by the simulators (started with them by {@code run-faults.sh}),
  *                            each found one for one and turned into a case
@@ -76,7 +78,7 @@ public record LoadDriverSettings(List<String> baseUrls,
                                  int faultAtDay,
                                  Duration faultDuration,
                                  String faultTarget) {
-    static final Set<String> FAULTS = Set.of("none", "F-1", "F-2", "F-4", "F-5");
+    static final Set<String> FAULTS = Set.of("none", "F-1", "F-2", "F-3", "F-4", "F-5");
 
 
     public static LoadDriverSettings fromArguments(String[] args) {

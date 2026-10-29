@@ -6,6 +6,7 @@
 #   ./run-faults.sh none                 # the same run without a fault, for comparison
 #   ./run-faults.sh F-1                  # damaged, duplicated and reordered webhook copies
 #   ./run-faults.sh F-2                  # every webhook answered 503 for 60 s from the open of business day 4
+#   ./run-faults.sh F-3                  # the instance SIGKILLed at the open of business day 4, started 10 s later
 #   ./run-faults.sh F-4                  # the exchange restarted at the open of business day 4
 #   ./run-faults.sh F-4 --fault-target=gateway   # the payment-gateway instead
 #   ./run-faults.sh F-4 --fault-duration=PT30S  # held down 30 s (stop, wait, start) instead of a plain restart
@@ -23,7 +24,8 @@
 #      (_demo_harness/CLAUDE.md) - and waits until the operator can log in.
 #   4. runs ./run-load.sh with the decided fault profile (Q-10): 2 000 customers, 1 000 active, 100 orders/s with 300/s
 #      at each open, 10 business days.
-#      For F-4 it restarts the simulator when the driver prints its `fault window open` line: `docker restart`, or with
+#      For F-3 it kills the instance (`kill -9`) when the driver prints its `fault window open` line and starts it again
+#      10 s later, appending to the same log. For F-4 it restarts the simulator when the driver prints its `fault window open` line: `docker restart`, or with
 #      --fault-duration=PT<n>S `docker stop`, n seconds, `docker start`. A plain restart is as long as the container's
 #      shutdown: the exchange ignores SIGTERM (10 s, Docker's stop timeout), the gateway stops in a fraction of a second.
 #   5. stops the instance. The exit code is the driver's: 0 only if every check passed.
@@ -33,7 +35,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-FAULT="${1:?usage: run-faults.sh <none|F-1|F-2|F-4|F-5> [driver arguments]}"
+FAULT="${1:?usage: run-faults.sh <none|F-1|F-2|F-3|F-4|F-5> [driver arguments]}"
 shift
 RUN="${RUN_TOKEN:-$(echo "$FAULT" | tr -d '-' | tr 'A-Z' 'a-z')$(date +%H%M%S)}"
 DB=trading_faults
@@ -61,6 +63,10 @@ CONTAINER=essentials-trading-demo-$([[ $TARGET == gateway ]] && echo payment-gat
 act_on_fault_window() {
   while IFS= read -r line; do
     echo "$line"
+    if [[ $FAULT == F-3 && $line == *"fault window open (F-3"* ]]; then
+      (log "fault F-3: kill -9 the instance (pid $(cat "$OUT/app-$RUN.pid"))"; kill -9 "$(cat "$OUT/app-$RUN.pid")"; sleep 10
+       log "fault F-3: starting the instance again"; start_instance; log "fault F-3: started (pid $(cat "$OUT/app-$RUN.pid"))") &
+    fi
     if [[ $FAULT == F-4 && $line == *"fault window open (F-4"* ]]; then
       if [[ -z $HOLD_DOWN ]]; then
         (log "fault F-4: restarting $CONTAINER"; docker restart "$CONTAINER" >/dev/null; log "fault F-4: $CONTAINER restarted") &
@@ -88,14 +94,27 @@ if [[ ! -f $classpath_file || pom.xml -nt $classpath_file ]]; then
   mvn -q dependency:build-classpath -Dmdep.outputFile="$classpath_file" -Dmdep.includeScope=runtime >/dev/null
 fi
 
+# F-3 starts it a second time, into the same log, under the same instance id (Q-8: one instance first)
+start_instance() {
+  "$JAVA" -Dserver.port=8080 -cp "target/classes:$(cat "$classpath_file")" \
+    dk.trustworks.essentials.examples.trading.TradingDemoApplication \
+    --spring.profiles.active=compose,simulators --spring.docker.compose.enabled=false \
+    --spring.datasource.url="jdbc:postgresql://localhost:5432/$DB" \
+    --essentials.shard-owned-queue.instance-id=demo-1 >> "$OUT/app-$RUN.log" 2>&1 &
+  echo $! > "$OUT/app-$RUN.pid"
+}
+
 log "starting the instance"
-"$JAVA" -Dserver.port=8080 -cp "target/classes:$(cat "$classpath_file")" \
-  dk.trustworks.essentials.examples.trading.TradingDemoApplication \
-  --spring.profiles.active=compose,simulators --spring.docker.compose.enabled=false \
-  --spring.datasource.url="jdbc:postgresql://localhost:5432/$DB" \
-  --essentials.shard-owned-queue.instance-id=demo-1 > "$OUT/app-$RUN.log" 2>&1 &
-APP=$!
-trap 'kill -TERM $APP 2>/dev/null || true; wait $APP 2>/dev/null || true' EXIT
+: > "$OUT/app-$RUN.log"
+start_instance
+# The pid lives in a file: F-3 restarts the instance from inside a pipeline, whose subshell cannot set the script's variables
+stop_instance() {
+  local pid; pid=$(cat "$OUT/app-$RUN.pid")
+  kill -TERM "$pid" 2>/dev/null || return 0
+  for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || return 0; sleep 1; done
+}
+trap stop_instance EXIT
+APP=$(cat "$OUT/app-$RUN.pid")
 # /login answers before the seeded users exist; an operator call answers only once they do
 for _ in $(seq 1 180); do
   if [[ $(curl -s -o /dev/null -w '%{http_code}' -u operator@demo.local:operator-demo-password 'localhost:8080/api/admin/load-report?runPrefix=none' || true) == 200 ]]; then
@@ -111,5 +130,10 @@ set +e
   --business-days=10 --max-in-flight=2048 --fault="$FAULT" --run-token="$RUN" "$@" 2>&1 | act_on_fault_window | tee "$OUT/driver-$RUN.txt"
 status=${PIPESTATUS[0]}
 set -e
+# The engine's per-key ordering warnings: on UUID keys they are the simulators' events, reordered on the network
+# (integration/CLAUDE.md); on our own ids (LD-..., LDA-...) they would be the brokerage's (F-3's "none beyond the network's")
+ordering=$(grep -c "is being delivered key_order" "$OUT/app-$RUN.log" || true)
+ours=$(grep "is being delivered key_order" "$OUT/app-$RUN.log" | grep -cvE "key '[0-9a-f]{8}-[0-9a-f]{4}-" || true)
+log "key-order warnings: $ordering, on our own keys: $ours"
 log "driver exit $status; report target/load-driver/load-$RUN.json"
 exit "$status"

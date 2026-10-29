@@ -43,7 +43,9 @@ import java.util.concurrent.atomic.*;
  * <p>
  * The load is open-loop: actions start at the configured rates whatever the brokerage's latency, as customers do; an
  * action that would exceed {@code max-in-flight} is skipped and counted ({@code skipped:driver-saturated}), so a
- * saturated driver shows in the report instead of quietly lowering the rate.
+ * saturated driver shows in the report instead of quietly lowering the rate. Inside a fault window and for 30 s after
+ * it, skips are counted apart ({@code skipped:driver-saturated-in-fault-window}): actions waiting out the fault are its
+ * cost, not a driver too small for the load.
  */
 public final class LoadDriver {
     static final String PASSWORD = "load-driver-password";
@@ -138,6 +140,10 @@ public final class LoadDriver {
                         openWebhookOutage();
                     } else if (settings.fault().equals("F-4")) {
                         openSimulatorRestart();
+                    } else if (settings.fault().equals("F-3")) {
+                        faultOpened = Instant.now();
+                        log("fault window open (F-3): kill the instance now; %s", progress());
+                        watchOutage("instance", base() + "/actuator/health");
                     }
                 }
             }
@@ -183,7 +189,7 @@ public final class LoadDriver {
             faultEvidence = faults.evidence();
         } else if (settings.fault().equals("F-2")) {
             faultEvidence = webhookOutageEvidence(report);
-        } else if (settings.fault().equals("F-4")) {
+        } else if (settings.fault().equals("F-4") || settings.fault().equals("F-3")) {
             faultEvidence = simulatorRestartEvidence(report);
         } else if (settings.fault().equals("F-5")) {
             breaks = new ReconciliationBreaks(http, base(), settings.exchangeUrl(), settings.gatewayUrl()).compare(lastClosed);
@@ -368,7 +374,10 @@ public final class LoadDriver {
 
     private void start(Runnable action) {
         if (!inFlight.tryAcquire()) {
-            stats.count("skipped:driver-saturated");
+            // Inside a fault window, and for 30 s after it, actions waiting on the fault are the fault's cost (F-3's
+            // placements retry until the instance answers), not a driver too small for the load
+            var window = faultOpened != null && (faultClosed == null || Instant.now().isBefore(faultClosed.plusSeconds(30)));
+            stats.count(window ? "skipped:driver-saturated-in-fault-window" : "skipped:driver-saturated");
             return;
         }
         actions.execute(() -> {
@@ -461,7 +470,21 @@ public final class LoadDriver {
         body.put("quantity", quantity);
         body.put("limitPrice", limitPrice == null ? null : usd(limitPrice));
         body.put("timeInForce", "DAY");
-        return customer.session().post(step, "/api/accounts/" + customer.accountId() + "/orders", body).ok() ? orderId : null;
+        // Q-7: a placement that got no answer at all (the instance gone, F-3) is sent again with the same orderId, as a
+        // client would; PlaceOrder ignores an orderId it already has, so a placement that did land is not placed twice
+        var deadline = System.nanoTime() + settings.drainTimeout().toNanos();
+        var answer   = customer.session().post(step, "/api/accounts/" + customer.accountId() + "/orders", body);
+        while (answer.status() == -1 && System.nanoTime() < deadline) {
+            stats.count("placement-retried:no-answer");
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+            answer = customer.session().post(step, "/api/accounts/" + customer.accountId() + "/orders", body);
+        }
+        return answer.ok() ? orderId : null;
     }
 
     private void paymentAction() {
@@ -608,6 +631,10 @@ public final class LoadDriver {
             // Deliveries the simulators gave up on can only arrive through catch-up: needs simulators/compose.outage.yml
             checks.put("simulators dead-lettered deliveries", ((Number) faultEvidence.get("dead")).longValue() > 0);
             checks.put("booked p99 under 10 s from 30 s to 2 min after the outage", (Boolean) faultEvidence.get("recovered"));
+        } else if (settings.fault().equals("F-3")) {
+            checks.put("instance went down", targetDown != null);
+            checks.put("instance came back", faultClosed != null);
+            checks.put("booked p99 under 10 s from 30 s to 2 min after it came back", (Boolean) faultEvidence.get("recovered"));
         } else if (settings.fault().equals("F-4")) {
             checks.put("simulator went down", targetDown != null);
             checks.put("simulator came back", faultClosed != null);
@@ -699,16 +726,24 @@ public final class LoadDriver {
         faultOpened = Instant.now();
         var health = (settings.faultTarget().equals("exchange") ? settings.exchangeUrl() : settings.gatewayUrl()) + "/health";
         log("fault window open (F-4 %s): restart the %s now; %s", settings.faultTarget(), settings.faultTarget(), progress());
-        Thread.ofPlatform().daemon().name("load-driver-f4-watch").start(() -> {
+        watchOutage(settings.faultTarget(), health);
+    }
+
+    /**
+     * Times an outage the run script causes (F-3, F-4) from a health endpoint, polled every 200 ms: {@code targetDown}
+     * at the first failed answer, {@code faultClosed} - the window's end - at the first good one after it.
+     */
+    private void watchOutage(String what, String health) {
+        Thread.ofPlatform().daemon().name("load-driver-outage-watch").start(() -> {
             var deadline = System.nanoTime() + Duration.ofMinutes(5).toNanos();
             while (System.nanoTime() < deadline) {
                 var up = http.plainGet("FAULT_HEALTH", health).ok();
                 if (!up && targetDown == null) {
                     targetDown = Instant.now();
-                    log("fault F-4: the %s stopped answering", settings.faultTarget());
+                    log("fault %s: the %s stopped answering", settings.fault(), what);
                 } else if (up && targetDown != null) {
                     faultClosed = Instant.now();
-                    log("fault F-4: the %s answers again after %.1f s", settings.faultTarget(), Duration.between(targetDown, faultClosed).toMillis() / 1000.0);
+                    log("fault %s: the %s answers again after %.1f s", settings.fault(), what, Duration.between(targetDown, faultClosed).toMillis() / 1000.0);
                     return;
                 }
                 try {
@@ -717,7 +752,7 @@ public final class LoadDriver {
                     return;
                 }
             }
-            log("fault F-4: the %s did not %s within 5 minutes", settings.faultTarget(), targetDown == null ? "go down" : "come back");
+            log("fault %s: the %s did not %s within 5 minutes", settings.fault(), what, targetDown == null ? "go down" : "come back");
         });
     }
 
@@ -726,7 +761,9 @@ public final class LoadDriver {
      */
     private Map<String, Object> simulatorRestartEvidence(JsonNode server) {
         var evidence = new LinkedHashMap<String, Object>();
-        evidence.put("target", settings.faultTarget());
+        evidence.put("target", settings.fault().equals("F-3") ? "instance" : settings.faultTarget());
+        evidence.put("placementsRetried", stats.counter("placement-retried:no-answer"));
+        evidence.put("skippedInWindow", stats.counter("skipped:driver-saturated-in-fault-window"));
         evidence.put("windowOpened", String.valueOf(faultOpened));
         evidence.put("down", String.valueOf(targetDown));
         evidence.put("up", String.valueOf(faultClosed));
