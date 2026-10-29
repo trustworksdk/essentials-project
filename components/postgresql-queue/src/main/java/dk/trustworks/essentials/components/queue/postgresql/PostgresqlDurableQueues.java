@@ -768,6 +768,15 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
+     * The {@code messageHandlingTimeout}: a message claimed by a consumer that dies becomes deliverable again once its
+     * claim is that old.
+     */
+    @Override
+    public Optional<Duration> maxUnservedAfterInstanceLoss() {
+        return Optional.of(Duration.ofMillis(messageHandlingTimeoutMs));
+    }
+
+    /**
      * Access to the {@link QueuedMessageRowMapper} required for certain integration tests
      *
      * @return the configured {@link QueuedMessageRowMapper}

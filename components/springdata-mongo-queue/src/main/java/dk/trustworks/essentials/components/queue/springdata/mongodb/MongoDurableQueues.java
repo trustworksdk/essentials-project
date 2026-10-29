@@ -372,6 +372,15 @@ public final class MongoDurableQueues implements DurableQueues {
         return Optional.ofNullable(unitOfWorkFactory);
     }
 
+    /**
+     * The {@code messageHandlingTimeout}: a message claimed by a consumer that dies becomes deliverable again once its
+     * claim is that old.
+     */
+    @Override
+    public Optional<Duration> maxUnservedAfterInstanceLoss() {
+        return Optional.of(Duration.ofMillis(messageHandlingTimeoutMs));
+    }
+
     @Override
     public DurableQueueMessageObserver getMessageObserver() {
         return messageObserver;

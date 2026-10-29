@@ -329,6 +329,15 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     }
 
     /**
+     * The engine's lease TTL: an ordered unit or shard of an instance that died is taken by another once its lease is that
+     * old.
+     */
+    @Override
+    public Optional<Duration> maxUnservedAfterInstanceLoss() {
+        return queues.leaseTtl();
+    }
+
+    /**
      * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@link UnitOfWork} or Spring transaction?
      * Default {@code false}: such an enqueue commits on its own, and each call site's first one is logged at WARN. In Spring Boot:
      * {@value EnqueueOutsideUnitOfWorkGuard#REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}. See {@link EnqueueOutsideUnitOfWorkGuard}.

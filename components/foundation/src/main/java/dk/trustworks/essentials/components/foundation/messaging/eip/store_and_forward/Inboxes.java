@@ -161,6 +161,17 @@ public interface Inboxes {
     }
 
     /**
+     * The longest a message of these {@link Inbox}es can stay unserved after the instance handling it dies; see
+     * {@link DurableQueues#maxUnservedAfterInstanceLoss()}. {@link Optional#empty()} by default; the {@link Inboxes} created
+     * by {@link #durableQueueBasedInboxes(DurableQueues, FencedLockManager)} answer what their {@link DurableQueues} answer.
+     *
+     * @return the window, or {@link Optional#empty()} if unknown
+     */
+    default Optional<Duration> maxUnservedAfterInstanceLoss() {
+        return Optional.empty();
+    }
+
+    /**
      * Create an {@link Inboxes} instance that uses a {@link DurableQueues} as its storage and message delivery mechanism.
      *
      * @param durableQueues     The {@link DurableQueues} implementation used by the {@link Inboxes} instance returned
@@ -215,6 +226,11 @@ public interface Inboxes {
         @Override
         public boolean keepsKeyOrderAcrossInstances() {
             return durableQueues.keepsKeyOrderAcrossInstances();
+        }
+
+        @Override
+        public Optional<Duration> maxUnservedAfterInstanceLoss() {
+            return durableQueues.maxUnservedAfterInstanceLoss();
         }
 
         public class DurableQueueBasedInbox implements Inbox {

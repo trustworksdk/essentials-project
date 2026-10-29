@@ -118,6 +118,21 @@ class PartitionedEventProcessorTest {
     }
 
     @Test
+    void a_processor_with_many_inbox_consumer_threads_says_the_connection_pool_must_fit_them() {
+        new ThingsEventProcessor(inboxes(true)) {
+            @Override
+            protected int getNumberOfParallelInboxMessageConsumers() {
+                return 8;
+            }
+        }.start();
+        new ThingsEventProcessor(inboxes(true)).start();
+
+        assertThat(logged(Level.INFO)).filteredOn(message -> message.contains("holds a pooled database connection"))
+                                      .singleElement()
+                                      .satisfies(message -> assertThat(message).contains("8 inbox consumer threads"));
+    }
+
+    @Test
     void an_event_processor_overriding_to_competing_consumers_where_key_order_is_kept_starts() {
         var inboxes   = inboxes(true);
         var processor = new ThingsEventProcessor(inboxes) {

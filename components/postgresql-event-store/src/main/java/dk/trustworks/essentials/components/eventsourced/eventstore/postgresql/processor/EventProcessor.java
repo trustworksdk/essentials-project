@@ -314,11 +314,14 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                 unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingInboxMessageHandlerDelegate, UnhandledEventTypes.Reporting.DEBUG);
                 var inboxMessageConsumptionMode = getInboxMessageConsumptionMode();
                 checkInboxConsumptionMode(processorName, inboxMessageConsumptionMode);
+                logConnectionPoolHint(processorName, getNumberOfParallelInboxMessageConsumers());
+                var inboxRedeliveryPolicy = getInboxRedeliveryPolicy();
+                logRedeliveryPolicy(processorName, inboxRedeliveryPolicy, failoverRedeliveryPolicy(inboxes.maxUnservedAfterInstanceLoss()));
                 inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
                                                             .inboxName(InboxName.of(processorName))
                                                             .messageConsumptionMode(inboxMessageConsumptionMode)
                                                             .numberOfParallelMessageConsumers(getNumberOfParallelInboxMessageConsumers())
-                                                            .redeliveryPolicy(getInboxRedeliveryPolicy())
+                                                            .redeliveryPolicy(inboxRedeliveryPolicy)
                                                             .build(),
                                                  inboxMessageHandlerDelegate);
                 // The Inbox outlives a stop(): Inbox#stopConsuming() drops its message consumer, and getOrCreateInbox
@@ -555,6 +558,25 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     }
 
     /**
+     * Above this many inbox consumer threads a processor says, once at start, that each holds a pooled connection.
+     */
+    static final int CONNECTION_POOL_HINT_ABOVE_CONSUMERS = 4;
+
+    /**
+     * Each inbox consumer thread holds a pooled connection while it handles a message, so several processors with many
+     * threads can exhaust a pool sized for the default (Hikari: 10) - which shows up as connection timeouts under load,
+     * far from the cause. A hint, not a check: the pool size and the other holders are not known here.
+     */
+    private void logConnectionPoolHint(String processorName, int consumers) {
+        if (consumers > CONNECTION_POOL_HINT_ABOVE_CONSUMERS) {
+            log.info("[{}] {} inbox consumer threads: each holds a pooled database connection while it handles a message. " +
+                             "Size the connection pool for them, together with every other processor's consumer threads, the " +
+                             "queue engine's pumps and the application's own transactions",
+                     processorName, consumers);
+        }
+    }
+
+    /**
      * Competing consumers on queues that keep a key in order per node only would handle one aggregate's events out of order
      * on two instances: refused, before anything is created. Otherwise said once, at INFO, so a log shows where handlers run.
      */
@@ -585,18 +607,16 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     }
 
     /**
-     * Get the {@link RedeliveryPolicy} used when consuming messages from the underlying {@link Inbox}
+     * Get the {@link RedeliveryPolicy} used when consuming messages from the underlying {@link Inbox}.
+     * <p>
+     * Default: {@link #failoverRedeliveryPolicy(Optional)} with the {@link Inbox}es' window - quick first retries, and
+     * retrying for long enough to outlast a failover, so a handler that waits for another processor's work does not
+     * dead-letter while that work moves to another instance. Override for a different budget.
      *
      * @return the {@link RedeliveryPolicy} used when consuming messages from the underlying {@link Inbox}
      */
     protected RedeliveryPolicy getInboxRedeliveryPolicy() {
-        return RedeliveryPolicy.exponentialBackoff()
-                               .setInitialRedeliveryDelay(Duration.ofMillis(200))
-                               .setFollowupRedeliveryDelay(Duration.ofMillis(200))
-                               .setFollowupRedeliveryDelayMultiplier(1.1d)
-                               .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofSeconds(3))
-                               .setMaximumNumberOfRedeliveries(20)
-                               .build();
+        return failoverRedeliveryPolicy(inboxes.maxUnservedAfterInstanceLoss()).policy();
     }
 
     /**

@@ -27,6 +27,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.tr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.json.JSONDeserializationException;
+import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
@@ -669,18 +670,41 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     }
 
     /**
-     * Get the {@link RedeliveryPolicy} used when consuming messages from the underlying Durable queue
+     * Get the {@link RedeliveryPolicy} used when consuming messages from the underlying Durable queue.
+     * <p>
+     * Default: {@link #failoverRedeliveryPolicy(Optional)} - quick first retries, and retrying for long enough to outlast a
+     * failover, so a handler that waits for another processor's work does not dead-letter while that work moves to
+     * another instance. Override for a different budget.
      *
      * @return the {@link RedeliveryPolicy} used when consuming messages from the underlying Durable queue
      */
     protected RedeliveryPolicy getDurableQueueRedeliveryPolicy() {
-        return RedeliveryPolicy.exponentialBackoff()
-                               .setInitialRedeliveryDelay(Duration.ofMillis(200))
-                               .setFollowupRedeliveryDelay(Duration.ofMillis(200))
-                               .setFollowupRedeliveryDelayMultiplier(1.1d)
-                               .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofSeconds(3))
-                               .setMaximumNumberOfRedeliveries(20)
-                               .build();
+        return failoverRedeliveryPolicy(Optional.empty()).policy();
+    }
+
+    /**
+     * A {@link FailoverRedeliveryPolicy} for this processor: from the lock timeout of its subscription manager's
+     * {@link FencedLockManager} and the given queue window ({@code DurableQueues#maxUnservedAfterInstanceLoss()}),
+     * each falling back to its default when unknown.
+     *
+     * @param queueWindow how long the processor's queue can leave a dead instance's messages unserved
+     * @return the policy and what it was derived from
+     */
+    protected final FailoverRedeliveryPolicy failoverRedeliveryPolicy(Optional<Duration> queueWindow) {
+        return FailoverRedeliveryPolicy.outlasting(eventStoreSubscriptionManager.getFencedLockManager().flatMap(FencedLockManager::getLockTimeOut),
+                                                   queueWindow);
+    }
+
+    /**
+     * Says at start which retry budget a queue consumer runs with: the derived default's, or that the processor chose its
+     * own. One line, so an operator reading a dead letter can tell how long it was retried.
+     */
+    protected final void logRedeliveryPolicy(String processorName, RedeliveryPolicy inUse, FailoverRedeliveryPolicy derivedDefault) {
+        if (inUse.equals(derivedDefault.policy())) {
+            log.info("[{}] {}", processorName, derivedDefault.describe());
+        } else {
+            log.info("[{}] Uses its own RedeliveryPolicy: {}", processorName, inUse);
+        }
     }
 
     /**

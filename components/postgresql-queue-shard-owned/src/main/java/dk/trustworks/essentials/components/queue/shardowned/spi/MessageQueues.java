@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.queue.shardowned.spi;
 
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.*;
 
 /**
@@ -51,4 +52,12 @@ public interface MessageQueues {
      * ordinary "not found", not a programming error.
      */
     Optional<MessageQueue> findQueue(QueueName queueName) throws SQLException;
+
+    /**
+     * The lease TTL the queues run with: how long an ordered unit or shard of an instance that died stays unserved before
+     * another instance takes it. Empty (the default) when the implementation does not say.
+     */
+    default Optional<Duration> leaseTtl() {
+        return Optional.empty();
+    }
 }

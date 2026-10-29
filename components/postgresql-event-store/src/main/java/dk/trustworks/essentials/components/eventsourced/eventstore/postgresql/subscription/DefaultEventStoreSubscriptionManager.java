@@ -408,6 +408,11 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         return eventStore;
     }
 
+    @Override
+    public Optional<FencedLockManager> getFencedLockManager() {
+        return Optional.of(fencedLockManager);
+    }
+
     /**
      * @return what the asynchronous subscriptions created by this manager do when their handler throws a non-I/O exception
      * @see EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)

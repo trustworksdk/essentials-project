@@ -295,6 +295,18 @@ public interface DurableQueues extends Lifecycle {
     }
 
     /**
+     * The longest a message being handled by an instance that dies stays unserved before another instance can deliver
+     * it again: the time until the implementation gives up on the dead consumer (a message-handling timeout, a lease).
+     * Callers size retries that must outlast a failover by it - a handler that waits for another processor's work, for
+     * example, must keep retrying until that work has failed over.
+     *
+     * @return the window, or {@link Optional#empty()} (the default) for an implementation that does not say
+     */
+    default Optional<Duration> maxUnservedAfterInstanceLoss() {
+        return Optional.empty();
+    }
+
+    /**
      * Start an asynchronous message consumer.<br>
      * Note: There can only be one {@link DurableQueueConsumer} per {@link QueueName} per {@link DurableQueues} instance<br>
      * Log levels of interest:

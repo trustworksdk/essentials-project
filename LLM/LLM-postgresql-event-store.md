@@ -794,7 +794,12 @@ What a throw does:
    `EventProcessor`, the durable queue (`getDurableQueueRedeliveryPolicy()`) for a `ViewEventProcessor` once its direct
    handling failed. The queue's built-in permanent-error list applies, so an `IllegalArgumentException` dead-letters on
    the first attempt (see [LLM-foundation.md § The built-in permanent-error list](LLM-foundation.md#the-built-in-permanent-error-list)).
-2. When the redeliveries are used up, the message becomes a dead letter.
+2. When the redeliveries are used up, the message becomes a dead letter. **The default policy retries for minutes, not
+   seconds** (since 0.61): quick first retries (200 ms, doubling to 10 s), for 4 × (lock timeout + the queue's
+   `maxUnservedAfterInstanceLoss()`) - about 3 minutes with the defaults - so a handler that throws until another
+   processor's work is there does not dead-letter while that work fails over to another instance. `start()` logs the
+   budget. A different budget: override the getter; to size your own `Inbox` policy the same way, use
+   `FailoverRedeliveryPolicy.outlasting(lockTimeOut, queueWindow)`.
 3. The subscription's resume point **keeps advancing**: the event is in the queue, so the processor goes on with the
    next events. Only that aggregate is held: messages are ordered by aggregate id (`OrderedMessage` key), and later
    events of the same aggregate wait behind its dead letter (a `ViewEventProcessor` queues them behind it), while every

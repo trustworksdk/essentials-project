@@ -1708,6 +1708,11 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     }
 
     @Override
+    public Optional<Duration> getLockTimeOut() {
+        return Optional.of(lockTimeOut);
+    }
+
+    @Override
     public String toString() {
         return this.getClass().getSimpleName() + "{" +
                 "lockManagerInstanceId='" + lockManagerInstanceId + '\'' +

@@ -66,6 +66,16 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
     EventStore getEventStore();
 
     /**
+     * The {@link FencedLockManager} behind this manager's exclusive subscriptions, if it has one. Processors read its lock
+     * timeout to size retries that must outlast a failover.
+     *
+     * @return the lock manager, or {@link Optional#empty()} (the default) when the implementation does not expose one
+     */
+    default Optional<FencedLockManager> getFencedLockManager() {
+        return Optional.empty();
+    }
+
+    /**
      * Create a builder for the {@link EventStoreSubscriptionManager}
      *
      * @return a builder for the {@link EventStoreSubscriptionManager}

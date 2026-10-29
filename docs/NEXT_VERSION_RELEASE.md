@@ -22,7 +22,8 @@ and two lock waits removed.
 - Handler dispatch (`shared`): every aggregate event applied and every handler call no longer builds log messages that
   trace logging is off for.
 - Event processors: `PartitionedEventProcessor` runs its handlers on every instance on the shard-owned engine (§2.7);
-  an `EventProcessor` overridden to competing consumers on a per-node queue now refuses to start (§1).
+  an `EventProcessor` overridden to competing consumers on a per-node queue now refuses to start (§1); the default retry
+  budget outlasts a failover, minutes instead of ~10 s (§1.1.4).
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1). The
 shard-owned adapter writes a new message format, and **0.60.x and this release must not run side by side against the
@@ -143,6 +144,30 @@ closed its books at UTC end of day instead of New York's. Check your annotations
 `essentials.eventstore.snapshots.default-every-n-events` defaults to 1000; it was 10, which added a snapshot - a
 serialization and an insert inside the command's transaction - every tenth event of every aggregate without an
 interval of its own. `@AggregateSnapshotPolicy` keeps its own default of 100. Set the property to keep the old interval.
+
+#### 1.1.4 Event processors retry a failed message for minutes, not seconds (`postgresql-event-store`)
+
+The default `RedeliveryPolicy` of an `EventProcessor`'s inbox (`getInboxRedeliveryPolicy()`) and a `ViewEventProcessor`'s
+queue (`getDurableQueueRedeliveryPolicy()`) retried 20 times, from 200 ms growing ×1.1 to 3 s: about 10 s, then a dead
+letter. A handler that throws until another processor's work is there - "not yet", retried - therefore dead-lettered
+during any failover, which takes the lock timeout (15 s) or the queue's window (30 s) to start, and every later message
+of that aggregate waited behind the dead letter. Measured in the trading demo: one killed instance of two dead-lettered
+438 settlement reports.
+
+The default now outlasts a failover: it starts at 200 ms, doubles to a 10 s cap, and retries for 4 × (lock timeout +
+the queue's window), derived from the actual settings - the lock manager's `lockTimeOut`, and the new
+`DurableQueues.maxUnservedAfterInstanceLoss()` (`message-handling-timeout` on `PostgresqlDurableQueues` and MongoDB, the
+lease TTL on the shard-owned engine). With the defaults that is 24 redeliveries over about 3 minutes. `start()` logs the
+budget in one line.
+
+- **What changes for you:** a message that can never succeed (a bug, a poison message) now dead-letters after minutes,
+  and later messages of its aggregate wait that long. A message that succeeds on an early retry is unaffected.
+- **To keep the old budget:** override `getInboxRedeliveryPolicy()` / `getDurableQueueRedeliveryPolicy()`. A processor
+  that already overrides them is unaffected. `FailoverRedeliveryPolicy.outlasting(...)` sizes your own `Inbox` policies
+  the same way.
+- New additive SPI methods, all with defaults: `FencedLockManager.getLockTimeOut()`,
+  `DurableQueues`/`Inboxes.maxUnservedAfterInstanceLoss()`, `EventStoreSubscriptionManager.getFencedLockManager()`, and
+  the shard-owned `MessageQueues.leaseTtl()`.
 
 ---
 
