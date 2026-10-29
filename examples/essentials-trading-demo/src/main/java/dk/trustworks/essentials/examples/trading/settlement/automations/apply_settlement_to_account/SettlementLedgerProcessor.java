@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.settlement.automations.apply_settlement_to_account;
 
+import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
@@ -34,7 +35,7 @@ import java.util.List;
  * {@code CorrectSettlementAmount} with the change (Q-2). Every ledger command is idempotent per execution.
  */
 @Service
-public class SettlementLedgerProcessor extends EventProcessor {
+public class SettlementLedgerProcessor extends TradingDemoEventProcessor {
 
     public SettlementLedgerProcessor(EventProcessorDependencies dependencies) {
         super(dependencies);

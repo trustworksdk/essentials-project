@@ -33,13 +33,6 @@ spring:
 
 essentials:
   immutable-jackson-module-enabled: true
-  eventstore:
-    event-processors:
-      # Every instance handles the event processors' inboxes (router, ledger processors, ...), not only the one holding
-      # each inbox's lock. Safe because this profile puts the queues on the shard-owned engine, which keeps one order's
-      # messages in order across instances; elsewhere the processors stay on one instance and say so at start.
-      # Measured with two instances: _demo_harness/CLAUDE.md, F-3 on two instances.
-      competing-inbox-consumers: true
   unit-of-work:
     # The compose PostgreSQL runs with its stock default, READ COMMITTED, so asking for it explicitly only costs a
     # SHOW TRANSACTION ISOLATION LEVEL round trip per transaction (~620 000 in one order-flow run; 13 % more completed

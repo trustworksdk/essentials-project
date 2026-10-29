@@ -102,13 +102,13 @@ for; one instance exercises none of its ownership, rebalancing or fencing.
 - **Every instance handles the event processors' inboxes; the views stay on one.** An `EventProcessor`'s
   subscription is exclusive (fenced lock), but its inbox - where its `@MessageHandler`s run - defaults to
   `SingleGlobalConsumer`, a second lock, so with two instances every handler ran on whichever started first. The
-  `compose` profile sets the opt-in `essentials.eventstore.event-processors.competing-inbox-consumers: true`, so the
   demo's six processors (`ExchangeOrderRouter`, `OrderLedgerProcessor`, `PaymentRouter`, the funding and settlement
-  ledger processors, `InstrumentRiskApprovalProcessor`) use `GlobalCompetingConsumers`: the shard-owned engine keeps one
-  aggregate's messages in order across instances, so both share the work - measured 6 194 / 6 124 router and 10 679 /
-  10 509 ledger deliveries, 0 order violations (`_demo_harness/CLAUDE.md`, F-3 on two instances). Each processor logs
-  "Inbox consumed with GlobalCompetingConsumers" at start. Without the shard-owned engine (the tests'
-  `PostgresqlDurableQueues`, which orders per node) they stay on one instance.
+  ledger processors, `InstrumentRiskApprovalProcessor`) extend `config/TradingDemoEventProcessor`, which uses
+  `GlobalCompetingConsumers` where the queues keep key order across instances (the `compose` profile's shard-owned
+  engine) and `SingleGlobalConsumer` otherwise (the tests, and the A/B on `PostgresqlDurableQueues`) - measured 6 194 /
+  6 124 router and 10 679 / 10 509 ledger deliveries, 0 order violations (`_demo_harness/CLAUDE.md`, F-3 on two
+  instances). **A test aid, not a pattern:** an application picks `PartitionedEventProcessor` (every instance, refuses to
+  start without the capability) or `EventProcessor` in its code (`docs/event-processor-specializations.md`).
   `ViewEventProcessor`s (the projections) remain one instance cluster-wide, by design.
 - **The status endpoint is cluster-wide; the statistics endpoint is per-instance.** Both instances
   report `ordered 64/64` because all 64 units have an owner *somewhere*, not because each holds 64.

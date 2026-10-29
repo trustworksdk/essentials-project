@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.funding.external_systems.payment_gateway;
 
+import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
@@ -41,7 +42,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * the gateway's code. A payment the gateway took despite the failure still completes (see {@code Deposit}).
  */
 @Service
-public class PaymentRouter extends EventProcessor {
+public class PaymentRouter extends TradingDemoEventProcessor {
     public static final String GATEWAY_UNAVAILABLE = "GATEWAY_UNAVAILABLE";
 
     private static final Logger log = LoggerFactory.getLogger(PaymentRouter.class);

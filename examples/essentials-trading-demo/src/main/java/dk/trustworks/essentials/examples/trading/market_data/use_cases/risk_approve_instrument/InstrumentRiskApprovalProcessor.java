@@ -16,8 +16,8 @@
 
 package dk.trustworks.essentials.examples.trading.market_data.use_cases.risk_approve_instrument;
 
+import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorDependencies;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.messaging.UnitOfWorkMode;
@@ -71,7 +71,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * observable through {@code views/instrument_details}.
  */
 @Service
-public class InstrumentRiskApprovalProcessor extends EventProcessor {
+public class InstrumentRiskApprovalProcessor extends TradingDemoEventProcessor {
     private static final Logger log = LoggerFactory.getLogger(InstrumentRiskApprovalProcessor.class);
 
     private final Instruments           instruments;

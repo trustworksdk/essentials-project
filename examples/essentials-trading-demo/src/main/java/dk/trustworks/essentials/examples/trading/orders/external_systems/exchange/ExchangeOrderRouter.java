@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.orders.external_systems.exchange;
 
+import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
@@ -44,7 +45,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * after all, its fills still arrive and are booked as facts (design Q-3).
  */
 @Service
-public class ExchangeOrderRouter extends EventProcessor {
+public class ExchangeOrderRouter extends TradingDemoEventProcessor {
     public static final String EXCHANGE_UNAVAILABLE = "EXCHANGE_UNAVAILABLE";
 
     private static final Logger log = LoggerFactory.getLogger(ExchangeOrderRouter.class);

@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.orders.automations.apply_order_to_account;
 
+import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
@@ -44,7 +45,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * releases nothing twice. A collision on the account's stream is redelivered by the processor.
  */
 @Service
-public class OrderLedgerProcessor extends EventProcessor {
+public class OrderLedgerProcessor extends TradingDemoEventProcessor {
 
     private final OrderProcessingProperties consumers;
     private final OrderForwardingProperties forwarding;
