@@ -1,0 +1,146 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/slice-source/cases/boundaries-kotlin",
+  "manifests": 0,
+  "parsed": 0,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [
+    "baskets.reopen",
+    "baskets.settle",
+    "baskets.storefront",
+    "baskets.open_basket",
+    "baskets.basket_list",
+    "checkout.receipts",
+    "stores.shelf_view"
+  ],
+  "lanes": [
+    {
+      "bc": "baskets",
+      "path": "src/main/*/com/example/cart/baskets",
+      "detected": "decider",
+      "signals": {
+        "decider": 1,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 0
+      },
+      "declared": {}
+    },
+    {
+      "bc": "checkout",
+      "path": "src/main/*/com/example/cart/checkout",
+      "detected": "service-entity?",
+      "signals": {
+        "decider": 0,
+        "aggregates": false,
+        "entities": true,
+        "eventStore": 0
+      },
+      "declared": {}
+    },
+    {
+      "bc": "stores",
+      "path": "src/main/*/com/example/cart/stores",
+      "detected": "aggregate",
+      "signals": {
+        "decider": 0,
+        "aggregates": true,
+        "entities": false,
+        "eventStore": 1
+      },
+      "declared": {}
+    }
+  ],
+  "endpoints": [],
+  "findings": [
+    {
+      "severity": "Blocking",
+      "impact": "wrong-next-caller",
+      "gate": "8(c) bc-private import",
+      "id": "ESS-G8c",
+      "slice": "baskets.settle",
+      "file": "src/main/kotlin/com/example/cart/baskets/automations/settle/SettleProcessor.kt",
+      "line": 3,
+      "message": "imports com.example.cart.checkout.entities.Payments from checkout/entities/ (targetShape: write repository) into bounded context 'baskets'; only events/ and types/ cross a BC boundary",
+      "hint": "a write repository acts for its owner: collaborate through the owner's events, or send its command on the command bus (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Blocking",
+      "impact": "wrong-next-caller",
+      "gate": "8(a) slice import",
+      "id": "ESS-G8a",
+      "slice": "baskets.basket_list",
+      "file": "src/main/kotlin/com/example/cart/baskets/views/basket_list/BasketListProjection.kt",
+      "line": 4,
+      "message": "imports com.example.cart.baskets.use_cases.open_basket.OpenBasketDecider from slice baskets.open_basket (targetShape: decider)",
+      "hint": "a decider acts for its owner: collaborate through the owner's events, or send its command on the command bus (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Blocking",
+      "impact": "coupling",
+      "gate": "8(d) command in domain",
+      "id": "ESS-G8d",
+      "slice": null,
+      "file": "src/main/kotlin/com/example/cart/checkout/entities/Payment.kt",
+      "line": 3,
+      "message": "entities/ imports com.example.cart.baskets.use_cases.open_basket.OpenBasket from command slice baskets.open_basket (targetShape: record); a BC-scoped domain artifact never references a slice's type",
+      "hint": "take the fields it needs; the emitting slice unpacks the command (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "coupling",
+      "gate": "8(a) slice import",
+      "id": "ESS-G8a",
+      "slice": "baskets.storefront",
+      "file": "src/main/kotlin/com/example/cart/baskets/external_systems/storefront/StorefrontFeed.kt",
+      "line": 3,
+      "message": "imports com.example.cart.baskets.views.basket_list.BasketRow from slice baskets.basket_list (targetShape: record)",
+      "hint": "read-only (record): shared vocabulary belongs in the owner's types/ or events/; otherwise keep a copy on this side (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "coupling",
+      "gate": "8(c) bc-private import",
+      "id": "ESS-G8c",
+      "slice": "checkout.receipts",
+      "file": "src/main/kotlin/com/example/cart/checkout/views/receipts/ReceiptsProjection.kt",
+      "line": 4,
+      "message": "imports com.example.cart.baskets.config.BasketRules from baskets/config/ (targetShape: object) into bounded context 'checkout'; only events/ and types/ cross a BC boundary",
+      "hint": "read-only (object): shared vocabulary belongs in the owner's types/ or events/; otherwise keep a copy on this side (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "coupling",
+      "gate": "8(c) bc-private import",
+      "id": "ESS-G8c",
+      "slice": "checkout.receipts",
+      "file": "src/main/kotlin/com/example/cart/checkout/views/receipts/ReceiptsProjection.kt",
+      "line": 5,
+      "message": "imports com.example.cart.baskets.config.roundCents from baskets/config/ (targetShape: function) into bounded context 'checkout'; only events/ and types/ cross a BC boundary",
+      "hint": "read-only (function): shared vocabulary belongs in the owner's types/ or events/; otherwise keep a copy on this side (rules/slice-design.md \u00a7R4)"
+    }
+  ],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [
+    {
+      "file": "src/main/kotlin/com/example/cart/checkout/entities/Payments.kt",
+      "line": 6,
+      "receiver": "docs",
+      "repository": "DocumentDbRepository",
+      "method": "save",
+      "entity": "Payment",
+      "bc": "checkout",
+      "fromBc": "checkout",
+      "slice": null,
+      "callerRole": "entities",
+      "declared": null
+    }
+  ],
+  "unhandledVariants": [],
+  "unverified": [],
+  "unparsed": []
+}

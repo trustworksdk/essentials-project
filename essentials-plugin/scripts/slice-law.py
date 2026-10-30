@@ -80,8 +80,9 @@ DIMENSIONS = {
 # Ceilings in bytes. BUDGET_VIEW holds every single lane x kind x store view, BUDGET_FILE the whole file, which
 # slice-check and slice-discover still read. They make growth a decision: raise one deliberately,
 # in the commit that needs it, never to turn a red check green.
-BUDGET_VIEW = 52_000
-BUDGET_FILE = 66_000
+# Raised (from 52_000 / 66_000) for the 0.60.1-1 field-feedback sections. cite-ok: plugin release, not the pin
+BUDGET_VIEW = 55_000
+BUDGET_FILE = 69_000
 
 HEADING = re.compile(r"^(#{2,3})\s+(.+?)\s*$")
 SCOPE = re.compile(r"^<!--\s*slice-law:\s*(.*?)\s*-->\s*$")

@@ -86,6 +86,7 @@
   "findings": [
     {
       "severity": "Blocking",
+      "impact": "coupling",
       "gate": "6 command mappings",
       "id": "ESS-G6",
       "slice": "billing.issue_invoice",
@@ -96,6 +97,7 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "6 undeclared mapping",
       "id": "ESS-G6",
       "slice": "billing.issue_invoice",
@@ -106,6 +108,7 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "11(b) handled events",
       "id": "ESS-G11b",
       "slice": "billing.invoice_audit",
@@ -116,6 +119,7 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "6 undeclared mapping",
       "id": "ESS-G6",
       "slice": "billing.invoice_list",
@@ -126,6 +130,7 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "6 undeclared mapping",
       "id": "ESS-G6",
       "slice": "billing.invoice_list",
@@ -136,6 +141,7 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "6 undeclared mapping",
       "id": "ESS-G6",
       "slice": "billing.invoice_list",
@@ -146,6 +152,7 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "11(b) handled events",
       "id": "ESS-G11b",
       "slice": "billing.invoice_list",
@@ -156,6 +163,7 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "6 discriminator",
       "id": "ESS-G6",
       "slice": "billing.invoice_list",
@@ -166,6 +174,7 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "6 discriminator",
       "id": "ESS-G6",
       "slice": "billing.invoice_list",
@@ -176,6 +185,7 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "6 discriminator",
       "id": "ESS-G6",
       "slice": "billing.invoice_list",
@@ -186,6 +196,7 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "6 endpoint route",
       "id": "ESS-G6",
       "slice": "billing.invoice_list",
@@ -195,6 +206,11 @@
       "hint": "a stale endpoint is removed by `--fix-manifests`; a missing handler is a source change"
     }
   ],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [],
+  "unhandledVariants": [],
   "unverified": [
     {
       "slice": "billing.invoice_export",

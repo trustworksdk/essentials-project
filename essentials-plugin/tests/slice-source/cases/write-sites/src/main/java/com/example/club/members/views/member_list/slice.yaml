@@ -1,0 +1,14 @@
+schemaVersion: "1.2"
+slice: members.member_list
+kind: view
+bc: members
+owner: team
+status: live
+summary: Members.
+generator: essentials
+language: java
+lane: service-entity
+serves: [MemberList]
+projections: []
+tests:
+  unit: { present: false }

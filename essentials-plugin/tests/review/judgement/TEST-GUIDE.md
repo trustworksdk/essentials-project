@@ -47,7 +47,7 @@ Findings — all six must appear:
 | 1 | Should-fix | ESS-050 | `src/main/resources/application.yml:7` | lock confirmation interval 4s is not 2× shorter than the 6s timeout | review-scan |
 | 2 | Should-fix | ESS-103 | `src/main/resources/application.yml:10` | `transactional-mode` is retired and binds to nothing; mechanical fix | review-scan |
 | 3 | Should-fix | ESS-G11b | `views/order_list/OrderListProjection.kt:54` | the projection now handles `OrderExpedited`, which `projections[].from` does not declare | slice-source |
-| 4 | Blocking | ESS-G8a | `use_cases/expedite_order/ExpediteOrderDecider.kt:6-7` | imports `cancel_order`'s `OrderState` and `OrderStateEvolver` | judgement |
+| 4 | Blocking | ESS-G8a | `use_cases/expedite_order/ExpediteOrderDecider.kt:6-7` | imports `cancel_order`'s `OrderState` and `OrderStateEvolver`; one row per import, or one row naming both | slice-source |
 | 5 | Blocking | ESS-G9 | `use_cases/expedite_order/ExpediteOrderDecider.kt:12` | no `@Bean` in `orders/config/OrdersConfiguration.kt`, so `ExpediteOrder` routes nowhere | judgement |
 | 6 | Blocking | ESS-075 (also ESS-G10) | `views/expedited_orders/ExpeditedOrdersProjection.kt:30` | a single-argument `@MessageHandler` saves a versioned read model without the event order | judgement |
 
@@ -79,7 +79,7 @@ A new command slice (`use_cases/cancel_shipment`), a guarded `cancelShipment()` 
 endpoint on the order-status view, a command-bus bean, a row count in the load harness, a POM
 dependency and an `application.properties`.
 
-Findings — all eight must appear:
+Findings — all nine must appear:
 
 | # | Severity | Id | Where | What | Found by |
 |---|---|---|---|---|---|
@@ -91,6 +91,7 @@ Findings — all eight must appear:
 | 6 | Blocking | ESS-G15a | `views/order_status/OrderStatusAPI.java:44` | `shippingOrders.deleteById` — a mutation on the write repository from a view | judgement |
 | 7 | Should-fix | ESS-G16 | `entities/ShippingOrder.java:53` | `setCancelled` bypasses the guard in `cancelShipment()` | judgement |
 | 8 | Advisory | ESS-G6 | `views/order_status/OrderStatusAPI.java:43` | `purge(@PathVariable String orderId)` takes the id raw, beside `get(@PathVariable OrderId …)`. Same line as 5, a different defect (`6 raw id`): its own row | slice-source |
+| 9 | Should-fix | ESS-G11c | `views/order_status/OrderStatusAPI.java:44` | the view's manifest `writes` omits `ShippingOrder`. Same line as 6, a different defect: its own row, and adding the entity to the view's `writes` is not the fix | slice-source |
 
 Dismissed: **ESS-064** at `_loadtest/LoadHarness.java:26` — a read-only row count for the load report;
 there is no write and no Spring transaction to join.

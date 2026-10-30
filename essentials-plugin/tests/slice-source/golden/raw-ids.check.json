@@ -137,6 +137,7 @@
   "findings": [
     {
       "severity": "Advisory",
+      "impact": "coupling",
       "gate": "6 raw id",
       "id": "ESS-G6",
       "slice": "orders.cancel_order",
@@ -147,6 +148,7 @@
     },
     {
       "severity": "Advisory",
+      "impact": "coupling",
       "gate": "6 raw id",
       "id": "ESS-G6",
       "slice": "orders.order_lookup",
@@ -157,6 +159,7 @@
     },
     {
       "severity": "Advisory",
+      "impact": "coupling",
       "gate": "6 raw id",
       "id": "ESS-G6",
       "slice": "orders.order_lookup",
@@ -167,6 +170,7 @@
     },
     {
       "severity": "Advisory",
+      "impact": "coupling",
       "gate": "6 raw id",
       "id": "ESS-G6",
       "slice": "orders.order_lookup",
@@ -177,6 +181,7 @@
     },
     {
       "severity": "Advisory",
+      "impact": "coupling",
       "gate": "6 raw id",
       "id": "ESS-G6",
       "slice": "billing.invoice_lookup",
@@ -187,6 +192,7 @@
     },
     {
       "severity": "Advisory",
+      "impact": "coupling",
       "gate": "6 raw id",
       "id": "ESS-G6",
       "slice": "billing.invoice_lookup",
@@ -197,6 +203,7 @@
     },
     {
       "severity": "Advisory",
+      "impact": "coupling",
       "gate": "6 raw id",
       "id": "ESS-G6",
       "slice": "billing.invoice_lookup",
@@ -206,6 +213,11 @@
       "hint": "two parts in Java, one here: a `@JvmInline value class` id binds with nothing from Essentials \u2014 no types-spring-web, no configurer (ESS-034); with it directly in the signature, pin the handler's name with `@Operation(operationId = \u2026)` (ESS-113)"
     }
   ],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [],
+  "unhandledVariants": [],
   "unverified": [],
   "unparsed": []
 }

@@ -1,0 +1,73 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/slice-source/cases/unhandled-variants",
+  "manifests": 0,
+  "parsed": 0,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [
+    "parcels.notify_sender",
+    "parcels.packing_desk",
+    "parcels.parcel_board",
+    "parcels.parcel_trail",
+    "letters.letter_log"
+  ],
+  "lanes": [
+    {
+      "bc": "letters",
+      "path": "src/main/*/com/example/post/letters",
+      "detected": "undetermined",
+      "signals": {
+        "decider": 0,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 0
+      },
+      "declared": {}
+    },
+    {
+      "bc": "parcels",
+      "path": "src/main/*/com/example/post/parcels",
+      "detected": "undetermined",
+      "signals": {
+        "decider": 0,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 0
+      },
+      "declared": {}
+    }
+  ],
+  "endpoints": [],
+  "findings": [],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [],
+  "unhandledVariants": [
+    {
+      "slice": "parcels.parcel_board",
+      "processor": "ParcelBoardProjection",
+      "file": "src/main/java/com/example/post/parcels/views/parcel_board/ParcelBoardProjection.java",
+      "line": 12,
+      "parent": "ParcelEvent",
+      "variants": [
+        "PackedFully",
+        "PackedPartly"
+      ]
+    },
+    {
+      "slice": "letters.letter_log",
+      "processor": "LetterLogProjection",
+      "file": "src/main/kotlin/com/example/post/letters/views/letter_log/LetterLogProjection.kt",
+      "line": 10,
+      "parent": "LetterEvent",
+      "variants": [
+        "LetterReturned"
+      ]
+    }
+  ],
+  "unverified": [],
+  "unparsed": []
+}

@@ -1,0 +1,144 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/slice-source/cases/acceptance",
+  "manifests": 0,
+  "parsed": 0,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [
+    "reports.daily_load",
+    "tickets.open_ticket",
+    "tickets.ticket_queue"
+  ],
+  "lanes": [
+    {
+      "bc": "reports",
+      "path": "src/main/*/com/example/desk/reports",
+      "detected": "undetermined",
+      "signals": {
+        "decider": 0,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 0
+      },
+      "declared": {}
+    },
+    {
+      "bc": "tickets",
+      "path": "src/main/*/com/example/desk/tickets",
+      "detected": "decider",
+      "signals": {
+        "decider": 1,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 0
+      },
+      "declared": {}
+    }
+  ],
+  "endpoints": [],
+  "findings": [
+    {
+      "severity": "Should-fix",
+      "impact": "documentation",
+      "gate": "0 acceptance record",
+      "id": "ESS-G0",
+      "slice": null,
+      "file": "slice-check-accepted.yaml",
+      "line": 16,
+      "message": "entry 4 is not an acceptance record: missing reason",
+      "hint": "each entry is a mapping of gate, match, reason, accepted and review-by (dates as YYYY-MM-DD); an entry that is not one accepts nothing"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "documentation",
+      "gate": "0 acceptance record",
+      "id": "ESS-G0",
+      "slice": null,
+      "file": "slice-check-accepted.yaml",
+      "line": 20,
+      "message": "entry 5 is not an acceptance record: `review-by` 'soon' is not a date (YYYY-MM-DD)",
+      "hint": "each entry is a mapping of gate, match, reason, accepted and review-by (dates as YYYY-MM-DD); an entry that is not one accepts nothing"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "documentation",
+      "gate": "0 acceptance record",
+      "id": "ESS-G0",
+      "slice": null,
+      "file": "slice-check-accepted.yaml",
+      "line": 25,
+      "message": "entry 6 is not an acceptance record: unknown key(s) review_by; missing review-by",
+      "hint": "each entry is a mapping of gate, match, reason, accepted and review-by (dates as YYYY-MM-DD); an entry that is not one accepts nothing"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "documentation",
+      "gate": "0 acceptance record",
+      "id": "ESS-G0",
+      "slice": null,
+      "file": "slice-check-accepted.yaml",
+      "line": 30,
+      "message": "entry 7 is not a mapping",
+      "hint": "each entry is a mapping of gate, match, reason, accepted and review-by (dates as YYYY-MM-DD); an entry that is not one accepts nothing"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "coupling",
+      "gate": "8(c) bc-private import",
+      "id": "ESS-G8c",
+      "slice": "reports.daily_load",
+      "file": "src/main/java/com/example/desk/reports/views/daily_load/DailyLoadReport.java",
+      "line": 3,
+      "message": "imports com.example.desk.tickets.config.TicketLimits from tickets/config/ (targetShape: record) into bounded context 'reports'; only events/ and types/ cross a BC boundary [acceptance expired 2000-01-01: slice-check-accepted.yaml:6]",
+      "hint": "read-only (record): shared vocabulary belongs in the owner's types/ or events/; otherwise keep a copy on this side (rules/slice-design.md \u00a7R4)"
+    }
+  ],
+  "accepted": [
+    {
+      "severity": "Blocking",
+      "impact": "wrong-next-caller",
+      "gate": "8(a) slice import",
+      "id": "ESS-G8a",
+      "slice": "tickets.ticket_queue",
+      "file": "src/main/java/com/example/desk/tickets/views/ticket_queue/TicketQueuePreview.java",
+      "line": 3,
+      "message": "imports com.example.desk.tickets.use_cases.open_ticket.OpenTicketDecider from slice tickets.open_ticket (targetShape: decider)",
+      "hint": "a decider acts for its owner: collaborate through the owner's events, or send its command on the command bus (rules/slice-design.md \u00a7R4)",
+      "acceptedBy": {
+        "gate": "8(a)",
+        "match": "TicketQueuePreview",
+        "reason": "preview runs the decider in memory until the what-if view ships",
+        "accepted": "2026-09-01",
+        "review-by": "2099-12-31",
+        "line": 1
+      }
+    }
+  ],
+  "expiredAcceptances": [
+    {
+      "gate": "8",
+      "match": "DailyLoadReport",
+      "reason": "limits shared until reports get their own copy",
+      "accepted": "1999-01-01",
+      "review-by": "2000-01-01",
+      "line": 6
+    }
+  ],
+  "unusedAcceptances": [
+    {
+      "gate": "6",
+      "match": "Nowhere",
+      "reason": "an endpoint that has since been removed",
+      "accepted": "2026-01-01",
+      "review-by": "2099-01-01",
+      "line": 11,
+      "expired": false
+    }
+  ],
+  "writeSites": [],
+  "unhandledVariants": [],
+  "unverified": [],
+  "unparsed": []
+}

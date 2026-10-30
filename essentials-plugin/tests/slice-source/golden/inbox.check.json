@@ -25,6 +25,7 @@
   "findings": [
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "11(b) handled events",
       "id": "ESS-G11b",
       "slice": "depot.carrier",
@@ -34,6 +35,11 @@
       "hint": "the code is right and the manifest is stale \u2014 `/essentials:slice-check --fix-manifests` (manifest-reconciliation.md \u00a72)"
     }
   ],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [],
+  "unhandledVariants": [],
   "unverified": [
     {
       "slice": "depot.carrier",

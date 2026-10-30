@@ -26,6 +26,11 @@
   ],
   "endpoints": [],
   "findings": [],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [],
+  "unhandledVariants": [],
   "unverified": [],
   "unparsed": []
 }

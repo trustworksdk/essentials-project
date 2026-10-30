@@ -1,0 +1,479 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/slice-source/cases/unhandled-variants",
+  "manifestsRead": true,
+  "sourceFiles": 14,
+  "bcs": [
+    {
+      "name": "letters",
+      "path": "src/main/*/com/example/post/letters",
+      "dirs": [
+        "src/main/kotlin/com/example/post/letters"
+      ],
+      "languages": [
+        "kotlin"
+      ],
+      "slices": [
+        "letters.letter_log"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "undetermined"
+      }
+    },
+    {
+      "name": "parcels",
+      "path": "src/main/*/com/example/post/parcels",
+      "dirs": [
+        "src/main/java/com/example/post/parcels"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "parcels.notify_sender",
+        "parcels.packing_desk",
+        "parcels.parcel_board",
+        "parcels.parcel_trail"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "undetermined"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "parcels.notify_sender",
+      "idSource": "directory",
+      "bc": "parcels",
+      "bcPath": "src/main/*/com/example/post/parcels",
+      "dir": "src/main/java/com/example/post/parcels/automations/notify_sender",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.post.parcels.automations.notify_sender",
+      "files": [
+        "NotifySenderProcessor.java"
+      ],
+      "processors": [
+        {
+          "class": "NotifySenderProcessor",
+          "base": "EventProcessor",
+          "file": "src/main/java/com/example/post/parcels/automations/notify_sender/NotifySenderProcessor.java",
+          "line": 7
+        }
+      ],
+      "handlers": [
+        {
+          "class": "NotifySenderProcessor",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/post/parcels/automations/notify_sender/NotifySenderProcessor.java",
+          "line": 9,
+          "annotationLine": 8,
+          "message": {
+            "written": "ParcelShipped",
+            "name": "ParcelShipped",
+            "fqn": "com.example.post.parcels.events.ParcelShipped",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "ParcelShipped"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "parcels.packing_desk",
+      "idSource": "directory",
+      "bc": "parcels",
+      "bcPath": "src/main/*/com/example/post/parcels",
+      "dir": "src/main/java/com/example/post/parcels/views/packing_desk",
+      "role": "views",
+      "kind": "view",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.post.parcels.views.packing_desk",
+      "files": [
+        "PackingDeskProjection.java"
+      ],
+      "processors": [
+        {
+          "class": "PackingDeskProjection",
+          "base": "ViewEventProcessor",
+          "file": "src/main/java/com/example/post/parcels/views/packing_desk/PackingDeskProjection.java",
+          "line": 11
+        }
+      ],
+      "handlers": [
+        {
+          "class": "PackingDeskProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/post/parcels/views/packing_desk/PackingDeskProjection.java",
+          "line": 13,
+          "annotationLine": 12,
+          "message": {
+            "written": "PackedFully",
+            "name": "PackedFully",
+            "fqn": "com.example.post.parcels.events.PackedFully",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "PackedFully"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    },
+    {
+      "id": "parcels.parcel_board",
+      "idSource": "directory",
+      "bc": "parcels",
+      "bcPath": "src/main/*/com/example/post/parcels",
+      "dir": "src/main/java/com/example/post/parcels/views/parcel_board",
+      "role": "views",
+      "kind": "view",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.post.parcels.views.parcel_board",
+      "files": [
+        "ParcelBoardProjection.java"
+      ],
+      "processors": [
+        {
+          "class": "ParcelBoardProjection",
+          "base": "ViewEventProcessor",
+          "file": "src/main/java/com/example/post/parcels/views/parcel_board/ParcelBoardProjection.java",
+          "line": 12
+        }
+      ],
+      "handlers": [
+        {
+          "class": "ParcelBoardProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/post/parcels/views/parcel_board/ParcelBoardProjection.java",
+          "line": 14,
+          "annotationLine": 13,
+          "message": {
+            "written": "ParcelRegistered",
+            "name": "ParcelRegistered",
+            "fqn": "com.example.post.parcels.events.ParcelRegistered",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "ParcelRegistered"
+            }
+          ],
+          "envelope": false
+        },
+        {
+          "class": "ParcelBoardProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/post/parcels/views/parcel_board/ParcelBoardProjection.java",
+          "line": 18,
+          "annotationLine": 17,
+          "message": {
+            "written": "ParcelShipped",
+            "name": "ParcelShipped",
+            "fqn": "com.example.post.parcels.events.ParcelShipped",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "ParcelShipped"
+            },
+            {
+              "name": "message",
+              "type": "OrderedMessage"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    },
+    {
+      "id": "parcels.parcel_trail",
+      "idSource": "directory",
+      "bc": "parcels",
+      "bcPath": "src/main/*/com/example/post/parcels",
+      "dir": "src/main/java/com/example/post/parcels/views/parcel_trail",
+      "role": "views",
+      "kind": "view",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.post.parcels.views.parcel_trail",
+      "files": [
+        "ParcelTrailProjection.java"
+      ],
+      "processors": [
+        {
+          "class": "ParcelTrailProjection",
+          "base": "ViewEventProcessor",
+          "file": "src/main/java/com/example/post/parcels/views/parcel_trail/ParcelTrailProjection.java",
+          "line": 7
+        }
+      ],
+      "handlers": [
+        {
+          "class": "ParcelTrailProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/post/parcels/views/parcel_trail/ParcelTrailProjection.java",
+          "line": 9,
+          "annotationLine": 8,
+          "message": {
+            "written": "ParcelEvent",
+            "name": "ParcelEvent",
+            "fqn": "com.example.post.parcels.events.ParcelEvent",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "ParcelEvent"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    },
+    {
+      "id": "letters.letter_log",
+      "idSource": "directory",
+      "bc": "letters",
+      "bcPath": "src/main/*/com/example/post/letters",
+      "dir": "src/main/kotlin/com/example/post/letters/views/letter_log",
+      "role": "views",
+      "kind": "view",
+      "manifest": null,
+      "language": "kotlin",
+      "package": "com.example.post.letters.views.letter_log",
+      "files": [
+        "LetterLogProjection.kt"
+      ],
+      "processors": [
+        {
+          "class": "LetterLogProjection",
+          "base": "ViewEventProcessor",
+          "file": "src/main/kotlin/com/example/post/letters/views/letter_log/LetterLogProjection.kt",
+          "line": 10
+        }
+      ],
+      "handlers": [
+        {
+          "class": "LetterLogProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/kotlin/com/example/post/letters/views/letter_log/LetterLogProjection.kt",
+          "line": 12,
+          "annotationLine": 11,
+          "message": {
+            "written": "LetterPosted",
+            "name": "LetterPosted",
+            "fqn": "com.example.post.letters.events.LetterPosted",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "LetterPosted"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    }
+  ],
+  "messages": [
+    {
+      "name": "LetterLost",
+      "type": "event",
+      "bc": "letters",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "id: String"
+      ],
+      "declaredIn": "src/main/kotlin/com/example/post/letters/events/LetterLost.kt",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "LetterPosted",
+      "type": "event",
+      "bc": "letters",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "id: String"
+      ],
+      "declaredIn": "src/main/kotlin/com/example/post/letters/events/LetterEvent.kt",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "LetterReturned",
+      "type": "event",
+      "bc": "letters",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "id: String"
+      ],
+      "declaredIn": "src/main/kotlin/com/example/post/letters/events/LetterEvent.kt",
+      "line": 6,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "PackedFully",
+      "type": "event",
+      "bc": "parcels",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "id: String"
+      ],
+      "declaredIn": "src/main/java/com/example/post/parcels/events/PackedFully.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "PackedPartly",
+      "type": "event",
+      "bc": "parcels",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "id: String"
+      ],
+      "declaredIn": "src/main/java/com/example/post/parcels/events/PackedPartly.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "ParcelDelivered",
+      "type": "event",
+      "bc": "parcels",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "id: String"
+      ],
+      "declaredIn": "src/main/java/com/example/post/parcels/events/ParcelDelivered.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "ParcelRegistered",
+      "type": "event",
+      "bc": "parcels",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "id: String"
+      ],
+      "declaredIn": "src/main/java/com/example/post/parcels/events/ParcelRegistered.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "ParcelShipped",
+      "type": "event",
+      "bc": "parcels",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "id: String"
+      ],
+      "declaredIn": "src/main/java/com/example/post/parcels/events/ParcelShipped.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": [],
+  "tests": {
+    "roots": [],
+    "classes": []
+  }
+}
