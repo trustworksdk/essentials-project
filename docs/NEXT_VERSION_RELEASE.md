@@ -24,6 +24,7 @@ and two lock waits removed.
 - Event processors: `PartitionedEventProcessor` runs its handlers on every instance on the shard-owned engine (§2.7);
   an `EventProcessor` overridden to competing consumers on a per-node queue now refuses to start (§1); the default retry
   budget outlasts a failover, minutes instead of ~10 s (§1.1.4).
+- Command handlers: an `AnnotatedCommandHandler` failure is logged at DEBUG, not ERROR - the sender reports it (§1.1.5).
 - Fenced locks: opt-in spreading of async-acquired locks, and so of exclusive processors, over the instances (§2.9).
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1). The
@@ -169,6 +170,22 @@ budget in one line.
 - New additive SPI methods, all with defaults: `FencedLockManager.getLockTimeOut()`,
   `DurableQueues`/`Inboxes.maxUnservedAfterInstanceLoss()`, `EventStoreSubscriptionManager.getFencedLockManager()`, and
   the shard-owned `MessageQueues.leaseTtl()`.
+
+#### 1.1.5 A failed command is no longer logged at ERROR by `AnnotatedCommandHandler` (`reactive`)
+
+`AnnotatedCommandHandler` logged every exception its handler method threw at ERROR, with the full stack trace, and then
+rethrew it - so every failure was reported twice, once here and once by whoever sent the command, and once more per
+retry on a durable command bus. Failures a sender expects and retries on purpose (a "not yet" exception) flooded the
+log: a trading-demo instance wrote about 6 000 stack traces in two minutes. The default log level
+(`getExceptionLogLevel`) is now DEBUG. The failure is still reported where it is handled: thrown to a `send` caller,
+logged by the `SendAndDontWaitErrorHandler` of a `sendAndDontWait`, and on a `DurableLocalCommandBus` kept on the queued
+message (`last_delivery_error`, queue statistics) and logged at ERROR by the queue consumer when it dead-letters the
+command - a retry is logged at DEBUG there, so a command that fails and then succeeds on a retry no longer shows above
+DEBUG at all.
+
+**What to do:** nothing, unless you relied on this log line - for example a `sendAndDontWait` with a custom
+`SendAndDontWaitErrorHandler` that logs nothing. Then override `getExceptionLogLevel` in your handler to return
+`Optional.of(Level.ERROR)`, or log in that error handler.
 
 ---
 

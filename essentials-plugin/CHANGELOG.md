@@ -16,6 +16,7 @@ targets, with a `-N` suffix for plugin-only releases.
   sweep, no longer that it may be lost.
   The foundation reference describes opt-in lock spreading (`essentials.fenced-lock-manager.spread-locks`), its
   rate-limited rebalancing (`spread-locks-rebalance-interval`) and their costs.
+  The reactive reference says `AnnotatedCommandHandler` logs a rethrown handler failure at DEBUG, not ERROR.
   No skill, rule or script changed.
 
 ## 0.60.1 — targets Essentials 0.60.1
