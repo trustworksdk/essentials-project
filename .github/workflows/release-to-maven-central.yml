@@ -38,7 +38,7 @@ jobs:
         # fails until it has them). maven.deploy.skip does not do it - central-publishing-maven-plugin never reads it
         run: >-
           mvn -B clean deploy -P release -DskipTests -DskipDependencyCheck=true
-          -pl '!:essentials-trading-demo,!:essentials-performance-lab,!:essentials-spring-examples,!:postgresql-cqrs,!:postgresql-inbox-outbox,!:mongodb-inbox-outbox'
+          -pl '!:essentials-trading-demo,!:essentials-performance-lab,!:essentials-spring-examples,!:postgresql-cqrs,!:postgresql-inbox-outbox,!:mongodb-inbox-outbox,!:essentials-webshop-demo'
         env:
           MAVEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}

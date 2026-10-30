@@ -1891,7 +1891,7 @@ const CONCEPTS = [
       'A row keeps the result: <code>UPDATE products SET price = 1225.00</code>. An event keeps <em>what happened</em>, so the old price isn\'t lost.',
       'The code that publishes it doesn\'t know who listens. Any number of handlers can react, and adding one changes nothing upstream.',
       'Some facts need only the id: <code>OrderPlaced(id)</code>. Others carry the why: <code>OrderCancelled(id, reason)</code>.',
-      '<span class="src">Webshop demo: <code>sales/events/ProductEvent.kt</code>, <code>OrderEvent.kt</code></span>'],
+      '<span class="src">Real types: <code>sales/events/ProductEvent.kt</code>, <code>OrderEvent.kt</code></span>'],
     aside: codebox('evt', 'Stored and sent as JSON: its type, and its fields', `event_type     <b>ProductPriceChanged</b>
 event_payload  {"id": "PRD-7f3a", "price": 1225.00}`) },
 
@@ -1975,7 +1975,7 @@ event_payload  {"id": "PRD-7f3a", "price": 1225.00}`) },
       'One command, one intent: <code>ChangeProductPrice</code>, not <code>UpdateProduct</code>. Chapter 7 shows why.',
       'A command is handled once and then gone. The event it produces is kept for good.',
       'On the left, the same request is a method call that sets a field.',
-      '<span class="src">Webshop demo: <code>sales/use_cases/change_product_price/ChangeProductPrice.kt</code></span>'] },
+      '<span class="src">Real type: <code>sales/use_cases/change_product_price/ChangeProductPrice.kt</code></span>'] },
 
   { after: '5.3', id: '5.decider', name: 'Decider', title: 'What is a decider?',
     lede: 'A plain function that makes one decision: given a command and the events so far, it returns new events, none, or a refusal. It never touches the database; Essentials loads the events and appends the result.',
@@ -1991,7 +1991,7 @@ event_payload  {"id": "PRD-7f3a", "price": 1225.00}`) },
       'It reads only what its decision needs: here, the last price.',
       'Its tests need no mocks and no database: events in, events out.',
       'One decider per command. Chapter 6 shows why that keeps each one small.',
-      '<span class="src">Webshop demo: <code>ChangeProductPriceDecider.kt</code></span>'] },
+      '<span class="src">Real code: <code>ChangeProductPriceDecider.kt</code></span>'] },
 
   { after: '5.5', id: '5.projection', name: 'Projection', title: 'What is a projection?',
     lede: 'Code that turns events into a table shaped for one screen or one question, called a <em>view</em> or read model. It applies the events in order, one at a time.',
@@ -2004,7 +2004,7 @@ event_payload  {"id": "PRD-7f3a", "price": 1225.00}`) },
       'Many projections can read the same events, each building the table its own screen needs.',
       'The view is derived: delete it, replay the events, and it comes back the same (5.8).',
       'It runs after the append, so it can be a moment behind. Chapter 9 deals with that.',
-      '<span class="src">Webshop demo: <code>ProductsForSaleViewProjection.kt</code>, a <code>ViewEventProcessor</code></span>'] },
+      '<span class="src">Real code: <code>ProductsForSaleViewProjection.kt</code>, a <code>ViewEventProcessor</code></span>'] },
 
   { after: '6.1', id: '6.aggregate', name: 'Aggregate', title: 'What is an aggregate?',
     lede: 'One thing decisions are made about, with its own id: an order, a product. In the classic style it is a class that is rebuilt from all of its events before every command, and records new events from its methods.',
@@ -2062,8 +2062,7 @@ CHAPTERS.push({
           `<dt>Right pane</dt><dd>The same shop, rebuilt one stage at a time: event-driven, then event sourced. The track at the bottom shows the stage.</dd>` +
           `<dt>Inbox</dt><dd>Top right. Each card is a new requirement both teams have to build.</dd>` +
           `<dt>Caption</dt><dd>Under the inbox. A sentence above a pane lights up while that pane plays, and the other pane dims.</dd>` +
-          `<dt>Pause</dt><dd>When the left pane has played, the step waits: press → again to play the right.</dd>` +
-          `<dt>Code</dt><dd>Real code comes from the webshop demo, <code>examples/essentials-webshop-demo</code> on the <code>presentation</code> branch. Anything else is tagged <em>illustrative</em>.</dd></dl>` +
+          `<dt>Pause</dt><dd>When the left pane has played, the step waits: press → again to play the right.</dd></dl>` +
           `<div class="hint">→ to step · a chapter number on the track jumps there · ☀ or H for the light palette</div>`, { cls: 'titlecard intro paper' });
       } },
     { id: '1.1', cap: 'Two copies of the same shop. For now they are identical, and that is the point: event sourcing starts from what you already know.',
@@ -2374,7 +2373,7 @@ CHAPTERS.push({
       run: async s => { await s.focus('R'); await playEs(s, 'R'); } },
     { id: '4.6', cap: 'Same reaction, less plumbing: the processor brings its own inbox, retries and dead letters, and nothing has to be registered on a bus.',
       run: async s => {
-        s.diff({ wide: { title: '◆2b · the email subscriber, re-homed onto the event store', path: 'webshop demo · same shape as payment/automations/hold_funds_on_order_placed/HoldFundsOnOrderPlacedPolicy.kt', diff: 1, code: `
+        s.diff({ wide: { title: '◆2b · the email subscriber, re-homed onto the event store', path: 'same shape as payment/automations/hold_funds_on_order_placed/HoldFundsOnOrderPlacedPolicy.kt', diff: 1, code: `
 -@Component
 -class SendConfirmationEmail(outboxes: Outboxes, private val mailer: Mailer) : AnnotatedEventHandler() {
 -    private val outbox = outboxes.getOrCreateOutbox(
@@ -2560,7 +2559,7 @@ fun changePrice(id: ProductId, price: Amount) {
     val product = products.findById(id).orElseThrow()
     product.price = price
 }`, after: 'Short, familiar, and the old price is gone.' },
-          R: { title: '◆3 · the real decider and projection handler', path: 'webshop demo · sales/use_cases/change_product_price · sales/views/products_for_sale', code: `
+          R: { title: '◆3 · the real decider and projection handler', path: 'sales/use_cases/change_product_price · sales/views/products_for_sale', code: `
 class ChangeProductPriceDecider : Decider<ChangeProductPrice, ProductEvent> {
     override fun handle(cmd: ChangeProductPrice, events: List<ProductEvent>): ProductPriceChanged? {
         if (events.isEmpty()) throw ProductHasNotBeenAddedException(cmd.id)
@@ -2795,7 +2794,7 @@ CHAPTERS.push({
     { id: '6.5', cap: 'One slice, whole. When an evolver earns its place, it is just as small.',
       run: async s => {
         s.diff({
-          L: { title: '◆4 · part 2 · PlaceOrderDecider', path: 'webshop demo · sales/use_cases/place_order', code: `
+          L: { title: '◆4 · part 2 · PlaceOrderDecider', path: 'sales/use_cases/place_order', code: `
 class PlaceOrderDecider : Decider<PlaceOrder, OrderEvent> {
     override fun handle(cmd: PlaceOrder, events: List<OrderEvent>): OrderPlaced? {
         if (events.any { it is OrderPlaced }) return null   // a double click, not a second order
@@ -2806,7 +2805,7 @@ class PlaceOrderDecider : Decider<PlaceOrder, OrderEvent> {
         return OrderPlaced(cmd.id)
     }
 }`, after: 'No fields, no state object: the decision asks the event list directly.' },
-          R: { title: '◆4 · part 2 · BasketLinesEvolver', path: 'webshop demo · sales/use_cases/remove_item_from_shopping_basket', code: `
+          R: { title: '◆4 · part 2 · BasketLinesEvolver', path: 'sales/use_cases/remove_item_from_shopping_basket', code: `
 fun basketLinesEvolver() = Evolver<ShoppingBasketEvent, Map<ProductId, List<Amount>>> { event, state ->
     val current = state ?: emptyMap()
     when (event) {
