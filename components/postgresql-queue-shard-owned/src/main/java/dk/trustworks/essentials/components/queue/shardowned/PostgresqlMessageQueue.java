@@ -466,7 +466,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             try {
                 // Committed here only when the connection came in autocommit mode; then the owners are woken after the
                 // commit (see wakeUp). Otherwise something else commits, and the notification has to ride along
-                writeBatch(connection, messages, unorderedByShard, orderedByShard, ids, !autoCommit);
+                writeBatch(connection, messages, unorderedByShard, orderedByShard, ids, !autoCommit, false);
                 if (autoCommit) {
                     connection.commit();
                     committedHere = true;
@@ -536,6 +536,48 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     /**
      * {@inheritDoc}
      * <p>
+     * Validated and intercepted as {@link #enqueue(Connection, List)} is.
+     */
+    @Override
+    public List<MessageId> enqueueIfAbsent(Connection connection, List<Message> messages) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        requireNonNull(messages, "No messages provided");
+        if (messages.isEmpty()) {
+            return List.of();
+        }
+        requireTrue(!connection.getAutoCommit(),
+                    "The connection is in autocommit mode, so it cannot carry a transaction for the "
+                            + "enqueue to join. Begin a transaction first");
+        if (!interceptors.isEmpty()) {
+            return intercepted(messages, connection, this::enqueueOnConnectionIfAbsent);
+        }
+        return enqueueOnConnectionIfAbsent(messages, connection);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Validated and intercepted as {@link #enqueue(Connection, List)} is.
+     */
+    @Override
+    public List<MessageId> enqueueWithoutWakeupIfAbsent(Connection connection, List<Message> messages) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        requireNonNull(messages, "No messages provided");
+        if (messages.isEmpty()) {
+            return List.of();
+        }
+        requireTrue(!connection.getAutoCommit(),
+                    "The connection is in autocommit mode, so it cannot carry a transaction for the "
+                            + "enqueue to join. Begin a transaction first");
+        if (!interceptors.isEmpty()) {
+            return intercepted(messages, connection, this::enqueueOnConnectionWithoutWakeupIfAbsent);
+        }
+        return enqueueOnConnectionWithoutWakeupIfAbsent(messages, connection);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
      * A unit an owner of this process serves actively is signalled in memory, through the runtime this queue's
      * consumers run on (its own, or the one shared per {@code DataSource} if some queue borrows it - never one stood
      * up for the purpose). Every other unit is notified through that runtime's {@link ShardWakeupNotifier}, or this
@@ -584,17 +626,33 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     private List<MessageId> enqueueOnConnectionWithoutWakeup(List<Message> messages, Connection connection) throws SQLException {
+        return enqueueOnConnectionWithoutWakeup(messages, connection, false);
+    }
+
+    private List<MessageId> enqueueOnConnectionWithoutWakeupIfAbsent(List<Message> messages, Connection connection) throws SQLException {
+        return enqueueOnConnectionWithoutWakeup(messages, connection, true);
+    }
+
+    private List<MessageId> enqueueOnConnectionWithoutWakeup(List<Message> messages, Connection connection, boolean ifAbsent) throws SQLException {
         var routed = route(messages);
         var ids    = new MessageId[messages.size()];
-        writeBatch(connection, messages, routed.unordered(), routed.ordered(), ids, false);
+        writeBatch(connection, messages, routed.unordered(), routed.ordered(), ids, false, ifAbsent);
         notifyEnqueued(routed.unordered(), routed.ordered());
         return List.of(ids);
     }
 
     private List<MessageId> enqueueOnConnection(List<Message> messages, Connection connection) throws SQLException {
+        return enqueueOnConnection(messages, connection, false);
+    }
+
+    private List<MessageId> enqueueOnConnectionIfAbsent(List<Message> messages, Connection connection) throws SQLException {
+        return enqueueOnConnection(messages, connection, true);
+    }
+
+    private List<MessageId> enqueueOnConnection(List<Message> messages, Connection connection, boolean ifAbsent) throws SQLException {
         var routed = route(messages);
         var ids    = new MessageId[messages.size()];
-        writeBatch(connection, messages, routed.unordered(), routed.ordered(), ids, true);
+        writeBatch(connection, messages, routed.unordered(), routed.ordered(), ids, true, ifAbsent);
         // Observers are told now rather than on commit: this method does not know when, or whether,
         // the caller commits. An observer counting enqueues on a rolled-back transaction is a
         // documented inaccuracy of the transactional path, not a defect in the engine.
@@ -691,7 +749,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                             Map<Integer, List<Integer>> unorderedByShard,
                             Map<Integer, List<Integer>> orderedByShard,
                             MessageId[] ids,
-                            boolean notify) throws SQLException {
+                            boolean notify,
+                            boolean ifAbsent) throws SQLException {
         for (var entry : unorderedByShard.entrySet()) {
             var positions = entry.getValue();
             var rows = positions.stream()
@@ -713,7 +772,11 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                                                                      message.payloadType(),
                                                                                      message.delay()))
                                 .toList();
-            var seqs = storage.enqueueOrderedBatch(connection, entry.getKey(), rows, notify);
+            // Both return one sequence value per row, in the order given (the plain batch's are ascending, which is also
+            // the order given: nextval runs in batch order)
+            var seqs = ifAbsent
+                       ? storage.enqueueOrderedBatchIfAbsent(connection, entry.getKey(), rows, notify)
+                       : storage.enqueueOrderedBatch(connection, entry.getKey(), rows, notify);
             assign(ids, positions, seqs, MessageId.Lane.ORDERED, entry.getKey());
         }
     }

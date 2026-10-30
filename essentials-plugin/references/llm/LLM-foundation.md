@@ -927,6 +927,14 @@ public class OrderedMessage extends Message {
 
 Messages with same `key` processed in `order` sequence. Different `key`s can be parallel.
 
+**`IdentifiedByKeyAndOrder`** (same package, marker interface, since 0.61): put it on an `OrderedMessage` subclass
+whose key and order identify the message. A `DurableQueues` that keeps ordered messages unique per key and order (the
+shard-owned engine) then leaves one already queued in place instead of refusing it - only when every ordered message of
+the `queueMessage(s)` call carries it, and on shard-owned only after a first refusal (that call fails; its retry, and the
+queue's such calls for 10 minutes, are written "if absent"). `EventProcessor`'s forwarded event references do, so a reader
+re-forwarding after an unclean failover no longer stops. Never put it on a message a reused key/order could describe
+differently: that message would be dropped instead of refused. `PostgresqlDurableQueues` and MongoDB ignore it.
+
 ### Single-Node Ordering
 
 Automatic - no configuration:

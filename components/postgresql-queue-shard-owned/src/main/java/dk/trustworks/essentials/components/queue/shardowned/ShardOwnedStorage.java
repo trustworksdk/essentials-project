@@ -1523,6 +1523,88 @@ public final class ShardOwnedStorage {
     }
 
     /**
+     * {@link #enqueueOrderedBatch(Connection, int, List, boolean)}, but a message whose {@code (msg_key, key_order)} is
+     * already queued in the shard is not inserted and not refused: the ordered lane's primary key would otherwise fail the
+     * whole batch. For a producer whose key and order identify the message - an event processor's reader re-forwarding the
+     * events since its last resume point after an unclean failover - enqueuing it again while it is queued is a no-op.
+     * <p>
+     * A skipped message still uses up a sequence value ({@code nextval} runs before the conflict is found). The ordered
+     * lane's watermark does not care about holes; the unordered lane, whose holes are chased, is never written this way.
+     *
+     * @return per message, in the order given (not sorted): the sequence value inserted, the sequence value of the row
+     * already queued under its key and order, or {@code 0} - which addresses nothing - when that row was delivered and
+     * acknowledged between the insert and the lookup
+     */
+    public List<Long> enqueueOrderedBatchIfAbsent(Connection connection, int shard, List<OrderedPayload> messages, boolean notify) throws SQLException {
+        return inTransaction(connection, () -> enqueueOrderedBatchIfAbsentInternal(connection, shard, messages, notify));
+    }
+
+    private List<Long> enqueueOrderedBatchIfAbsentInternal(Connection connection, int shard, List<OrderedPayload> messages, boolean notify) throws SQLException {
+        assignTransactionIdBeforeAllocating(connection);
+        var sql = "INSERT INTO " + ORDERED_TABLE
+                + " (queue_id, shard, msg_key, key_order, seq, payload, payload_type, visible_at)"
+                + " VALUES (?, ?, ?, ?, nextval(?::regclass), ?, ?, now() + make_interval(secs => ? / 1000.0))"
+                + " ON CONFLICT (queue_id, shard, msg_key, key_order) DO NOTHING";
+        var inserted = new HashMap<OrderedKey, Long>();
+        try (var statement = connection.prepareStatement(sql, new String[]{"seq", "msg_key", "key_order"})) {
+            for (var message : messages) {
+                statement.setShort(1, queueId);
+                statement.setInt(2, shard);
+                statement.setString(3, message.key());
+                statement.setLong(4, message.keyOrder());
+                statement.setString(5, ShardOwnedSchema.orderedSequenceName(queueId));
+                statement.setBytes(6, message.payload());
+                statement.setInt(7, message.payloadType());
+                statement.setLong(8, message.delayMillis());
+                statement.addBatch();
+            }
+            statement.executeBatch();
+            try (var keys = statement.getGeneratedKeys()) {
+                while (keys.next()) {
+                    inserted.put(new OrderedKey(keys.getString(2), keys.getLong(3)), keys.getLong(1));
+                }
+            }
+        }
+        var alreadyQueued = inserted.size() == messages.size()
+                            ? Map.<OrderedKey, Long>of()
+                            : queuedSeqs(connection, shard, messages.stream()
+                                                                    .map(message -> new OrderedKey(message.key(), message.keyOrder()))
+                                                                    .filter(key -> !inserted.containsKey(key))
+                                                                    .toList());
+        var seqs = new ArrayList<Long>(messages.size());
+        for (var message : messages) {
+            var key = new OrderedKey(message.key(), message.keyOrder());
+            seqs.add(inserted.getOrDefault(key, alreadyQueued.getOrDefault(key, 0L)));
+        }
+        if (notify) {
+            ShardWakeupListener.notifyShard(connection, queueId, "ordered", shard);
+        }
+        return seqs;
+    }
+
+    private Map<OrderedKey, Long> queuedSeqs(Connection connection, int shard, List<OrderedKey> keys) throws SQLException {
+        var sql = "SELECT o.msg_key, o.key_order, o.seq FROM " + ORDERED_TABLE + " o"
+                + " JOIN unnest(?::text[], ?::bigint[]) AS k(msg_key, key_order) ON o.msg_key = k.msg_key AND o.key_order = k.key_order"
+                + " WHERE o.queue_id = ? AND o.shard = ?";
+        var seqs = new HashMap<OrderedKey, Long>();
+        try (var statement = connection.prepareStatement(sql)) {
+            statement.setArray(1, connection.createArrayOf("text", keys.stream().map(OrderedKey::key).toArray()));
+            statement.setArray(2, connection.createArrayOf("bigint", keys.stream().map(OrderedKey::keyOrder).toArray()));
+            statement.setShort(3, queueId);
+            statement.setInt(4, shard);
+            try (var resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    seqs.put(new OrderedKey(resultSet.getString(1), resultSet.getLong(2)), resultSet.getLong(3));
+                }
+            }
+        }
+        return seqs;
+    }
+
+    private record OrderedKey(String key, long keyOrder) {
+    }
+
+    /**
      * Discovery scan for the ordered lane, on the {@code seq} index.
      * <p>
      * Note what is absent: no correlated subquery asking whether an earlier {@code key_order} exists

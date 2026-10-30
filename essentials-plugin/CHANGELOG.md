@@ -17,6 +17,7 @@ targets, with a `-N` suffix for plugin-only releases.
   The foundation reference describes opt-in lock spreading (`essentials.fenced-lock-manager.spread-locks`), its
   rate-limited rebalancing (`spread-locks-rebalance-interval`) and their costs.
   The reactive reference says `AnnotatedCommandHandler` logs a rethrown handler failure at DEBUG, not ERROR.
+  The foundation reference describes `IdentifiedByKeyAndOrder`; the shard-owned reference `enqueueIfAbsent`.
   No skill, rule or script changed.
 
 ## 0.60.1 — targets Essentials 0.60.1

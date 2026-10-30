@@ -148,6 +148,41 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     }
 
     /**
+     * As {@link #enqueue(Connection, List)}, but an ordered message whose key and {@code key_order} are already queued is
+     * not enqueued again - and not refused. {@link #enqueue(Connection, List)} refuses it, so a reused {@code key_order}
+     * never silently replaces or drops a queued message; this is for a producer whose key and order identify the
+     * message, so that enqueuing it again while it is queued means nothing: an event processor's reader re-forwarding,
+     * after an unclean failover, the events since its last resume point. Unordered messages are enqueued as by
+     * {@link #enqueue(Connection, List)} - they carry no identity to compare.
+     * <p>
+     * The id returned for a message not enqueued again is the queued message's, or one with {@code seq} 0, which
+     * addresses nothing, when that message was delivered and acknowledged meanwhile. The default enqueues as
+     * {@link #enqueue(Connection, List)} does, refusal included.
+     *
+     * @param connection the caller's connection, inside the caller's transaction
+     * @param messages   the messages
+     * @return one id per message, in the order given
+     * @throws SQLException when the enqueue fails
+     */
+    default List<MessageId> enqueueIfAbsent(Connection connection, List<Message> messages) throws SQLException {
+        return enqueue(connection, messages);
+    }
+
+    /**
+     * {@link #enqueueIfAbsent(Connection, List)} without the wake-up notification, as
+     * {@link #enqueueWithoutWakeup(Connection, List)} is to {@link #enqueue(Connection, List)}. The default enqueues as
+     * {@link #enqueueWithoutWakeup(Connection, List)} does.
+     *
+     * @param connection the caller's connection, inside the caller's transaction
+     * @param messages   the messages
+     * @return one id per message, in the order given
+     * @throws SQLException when the enqueue fails
+     */
+    default List<MessageId> enqueueWithoutWakeupIfAbsent(Connection connection, List<Message> messages) throws SQLException {
+        return enqueueWithoutWakeup(connection, messages);
+    }
+
+    /**
      * Wake the owners of the units {@code enqueued} were written to, after the transaction that wrote them by
      * {@link #enqueueWithoutWakeup(Connection, List)} has committed. Never blocks on the database: owners in this
      * process are signalled in memory, and the notifications for the rest are queued and sent batched.

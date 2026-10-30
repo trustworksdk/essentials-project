@@ -370,10 +370,12 @@ Two consequences:
 - **Re-forwarding collides with the ordered lane's primary key.** `shard_queue_ordered` has
   `PRIMARY KEY (queue_id, shard, msg_key, key_order)` (`ShardOwnedSchema.java:221`), and the ordered insert has no
   `ON CONFLICT` (`ShardOwnedStorage.java:1029-1031`). If a re-forwarded event is still queued, the forwarding
-  transaction fails. The reader then retries and, under the default error policy, stops. This is **inferred, not
-  observed**, and today's exclusive `EventProcessor` on this engine is exposed to the same thing after an unclean
-  reader failover. It needs a reproducer (§7, IT-4). A partitioned mode needs an idempotent ordered enqueue
-  ("already present ⇒ success").
+  transaction fails. The reader then retries and, under the default error policy, stops. **Observed (2026-10-30,
+  `EventProcessorReForwardOnShardOwnedIT`, IT-4)** on today's exclusive `EventProcessor`: the new reader's re-forward
+  fails on `shard_queue_ordered_pkey`, `RETRY_N_THEN_STOP` retries three times within a few hundred milliseconds and
+  stops the subscription (ERROR), the auto-resumer restarts it 10 s later, and that repeats until the originals have
+  drained - a stall per unclean failover as long as the backlog, not a loss. A partitioned mode needs an idempotent
+  ordered enqueue ("already present ⇒ success"), and today's `EventProcessor` on this engine needs it too.
 - **Resume point meaning changes.** In (a) the resume point means *forwarded*, not *handled*. Whether the view is
   current becomes reader lag + queue depth for the processor's queue. The admin subscription page alone no longer
   answers it (§6).
@@ -799,6 +801,13 @@ Answered since the first version of this document:
 - **Should the mode exist only on the `EventProcessor` side** (old Q1, second half): it exists there now, as
   `PartitionedEventProcessor`. What remains is whether views get it too (`PartitionedViewEventProcessor`).
 - **Class or setting:** a class per contract (`docs/event-processor-specializations.md`).
+- **(a1) and questions 2-7 (2026-10-30):** build it, as `PartitionedViewEventProcessor` (named like
+  `PartitionedEventProcessor`), with the recommendations below: a reference in the forwarded message, the key qualified
+  with the aggregate type, reset only while the processor is stopped cluster-wide, no new admin entity, a clean stop to
+  migrate a view. Question 5 was settled by IT-4 (`EventProcessorReForwardOnShardOwnedIT`, §3.8): the re-forward did stop
+  today's `EventProcessor`, so the idempotent ordered enqueue is in the engine, opt-in - `MessageQueue.enqueueIfAbsent`
+  (additive default methods) for messages marked `IdentifiedByKeyAndOrder` (foundation), which the forwarded event
+  references are - and every other ordered enqueue still refuses a reused key and order.
 - **Spread the fenced locks ((d), §3.5)?** Yes, as an opt-in on `DBFencedLockManager`, off by default, with its cons
   (a pause per moved processor on every membership change, whole processors only, new timing cases in the lock manager)
   documented wherever the option is. Built as the prototype the recommendation described (membership lock, rendezvous

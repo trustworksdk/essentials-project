@@ -185,6 +185,16 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     private final StartHook startHook;
 
     private final AtomicBoolean warnedAboutUnitOfWorkWithoutConnection = new AtomicBoolean();
+    /**
+     * How long after a refused enqueue of {@link IdentifiedByKeyAndOrder} messages their queue is written with the engine's
+     * "if absent" insert - long enough for the backlog a reader re-forwards after an unclean failover to drain
+     */
+    static final Duration IF_ABSENT_AFTER_A_REFUSAL = Duration.ofMinutes(10);
+    /**
+     * Queues whose {@link IdentifiedByKeyAndOrder} messages are enqueued "if absent", mapped to until when (by
+     * {@link System#nanoTime()}) - see {@link #identifiedByKeyAndOrder}
+     */
+    private final ConcurrentMap<QueueName, Long> enqueueIfAbsentUntilNanos = new ConcurrentHashMap<>();
 
     private final EnqueueOutsideUnitOfWorkGuard enqueueOutsideUnitOfWorkGuard = new EnqueueOutsideUnitOfWorkGuard(ShardOwnedDurableQueues.class);
 
@@ -463,8 +473,11 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                 // withUnitOfWork, not getCurrentUnitOfWork(): it joins an Essentials UnitOfWork already bound AND a plain
                 // Spring transaction (@Transactional / TransactionTemplate) nothing has bound one to yet - the Spring-aware
                 // factories create one for that transaction. Outside any transaction it starts a UnitOfWork and commits it.
+                var identified = identifiedByKeyAndOrder(messagesToQueue);
+                var ifAbsent   = identified && enqueuesIfAbsent(queueName);
                 ids = unitOfWorkFactory.withUnitOfWork(unitOfWork -> unitOfWork instanceof HandleAwareUnitOfWork handleAwareUnitOfWork
-                                                                     ? onQueue(queueName, what, () -> enqueueWakingAfterCommit(queue, handleAwareUnitOfWork, messages))
+                                                                     ? onQueue(queueName, what, () -> enqueueNotingARefusal(queueName, identified && !ifAbsent,
+                                                                                                                             () -> enqueueWakingAfterCommit(queue, handleAwareUnitOfWork, messages, ifAbsent)))
                                                                      : enqueueOnOwnConnection(queue, queueName, what, messages, unitOfWork));
             } catch (UnitOfWorkException e) {
                 // withUnitOfWork wraps whatever the enqueue threw. The queue-naming DurableQueueException is what this
@@ -1108,17 +1121,92 @@ public class ShardOwnedDurableQueues implements DurableQueues {
      * callback gets the in-transaction notification instead.
      */
     private List<MessageId> enqueueWakingAfterCommit(MessageQueue queue, HandleAwareUnitOfWork unitOfWork,
-                                                     List<dk.trustworks.essentials.components.queue.shardowned.spi.Message> messages) throws SQLException {
+                                                     List<dk.trustworks.essentials.components.queue.shardowned.spi.Message> messages,
+                                                     boolean ifAbsent) throws SQLException {
         var connection = unitOfWork.handle().getConnection();
         var wakeUp     = new PendingWakeUp(queue);
         try {
             unitOfWork.registerLifecycleCallbackForResource(wakeUp, WAKE_UP_AFTER_COMMIT);
         } catch (UnsupportedOperationException cannotCarryTheCallback) {
-            return queue.enqueue(connection, messages);
+            return ifAbsent ? queue.enqueueIfAbsent(connection, messages) : queue.enqueue(connection, messages);
         }
-        var ids = queue.enqueueWithoutWakeup(connection, messages);
+        var ids = ifAbsent ? queue.enqueueWithoutWakeupIfAbsent(connection, messages) : queue.enqueueWithoutWakeup(connection, messages);
         wakeUp.ids = ids;
         return ids;
+    }
+
+    /**
+     * Whether every ordered message of the call is {@link IdentifiedByKeyAndOrder} - an event processor's forward - and so
+     * may be written with the engine's "if absent" ordered insert, which leaves one already queued under its key and order
+     * in place instead of failing the call on the ordered lane's primary key. Only then: an unmarked ordered message in the
+     * same call keeps the refusal, so a reused key and order is never dropped silently. Unordered messages carry no
+     * identity and do not count either way.
+     * <p>
+     * Not always: the "if absent" insert is a speculative insertion, measured at about 25 % more time and 11 % more WAL
+     * per message (424 to 472 bytes) than the plain one, paid by every forward for a failover that is rare. So a queue is
+     * written plain until such a call is refused for a duplicate key - a reader re-forwarding after an unclean failover -
+     * and "if absent" for {@link #IF_ABSENT_AFTER_A_REFUSAL} from then on ({@link #enqueueNotingARefusal}). The refused
+     * call fails as before; the reader's retry, under its subscription's error policy, is then written "if absent" and
+     * succeeds. Only the unit-of-work path; an enqueue that commits on its own is always plain.
+     */
+    private static boolean identifiedByKeyAndOrder(List<? extends Message> messages) {
+        var anyOrdered = false;
+        for (var message : messages) {
+            if (message instanceof OrderedMessage) {
+                if (!(message instanceof IdentifiedByKeyAndOrder)) {
+                    return false;
+                }
+                anyOrdered = true;
+            }
+        }
+        return anyOrdered;
+    }
+
+    private boolean enqueuesIfAbsent(QueueName queueName) {
+        var until = enqueueIfAbsentUntilNanos.get(queueName);
+        if (until == null) {
+            return false;
+        }
+        if (System.nanoTime() - until < 0) {
+            return true;
+        }
+        enqueueIfAbsentUntilNanos.remove(queueName, until);
+        return false;
+    }
+
+    /**
+     * Runs a plain enqueue of {@link IdentifiedByKeyAndOrder} messages ({@code noteARefusal}) and, when the ordered lane
+     * refuses one as a duplicate (SQL state {@code 23505}), writes that queue's such messages "if absent" for
+     * {@link #IF_ABSENT_AFTER_A_REFUSAL} before rethrowing - see {@link #identifiedByKeyAndOrder}
+     */
+    private List<MessageId> enqueueNotingARefusal(QueueName queueName, boolean noteARefusal, SqlSupplier<List<MessageId>> enqueue) throws SQLException {
+        try {
+            return enqueue.get();
+        } catch (SQLException e) {
+            if (noteARefusal && isUniqueViolation(e)) {
+                var until = System.nanoTime() + IF_ABSENT_AFTER_A_REFUSAL.toNanos();
+                if (enqueueIfAbsentUntilNanos.put(queueName, until) == null) {
+                    log.info("[{}] A message identified by its key and order is already queued - an event processor's reader re-forwarding "
+                             + "after an unclean failover. Enqueuing such messages if absent for the next {}, so the reader's retry succeeds",
+                             queueName, IF_ABSENT_AFTER_A_REFUSAL);
+                }
+            }
+            throw e;
+        }
+    }
+
+    private static boolean isUniqueViolation(SQLException exception) {
+        for (SQLException e = exception; e != null; e = e.getNextException()) {
+            if ("23505".equals(e.getSQLState())) {
+                return true;
+            }
+            for (var cause = e.getCause(); cause != null; cause = cause.getCause()) {
+                if (cause instanceof SQLException sqlCause && "23505".equals(sqlCause.getSQLState())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**

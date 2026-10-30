@@ -258,6 +258,12 @@ try (var connection = dataSource.getConnection()) {
 queue.wakeUp(ids);                            // after commit only; never on rollback
 ```
 
+A reused `(key, key_order)` is refused by the ordered lane's primary key (`SQLException`), so a queued message is never
+replaced. `enqueueIfAbsent(connection, messages)` / `enqueueWithoutWakeupIfAbsent(connection, messages)` (SPI
+defaults = the plain enqueue) leave an ordered message already queued under its key and order in place instead and
+return its id - `seq` 0 if it was handled meanwhile. Only for a producer whose key and order identify the message (an
+event processor's reader re-forwarding); the adapter uses it for `IdentifiedByKeyAndOrder` messages.
+
 `wakeUp` never blocks on the database: an owner in this process is signalled in memory, the rest are notified by a
 per-runtime notifier that batches pending wake-ups into one transaction. Forgetting `wakeUp` loses no message - the
 owner's head sweep finds it - only latency. The Essentials `DurableQueues` adapter does this for you inside a

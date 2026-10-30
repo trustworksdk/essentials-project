@@ -1047,7 +1047,10 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * the {@link PersistedEvent#aggregateId()} as the {@link OrderedMessage#getKey()} and
      * the {@link PersistedEvent#eventOrder()} as the {@link OrderedMessage#getOrder()}
      */
-    public static class EventReferenceOrderedMessage extends OrderedMessage {
+    // IdentifiedByKeyAndOrder: the key is the aggregate id and the order the event order, so a reader re-forwarding after
+    // an unclean failover is a no-op for an event still queued rather than a refused enqueue that stops the reader
+    // (EventProcessorReForwardOnShardOwnedIT)
+    public static class EventReferenceOrderedMessage extends OrderedMessage implements IdentifiedByKeyAndOrder {
         /**
          * {@link MessageMetaData} key, that's used as a flag to indicate
          * that an {@link OrderedMessage} is an {@link EventProcessor.EventReferenceOrderedMessage}

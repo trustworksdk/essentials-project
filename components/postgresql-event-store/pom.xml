@@ -133,6 +133,14 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Event processors on the shard-owned engine (key order across instances): PartitionedEventProcessor,
+             PartitionedViewEventProcessor and the reader re-forward reproducer -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-queue-shard-owned-adapter</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-test-junit</artifactId>
