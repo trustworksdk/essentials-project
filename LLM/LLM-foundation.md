@@ -575,6 +575,29 @@ public interface FencedLock extends AutoCloseable {
 
 **Rule**: `lockConfirmationInterval` should be 2-3x smaller than `lockTimeOut`.
 
+### Spreading async-acquired locks over instances (opt-in)
+
+Off by default. `FencedLockManagerSettings.builder().setSpreadLocks(true)` (or the PostgreSQL/MongoDB manager builders'
+`setSpreadLocks`, Spring Boot `essentials.fenced-lock-manager.spread-locks=true`) makes the locks taken through
+`acquireLockAsync` - every exclusive `EventProcessor`, `Inbox` and consumer - spread over the live instances instead of
+going to whichever instance asks first. Each manager holds a membership lock `__member:<instanceId>`, so live instances
+are read from the lock table, with no schema change. Every instance computes the same preferred owner per lock (rendezvous
+hashing). A free lock is taken by its preferred owner; another instance takes it only once it has seen it free for
+`spreadLocksAcquireGrace` (default 2 x `lockConfirmationInterval`), so no lock is left unserved.
+
+Costs - weigh them before enabling it:
+
+- **Spreads on acquire only; a held lock never moves.** Instances started one after another stay uneven: the first one up
+  takes every free lock it is preferred for. It spreads when instances are up before the locks are free - a cluster
+  restart, or a crash of a holder (its locks spread over all survivors instead of one). Rebalancing held locks is not built.
+- **A free lock waits up to the grace longer** when its preferred owner does not take it: the consumer behind it idles
+  that long after a failover.
+- **Whole locks only**: one busy consumer is still one instance's work (for that, see `PartitionedEventProcessor`).
+- **Extra reads**: each instance reads the membership rows once per `lockConfirmationInterval`, and a non-preferred
+  instance reads a free lock's row each tick while it waits. The `__member:` rows show in the lock table and admin API.
+- **Instances may disagree on membership for one `lockConfirmationInterval`** after a join or leave. Exclusion is still
+  decided by the fence token; only who takes a free lock is affected.
+
 ### Ownership is per lock-manager instance, not per caller or thread
 
 A `FencedLock` excludes **other lock-manager instances** (other JVMs), never other callers in the same JVM:

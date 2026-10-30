@@ -24,6 +24,7 @@ and two lock waits removed.
 - Event processors: `PartitionedEventProcessor` runs its handlers on every instance on the shard-owned engine (§2.7);
   an `EventProcessor` overridden to competing consumers on a per-node queue now refuses to start (§1); the default retry
   budget outlasts a failover, minutes instead of ~10 s (§1.1.4).
+- Fenced locks: opt-in spreading of async-acquired locks, and so of exclusive processors, over the instances (§2.9).
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1). The
 shard-owned adapter writes a new message format, and **0.60.x and this release must not run side by side against the
@@ -314,6 +315,29 @@ The shard-owned engine already warned for its equivalent (a handler outlasting `
 Related: an `EventProcessor` with more than 4 inbox consumer threads (`getNumberOfParallelInboxMessageConsumers()`) says
 so at start, at INFO - each thread holds a pooled connection while it handles a message, so the connection pool has to
 fit them together with every other processor's threads and the queue engine's pumps.
+
+### 2.9 Fenced locks can be spread over the instances, opt-in (foundation, PostgreSQL/MongoDB lock managers, Spring Boot starters)
+
+Every exclusive `EventProcessor`, `Inbox` and consumer runs on whichever instance takes its fenced lock first, so in a
+cluster one instance usually ends up with nearly all of them, and after a crash a single survivor takes over everything
+the dead instance held. `essentials.fenced-lock-manager.spread-locks=true` (builders: `setSpreadLocks(true)`) spreads the
+locks taken through `acquireLockAsync` over the live instances instead: each lock has a preferred instance, computed the
+same way by all of them, and another instance takes a free lock only after `spread-locks-acquire-grace` (default two
+`lock-confirmation-interval`s). Measured with three managers and 30 locks: 30/0/0 without, 10/9/11 with; one instance
+stopped, its 11 locks went to both survivors (15/15). No schema change: membership is a `__member:<instanceId>` row in
+the lock table.
+
+Off by default, because it has costs:
+
+- It spreads locks when they are free and never moves a held one. Instances started one after another stay uneven - the
+  first one up takes the locks before the others exist. It helps on a cluster restart and when an instance dies.
+- A free lock waits up to the grace longer when its preferred instance does not take it.
+- It moves whole consumers; one busy consumer is still one instance's work.
+- One extra read of the lock table per instance per `lock-confirmation-interval`, and per tick for each free lock a
+  non-preferred instance waits on. The membership rows appear in the lock table and the admin API.
+
+`FencedLockManagerSettings` gained a `lockSpreading` component. Its 4-argument constructor stays, deprecated, and means
+"not spread"; build the settings with `FencedLockManagerSettings.builder()`.
 
 ---
 

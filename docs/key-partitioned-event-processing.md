@@ -20,7 +20,7 @@ where the time goes. EF-2 is about running the handling on every instance while 
 | `EventProcessor`: batched forward from the reader to the inbox | **Built** (`getForwardBatchSize()`), measured | §5 "Batched forward, built and measured" |
 | `ViewEventProcessor`: batched handling (one unit of work per batch) | **Built** (`getDirectHandlingBatchSize()`), measured | `docs/view-event-processor-batched-handling.md` |
 | `ViewEventProcessor`: handling on every instance (option (a1)) | **Proposal**: §4, decisions §8 | this document |
-| Spreading the fenced locks: whole processors over instances, on every queue engine (option (d)) | **Open option** (§3.5), decision §8 | this document |
+| Spreading the fenced locks: whole processors over instances, on every queue engine (option (d)) | **Built, opt-in** (`essentials.fenced-lock-manager.spread-locks`, §3.5); rebalancing not built; demo measurement pending | this document |
 
 Which queue implementation an application runs decides how much of this it can use at all: §3.6. In short, only an
 engine that keeps one key in order across instances - today the shard-owned engine - can spread handling over
@@ -243,7 +243,7 @@ Cons:
 
 **Rejected as a foundation.** CDC stays useful underneath (a0)/(a1) for reader latency.
 
-### 3.5 Option (d) — spread the fenced locks (open)
+### 3.5 Option (d) — spread the fenced locks (built, opt-in; rebalancing not built)
 
 Leave every processor exclusive and spread the locks - and so whole processors - over the instances. It is independent
 of the queue engine, so it is the one way to spread work over instances on `PostgresqlDurableQueues`, MongoDB and the
@@ -768,15 +768,13 @@ Answered since the first version of this document:
 - **Should the mode exist only on the `EventProcessor` side** (old Q1, second half): it exists there now, as
   `PartitionedEventProcessor`. What remains is whether views get it too (`PartitionedViewEventProcessor`).
 - **Class or setting:** a class per contract (`docs/event-processor-specializations.md`).
+- **Spread the fenced locks ((d), §3.5)?** Yes, as an opt-in on `DBFencedLockManager`, off by default, with its cons
+  (a pause per moved processor on every membership change, whole processors only, new timing cases in the lock manager)
+  documented wherever the option is. Built as the prototype the recommendation described (membership lock, rendezvous
+  preferred owner, grace on acquire; rebalancing off at first), measured with three instances in the demo, then
+  rebalancing, rate-limited, if the prototype holds.
 
 Still open, with a recommendation each:
-
-0. **Spread the fenced locks ((d), §3.5)?** It is the only way to spread work over instances on the per-node engines
-   (`PostgresqlDurableQueues`, MongoDB, the planned replacement), and on the shard-owned engine it also places the views
-   and readers. *Recommendation:* worth building, opt-in, independently of (a1). First a prototype in
-   `DBFencedLockManager` (membership lock, rendezvous preferred owner, grace on acquire; rebalancing off at first),
-   measured with three instances in the demo: lock spread after start-up, after a kill, and through a rolling restart,
-   with the pause per move. Then rebalancing, rate-limited, if the prototype holds.
 
 1. **Do views get per-aggregate-only order at all ((a1) yes or no)?** `ViewEventProcessor` is effectively
    commit-ordered today. *Recommendation:* yes, as a separate class whose name says it, for views keyed by aggregate

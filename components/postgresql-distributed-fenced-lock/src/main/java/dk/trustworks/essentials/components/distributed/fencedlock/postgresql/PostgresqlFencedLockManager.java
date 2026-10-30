@@ -184,9 +184,32 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
                                 boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
                                 Optional<EventBus> eventBus,
                                 SchemaOwnership schemaOwnership) {
+        this(jdbi, unitOfWorkFactory, lockManagerInstanceId, fencedLocksTableName, lockTimeOut, lockConfirmationInterval,
+             releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation, eventBus, schemaOwnership, LockSpreading.disabled());
+    }
+
+    /**
+     * The {@link PostgresqlFencedLockManagerBuilder}'s constructor.
+     *
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} creates the lock table when the manager starts;
+     *                        {@link SchemaOwnership#HARNESS} leaves it to an {@link EssentialsSchemaHarness} this manager
+     *                        is registered with
+     * @param lockSpreading   see {@link LockSpreading}
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    PostgresqlFencedLockManager(Jdbi jdbi,
+                                HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                Optional<String> lockManagerInstanceId,
+                                String fencedLocksTableName,
+                                Duration lockTimeOut,
+                                Duration lockConfirmationInterval,
+                                boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
+                                Optional<EventBus> eventBus,
+                                SchemaOwnership schemaOwnership,
+                                LockSpreading lockSpreading) {
         this(new PostgresqlFencedLockStorage(jdbi, fencedLocksTableName, schemaOwnership),
              unitOfWorkFactory, lockManagerInstanceId, lockTimeOut, lockConfirmationInterval,
-             releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation, eventBus);
+             releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation, eventBus, lockSpreading);
     }
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
@@ -196,7 +219,8 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
                                         Duration lockTimeOut,
                                         Duration lockConfirmationInterval,
                                         boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
-                                        Optional<EventBus> eventBus) {
+                                        Optional<EventBus> eventBus,
+                                        LockSpreading lockSpreading) {
         super(lockStorage,
               unitOfWorkFactory,
               FencedLockManagerSettings.builder()
@@ -204,6 +228,7 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
                                        .setLockTimeOut(lockTimeOut)
                                        .setLockConfirmationInterval(lockConfirmationInterval)
                                        .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation)
+                                       .setLockSpreading(requireNonNull(lockSpreading, "No lockSpreading provided"))
                                        .build(),
               requireNonNull(eventBus, "No eventBus option provided").orElse(null));
         this.schemaStorage = lockStorage;

@@ -279,6 +279,8 @@ public class EssentialsComponentsConfiguration {
                                           .setLockConfirmationInterval(properties.getFencedLockManager().getLockConfirmationInterval())
                                           .setFencedLocksTableName(properties.getFencedLockManager().getFencedLocksTableName())
                                           .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(properties.getFencedLockManager().isReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation())
+                                          .setSpreadLocks(properties.getFencedLockManager().isSpreadLocks())
+                                          .setSpreadLocksAcquireGrace(properties.getFencedLockManager().getSpreadLocksAcquireGrace())
                                           .setEventBus(eventBus)
                                           .setSchemaOwnership(properties.getSchema().getMode().schemaOwnership());
         // Started at once in the create mode, as it always was. Otherwise the lifecycle manager starts it, after the

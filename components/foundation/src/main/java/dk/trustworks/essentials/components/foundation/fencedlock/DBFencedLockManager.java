@@ -146,6 +146,21 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      */
     private final ConcurrentMap<LockName, AsyncLockAcquiring> asyncLockAcquirings;
     private final Duration                                    lockTimeOut;
+    /**
+     * See {@link LockSpreading}. When enabled, {@link #asyncLockAcquiringTick} asks {@link #mayAcquireUnderLockSpreading}
+     * before it acquires a free lock
+     */
+    private final LockSpreading                               lockSpreading;
+    /**
+     * When this instance, not being a lock's preferred owner, first saw the lock free (by {@link System#nanoTime()}).
+     * Only used while {@link #lockSpreading} is enabled
+     */
+    private final ConcurrentMap<LockName, Long>               seenFreeByNonPreferredOwnerSinceNanos = new ConcurrentHashMap<>();
+    /**
+     * The live lock manager instances last read from the membership locks, and when. Only used while
+     * {@link #lockSpreading} is enabled
+     */
+    private volatile LockSpreadingMembership                  lockSpreadingMembership;
     private final Duration                                    lockConfirmationInterval;
     private final String                                      lockManagerInstanceId;
 
@@ -227,6 +242,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         this.lockTimeOut = settings.lockTimeOut();
         this.lockConfirmationInterval = settings.lockConfirmationInterval();
         this.releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation = settings.releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation();
+        this.lockSpreading = settings.lockSpreading();
         this.eventBus = eventBus;
 
         locksAcquiredByThisLockManager = new ConcurrentHashMap<>();
@@ -239,6 +255,11 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                  lockStorage.getClass().getName(),
                  lockConfirmationInterval.toMillis(),
                  lockTimeOut.toMillis());
+        if (lockSpreading.enabled()) {
+            log.info("[{}] Spreading async acquired locks over the live lock manager instances, acquireGrace: {} ms",
+                     this.lockManagerInstanceId,
+                     lockSpreading.acquireGrace().toMillis());
+        }
         usingUnitOfWork(uow -> lockStorage.initializeLockStorage(this, uow),
                         e -> {
                             throw new IllegalStateException(msg("[{}] Failed to initialize lock storage", this.lockManagerInstanceId), e);
@@ -297,6 +318,14 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 }
 
                 started = true;
+                if (lockSpreading.enabled()) {
+                    // Join the membership before any async acquiring ticks (they wait for reentrantLock, held here): an
+                    // instance that only joined on its first tick saw no other member, preferred itself for every lock, and
+                    // instances starting together raced for all of them as if nothing were spread
+                    lockSpreadingMembership = null;
+                    seenFreeByNonPreferredOwnerSinceNanos.clear();
+                    liveLockManagerInstances();
+                }
             } finally {
                 reentrantLock.unlock();
             }
@@ -1211,6 +1240,131 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         }
     }
 
+    /**
+     * Whether {@link #asyncLockAcquiringTick} may try to acquire a lock this instance does not hold, under
+     * {@link #lockSpreading}: always when spreading is off, for a membership lock, or when this instance is the lock's
+     * preferred owner; otherwise only once this instance has seen the lock free for {@link LockSpreading#acquireGrace()}.
+     * A failure to read the lock or the membership falls back to acquiring as without spreading - exclusion never
+     * depends on this, only who takes a free lock.
+     *
+     * @param lockName the lock the tick is about to acquire
+     * @return whether to try
+     */
+    private boolean mayAcquireUnderLockSpreading(LockName lockName) {
+        if (!lockSpreading.enabled() || LockSpreading.isMembershipLock(lockName)) {
+            return true;
+        }
+        var preferredOwner = preferredOwner(lockName, liveLockManagerInstances());
+        if (preferredOwner.equals(lockManagerInstanceId)) {
+            seenFreeByNonPreferredOwnerSinceNanos.remove(lockName);
+            return true;
+        }
+        var existingLock = withUnitOfWork(uow -> lockStorage.lookupLockInDB(this, uow, lockName),
+                                          e -> null);
+        if (existingLock == null) {
+            return true;
+        }
+        var free = existingLock.isEmpty()
+                || !existingLock.get().isLocked()
+                || existingLock.get().isLockedByThisLockManagerInstance()
+                || isLockTimedOut(existingLock.get());
+        if (!free) {
+            seenFreeByNonPreferredOwnerSinceNanos.remove(lockName);
+            return false;
+        }
+        var now       = System.nanoTime();
+        var freeSince = seenFreeByNonPreferredOwnerSinceNanos.computeIfAbsent(lockName, name -> now);
+        if (now - freeSince >= lockSpreading.acquireGrace().toNanos()) {
+            seenFreeByNonPreferredOwnerSinceNanos.remove(lockName);
+            log.debug("[{}] Lock '{}' has been free for {} ms without its preferred owner '{}' taking it - acquiring it",
+                      lockManagerInstanceId, lockName, Duration.ofNanos(now - freeSince).toMillis(), preferredOwner);
+            return true;
+        }
+        log.trace("[{}] Leaving free lock '{}' to its preferred owner '{}' for now", lockManagerInstanceId, lockName, preferredOwner);
+        return false;
+    }
+
+    /**
+     * The live lock manager instances - this one always among them - from the confirmed membership locks, read at most
+     * once per {@code lockConfirmationInterval}. Makes sure this instance holds its own membership lock first; the
+     * confirmation keeps it alive from then on. A failed read keeps the last membership read
+     *
+     * @return the instance ids, sorted
+     */
+    private SortedSet<String> liveLockManagerInstances() {
+        var membership = lockSpreadingMembership;
+        var now        = System.nanoTime();
+        if (membership != null && now - membership.readAtNanos() < lockConfirmationInterval.toNanos()) {
+            return membership.lockManagerInstanceIds();
+        }
+        var membershipLockName = LockName.of(LockSpreading.MEMBERSHIP_LOCK_NAME_PREFIX + lockManagerInstanceId);
+        if (!locksAcquiredByThisLockManager.containsKey(membershipLockName)) {
+            try {
+                tryAcquireLock(membershipLockName);
+            } catch (Exception e) {
+                rethrowIfCriticalError(e);
+                log.debug(msg("[{}] Failed to acquire the membership lock '{}'", lockManagerInstanceId, membershipLockName), e);
+            }
+        }
+        var instanceIds = new TreeSet<String>();
+        instanceIds.add(lockManagerInstanceId);
+        var read = withUnitOfWork(uow -> {
+                                      for (var lock : lockStorage.getAllLocksInDB(this, uow)) {
+                                          if (LockSpreading.isMembershipLock(lock.getName()) && lock.isLocked() && !isLockTimedOut(lock)) {
+                                              instanceIds.add(lock.getLockedByLockManagerInstanceId());
+                                          }
+                                      }
+                                      return Boolean.TRUE;
+                                  },
+                                  e -> Boolean.FALSE);
+        if (!read && membership != null) {
+            return membership.lockManagerInstanceIds();
+        }
+        var ids = Collections.unmodifiableSortedSet(instanceIds);
+        lockSpreadingMembership = new LockSpreadingMembership(ids, now);
+        return ids;
+    }
+
+    /**
+     * Rendezvous (highest random weight) hashing: the instance whose hash of {@code (lockName, instanceId)} is highest.
+     * Every instance computes the same answer from the same membership, and a member joining or leaving changes the
+     * answer for only the locks it wins or held. The hash is computed here (FNV-1a over UTF-8, then a 64-bit finalizer),
+     * never {@link String#hashCode()} alone, whose weak mixing of similar ids would skew the spread
+     *
+     * @param lockName            the lock
+     * @param lockManagerInstanceIds the live instances, not empty
+     * @return the preferred owner's id
+     */
+    static String preferredOwner(LockName lockName, SortedSet<String> lockManagerInstanceIds) {
+        String best      = null;
+        long   bestScore = 0;
+        for (var instanceId : lockManagerInstanceIds) {
+            var score = rendezvousScore(lockName.toString(), instanceId);
+            if (best == null || Long.compareUnsigned(score, bestScore) > 0) {
+                best = instanceId;
+                bestScore = score;
+            }
+        }
+        return best;
+    }
+
+    private static long rendezvousScore(String lockName, String instanceId) {
+        var hash = 0xcbf29ce484222325L;
+        for (var b : (lockName + '\u0000' + instanceId).getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+            hash ^= b & 0xff;
+            hash *= 0x100000001b3L;
+        }
+        hash ^= hash >>> 33;
+        hash *= 0xff51afd7ed558ccdL;
+        hash ^= hash >>> 33;
+        hash *= 0xc4ceb9fe1a85ec53L;
+        hash ^= hash >>> 33;
+        return hash;
+    }
+
+    private record LockSpreadingMembership(SortedSet<String> lockManagerInstanceIds, long readAtNanos) {
+    }
+
     private boolean isLockTimedOut(LOCK lock) {
         requireNonNull(lock, "No lock provided");
         var durationSinceLastConfirmation = lock.getDurationSinceLastConfirmation();
@@ -1487,6 +1641,9 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                     return;
                 }
 
+                if (!mayAcquireUnderLockSpreading(lockName)) {
+                    return;
+                }
                 Optional<FencedLock> lock;
                 try {
                     lock = tryAcquireLock(lockName);

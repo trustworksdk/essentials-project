@@ -755,6 +755,8 @@ public class EssentialsComponentsProperties {
         private String   fencedLocksTableName                                           = PostgresqlFencedLockStorage.DEFAULT_FENCED_LOCKS_TABLE_NAME;
         private boolean  releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation = false;
         private String   instanceId;
+        private boolean  spreadLocks;
+        private Duration spreadLocksAcquireGrace;
 
         /**
          * The lock manager's instance id: what the lock table, the admin API ({@code lockedByLockManagerInstanceId}) and the
@@ -777,6 +779,47 @@ public class EssentialsComponentsProperties {
          */
         public void setInstanceId(String instanceId) {
             this.instanceId = instanceId;
+        }
+
+        /**
+         * Spread the locks acquired asynchronously - the exclusive event processors, Inboxes and consumers - over the live
+         * application instances, instead of leaving each to whichever instance asks first. Property:
+         * {@code essentials.fenced-lock-manager.spread-locks}, default {@code false}. Locks spread when they are free (on a
+         * crash or a cluster restart); a held lock never moves, so instances started one after another stay uneven, and a
+         * free lock waits up to {@link #getSpreadLocksAcquireGrace()} longer for its preferred instance. See
+         * {@link dk.trustworks.essentials.components.foundation.fencedlock.LockSpreading} for every cost before enabling it.
+         *
+         * @return whether locks are spread
+         */
+        public boolean isSpreadLocks() {
+            return spreadLocks;
+        }
+
+        /**
+         * @param spreadLocks whether locks are spread
+         * @see #isSpreadLocks()
+         */
+        public void setSpreadLocks(boolean spreadLocks) {
+            this.spreadLocks = spreadLocks;
+        }
+
+        /**
+         * How long an instance that is not a free lock's preferred owner must see it free before taking it. Property:
+         * {@code essentials.fenced-lock-manager.spread-locks-acquire-grace}. Unset (the default), two lock confirmation
+         * intervals. Only used with {@link #isSpreadLocks()}.
+         *
+         * @return the grace, or {@code null} for the default
+         */
+        public Duration getSpreadLocksAcquireGrace() {
+            return spreadLocksAcquireGrace;
+        }
+
+        /**
+         * @param spreadLocksAcquireGrace the grace, or {@code null} for the default
+         * @see #getSpreadLocksAcquireGrace()
+         */
+        public void setSpreadLocksAcquireGrace(Duration spreadLocksAcquireGrace) {
+            this.spreadLocksAcquireGrace = spreadLocksAcquireGrace;
         }
 
         /**

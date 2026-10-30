@@ -54,13 +54,18 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *                                                                       {@link FencedLockStorage#confirmLockInDB(DBFencedLockManager, UnitOfWork, DBFencedLock, OffsetDateTime)}
  *                                                                       fails with an exception for which {@link IOExceptionUtil#isIOException(Throwable)}
  *                                                                       returns true. {@code true} releases them locally; {@code false} retains them as locked
+ * @param lockSpreading                                                  whether locks acquired asynchronously are spread over the live lock manager instances -
+ *                                                                       {@link LockSpreading#disabled()} by default. Read {@link LockSpreading}'s costs before
+ *                                                                       enabling it
  */
 public record FencedLockManagerSettings(String lockManagerInstanceId,
                                         Duration lockTimeOut,
                                         Duration lockConfirmationInterval,
-                                        boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation) {
+                                        boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
+                                        LockSpreading lockSpreading) {
 
     public FencedLockManagerSettings {
+        requireNonNull(lockSpreading, "No lockSpreading provided - use LockSpreading.disabled()");
         requireNonNull(lockManagerInstanceId, "No lockManagerInstanceId provided - use FencedLockManagerSettings.builder() to default it to hostname:pid");
         requireNonNull(lockTimeOut, "No lockTimeOut value provided");
         requireNonNull(lockConfirmationInterval, "No lockConfirmationInterval value provided");
@@ -70,6 +75,24 @@ public record FencedLockManagerSettings(String lockManagerInstanceId,
                                                    lockConfirmationInterval,
                                                    lockTimeOut));
         }
+    }
+
+    /**
+     * Settings with locks not spread ({@link LockSpreading#disabled()}).
+     *
+     * @param lockManagerInstanceId                                          see {@link #lockManagerInstanceId()}
+     * @param lockTimeOut                                                    see {@link #lockTimeOut()}
+     * @param lockConfirmationInterval                                       see {@link #lockConfirmationInterval()}
+     * @param releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation see {@link #releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation()}
+     * @deprecated use {@link #builder()}, or the canonical constructor with {@link LockSpreading#disabled()}
+     */
+    @Deprecated(forRemoval = true, since = "0.61.0")
+    public FencedLockManagerSettings(String lockManagerInstanceId,
+                                     Duration lockTimeOut,
+                                     Duration lockConfirmationInterval,
+                                     boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation) {
+        this(lockManagerInstanceId, lockTimeOut, lockConfirmationInterval, releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
+             LockSpreading.disabled());
     }
 
     /**
