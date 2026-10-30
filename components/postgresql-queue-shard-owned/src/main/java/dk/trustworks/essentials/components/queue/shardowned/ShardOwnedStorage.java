@@ -440,7 +440,9 @@ public final class ShardOwnedStorage {
      * A new owner starts its cursor just below the shard's first readable row instead of at 0, and a message whose
      * sequence value was allocated before that point but committed after it is delivered by the head sweep. The
      * range delete must not reach down to it before it is delivered, so the owner bounds the range at that point and
-     * acknowledges anything at or below it by exact sequence value.
+     * acknowledges anything at or below it by exact sequence value. The same holds above that point for a late commit
+     * whose hole expired, so {@link ShardOwner} passes the seq just below the first one it acknowledges in the range,
+     * never lower: every value in the range is then one it handled.
      */
     public int acknowledge(Connection connection, int shard, long rangeAbove, long contiguousThrough, Collection<Long> stragglers,
                            String owner, long fence) throws SQLException {

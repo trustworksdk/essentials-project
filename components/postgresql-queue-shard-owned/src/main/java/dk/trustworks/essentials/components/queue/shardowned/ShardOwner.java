@@ -136,6 +136,14 @@ final class ShardOwner implements LeasedOwner {
      */
     private final NavigableMap<Long, Long> pendingHoles = new TreeMap<>();
     /**
+     * Sequence values above {@link #cursor} that this owner has already delivered - the head sweep reads from the head
+     * whatever the cursor, and routinely reaches the row just above it first. Once such a row is handled and
+     * acknowledged it is gone from the table, and the cursor read stepping over it recorded it as a hole that no chase
+     * could ever find: chased every {@code chaseDelay} and holding the range acknowledgement back until
+     * {@code holeExpiry}. Pruned as the cursor passes.
+     */
+    private final NavigableSet<Long>       deliveredAheadOfCursor = new TreeSet<>();
+    /**
      * In a handler: delivered and not yet returned, so a sweep does not deliver them twice. Each with when it was handed to
      * the handler executor, by {@link System#nanoTime()}, which {@link #chargeInHandlerBeforeRelease} times
      * {@code stuckHandlerTimeout} from.
@@ -583,11 +591,15 @@ final class ShardOwner implements LeasedOwner {
             synchronized (stateLock) {
                 // Everything skipped over is a hole: allocated by a transaction that has not committed.
                 for (var missing = cursor + 1; missing < row.seq(); missing++) {
+                    if (deliveredAheadOfCursor.contains(missing)) {
+                        continue;
+                    }
                     if (pendingHoles.putIfAbsent(missing, System.nanoTime()) == null) {
                         metrics.holesObserved.increment();
                     }
                 }
                 cursor = Math.max(cursor, row.seq());
+                deliveredAheadOfCursor.headSet(cursor, true).clear();
             }
             if (deliver(row)) {
                 delivered++;
@@ -740,6 +752,17 @@ final class ShardOwner implements LeasedOwner {
                 return false;
             }
             inFlight.put(row.seq(), System.nanoTime());
+            if (row.seq() > cursor) {
+                deliveredAheadOfCursor.add(row.seq());
+            }
+            // A hole whose row another path reached first - the head sweep, typically - is resolved by that delivery.
+            // Left in place it was chased every chaseDelay for a row already handled, and held the range
+            // acknowledgement back, until holeExpiry
+            var missedAt = pendingHoles.remove(row.seq());
+            if (missedAt != null) {
+                metrics.holeResolutionNanos.add(System.nanoTime() - missedAt);
+                metrics.holesResolved.increment();
+            }
             // Whichever path gets there first invalidates the other. A failed message exists in two
             // places timed by different clocks — the table's `visible_at` by the database's now(),
             // the in-memory schedule by System.nanoTime() — so the sweep can deliver, acknowledge
@@ -1103,7 +1126,13 @@ final class ShardOwner implements LeasedOwner {
             // Only above the takeover cursor: anything at or below it came from the head sweep and is acknowledged
             // by exact sequence value, so the range delete cannot reach a late commit below it - see takeoverCursor
             var rangeCandidates = pendingAcks.tailSet(takeoverCursor, false);
-            contiguousThrough = takeoverCursor;
+            // The range starts just below the run's first acknowledged seq, not at the takeover cursor. Between the
+            // two there can be a row nobody here delivered: a hole that expired and was dropped from pendingHoles,
+            // whose transaction then committed. The hole floor no longer covers it, so a range reaching down to the
+            // takeover cursor deleted it undelivered (ShardOwnedLateCommitAfterHoleExpiryIT). Every seq in
+            // (rangeAbove, contiguousThrough] is in pendingAcks, so the range deletes only what was handled
+            rangeAbove = rangeCandidates.isEmpty() ? takeoverCursor : rangeCandidates.first() - 1;
+            contiguousThrough = rangeAbove;
             var expected = rangeCandidates.isEmpty() ? Long.MAX_VALUE : rangeCandidates.first();
             for (var seq : rangeCandidates) {
                 // A message that has failed before is acknowledged by its exact seq, never by the
@@ -1136,10 +1165,9 @@ final class ShardOwner implements LeasedOwner {
                     stragglers.add(seq);
                 }
             }
-            if (contiguousThrough == takeoverCursor && stragglers.isEmpty()) {
+            if (contiguousThrough == rangeAbove && stragglers.isEmpty()) {
                 return;
             }
-            rangeAbove = takeoverCursor;
         }
 
         // The round trip happens outside the monitor, so handlers finishing are not blocked on it.

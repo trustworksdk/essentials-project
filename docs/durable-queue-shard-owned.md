@@ -511,7 +511,7 @@ Because a shard has exactly one reader, hole tracking is cheap and entirely in m
 
 - **does not stall the cursor.** It records every value it stepped over in `pendingHoles` and keeps delivering everything it can see.
 - **chases** with a targeted `WHERE seq = ANY(?)` after `chaseDelay` (default 2 ms), which resolves as soon as the late transaction commits. Measured hole resolution latency tracks `chaseDelay` almost exactly — the cost of a hole is set by how often the owner bothers to look, not by the database.
-- **abandons** a value that never appears after `holeExpiry` (default 10 s), on the assumption its transaction aborted. This must exceed the longest expected enqueue transaction, or live messages get written off.
+- **abandons** a value that never appears after `holeExpiry` (default 10 s), on the assumption its transaction aborted. This should exceed the longest expected enqueue transaction: a message whose transaction commits after that is no longer chased, and only the head sweep delivers it, up to `maxSweepInterval` late. It is not lost: the range acknowledgement starts just below the first sequence value it acknowledges, so it never reaches a value the owner did not handle. Until 0.61 it started at the takeover cursor, and such a message was deleted undelivered once later traffic was acknowledged around it (`ShardOwnedLateCommitAfterHoleExpiryIT`).
 
 A hole costs a few milliseconds of extra latency for the delayed message only, and one cheap point-lookup query. Nothing else is affected, and the common path stays write-free.
 

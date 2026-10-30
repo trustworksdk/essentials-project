@@ -12,6 +12,8 @@ targets, with a `-N` suffix for plugin-only releases.
   The event-store reference describes `PartitionedEventProcessor` (handlers on every instance, on a queue that keeps
   key order across instances) and the start-up refusal of competing inbox consumers on a per-node queue, and that a
   processor's default retry budget now outlasts a failover (`FailoverRedeliveryPolicy`).
+  The shard-owned reference's `holeExpiry` row says a message committed after it is delivered late by the head
+  sweep, no longer that it may be lost.
   No skill, rule or script changed.
 
 ## 0.60.1 — targets Essentials 0.60.1

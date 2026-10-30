@@ -167,7 +167,7 @@ public class ShardOwnedQueueProperties {
     private int maxHolesPerChase = 1_000;
     private Duration ackFlushInterval = Duration.ofMillis(1);
     private Duration chaseDelay = Duration.ofMillis(2);
-    /** Must exceed the longest enqueue transaction, or live messages are written off as aborted. */
+    /** Should exceed the longest enqueue transaction: a message committed after it is delivered late, by the head sweep. */
     private Duration holeExpiry = Duration.ofSeconds(10);
     private Duration sweepInterval = Duration.ofMillis(500);
     private Duration maxSweepInterval = Duration.ofSeconds(30);
