@@ -161,6 +161,18 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * {@link #lockSpreading} is enabled
      */
     private volatile LockSpreadingMembership                  lockSpreadingMembership;
+    /**
+     * When this instance may next release a lock to its preferred owner (by {@link System#nanoTime()}): one lock per
+     * {@link LockSpreading#rebalanceInterval()} for the whole lock manager. Only used while {@link #lockSpreading} rebalances
+     */
+    private final AtomicLong                                  nextRebalanceAtNanos                  = new AtomicLong();
+    /**
+     * Locks this instance took back after the grace because their preferred owner did not take them, mapped to the
+     * membership they were taken back under: not released again until the membership changes. A lock whose preferred owner
+     * never asks for it (or is paused) would otherwise be moved back and forth for good - a time-based suppression was
+     * tried and churned, as releasing one lock per interval cycles through the suppressed ones faster than they expire
+     */
+    private final ConcurrentMap<LockName, SortedSet<String>>  rebalanceSuppressedForMembership      = new ConcurrentHashMap<>();
     private final Duration                                    lockConfirmationInterval;
     private final String                                      lockManagerInstanceId;
 
@@ -324,6 +336,9 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                     // instances starting together raced for all of them as if nothing were spread
                     lockSpreadingMembership = null;
                     seenFreeByNonPreferredOwnerSinceNanos.clear();
+                    rebalanceSuppressedForMembership.clear();
+                    // The first lock moves one interval after start, once the other instances have read this one's membership
+                    nextRebalanceAtNanos.set(System.nanoTime() + lockSpreading.rebalanceInterval().toNanos());
                     liveLockManagerInstances();
                 }
             } finally {
@@ -1276,12 +1291,68 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         var freeSince = seenFreeByNonPreferredOwnerSinceNanos.computeIfAbsent(lockName, name -> now);
         if (now - freeSince >= lockSpreading.acquireGrace().toNanos()) {
             seenFreeByNonPreferredOwnerSinceNanos.remove(lockName);
+            if (lockSpreading.rebalances()) {
+                rebalanceSuppressedForMembership.put(lockName, liveLockManagerInstances());
+            }
             log.debug("[{}] Lock '{}' has been free for {} ms without its preferred owner '{}' taking it - acquiring it",
                       lockManagerInstanceId, lockName, Duration.ofNanos(now - freeSince).toMillis(), preferredOwner);
             return true;
         }
         log.trace("[{}] Leaving free lock '{}' to its preferred owner '{}' for now", lockManagerInstanceId, lockName, preferredOwner);
         return false;
+    }
+
+    /**
+     * Whether {@link #asyncLockAcquiringTick} should release a lock this instance holds to the lock's preferred owner, under
+     * {@link LockSpreading#rebalances()}: the preferred owner is another live instance, the lock was not taken back from it
+     * under the current membership (see {@link #rebalanceSuppressedForMembership}), and this lock manager has not released another lock within the
+     * last {@link LockSpreading#rebalanceInterval()} - claimed here, so two ticks cannot both release
+     *
+     * @param lockName a lock this instance holds
+     * @return whether to release it
+     */
+    private boolean mayRebalanceAway(LockName lockName) {
+        if (!lockSpreading.rebalances() || paused || LockSpreading.isMembershipLock(lockName)) {
+            return false;
+        }
+        var now = System.nanoTime();
+        var due = nextRebalanceAtNanos.get();
+        if (now - due < 0) {
+            return false;
+        }
+        var members         = liveLockManagerInstances();
+        var suppressedUnder = rebalanceSuppressedForMembership.get(lockName);
+        if (suppressedUnder != null) {
+            if (suppressedUnder.equals(members)) {
+                return false;
+            }
+            rebalanceSuppressedForMembership.remove(lockName, suppressedUnder);
+        }
+        if (members.size() < 2 || preferredOwner(lockName, members).equals(lockManagerInstanceId)) {
+            return false;
+        }
+        return nextRebalanceAtNanos.compareAndSet(due, now + lockSpreading.rebalanceInterval().toNanos());
+    }
+
+    /**
+     * Releases a lock this instance holds so its preferred owner takes it on its next acquire tick. The lock's
+     * {@code lockReleased} callbacks run, as on any release; the async acquiring stays registered, and this instance takes
+     * the lock back after the grace if the preferred owner does not
+     *
+     * @param lockName the lock
+     * @param lock     this instance's lock
+     */
+    private void releaseToPreferredOwner(LockName lockName, LOCK lock) {
+        log.info("[{}] Releasing lock '{}' to its preferred owner '{}' (lock spreading rebalance)",
+                 lockManagerInstanceId, lockName, preferredOwner(lockName, liveLockManagerInstances()));
+        try {
+            releaseLock(lock);
+        } catch (Throwable releaseFailure) {
+            releaseLocallyAfterFailedRelease(lock, releaseFailure);
+            rethrowIfCriticalError(releaseFailure);
+            log.error(msg("[{}] Releasing lock '{}' to its preferred owner failed - this lock manager no longer confirms it, so a row the "
+                          + "release did not free expires after the lock timeout", lockManagerInstanceId, lockName), releaseFailure);
+        }
     }
 
     /**
@@ -1709,6 +1780,8 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                                   lockManagerInstanceId, lockName, lookupLock(lockName));
                     }
                 }
+            } else if (existingLock.isLockedByThisLockManagerInstance() && mayRebalanceAway(lockName)) {
+                releaseToPreferredOwner(lockName, existingLock);
             } else if (!existingLock.isLockedByThisLockManagerInstance()) {
                 log.debug("[{}] Noticed that lock '{}' isn't locked by this Lock Manager instance anymore. Releasing the lock",
                           lockManagerInstanceId,

@@ -69,31 +69,35 @@ class FencedLockManagerSettingsTest {
     }
 
     @Test
-    void spreading_without_a_grace_waits_two_confirmation_intervals() {
+    void spreading_without_a_grace_or_rebalance_interval_uses_two_confirmation_intervals_for_both() {
         var settings = FencedLockManagerSettings.builder()
                                                 .setLockTimeOut(Duration.ofSeconds(15))
                                                 .setLockConfirmationInterval(Duration.ofSeconds(4))
                                                 .setSpreadLocks(true)
                                                 .build();
 
-        assertThat(settings.lockSpreading()).isEqualTo(LockSpreading.enabled(Duration.ofSeconds(8)));
+        assertThat(settings.lockSpreading()).isEqualTo(LockSpreading.enabled(Duration.ofSeconds(8), Duration.ofSeconds(8)));
+        assertThat(settings.lockSpreading().rebalances()).isTrue();
     }
 
     @Test
-    void spreading_keeps_an_explicit_grace() {
+    void spreading_keeps_an_explicit_grace_and_a_zero_rebalance_interval_turns_rebalancing_off() {
         var settings = FencedLockManagerSettings.builder()
                                                 .setLockTimeOut(Duration.ofSeconds(15))
                                                 .setLockConfirmationInterval(Duration.ofSeconds(4))
                                                 .setSpreadLocks(true)
                                                 .setSpreadLocksAcquireGrace(Duration.ofSeconds(1))
+                                                .setSpreadLocksRebalanceInterval(Duration.ZERO)
                                                 .build();
 
-        assertThat(settings.lockSpreading()).isEqualTo(LockSpreading.enabled(Duration.ofSeconds(1)));
+        assertThat(settings.lockSpreading()).isEqualTo(LockSpreading.enabled(Duration.ofSeconds(1), Duration.ZERO));
+        assertThat(settings.lockSpreading().rebalances()).isFalse();
     }
 
     @Test
-    void a_negative_grace_is_refused() {
-        assertThatThrownBy(() -> LockSpreading.enabled(Duration.ofSeconds(-1))).isInstanceOf(IllegalArgumentException.class);
+    void a_negative_grace_or_rebalance_interval_is_refused() {
+        assertThatThrownBy(() -> LockSpreading.enabled(Duration.ofSeconds(-1), Duration.ZERO)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> LockSpreading.enabled(Duration.ZERO, Duration.ofSeconds(-1))).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

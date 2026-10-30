@@ -58,6 +58,7 @@ public final class PostgresqlFencedLockManagerBuilder {
     private SchemaOwnership                                               schemaOwnership       = SchemaOwnership.COMPONENT;
     private boolean                                                       spreadLocks;
     private Duration                                                      spreadLocksAcquireGrace;
+    private Duration                                                      spreadLocksRebalanceInterval;
 
     /**
      * @param jdbi the jdbi instance used
@@ -186,11 +187,7 @@ public final class PostgresqlFencedLockManagerBuilder {
                                                releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
                                                eventBus,
                                                schemaOwnership,
-                                               spreadLocks
-                                               ? LockSpreading.enabled(spreadLocksAcquireGrace != null
-                                                                       ? spreadLocksAcquireGrace
-                                                                       : LockSpreading.defaultAcquireGrace(lockConfirmationInterval))
-                                               : LockSpreading.disabled());
+                                               LockSpreading.from(spreadLocks, spreadLocksAcquireGrace, spreadLocksRebalanceInterval, lockConfirmationInterval));
     }
 
     /**
@@ -214,6 +211,18 @@ public final class PostgresqlFencedLockManagerBuilder {
      */
     public PostgresqlFencedLockManagerBuilder setSpreadLocksAcquireGrace(Duration spreadLocksAcquireGrace) {
         this.spreadLocksAcquireGrace = spreadLocksAcquireGrace;
+        return this;
+    }
+
+    /**
+     * See {@link LockSpreading#rebalanceInterval()}. {@code null} (the default) means two lock confirmation intervals;
+     * {@link Duration#ZERO} turns rebalancing off. Only used when {@link #setSpreadLocks(boolean)} is {@code true}.
+     *
+     * @param spreadLocksRebalanceInterval the interval, {@link Duration#ZERO} for none, or {@code null} for the default
+     * @return this builder instance
+     */
+    public PostgresqlFencedLockManagerBuilder setSpreadLocksRebalanceInterval(Duration spreadLocksRebalanceInterval) {
+        this.spreadLocksRebalanceInterval = spreadLocksRebalanceInterval;
         return this;
     }
 

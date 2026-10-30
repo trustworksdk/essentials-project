@@ -323,14 +323,20 @@ cluster one instance usually ends up with nearly all of them, and after a crash 
 the dead instance held. `essentials.fenced-lock-manager.spread-locks=true` (builders: `setSpreadLocks(true)`) spreads the
 locks taken through `acquireLockAsync` over the live instances instead: each lock has a preferred instance, computed the
 same way by all of them, and another instance takes a free lock only after `spread-locks-acquire-grace` (default two
-`lock-confirmation-interval`s). Measured with three managers and 30 locks: 30/0/0 without, 10/9/11 with; one instance
-stopped, its 11 locks went to both survivors (15/15). No schema change: membership is a `__member:<instanceId>` row in
+`lock-confirmation-interval`s). As instances never start at once, held locks move too: each instance releases at most one
+lock per `spread-locks-rebalance-interval` (default two `lock-confirmation-interval`s, `0` = off) to its preferred
+instance. Measured with three managers and 30 locks: 30/0/0 without, 10/9/11 with; one instance
+stopped, its 11 locks went to both survivors (15/15). Three trading-demo instances, 35 locks, default intervals, three
+rounds each: after a staggered start 35/0/0 without, 10/13/12 with spreading, settled after about 3.5 minutes; after a
+cluster restart 34/0/1, 35/0/0 and 2/30/3 without, 10/13/12 every time with; after a crash the survivors' share was
+uneven to all-on-one without, 17/18 every time with, at about 5 s longer failover. No schema change: membership is a `__member:<instanceId>` row in
 the lock table.
 
 Off by default, because it has costs:
 
-- It spreads locks when they are free and never moves a held one. Instances started one after another stay uneven - the
-  first one up takes the locks before the others exist. It helps on a cluster restart and when an instance dies.
+- Every lock that moves pauses its processor or consumer for a few seconds, on every instance joining, leaving or
+  restarting - a rolling deploy moves locks out and back. With rebalancing off nothing moves, but then instances started
+  one after another stay uneven and spreading only helps when an instance dies.
 - A free lock waits up to the grace longer when its preferred instance does not take it.
 - It moves whole consumers; one busy consumer is still one instance's work.
 - One extra read of the lock table per instance per `lock-confirmation-interval`, and per tick for each free lock a

@@ -14,7 +14,8 @@ targets, with a `-N` suffix for plugin-only releases.
   processor's default retry budget now outlasts a failover (`FailoverRedeliveryPolicy`).
   The shard-owned reference's `holeExpiry` row says a message committed after it is delivered late by the head
   sweep, no longer that it may be lost.
-  The foundation reference describes opt-in lock spreading (`essentials.fenced-lock-manager.spread-locks`) and its costs.
+  The foundation reference describes opt-in lock spreading (`essentials.fenced-lock-manager.spread-locks`), its
+  rate-limited rebalancing (`spread-locks-rebalance-interval`) and their costs.
   No skill, rule or script changed.
 
 ## 0.60.1 — targets Essentials 0.60.1

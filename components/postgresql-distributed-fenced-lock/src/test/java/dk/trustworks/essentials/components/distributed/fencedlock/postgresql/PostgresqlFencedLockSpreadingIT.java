@@ -28,7 +28,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 import java.util.stream.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -45,6 +45,7 @@ class PostgresqlFencedLockSpreadingIT {
     private static final int      LOCKS                      = 30;
     private static final Duration LOCK_TIME_OUT              = Duration.ofSeconds(3);
     private static final Duration LOCK_CONFIRMATION_INTERVAL = Duration.ofMillis(500);
+    private static final Duration REBALANCE_INTERVAL         = Duration.ofMillis(500);
 
     @Container
     private static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("lock-db");
@@ -111,28 +112,80 @@ class PostgresqlFencedLockSpreadingIT {
                 .isPositive();
     }
 
+    @Test
+    void with_rebalancing_locks_the_first_instance_took_move_to_instances_that_start_after_it() {
+        var first = startManager(1, true);
+        acquireAllLocksAsync(first);
+        Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> holders.size() == LOCKS);
+        assertThat(locksHeldBy()).as("locks held while only node1 runs").containsOnlyKeys("node1");
+
+        acquireAllLocksAsync(startManager(2, true));
+        acquireAllLocksAsync(startManager(3, true));
+        // Rebalancing converges on every lock held by its preferred owner: the same spread as when all three were up before
+        // the first lock was asked for (with_spreading_free_locks_spread_..., 10/9/11 for these lock names)
+        var startedAt = System.nanoTime();
+        Awaitility.await().atMost(Duration.ofSeconds(60))
+                  .until(() -> holders.size() == LOCKS && locksHeldBy().equals(Map.of("node1", 10, "node2", 9, "node3", 11)));
+        System.out.printf("%nLock spreading after a staggered start converged after %d ms: %s%n%n",
+                          Duration.ofNanos(System.nanoTime() - startedAt).toMillis(), locksHeldBy());
+    }
+
+    @Test
+    void a_lock_whose_preferred_owner_never_takes_it_is_taken_back_and_not_released_again_while_the_membership_stands() {
+        var first = startManager(1, true);
+        startManager(2, true); // a member that never asks for the locks
+        var releases = new ConcurrentHashMap<String, List<Long>>();
+        acquireAllLocksAsync(first, lock -> releases.computeIfAbsent(lock.getName().toString(), name -> new CopyOnWriteArrayList<>()).add(System.nanoTime()));
+        Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> holders.size() == LOCKS);
+
+        var window = REBALANCE_INTERVAL.multipliedBy(13);
+        sleep(window);
+
+        // A lock released moments ago is held again once the grace has passed
+        Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> holders.size() == LOCKS);
+        assertThat(locksHeldBy()).containsOnlyKeys("node1");
+        assertThat(releases).as("node1 released some locks to node2, their preferred owner").isNotEmpty();
+        releases.forEach((lock, at) -> assertThat(at).as("releases of %s to a preferred owner that never takes it", lock).hasSize(1));
+        System.out.printf("%nReleases of locks nobody else takes, over %s: %d releases of %d locks%n%n",
+                          window, releases.values().stream().mapToInt(List::size).sum(), releases.size());
+    }
+
     private void startManagers(boolean spreadLocks) {
         for (var node = 1; node <= 3; node++) {
-            var jdbi = jdbi();
-            var manager = PostgresqlFencedLockManager.builder()
-                                                     .setJdbi(jdbi)
-                                                     .setUnitOfWorkFactory(new JdbiUnitOfWorkFactory(jdbi))
-                                                     .setLockManagerInstanceId("node" + node)
-                                                     .setLockTimeOut(LOCK_TIME_OUT)
-                                                     .setLockConfirmationInterval(LOCK_CONFIRMATION_INTERVAL)
-                                                     .setSpreadLocks(spreadLocks)
-                                                     .build();
-            manager.start();
-            managers.add(manager);
+            startManager(node, spreadLocks);
         }
     }
 
+    private PostgresqlFencedLockManager startManager(int node, boolean spreadLocks) {
+        var jdbi = jdbi();
+        var manager = PostgresqlFencedLockManager.builder()
+                                                 .setJdbi(jdbi)
+                                                 .setUnitOfWorkFactory(new JdbiUnitOfWorkFactory(jdbi))
+                                                 .setLockManagerInstanceId("node" + node)
+                                                 .setLockTimeOut(LOCK_TIME_OUT)
+                                                 .setLockConfirmationInterval(LOCK_CONFIRMATION_INTERVAL)
+                                                 .setSpreadLocks(spreadLocks)
+                                                 .setSpreadLocksRebalanceInterval(REBALANCE_INTERVAL)
+                                                 .build();
+        manager.start();
+        managers.add(manager);
+        return manager;
+    }
+
     private void acquireAllLocksAsync(PostgresqlFencedLockManager manager) {
+        acquireAllLocksAsync(manager, lock -> {
+        });
+    }
+
+    private void acquireAllLocksAsync(PostgresqlFencedLockManager manager, java.util.function.Consumer<FencedLock> onReleased) {
         for (var index = 0; index < LOCKS; index++) {
             manager.acquireLockAsync(lockName(index),
                                      LockCallback.builder()
                                                  .onLockAcquired(lock -> holders.put(lock.getName().toString(), lock.getLockedByLockManagerInstanceId()))
-                                                 .onLockReleased(lock -> holders.remove(lock.getName().toString(), manager.getLockManagerInstanceId()))
+                                                 .onLockReleased(lock -> {
+                                                     holders.remove(lock.getName().toString(), manager.getLockManagerInstanceId());
+                                                     onReleased.accept(lock);
+                                                 })
                                                  .build());
         }
     }

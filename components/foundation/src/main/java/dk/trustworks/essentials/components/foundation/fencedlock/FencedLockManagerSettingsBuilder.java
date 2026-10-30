@@ -35,6 +35,7 @@ public final class FencedLockManagerSettingsBuilder {
     private boolean  releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation;
     private boolean  spreadLocks;
     private Duration spreadLocksAcquireGrace;
+    private Duration spreadLocksRebalanceInterval;
 
     /**
      * @param lockManagerInstanceId the unique name for this lock manager instance, or {@code null} to use {@code <hostname>:<pid>}.
@@ -98,11 +99,8 @@ public final class FencedLockManagerSettingsBuilder {
                                              lockTimeOut,
                                              lockConfirmationInterval,
                                              releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
-                                             spreadLocks
-                                             ? LockSpreading.enabled(spreadLocksAcquireGrace != null
-                                                                     ? spreadLocksAcquireGrace
-                                                                     : LockSpreading.defaultAcquireGrace(requireNonNull(lockConfirmationInterval, "No lockConfirmationInterval value provided")))
-                                             : LockSpreading.disabled());
+                                             LockSpreading.from(spreadLocks, spreadLocksAcquireGrace, spreadLocksRebalanceInterval,
+                                                                requireNonNull(lockConfirmationInterval, "No lockConfirmationInterval value provided")));
     }
 
     /**
@@ -128,6 +126,7 @@ public final class FencedLockManagerSettingsBuilder {
         requireNonNull(lockSpreading, "No lockSpreading provided");
         this.spreadLocks = lockSpreading.enabled();
         this.spreadLocksAcquireGrace = lockSpreading.enabled() ? lockSpreading.acquireGrace() : null;
+        this.spreadLocksRebalanceInterval = lockSpreading.enabled() ? lockSpreading.rebalanceInterval() : null;
         return this;
     }
 
@@ -141,6 +140,19 @@ public final class FencedLockManagerSettingsBuilder {
      */
     public FencedLockManagerSettingsBuilder setSpreadLocksAcquireGrace(Duration spreadLocksAcquireGrace) {
         this.spreadLocksAcquireGrace = spreadLocksAcquireGrace;
+        return this;
+    }
+
+    /**
+     * See {@link LockSpreading#rebalanceInterval()}. {@code null} (the default) means
+     * {@link LockSpreading#defaultRebalanceInterval(Duration) two lock confirmation intervals}; {@link Duration#ZERO} turns
+     * rebalancing off. Only used when {@link #setSpreadLocks(boolean)} is {@code true}.
+     *
+     * @param spreadLocksRebalanceInterval the interval, {@link Duration#ZERO} for none, or {@code null} for the default
+     * @return this builder
+     */
+    public FencedLockManagerSettingsBuilder setSpreadLocksRebalanceInterval(Duration spreadLocksRebalanceInterval) {
+        this.spreadLocksRebalanceInterval = spreadLocksRebalanceInterval;
         return this;
     }
 }

@@ -33,13 +33,22 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * {@link #acquireGrace()}, so a lock is never left unserved when its preferred owner is slow or gone. An instance joining
  * or leaving changes the preferred owner of only about 1/N of the locks.
  * <p>
+ * <p>
+ * <b>Rebalancing:</b> instances do not start at once - JVMs come up seconds apart, and a rolling deploy starts them minutes
+ * apart - so the first one up takes every free lock before the others exist. With a positive {@link #rebalanceInterval()},
+ * an instance therefore also releases a lock it holds whose preferred owner is another live instance, at most one lock
+ * per {@code rebalanceInterval} per instance (the first one interval after start, once the membership has settled), and
+ * the preferred owner takes it on its next acquire tick. A lock released that way that its preferred owner does not take
+ * - it never asks for it, or is paused - is taken back after the grace and not released again until the membership changes, so it is moved at most once per
+ * membership change. A preferred owner that only starts asking for a lock later gets it at the next membership change.
+ * <p>
  * <b>What it costs - read before turning it on:</b>
  * <ul>
- *     <li><b>Locks spread on acquire only; a held lock never moves.</b> Instances that start one after another still end
- *         up uneven: the first instance takes every free lock it is preferred for, and the grace only holds it back from
- *         the others for a little while once they are up. Spreading is even when instances are up before the locks are
- *         free - a crash of a holder, or a restart of the whole cluster - and a crashed instance's locks are spread over
- *         all survivors instead of landing on one. Moving held locks over (rebalancing) is not built.</li>
+ *     <li><b>Every lock that moves pauses its consumer.</b> Its holder releases it (the consumer's {@code lockReleased}
+ *         runs: an event processor stops and saves its resume point), and the new holder takes it on its next acquire
+ *         tick, up to a {@code lockConfirmationInterval} later, and resubscribes. A few seconds without handling, per
+ *         moved consumer, on every membership change - an instance joining, leaving or restarting. With rebalancing off,
+ *         nothing moves, but a staggered start stays uneven: spreading then only helps when a holder crashes.</li>
  *     <li><b>A free lock waits up to {@link #acquireGrace()} longer</b> when its preferred owner does not take it - its
  *         processor is idle for that long after a failover.</li>
  *     <li><b>It spreads whole locks, and so whole exclusive consumers.</b> One busy consumer behind one lock is still one
@@ -52,11 +61,13 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *         decided by the fence token as always - only who takes the lock.</li>
  * </ul>
  *
- * @param enabled      whether locks are spread
- * @param acquireGrace how long an instance that is not a free lock's preferred owner must see the lock free before it
- *                     takes it. Not negative. Ignored when {@code enabled} is false
+ * @param enabled           whether locks are spread
+ * @param acquireGrace      how long an instance that is not a free lock's preferred owner must see the lock free before
+ *                          it takes it. Not negative. Ignored when {@code enabled} is false
+ * @param rebalanceInterval how often an instance may release one lock it holds to that lock's preferred owner;
+ *                          {@link Duration#ZERO} turns rebalancing off. Not negative. Ignored when {@code enabled} is false
  */
-public record LockSpreading(boolean enabled, Duration acquireGrace) {
+public record LockSpreading(boolean enabled, Duration acquireGrace, Duration rebalanceInterval) {
     /**
      * The prefix of every membership lock's name. A lock whose name starts with it is never spread.
      */
@@ -64,8 +75,12 @@ public record LockSpreading(boolean enabled, Duration acquireGrace) {
 
     public LockSpreading {
         requireNonNull(acquireGrace, "No acquireGrace provided");
+        requireNonNull(rebalanceInterval, "No rebalanceInterval provided");
         if (acquireGrace.isNegative()) {
             throw new IllegalArgumentException(msg("acquireGrace {} must not be negative", acquireGrace));
+        }
+        if (rebalanceInterval.isNegative()) {
+            throw new IllegalArgumentException(msg("rebalanceInterval {} must not be negative", rebalanceInterval));
         }
     }
 
@@ -73,15 +88,52 @@ public record LockSpreading(boolean enabled, Duration acquireGrace) {
      * @return locks are not spread - the default
      */
     public static LockSpreading disabled() {
-        return new LockSpreading(false, Duration.ZERO);
+        return new LockSpreading(false, Duration.ZERO, Duration.ZERO);
     }
 
     /**
-     * @param acquireGrace see {@link #acquireGrace()}
+     * @param acquireGrace      see {@link #acquireGrace()}
+     * @param rebalanceInterval see {@link #rebalanceInterval()}; {@link Duration#ZERO} for no rebalancing
      * @return locks are spread
      */
-    public static LockSpreading enabled(Duration acquireGrace) {
-        return new LockSpreading(true, acquireGrace);
+    public static LockSpreading enabled(Duration acquireGrace, Duration rebalanceInterval) {
+        return new LockSpreading(true, acquireGrace, rebalanceInterval);
+    }
+
+    /**
+     * The rebalance interval used when spreading is enabled without one: two lock confirmation intervals, so a lock moved
+     * has been taken by its preferred owner (on its next acquire tick, at most one interval later) before the next moves.
+     *
+     * @param lockConfirmationInterval the lock manager's confirmation interval, which is also its acquire tick
+     * @return the default rebalance interval
+     */
+    public static Duration defaultRebalanceInterval(Duration lockConfirmationInterval) {
+        return requireNonNull(lockConfirmationInterval, "No lockConfirmationInterval provided").multipliedBy(2);
+    }
+
+    /**
+     * The lock spreading a builder's settings describe, with the defaults filled in.
+     *
+     * @param spreadLocks              whether locks are spread
+     * @param acquireGrace             the grace, or {@code null} for {@link #defaultAcquireGrace(Duration)}
+     * @param rebalanceInterval        the rebalance interval, or {@code null} for {@link #defaultRebalanceInterval(Duration)};
+     *                                 {@link Duration#ZERO} for no rebalancing
+     * @param lockConfirmationInterval the lock manager's confirmation interval the defaults derive from
+     * @return {@link #disabled()} unless {@code spreadLocks}
+     */
+    public static LockSpreading from(boolean spreadLocks, Duration acquireGrace, Duration rebalanceInterval, Duration lockConfirmationInterval) {
+        if (!spreadLocks) {
+            return disabled();
+        }
+        return enabled(acquireGrace != null ? acquireGrace : defaultAcquireGrace(lockConfirmationInterval),
+                       rebalanceInterval != null ? rebalanceInterval : defaultRebalanceInterval(lockConfirmationInterval));
+    }
+
+    /**
+     * @return whether held locks are released to their preferred owner
+     */
+    public boolean rebalances() {
+        return enabled && !rebalanceInterval.isZero();
     }
 
     /**

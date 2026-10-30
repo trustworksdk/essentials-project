@@ -53,6 +53,7 @@ public final class MongoFencedLockManagerBuilder {
     private Optional<EventBus> eventBus = Optional.empty();
     private boolean            spreadLocks;
     private Duration           spreadLocksAcquireGrace;
+    private Duration           spreadLocksRebalanceInterval;
 
     /**
      * @param mongoTemplate the mongoTemplate instance
@@ -179,11 +180,7 @@ public final class MongoFencedLockManagerBuilder {
                                           lockConfirmationInterval,
                                           releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
                                           eventBus,
-                                          spreadLocks
-                                          ? LockSpreading.enabled(spreadLocksAcquireGrace != null
-                                                                  ? spreadLocksAcquireGrace
-                                                                  : LockSpreading.defaultAcquireGrace(lockConfirmationInterval))
-                                          : LockSpreading.disabled());
+                                          LockSpreading.from(spreadLocks, spreadLocksAcquireGrace, spreadLocksRebalanceInterval, lockConfirmationInterval));
     }
 
     /**
@@ -207,6 +204,18 @@ public final class MongoFencedLockManagerBuilder {
      */
     public MongoFencedLockManagerBuilder setSpreadLocksAcquireGrace(Duration spreadLocksAcquireGrace) {
         this.spreadLocksAcquireGrace = spreadLocksAcquireGrace;
+        return this;
+    }
+
+    /**
+     * See {@link LockSpreading#rebalanceInterval()}. {@code null} (the default) means two lock confirmation intervals;
+     * {@link Duration#ZERO} turns rebalancing off. Only used when {@link #setSpreadLocks(boolean)} is {@code true}.
+     *
+     * @param spreadLocksRebalanceInterval the interval, {@link Duration#ZERO} for none, or {@code null} for the default
+     * @return this builder instance
+     */
+    public MongoFencedLockManagerBuilder setSpreadLocksRebalanceInterval(Duration spreadLocksRebalanceInterval) {
+        this.spreadLocksRebalanceInterval = spreadLocksRebalanceInterval;
         return this;
     }
 

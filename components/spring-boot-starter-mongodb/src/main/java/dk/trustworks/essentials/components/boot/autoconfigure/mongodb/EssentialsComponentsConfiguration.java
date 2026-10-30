@@ -294,6 +294,7 @@ public class EssentialsComponentsConfiguration {
                                      .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(properties.getFencedLockManager().isReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation())
                                      .setSpreadLocks(properties.getFencedLockManager().isSpreadLocks())
                                      .setSpreadLocksAcquireGrace(properties.getFencedLockManager().getSpreadLocksAcquireGrace())
+                                     .setSpreadLocksRebalanceInterval(properties.getFencedLockManager().getSpreadLocksRebalanceInterval())
                                      .setEventBus(eventBus)
                                      .buildAndStart();
     }

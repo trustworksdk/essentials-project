@@ -20,7 +20,7 @@ where the time goes. EF-2 is about running the handling on every instance while 
 | `EventProcessor`: batched forward from the reader to the inbox | **Built** (`getForwardBatchSize()`), measured | §5 "Batched forward, built and measured" |
 | `ViewEventProcessor`: batched handling (one unit of work per batch) | **Built** (`getDirectHandlingBatchSize()`), measured | `docs/view-event-processor-batched-handling.md` |
 | `ViewEventProcessor`: handling on every instance (option (a1)) | **Proposal**: §4, decisions §8 | this document |
-| Spreading the fenced locks: whole processors over instances, on every queue engine (option (d)) | **Built, opt-in** (`essentials.fenced-lock-manager.spread-locks`, §3.5); rebalancing not built; demo measurement pending | this document |
+| Spreading the fenced locks: whole processors over instances, on every queue engine (option (d)) | **Built, opt-in** (`essentials.fenced-lock-manager.spread-locks`, §3.5), with rate-limited rebalancing; measured in the demo | this document |
 
 Which queue implementation an application runs decides how much of this it can use at all: §3.6. In short, only an
 engine that keeps one key in order across instances - today the shard-owned engine - can spread handling over
@@ -243,7 +243,7 @@ Cons:
 
 **Rejected as a foundation.** CDC stays useful underneath (a0)/(a1) for reader latency.
 
-### 3.5 Option (d) — spread the fenced locks (built, opt-in; rebalancing not built)
+### 3.5 Option (d) — spread the fenced locks (built, opt-in, with rate-limited rebalancing)
 
 Leave every processor exclusive and spread the locks - and so whole processors - over the instances. It is independent
 of the queue engine, so it is the one way to spread work over instances on `PostgresqlDurableQueues`, MongoDB and the
@@ -281,6 +281,37 @@ Cons:
 - Spreads whole processors only: one busy view is still one thread on one instance (that is (a1)'s job).
 - A new behaviour in the central `FencedLockManager`, with the timing cases that come with it: a preferred owner that
   is slow to start, flapping membership (hysteresis needed), and two managers disagreeing on membership for a tick.
+
+**Measured, built without rebalancing (2026-10-30, one run per arm).** Three trading-demo instances, 35 locks,
+`lockTimeOut` 15 s, grace 8 s (`~/trading-demo-profiling/lockspread-2026-10-30/lockspread.sh`):
+
+| Scenario | Spreading off | Spreading on |
+|---|---|---|
+| Staggered start (each instance up and settled before the next) | 35 / 0 / 0 | 35 / 0 / 0 |
+| SIGKILL of the holder of all 35 | all 35 to one survivor, re-held after 13.0 s | 17 / 18 over both survivors, after 17.4 s |
+| Cluster restart (all killed, started together) | 1 / 16 / 18 | 24 / 0 / 11 |
+
+What it shows: without rebalancing, the one case spreading wins is a crash (the dead instance's locks go to every
+survivor instead of one), at about 4 s more failover - the locks whose preferred owner was the dead instance wait for the
+grace or the next membership read. A staggered start is unchanged, as documented. A "simultaneous" restart is not
+simultaneous: JVMs come up seconds apart, the first ones read a membership that lacks the later ones and take the locks
+they are preferred for, and nothing moves a held lock afterwards - here one instance ended with none, worse than without.
+Rebalancing (or a settle period after start before acquiring) is what the restart and staggered cases need.
+
+**Measured with rebalancing (2026-10-30, three alternating rounds per arm).** Same setup, default intervals
+(confirmation 4 s, grace 8 s, rebalance 8 s); "settled" = unchanged for 30 s:
+
+| Scenario | Spreading off (rounds 1 / 2 / 3) | Spreading on, rebalancing (rounds 1 / 2 / 3) |
+|---|---|---|
+| Staggered start | 35/0/0 · 35/0/0 · 35/0/0 | 10/13/12 in all three, settled after 204 / 200 / 203 s |
+| SIGKILL of the largest holder | 26/9 · 13/22 · 35/0, re-held after 12.4 / 8.5 / 12.3 s | 17/18 in all three, re-held after 16.9 / 18.6 / 17.6 s |
+| Cluster restart | 34/0/1 · 35/0/0 · 2/30/3 | 10/13/12 in all three, settled after 179 / 145 / 165 s |
+
+Rebalancing makes the spread the same every time, whatever the start order: about 25 of 35 locks move after a
+staggered start, one per 8 s, so it takes about 3.5 minutes, each move a pause of up to one confirmation interval for
+its processor. Not measured: processor downtime per move, and a rolling deploy. Failover after a crash takes about 5 s
+longer (the grace, for the locks whose preferred owner was the dead instance). Without spreading, a crash lands
+anywhere from evenly to all on one survivor, and a restart usually leaves one instance with nearly everything.
 
 A cheaper variant without membership - an instance holding more locks waits longer before taking a free one - was
 looked at and set aside: it spreads only locks that are free while several instances already run, and instances start

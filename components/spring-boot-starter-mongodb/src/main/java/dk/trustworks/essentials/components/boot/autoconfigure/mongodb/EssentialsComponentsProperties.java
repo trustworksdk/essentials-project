@@ -495,6 +495,7 @@ public class EssentialsComponentsProperties {
         private String   instanceId;
         private boolean  spreadLocks;
         private Duration spreadLocksAcquireGrace;
+        private Duration spreadLocksRebalanceInterval;
 
         /**
          * The lock manager's instance id: what the lock table, the admin API ({@code lockedByLockManagerInstanceId}) and the
@@ -523,8 +524,8 @@ public class EssentialsComponentsProperties {
          * Spread the locks acquired asynchronously - the exclusive event processors, Inboxes and consumers - over the live
          * application instances, instead of leaving each to whichever instance asks first. Property:
          * {@code essentials.fenced-lock-manager.spread-locks}, default {@code false}. Locks spread when they are free (on a
-         * crash or a cluster restart); a held lock never moves, so instances started one after another stay uneven, and a
-         * free lock waits up to {@link #getSpreadLocksAcquireGrace()} longer for its preferred instance. See
+         * crash or a cluster restart), and a waits up to {@link #getSpreadLocksAcquireGrace()} longer for its preferred instance;
+         * {@link #getSpreadLocksRebalanceInterval()} moves held locks over too. See
          * {@link dk.trustworks.essentials.components.foundation.fencedlock.LockSpreading} for every cost before enabling it.
          *
          * @return whether locks are spread
@@ -558,6 +559,26 @@ public class EssentialsComponentsProperties {
          */
         public void setSpreadLocksAcquireGrace(Duration spreadLocksAcquireGrace) {
             this.spreadLocksAcquireGrace = spreadLocksAcquireGrace;
+        }
+
+        /**
+         * How often an instance may release one lock it holds to that lock's preferred instance, so locks also spread
+         * after a staggered start or a rolling deploy. Each moved lock pauses its consumer for a few seconds. Property:
+         * {@code essentials.fenced-lock-manager.spread-locks-rebalance-interval}. Unset (the default), two lock
+         * confirmation intervals; {@code 0} turns rebalancing off. Only used with {@link #isSpreadLocks()}.
+         *
+         * @return the interval, or {@code null} for the default
+         */
+        public Duration getSpreadLocksRebalanceInterval() {
+            return spreadLocksRebalanceInterval;
+        }
+
+        /**
+         * @param spreadLocksRebalanceInterval the interval, {@code 0} for no rebalancing, or {@code null} for the default
+         * @see #getSpreadLocksRebalanceInterval()
+         */
+        public void setSpreadLocksRebalanceInterval(Duration spreadLocksRebalanceInterval) {
+            this.spreadLocksRebalanceInterval = spreadLocksRebalanceInterval;
         }
 
         /**

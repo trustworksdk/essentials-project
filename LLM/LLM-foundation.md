@@ -583,13 +583,17 @@ Off by default. `FencedLockManagerSettings.builder().setSpreadLocks(true)` (or t
 going to whichever instance asks first. Each manager holds a membership lock `__member:<instanceId>`, so live instances
 are read from the lock table, with no schema change. Every instance computes the same preferred owner per lock (rendezvous
 hashing). A free lock is taken by its preferred owner; another instance takes it only once it has seen it free for
-`spreadLocksAcquireGrace` (default 2 x `lockConfirmationInterval`), so no lock is left unserved.
+`spreadLocksAcquireGrace` (default 2 x `lockConfirmationInterval`), so no lock is left unserved. Instances do not start
+at once, so a held lock also moves: an instance releases at most one lock per `spreadLocksRebalanceInterval` (default
+2 x `lockConfirmationInterval`, `0` = off) whose preferred owner is another live instance, and that owner takes it on its
+next tick. A lock its preferred owner does not take is taken back and not released again until the membership changes.
 
 Costs - weigh them before enabling it:
 
-- **Spreads on acquire only; a held lock never moves.** Instances started one after another stay uneven: the first one up
-  takes every free lock it is preferred for. It spreads when instances are up before the locks are free - a cluster
-  restart, or a crash of a holder (its locks spread over all survivors instead of one). Rebalancing held locks is not built.
+- **Every moved lock pauses its consumer** for a few seconds (release, `lockReleased`, the new holder takes it on its next
+  tick and resubscribes), on every membership change - an instance joining, leaving or restarting. A staggered start of
+  three instances moves about two thirds of the locks, one per rebalance interval. With rebalancing off nothing moves, and
+  spreading then only helps when a holder crashes.
 - **A free lock waits up to the grace longer** when its preferred owner does not take it: the consumer behind it idles
   that long after a failover.
 - **Whole locks only**: one busy consumer is still one instance's work (for that, see `PartitionedEventProcessor`).
