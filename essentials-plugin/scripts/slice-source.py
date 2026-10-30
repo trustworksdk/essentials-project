@@ -25,29 +25,60 @@ The facts mode also indexes the project's tests (`tests`), so a manifest's `scen
 resolved: every type declared under a test source root, and on each the methods carrying a JUnit 5
 test annotation, matched by simple name — a composed annotation of your own is not followed.
 
+`--check` also resolves every import to the source directory that declares its package (gate 8), lists every
+call of a mutating method on a write repository of an entity declared in some `<bc>/entities/` (`writeSites`), and
+predicts, per `ViewEventProcessor`, the variants of a sealed event parent no handler accepts (`unhandledVariants`).
+A bounded context is a directory holding a role directory (`use_cases/`, `views/`, `automations/`,
+`external_systems/`); everything outside every one — the application's own `config/`, a shared kernel, a library —
+is out of gate 8's scope, as is anything under a `_`-prefixed directory.
+
 Judgement stays with the command that calls it: the service-entity lane criterion ("state loaded,
-mutated and saved in place"), gate 11(a), and every judgement field in
+mutated and saved in place"), gate 11(a), whether a write site is allowed (gate 15), and every judgement field in
 `references/slice/manifest-reconciliation.md` §1.
 
 Usage
 -----
-    slice-source.py [ROOT] [--json] [--check] [--bc NAME]... [--quiet]
+    slice-source.py [ROOT] [--json] [--check] [--bc NAME]... [--quiet] [--fail-on LEVEL] [--today DATE]
 
     ROOT        directory to scan (default: the current directory)
     --json      emit JSON on stdout (facts, or findings with --check); the facts carry the test
                 index under `tests`
-    --check     compare every slice.yaml with its source: gates 6 (endpoints and query
-                discriminators, per handler; raw-scalar ids at the API edge), 11(b) (handled
-                events declared) and the signal-count rows of 14 (write-style lane). Needs pyyaml.
-    --bc NAME   restrict to these bounded contexts (directory name); repeatable
+    --check     compare every slice.yaml with its source, and the source with the slice law. Needs pyyaml.
+                Gates: 6 (endpoints and query discriminators, per handler; raw-scalar ids at the API edge),
+                8 (§R4 boundary imports: `8(a) slice import` into use_cases/ or views/, `8(b) slice import` into
+                automations/ or external_systems/, `8(c) bc-private import` of another BC's anything but events/
+                and types/, `8(d) command in domain`; Blocking when the imported type decides, handles, writes or
+                routes, Should-fix when it is read-only — `targetShape` in the message; not findings: a command
+                type the file only constructs and sends on a command bus, an aggregates/ type named only for its
+                `AggregateType` constant, the BC's own config/ wiring its deciders), 11(b) (handled events
+                declared), 11(c) (a write site in a slice whose `writes` lacks the entity) and the signal-count
+                rows of 14 (write-style lane, a declared lane with no write model). Every finding carries an
+                `impact`: wrong-today, wrong-next-caller, coupling or documentation
+    --bc NAME   restrict to these bounded contexts (directory name); repeatable. Imports and write sites
+                still resolve against every BC
     --quiet     text mode: findings and unparsed only
+    --fail-on LEVEL
+                with --check, the least severe finding that exits 1: blocking, should-fix or advisory
+                (default: advisory — any finding)
+    --today DATE
+                with --check, the date (YYYY-MM-DD) the acceptance record is read against (default: today)
+
+Acceptance record
+-----------------
+`ROOT/slice-check-accepted.yaml`, written and owned by the project — this script never writes it. A YAML list of
+`{gate, match, reason, accepted, review-by}`, dates as YYYY-MM-DD. A finding is accepted when its gate starts with
+`gate` (at a gate-number boundary: `8` covers `8(c) …`, `1` does not cover `11(b) …`) and `match` occurs in its file
+or message: it moves to `accepted`, with the record, and never counts towards the exit code. A record past its
+`review-by` accepts nothing — its finding stays, marked `acceptance expired`, and the record is listed under
+`expiredAcceptances`. An entry that is not a record is a `0 acceptance record` finding (Should-fix); a record
+matching no finding is listed under `unusedAcceptances`.
 
 Exit codes
 ----------
     0   nothing to report: no findings, nothing unparsed, nothing unverified
-    1   findings (--check)
+    1   findings at or above --fail-on (--check); accepted findings never count
     2   could not run — ROOT not a directory, bad arguments, --check without pyyaml
-    3   incomplete, NOT a pass: no findings, but some source was unparsed (in the facts mode,
+    3   incomplete, NOT a pass: no failing finding, but some source was unparsed (in the facts mode,
         test source included) or (with --check) some check had nothing to run against
 
 Dependencies
@@ -59,6 +90,7 @@ The facts mode is stdlib-only. `--check` reads manifests and needs `pyyaml`; run
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -107,6 +139,31 @@ USE_SITE_TARGETS = {"file", "property", "field", "get", "set", "receiver", "para
 JAVA_NOT_METHOD = {"if", "for", "while", "switch", "catch", "synchronized", "return", "new", "throw", "super", "this",
                    "assert", "else", "try", "do", "case", "yield"}
 SEVERITY_ORDER = {"Blocking": 0, "Should-fix": 1, "Advisory": 2}
+FAIL_ON = {"blocking": 0, "should-fix": 1, "advisory": 2}
+# what a finding costs if left: broken now, broken for the next caller, a dependency that should not exist, or a
+# description that no longer matches the code. Gate 8's (a)-(c) take theirs from the severity, see finding()
+IMPACT = {
+    "0 acceptance record": "documentation",
+    "6 command mappings": "coupling", "6 endpoint route": "documentation", "6 discriminator": "documentation",
+    "6 undeclared mapping": "documentation", "6 raw id": "coupling",
+    "8(d) command in domain": "coupling",
+    "11(b) handled events": "documentation", "11(c) undeclared write": "documentation",
+    "14 two write styles": "wrong-next-caller", "14 entities with event store": "wrong-next-caller",
+    "14 declared lanes": "documentation", "14 stale lane": "documentation", "14 lane without write model": "documentation",
+}
+# gate 8 and the write sites: a type that can change state. The CRUD bases take the entity as their first type argument
+MUTATORS = {"save", "saveAll", "saveAndFlush", "saveAllAndFlush", "update", "updateAll", "delete", "deleteAll",
+            "deleteById", "deleteAllById", "deleteInBatch", "deleteAllInBatch", "deleteAllByIdInBatch", "insert",
+            "insertAll", "upsert", "persist"}
+WRITE_REPO_BASES = {"DocumentDbRepository", "DelegatingDocumentDbRepository", "PostgresqlDocumentDbRepository",
+                    "CrudRepository", "ListCrudRepository", "JpaRepository", "MongoRepository", "ReactiveCrudRepository",
+                    "ReactiveMongoRepository", "R2dbcRepository", "CoroutineCrudRepository"}
+CONFIG_ANNS = {"Configuration", "ConfigurationProperties", "AutoConfiguration"}
+# the shapes of an imported type that let the importer decide, handle, write or route for another slice
+BLOCKING_SHAPES = {"decider", "evolver", "decider state", "event processor", "handler", "endpoint", "write repository",
+                   "aggregate", "routing marker"}
+ACCEPTANCE_FILE = "slice-check-accepted.yaml"
+ACCEPTANCE_KEYS = ("gate", "match", "reason", "accepted", "review-by")
 # gate `6 raw id`: an id-named request binding typed as one of these is the wire contract left untyped
 EDGE_BINDING_ANNS = {"PathVariable", "RequestParam"}
 ID_NAME = re.compile(r"^(?:id|.*[a-z0-9]Id)$")
@@ -437,6 +494,7 @@ class SrcFile:
         self.kotlin = lang == "kotlin"
         self.package = None
         self.imports, self.aliases, self.static_imports, self.wildcards = {}, {}, {}, []
+        self.import_lines = []  # (name, line, static, wildcard, alias) in source order — gate 8 reads these
         self.typealiases = {}
         self.types, self.methods, self.props = [], [], []
         self.anns_at, self.ann_last, self.type_at = {}, {}, {}
@@ -546,6 +604,7 @@ class SrcFile:
                 alias = None
                 if self.kotlin and self.is_id(j, "as") and self.toks[j].line == self.toks[j - 1].line and self.is_id(j + 1):
                     alias, j = self.toks[j + 1].t, j + 2
+                self.import_lines.append((name, self.toks[i].line, static, wildcard, alias))
                 if wildcard:
                     self.wildcards.append(name)
                 elif static:
@@ -1163,6 +1222,30 @@ def bc_key(relpath):
     return SOURCE_ROOT_LANG.sub(r"\1src/\2/*\4", relpath)
 
 
+class Where:
+    """Where a main source file sits: its bounded context (None outside every one), the directories between the BC
+    and the file, and the slice directory when a role directory holds it."""
+    __slots__ = ("bc", "parts", "slice_dir")
+
+    def __init__(self, bc, parts, slice_dir):
+        self.bc, self.parts, self.slice_dir = bc, parts, slice_dir
+
+    @property
+    def part(self):
+        return self.parts[0] if self.parts else ""
+
+    @property
+    def excluded(self):
+        """Under a `_`-prefixed directory: not a slice, and outside the §R4 boundary check."""
+        return any(p.startswith("_") for p in self.parts)
+
+    @property
+    def role(self):
+        if self.bc is None:
+            return "outside-bc"
+        return self.part or "bc-root"
+
+
 class Slice:
     def __init__(self, dir_, role, bc_dir):
         self.dir, self.role, self.bc_dir = dir_, role, bc_dir
@@ -1193,13 +1276,22 @@ class Project:
         self._event_names = {}
         self._discover_slices(dirs, manifest_paths)
         self._load_manifests()
+        self.bcs_filter = bcs_filter
+        # gate 8 and the write sites resolve a target to its bounded context whatever --bc says
+        self.all_slices = list(self.slices)
+        self.all_bcs = self._group_bcs({sl.bc_dir for sl in self.slices} | self.role_parents)
         if bcs_filter:
             self.slices = [s for s in self.slices if s.bc_dir.name in bcs_filter]
-        groups = {}
+        self.bcs = self._group_bcs({sl.bc_dir for sl in self.slices})
         for sl in self.slices:
-            key = bc_key(rel(sl.bc_dir, root))
-            groups.setdefault(key, set()).add(sl.bc_dir)
-        self.bcs = []
+            sl.bc = next(b for b in self.bcs if sl.bc_dir in b.dirs)
+        self._index()
+
+    def _group_bcs(self, bc_dirs):
+        root, groups = self.root, {}
+        for d in bc_dirs:
+            groups.setdefault(bc_key(rel(d, root)), set()).add(d)
+        out = []
         for key in sorted(groups):
             dirs = set(groups[key])
             if "*" in key:  # the same package in the other language's source root, slices or not
@@ -1207,22 +1299,21 @@ class Project:
                     other = root / key.replace("*", lang, 1)
                     if other.is_dir():
                         dirs.add(other)
-            self.bcs.append(BC(key, Path(key).name, sorted(dirs, key=lambda p: rel(p, root))))
-        for sl in self.slices:
-            sl.bc = next(b for b in self.bcs if sl.bc_dir in b.dirs)
-        self._index()
+            out.append(BC(key, Path(key).name, sorted(dirs, key=lambda p: rel(p, root))))
+        return out
 
     def _u(self, path, line, what, reason):
         return {"file": rel(path, self.root) if isinstance(path, Path) else path, "line": line, "what": what,
                 "reason": reason}
 
     def _discover_slices(self, dirs, manifest_paths):
-        slices = {}
+        slices, self.role_parents = {}, set()
         for d in sorted(dirs, key=lambda p: len(p.parts)):
             if d.name not in ROLES:
                 continue
             if any(under(d, parent) for parent in slices):
                 continue
+            self.role_parents.add(d.parent)
             for child in sorted(p for p in d.iterdir() if p.is_dir()):
                 if child.name.startswith("_") or child.name.startswith(".") or child.name in SKIP_DIRS:
                     continue
@@ -1292,12 +1383,67 @@ class Project:
                     self.agg_consts.setdefault(key, set()).add(f.toks[a + 4].v)
                 else:
                     self.consts.setdefault(key, []).append((f, a, b, p))
+        # package → the directories declaring it: gate 8 resolves an import to where its target lives
+        self.package_dirs = {}
+        for f in self.files:
+            if f.package:
+                self.package_dirs.setdefault(f.package, set()).add(f.path.parent)
+        self._where, self._commands = {}, {}
         # supertype → subtypes, by simple name
         self.subtypes = {}
         for f in self.files:
             for td in f.types:
                 for _, tr in td.supers:
                     self.subtypes.setdefault(tr.base.rsplit(".", 1)[-1], []).append(td)
+
+    # -- where a file sits ------------------------------------------------------------------------
+
+    def where(self, path):
+        """Where a main source file sits, against every bounded context — `--bc` does not narrow it."""
+        if path not in self._where:
+            best = None
+            for bc in self.all_bcs:
+                for d in bc.dirs:
+                    if under(path, d) and (best is None or len(d.parts) > len(best[1].parts)):
+                        best = (bc, d)
+            if best is None:
+                self._where[path] = Where(None, (), None)
+            else:
+                bc, d = best
+                parts = path.parent.relative_to(d).parts
+                slice_dir = d / parts[0] / parts[1] if len(parts) >= 2 and parts[0] in ROLES else None
+                self._where[path] = Where(bc, parts, slice_dir)
+        return self._where[path]
+
+    def slice_at(self, slice_dir):
+        return next((s for s in self.all_slices if s.dir == slice_dir), None)
+
+    def slice_commands(self, slice_dir):
+        """The command types a command slice handles: its manifest's `handles`, a decider's command type, a command
+        handler's parameter, and every type of the slice implementing a `routing/` marker."""
+        if slice_dir not in self._commands:
+            names = set()
+            s = self.slice_at(slice_dir)
+            if s is not None and s.doc is not None:
+                names |= set(_names(s.doc.get("handles")))
+            for f in self.files:
+                if f.error is not None or not under(f.path, slice_dir):
+                    continue
+                for td in f.types:
+                    for _, tr in td.supers:
+                        b = tr.base.rsplit(".", 1)[-1]
+                        if b in DECIDER_BASES and tr.args:
+                            names.add(tr.args[0].base.rsplit(".", 1)[-1])
+                        elif any(self.where(sup.file.path).part == "routing" for sup in self.types_by_name.get(b, [])):
+                            names.add(td.name)
+                for m in f.methods:
+                    command = any(a.simple == "CmdHandler" or (a.simple == "Handler" and m.owner is not None and
+                                                               set(m.owner.super_bases()) & COMMAND_HANDLER_BASES)
+                                  for a in m.anns)
+                    if command and m.params and m.params[0].type is not None:
+                        names.add(m.params[0].type.base.rsplit(".", 1)[-1])
+            self._commands[slice_dir] = names
+        return self._commands[slice_dir]
 
     # -- resolution --------------------------------------------------------------------------------
 
@@ -2104,8 +2250,12 @@ def gate_id(gate):
 
 
 def finding(severity, gate, slice_id, file, line, message, hint=None):
-    return {"severity": severity, "gate": gate, "id": gate_id(gate), "slice": slice_id, "file": file, "line": line,
-            "message": message, "hint": hint}
+    if gate.startswith("8(") and gate not in IMPACT:
+        impact = "wrong-next-caller" if severity == "Blocking" else "coupling"
+    else:
+        impact = IMPACT[gate]
+    return {"severity": severity, "impact": impact, "gate": gate, "id": gate_id(gate), "slice": slice_id, "file": file,
+            "line": line, "message": message, "hint": hint}
 
 
 def parse_endpoint(path):
@@ -2267,7 +2417,7 @@ def _dedupe(items):
 # check
 # --------------------------------------------------------------------------------------------------
 
-def check_json(project):
+def check_json(project, today):
     findings, unverified, endpoint_table = [], [], []
     root = project.root
     for s in project.slices:
@@ -2285,6 +2435,9 @@ def check_json(project):
         _check_handled_events(project, s, facts, findings, unverified, bool(broken))
         _check_endpoints(project, s, facts, findings, unverified, endpoint_table)
         _check_raw_ids(project, s, findings)
+    _check_boundaries(project, findings)
+    sites = write_sites(project)
+    _check_undeclared_writes(sites, findings)
     lanes = []
     for bc in project.bcs:
         lane = lane_facts(project, bc)
@@ -2297,8 +2450,14 @@ def check_json(project):
                       "signals": {"decider": len(sig["decider"]), "aggregates": bool(sig["aggregates"]),
                                   "entities": bool(sig["entities"]), "eventStore": len(sig["eventStore"])},
                       "declared": declared})
-    findings.sort(key=lambda d: (SEVERITY_ORDER.get(d["severity"], 9), d["file"] or "", d["line"] or 0, d["gate"],
-                                 d["message"]))
+    records = read_acceptances(project, findings)
+    findings, accepted, expired, unused = apply_acceptances(records, findings, today)
+
+    def order(d):
+        return SEVERITY_ORDER.get(d["severity"], 9), d["file"] or "", d["line"] or 0, d["gate"], d["message"]
+
+    findings.sort(key=order)
+    accepted.sort(key=order)
     manifests = [s for s in project.slices if s.manifest]
     return {
         "tool": "slice-source", "format": FORMAT, "mode": "check", "root": project.root_arg,
@@ -2308,6 +2467,11 @@ def check_json(project):
         "lanes": lanes,
         "endpoints": endpoint_table,
         "findings": findings,
+        "accepted": accepted,
+        "expiredAcceptances": expired,
+        "unusedAcceptances": unused,
+        "writeSites": sites,
+        "unhandledVariants": unhandled_variants(project),
         "unverified": sorted(unverified, key=lambda d: (d["file"] or "", d["gate"])),
         "unparsed": sorted(project.unparsed, key=_loc_key),
     }
@@ -2649,6 +2813,14 @@ def _check_lane(project, bc_obj, lane, findings):
             f"manifests in bounded context '{bc}' declare {len(lanes)} lanes: "
             + "; ".join(f"{k}: {', '.join(d['slice'] for d in v)}" for k, v in sorted(lanes.items())),
             "a half-finished migration between write styles — corroborates gate 14"))
+    if lane["detected"] == "undetermined":
+        for d in lane["declared"]:
+            findings.append(finding(
+                "Should-fix", "14 lane without write model", d["slice"], d["file"], None,
+                f"declares lane: {d['lane']}, but '{bc}' has no write-style signal — no decider, no aggregates/, "
+                f"no entities/",
+                "`lane` is machine-derived from the BC's write model, and this one has none yet — `--fix-manifests` "
+                "drops it, or add the write side it names"))
     if len(present) == 1 and lane["detected"] != "conflict":
         detected = present[0]
         for d in lane["declared"]:
@@ -2658,6 +2830,530 @@ def _check_lane(project, bc_obj, lane, findings):
                     f"declares lane: {d['lane']}, but the only write-style signal in '{bc}' is "
                     f"{described[detected]()}",
                     "`lane` is machine-derived; `--fix-manifests` repairs it"))
+
+
+# --------------------------------------------------------------------------------------------------
+# gate 8 (§R4 boundary imports), write sites (gate 11(c), and gate 15's facts), unhandled sealed variants
+# --------------------------------------------------------------------------------------------------
+
+def all_supers(project, td, seen=None):
+    """Simple names of every supertype of td, following those declared in the project."""
+    seen = set() if seen is None else seen
+    for b in td.super_bases():
+        if b not in seen:
+            seen.add(b)
+            for sup in project.types_by_name.get(b, []):
+                all_supers(project, sup, seen)
+    return seen
+
+
+def write_surface(project, td, seen=None):
+    """td declares or inherits a mutating method — a write repository by its surface, whatever store is behind it.
+    A record, data class or enum declaring `update(…)` is a value's wither, not a store."""
+    seen = set() if seen is None else seen
+    if id(td) in seen:
+        return False
+    seen.add(id(td))
+    if td.kind not in ("record", "enum") and "data" not in td.mods and any(m.name in MUTATORS for m in td.methods):
+        return True
+    for b in td.super_bases():
+        if b in WRITE_REPO_BASES or any(write_surface(project, sup, seen) for sup in project.types_by_name.get(b, [])):
+            return True
+    return False
+
+
+def target_shape(project, td, part):
+    """What an imported type can do, read from its syntax. A shape in BLOCKING_SHAPES decides, handles, writes or
+    routes; the rest are read-only."""
+    if part == "routing":
+        return "routing marker"
+    supers = all_supers(project, td)
+    if supers & DECIDER_BASES:
+        return "decider"
+    if td.name.endswith("Evolver") or any(b.endswith("Evolver") for b in supers):
+        return "evolver"
+    if part == "use_cases" and td.name.endswith("State"):
+        return "decider state"
+    if supers & PROCESSOR_BASES:
+        return "event processor"
+    if supers & COMMAND_HANDLER_BASES or any(a.simple in HANDLER_ANNS for m in td.methods for a in m.anns):
+        return "handler"
+    if any(a.simple in MAPPING_ANNS for m in td.methods for a in m.anns):
+        return "endpoint"
+    if write_surface(project, td):
+        return "write repository"
+    if part == "aggregates" and td.kind == "class" and "data" not in td.mods:
+        return "aggregate"
+    if any(a.simple in CONFIG_ANNS for a in td.anns):
+        return "configuration"
+    if td.kind == "record" or "data" in td.mods:
+        return "record"
+    return td.kind if td.kind in ("enum", "interface", "object", "annotation") else "class"
+
+
+def import_target(project, name):
+    """(package, the segments after it) for an import whose package some project file declares, else None."""
+    parts = name.split(".")
+    for k in range(len(parts), 0, -1):
+        pkg = ".".join(parts[:k])
+        if pkg in project.package_dirs:
+            return pkg, parts[k:]
+    return None
+
+
+def _import_targets(project, f, pkg, rest, wildcard, alias):
+    """[(type or None, member or None, the name the file uses, the declaring file's path)] for one import."""
+    files = [g for g in project.files if g.package == pkg and g.error is None]
+    tops = {td.name: td for g in files for td in g.types if td.outer is None}
+    used_ids = {t.t for t in f.toks[f.header_end:] if t.k == "id"}
+    if not rest:  # `import pkg.*`: the package's types this file names
+        return [(td, None, td.name, td.file.path) for n, td in sorted(tops.items()) if wildcard and n in used_ids]
+    td = tops.get(rest[0])
+    if td is None:  # a Kotlin top-level function or property
+        owner = next((g for g in files for m in [*g.methods, *g.props] if m.owner is None and m.name == rest[0]), None)
+        return [] if owner is None else [(None, rest[0], alias or rest[0], owner.path)]
+    if wildcard or len(rest) == 1:
+        return [(td, None, None if wildcard else alias or td.name, td.file.path)]
+    nested = next((n for n in td.file.types if n.outer is td and n.name == rest[1]), None)
+    if nested is not None:
+        return [(nested, None, alias or rest[-1], td.file.path)]
+    return [(td, rest[1], alias or rest[1], td.file.path)]
+
+
+def _only_constructed(f, used):
+    """Every use of `used` after the imports constructs it: `new X(…)`, Kotlin `X(…)`, or the declared type of a
+    local initialised by that construction."""
+    uses = [i for i in range(f.header_end, f.n)
+            if f.toks[i].k == "id" and f.toks[i].t == used and not (f.is_op(i - 1, ".") or f.is_op(i - 1, "?."))]
+    for i in uses:
+        if f.kotlin:
+            if f.is_op(i + 1, "(") and not f.is_id(i - 1, "fun"):
+                continue
+            if f.is_op(i - 1, ":") and f.is_op(i + 1, "=") and f.is_id(i + 2, used) and f.is_op(i + 3, "("):
+                continue
+        else:
+            if f.is_id(i - 1, "new"):
+                continue
+            if f.is_id(i + 1) and f.is_op(i + 2, "=") and f.is_id(i + 3, "new") and f.is_id(i + 4, used):
+                continue
+        return False
+    return bool(uses)
+
+
+def _sends_commands(project, f):
+    """The file sends on a command bus — `send`, `sendAsync`, `sendAndDontWait` — or adds to an inbox that forwards
+    to one."""
+    forwarding, _ = project._inboxes(f)
+    for i, t in enumerate(f.toks):
+        if t.k != "id":
+            continue
+        lp = f.skip_angles(i + 1) if f.is_op(i + 1, "<") else i + 1
+        if not f.is_op(lp, "("):
+            continue
+        recv = f.toks[i - 2] if i >= 2 and f.toks[i - 1].t in (".", "?.") else None
+        if recv is not None and recv.t == ")" and f.match.get(i - 2, 0) > 0:
+            recv = f.toks[f.match[i - 2] - 1]
+        if recv is None:
+            continue
+        if t.t in ("send", "sendAsync", "sendAndDontWait") and (
+                (recv.k == "id" and COMMAND_BUS.search(recv.t)) or t.t != "send"):
+            return True
+        if t.t == "addMessageReceived" and recv.t in forwarding:
+            return True
+    return False
+
+
+def _names_only_aggregate_type(project, f, td, member, used):
+    """The import serves only to name the aggregate's `AggregateType` constant — the stream a read side subscribes to."""
+    if member is not None:
+        return project.lookup_agg(f, f"{td.name}.{member}", 0) is not None
+    if used is None:
+        return False
+    uses = [i for i in range(f.header_end, f.n)
+            if f.toks[i].k == "id" and f.toks[i].t == used and not f.is_op(i - 1, ".")]
+    for i in uses:
+        if not (f.is_op(i + 1, ".") and f.is_id(i + 2) and not f.is_op(i + 3, "(")
+                and project.lookup_agg(f, f"{td.name}.{f.toks[i + 2].t}", i) is not None):
+            return False
+    return bool(uses)
+
+
+def _check_boundaries(project, findings):
+    """Gate 8: an import that reaches past a slice's or a bounded context's public surface. Only imports resolve —
+    a fully-qualified name in a body is not read. An importer or a target outside every BC (the application's own
+    `config/`, a shared kernel, a library) or under a `_`-prefixed directory is out of scope."""
+    for f in project.files:
+        if f.error is not None:
+            continue
+        src = project.where(f.path)
+        if src.bc is None or src.excluded or (project.bcs_filter and src.bc.name not in project.bcs_filter):
+            continue
+        src_slice = project.slice_at(src.slice_dir) if src.slice_dir is not None else None
+        for name, line, _static, wildcard, alias in f.import_lines:
+            hit = import_target(project, name)
+            if hit is None:
+                continue
+            pkg, rest = hit
+            for td, member, used, path in _import_targets(project, f, pkg, rest, wildcard, alias):
+                tgt = project.where(path)
+                if tgt.bc is None or tgt.excluded or (tgt.slice_dir is not None and tgt.slice_dir == src.slice_dir):
+                    continue
+                if src.part in ("events", "entities", "aggregates") and tgt.part == "use_cases" and tgt.slice_dir:
+                    gate = "8(d) command in domain"
+                elif tgt.slice_dir is not None:
+                    if tgt.bc is src.bc and src.part == "config":
+                        continue  # the BC's own wiring: one @Bean per decider (gate 9)
+                    gate = "8(a) slice import" if tgt.part in ("use_cases", "views") else "8(b) slice import"
+                elif tgt.bc is src.bc or tgt.part in ("events", "types"):
+                    continue
+                else:
+                    gate = "8(c) bc-private import"
+                if td is None:
+                    shape = "function" if any(m.name == member for g in project.files for m in g.methods
+                                              if m.owner is None and g.path == path) else "constant"
+                elif member is not None and any(p.name == member for p in td.props):
+                    shape = "constant"
+                else:
+                    shape = target_shape(project, td, tgt.part)
+                if (gate == "8(a) slice import" and tgt.part == "use_cases" and td is not None and member is None
+                        and used is not None and td.name in project.slice_commands(tgt.slice_dir)
+                        and _only_constructed(f, used) and _sends_commands(project, f)):
+                    continue  # a command constructed and sent on the bus: the collaboration §R4 prescribes
+                if tgt.part == "aggregates" and td is not None and _names_only_aggregate_type(project, f, td, member, used):
+                    continue  # the aggregate named only for its AggregateType constant (§R4)
+                shown = f"{pkg}.{td.name}" if wildcard and td is not None else name
+                owner = project.slice_at(tgt.slice_dir) if tgt.slice_dir is not None else None
+                tid = owner.id if owner is not None else None
+                if gate.startswith("8(d)"):
+                    severity = "Blocking"
+                    message = (f"{src.part}/ imports {shown} from command slice {tid} (targetShape: {shape}); a "
+                               f"BC-scoped domain artifact never references a slice's type")
+                    hint = "take the fields it needs; the emitting slice unpacks the command (rules/slice-design.md §R4)"
+                else:
+                    severity = "Blocking" if shape in BLOCKING_SHAPES else "Should-fix"
+                    where_t = f"slice {tid}" if tgt.slice_dir is not None else f"{tgt.bc.name}/{tgt.part or '(root)'}/"
+                    message = f"imports {shown} from {where_t} (targetShape: {shape})"
+                    if gate.startswith("8(c)"):
+                        message += f" into bounded context '{src.bc.name}'; only events/ and types/ cross a BC boundary"
+                    if severity == "Blocking":
+                        article = "an" if shape[0] in "aeiou" else "a"
+                        hint = (f"{article} {shape} acts for its owner: collaborate through the owner's events, or send "
+                                f"its command on the command bus (rules/slice-design.md §R4)")
+                    elif tgt.part == "use_cases" and td is not None and td.name in project.slice_commands(tgt.slice_dir):
+                        hint = ("a command type crosses a slice boundary only to be constructed and sent on the command "
+                                "bus; here it is used otherwise (rules/slice-design.md §R4)")
+                    else:
+                        hint = (f"read-only ({shape}): shared vocabulary belongs in the owner's types/ or events/; "
+                                f"otherwise keep a copy on this side (rules/slice-design.md §R4)")
+                findings.append(finding(severity, gate, src_slice.id if src_slice is not None else None, f.rel, line,
+                                        message, hint))
+
+
+def _entity_index(project):
+    """{entity name: (TypeDecl, BC)} for the types declared under some <bc>/entities/, and {repository type name:
+    entity name} for every project type with a write surface that persists one of them."""
+    entities = {}
+    for f in project.files:
+        w = project.where(f.path)
+        if f.error is None and w.bc is not None and w.part == "entities" and not w.excluded:
+            for td in f.types:
+                if not write_surface(project, td):
+                    entities.setdefault(td.name, (td, w.bc))
+
+    def entity_of(td, seen):
+        if id(td) in seen:
+            return None
+        seen.add(id(td))
+        for _, tr in td.supers:
+            if tr.base.rsplit(".", 1)[-1] in WRITE_REPO_BASES and tr.args:
+                e = tr.args[0].base.rsplit(".", 1)[-1]
+                if e in entities:
+                    return e
+        for m in td.methods:
+            if m.name in MUTATORS and m.params and m.params[0].type is not None:
+                e = m.params[0].type.base.rsplit(".", 1)[-1]
+                if e in entities:
+                    return e
+        for b in td.super_bases():
+            for sup in project.types_by_name.get(b, []):
+                e = entity_of(sup, seen)
+                if e is not None:
+                    return e
+        return None
+
+    repos = {}
+    for f in project.files:
+        for td in f.types:
+            if write_surface(project, td):
+                e = entity_of(td, set())
+                if e is not None:
+                    repos.setdefault(td.name, e)
+    return entities, repos
+
+
+def _receiver_type(project, f, at, name):
+    """The declared type of the receiver `name` at token at: a parameter or local, else a field or constructor
+    parameter of an enclosing type."""
+    typ = project._local_type(f, at, name)
+    td = f.enclosing_type(at)
+    while typ is None and td is not None:
+        typ = next((p.type for p in [*td.props, *td.params] if p.name == name and p.type is not None), None)
+        td = td.outer
+    return typ
+
+
+def write_sites(project):
+    """Every call of a mutating method on a write repository of an entity declared in some <bc>/entities/ — facts for
+    gate 15(a) to judge, and the input of `11(c) undeclared write`."""
+    entities, repos = _entity_index(project)
+    out = []
+    if not entities:
+        return out
+    for f in project.files:
+        if f.error is not None:
+            continue
+        for i, t in enumerate(f.toks):
+            if t.k != "id" or t.t not in MUTATORS or not f.is_op(i + 1, "(") or not (
+                    f.is_op(i - 1, ".") or f.is_op(i - 1, "?.")):
+                continue
+            recv = f.tok(i - 2)
+            if recv is None or recv.k != "id" or ((f.is_op(i - 3, ".") or f.is_op(i - 3, "?.")) and not f.is_id(i - 4, "this")):
+                continue
+            typ = _receiver_type(project, f, i - 2, recv.t)
+            if typ is None:
+                continue
+            base = (typ.base if isinstance(typ, TypeRef) else typ).rsplit(".", 1)[-1]
+            entity = repos.get(base)
+            if entity is None and base in WRITE_REPO_BASES and isinstance(typ, TypeRef) and typ.args:
+                arg = typ.args[0].base.rsplit(".", 1)[-1]
+                entity = arg if arg in entities else None
+            if entity is None:
+                continue
+            w = project.where(f.path)
+            s = project.slice_at(w.slice_dir) if w.slice_dir is not None and not w.excluded else None
+            bc = entities[entity][1].name
+            if project.bcs_filter and bc not in project.bcs_filter and (w.bc is None or w.bc.name not in project.bcs_filter):
+                continue
+            out.append({"file": f.rel, "line": t.line, "receiver": recv.t, "repository": base, "method": t.t,
+                        "entity": entity, "bc": bc, "fromBc": w.bc.name if w.bc is not None else None,
+                        "slice": s.id if s is not None else None, "callerRole": w.role,
+                        "declared": entity in _names(s.doc.get("writes")) if s is not None and s.doc is not None
+                        else None})
+    return sorted(out, key=lambda d: (d["file"], d["line"], d["method"]))
+
+
+def _check_undeclared_writes(sites, findings):
+    """Gate 11(c): a slice writes an entity its manifest's `writes` does not name — one finding per slice and entity."""
+    groups = {}
+    for site in sites:
+        if site["declared"] is False:
+            groups.setdefault((site["slice"], site["entity"]), []).append(site)
+    for (sid, entity), group in sorted(groups.items()):
+        first = group[0]
+        # no line numbers in a message: /essentials:review diffs findings head-vs-base by (gate, file, message)
+        calls = ", ".join(dict.fromkeys(f"{g['receiver']}.{g['method']} ({g['file'].rsplit('/', 1)[-1]})" for g in group))
+        findings.append(finding(
+            "Should-fix", "11(c) undeclared write", sid, first["file"], first["line"],
+            f"{first['callerRole']} slice {sid} writes {entity} — {calls} — but its manifest's `writes` does not name it",
+            "the manifest is stale — `--fix-manifests` adds it; whether this slice may write the entity at all is "
+            "gate 15's question"))
+
+
+def _class_literals(f, ann):
+    """The `X.class` / `X::class` names in an annotation's arguments."""
+    if not ann.args:
+        return []
+    lp, rp = ann.args
+    out = []
+    for k in range(lp + 1, rp):
+        if f.is_id(k) and (f.is_op(k + 1, ".") or f.is_op(k + 1, "::")) and f.is_id(k + 2, "class"):
+            out.append(f.toks[k].t)
+    return out
+
+
+def unhandled_variants(project):
+    """Per `ViewEventProcessor`, the variants of a sealed supertype of a handled event that no `@MessageHandler`
+    accepts and `@IgnoresEventTypes` does not list — the WARN Essentials logs at start. The rule mirrors the
+    framework's (`UnhandledEventTypes.summarizeView`): every sealed supertype of a handled type, its permitted types
+    followed down to the non-sealed ones, less those a handler or an ignored type is assignable from and those that
+    are themselves a supertype of a handled type. Only types declared in the project are seen."""
+    def supers_of(name):
+        out = set()
+        for td in project.types_by_name.get(name, []):
+            out |= all_supers(project, td)
+        return out
+
+    def sealed(name):
+        return any("sealed" in td.mods for td in project.types_by_name.get(name, []))
+
+    def assignable(a, b):  # a is b or a supertype of b
+        return a == b or a in supers_of(b)
+
+    def leaves(name, visited, out):
+        if name in visited:
+            return
+        visited.add(name)
+        decl = next((td for td in project.types_by_name.get(name, []) if "sealed" in td.mods), None)
+        if decl is None:
+            return
+        subs = ([tr.base.rsplit(".", 1)[-1] for _, tr in decl.permits] if decl.permits
+                else [td.name for td in project.subtypes.get(name, [])])
+        for sub in subs:
+            if sealed(sub):
+                leaves(sub, visited, out)
+            elif sub not in out:
+                out.append(sub)
+
+    result = []
+    for s in project.slices:
+        for f in s.files:
+            if f.error is not None:
+                continue
+            for td in f.types:
+                supers = all_supers(project, td)
+                if "ViewEventProcessor" not in supers:
+                    continue
+                chain = [td] + [sup for b in sorted(supers) for sup in project.types_by_name.get(b, [])]
+                handled, ignored = [], []
+                for c in chain:
+                    for m in c.methods:
+                        if any(a.simple == "MessageHandler" for a in m.anns) and 1 <= len(m.params) <= 2 \
+                                and m.params[0].type is not None:
+                            h = m.params[0].type.base.rsplit(".", 1)[-1]
+                            if h not in handled:
+                                handled.append(h)
+                    for a in c.anns:
+                        if a.simple == "IgnoresEventTypes":
+                            ignored += _class_literals(c.file, a)
+                parents = []
+                for h in handled:
+                    for name in [h, *sorted(supers_of(h))]:
+                        if sealed(name) and name not in parents:
+                            parents.append(name)
+                reported = set()
+                for parent in parents:
+                    candidates = []
+                    leaves(parent, set(), candidates)
+                    missing = sorted(c for c in candidates if c not in reported
+                                     and not any(assignable(h, c) or assignable(c, h) for h in handled)
+                                     and not any(assignable(ig, c) for ig in ignored))
+                    if missing:
+                        reported.update(missing)
+                        result.append({"slice": s.id, "processor": td.name, "file": f.rel, "line": td.line,
+                                       "parent": parent, "variants": missing})
+    return result
+
+
+# --------------------------------------------------------------------------------------------------
+# acceptance record — the project's settled deviations
+# --------------------------------------------------------------------------------------------------
+
+def _as_date(value):
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.date.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def read_acceptances(project, findings):
+    """The records of ROOT/slice-check-accepted.yaml; an entry that is not one is a `0 acceptance record` finding,
+    and accepts nothing."""
+    path = project.root / ACCEPTANCE_FILE
+    yaml = project.yaml
+    if yaml is None or not path.is_file():
+        return []
+
+    def bad(line, problem):
+        findings.append(finding(
+            "Should-fix", "0 acceptance record", None, ACCEPTANCE_FILE, line, problem,
+            "each entry is a mapping of gate, match, reason, accepted and review-by (dates as YYYY-MM-DD); an entry "
+            "that is not one accepts nothing"))
+
+    try:
+        text = path.read_text(encoding="utf-8")
+        node = yaml.compose(text)
+        data = yaml.safe_load(text)
+    except (OSError, yaml.YAMLError) as exc:
+        mark = getattr(exc, "problem_mark", None)
+        bad(mark.line + 1 if mark is not None else None, f"does not parse: {str(exc).splitlines()[0] if str(exc) else exc}")
+        return []
+    if data is None:
+        return []
+    if not isinstance(data, list) or not isinstance(node, yaml.SequenceNode):
+        bad(1, "is not a YAML list of acceptance records")
+        return []
+    records = []
+    for n, (entry, item) in enumerate(zip(data, node.value), 1):
+        line = item.start_mark.line + 1
+        problems = []
+        if not isinstance(entry, dict):
+            bad(line, f"entry {n} is not a mapping")
+            continue
+        unknown = sorted(str(k) for k in entry if k not in ACCEPTANCE_KEYS)
+        if unknown:
+            problems.append("unknown key(s) " + ", ".join(unknown))
+        missing = [k for k in ACCEPTANCE_KEYS if k not in entry]
+        if missing:
+            problems.append("missing " + ", ".join(missing))
+        for key in ("gate", "match", "reason"):
+            if key in entry and not (isinstance(entry[key], str) and entry[key].strip()):
+                problems.append(f"`{key}` is not a non-empty string")
+        if isinstance(entry.get("gate"), str) and entry["gate"].strip() and not re.match(r"\d", entry["gate"]):
+            problems.append(f"`gate` {entry['gate']!r} names no gate (`8`, `8(c)`, `11(b) handled events`)")
+        dates = {}
+        for key in ("accepted", "review-by"):
+            if key in entry:
+                dates[key] = _as_date(entry[key])
+                if dates[key] is None:
+                    problems.append(f"`{key}` {entry[key]!r} is not a date (YYYY-MM-DD)")
+        if dates.get("accepted") and dates.get("review-by") and dates["review-by"] < dates["accepted"]:
+            problems.append("`review-by` is before `accepted`")
+        if problems:
+            bad(line, f"entry {n} is not an acceptance record: " + "; ".join(problems))
+            continue
+        records.append({"gate": entry["gate"].strip(), "match": entry["match"], "reason": entry["reason"],
+                        "accepted": dates["accepted"].isoformat(), "review-by": dates["review-by"].isoformat(),
+                        "line": line, "_review": dates["review-by"]})
+    return records
+
+
+def _gate_matches(gate, finding_gate):
+    """`8` covers `8(c) bc-private import`; `1` does not cover `11(b) handled events`."""
+    return finding_gate.startswith(gate) and (len(finding_gate) == len(gate) or not finding_gate[len(gate)].isdigit())
+
+
+def apply_acceptances(records, findings, today):
+    """(findings left, accepted, expired records that matched, records that matched nothing). A record past its
+    `review-by` accepts nothing: its finding stays, marked."""
+    def public(r):
+        return {k: v for k, v in r.items() if not k.startswith("_")}
+
+    kept, accepted, hit_lines, expired = [], [], set(), []
+    for fd in findings:
+        if fd["gate"].startswith("0 "):
+            kept.append(fd)
+            continue
+        hits = [r for r in records if _gate_matches(r["gate"], fd["gate"])
+                and (r["match"] in (fd["file"] or "") or r["match"] in fd["message"])]
+        hit_lines.update(r["line"] for r in hits)
+        live = [r for r in hits if r["_review"] >= today]
+        if live:
+            accepted.append(dict(fd, acceptedBy=public(live[0])))
+            continue
+        if hits:
+            r = hits[0]
+            fd = dict(fd, message=fd["message"] + f" [acceptance expired {r['review-by']}: {ACCEPTANCE_FILE}:{r['line']}]")
+            if public(r) not in expired:
+                expired.append(public(r))
+        kept.append(fd)
+    unused = [dict(public(r), expired=r["_review"] < today) for r in records if r["line"] not in hit_lines]
+    return kept, accepted, expired, unused
 
 
 # --------------------------------------------------------------------------------------------------
@@ -2731,9 +3427,24 @@ def print_check(data, quiet):
     for u in data["unverified"]:
         print(f"UNVERIFIED  {u['gate']:<30} {u['file']}", file=out)
         print(f"            {u['reason']}", file=out)
+    for a in data["accepted"]:
+        loc = f"{a['file']}:{a['line']}" if a["line"] else a["file"]
+        rec = a["acceptedBy"]
+        print(f"ACCEPTED    {a['gate']:<30} {loc}", file=out)
+        print(f"            {rec['reason']} (review by {rec['review-by']}, {ACCEPTANCE_FILE}:{rec['line']})", file=out)
+    for r in data["unusedAcceptances"]:
+        print(f"UNUSED      {ACCEPTANCE_FILE}:{r['line']}  gate {r['gate']}, match {r['match']!r} matches no finding"
+              + (" (and is past its review-by)" if r["expired"] else ""), file=out)
     if not quiet:
+        for w in data["writeSites"]:
+            caller = w["slice"] or w["callerRole"]
+            print(f"write     {w['entity']} <- {w['receiver']}.{w['method']}  {w['file']}:{w['line']}  ({caller})", file=out)
+        for u in data["unhandledVariants"]:
+            print(f"unhandled {u['processor']}: {u['parent']} variant(s) {', '.join(u['variants'])}  "
+                  f"{u['file']}:{u['line']}", file=out)
         print(f"\n{data['manifests']} manifest(s), {data['parsed']} checked, {len(data['findings'])} finding(s), "
-              f"{len(data['unverified'])} unverified, {len(data['unparsed'])} unparsed.", file=out)
+              f"{len(data['accepted'])} accepted, {len(data['unverified'])} unverified, {len(data['unparsed'])} "
+              f"unparsed.", file=out)
 
 
 def main(argv=None):
@@ -2742,7 +3453,11 @@ def main(argv=None):
         description="Syntactic facts from a slice-law project's Java/Kotlin sources. Deterministic; never writes.")
     parser.add_argument("root", nargs="?", default=".", help="directory to scan (default: .)")
     parser.add_argument("--json", action="store_true", help="emit JSON")
-    parser.add_argument("--check", action="store_true", help="compare manifests with source (gates 6, 11(b), 14)")
+    parser.add_argument("--check", action="store_true",
+                        help="compare manifests with source (gates 6, 8, 11(b), 11(c), 14)")
+    parser.add_argument("--fail-on", choices=sorted(FAIL_ON), default="advisory",
+                        help="--check: the least severe finding that exits 1 (default: advisory, any finding)")
+    parser.add_argument("--today", help=f"--check: the date {ACCEPTANCE_FILE} records are read against (YYYY-MM-DD)")
     parser.add_argument("--bc", action="append", default=[], help="restrict to this bounded context (repeatable)")
     parser.add_argument("--quiet", action="store_true", help="text mode: findings and unparsed only")
     try:
@@ -2750,6 +3465,13 @@ def main(argv=None):
     except SystemExit as exc:
         return 2 if exc.code else 0
 
+    today = datetime.date.today()
+    if args.today is not None:
+        try:
+            today = datetime.date.fromisoformat(args.today)
+        except ValueError:
+            print(f"slice-source: --today is not a date (YYYY-MM-DD): {args.today}", file=sys.stderr)
+            return 2
     root = Path(args.root).resolve()
     if not root.is_dir():
         print(f"slice-source: not a directory: {args.root}", file=sys.stderr)
@@ -2766,13 +3488,13 @@ def main(argv=None):
 
     project = Project(root, args.root, set(args.bc), yaml)
     if args.check:
-        data = check_json(project)
+        data = check_json(project, today)
         if args.json:
             json.dump(data, sys.stdout, indent=2)
             sys.stdout.write("\n")
         else:
             print_check(data, args.quiet)
-        if data["findings"]:
+        if any(SEVERITY_ORDER.get(f["severity"], 9) <= FAIL_ON[args.fail_on] for f in data["findings"]):
             return 1
         return 3 if data["unparsed"] or data["unverified"] else 0
     data = facts_json(project)

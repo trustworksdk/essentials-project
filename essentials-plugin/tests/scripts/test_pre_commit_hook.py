@@ -13,6 +13,10 @@ installs the hook template, the slice-lint script and its schema exactly where t
 puts them, activates the hook with the README's command, and commits. The hook runs on a PATH of
 stubs written here, so the result does not depend on whether this machine has uv: `python3` is the
 interpreter running this file, which carries pyyaml and jsonschema.
+
+The SelfTest cases run the hook self-test of /essentials:upgrade Group A2, extracted verbatim from
+commands/upgrade.md, against the same repository: it must pass on an active hook, name the fault on an
+inactive one, and leave the real index and the working tree as they were.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -30,6 +35,8 @@ HOOK = PLUGIN / "references" / "init-assets" / "project" / ".githooks" / "pre-co
 LINT = PLUGIN / "scripts" / "slice-lint.py"
 SCHEMA = PLUGIN / "references" / "slice" / "slice-yaml.schema.json"
 FIXTURE = PLUGIN / "tests" / "fixtures" / "service-entity"
+UPGRADE = PLUGIN / "commands" / "upgrade.md"
+SELF_TEST_MARK = "# A2 hook self-test"
 
 # The one authoring mistake that makes a manifest unparseable: a braced path unquoted in a flow mapping.
 BROKEN = """slice: shipping.broken
@@ -44,7 +51,9 @@ endpoints:
 ACTIVATE = 'git config core.hooksPath "$(git rev-parse --show-prefix).githooks"'
 
 
-class PreCommitHook(unittest.TestCase):
+class HookRepo(unittest.TestCase):
+    """The throwaway repository, the stub PATH and the helpers both test classes share."""
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         tmp = Path(self._tmp.name)
@@ -52,7 +61,7 @@ class PreCommitHook(unittest.TestCase):
         self.project = self.repo / "orders-service"
         self.bin = tmp / "bin"
         self.bin.mkdir()
-        for tool in ("bash", "git", "dirname", "grep"):
+        for tool in ("bash", "git", "dirname", "grep", "mktemp", "mkdir", "cp", "rm", "cat"):
             found = shutil.which(tool)
             assert found, f"{tool} not on PATH"
             (self.bin / tool).symlink_to(found)
@@ -105,6 +114,8 @@ class PreCommitHook(unittest.TestCase):
         manifest.parent.mkdir(parents=True)
         manifest.write_text(BROKEN)
 
+
+class PreCommitHook(HookRepo):
     def test_valid_project_commits_and_a_broken_manifest_is_blocked(self):
         self.activate()
         r = self.commit_all()
@@ -162,6 +173,72 @@ class PreCommitHook(unittest.TestCase):
         r = self.commit_all()
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("UNPARSEABLE MANIFESTS", r.stdout + r.stderr)  # git sends hook stdout to stderr
+
+
+def self_test_snippet():
+    """The fenced bash block of upgrade.md Group A2 that starts with SELF_TEST_MARK, dedented."""
+    lines = UPGRADE.read_text().splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip().startswith(SELF_TEST_MARK))
+    end = next(i for i in range(start, len(lines)) if lines[i].strip() == "```")
+    return textwrap.dedent("\n".join(lines[start:end])) + "\n"
+
+
+class SelfTest(HookRepo):
+    """The upgrade self-test, run from the project directory as the command runs it."""
+
+    def setUp(self):
+        super().setUp()
+        self.snippet = self_test_snippet()
+
+    def self_test(self):
+        return self.run_in(self.project, str(self.bin / "bash"), "-c", self.snippet)
+
+    def snapshot(self):
+        # status first: it may refresh the index's stat data, which is not a change the self-test made
+        status = self.git("status", "--porcelain", "--untracked-files=all").stdout
+        return status, (self.repo / ".git" / "index").read_bytes()
+
+    def committed(self):
+        self.assertEqual(self.commit_all().returncode, 0)
+
+    def test_passes_on_an_active_hook_and_changes_nothing(self):
+        self.activate()
+        self.committed()
+        before = self.snapshot()
+        r = self.self_test()
+        self.assertTrue(r.stdout.startswith("SELF-TEST PASS"), r.stdout + r.stderr)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_names_a_hook_without_the_execute_bit(self):
+        self.activate()
+        self.committed()
+        (self.project / ".githooks" / "pre-commit").chmod(0o600)  # an in-place edit that dropped the bit
+        r = self.self_test()
+        self.assertIn("SELF-TEST FAIL: git skipped the hook, which is not executable", r.stdout)
+
+    def test_names_a_clone_where_git_runs_no_hook(self):
+        self.committed()  # never activated
+        r = self.self_test()
+        self.assertIn("SELF-TEST FAIL: git runs no pre-commit hook in this clone", r.stdout)
+
+    def test_names_a_forwarder_whose_target_is_not_executable(self):
+        self.committed()
+        forwarder = self.repo / ".git" / "hooks" / "pre-commit"
+        forwarder.parent.mkdir(exist_ok=True)
+        forwarder.write_text('#!/usr/bin/env bash\n'
+                             '"$(git rev-parse --show-toplevel)/orders-service/.githooks/pre-commit" || exit 1\n')
+        forwarder.chmod(0o755)
+        (self.project / ".githooks" / "pre-commit").chmod(0o600)
+        r = self.self_test()
+        self.assertIn("SELF-TEST FAIL: a hook git runs could not run the next one", r.stdout)
+
+    def test_names_a_hook_that_runs_but_does_not_block(self):
+        self.activate()
+        self.committed()
+        (self.bin / "python3").unlink()  # the hook's documented fail-open
+        r = self.self_test()
+        self.assertIn("SELF-TEST FAIL: the hook ran but did not block", r.stdout)
+        self.assertIn("neither uv nor python3", r.stdout)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,432 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/slice-source/cases/boundaries-kotlin",
+  "manifestsRead": true,
+  "sourceFiles": 17,
+  "bcs": [
+    {
+      "name": "baskets",
+      "path": "src/main/*/com/example/cart/baskets",
+      "dirs": [
+        "src/main/kotlin/com/example/cart/baskets"
+      ],
+      "languages": [
+        "kotlin"
+      ],
+      "slices": [
+        "baskets.reopen",
+        "baskets.settle",
+        "baskets.storefront",
+        "baskets.open_basket",
+        "baskets.basket_list"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [
+            {
+              "file": "src/main/kotlin/com/example/cart/baskets/use_cases/open_basket/OpenBasketDecider.kt",
+              "line": 7,
+              "symbol": "OpenBasketDecider",
+              "via": "Decider"
+            }
+          ],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "decider"
+      }
+    },
+    {
+      "name": "checkout",
+      "path": "src/main/*/com/example/cart/checkout",
+      "dirs": [
+        "src/main/kotlin/com/example/cart/checkout"
+      ],
+      "languages": [
+        "kotlin"
+      ],
+      "slices": [
+        "checkout.receipts"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": {
+            "dir": "src/main/*/com/example/cart/checkout/entities",
+            "files": 2
+          },
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "service-entity?"
+      }
+    },
+    {
+      "name": "stores",
+      "path": "src/main/*/com/example/cart/stores",
+      "dirs": [
+        "src/main/kotlin/com/example/cart/stores"
+      ],
+      "languages": [
+        "kotlin"
+      ],
+      "slices": [
+        "stores.shelf_view"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": {
+            "dir": "src/main/*/com/example/cart/stores/aggregates",
+            "files": 1
+          },
+          "entities": null,
+          "eventStore": [
+            {
+              "file": "src/main/kotlin/com/example/cart/stores/aggregates/Store.kt",
+              "line": 7,
+              "symbol": "AggregateType"
+            }
+          ]
+        },
+        "declared": [],
+        "detected": "aggregate"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "baskets.reopen",
+      "idSource": "directory",
+      "bc": "baskets",
+      "bcPath": "src/main/*/com/example/cart/baskets",
+      "dir": "src/main/kotlin/com/example/cart/baskets/automations/reopen",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": null,
+      "language": "kotlin",
+      "package": "com.example.cart.baskets.automations.reopen",
+      "files": [
+        "ReopenProcessor.kt"
+      ],
+      "processors": [],
+      "handlers": [
+        {
+          "class": "ReopenProcessor",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/kotlin/com/example/cart/baskets/automations/reopen/ReopenProcessor.kt",
+          "line": 10,
+          "annotationLine": 9,
+          "message": {
+            "written": "BasketOpened",
+            "name": "BasketOpened",
+            "fqn": "com.example.cart.baskets.events.BasketOpened",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "BasketOpened"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [
+        {
+          "name": "OpenBasket",
+          "fqn": "com.example.cart.baskets.use_cases.open_basket.OpenBasket",
+          "resolvedBy": "import",
+          "via": "send",
+          "file": "src/main/kotlin/com/example/cart/baskets/automations/reopen/ReopenProcessor.kt",
+          "line": 11,
+          "own": false
+        }
+      ],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "baskets.settle",
+      "idSource": "directory",
+      "bc": "baskets",
+      "bcPath": "src/main/*/com/example/cart/baskets",
+      "dir": "src/main/kotlin/com/example/cart/baskets/automations/settle",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": null,
+      "language": "kotlin",
+      "package": "com.example.cart.baskets.automations.settle",
+      "files": [
+        "SettleProcessor.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "baskets.storefront",
+      "idSource": "directory",
+      "bc": "baskets",
+      "bcPath": "src/main/*/com/example/cart/baskets",
+      "dir": "src/main/kotlin/com/example/cart/baskets/external_systems/storefront",
+      "role": "external_systems",
+      "kind": "translation",
+      "manifest": null,
+      "language": "kotlin",
+      "package": "com.example.cart.baskets.external_systems.storefront",
+      "files": [
+        "StorefrontFeed.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "baskets.open_basket",
+      "idSource": "directory",
+      "bc": "baskets",
+      "bcPath": "src/main/*/com/example/cart/baskets",
+      "dir": "src/main/kotlin/com/example/cart/baskets/use_cases/open_basket",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": null,
+      "language": "kotlin",
+      "package": "com.example.cart.baskets.use_cases.open_basket",
+      "files": [
+        "OpenBasket.kt",
+        "OpenBasketDecider.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [
+        {
+          "name": "OpenBasket",
+          "fqn": "com.example.cart.baskets.use_cases.open_basket.OpenBasket",
+          "resolvedBy": "same-package",
+          "via": "Decider",
+          "file": "src/main/kotlin/com/example/cart/baskets/use_cases/open_basket/OpenBasketDecider.kt",
+          "line": 7
+        }
+      ],
+      "dispatches": [],
+      "publishes": [
+        {
+          "name": "BasketOpened",
+          "fqn": "com.example.cart.baskets.events.BasketOpened",
+          "resolvedBy": "import",
+          "via": "decider",
+          "file": "src/main/kotlin/com/example/cart/baskets/use_cases/open_basket/OpenBasketDecider.kt",
+          "line": 8
+        }
+      ],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "baskets.basket_list",
+      "idSource": "directory",
+      "bc": "baskets",
+      "bcPath": "src/main/*/com/example/cart/baskets",
+      "dir": "src/main/kotlin/com/example/cart/baskets/views/basket_list",
+      "role": "views",
+      "kind": "view",
+      "manifest": null,
+      "language": "kotlin",
+      "package": "com.example.cart.baskets.views.basket_list",
+      "files": [
+        "BasketListProjection.kt",
+        "BasketRow.kt"
+      ],
+      "processors": [
+        {
+          "class": "BasketListProjection",
+          "base": "ViewEventProcessor",
+          "file": "src/main/kotlin/com/example/cart/baskets/views/basket_list/BasketListProjection.kt",
+          "line": 8
+        }
+      ],
+      "handlers": [
+        {
+          "class": "BasketListProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/kotlin/com/example/cart/baskets/views/basket_list/BasketListProjection.kt",
+          "line": 10,
+          "annotationLine": 9,
+          "message": {
+            "written": "BasketOpened",
+            "name": "BasketOpened",
+            "fqn": "com.example.cart.baskets.events.BasketOpened",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "BasketOpened"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    },
+    {
+      "id": "checkout.receipts",
+      "idSource": "directory",
+      "bc": "checkout",
+      "bcPath": "src/main/*/com/example/cart/checkout",
+      "dir": "src/main/kotlin/com/example/cart/checkout/views/receipts",
+      "role": "views",
+      "kind": "view",
+      "manifest": null,
+      "language": "kotlin",
+      "package": "com.example.cart.checkout.views.receipts",
+      "files": [
+        "ReceiptsProjection.kt"
+      ],
+      "processors": [
+        {
+          "class": "ReceiptsProjection",
+          "base": "ViewEventProcessor",
+          "file": "src/main/kotlin/com/example/cart/checkout/views/receipts/ReceiptsProjection.kt",
+          "line": 10
+        }
+      ],
+      "handlers": [
+        {
+          "class": "ReceiptsProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/kotlin/com/example/cart/checkout/views/receipts/ReceiptsProjection.kt",
+          "line": 14,
+          "annotationLine": 13,
+          "message": {
+            "written": "BasketOpened",
+            "name": "BasketOpened",
+            "fqn": "com.example.cart.baskets.events.BasketOpened",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "BasketOpened"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [
+        {
+          "aggregateType": "Stores",
+          "written": "Store.AGGREGATE_TYPE",
+          "file": "src/main/kotlin/com/example/cart/checkout/views/receipts/ReceiptsProjection.kt",
+          "line": 11
+        }
+      ],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    },
+    {
+      "id": "stores.shelf_view",
+      "idSource": "directory",
+      "bc": "stores",
+      "bcPath": "src/main/*/com/example/cart/stores",
+      "dir": "src/main/kotlin/com/example/cart/stores/views/shelf_view",
+      "role": "views",
+      "kind": "view",
+      "manifest": null,
+      "language": "kotlin",
+      "package": "com.example.cart.stores.views.shelf_view",
+      "files": [
+        "ShelfRow.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    }
+  ],
+  "messages": [
+    {
+      "name": "BasketOpened",
+      "type": "event",
+      "bc": "baskets",
+      "found": true,
+      "identity": "id: BasketId",
+      "fields": [
+        "id: BasketId"
+      ],
+      "declaredIn": "src/main/kotlin/com/example/cart/baskets/events/BasketEvent.kt",
+      "line": 9,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "OpenBasket",
+      "type": "command",
+      "bc": "baskets",
+      "found": true,
+      "identity": "id: BasketId",
+      "fields": [
+        "id: BasketId"
+      ],
+      "declaredIn": "src/main/kotlin/com/example/cart/baskets/use_cases/open_basket/OpenBasket.kt",
+      "line": 6,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": [],
+  "tests": {
+    "roots": [],
+    "classes": []
+  }
+}

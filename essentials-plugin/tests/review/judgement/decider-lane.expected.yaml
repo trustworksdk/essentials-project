@@ -46,6 +46,10 @@ deterministic:
     new:
     - {id: ESS-G11b, gate: 11(b) handled events, severity: Should-fix,
        file: orders/views/order_list/OrderListProjection.kt, line: 54}
+    - {id: ESS-G8a, gate: 8(a) slice import, severity: Blocking,
+       file: orders/use_cases/expedite_order/ExpediteOrderDecider.kt, line: 6}
+    - {id: ESS-G8a, gate: 8(a) slice import, severity: Blocking,
+       file: orders/use_cases/expedite_order/ExpediteOrderDecider.kt, line: 7}
 
 must_find:
 - id: R1
@@ -80,10 +84,14 @@ must_find:
   gate: 8a
   ess: ESS-G8a
   severity: Blocking
+  deterministic: true
   file: orders/use_cases/expedite_order/ExpediteOrderDecider.kt
   line: 6
   anchor: 'import {{packagePath}}.orders.use_cases.cancel_order.OrderState'
-  what: The expedite_order command slice imports cancel_order's OrderState and OrderStateEvolver — one slice reaching into another slice's internals (§R4).
+  what: >-
+    The expedite_order command slice imports cancel_order's OrderState and OrderStateEvolver — one slice reaching
+    into another slice's internals (§R4). slice-source reports it as one 8(a) row per import (lines 6 and 7); two
+    rows, or one row naming both imports, both count.
 - id: R5
   gate: '9'
   ess: ESS-G9

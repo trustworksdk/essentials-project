@@ -39,6 +39,8 @@ deterministic:
        file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java, line: 43}
     - {id: ESS-G6, gate: 6 raw id, severity: Advisory,
        file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java, line: 43}
+    - {id: ESS-G11c, gate: 11(c) undeclared write, severity: Should-fix,
+       file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java, line: 44}
 
 must_find:
 - id: R1
@@ -101,7 +103,9 @@ must_find:
   line: 44
   anchor: 'shippingOrders.deleteById(orderId);'
   symbol: OrderStatusAPI.purge
-  what: A mutating call (deleteById) on the bounded context's write repository from a view slice, outside use_cases/*.
+  what: >-
+    A mutating call (deleteById) on the bounded context's write repository from a view slice, outside use_cases/*.
+    Judgement, and its own row beside R9: slice-source's 11(c) says only that the manifest omits the write.
 - id: R7
   gate: '16'
   ess: ESS-G16
@@ -123,6 +127,20 @@ must_find:
   what: >-
     The new purge binds orderId as a raw String, beside get() in the same class taking OrderId. Its own row, separate
     from the undeclared-mapping finding on the same line: a different defect (slice-source's `6 raw id`).
+- id: R9
+  gate: 11c
+  ess: ESS-G11c
+  severity: Should-fix
+  deterministic: true
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
+  line: 44
+  anchor: 'shippingOrders.deleteById(orderId);'
+  symbol: OrderStatusAPI.purge
+  what: >-
+    The order_status view writes ShippingOrder (shippingOrders.deleteById) but its manifest's writes does not name
+    it (slice-source's `11(c) undeclared write`). Its own row beside R6, a different defect on the same line; the
+    report must not present adding ShippingOrder to the view's writes as the fix, since R6 says the view must not
+    write at all.
 
 dismissed:
 - id: D1
@@ -240,7 +258,7 @@ tolerated:
 
 fix:                      # prompt /essentials:review HEAD~1 --fix, the questions answered in order
   prompt: /essentials:review HEAD~1 --fix
-  offers_in_order: [R1, R2, R3]   # only mechanical rows from review-scan (confirmed) or stack-lint; never R4-R8
+  offers_in_order: [R1, R2, R3]   # only mechanical rows from review-scan (confirmed) or stack-lint; never R4-R9
   answers: [Apply, Skip, Apply]
   after:
   - file: pom.xml

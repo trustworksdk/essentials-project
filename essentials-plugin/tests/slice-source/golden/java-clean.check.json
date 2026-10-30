@@ -106,6 +106,22 @@
     }
   ],
   "findings": [],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [],
+  "unhandledVariants": [
+    {
+      "slice": "orders.order_list",
+      "processor": "OrderListProjection",
+      "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListProjection.java",
+      "line": 20,
+      "parent": "OrderEvent",
+      "variants": [
+        "OrderShipped"
+      ]
+    }
+  ],
   "unverified": [],
   "unparsed": []
 }

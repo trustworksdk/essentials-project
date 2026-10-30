@@ -147,6 +147,11 @@ class ExitCodes(unittest.TestCase):
         "unparsed": (3, 3),
         "tests": (3, 0),  # facts: test files unparsed; check: never reads test source
         "inbox": (0, 1),
+        "boundaries": (0, 1),
+        "boundaries-kotlin": (0, 1),
+        "write-sites": (0, 1),
+        "unhandled-variants": (0, 0),  # facts, not findings
+        "acceptance": (0, 1),  # an expired record and malformed entries leave Should-fix findings
     }
 
     def test_case_exit_codes(self):
@@ -154,6 +159,24 @@ class ExitCodes(unittest.TestCase):
             with self.subTest(case=name):
                 self.assertEqual(run(rel_case(name))[0], facts)
                 self.assertEqual(run(rel_case(name), "--check")[0], check)
+
+    def test_fail_on(self):
+        # acceptance: Should-fix findings left, the one Blocking finding accepted — accepted never counts
+        for level, code in (("blocking", 0), ("should-fix", 1), ("advisory", 1)):
+            with self.subTest(level=level):
+                self.assertEqual(run(rel_case("acceptance"), "--check", "--fail-on", level)[0], code)
+        # raw-ids holds Advisory findings only
+        self.assertEqual(run(rel_case("raw-ids"), "--check", "--fail-on", "should-fix")[0], 0)
+        self.assertEqual(run(rel_case("raw-ids"), "--check", "--fail-on", "advisory")[0], 1)
+        # unparsed source is never a pass, whatever the threshold
+        self.assertEqual(run(rel_case("java-drift"), "--check", "--fail-on", "blocking")[0], 1)
+        self.assertEqual(run(rel_case("unparsed"), "--check", "--fail-on", "blocking")[0], 3)
+        self.assertEqual(run(rel_case("acceptance"), "--check", "--fail-on", "nothing")[0], 2)
+
+    def test_today_must_be_a_date(self):
+        self.assertEqual(run(rel_case("acceptance"), "--check", "--today", "soon")[0], 2)
+        self.assertEqual(run(rel_case("acceptance"), "--check", "--fail-on", "blocking",
+                             "--today", "2100-01-01")[0], 1, "a record past review-by accepts nothing")
 
     def test_not_a_directory(self):
         self.assertEqual(run("does/not/exist")[0], 2)
@@ -268,6 +291,9 @@ class Rules(unittest.TestCase):
         self.assertEqual(gates(self.check["kotlin-drift"]), [
             ("11(b) handled events", "orders.notify_customer"),
             ("11(b) handled events", "orders.order_board"),
+            ("14 lane without write model", "orders.notify_customer"),  # orders/ declares a decider lane, holds none
+            ("14 lane without write model", "orders.order_board"),
+            ("14 lane without write model", "orders.order_feed"),
             ("6 discriminator", "orders.order_board"),
             ("6 discriminator", "orders.order_board"),
             ("6 undeclared mapping", "orders.order_board"),
@@ -305,9 +331,12 @@ class Rules(unittest.TestCase):
             ("14 declared lanes", "ledger"),
             ("14 declared lanes", "payments"),
             ("14 entities with event store", "catalog"),
+            ("14 lane without write model", "slice.yaml"),
             ("14 stale lane", "slice.yaml"),
             ("14 two write styles", "ledger"),
         ])
+        bare = next(f for f in c["findings"] if f["gate"] == "14 lane without write model")
+        self.assertEqual((bare["slice"], bare["severity"]), ("drafts.draft_list", "Should-fix"))
         detected = {l["bc"]: l["detected"] for l in c["lanes"]}
         self.assertEqual(detected, {"billing": "aggregate", "catalog": "conflict", "drafts": "undetermined",
                                     "ledger": "conflict", "payments": "decider", "shipping": "service-entity?"})
@@ -371,7 +400,127 @@ class Rules(unittest.TestCase):
             for f in c["findings"] + c["unverified"]:
                 with self.subTest(case=case, gate=f["gate"]):
                     self.assertEqual(f["id"], ss.gate_id(f["gate"]))
-                    self.assertRegex(f["id"], r"^ESS-G(6|11b|14)$")
+                    self.assertRegex(f["id"], r"^ESS-G(0|6|8[abcd]|11[bc]|14)$")
+
+    def test_every_finding_carries_an_impact(self):
+        for case, c in self.check.items():
+            for f in c["findings"] + c["accepted"]:
+                with self.subTest(case=case, gate=f["gate"]):
+                    self.assertIn(f["impact"], ("wrong-today", "wrong-next-caller", "coupling", "documentation"))
+
+    def findings8(self, case):
+        return sorted((f["gate"], f["file"].rsplit("/", 1)[-1], f["line"], f["severity"]) for f in self.check[case]["findings"]
+                      if f["gate"].startswith("8("))
+
+    def test_boundary_imports_java(self):
+        self.assertEqual(self.findings8("boundaries"), [
+            ("8(a) slice import", "AutoReorderProcessor.java", 4, "Should-fix"),   # a command kept in a field
+            ("8(a) slice import", "CourierPublisher.java", 3, "Should-fix"),       # another slice's read-only record
+            ("8(a) slice import", "OrderBoardProjection.java", 5, "Blocking"),     # another slice's decider
+            ("8(a) slice import", "RestockProcessor.java", 3, "Blocking"),         # another BC's slice: (a), not (c)
+            ("8(b) slice import", "BillOrderProcessor.java", 3, "Blocking"),       # an event processor
+            ("8(c) bc-private import", "BillOrderProcessor.java", 4, "Blocking"),  # a routing marker
+            ("8(c) bc-private import", "BillOrderProcessor.java", 5, "Blocking"),  # an aggregate, its method called
+            ("8(c) bc-private import", "BillingConfiguration.java", 3, "Should-fix"),
+            ("8(c) bc-private import", "InvoiceFeedProjection.java", 3, "Should-fix"),  # a static import: a constant
+            ("8(c) bc-private import", "InvoiceFeedProjection.java", 5, "Should-fix"),  # a config/ record
+            ("8(d) command in domain", "OrderPlaced.java", 4, "Blocking"),
+        ])
+        files = " ".join(f["file"] for f in self.check["boundaries"]["findings"])
+        for quiet in ("MallConfiguration", "Backfill", "OrdersConfiguration.java", "NudgeBuyerProcessor",
+                      "StockLevelProjection"):
+            self.assertNotIn(quiet, files, "application config/, a `_` directory, the BC's own wiring, a command "
+                                           "constructed and sent, an AggregateType constant are not findings")
+        messages = {(f["file"].rsplit("/", 1)[-1], f["line"]): f["message"] for f in self.check["boundaries"]["findings"]}
+        self.assertNotIn("TenantId", " ".join(messages.values()), "a shared kernel outside every BC is out of scope")
+        self.assertNotIn("_shared", " ".join(messages.values()), "use_cases/_shared/ is not a slice")
+        self.assertIn("(targetShape: decider)", messages[("OrderBoardProjection.java", 5)])
+        self.assertIn("(targetShape: constant)", messages[("InvoiceFeedProjection.java", 3)])
+        self.assertNotRegex(" ".join(messages.values()), r"line \d", "review diffs head-vs-base by message")
+        impacts = {f["severity"]: f["impact"] for f in self.check["boundaries"]["findings"] if f["gate"][:4] in ("8(a)", "8(c)")}
+        self.assertEqual(impacts, {"Blocking": "wrong-next-caller", "Should-fix": "coupling"})
+
+    def test_boundary_imports_kotlin(self):
+        self.assertEqual(self.findings8("boundaries-kotlin"), [
+            ("8(a) slice import", "BasketListProjection.kt", 4, "Blocking"),   # through an `as` alias
+            ("8(a) slice import", "StorefrontFeed.kt", 3, "Should-fix"),       # a wildcard import, the type it names
+            ("8(c) bc-private import", "ReceiptsProjection.kt", 4, "Should-fix"),  # an object of constants
+            ("8(c) bc-private import", "ReceiptsProjection.kt", 5, "Should-fix"),  # a top-level function
+            ("8(c) bc-private import", "SettleProcessor.kt", 3, "Blocking"),   # a DocumentDbRepository-backed store
+            ("8(d) command in domain", "Payment.kt", 3, "Blocking"),
+        ])
+        files = " ".join(f["file"] for f in self.check["boundaries-kotlin"]["findings"])
+        self.assertNotIn("ReopenProcessor", files, "a command constructed and sent on the bus")
+        self.assertNotIn("Store.AGGREGATE_TYPE", " ".join(f["message"] for f in self.check["boundaries-kotlin"]["findings"]))
+        self.assertNotIn("Money", " ".join(f["message"] for f in self.check["boundaries-kotlin"]["findings"]))
+
+    def test_boundaries_ignore_the_bc_filter_for_targets(self):
+        code, c = run_json(rel_case("boundaries"), "--check", "--bc", "billing")
+        self.assertEqual({f["file"].split("/")[6] for f in c["findings"] if f["gate"].startswith("8(")}, {"billing"},
+                         "importers are filtered, targets in orders/ and stock/ still resolve")
+        self.assertIn(("8(c) bc-private import", "BillOrderProcessor.java", 4, "Blocking"),
+                      [(f["gate"], f["file"].rsplit("/", 1)[-1], f["line"], f["severity"]) for f in c["findings"]])
+
+    def test_write_sites(self):
+        sites = [(w["file"].rsplit("/", 1)[-1], w["line"], w["method"], w["entity"], w["callerRole"], w["slice"],
+                  w["declared"]) for w in self.check["write-sites"]["writeSites"]]
+        self.assertEqual(sites, [
+            ("SeedConfiguration.java", 13, "save", "Member", "outside-bc", None, None),
+            ("DemoMembers.java", 8, "save", "Member", "_seed", None, None),
+            ("JoinClubHandler.java", 14, "save", "Member", "use_cases", "members.join_club", True),
+            ("RenameMemberHandler.java", 21, "save", "Member", "use_cases", "members.rename_member", False),
+            ("RenameMemberHandler.java", 22, "update", "Member", "use_cases", "members.rename_member", False),
+            ("MemberListQueries.java", 15, "delete", "Member", "views", "members.member_list", False),
+            ("WelcomeProcessor.kt", 8, "save", "Member", "automations", "members.welcome", None),
+        ], "no finder, no save on a type that is not a repository of an entity")
+        archive = next(w for w in self.check["write-sites"]["writeSites"] if w["method"] == "update")
+        self.assertEqual(archive["repository"], "DocumentDbRepository")
+        self.assertEqual({(w["bc"], w["fromBc"]) for w in self.check["write-sites"]["writeSites"]},
+                         {("members", "members"), ("members", None)})
+
+    def test_undeclared_writes(self):
+        found = sorted((f["slice"], f["line"]) for f in self.check["write-sites"]["findings"]
+                       if f["gate"] == "11(c) undeclared write")
+        self.assertEqual(found, [("members.member_list", 15), ("members.rename_member", 21)],
+                         "one finding per slice and entity; no manifest, nothing to declare")
+        rename = next(f for f in self.check["write-sites"]["findings"] if f["slice"] == "members.rename_member")
+        self.assertIn("archive.update", rename["message"])
+        self.assertEqual((rename["severity"], rename["impact"], rename["id"]), ("Should-fix", "documentation", "ESS-G11c"))
+        lane = [f for f in self.check["write-sites"]["findings"] if f["gate"] == "14 lane without write model"]
+        self.assertEqual([f["slice"] for f in lane], ["notes.note_list"])
+
+    def test_unhandled_variants(self):
+        got = [(u["processor"], u["parent"], u["variants"]) for u in self.check["unhandled-variants"]["unhandledVariants"]]
+        self.assertEqual(got, [
+            ("ParcelBoardProjection", "ParcelEvent", ["PackedFully", "PackedPartly"]),  # nested sealed; Delivered ignored
+            ("LetterLogProjection", "LetterEvent", ["LetterReturned"]),                 # Kotlin ::class ignore
+        ], "a handled sealed parent, an ignored supertype and an EventProcessor report nothing")
+
+    def test_acceptance_record(self):
+        c = self.check["acceptance"]
+        self.assertEqual([(a["gate"], a["acceptedBy"]["line"]) for a in c["accepted"]], [("8(a) slice import", 1)])
+        expired = next(f for f in c["findings"] if f["gate"].startswith("8("))
+        self.assertIn("[acceptance expired 2000-01-01: slice-check-accepted.yaml:6]", expired["message"])
+        self.assertEqual([r["line"] for r in c["expiredAcceptances"]], [6])
+        self.assertEqual([(r["line"], r["expired"]) for r in c["unusedAcceptances"]], [(11, False)])
+        malformed = sorted((f["line"], f["message"].split(": ", 1)[-1]) for f in c["findings"]
+                           if f["gate"] == "0 acceptance record")
+        self.assertEqual(malformed, [
+            (16, "missing reason"),
+            (20, "`review-by` 'soon' is not a date (YYYY-MM-DD)"),
+            (25, "unknown key(s) review_by; missing review-by"),
+            (30, "entry 7 is not a mapping"),
+        ])
+        self.assertEqual({f["id"] for f in c["findings"] if f["gate"] == "0 acceptance record"}, {"ESS-G0"})
+
+    def test_acceptance_review_by_is_inclusive(self):
+        on = run_json(rel_case("acceptance"), "--check", "--today", "2099-12-31")[1]
+        after = run_json(rel_case("acceptance"), "--check", "--today", "2100-01-01")[1]
+        self.assertEqual(len(on["accepted"]), 1)
+        self.assertEqual(after["accepted"], [])
+        self.assertIn("8(a) slice import", [f["gate"] for f in after["findings"]])
+        self.assertEqual(sorted(r["line"] for r in after["expiredAcceptances"]), [1, 6])
+        self.assertEqual([(r["line"], r["expired"]) for r in after["unusedAcceptances"]], [(11, True)])
 
 
     def test_test_index(self):
@@ -450,7 +599,16 @@ class Units(unittest.TestCase):
         self.assertEqual(ss.iso_duration("PT5M"), "PT5M")
         self.assertIsNone(ss.iso_duration("${delay}"))
 
+    def test_acceptance_gate_boundary(self):
+        self.assertTrue(ss._gate_matches("8", "8(c) bc-private import"))
+        self.assertTrue(ss._gate_matches("8(c)", "8(c) bc-private import"))
+        self.assertTrue(ss._gate_matches("11(b) handled events", "11(b) handled events"))
+        self.assertFalse(ss._gate_matches("1", "11(b) handled events"))
+        self.assertFalse(ss._gate_matches("8(a)", "8(c) bc-private import"))
+
     def test_gate_ids(self):
+        self.assertEqual(ss.gate_id("8(d) command in domain"), "ESS-G8d")
+        self.assertEqual(ss.gate_id("0 acceptance record"), "ESS-G0")
         self.assertEqual(ss.gate_id("11(b) handled events"), "ESS-G11b")
         self.assertEqual(ss.gate_id("6 discriminator"), "ESS-G6")
         self.assertEqual(ss.gate_id("14 stale lane"), "ESS-G14")

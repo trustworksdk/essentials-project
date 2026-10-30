@@ -260,7 +260,7 @@ Exit 0 is clean, 1 is findings, 2 is that it could not validate (a missing `json
 git config core.hooksPath "$(git rev-parse --show-prefix).githooks"
 ```
 
-If the repository already sets `core.hooksPath` (a hook manager such as husky) or has a `.git/hooks/pre-commit`, do not run that: `core.hooksPath` replaces every hook in `.git/hooks`. Call this project's hook from the existing pre-commit hook instead, where `<prefix>` is what `git rev-parse --show-prefix` prints in this directory (empty at the repository root):
+If the repository already sets `core.hooksPath` (a hook manager such as husky), or `.git/hooks` holds any hook other than a `*.sample` (another tool's `post-commit` or `post-checkout` counts), do not run that: `core.hooksPath` replaces every hook in `.git/hooks`, and those hooks would silently stop running. Call this project's hook from the existing pre-commit hook instead, where `<prefix>` is what `git rev-parse --show-prefix` prints in this directory (empty at the repository root):
 
 ```bash
 "$(git rev-parse --show-toplevel)/<prefix>.githooks/pre-commit" || exit 1

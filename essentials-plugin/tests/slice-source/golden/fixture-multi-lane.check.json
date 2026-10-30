@@ -148,6 +148,7 @@
   "findings": [
     {
       "severity": "Blocking",
+      "impact": "wrong-next-caller",
       "gate": "14 entities with event store",
       "id": "ESS-G14",
       "slice": null,
@@ -158,6 +159,7 @@
     },
     {
       "severity": "Blocking",
+      "impact": "documentation",
       "gate": "14 declared lanes",
       "id": "ESS-G14",
       "slice": null,
@@ -168,6 +170,7 @@
     },
     {
       "severity": "Blocking",
+      "impact": "wrong-next-caller",
       "gate": "14 two write styles",
       "id": "ESS-G14",
       "slice": null,
@@ -178,6 +181,7 @@
     },
     {
       "severity": "Blocking",
+      "impact": "documentation",
       "gate": "14 declared lanes",
       "id": "ESS-G14",
       "slice": null,
@@ -188,6 +192,7 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "14 stale lane",
       "id": "ESS-G14",
       "slice": "payments.capture_payment",
@@ -197,6 +202,64 @@
       "hint": "`lane` is machine-derived; `--fix-manifests` repairs it"
     }
   ],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [
+    {
+      "file": "src/main/java/com/example/multi/catalog/use_cases/list_product/ListProductHandler.java",
+      "line": 28,
+      "receiver": "products",
+      "repository": "Products",
+      "method": "save",
+      "entity": "Product",
+      "bc": "catalog",
+      "fromBc": "catalog",
+      "slice": "catalog.list_product",
+      "callerRole": "use_cases",
+      "declared": true
+    },
+    {
+      "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
+      "line": 32,
+      "receiver": "products",
+      "repository": "Products",
+      "method": "update",
+      "entity": "Product",
+      "bc": "catalog",
+      "fromBc": "catalog",
+      "slice": "catalog.reprice_product",
+      "callerRole": "use_cases",
+      "declared": true
+    },
+    {
+      "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStockHandler.java",
+      "line": 28,
+      "receiver": "stockItems",
+      "repository": "StockItems",
+      "method": "save",
+      "entity": "StockItem",
+      "bc": "inventory",
+      "fromBc": "inventory",
+      "slice": "inventory.adjust_stock",
+      "callerRole": "use_cases",
+      "declared": true
+    },
+    {
+      "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStockHandler.java",
+      "line": 30,
+      "receiver": "stockItems",
+      "repository": "StockItems",
+      "method": "update",
+      "entity": "StockItem",
+      "bc": "inventory",
+      "fromBc": "inventory",
+      "slice": "inventory.adjust_stock",
+      "callerRole": "use_cases",
+      "declared": true
+    }
+  ],
+  "unhandledVariants": [],
   "unverified": [],
   "unparsed": []
 }

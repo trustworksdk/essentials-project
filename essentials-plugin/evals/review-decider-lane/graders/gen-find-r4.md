@@ -9,5 +9,5 @@ PASS if the report contains a finding that matches all of:
 - it concerns `orders/use_cases/expedite_order/ExpediteOrderDecider.kt`
 - it is filed under gate 8a (§R4), id ESS-G8a, or plainly describes that check
 - its severity is Blocking
-- its substance: The expedite_order command slice imports cancel_order's OrderState and OrderStateEvolver — one slice reaching into another slice's internals (§R4).
+- its substance: The expedite_order command slice imports cancel_order's OrderState and OrderStateEvolver — one slice reaching into another slice's internals (§R4). slice-source reports it as one 8(a) row per import (lines 6 and 7); two rows, or one row naming both imports, both count.
 FAIL if no finding matches, or the matching one has a different severity. Ignore formatting, ordering and other findings.

@@ -77,7 +77,30 @@
   ],
   "findings": [
     {
+      "severity": "Blocking",
+      "impact": "coupling",
+      "gate": "8(d) command in domain",
+      "id": "ESS-G8d",
+      "slice": null,
+      "file": "src/main/java/com/example/shipping/entities/ShippingOrder.java",
+      "line": 3,
+      "message": "entities/ imports com.example.shipping.use_cases.register_shipping_order.RegisterShippingOrder from command slice shipping.register_shipping_order (targetShape: record); a BC-scoped domain artifact never references a slice's type",
+      "hint": "take the fields it needs; the emitting slice unpacks the command (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Blocking",
+      "impact": "coupling",
+      "gate": "8(d) command in domain",
+      "id": "ESS-G8d",
+      "slice": null,
+      "file": "src/main/java/com/example/shipping/events/ShippingOrderRegistered.java",
+      "line": 3,
+      "message": "events/ imports com.example.shipping.use_cases.register_shipping_order.RegisterShippingOrder from command slice shipping.register_shipping_order (targetShape: record); a BC-scoped domain artifact never references a slice's type",
+      "hint": "take the fields it needs; the emitting slice unpacks the command (rules/slice-design.md \u00a7R4)"
+    },
+    {
       "severity": "Advisory",
+      "impact": "coupling",
       "gate": "6 raw id",
       "id": "ESS-G6",
       "slice": "shipping.ship_order",
@@ -87,6 +110,38 @@
       "hint": "two parts: type the parameter, then for a `CharSequenceType` / `SingleValueType` id always make sure exactly one configurer matching the web stack is `@Import`ed \u2014 `EssentialsWebMvcConfigurer` for spring-webmvc, `EssentialsWebFluxConfigurer` for spring-webflux (stack contract S4, ESS-031). It is required for an id with no `String` route (HTTP 500 without it) and the rule even where Spring's own conversion would bind one; stack-lint reports either case (`s4-typed-edge-unregistered` / `s4-typed-edge-convention`)"
     }
   ],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [
+    {
+      "file": "src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrderHandler.java",
+      "line": 27,
+      "receiver": "shippingOrders",
+      "repository": "ShippingOrders",
+      "method": "save",
+      "entity": "ShippingOrder",
+      "bc": "shipping",
+      "fromBc": "shipping",
+      "slice": "shipping.register_shipping_order",
+      "callerRole": "use_cases",
+      "declared": true
+    },
+    {
+      "file": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderHandler.java",
+      "line": 27,
+      "receiver": "shippingOrders",
+      "repository": "ShippingOrders",
+      "method": "save",
+      "entity": "ShippingOrder",
+      "bc": "shipping",
+      "fromBc": "shipping",
+      "slice": "shipping.ship_order",
+      "callerRole": "use_cases",
+      "declared": true
+    }
+  ],
+  "unhandledVariants": [],
   "unverified": [],
   "unparsed": []
 }

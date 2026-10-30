@@ -3,6 +3,48 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-1 — targets Essentials 0.60.1
+Field feedback from running `/essentials:slice-check` and `/essentials:upgrade` on a real 27-context project.
+- **Findings are graded by consequence.** An §R4 import is **Blocking** only when the imported thing can
+  change state or decide (a decider, evolver or state, a handler, a processor, a write repository, a
+  routing marker, an endpoint); a read-only one (a record, a config record, a catalogue, a pure function) is
+  **Should-fix**. Every finding also names its **impact** — wrong today, wrong on the next caller,
+  structure/coupling, documentation — and the report sorts by severity, then impact
+  (`rules/slice-design.md` § Reporting severities).
+- **Gate 8 runs in `slice-source.py`**, not by hand: `8(a)`/`8(b) slice import`, `8(c) bc-private import`,
+  `8(d) command in domain`. Imports resolve to source directories, so application-level packages beside
+  the bounded contexts (a root `config/`, a shared kernel) are never reported as contexts, and the two
+  sanctioned uses (constructing a command for the bus, naming an `AggregateType` constant) are exempt.
+- **New source facts and gates.** `writeSites` lists every mutating call on an entity's write repository,
+  `DocumentDbRepository` fields included, with the caller's slice and role; gate 15(a) and the new gate 19
+  start from it. `11(c) undeclared write` (Should-fix) reports a slice writing an entity its manifest does
+  not list under `writes`, so the maps stop missing it. `14 lane without write model` (Should-fix) reports
+  a declared lane in a context with no write model.
+- **Accepted deviations.** A project may keep `slice-check-accepted.yaml` at its root (gate, match, reason,
+  accepted, review-by). `slice-source.py` moves matching findings to `accepted`, and lists expired entries and
+  entries that match nothing. `slice-check` applies the same file to the findings it judges, and reports
+  them in an `Accepted` block. The plugin never writes the file.
+- **`slice-source.py --fail-on blocking|should-fix|advisory`** (default `advisory`, any finding exits 1, as
+  before) lets CI gate on a severity. `--today` pins the date the acceptance record is checked against.
+- **Law additions:** application-level packages are out of scope; code-defined reference data belongs in
+  `types/` (data loaded at startup is a published read seam); § Changing another bounded context's state
+  (send the owner's command or publish an event, never a state-changing port); § Side effects after a state
+  change (the dual write, with the per-lane outbox); and a `DocumentDbRepository` paragraph on the
+  service-entity read side, where getters read by views are expected and the finder rule still bites.
+- **Gate texts that did not fit real code:** gate 17's Blocking marker row applies only to commands a
+  decider handles (a plain `AnnotatedCommandHandler` command routes by type); a marker with documented audit
+  fields is Advisory; gate 15(a) exempts an idempotent startup seed (Advisory when documented, Should-fix
+  when not); gate 11(a) treats `serves` as query names, as `manifest-guide.md` defines them; a handler
+  checking a precondition the entity method does not guard is a Should-fix, impact *wrong on the next
+  caller*. New gate 19 (Should-fix) reports an external call in the same flow as a state change.
+- **`/essentials:upgrade`.** A hook counts as active only when it is wired and executable (the hook git
+  actually runs, and the project hook). A self-test stages a broken manifest in a temporary index and checks
+  that the hook fails. When `.git/hooks` holds other tools' hooks, upgrade recommends the forwarder instead of
+  `core.hooksPath`. A devcontainer gets the activation line for its post-create script. Upgrade also checks
+  that CI runs `slice-lint`, since CI is the gate nobody can bypass. A release move that crosses into 0.60.1
+  lists the views that will log the new unhandled-event-types WARN (`unhandledVariants`), before the move.
+- The slice-law view budget is raised to fit the new sections (`scripts/slice-law.py`).
+
 ## 0.60.1 — targets Essentials 0.60.1
 - **`/essentials:slice-map-html` — the Slice Atlas.** A new command writes one self-contained page
   (no server, no CDN, opens from `file://`) that shows the whole slice architecture from the manifests,

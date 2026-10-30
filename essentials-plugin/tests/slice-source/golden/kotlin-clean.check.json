@@ -86,6 +86,22 @@
     }
   ],
   "findings": [],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [],
+  "unhandledVariants": [
+    {
+      "slice": "orders.order_list",
+      "processor": "OrderListProjection",
+      "file": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt",
+      "line": 17,
+      "parent": "OrderEvent",
+      "variants": [
+        "OrderPlaced"
+      ]
+    }
+  ],
   "unverified": [],
   "unparsed": []
 }
