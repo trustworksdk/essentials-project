@@ -54,6 +54,12 @@ public final class LoadDriver {
     private record Customer(int n, String accountId, BrokerageHttp.Session session) {
     }
 
+    /**
+     * A business day's open burst, on the driver's clock: from the open to {@code burst-fraction} of a business day later.
+     */
+    private record Burst(Instant open, Instant end) {
+    }
+
     private final LoadDriverSettings       settings;
     private final StepStats                stats     = new StepStats();
     private final BrokerageHttp            http;
@@ -73,6 +79,8 @@ public final class LoadDriver {
     private Instant                        clockReading;
     private long                           clockReadAt;
     private double                         clockSpeed;
+    private final List<Burst>              bursts    = new CopyOnWriteArrayList<>();
+    private final List<Map<String, Object>> storeSamples = new CopyOnWriteArrayList<>();
     private volatile Instant               faultOpened; // a fault window (F-2, F-4), on the driver's clock
     private volatile Instant               faultClosed;
     private volatile Instant               targetDown;  // F-4: when the restarted simulator stopped answering
@@ -98,6 +106,7 @@ public final class LoadDriver {
         loadCalendar();
         setUpPopulation();
         skipToTheLatestClose();
+        sampleStores("start");
         if (settings.fault().equals("F-1")) {
             // From the first order on, so every flow's deliveries are damaged; cleared only after the drain
             faults.applyDeliveryFaults(SimulatorFaults.deliveryFaultPolicy(Math.abs((long) settings.runToken().hashCode())));
@@ -124,6 +133,11 @@ public final class LoadDriver {
                 lastPoll = now;
                 var newCloses = pollCloses();
                 if (newCloses > 0) {
+                    var every = settings.storeSampleEveryDays();
+                    if (every > 0 && closes / every < (closes + newCloses) / every && closes + newCloses < settings.businessDays()) {
+                        var label = "close " + (closes + newCloses);
+                        actions.submit(() -> sampleStores(label)); // off the pacing loop, so the rate does not stall on it
+                    }
                     closes += newCloses;
                     chooseActiveCustomers();
                     log("close %d of %d; %s", closes, settings.businessDays(), progress());
@@ -135,6 +149,8 @@ public final class LoadDriver {
             var open = tradingOpen();
             if (open && !wasOpen) {
                 dayStarted = now; // the open: a business day's window begins
+                var opened = Instant.now();
+                bursts.add(new Burst(opened, opened.plusMillis((long) (settings.burstFraction() * dayMillis))));
                 if (faultOpened == null && closes == settings.faultAtDay() - 1) {
                     if (settings.fault().equals("F-2")) {
                         openWebhookOutage();
@@ -180,6 +196,7 @@ public final class LoadDriver {
         waitForCloses(1, Duration.ofMillis(dayMillis * 3));
         Thread.sleep(10_000);
         report = serverReport();
+        sampleStores("end");
         var openCases = http.json(http.operatorGet("REPORT", base() + "/api/admin/reconciliation/cases?state=OPEN"));
         var missing   = http.json(http.operatorGet("REPORT", base() + "/api/admin/reconciliation/missing-statements"));
         Map<String, Object> faultEvidence = null;
@@ -619,6 +636,8 @@ public final class LoadDriver {
         }
         checks.put("no missing statement", missing.isArray() && missing.isEmpty());
         checks.put("driver never saturated", stats.counter("skipped:driver-saturated") == 0);
+        var steady = outsideBursts(server);
+        checks.put("booked p99 under 10 s outside bursts, and from 30 s after each", (Boolean) steady.get("passed"));
         if (settings.fault().equals("F-1")) {
             // A fault run proves nothing unless the faults happened
             for (var kind : List.of("duplicate", "missing", "null", "held")) {
@@ -653,6 +672,8 @@ public final class LoadDriver {
         result.put("requests", stats.summaries());
         result.put("counters", stats.counters());
         result.put("brokerage", server);
+        result.put("steadyState", steady);
+        result.put("storeSizes", storeSamples);
         result.put("openCases", openCases);
         result.put("missingStatements", missing);
         if (faultEvidence != null) {
@@ -672,12 +693,114 @@ public final class LoadDriver {
             log("stage %-18s p50 %8.0f ms  p99 %8.0f ms  max %8.0f ms", stage.getKey(), stage.getValue().path("p50Ms").asDouble(),
                 stage.getValue().path("p99Ms").asDouble(), stage.getValue().path("maxMs").asDouble());
         }
+        log("steady state: %d buckets outside bursts, %s over 10 s; burst recovery (s after its end) max %s, per burst %s",
+            steady.get("bucketsChecked"), steady.get("violations"), steady.get("maxRecoverySeconds"), steady.get("recoverySeconds"));
+        logStoreGrowth();
         if (faultEvidence != null) {
             faultEvidence.forEach((key, evidence) -> log("fault %s %-24s %s", settings.fault(), key, evidence));
         }
         checks.forEach((check, passed) -> log("%s %s", passed ? "PASS" : "FAIL", check));
         log("report: %s", file.toAbsolutePath());
         return !checks.containsValue(false);
+    }
+
+    // ---- design §4's steady-state target and §5's watched stores
+
+    /**
+     * Design §4: order end to end ({@code OrderPlaced} to {@code TradeBooked}) p99 under 10 s outside the open bursts, and
+     * back under it within 30 s after each. Every 10 s placement bucket with a booking is checked, except those from one
+     * bucket before a burst's open to 30 s after its end - and, in a fault run, the fault window and 30 s after it, which
+     * the fault's own recovery check covers. A burst's recovery is how long after its end the first bucket placed came in
+     * under 10 s again.
+     */
+    private Map<String, Object> outsideBursts(JsonNode server) {
+        var buckets = new ArrayList<Map.Entry<Instant, Double>>();
+        for (var bucket : server.path("buckets")) {
+            if (bucket.path("booked").asLong() > 0) {
+                buckets.add(Map.entry(Instant.parse(bucket.path("start").asString()), bucket.path("p99BookedMs").asDouble()));
+            }
+        }
+        var violations = new ArrayList<String>();
+        var checked    = 0;
+        for (var bucket : buckets) {
+            var start = bucket.getKey();
+            var excluded = bursts.stream().anyMatch(b -> !start.isBefore(b.open().minusSeconds(10)) && start.isBefore(b.end().plusSeconds(30)))
+                    || (faultOpened != null && !start.isBefore(faultOpened.minusSeconds(10)) && (faultClosed == null || start.isBefore(faultClosed.plusSeconds(30))));
+            if (excluded) {
+                continue;
+            }
+            checked++;
+            if (bucket.getValue() >= 10_000) {
+                violations.add(String.format(Locale.ROOT, "%s %.0f ms", start, bucket.getValue()));
+            }
+        }
+        var recovery = new ArrayList<Long>();
+        for (var burst : bursts) {
+            buckets.stream()
+                   .filter(b -> !b.getKey().isBefore(burst.end()) && b.getValue() < 10_000)
+                   .findFirst()
+                   .ifPresent(b -> recovery.add(Duration.between(burst.end(), b.getKey()).toSeconds()));
+        }
+        var evidence = new LinkedHashMap<String, Object>();
+        evidence.put("passed", violations.isEmpty() && checked > 0);
+        evidence.put("bucketsChecked", checked);
+        evidence.put("violations", violations);
+        evidence.put("bursts", bursts.size());
+        evidence.put("maxRecoverySeconds", recovery.stream().mapToLong(Long::longValue).max().orElse(-1));
+        evidence.put("recoverySeconds", recovery);
+        return evidence;
+    }
+
+    /**
+     * Design §5: samples the stores at the start, every {@code store-sample-every-days} closes and at the end, so growth
+     * across the run shows. Judging "grows without bound" is left to the reader - the report gives the series; a sample that
+     * fails is counted, not fatal.
+     */
+    private void sampleStores(String label) {
+        var response = http.operatorGet("STORES", base() + "/api/admin/load-report/store-sizes");
+        if (!response.ok()) {
+            stats.count("store-sample-failed");
+            log("store sample %s failed: %s", label, response);
+            return;
+        }
+        var sample = new LinkedHashMap<String, Object>();
+        sample.put("label", label);
+        sample.put("sizes", http.json(response));
+        storeSamples.add(sample);
+        var sizes = (JsonNode) sample.get("sizes");
+        log("stores at %s: database %s, slot WAL %s", label, megabytes(sizes.path("databaseBytes").asLong()), sizes.path("slotRetainedWalBytes"));
+    }
+
+    private void logStoreGrowth() {
+        if (storeSamples.size() < 2) {
+            return;
+        }
+        var first = (JsonNode) storeSamples.getFirst().get("sizes");
+        var last  = (JsonNode) storeSamples.getLast().get("sizes");
+        var before = new HashMap<String, long[]>();
+        for (var table : first.path("tables")) {
+            before.put(table.path("table").asString(), new long[]{table.path("rows").asLong(), table.path("bytes").asLong()});
+        }
+        var growth = new ArrayList<String[]>();
+        var deltas = new ArrayList<Map.Entry<String, Long>>();
+        for (var table : last.path("tables")) {
+            var name  = table.path("table").asString();
+            var was   = before.getOrDefault(name, new long[2]);
+            deltas.add(Map.entry(name, table.path("bytes").asLong() - was[1]));
+            growth.add(new String[]{name, Long.toString(was[0]), Long.toString(table.path("rows").asLong()), Long.toString(was[1]), Long.toString(table.path("bytes").asLong())});
+        }
+        deltas.sort(Map.Entry.<String, Long>comparingByValue().reversed());
+        var days = Math.max(1, settings.businessDays());
+        log("stores: database %s -> %s over %d business days", megabytes(first.path("databaseBytes").asLong()), megabytes(last.path("databaseBytes").asLong()), days);
+        for (var delta : deltas.subList(0, Math.min(15, deltas.size()))) {
+            var row = growth.stream().filter(g -> g[0].equals(delta.getKey())).findFirst().orElseThrow();
+            log("store %-48s rows %10s -> %10s  size %10s -> %10s  (+%s per business day)", row[0], row[1], row[2],
+                megabytes(Long.parseLong(row[3])), megabytes(Long.parseLong(row[4])), megabytes(delta.getValue() / days));
+        }
+    }
+
+    private static String megabytes(long bytes) {
+        return String.format(Locale.ROOT, "%.1f MB", bytes / 1_048_576.0);
     }
 
     // ---- F-2, the webhook outage

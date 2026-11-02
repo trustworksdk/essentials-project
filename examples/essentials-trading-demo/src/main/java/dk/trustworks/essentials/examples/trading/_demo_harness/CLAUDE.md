@@ -17,7 +17,7 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `NoOpAccounts*Processor`, `BatchedAccountsForwarder` | EF-2 measurement processors, off by default |
 | `load_driver/` (`LoadDriver`, `run-load.sh`) | Phase 6: the HTTP load driver - **not part of the application**, a plain `main` run in a JVM of its own |
 | `WebhookOutage`, `WebhookOutageController` | Phase 6 fault F-2: `/api/admin/webhook-outage?seconds=N` makes every `/webhooks/**` request answer `503` before anything reads it, for N seconds; `GET` reports the window and the refusals |
-| `LoadRunReport`, `LoadRunReportController` | `GET /api/admin/load-report?runPrefix=`: what the brokerage recorded of a driver run - orders by status, placed→filled/booked latency overall and per 10 s placement bucket, payments, durable-queue depth and dead letters, largest tables |
+| `LoadRunReport`, `LoadRunReportController` | `GET /api/admin/load-report?runPrefix=`: what the brokerage recorded of a driver run - orders by status, placed→filled/booked latency overall and per 10 s placement bucket, payments, durable-queue depth and dead letters, largest tables; `GET /api/admin/load-report/store-sizes`: every table, the database, WAL held back per replication slot, queue depth - cheap enough to sample through a run |
 
 The `brokerage` bootstrap runner, its trading load generator, the dashboard and the demo's own admin page went with
 `brokerage` (phase 4 Q-3). The Essentials admin console covers closing books, snapshots, archives and lifecycle for
@@ -364,6 +364,17 @@ every check passed; the full report goes to `target/load-driver/load-<run>.json`
 - **`run-load.sh` does not compile.** It runs `target/classes` with the runtime classpath resolved once into
   `target/load-driver.classpath`. Compile the module yourself, never while an instance is starting (`target/` has more
   than one writer - root `CLAUDE.md`).
+- **Design §4's steady-state check**: `booked p99 under 10 s outside bursts, and from 30 s after each` - every 10 s
+  placement bucket with a booking, except from one bucket before each open to 30 s after its burst (and a fault window
+  plus 30 s), must book its p99 under 10 s. The report's `steadyState` also gives each burst's recovery: seconds from its
+  end to the first bucket back under 10 s.
+- **Design §5's stores** are sampled at the start, every `store-sample-every-days` closes (default 10; 0 = start and end
+  only) and at the end, off the pacing loop; the report's `storeSizes` holds the series and the log ranks the top 15
+  tables by growth per business day. "Grows without bound" is judged from the series, not a pass check.
+- **The load report's query must keep its `MATERIALIZED` CTEs.** Without them the planner, estimating one row per
+  `LIKE`, nests the joins and re-runs the submitted and booked scans once per fill: 190 s instead of 0.3 s for a 3-day
+  run on a database holding earlier runs. The HTTP timeout does not cancel the query, so every retry stacked another
+  one on the database.
 - **Login is the expensive request**: ~100 ms p50 (BCrypt), which is why a session logs in once. HTTP Basic per request
   would cost that on every call.
 - **A `DAY` order can legitimately live several business days' worth of real minutes**: one that reaches the exchange

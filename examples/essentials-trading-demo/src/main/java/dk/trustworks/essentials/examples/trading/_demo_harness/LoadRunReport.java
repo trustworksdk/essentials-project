@@ -63,6 +63,15 @@ public class LoadRunReport {
                          List<StoreSize> largestTables) {
     }
 
+    /**
+     * Design phase 6 §5's watched stores at one instant, cheap enough to sample through a long run: every table of the
+     * schema, the database as a whole, the WAL each replication slot holds back (the CDC slot's above all), and the
+     * durable queues' depth and dead letters.
+     */
+    public record StoreSizes(Instant at, long databaseBytes, List<StoreSize> tables, Map<String, Long> slotRetainedWalBytes,
+                             Map<String, QueueDepth> queues) {
+    }
+
     private final JdbcTemplate                                                            jdbcTemplate;
     private final ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
     private final DurableQueues                                                           durableQueues;
@@ -97,14 +106,16 @@ public class LoadRunReport {
         // Table and column names come from the event store's configuration, not from a request
         var placed = jdbcTemplate.queryForObject("SELECT count(*) FROM " + orders.eventStreamTableName + " WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderPlaced'",
                                                  Long.class, runPrefix + "%");
+        // MATERIALIZED: the planner estimates one row for each LIKE, so without it it nests the joins and re-runs the
+        // submitted and booked scans once per fill - 190 s instead of 0.3 s for a 3-day run on a database holding earlier runs
         var executions = jdbcTemplate.query(
-                "WITH placed AS (SELECT " + o.aggregateIdColumn + " AS order_id, " + o.timestampColumn + " AS at FROM " + orders.eventStreamTableName
+                "WITH placed AS MATERIALIZED (SELECT " + o.aggregateIdColumn + " AS order_id, " + o.timestampColumn + " AS at FROM " + orders.eventStreamTableName
                 + "                WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderPlaced'),"
-                + " submitted AS (SELECT " + o.aggregateIdColumn + " AS order_id, min(" + o.timestampColumn + ") AS at FROM " + orders.eventStreamTableName
+                + " submitted AS MATERIALIZED (SELECT " + o.aggregateIdColumn + " AS order_id, min(" + o.timestampColumn + ") AS at FROM " + orders.eventStreamTableName
                 + "                WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderSubmitted' GROUP BY 1),"
-                + " fills AS (SELECT " + o.aggregateIdColumn + " AS order_id, " + o.eventPayloadColumn + "->>'executionId' AS execution_id, " + o.timestampColumn + " AS at"
+                + " fills AS MATERIALIZED (SELECT " + o.aggregateIdColumn + " AS order_id, " + o.eventPayloadColumn + "->>'executionId' AS execution_id, " + o.timestampColumn + " AS at"
                 + "             FROM " + orders.eventStreamTableName + " WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderFilled'),"
-                + " booked AS (SELECT " + a.eventPayloadColumn + "->'trade'->>'executionId' AS execution_id, min(" + a.timestampColumn + ") AS at FROM " + accounts.eventStreamTableName
+                + " booked AS MATERIALIZED (SELECT " + a.eventPayloadColumn + "->'trade'->>'executionId' AS execution_id, min(" + a.timestampColumn + ") AS at FROM " + accounts.eventStreamTableName
                 + "              WHERE " + a.aggregateIdColumn + " LIKE ? AND " + a.eventTypeColumn + " LIKE '%.TradeBooked' GROUP BY 1)"
                 + " SELECT f.order_id, p.at, s.at, f.at, b.at FROM fills f JOIN placed p ON p.order_id = f.order_id"
                 + "   LEFT JOIN submitted s ON s.order_id = f.order_id LEFT JOIN booked b ON b.execution_id = f.execution_id",
@@ -153,6 +164,22 @@ public class LoadRunReport {
         return new Report(runPrefix, Instant.now(),
                           new Orders(placed == null ? 0 : placed, byStatus, nonTerminal, latency(toFilled), latency(toBooked), toFilled.length - toBooked.length, stages),
                           payments, buckets, queues, largest);
+    }
+
+    public StoreSizes storeSizes() {
+        var tables = jdbcTemplate.query("SELECT relname, n_live_tup, pg_total_relation_size(relid) FROM pg_stat_user_tables ORDER BY 3 DESC",
+                                        (rs, row) -> new StoreSize(rs.getString(1), rs.getLong(2), rs.getLong(3)));
+        var databaseBytes = jdbcTemplate.queryForObject("SELECT pg_database_size(current_database())", Long.class);
+        var slots = new TreeMap<String, Long>();
+        jdbcTemplate.query("SELECT slot_name, coalesce(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn), 0)::bigint FROM pg_replication_slots WHERE database = current_database()",
+                           rs -> {
+                               slots.put(rs.getString(1), rs.getLong(2));
+                           });
+        var queues = new TreeMap<String, QueueDepth>();
+        for (var queueName : durableQueues.getQueueNames()) {
+            queues.put(queueName.toString(), new QueueDepth(durableQueues.getTotalMessagesQueuedFor(queueName), durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)));
+        }
+        return new StoreSizes(Instant.now(), databaseBytes == null ? 0 : databaseBytes, tables, slots, queues);
     }
 
     private static Instant bucketOf(Instant at, Duration bucket) {

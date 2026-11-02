@@ -23,7 +23,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * {@code GET /api/admin/load-report?runPrefix=LD-<run>-&accountPrefix=LDA-&bucketSeconds=10}: what the brokerage
- * recorded of a load-driver run ({@link LoadRunReport}). Operator only, as every {@code /api/admin} path.
+ * recorded of a load-driver run ({@link LoadRunReport}); {@code GET /api/admin/load-report/store-sizes}: the stores
+ * design phase 6 §5 watches, sampled through a run. Operator only, as every {@code /api/admin} path.
  */
 @RestController
 @RequestMapping("/api/admin/load-report")
@@ -39,5 +40,10 @@ public class LoadRunReportController {
                                        @RequestParam(defaultValue = "LDA-") String accountPrefix,
                                        @RequestParam(defaultValue = "10") long bucketSeconds) {
         return report.report(runPrefix, accountPrefix, Duration.ofSeconds(Math.max(1, bucketSeconds)));
+    }
+
+    @GetMapping("/store-sizes")
+    public LoadRunReport.StoreSizes storeSizes() {
+        return report.storeSizes();
     }
 }
