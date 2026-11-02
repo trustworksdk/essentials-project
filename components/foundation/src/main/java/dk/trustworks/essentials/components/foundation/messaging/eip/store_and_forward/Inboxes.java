@@ -172,6 +172,19 @@ public interface Inboxes {
     }
 
     /**
+     * Who may be handling the {@link Inbox}'s messages right now, cluster-wide - see
+     * {@link DurableQueues#getQueueConsumers(QueueName)}. {@link Optional#empty()} by default; the {@link Inboxes} created by
+     * {@link #durableQueueBasedInboxes(DurableQueues, FencedLockManager)} answer what their {@link DurableQueues} answer for
+     * the inbox's queue.
+     *
+     * @param inboxName the inbox
+     * @return the inbox's consumers, or {@link Optional#empty()} if unknown
+     */
+    default Optional<QueueConsumers> getQueueConsumers(InboxName inboxName) {
+        return Optional.empty();
+    }
+
+    /**
      * Create an {@link Inboxes} instance that uses a {@link DurableQueues} as its storage and message delivery mechanism.
      *
      * @param durableQueues     The {@link DurableQueues} implementation used by the {@link Inboxes} instance returned
@@ -231,6 +244,12 @@ public interface Inboxes {
         @Override
         public Optional<Duration> maxUnservedAfterInstanceLoss() {
             return durableQueues.maxUnservedAfterInstanceLoss();
+        }
+
+        @Override
+        public Optional<QueueConsumers> getQueueConsumers(InboxName inboxName) {
+            requireNonNull(inboxName, "No inboxName provided");
+            return durableQueues.getQueueConsumers(inboxName.asQueueName());
         }
 
         public class DurableQueueBasedInbox implements Inbox {

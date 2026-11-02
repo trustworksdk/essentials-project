@@ -309,6 +309,20 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     QueueHealth health() throws SQLException;
 
     /**
+     * How many instances that no longer count as live ({@link QueueHealth#liveInstances()} leaves them out) still own a
+     * unit of this queue: one that crashed, or one that stopped while a handler was running and kept the unit until it
+     * returns. The two cannot be told apart from the database. A caller that must know no handler may still be running
+     * anywhere - a partitioned processor's reset - asks this beside {@link QueueHealth#liveInstances()}.
+     *
+     * @return the number of departed instances still owning a unit
+     * @throws SQLException                  if the count cannot be read
+     * @throws UnsupportedOperationException (the default) if the implementation cannot tell
+     */
+    default int departedInstancesHoldingUnits() throws SQLException {
+        throw new UnsupportedOperationException(getClass().getName() + " cannot tell which departed instances still hold units");
+    }
+
+    /**
      * Read one message by id, for an admin surface or an operator with a support ticket.
      * <p>
      * A primary-key point lookup that costs delivery nothing. Returns empty if the message has been

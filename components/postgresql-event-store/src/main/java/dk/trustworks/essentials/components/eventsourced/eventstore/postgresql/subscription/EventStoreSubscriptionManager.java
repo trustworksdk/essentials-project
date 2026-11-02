@@ -76,6 +76,40 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
     }
 
     /**
+     * The {@link LockName} an exclusive subscription of the subscriber to the aggregate type holds while it reads - the one
+     * place the name is made, so a caller that must keep the subscription from reading (a partitioned processor's reset)
+     * takes the same lock.
+     *
+     * @param subscriberId  the subscriber
+     * @param aggregateType the aggregate type
+     * @return the lock name
+     */
+    static LockName exclusiveSubscriptionLockName(SubscriberId subscriberId, AggregateType aggregateType) {
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        return LockName.of(dk.trustworks.essentials.shared.MessageFormatter.msg("[{}-{}]", subscriberId, aggregateType));
+    }
+
+    /**
+     * Move the stored resume point of a subscriber that is <b>not running</b> - on this instance or any other - so its next
+     * subscription starts from and including <code>resumeFromAndIncluding</code>; the resume point is created if the
+     * subscriber never had one. For a reset that runs while the processor is stopped cluster-wide, from any instance,
+     * where {@link EventStoreSubscription#resetFrom} needs the running subscription on the instance that holds it.
+     * <p>
+     * The caller guarantees that no instance runs the subscriber (a partitioned processor holds the subscriber's lock
+     * while it calls this); an implementation refuses when a subscription of the pair is active in this manager.
+     *
+     * @param subscriberId           the subscriber
+     * @param aggregateType          the aggregate type
+     * @param resumeFromAndIncluding where the next subscription starts
+     * @throws IllegalStateException         if a subscription of the pair is active in this manager
+     * @throws UnsupportedOperationException (the default) if the implementation cannot move a stored resume point
+     */
+    default void resetStoredResumePoint(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder resumeFromAndIncluding) {
+        throw new UnsupportedOperationException(getClass().getName() + " cannot move a stored resume point");
+    }
+
+    /**
      * Create a builder for the {@link EventStoreSubscriptionManager}
      *
      * @return a builder for the {@link EventStoreSubscriptionManager}

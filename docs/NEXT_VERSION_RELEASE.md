@@ -21,7 +21,8 @@ and two lock waits removed.
   repositories built at startup (§1.1.2), and the default snapshot interval is 1000 events (§1.1.3).
 - Handler dispatch (`shared`): every aggregate event applied and every handler call no longer builds log messages that
   trace logging is off for.
-- Event processors: `PartitionedEventProcessor` runs its handlers on every instance on the shard-owned engine (§2.7);
+- Event processors: `PartitionedEventProcessor` runs its handlers on every instance on the shard-owned engine (§2.7),
+  `PartitionedViewEventProcessor` does the same for views (§2.10), and both reset only while stopped on every instance;
   an `EventProcessor` overridden to competing consumers on a per-node queue now refuses to start (§1); the default retry
   budget outlasts a failover, minutes instead of ~10 s (§1.1.4).
 - Command handlers: an `AnnotatedCommandHandler` failure is logged at DEBUG, not ERROR - the sender reports it (§1.1.5).
@@ -309,6 +310,12 @@ the first one started. `PartitionedEventProcessor` is the alternative, chosen by
 Whether a queue keeps key order across instances is the new `DurableQueues.keepsKeyOrderAcrossInstances()` /
 `Inboxes.keepsKeyOrderAcrossInstances()`: `false` by default, `true` for the shard-owned adapter.
 
+**Reset only while stopped on every instance.** Unlike `EventProcessor`, whose reset runs live on the instance that
+reads, a `PartitionedEventProcessor` is reset only while it is stopped everywhere: with handlers on every instance, a live
+reset would let a handler still running elsewhere act on an event from before the reset after it. Checked, not assumed -
+see §2.10, which describes the rule both partitioned classes share. `start()` now needs the
+`EventStoreSubscriptionManager`'s `FencedLockManager` (the default manager has one).
+
 Measured in the trading demo (two instances in one 8-core container, so correctness, not scaling), with its six event
 processors handling their inboxes on every instance: a second instance went from 306 to 510 of the 2 244 shard-owned
 units, fenced locks from 41 to 35, and each inbox's deliveries split about evenly (order router 6 194 / 6 124, order
@@ -363,6 +370,43 @@ Off by default, because it has costs:
 "not spread"; build the settings with `FencedLockManagerSettings.builder()`.
 
 ---
+
+### 2.10 `PartitionedViewEventProcessor`: a view projector whose handlers run on every instance (`postgresql-event-store`, foundation, shard-owned engine and adapter)
+
+The view counterpart of `PartitionedEventProcessor` (§2.7). One instance - the holder of `<processorName>:lock` - reads
+the events and forwards them in batches (`getForwardBatchSize()`, default 100) to `<processorName>:queue`, one
+`queueMessages` per batch in the unit of work that moves the resume point. Every instance consumes the queue and handles
+its share of the aggregates, each message in a `UnitOfWork` of its own together with its acknowledgement.
+
+- **Differs from `ViewEventProcessor`:** no order across aggregates (a view relying on one aggregate's row being written
+  before another's, or totals over many aggregates, stays a `ViewEventProcessor`); no inline handling, every event goes
+  through the queue (a few ms across instances); no `FENCED_LOCK_TOKEN` metadata; handlers must be idempotent (guard rows
+  with the event order). `UnitOfWorkMode.NONE` handlers are refused, as by `ViewEventProcessor`.
+- **Refuses to start** where `DurableQueues.keepsKeyOrderAcrossInstances()` is `false`: it needs the shard-owned engine.
+- **The queue key is `<aggregateType>|<aggregateId>`** (`PartitionedViewEventProcessor.qualifiedKey`), so two aggregate
+  types sharing an id are two keys. Handlers still see the plain id.
+- **Switching from `ViewEventProcessor`** keeps the resume point, lock and queue names. Stop the view on every instance
+  first and deploy the new class everywhere before starting it again.
+
+**Reset only while stopped on every instance** - the rule both partitioned classes share. A reset (`resetAllSubscriptions`,
+`resetSubscriptions`) is refused unless:
+
+1. the processor is not started on the calling instance;
+2. no instance holds a reader lock - the reset holds them while it runs;
+3. the queue implementation counts no live consumer of the processor's queue, and no departed instance still holding part
+   of it - one that crashed, or one whose stop kept part of the queue for a handler still running. The database cannot
+   tell those two apart, so both refuse, for as long as the unit is held. After a crash nobody recovered from, start and
+   cleanly stop an instance, or - once you have made sure the old process is gone - call
+   `resetAllSubscriptionsIgnoringDepartedInstances()`, which skips only this last check.
+
+A starting instance registers its queue consumer while holding `<processorName>:reset`, which the reset holds too, so a
+start and a reset exclude each other (within one JVM as well). The reset can run on any instance, including one that never
+read: it moves the stored resume points itself (new `EventStoreSubscriptionManager.resetStoredResumePoint`).
+
+New, all additive: `DurableQueues.getQueueConsumers(QueueName)` / `Inboxes.getQueueConsumers(InboxName)` returning
+`QueueConsumers(liveInstances, departedInstancesHoldingUnits)` (empty by default, answered by the shard-owned adapter);
+`MessageQueue.departedInstancesHoldingUnits()` on the shard-owned engine; `EventStoreSubscriptionManager.resetStoredResumePoint`
+and `exclusiveSubscriptionLockName`.
 
 ## 3. Bug fixes
 

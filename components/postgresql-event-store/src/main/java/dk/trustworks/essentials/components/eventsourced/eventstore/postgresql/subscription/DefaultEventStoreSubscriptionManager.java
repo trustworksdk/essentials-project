@@ -409,6 +409,24 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     }
 
     @Override
+    public void resetStoredResumePoint(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder resumeFromAndIncluding) {
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(resumeFromAndIncluding, "No resumeFromAndIncluding provided");
+        var subscription = subscribers.get(Pair.of(subscriberId, aggregateType));
+        if (subscription != null && subscription.isActive()) {
+            throw new IllegalStateException(msg("Cannot move the stored resume point of '{}' for '{}': its subscription is active in this instance - " +
+                                                "reset it through EventStoreSubscription#resetFrom, or stop it first", subscriberId, aggregateType));
+        }
+        var resumePoint = durableSubscriptionRepository.getOrCreateResumePoint(subscriberId, aggregateType, resumeFromAndIncluding);
+        resumePoint.setResumeFromAndIncluding(resumeFromAndIncluding);
+        durableSubscriptionRepository.saveResumePoint(resumePoint);
+        // As EventStoreSubscription#resetFrom: a middle of a wide gap awaited below the old resume point must not be delivered after the reset
+        eventStore.forgetGapMiddlesAwaitedInMemory(subscriberId, aggregateType);
+        log.info("[{}-{}] Moved the stored resume point to start from-and-including-globalOrder {}", subscriberId, aggregateType, resumeFromAndIncluding);
+    }
+
+    @Override
     public Optional<FencedLockManager> getFencedLockManager() {
         return Optional.of(fencedLockManager);
     }

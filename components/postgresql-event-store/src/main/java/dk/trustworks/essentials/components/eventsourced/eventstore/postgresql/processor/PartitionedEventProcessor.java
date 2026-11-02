@@ -16,11 +16,20 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
 
-import java.util.List;
+import java.util.*;
+import java.util.function.Consumer;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * An {@link EventProcessor} whose {@code @MessageHandler}s run on <b>every</b> instance, each instance handling its share
@@ -46,6 +55,13 @@ import java.util.List;
  *     <li>Handlers of different aggregates that write one shared stream conflict on it more often; the {@link Inbox}
  *     redelivers them.</li>
  *     <li>Handlers must be idempotent: a failover can deliver a message twice (true of every processor, more likely here).</li>
+ *     <li><b>A reset runs only while the processor is stopped on every instance</b>, unlike {@link EventProcessor}'s live
+ *     reset on the instance that reads: a handler still running on another instance would otherwise act on an event from
+ *     before the reset after it. Refused while the processor is started on this instance, while an instance holds a
+ *     reader lock, and while the queue implementation counts any instance consuming the {@link Inbox}; a starting
+ *     instance cannot register its consumer while a reset runs. It can run on any instance. Details:
+ *     {@link StoppedEverywhereReset}. {@link #start()} needs the {@link EventStoreSubscriptionManager}'s
+ *     {@link FencedLockManager} for it.</li>
  * </ul>
  * The consumption mode is fixed ({@link #getInboxMessageConsumptionMode()} is final): the contract is the class.
  */
@@ -79,6 +95,125 @@ public abstract class PartitionedEventProcessor extends EventProcessor {
     @Override
     protected final MessageConsumptionMode getInboxMessageConsumptionMode() {
         return MessageConsumptionMode.GlobalCompetingConsumers;
+    }
+
+    /**
+     * Starts as {@link EventProcessor#start()} does, holding the processor's reset lock while it registers its consumer of
+     * the {@link Inbox}, so a reset either counts this instance or this start waits for it (see {@link StoppedEverywhereReset}).
+     *
+     * @throws IllegalStateException if the {@link EventStoreSubscriptionManager} has no {@link FencedLockManager}, or a reset
+     *                               is still in progress after {@link StoppedEverywhereReset#START_WAITS_FOR_RESET}
+     */
+    @Override
+    public void start() {
+        if (isStarted()) {
+            return;
+        }
+        var processorName = requireNonNull(getProcessorName(), "getProcessorName() returned null");
+        StoppedEverywhereReset.startConsumingExclusiveOfAReset(processorName, lockManager(processorName), StoppedEverywhereReset.START_WAITS_FOR_RESET, super::start);
+    }
+
+    private FencedLockManager lockManager(String processorName) {
+        return eventStoreSubscriptionManager.getFencedLockManager()
+                                            .orElseThrow(() -> new IllegalStateException(msg("[{}] A PartitionedEventProcessor needs the EventStoreSubscriptionManager's FencedLockManager " +
+                                                                                             "to keep a reset and a start apart, and {} exposes none",
+                                                                                             processorName, eventStoreSubscriptionManager.getClass().getName())));
+    }
+
+    /**
+     * Every aggregate type the processor reacts to - not only those this instance has subscriptions for, as it may never
+     * have read.
+     */
+    @Override
+    protected void resetAllSubscriptions(Consumer<QueueName> resetDurableQueueCallback) {
+        var resetParameters = new LinkedHashMap<AggregateType, GlobalEventOrder>();
+        requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null")
+                .forEach(aggregateType -> resetParameters.put(aggregateType, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER));
+        resetSubscriptions(resetParameters, true, resetDurableQueueCallback);
+    }
+
+    /**
+     * The one path every reset of this processor takes: refused unless the processor is stopped on every instance, then
+     * the stored resume points are moved, the {@link Inbox} purged (if asked) and
+     * {@link #onSubscriptionsReset(AggregateType, GlobalEventOrder)} called per aggregate type - see {@link StoppedEverywhereReset}.
+     * <p>
+     * The purge calls {@code resetDurableQueueCallback} on an instance that started the processor; on one that never did,
+     * it has no {@link Inbox} for the callback to act on, and purges the {@link Inbox} itself.
+     */
+    @Override
+    protected void resetSubscriptions(Map<AggregateType, GlobalEventOrder> resetAggregateSubscriptionsFromAndIncluding,
+                                      boolean resetDurableQueue,
+                                      Consumer<QueueName> resetDurableQueueCallback) {
+        guardedReset(resetAggregateSubscriptionsFromAndIncluding, resetDurableQueue, resetDurableQueueCallback, false);
+    }
+
+    /**
+     * Reset every subscription to the first event and purge the queue although departed instances still hold part of
+     * it - see {@link StoppedEverywhereReset}. <b>Only once you have made sure their processes are gone</b>: such an
+     * instance either crashed, or stopped while a handler was still running, and that handler would act on an event from
+     * before the reset after it. Everything else is still checked: the processor stopped here, no reader, no live consumer.
+     *
+     * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
+     */
+    public void resetAllSubscriptionsIgnoringDepartedInstances() {
+        var resetParameters = new LinkedHashMap<AggregateType, GlobalEventOrder>();
+        requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null")
+                .forEach(aggregateType -> resetParameters.put(aggregateType, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER));
+        guardedReset(resetParameters, true, queueName -> purgeInbox(), true);
+    }
+
+    private void guardedReset(Map<AggregateType, GlobalEventOrder> resetAggregateSubscriptionsFromAndIncluding,
+                              boolean resetDurableQueue,
+                              Consumer<QueueName> resetDurableQueueCallback,
+                              boolean ignoreDepartedInstances) {
+        requireNonNull(resetAggregateSubscriptionsFromAndIncluding, "resetAggregateSubscriptionsFromAndIncluding is null");
+        requireNonNull(resetDurableQueueCallback, "resetDurableQueueCallback is null");
+        var processorName = requireNonNull(getProcessorName(), "getProcessorName() returned null");
+        var reactsTo      = requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null");
+        resetAggregateSubscriptionsFromAndIncluding.keySet().forEach(aggregateType -> {
+            if (!reactsTo.contains(aggregateType)) {
+                throw new IllegalArgumentException(msg("[{}] Cannot reset subscription for {} '{}' since the processor doesn't subscribe to events for this aggregate type",
+                                                       processorName, AggregateType.class.getSimpleName(), aggregateType));
+            }
+        });
+        var inboxName  = InboxName.of(processorName);
+        var readerLocks = reactsTo.stream()
+                                  .map(aggregateType -> EventStoreSubscriptionManager.exclusiveSubscriptionLockName(resolveSubscriberId(aggregateType, processorName), aggregateType))
+                                  .toList();
+        StoppedEverywhereReset.reset(processorName,
+                                     isStarted(),
+                                     lockManager(processorName),
+                                     readerLocks,
+                                     "inbox '" + inboxName + "'",
+                                     this::getInboxConsumers,
+                                     ignoreDepartedInstances,
+                                     () -> {
+                                         resetAggregateSubscriptionsFromAndIncluding.forEach((aggregateType, from) ->
+                                                 eventStoreSubscriptionManager.resetStoredResumePoint(resolveSubscriberId(aggregateType, processorName), aggregateType, from));
+                                         if (resetDurableQueue) {
+                                             log.info("[{}] Purging inbox '{}'", processorName, inboxName);
+                                             if (getInbox() != null) {
+                                                 resetDurableQueueCallback.accept(inboxName.asQueueName());
+                                             } else {
+                                                 purgeInbox();
+                                             }
+                                         }
+                                         resetAggregateSubscriptionsFromAndIncluding.forEach(this::onSubscriptionsReset);
+                                     });
+    }
+
+    /**
+     * Resets the subscription's aggregate type through {@link #resetSubscriptions(Map, boolean, Consumer)}: refused unless
+     * the processor is stopped on every instance.
+     */
+    @Override
+    protected void doResetSubscription(EventStoreSubscription eventStoreSubscription,
+                                       GlobalEventOrder resubscribeFromAndIncluding,
+                                       boolean resetDurableQueue,
+                                       Consumer<QueueName> resetDurableQueueCallback) {
+        requireNonNull(eventStoreSubscription, "eventStoreSubscription is null");
+        requireNonNull(resubscribeFromAndIncluding, "resubscribeFromAndIncluding is null");
+        resetSubscriptions(Map.of(eventStoreSubscription.aggregateType(), resubscribeFromAndIncluding), resetDurableQueue, resetDurableQueueCallback);
     }
 
     /**

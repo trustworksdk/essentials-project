@@ -82,7 +82,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
         this.fencedLockAwareSubscriber = requireNonNull(fencedLockAwareSubscriber, "No fencedLockAwareSubscriber provided");
         this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
         this.eventStoreSubscriptionManagerSettings = durableContext.eventStoreSubscriptionManagerSettings();
-        this.lockName = LockName.of(msg("[{}-{}]", context.subscriberId(), context.aggregateType()));
+        this.lockName = EventStoreSubscriptionManager.exclusiveSubscriptionLockName(context.subscriberId(), context.aggregateType());
     }
 
     @Override

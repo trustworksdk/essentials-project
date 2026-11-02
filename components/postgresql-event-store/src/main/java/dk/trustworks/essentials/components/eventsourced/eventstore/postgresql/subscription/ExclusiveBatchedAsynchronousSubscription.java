@@ -91,7 +91,7 @@ public class ExclusiveBatchedAsynchronousSubscription extends AbstractEventStore
         this.maxBatchSize = delivery.maxBatchSize();
         this.maxLatency = delivery.maxLatency();
         this.eventStoreSubscriptionManagerSettings = durableContext.eventStoreSubscriptionManagerSettings();
-        this.lockName = LockName.of(msg("[{}-{}]", context.subscriberId(), context.aggregateType()));
+        this.lockName = EventStoreSubscriptionManager.exclusiveSubscriptionLockName(context.subscriberId(), context.aggregateType());
     }
 
     @Override

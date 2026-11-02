@@ -1623,6 +1623,12 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     @Override
+    public int departedInstancesHoldingUnits() throws SQLException {
+        // The same staleness bound health() counts live instances by, so the two answers partition the owners
+        return storage.countDepartedOwnersHoldingUnits(Math.max(1_000L, settings.leaseTtlMillis()));
+    }
+
+    @Override
     public QueueHealth health() throws SQLException {
         var owned = storage.ownedShardsPerLane(Math.max(1_000L, settings.leaseTtlMillis()));
         // The lease TTL is what countLiveInstances treats as the staleness bound, and it is derived

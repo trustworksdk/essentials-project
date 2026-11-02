@@ -677,6 +677,32 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     }
 
     /**
+     * How many instances consume this processor's {@link Inbox}, cluster-wide - see
+     * {@link Inboxes#getQueueConsumers(InboxName)}. Used by {@link PartitionedEventProcessor}'s reset.
+     */
+    Optional<QueueConsumers> getInboxConsumers() {
+        return inboxes.getQueueConsumers(InboxName.of(requireNonNull(getProcessorName(), "getProcessorName() returned null")));
+    }
+
+    /**
+     * Purge this processor's {@link Inbox} - also on an instance where the processor never started, whose {@code inbox}
+     * is {@code null}: the {@link Inbox} is then got from {@link Inboxes#getOrCreateInbox(InboxConfig)}, which consumes
+     * nothing, with the configuration {@link #start()} gives it.
+     */
+    void purgeInbox() {
+        var current = inbox;
+        if (current == null) {
+            current = inboxes.getOrCreateInbox(InboxConfig.builder()
+                                                          .inboxName(InboxName.of(requireNonNull(getProcessorName(), "getProcessorName() returned null")))
+                                                          .messageConsumptionMode(getInboxMessageConsumptionMode())
+                                                          .numberOfParallelMessageConsumers(getNumberOfParallelInboxMessageConsumers())
+                                                          .redeliveryPolicy(getInboxRedeliveryPolicy())
+                                                          .build());
+        }
+        current.deleteAllMessages();
+    }
+
+    /**
      * Retrieves the underlying {@link Inbox} associated with the {@link EventProcessor}.
      *
      * @return the {@link Inbox} instance used for managing messages within the {@link EventProcessor}.

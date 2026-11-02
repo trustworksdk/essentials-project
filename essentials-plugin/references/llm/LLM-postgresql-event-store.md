@@ -485,6 +485,8 @@ Base package: `dk.trustworks.essentials.components.eventsourced.eventstore.postg
 | `EventProcessor` | Async (Inbox) | Yes | Higher | Eventual | Yes | External integrations, long ops |
 | `InTransactionEventProcessor` | Sync (in-tx) | Configurable | Lowest | Strong | No | Consistent projections |
 | `ViewEventProcessor` | Async Direct + queue on failure | Yes | Low | Eventual | Yes | Low-latency views |
+| `PartitionedEventProcessor` | Async (Inbox), handlers on every instance | Reader only | Higher | Eventual, per-aggregate order only | Yes (stopped everywhere) | Spreading handler work; shard-owned engine only |
+| `PartitionedViewEventProcessor` | Async (queue), handlers on every instance | Reader only | A few ms | Eventual, per-aggregate order only | Yes (stopped everywhere) | Views keyed by aggregate, spread over instances; shard-owned engine only |
 
 Note: All `@MessageHandler` annotated methods accept an optional `OrderedMessage` parameter as 2. parameter.
 
@@ -575,6 +577,48 @@ public class OrderLedgerProcessor extends PartitionedEventProcessor {
   writing one shared stream conflict on it more often (redelivered). Handlers must be idempotent.
 - An `EventProcessor` that overrides `getInboxMessageConsumptionMode()` to `GlobalCompetingConsumers` on a queue without
   cross-instance key order refuses to start (since 0.61): it could handle one aggregate's events out of order.
+
+#### Views on several instances: `PartitionedViewEventProcessor`
+
+The view counterpart of `PartitionedEventProcessor`. The holder of `<processorName>:lock` reads and forwards the events in
+batches (`getForwardBatchSize()`, default 100) to `<processorName>:queue`; every instance consumes the queue and handles
+its share of the aggregates, each message in its own `UnitOfWork` with its acknowledgement. Takes
+`ViewEventProcessorDependencies`.
+
+```java
+public class AccountActivityProjection extends PartitionedViewEventProcessor {
+    public AccountActivityProjection(ViewEventProcessorDependencies dependencies) { super(dependencies); }
+
+    @Override public String getProcessorName() { return "AccountActivityProjection"; }
+    @Override protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() { return List.of(ACCOUNTS); }
+
+    @MessageHandler
+    void on(FundsHeld e, OrderedMessage m) {
+        // idempotent: write only if m.getOrder() is above the order stored with the row
+    }
+}
+```
+
+- **Per-aggregate order only.** Not for a view that needs one aggregate's row before another's, or that read-modify-writes
+  rows shared by many aggregates - keep those on `ViewEventProcessor`.
+- **No inline path**: every event goes through the queue. **Handlers must be idempotent** (re-forward after a reader
+  failover, redelivery when a unit moves). No `FENCED_LOCK_TOKEN` metadata. `UnitOfWorkMode.NONE` is refused.
+- **Refuses to start** without `DurableQueues.keepsKeyOrderAcrossInstances()` - the shard-owned engine, everywhere.
+- **Queue key** is `<aggregateType>|<aggregateId>`; handlers see the plain id as `OrderedMessage.getKey()`.
+- **Lag** = reader lag + queue depth of `<processorName>:queue`; the resume point means *forwarded*.
+- **Switching from `ViewEventProcessor`** keeps resume point, lock and queue names - stop the view on every instance first.
+
+#### Resetting a partitioned processor
+
+`PartitionedEventProcessor` and `PartitionedViewEventProcessor` reset **only while stopped on every instance** -
+`resetAllSubscriptions()`/`resetSubscriptions(...)` throw `IllegalStateException` otherwise (unlike `EventProcessor`,
+whose reset runs live on the reading instance). Refused while: the processor is started on the calling instance; any
+instance holds a reader lock; the queue counts a live consumer (`DurableQueues.getQueueConsumers`); or a **departed**
+instance still holds part of the queue - crashed, or stopped while a handler was running. The engine cannot tell those
+two apart, so the refusal lasts as long as the unit is held. After a crash: start and cleanly stop one instance, or -
+having made sure the old process is gone - `resetAllSubscriptionsIgnoringDepartedInstances()`. A start registers its
+consumer under `<processorName>:reset`, which the reset holds, so a start never slips in mid-reset. The reset may run on
+any instance, also one that never read.
 
 #### Blocking I/O in a handler: `UnitOfWorkMode.NONE`
 

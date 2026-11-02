@@ -1385,6 +1385,26 @@ public final class ShardOwnedStorage {
         }
     }
 
+    /**
+     * How many instances that are no longer live (their membership row is older than {@code ttlMillis}, or gone) still
+     * own a unit of this queue, either lane. Such an owner either crashed, or stopped while a handler was still running
+     * and kept the unit until that handler returns - the database cannot tell the two apart, so a caller that must know
+     * nothing may still be handling a message counts both. {@link #ownedShardsPerLane(long)} leaves them out.
+     */
+    public int countDepartedOwnersHoldingUnits(long ttlMillis) throws SQLException {
+        try (var connection = open();
+             var statement = connection.prepareStatement(
+                     "SELECT count(DISTINCT l.owner) FROM " + LEASE_TABLE + " l"
+                             + " WHERE l.owner IS NOT NULL AND" + ownerIsGoneClause() + " AND l.queue_id = ?")) {
+            statement.setLong(1, ttlMillis);
+            statement.setShort(2, queueId);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
+            }
+        }
+    }
+
     public long countRemaining(int shard) throws SQLException {
         try (var connection = open();
              var statement = connection.prepareStatement(

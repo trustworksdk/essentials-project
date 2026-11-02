@@ -23,13 +23,14 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
+import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
 import org.junit.jupiter.api.*;
 import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
+import java.util.*;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.*;
@@ -173,6 +174,10 @@ class PartitionedEventProcessorTest {
                                        invocation -> invocation.getMethod().getName().startsWith("exclusively") ?
                                                      mock(EventStoreSubscription.class) : RETURNS_DEFAULTS.answer(invocation));
         when(subscriptionManager.getEventStore()).thenReturn(eventStore);
+        // A PartitionedEventProcessor registers its consumer holding the reset lock
+        var lockManager = mock(FencedLockManager.class);
+        when(lockManager.tryAcquireLock(any(LockName.class), any(java.time.Duration.class))).thenAnswer(invocation -> Optional.of(mock(FencedLock.class)));
+        when(subscriptionManager.getFencedLockManager()).thenReturn(Optional.of(lockManager));
         return subscriptionManager;
     }
 

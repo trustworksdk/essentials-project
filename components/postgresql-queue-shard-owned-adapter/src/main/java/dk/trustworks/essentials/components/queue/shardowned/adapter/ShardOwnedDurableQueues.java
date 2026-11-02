@@ -348,6 +348,25 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     }
 
     /**
+     * From the engine's records of the queue: {@code QueueHealth.liveInstances()} - instances registered and heartbeating
+     * within the lease TTL - and {@code MessageQueue.departedInstancesHoldingUnits()} - instances past it that still own a
+     * unit, a crashed one or one whose stop kept a unit for a handler still running. Nothing for a queue that is not
+     * registered: nobody has consumed it. Never registers the queue.
+     */
+    @Override
+    public Optional<QueueConsumers> getQueueConsumers(QueueName queueName) {
+        requireNonNull(queueName, "No queueName provided");
+        var engineQueueName = dk.trustworks.essentials.components.queue.shardowned.spi.QueueName.of(queueName.toString());
+        var queue           = onQueue(queueName, "find queue '" + queueName + "'", () -> queues.findQueue(engineQueueName));
+        if (queue.isEmpty()) {
+            return Optional.of(new QueueConsumers(0, 0));
+        }
+        var live     = onQueue(queueName, "read the health of queue '" + queueName + "'", () -> queue.get().health()).liveInstances();
+        var departed = onQueue(queueName, "count the departed instances holding units of queue '" + queueName + "'", () -> queue.get().departedInstancesHoldingUnits());
+        return Optional.of(new QueueConsumers(live, departed));
+    }
+
+    /**
      * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@link UnitOfWork} or Spring transaction?
      * Default {@code false}: such an enqueue commits on its own, and each call site's first one is logged at WARN. In Spring Boot:
      * {@value EnqueueOutsideUnitOfWorkGuard#REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}. See {@link EnqueueOutsideUnitOfWorkGuard}.

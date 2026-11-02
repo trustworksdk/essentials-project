@@ -307,6 +307,19 @@ public interface DurableQueues extends Lifecycle {
     }
 
     /**
+     * Who may be handling the queue's messages right now, cluster-wide, by the implementation's own record of its
+     * consumers - see {@link QueueConsumers}. A caller that must know nothing handles the queue anywhere - a partitioned
+     * processor's reset, which truncates a view a handler still running elsewhere would write an old row into - asks this.
+     * Answer only from a cluster-wide record, never from this instance's consumers alone.
+     *
+     * @param queueName the queue
+     * @return the queue's consumers; {@link Optional#empty()} (the default) for an implementation that cannot tell
+     */
+    default Optional<QueueConsumers> getQueueConsumers(QueueName queueName) {
+        return Optional.empty();
+    }
+
+    /**
      * Start an asynchronous message consumer.<br>
      * Note: There can only be one {@link DurableQueueConsumer} per {@link QueueName} per {@link DurableQueues} instance<br>
      * Log levels of interest:

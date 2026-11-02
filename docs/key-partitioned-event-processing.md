@@ -177,7 +177,7 @@ Cons:
 - Ties the processor to an engine with cross-instance key order in every environment, tests included.
 - Only `EventProcessor`s; the views stay on one instance.
 
-### 3.2 Option (a1) — key-partitioned views: one batched reader, view handling on every instance (proposal)
+### 3.2 Option (a1) — key-partitioned views: one batched reader, view handling on every instance (built: `PartitionedViewEventProcessor`)
 
 The same topology for views, as a new class (working name `KeyPartitionedViewEventProcessor`): the view's own
 `FencedLock` guards a **batched** non-exclusive subscription that only forwards each batch into the shard-owned ordered
@@ -460,6 +460,16 @@ There is no processor registry in the starter. Processors are application beans 
   units are already there.
 
 ### 4.4 Reset across instances
+
+**Built (2026-11-02), for both partitioned classes:** reset only while stopped on every instance, checked, not assumed
+(`StoppedEverywhereReset`): not started on the calling instance; reset lock `<name>:reset` held (a starting instance
+registers its consumer under it, so a start never slips into a reset); every reader lock held; the queue engine counts no
+live consumer **and no departed instance still holding a unit** - a stop that kept a unit for a running handler stops
+heartbeating and becomes indistinguishable from a crash, so both refuse for as long as the unit is held, with
+`resetAllSubscriptionsIgnoringDepartedInstances()` as the explicit override once the old process is known to be gone.
+Resume points are moved through `EventStoreSubscriptionManager.resetStoredResumePoint`, so any instance can reset. The
+epoch below stays unbuilt.
+
 
 The proposal is a **reset epoch**: a per-processor counter, stored beside the resume point. The reader stamps every
 forwarded message with it. A reset runs: stop reader → bump epoch → purge queue → `onSubscriptionsReset` → start
