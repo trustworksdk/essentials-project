@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessorDependencies;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instruments;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRegistered;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRenamed;
@@ -48,7 +49,7 @@ import java.util.List;
 public class InstrumentDetailsProjection extends TradingDemoViewEventProcessor {
     public InstrumentDetailsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                CREATE TABLE IF NOT EXISTS projection_instrument_details (
                                                                                    instrument_id VARCHAR PRIMARY KEY,
                                                                                    symbol VARCHAR NOT NULL,
@@ -63,8 +64,8 @@ public class InstrumentDetailsProjection extends TradingDemoViewEventProcessor {
         // The two risk columns arrived after the table did, and CREATE TABLE IF NOT EXISTS is a no-op against a demo
         // database that already has it. Both statements are idempotent, so they cost one round trip at startup and
         // spare anyone with an existing demo database an "column risk_status does not exist" on the first query.
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_status VARCHAR NOT NULL DEFAULT 'PENDING'"));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_detail VARCHAR NULL"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_status VARCHAR NOT NULL DEFAULT 'PENDING'"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_detail VARCHAR NULL"));
     }
 
     @Override

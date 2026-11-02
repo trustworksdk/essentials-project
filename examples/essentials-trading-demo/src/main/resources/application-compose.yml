@@ -74,14 +74,10 @@ essentials:
     # ShardOwnedQueueFactory.register, so its name lives in that class rather than in two places that
     # have to agree. Listing a queue here is for one an application wants to exist before anything
     # touches it — `name: <unordered shard count>`, with `ordered-units.<name>` to size the other lane.
-    # Run the application's DurableQueues on this engine, so Inbox, Outbox and every
-    # EventProcessor's projections are delivered by it. Set to false to run the same demo on
-    # PostgresqlDurableQueues instead — both implement the interface, so it is an A/B.
-    #
-    # This is the only line needed. The queues the framework invents — Inbox:<processor>,
-    # <processor>:queue, DefaultCommandQueue — register themselves on first use with
-    # auto-register-shard-count unordered shards, which defaults to 4.
-    durable-queues-enabled: true
+    # durable-queues-enabled is set in application.yml, for every profile: the account views are
+    # PartitionedViewEventProcessors and need this engine. The queues the framework invents —
+    # Inbox:<processor>, <processor>:queue, DefaultCommandQueue — register themselves on first use
+    # with auto-register-shard-count unordered shards, which defaults to 4.
 
   fenced-lock-manager:
     fenced-locks-table-name: fenced_locks
@@ -150,3 +146,6 @@ trading-demo:
   # order list (OrdersProjection) falling 5 000-7 500 events behind in a business day at 300 orders/s rushes.
   views:
     direct-handling-batch-size: 100
+    # Queue consumer threads per instance of each PartitionedViewEventProcessor (the account views): every event of
+    # such a view goes through its queue, so this times the instances is how many are handled at once
+    partitioned-consumers: 8

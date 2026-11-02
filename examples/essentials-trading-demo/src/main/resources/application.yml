@@ -82,10 +82,13 @@ trading-demo:
       - MSFT
 
 essentials:
-  # The shard-owned queue engine is off by default in its starter; the demo always runs it, since
-  # QueueLoadGenerator drives it and the adapter can back DurableQueues. Tuning lives in application-compose.yml.
+  # The shard-owned queue engine is off by default in its starter; the demo always runs it, and runs the
+  # application's DurableQueues on it in every profile, tests included: the account views are
+  # PartitionedViewEventProcessors, which refuse to start on an engine that keeps a key in order per
+  # node only. Tuning lives in application-compose.yml.
   shard-owned-queue:
     enabled: true
+    durable-queues-enabled: true
   eventstore:
     causation:
       # Causation is recorded by default; the index behind "what did this event cause?" is opt-in. The demo turns it

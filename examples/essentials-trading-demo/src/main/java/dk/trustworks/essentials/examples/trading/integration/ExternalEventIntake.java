@@ -19,6 +19,7 @@ package dk.trustworks.essentials.examples.trading.integration;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.Inbox;
 import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage;
 import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -49,7 +50,7 @@ public class ExternalEventIntake {
                                UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory) {
         this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
-        this.jdbcTemplate.execute("""
+        TradingDemoSchema.ddl(this.jdbcTemplate, """
                                           CREATE TABLE IF NOT EXISTS external_inbound_event (
                                               consumer VARCHAR NOT NULL,
                                               event_id VARCHAR NOT NULL,
@@ -62,7 +63,7 @@ public class ExternalEventIntake {
                                               PRIMARY KEY (consumer, event_id)
                                           )
                                           """);
-        this.jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS external_inbound_event_received_at ON external_inbound_event (received_at)");
+        TradingDemoSchema.ddl(this.jdbcTemplate, "CREATE INDEX IF NOT EXISTS external_inbound_event_received_at ON external_inbound_event (received_at)");
     }
 
     /**

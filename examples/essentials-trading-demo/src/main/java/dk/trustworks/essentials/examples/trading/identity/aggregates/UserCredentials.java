@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.identity.aggregates;
 
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.identity.types.*;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -45,7 +46,7 @@ public class UserCredentials {
 
     public UserCredentials(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
+        TradingDemoSchema.ddl(this.jdbcTemplate, """
                                           CREATE TABLE IF NOT EXISTS user_credentials (
                                               user_id VARCHAR PRIMARY KEY,
                                               email VARCHAR NOT NULL UNIQUE,

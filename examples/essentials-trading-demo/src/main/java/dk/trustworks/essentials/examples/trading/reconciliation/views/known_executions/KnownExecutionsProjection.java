@@ -19,6 +19,7 @@ package dk.trustworks.essentials.examples.trading.reconciliation.views.known_exe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.orders.events.OrderFilled;
 import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
@@ -43,7 +44,7 @@ import java.util.List;
 public class KnownExecutionsProjection extends TradingDemoViewEventProcessor {
     public KnownExecutionsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                    CREATE TABLE IF NOT EXISTS projection_reconciliation_execution (
                                                                                        execution_id VARCHAR PRIMARY KEY,
                                                                                        instrument_id VARCHAR NOT NULL,
@@ -53,7 +54,7 @@ public class KnownExecutionsProjection extends TradingDemoViewEventProcessor {
                                                                                        trade_date DATE NOT NULL
                                                                                    )
                                                                                    """));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_reconciliation_execution_trade_date ON projection_reconciliation_execution (trade_date)"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "CREATE INDEX IF NOT EXISTS projection_reconciliation_execution_trade_date ON projection_reconciliation_execution (trade_date)"));
     }
 
     @Override

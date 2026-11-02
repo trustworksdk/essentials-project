@@ -19,6 +19,7 @@ package dk.trustworks.essentials.examples.trading.funding.views.payments;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.funding.aggregates.*;
 import dk.trustworks.essentials.examples.trading.funding.events.*;
 import dk.trustworks.essentials.examples.trading.funding.types.*;
@@ -42,7 +43,7 @@ import java.util.List;
 public class PaymentsProjection extends TradingDemoViewEventProcessor {
     public PaymentsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                    CREATE TABLE IF NOT EXISTS projection_funding_payment (
                                                                                        reference VARCHAR NOT NULL,
                                                                                        kind VARCHAR NOT NULL,
@@ -60,7 +61,7 @@ public class PaymentsProjection extends TradingDemoViewEventProcessor {
                                                                                        PRIMARY KEY (kind, reference)
                                                                                    )
                                                                                    """));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_funding_payment_account ON projection_funding_payment (account_id, requested_at)"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "CREATE INDEX IF NOT EXISTS projection_funding_payment_account ON projection_funding_payment (account_id, requested_at)"));
     }
 
     @Override

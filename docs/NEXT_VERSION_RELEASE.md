@@ -427,7 +427,8 @@ and `exclusiveSubscriptionLockName`.
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md).
 
 - `0.60.1-1` - the LLM docs describe elastic pump connections, wake-after-commit, `JSONSerializer.readProperties` and
-  the batched forward, and their `InboxConfig.builder()` examples compile.
+  the batched forward, and their `InboxConfig.builder()` examples compile; they describe `PartitionedViewEventProcessor` and the
+  partitioned reset (§2.10), and the slice tooling recognises both partitioned processors as event processors.
 
 ---
 
@@ -443,6 +444,15 @@ Not published; listed because they are the reference for how to use the framewor
   commits together with the processor's progress by construction; with `JdbcTemplate` it did so only because the
   Spring wiring bound both to one connection, which code copied into a project with another unit-of-work factory
   would not get. Its DDL and reset open a unit of work of their own. Nothing changes at runtime in the demo.
+- **`essentials-trading-demo` runs its `DurableQueues` on the shard-owned engine in every profile, tests included**,
+  and its two account views (`AccountActivityProjection`, `AccountOverviewProjection`) are `PartitionedViewEventProcessor`s
+  (§2.10), with `trading-demo.views.partitioned-consumers` queue consumers per instance (8 under `compose`). Measured on
+  one 8-core machine, two instances, 80 000 ledger commands: the account activity view was current 64-91 ms after the
+  last command, against 7-9 s for the inline `ViewEventProcessor`, for 30 % longer command drain and 40 % more CPU -
+  every event goes through the queue and is reloaded; the gain needs instances on separate machines.
+- **`essentials-trading-demo`: two instances started together on an empty database no longer fail on the projections'
+  start-up DDL.** `CREATE TABLE IF NOT EXISTS` is not safe against itself; every DDL statement now runs behind
+  `PostgresqlUtil.acquireBootstrapLock` (`config/TradingDemoSchema`).
 
 ---
 

@@ -19,6 +19,7 @@ package dk.trustworks.essentials.examples.trading.settlement.views.settlements;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.settlement.aggregates.TradeSettlements;
 import dk.trustworks.essentials.examples.trading.settlement.events.*;
 import dk.trustworks.essentials.examples.trading.settlement.types.SettlementState;
@@ -42,7 +43,7 @@ import java.util.List;
 public class SettlementsProjection extends TradingDemoViewEventProcessor {
     public SettlementsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                    CREATE TABLE IF NOT EXISTS projection_settlement (
                                                                                        execution_id VARCHAR PRIMARY KEY,
                                                                                        account_id VARCHAR NOT NULL,
@@ -57,7 +58,7 @@ public class SettlementsProjection extends TradingDemoViewEventProcessor {
                                                                                        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
                                                                                    )
                                                                                    """));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_settlement_account ON projection_settlement (account_id)"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "CREATE INDEX IF NOT EXISTS projection_settlement_account ON projection_settlement (account_id)"));
     }
 
     @Override

@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.market_data.views.closing_prices;
 
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.market_data.types.*;
 import dk.trustworks.essentials.types.Money;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -37,7 +38,7 @@ public class StoredClosingPrices implements ClosingPrices {
 
     public StoredClosingPrices(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        jdbcTemplate.execute("""
+        TradingDemoSchema.ddl(jdbcTemplate, """
                                      CREATE TABLE IF NOT EXISTS closing_price (
                                          instrument_id VARCHAR NOT NULL,
                                          business_date DATE NOT NULL,

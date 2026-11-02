@@ -23,8 +23,9 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage;
 import dk.trustworks.essentials.examples.trading.accounts.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoPartitionedViewEventProcessor;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.types.Money;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -34,7 +35,7 @@ import java.util.List;
  * Projects the ledger's buckets into {@code projection_account_overview}, one row per account.
  *
  * <h2>Versioned, because it applies deltas</h2>
- * A {@code ViewEventProcessor} may redeliver an event, and a delta applied twice is wrong money. So the row carries the
+ * A {@code PartitionedViewEventProcessor} may redeliver an event, and a delta applied twice is wrong money. So the row carries the
  * generation and the last applied {@code EventOrder}, and every update is guarded (the "Version = EventOrder" pattern
  * of the event-store docs):
  * <ul>
@@ -45,18 +46,18 @@ import java.util.List;
  * already include it.
  * <p>
  * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
- * {@link ViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
+ * {@link PartitionedViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
  * with Spring's {@code JdbcTemplate}, only while the Spring wiring binds both to one connection. The
  * constructor's DDL and the reset run where none is active, so they go through
  * {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)}, which opens one.
  */
 @Service
-public class AccountOverviewProjection extends TradingDemoViewEventProcessor {
+public class AccountOverviewProjection extends TradingDemoPartitionedViewEventProcessor {
     private static final BigDecimal ZERO = BigDecimal.ZERO;
 
     public AccountOverviewProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                    CREATE TABLE IF NOT EXISTS projection_account_overview (
                                                                                        account_id VARCHAR PRIMARY KEY,
                                                                                        owner_id VARCHAR NOT NULL,
@@ -73,7 +74,7 @@ public class AccountOverviewProjection extends TradingDemoViewEventProcessor {
                                                                                        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
                                                                                    )
                                                                                    """));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_account_overview_owner ON projection_account_overview (owner_id)"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "CREATE INDEX IF NOT EXISTS projection_account_overview_owner ON projection_account_overview (owner_id)"));
     }
 
     @Override

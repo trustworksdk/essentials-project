@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage;
 import dk.trustworks.essentials.examples.trading.accounts.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.stereotype.Service;
@@ -45,7 +46,7 @@ import java.util.List;
 public class PositionsProjection extends TradingDemoViewEventProcessor {
     public PositionsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                    CREATE TABLE IF NOT EXISTS projection_positions_version (
                                                                                        account_id VARCHAR PRIMARY KEY,
                                                                                        currency VARCHAR NOT NULL,
@@ -53,7 +54,7 @@ public class PositionsProjection extends TradingDemoViewEventProcessor {
                                                                                        last_event_order BIGINT NOT NULL
                                                                                    )
                                                                                    """));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                    CREATE TABLE IF NOT EXISTS projection_positions (
                                                                                        account_id VARCHAR NOT NULL,
                                                                                        instrument_id VARCHAR NOT NULL,

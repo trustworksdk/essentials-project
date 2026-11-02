@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.reconciliation.external_systems.clearinghouse;
 
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -29,7 +30,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public class ClearingStatementTables {
     public ClearingStatementTables(JdbcTemplate jdbc) {
         requireNonNull(jdbc, "No jdbc provided");
-        jdbc.execute("""
+        TradingDemoSchema.ddl(jdbc, """
                              CREATE TABLE IF NOT EXISTS clearing_statement (
                                  statement_id VARCHAR PRIMARY KEY,
                                  business_date DATE NOT NULL,
@@ -38,7 +39,7 @@ public class ClearingStatementTables {
                                  received_at TIMESTAMPTZ NOT NULL
                              )
                              """);
-        jdbc.execute("""
+        TradingDemoSchema.ddl(jdbc, """
                              CREATE TABLE IF NOT EXISTS clearing_trade (
                                  statement_id VARCHAR NOT NULL,
                                  execution_id VARCHAR NOT NULL,
@@ -51,7 +52,7 @@ public class ClearingStatementTables {
                                  PRIMARY KEY (statement_id, execution_id)
                              )
                              """);
-        jdbc.execute("""
+        TradingDemoSchema.ddl(jdbc, """
                              CREATE TABLE IF NOT EXISTS clearing_obligation (
                                  obligation_id VARCHAR PRIMARY KEY,
                                  statement_id VARCHAR NOT NULL,

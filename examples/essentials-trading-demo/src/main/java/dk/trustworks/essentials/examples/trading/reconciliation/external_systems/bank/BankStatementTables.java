@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.reconciliation.external_systems.bank;
 
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -29,7 +30,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public class BankStatementTables {
     public BankStatementTables(JdbcTemplate jdbc) {
         requireNonNull(jdbc, "No jdbc provided");
-        jdbc.execute("""
+        TradingDemoSchema.ddl(jdbc, """
                              CREATE TABLE IF NOT EXISTS bank_statement (
                                  statement_id VARCHAR PRIMARY KEY,
                                  business_date DATE NOT NULL,
@@ -40,7 +41,7 @@ public class BankStatementTables {
                                  received_at TIMESTAMPTZ NOT NULL
                              )
                              """);
-        jdbc.execute("""
+        TradingDemoSchema.ddl(jdbc, """
                              CREATE TABLE IF NOT EXISTS bank_statement_entry (
                                  entry_id VARCHAR PRIMARY KEY,
                                  statement_id VARCHAR NOT NULL,
@@ -51,6 +52,6 @@ public class BankStatementTables {
                                  value_date DATE NOT NULL
                              )
                              """);
-        jdbc.execute("CREATE INDEX IF NOT EXISTS bank_statement_entry_statement ON bank_statement_entry (statement_id)");
+        TradingDemoSchema.ddl(jdbc, "CREATE INDEX IF NOT EXISTS bank_statement_entry_statement ON bank_statement_entry (statement_id)");
     }
 }

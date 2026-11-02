@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.orders.events.*;
 import dk.trustworks.essentials.examples.trading.orders.types.*;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
@@ -41,7 +42,7 @@ import java.util.List;
 public class OrdersProjection extends TradingDemoViewEventProcessor {
     public OrdersProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                    CREATE TABLE IF NOT EXISTS projection_orders (
                                                                                        order_id VARCHAR PRIMARY KEY,
                                                                                        account_id VARCHAR NOT NULL,
@@ -63,8 +64,8 @@ public class OrdersProjection extends TradingDemoViewEventProcessor {
                                                                                    )
                                                                                    """));
         // Added after the table first shipped; a demo database from before keeps working
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("ALTER TABLE projection_orders ADD COLUMN IF NOT EXISTS average_fill_price NUMERIC(24, 6)"));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_orders_account ON projection_orders (account_id, placed_at)"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "ALTER TABLE projection_orders ADD COLUMN IF NOT EXISTS average_fill_price NUMERIC(24, 6)"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "CREATE INDEX IF NOT EXISTS projection_orders_account ON projection_orders (account_id, placed_at)"));
     }
 
     @Override

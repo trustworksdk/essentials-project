@@ -18,6 +18,7 @@ package dk.trustworks.essentials.examples.trading.orders.views.late_fills;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.orders.events.OrderFilledAfterClose;
 import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
@@ -38,7 +39,7 @@ import java.util.List;
 public class LateFillsProjection extends TradingDemoViewEventProcessor {
     public LateFillsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                    CREATE TABLE IF NOT EXISTS projection_late_fills (
                                                                                        execution_id VARCHAR PRIMARY KEY,
                                                                                        order_id VARCHAR NOT NULL,

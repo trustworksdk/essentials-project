@@ -23,7 +23,8 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage;
 import dk.trustworks.essentials.examples.trading.accounts.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoPartitionedViewEventProcessor;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -34,16 +35,16 @@ import java.util.List;
  * Insert-only — no versioning needed.
  * <p>
  * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
- * {@link ViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
+ * {@link PartitionedViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
  * with Spring's {@code JdbcTemplate}, only while the Spring wiring binds both to one connection. The
  * constructor's DDL and the reset run where none is active, so they go through
  * {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)}, which opens one.
  */
 @Service
-public class AccountActivityProjection extends TradingDemoViewEventProcessor {
+public class AccountActivityProjection extends TradingDemoPartitionedViewEventProcessor {
     public AccountActivityProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                CREATE TABLE IF NOT EXISTS projection_account_activity (
                                                                                    account_stream_id VARCHAR NOT NULL,
                                                                                    event_order BIGINT NOT NULL,
@@ -57,7 +58,7 @@ public class AccountActivityProjection extends TradingDemoViewEventProcessor {
                                                                                    PRIMARY KEY (account_stream_id, event_order)
                                                                                )
                                                                                """));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_account_activity_account ON projection_account_activity (account_id, generation, event_order)"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "CREATE INDEX IF NOT EXISTS projection_account_activity_account ON projection_account_activity (account_id, generation, event_order)"));
     }
 
     @Override

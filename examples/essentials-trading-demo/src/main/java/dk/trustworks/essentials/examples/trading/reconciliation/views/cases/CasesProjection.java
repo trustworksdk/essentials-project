@@ -19,6 +19,7 @@ package dk.trustworks.essentials.examples.trading.reconciliation.views.cases;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.reconciliation.aggregates.ReconciliationCases;
 import dk.trustworks.essentials.examples.trading.reconciliation.events.*;
 import dk.trustworks.essentials.examples.trading.reconciliation.types.*;
@@ -51,7 +52,7 @@ public class CasesProjection extends TradingDemoViewEventProcessor {
 
     public CasesProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                    CREATE TABLE IF NOT EXISTS projection_reconciliation_case (
                                                                                        case_id VARCHAR PRIMARY KEY,
                                                                                        statement_id VARCHAR NOT NULL,
@@ -68,8 +69,8 @@ public class CasesProjection extends TradingDemoViewEventProcessor {
                                                                                        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
                                                                                    )
                                                                                    """));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("CREATE INDEX IF NOT EXISTS projection_reconciliation_case_state ON projection_reconciliation_case (state)"));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "CREATE INDEX IF NOT EXISTS projection_reconciliation_case_state ON projection_reconciliation_case (state)"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                    CREATE TABLE IF NOT EXISTS projection_reconciliation_case_history (
                                                                                        case_id VARCHAR NOT NULL,
                                                                                        seq BIGSERIAL,

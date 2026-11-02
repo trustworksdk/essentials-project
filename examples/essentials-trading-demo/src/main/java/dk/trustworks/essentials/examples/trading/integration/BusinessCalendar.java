@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManag
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.Message;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.*;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -118,7 +119,7 @@ public class BusinessCalendar {
         this.intake = requireNonNull(intake, "No intake provided");
         this.dependencies = requireNonNull(dependencies, "No dependencies provided");
         this.exchange = dependencies.restClientBuilder().clone().baseUrl(dependencies.properties().getExchange().getBaseUrl()).build();
-        dependencies.jdbcTemplate().execute("""
+        TradingDemoSchema.ddl(dependencies.jdbcTemplate(), """
                                                     CREATE TABLE IF NOT EXISTS business_day_closed (
                                                         business_date DATE PRIMARY KEY,
                                                         next_business_date DATE NOT NULL,

@@ -4,6 +4,10 @@ Each entry is a release, headed by its `plugin.json` version: the Essentials rel
 targets, with a `-N` suffix for plugin-only releases.
 
 ## 0.60.1-1 — targets Essentials 0.60.1
+- **`PartitionedViewEventProcessor` and the partitioned reset** — the event-store reference describes the view
+  counterpart of `PartitionedEventProcessor` and that both partitioned processors reset only while stopped on every
+  instance (trap `ESS-137`). `slice-check`, `slice-map` and enrichment recognise `PartitionedEventProcessor` and
+  `PartitionedViewEventProcessor` as event processors; a slice built on one was not counted as a processor before.
 - **Framework docs for the next Essentials release** — the shard-owned reference describes elastic pump
   connections, waking owners after commit instead of `NOTIFY` in the enqueue transaction, pumps that visit
   only owners that signalled or came due, and one horizon probe per pass; the event-store reference the

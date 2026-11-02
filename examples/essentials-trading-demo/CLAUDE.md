@@ -51,6 +51,7 @@ lane. Do **not** convert to `Decider`s.
   `EssentialsObjectMappers` sets `withFieldVisibility(ANY)` / `withGetterVisibility(NONE)`, so snapshots
   round-trip fine. The `protected` no-arg constructors are load-bearing: without them Jackson 3 would pick a
   public constructor as an implicit properties creator and half-populate a snapshot.
+- **Start-up DDL goes through `config/TradingDemoSchema.ddl`** (handle or `JdbcTemplate`), which takes `PostgresqlUtil.acquireBootstrapLock` in the statement's own transaction. `CREATE ... IF NOT EXISTS` is not safe against itself: two instances starting together on an empty DB both see the table missing and the second fails on `pg_type_typname_nsp_index` (hit by `UnclearedDepositsProjection`). A plain `JdbcTemplate.execute` is autocommit - a transaction-scoped lock would be gone before the statement, hence the helper's own transaction. New DDL in a constructor → use the helper
 - **Every projection is eventually consistent.** Tests must await them.
 - **Every `@SpringBootTest` here carries `@DirtiesContext`.** Each class owns a static Postgres container, so a cached
   context outlives its database; on the next context switch Spring pauses it, and every event-processor subscription's

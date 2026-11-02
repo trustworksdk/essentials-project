@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.examples.trading.integration;
 
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import org.slf4j.*;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -102,7 +103,7 @@ public final class ExternalEventLogCatchUp implements SmartLifecycle {
         this.fencedLockManager = requireNonNull(fencedLockManager, "No fencedLockManager provided");
         this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
         this.objectMapper = requireNonNull(objectMapper, "No objectMapper provided");
-        this.jdbcTemplate.execute("""
+        TradingDemoSchema.ddl(this.jdbcTemplate, """
                                           CREATE TABLE IF NOT EXISTS external_event_log_cursor (
                                               name VARCHAR PRIMARY KEY,
                                               last_sequence BIGINT NOT NULL,

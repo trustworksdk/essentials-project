@@ -19,6 +19,7 @@ package dk.trustworks.essentials.examples.trading.reconciliation.views.known_pay
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.funding.events.*;
 import dk.trustworks.essentials.examples.trading.funding.types.FundingAggregateTypes;
 import dk.trustworks.essentials.types.Money;
@@ -44,7 +45,7 @@ import java.util.List;
 public class KnownPaymentsProjection extends TradingDemoViewEventProcessor {
     public KnownPaymentsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                    CREATE TABLE IF NOT EXISTS projection_reconciliation_payment (
                                                                                        reference VARCHAR PRIMARY KEY,
                                                                                        kind VARCHAR NOT NULL,
