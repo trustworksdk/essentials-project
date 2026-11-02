@@ -914,6 +914,21 @@ can write them in one multi-row statement. It pays only where commands append se
 ledger load appends one or two, so the account views would gain little. A view can already batch its own JDBC
 statements within the transaction. Not worth an API before a measurement shows a view that needs it.
 
-**Suggested next measurement:** a fourth arm, T, with the two account views as `InTransactionEventProcessor`s
-(non-exclusive), in the same A/B as V, P and PP. If T is close to V's command throughput with no view lag, it is the
-cheaper answer for aggregate-keyed views, and the open question becomes the rebuild path rather than batched handling.
+**Measured (2026-11-02):** a fourth arm, T, with the two account views as non-exclusive `InTransactionEventProcessor`s,
+in the same A/B (two instances, one 8-core machine, 80 000 ledger commands, medians of 3):
+
+| Arm | Drain | Commands/s | Command p99 | View current after drain | CPU | WAL |
+|---|---|---|---|---|---|---|
+| V - inline `ViewEventProcessor` | 30.7 s | 2 609 | 4.4 ms | 8.6 s | 85 s | 421 MB |
+| P - partitioned, references | 47.3 s | 1 691 | 5.4 ms | 0.09 s | 122 s | 577 MB |
+| PP - partitioned, payloads | 45.8 s | 1 746 | 5.1 ms | 0.07 s | 114 s | 650 MB |
+| T - in the appending transaction | 38.0 s | 2 104 | 4.1 ms | 0.01 s | 85 s | 431 MB |
+
+T costs no more CPU or WAL than V and has no lag; its drain is 24 % longer than V's because each command's transaction
+now also writes the view rows, but V's view only becomes current 8.6 s after its drain - counted to the moment the
+view is current, T (38.0 s) is ahead of V (39.3 s), PP (45.9 s) and P (47.4 s). In this load every command runs on
+instance 1 (the ledger load sends them locally), so T's work was not spread at all; with commands arriving on every
+instance it would be spread as they are. For aggregate-keyed views the open question is therefore the rebuild path
+(no replay), not batched handling of queued messages. Also found: `InTransactionEventProcessor` does not extend
+`AbstractEventProcessor`, so it has none of the `getUnitOfWorkFactory()` / `getRequiredUnitOfWork()` helpers the other
+processors give a view, and no `onSubscriptionsReset`; the experiment copied the first two into the views.
