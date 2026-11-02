@@ -8,6 +8,7 @@ targets, with a `-N` suffix for plugin-only releases.
   counterpart of `PartitionedEventProcessor` and that both partitioned processors reset only while stopped on every
   instance (trap `ESS-137`). `slice-check`, `slice-map` and enrichment recognise `PartitionedEventProcessor` and
   `PartitionedViewEventProcessor` as event processors; a slice built on one was not counted as a processor before.
+  The reference also describes the partitioned view's opt-in to forward event payloads instead of references.
 - **Framework docs for the next Essentials release** — the shard-owned reference describes elastic pump
   connections, waking owners after commit instead of `NOTIFY` in the enqueue transaction, pumps that visit
   only owners that signalled or came due, and one horizon probe per pass; the event-store reference the

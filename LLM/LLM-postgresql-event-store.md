@@ -606,6 +606,8 @@ public class AccountActivityProjection extends PartitionedViewEventProcessor {
 - **Refuses to start** without `DurableQueues.keepsKeyOrderAcrossInstances()` - the shard-owned engine, everywhere.
 - **Queue key** is `<aggregateType>|<aggregateId>`; handlers see the plain id as `OrderedMessage.getKey()`.
 - **Lag** = reader lag + queue depth of `<processorName>:queue`; the resume point means *forwarded*.
+- **`forwardsEventPayloads()`** (default `false`): `true` queues each event itself instead of a reference, saving the
+  event-store load per event on the handling side, for larger queue rows (measured: ~8 % less CPU, ~11 % more WAL).
 - **Switching from `ViewEventProcessor`** keeps resume point, lock and queue names - stop the view on every instance first.
 
 #### Resetting a partitioned processor

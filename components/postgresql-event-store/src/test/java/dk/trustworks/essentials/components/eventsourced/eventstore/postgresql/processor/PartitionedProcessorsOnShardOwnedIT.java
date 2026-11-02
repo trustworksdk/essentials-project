@@ -194,6 +194,29 @@ class PartitionedProcessorsOnShardOwnedIT {
     }
 
     @Test
+    void a_view_forwarding_payloads_handles_every_event_in_order_with_the_plain_id_and_the_event_as_cause() {
+        forwardPayloads = true;
+        var a = instance("a");
+        var b = instance("b");
+        a.view.start();
+        b.view.start();
+        var id = OrderId.random();
+        var eventIds = new ArrayList<String>();
+        for (var i = 0; i < 10; i++) {
+            var n = i;
+            eventIds.add(unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(ORDERS, id, new OrderPlacedEvent(id, "o" + n)).eventList().getFirst().eventId().toString()));
+        }
+
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(distinctHandled()).isEqualTo(10));
+        assertThat(handled.stream().map(entry -> entry.substring(0, entry.indexOf('@'))).distinct().toList())
+                .containsExactly(java.util.stream.IntStream.range(0, 10).mapToObj(n -> ORDERS + "|" + id + "|" + n).toArray(String[]::new));
+        assertThat(causes).as("each handler bound to its event as the cause").containsAll(eventIds);
+        // The queue carried payloads, not references
+        long deadLetters = Jdbi.create(dataSource).withHandle(handle -> handle.createQuery("SELECT count(*) FROM shard_queue_dead_letter").mapTo(Long.class).one());
+        assertThat(deadLetters).isZero();
+    }
+
+    @Test
     void await_processed_waits_on_the_qualified_key() {
         var a = instance("a");
         a.view.start();
@@ -473,6 +496,7 @@ class PartitionedProcessorsOnShardOwnedIT {
     }
 
     private void record(OrderPlacedEvent event, OrderedMessage message, String instance) throws InterruptedException {
+        causes.add(dk.trustworks.essentials.components.foundation.causation.CausationContext.current().map(Object::toString).orElse("none"));
         handlerEntered.countDown();
         holdHandler.await();
         // The handler sees the plain id; the aggregate type is told apart by the details' prefix
@@ -489,8 +513,16 @@ class PartitionedProcessorsOnShardOwnedIT {
         }
     }
 
+    private volatile boolean forwardPayloads;
+    private final ConcurrentLinkedQueue<String> causes = new ConcurrentLinkedQueue<>();
+
     private class View extends PartitionedViewEventProcessor {
         private final String instance;
+
+        @Override
+        protected boolean forwardsEventPayloads() {
+            return forwardPayloads;
+        }
 
         View(ViewEventProcessorDependencies dependencies, String instance) {
             super(dependencies);

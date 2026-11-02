@@ -25,7 +25,8 @@ import org.springframework.beans.factory.annotation.Value;
  * goes through its queue, so this - times the instances - is how many events of the view are handled at once.
  */
 public abstract class TradingDemoPartitionedViewEventProcessor extends PartitionedViewEventProcessor {
-    private int consumers = 1;
+    private int     consumers       = 1;
+    private boolean forwardPayloads = false;
 
     protected TradingDemoPartitionedViewEventProcessor(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
@@ -34,6 +35,16 @@ public abstract class TradingDemoPartitionedViewEventProcessor extends Partition
     @Value("${trading-demo.views.partitioned-consumers:1}")
     void setConsumers(int consumers) {
         this.consumers = consumers;
+    }
+
+    @Value("${trading-demo.views.partitioned-forward-payloads:false}")
+    void setForwardPayloads(boolean forwardPayloads) {
+        this.forwardPayloads = forwardPayloads;
+    }
+
+    @Override
+    protected boolean forwardsEventPayloads() {
+        return forwardPayloads;
     }
 
     @Override

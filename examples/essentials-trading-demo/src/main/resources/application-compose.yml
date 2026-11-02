@@ -149,3 +149,6 @@ trading-demo:
     # Queue consumer threads per instance of each PartitionedViewEventProcessor (the account views): every event of
     # such a view goes through its queue, so this times the instances is how many are handled at once
     partitioned-consumers: 8
+    # Forward each event itself rather than a reference the consumer loads again: measured 11 % shorter drain and 8 %
+    # less CPU for 11 % more WAL on the ledger load (docs/key-partitioned-event-processing.md, question 2)
+    partitioned-forward-payloads: true

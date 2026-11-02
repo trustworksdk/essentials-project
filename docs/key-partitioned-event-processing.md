@@ -833,7 +833,12 @@ Still open, with a recommendation each:
    which may still be enough.
 2. **Payload or reference in the forwarded message?** *Recommendation:* reference, as `EventProcessor` does: it keeps
    queue rows and their WAL small and the event store authoritative; revisit only if the consumer's re-read shows up in
-   a profile.
+   a profile. **Revisited 2026-11-02:** it did - the reload (`resolveEventReference`, half of it the `fetchStream` query)
+   was 7 % of the partitioned view's CPU in the trading demo. Built as an opt-in, `forwardsEventPayloads()`, reference
+   still the default. Measured (two instances, one 8-core machine, 80 000 ledger commands, medians of 3; V = inline
+   `ViewEventProcessor`, P = references, PP = payloads, 8 consumers per instance): drain 34.8 / 47.4 / 42.2 s, CPU
+   82 / 118 / 109 s, WAL 424 / 574 / 640 MB, view current after the last command in < 0.1 s for P and PP against 5-8 s
+   for V. See §9 for what is left of the gap.
 3. **Key qualification:** qualify the key with the aggregate type in the new class, or keep the bare id?
    *Recommendation:* qualify in the new class (no collision between two aggregate types sharing an id), and document
    the existing collision for multi-type `EventProcessor`s.
@@ -849,3 +854,66 @@ Still open, with a recommendation each:
 7. **Migrating an existing view:** reuse `<name>:lock` and `<name>:queue` so a rolling deploy can mix old and new nodes,
    or require a clean stop? *Recommendation:* a clean stop for v1 - mixing inline and partitioned handlers of one view
    is the hardest case to reason about.
+
+---
+
+## 9. What is left of the gap: batched handling, and views handled in the appending transaction
+
+Written 2026-11-02, after the measurements in §8 question 2. Nothing in this section is built.
+
+**Where the remaining cost is.** With payloads forwarded (PP), a partitioned view still drains the trading demo's
+ledger load 21 % slower than the inline `ViewEventProcessor` (V), with 33 % more CPU and 51 % more WAL, on one 8-core
+machine. Per event it pays what V does not: a queue row written and deleted (the WAL), the owner's read of it, the queue
+envelope serialized and read back, and a `UnitOfWork` of its own - V commits once per batch of up to 100. In the
+profile (references, before payloads) transaction commits were +80 samples over V, JSON +122, the reload +169; the
+engine's reads were within noise of V's.
+
+### 9.1 Option 2 - handle queued messages in batches
+
+**What:** the consumer gets up to N ready messages of the units it owns and handles them in one `UnitOfWork`, a
+savepoint per message as `ViewEventProcessor`'s batched direct path does, and the engine acknowledges them together.
+A failing message rolls back to its savepoint and is retried by the engine (its key stays blocked), the others commit;
+a failure a savepoint cannot undo rolls the batch back and it is replayed message by message - the rule
+`ViewEventProcessor.replayOneEventPerUnitOfWork` already follows.
+
+**What it needs:**
+- Engine: batch delivery on the ordered lane. Today `OrderedShardOwner` dispatches one message per handler call, and
+  per-key exclusivity is its in-flight set. A batch spanning several keys keeps each of them in flight until the batch
+  returns; a key's messages inside one batch stay in `key_order`. Acknowledgement already flushes in batches.
+- `DurableQueues`: no batch consumer exists on the SPI. An additive `consumeFromQueueInBatches` (default: per message)
+  and its shard-owned adapter implementation.
+- `PartitionedViewEventProcessor`: a batched queue handler with the savepoint/escalation rules above.
+
+**What it would buy:** one commit per batch instead of per event, and fewer `UnitOfWork` set-ups - the commit share and
+part of the JSON share. It does not remove the queue row, so the WAL difference stays.
+
+**Risks:** a slow message holds every key of its batch, so the batch must stay well inside `leaseTtl` (the engine's
+"never two handlers per key" bound); a bigger blast radius per escalation; the engine's dispatch is where its hardest
+defects lived (`components/postgresql-queue-shard-owned/CLAUDE.md`). Measure before building: the gain is bounded by
+the commit and set-up share, roughly a third of the remaining CPU gap by the profile.
+
+### 9.2 Views handled in the appending transaction - `InTransactionEventProcessor`
+
+For a view keyed by the aggregate whose command writes it (the demo's account views are), there is a different answer
+to "spread the view over the instances": handle it where the events are appended. An `InTransactionEventProcessor`
+runs its `@MessageHandler`s inside the appending `UnitOfWork`. There is then no reader, no queue, no reload, no extra
+transaction and no lag - the view row commits with the events - and the work is spread exactly as the commands are,
+across every instance that handles them, with no partitioning machinery at all.
+
+What it costs:
+- **Coupling.** A view handler that throws fails the command's append: a view bug becomes a write outage. View writes
+  add to the command transaction's duration and the locks it holds.
+- **No replay.** The in-transaction subscription has no resume point, so a reset or a new view cannot catch up from
+  history. A view built this way needs a separate rebuild path (a one-off catch-up with the same handlers), and a
+  handover from that catch-up to in-transaction delivery that misses nothing - the same race as CDC's
+  backfill-to-live handover, so not small.
+- **Hot rows** shared by many aggregates contend inside the command transactions instead of in a queue consumer.
+
+**Batching there** would mean handing a handler every event of one transaction at once (per aggregate type), so a view
+can write them in one multi-row statement. It pays only where commands append several events per transaction; the
+ledger load appends one or two, so the account views would gain little. A view can already batch its own JDBC
+statements within the transaction. Not worth an API before a measurement shows a view that needs it.
+
+**Suggested next measurement:** a fourth arm, T, with the two account views as `InTransactionEventProcessor`s
+(non-exclusive), in the same A/B as V, P and PP. If T is close to V's command throughput with no view lag, it is the
+cheaper answer for aggregate-keyed views, and the open question becomes the rebuild path rather than batched handling.

@@ -20,12 +20,13 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
-import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
@@ -103,6 +104,15 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
      * Separates the {@link AggregateType} from the aggregate id in the queue key - see {@link #qualifiedKey(AggregateType, String)}.
      */
     public static final String KEY_SEPARATOR              = "|";
+    /**
+     * {@link MessageMetaData} key of a forwarded event's {@link AggregateType}, set when {@link #forwardsEventPayloads()}.
+     */
+    public static final String AGGREGATE_TYPE_METADATA_KEY = "PARTITIONED_VIEW_AGGREGATE_TYPE";
+    /**
+     * {@link MessageMetaData} key of a forwarded event's {@link EventId}, set when {@link #forwardsEventPayloads()}: the
+     * handler runs with {@link CausationContext} bound to it, as it does for a forwarded reference.
+     */
+    public static final String EVENT_ID_METADATA_KEY       = "PARTITIONED_VIEW_EVENT_ID";
 
     private final Logger                        logger              = LoggerFactory.getLogger(this.getClass());
     private final PatternMatchingMessageHandler patternMatchingMessageHandlerDelegate;
@@ -320,7 +330,43 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
             logger.debug("[{}:{}] Could not deserialize the meta data of the event with event-order '{}' - forwarding it without", aggregateType, key, event.eventOrder(), e);
             meta = new MessageMetaData();
         }
+        if (forwardsEventPayloads()) {
+            try {
+                var payload = event.event().deserialize();
+                meta.put(AGGREGATE_TYPE_METADATA_KEY, aggregateType.toString());
+                meta.put(EVENT_ID_METADATA_KEY, event.eventId().toString());
+                return new EventPayloadOrderedMessage(payload, key, event.eventOrder().longValue(), meta);
+            } catch (RuntimeException e) {
+                // Forwarded as a reference: the consumer resolves it again and, if it still cannot be deserialized, dead-letters it
+                logger.debug("[{}:{}] Could not deserialize the event with event-order '{}' - forwarding a reference to it instead", aggregateType, key, event.eventOrder(), e);
+                meta.remove(AGGREGATE_TYPE_METADATA_KEY);
+                meta.remove(EVENT_ID_METADATA_KEY);
+            }
+        }
         return new EventReferenceOrderedMessage(aggregateType, key, event.eventOrder(), meta);
+    }
+
+    /**
+     * Forward each event's payload instead of a reference to it. Default {@code false}: a reference, which the consumer
+     * resolves by loading the event from the event store - small queue rows, the event store authoritative, but a query
+     * and a deserialization per event on the handling side. {@code true}: the reader deserializes the event once and the
+     * queue carries it - no load on the handling side, larger queue rows and more WAL. An event that cannot be deserialized
+     * is still forwarded as a reference.
+     *
+     * @return whether to forward event payloads
+     */
+    protected boolean forwardsEventPayloads() {
+        return false;
+    }
+
+    /**
+     * An event forwarded with its payload ({@link #forwardsEventPayloads()}). Identified by key and order, like a reference,
+     * so a re-forward of one still queued after a reader failover is absorbed by the queue.
+     */
+    public static final class EventPayloadOrderedMessage extends OrderedMessage implements IdentifiedByKeyAndOrder {
+        EventPayloadOrderedMessage(Object payload, String key, long order, MessageMetaData metaData) {
+            super(payload, key, order, metaData);
+        }
     }
 
     /**
@@ -348,6 +394,21 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
             if (key.startsWith(prefix)) {
                 msg = OrderedMessage.of(aggregateType, key.substring(prefix.length()), orderedMessage.getOrder(), orderedMessage.getMetaData());
             }
+        }
+        if (msg instanceof OrderedMessage orderedMessage && !AbstractEventProcessor.EventReferenceOrderedMessage.isEventReference(orderedMessage)
+                && orderedMessage.getMetaData().get(AGGREGATE_TYPE_METADATA_KEY) != null) {
+            // A forwarded payload: hand the handlers the plain id, bound to the event as its cause, as for a reference
+            var prefix  = orderedMessage.getMetaData().get(AGGREGATE_TYPE_METADATA_KEY) + KEY_SEPARATOR;
+            var key     = orderedMessage.getKey();
+            var plain   = OrderedMessage.of(orderedMessage.getPayload(), key.startsWith(prefix) ? key.substring(prefix.length()) : key,
+                                            orderedMessage.getOrder(), orderedMessage.getMetaData());
+            var eventId = orderedMessage.getMetaData().get(EVENT_ID_METADATA_KEY);
+            if (eventId != null) {
+                CausationContext.where(EventId.of(eventId)).run(() -> queuedMessageConsumer.accept(plain));
+            } else {
+                queuedMessageConsumer.accept(plain);
+            }
+            return;
         }
         queuedMessageConsumer.accept(msg);
     }

@@ -387,6 +387,11 @@ its share of the aggregates, each message in a `UnitOfWork` of its own together 
   types sharing an id are two keys. Handlers still see the plain id.
 - **Switching from `ViewEventProcessor`** keeps the resume point, lock and queue names. Stop the view on every instance
   first and deploy the new class everywhere before starting it again.
+- **Forward payloads, opt-in:** `forwardsEventPayloads()` returning `true` puts each event itself in the queue instead
+  of a reference, so the handling side does not load it from the event store again. Measured in the trading demo (two
+  instances, one 8-core machine, 80 000 ledger commands, medians of 3): command drain 47.4 s → 42.2 s, CPU 118 s → 109 s,
+  WAL 574 MB → 640 MB. The default stays a reference: small queue rows, the event store authoritative. An event the
+  reader cannot deserialize is still forwarded as a reference.
 
 **Reset only while stopped on every instance** - the rule both partitioned classes share. A reset (`resetAllSubscriptions`,
 `resetSubscriptions`) is refused unless:
@@ -449,7 +454,8 @@ Not published; listed because they are the reference for how to use the framewor
   (§2.10), with `trading-demo.views.partitioned-consumers` queue consumers per instance (8 under `compose`). Measured on
   one 8-core machine, two instances, 80 000 ledger commands: the account activity view was current 64-91 ms after the
   last command, against 7-9 s for the inline `ViewEventProcessor`, for 30 % longer command drain and 40 % more CPU -
-  every event goes through the queue and is reloaded; the gain needs instances on separate machines.
+  every event goes through the queue and is reloaded; the gain needs instances on separate machines. Under `compose`
+  the views forward event payloads (`trading-demo.views.partitioned-forward-payloads`), which cut that to 21 % and 33 %.
 - **`essentials-trading-demo`: two instances started together on an empty database no longer fail on the projections'
   start-up DDL.** `CREATE TABLE IF NOT EXISTS` is not safe against itself; every DDL statement now runs behind
   `PostgresqlUtil.acquireBootstrapLock` (`config/TradingDemoSchema`).
