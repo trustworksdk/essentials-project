@@ -87,6 +87,34 @@ The orders figure is under a third of the measured in-process ceiling (~366/s), 
 flows and the burst are what is tested, not the known `EventProcessor` limit. The burst is above that ceiling on
 purpose: a backlog that builds and drains is the realistic case, and the drain time is the number.
 
+### 4.1 Measured: the hour-long run on one instance (2026-11-02, run `dnny`)
+
+The default profile above, 60 business days, one instance, every process on this devcontainer's 8 cores, on a fresh
+database (only the 10 000 customers and a 10-day trial run before it), `max-in-flight=512`, the CDC inbox on
+`dispatched-row-policy: DELETE`:
+
+| | |
+|---|---|
+| Load | 5 166 s; 426 893 orders, all reached their outcome; drained 66 s after the last close |
+| Checks | all 8 pass: outcomes, every fill booked, payments, 0 dead letters, 0 open cases, 0 missing statements, driver never saturated, steady state |
+| Booked (placed → `TradeBooked`), whole run | p50 1.35 s, p99 14.1 s, bursts included |
+| A business day, by 10 s placement bucket | burst bucket p99 14.2-15.0 s, the next ~7.5 s, the rest of the day under 2 s - the same on day 1 and day 40 |
+| Stages, p99 | placed → submitted (the router) 15.8 s, submitted → filled 0.8 s, filled → booked 4.6 s: the router carries the burst |
+| HTTP, p99 | every customer request under 100 ms (login ~110 ms, BCrypt) |
+| Database | 1 958 → 6 373 MB, ~74 MB per business day, steady from day 10 on |
+
+The cumulative p99 rose from 12.0 s (day 20) to 14.1 s (day 60) while each day's own shape stayed flat: the later days'
+bursts are a little worse (14.2 → 15.0 s), not the steady state. On the accelerated clock a business day trades for
+only ~41 real seconds, so the steady-state check's exclusion (10 s before an open to 30 s after its burst) leaves one
+10 s bucket per day; the per-bucket figures above are the fuller picture, and they meet the target.
+
+§5's stores over the run: the event tables and the projections grow with the history they record (accounts and
+orders events ~20 MB per business day each); `external_inbound_event` ~9 MB per business day under its 7-day retention;
+snapshots stop at one per account; the CDC slot held back 21 KB-236 MB of WAL, never growing across samples. The CDC
+inbox stayed flat in rows on `DELETE`; on the default `MARK_DISPATCHED` the 10-day trial kept ~75 MB per business day
+of dispatched rows, which the inbox TTL (the demo sets one real day) would prune only after an accelerated run
+of over a thousand business days.
+
 ## 5. Long-run hygiene
 
 What an hour-long run makes visible, and what is proposed for each:

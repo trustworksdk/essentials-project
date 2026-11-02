@@ -19,6 +19,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.Co
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
 import dk.trustworks.essentials.examples.trading.accounts.types.AccountsAggregateTypes;
+import dk.trustworks.essentials.examples.trading.orders.external_systems.exchange.RouterStageTimings;
 import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -75,11 +76,14 @@ public class LoadRunReport {
     private final JdbcTemplate                                                            jdbcTemplate;
     private final ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
     private final DurableQueues                                                           durableQueues;
+    private final RouterStageTimings                                                      routerStageTimings;
 
-    public LoadRunReport(JdbcTemplate jdbcTemplate, ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore, DurableQueues durableQueues) {
+    public LoadRunReport(JdbcTemplate jdbcTemplate, ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore, DurableQueues durableQueues,
+                         RouterStageTimings routerStageTimings) {
         this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         this.durableQueues = requireNonNull(durableQueues, "No durableQueues provided");
+        this.routerStageTimings = requireNonNull(routerStageTimings, "No routerStageTimings provided");
     }
 
     private record Execution(String orderId, Instant placedAt, Instant submittedAt, Instant filledAt, Instant bookedAt) {
@@ -133,6 +137,14 @@ public class LoadRunReport {
                                                           .mapToLong(e -> Duration.between(e.submittedAt(), e.filledAt()).toMillis()).sorted().toArray()));
         stages.put("filledToBooked", latency(executions.stream().filter(e -> e.bookedAt() != null)
                                                        .mapToLong(e -> Duration.between(e.filledAt(), e.bookedAt()).toMillis()).sorted().toArray()));
+        if (routerStageTimings.isEnabled()) {
+            // placed -> submitted, split (RouterStageTimings): this instance's routed orders only
+            var timings = routerStageTimings.timingsFor(runPrefix);
+            var timed = executions.stream().filter(e -> e.submittedAt() != null && timings.containsKey(e.orderId())).toList();
+            stages.put("routerQueueWait", latency(timed.stream().mapToLong(e -> Duration.between(e.placedAt(), timings.get(e.orderId()).handlingStarted()).toMillis()).sorted().toArray()));
+            stages.put("exchangeCall", latency(timed.stream().mapToLong(e -> Duration.between(timings.get(e.orderId()).handlingStarted(), timings.get(e.orderId()).exchangeAnswered()).toMillis()).sorted().toArray()));
+            stages.put("reportsQueueWait", latency(timed.stream().mapToLong(e -> Duration.between(timings.get(e.orderId()).exchangeAnswered(), e.submittedAt()).toMillis()).sorted().toArray()));
+        }
 
         var placedPerBucket = new TreeMap<Instant, Long>();
         jdbcTemplate.query("SELECT " + o.timestampColumn + " FROM " + orders.eventStreamTableName + " WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderPlaced'",
@@ -164,6 +176,18 @@ public class LoadRunReport {
         return new Report(runPrefix, Instant.now(),
                           new Orders(placed == null ? 0 : placed, byStatus, nonTerminal, latency(toFilled), latency(toBooked), toFilled.length - toBooked.length, stages),
                           payments, buckets, queues, largest);
+    }
+
+    /**
+     * Messages queued per durable queue right now: cheap enough to sample every second, so a burst's backlog shows in the
+     * queue it sits in - or, when the queue stays shallow while messages still wait, upstream of it.
+     */
+    public Map<String, Long> queueDepths() {
+        var depths = new TreeMap<String, Long>();
+        for (var queueName : durableQueues.getQueueNames()) {
+            depths.put(queueName.toString(), durableQueues.getTotalMessagesQueuedFor(queueName));
+        }
+        return depths;
     }
 
     public StoreSizes storeSizes() {

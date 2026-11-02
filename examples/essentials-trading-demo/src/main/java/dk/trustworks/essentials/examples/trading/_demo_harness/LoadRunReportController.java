@@ -18,6 +18,7 @@ package dk.trustworks.essentials.examples.trading._demo_harness;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Duration;
+import java.util.Map;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -40,6 +41,11 @@ public class LoadRunReportController {
                                        @RequestParam(defaultValue = "LDA-") String accountPrefix,
                                        @RequestParam(defaultValue = "10") long bucketSeconds) {
         return report.report(runPrefix, accountPrefix, Duration.ofSeconds(Math.max(1, bucketSeconds)));
+    }
+
+    @GetMapping("/queue-depths")
+    public Map<String, Long> queueDepths() {
+        return report.queueDepths();
     }
 
     @GetMapping("/store-sizes")

@@ -49,6 +49,8 @@ import java.util.*;
  * @param faultInstance       F-3's instance, 1-based into {@code baseUrls}
  * @param storeSampleEveryDays how many closes apart the stores design phase 6 §5 watches are sampled, besides at the
  *                            run's start and end; 0 samples only those two
+ * @param queueSampleMillis   how often every durable queue's depth is sampled during the load, so a burst's backlog
+ *                            shows in the queue it sits in; 0 (the default) samples none
  */
 public record LoadDriverSettings(List<String> baseUrls,
                                  String exchangeUrl,
@@ -82,7 +84,8 @@ public record LoadDriverSettings(List<String> baseUrls,
                                  Duration faultDuration,
                                  String faultTarget,
                                  int faultInstance,
-                                 int storeSampleEveryDays) {
+                                 int storeSampleEveryDays,
+                                 long queueSampleMillis) {
     static final Set<String> FAULTS = Set.of("none", "F-1", "F-2", "F-3", "F-4", "F-5");
 
 
@@ -127,7 +130,8 @@ public record LoadDriverSettings(List<String> baseUrls,
                 Duration.parse(take(values, "fault-duration", "PT60S")),
                 take(values, "fault-target", "exchange"),
                 Integer.parseInt(take(values, "fault-instance", "1")),
-                Integer.parseInt(take(values, "store-sample-every-days", "10")));
+                Integer.parseInt(take(values, "store-sample-every-days", "10")),
+                Long.parseLong(take(values, "queue-sample-millis", "0")));
         if (!values.isEmpty()) {
             throw new IllegalArgumentException("Unknown settings: " + values.keySet());
         }

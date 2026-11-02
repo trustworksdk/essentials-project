@@ -371,6 +371,14 @@ every check passed; the full report goes to `target/load-driver/load-<run>.json`
 - **Design §5's stores** are sampled at the start, every `store-sample-every-days` closes (default 10; 0 = start and end
   only) and at the end, off the pacing loop; the report's `storeSizes` holds the series and the log ranks the top 15
   tables by growth per business day. "Grows without bound" is judged from the series, not a pass check.
+- **Where a burst waits**: `--queue-sample-millis=1000` samples every durable queue's depth
+  (`GET /api/admin/load-report/queue-depths`) and reports per queue its peak, its median per-burst peak and how long
+  after each burst it took to get under 100. Starting the instance with
+  `TRADING_DEMO_ORDERS_ROUTER_STAGE_TIMINGS_ENABLED=true` (`RouterStageTimings`, in memory, per instance) splits
+  placed → submitted into `routerQueueWait`, `exchangeCall` and `reportsQueueWait`. Measured (10-day trial, one
+  instance): router queue wait p99 15.9 s, exchange call p50 7 ms / p99 46 ms, reports queue wait p99 5.4 s; the
+  router inbox peaks at ~2 100 queued per burst and drains in ~17 s, at the same time as both settlement queues, the
+  account views, the ledger and the reports inbox - the backlog is in the queues, not the forward or the exchange.
 - **The load report's query must keep its `MATERIALIZED` CTEs.** Without them the planner, estimating one row per
   `LIKE`, nests the joins and re-runs the submitted and booked scans once per fill: 190 s instead of 0.3 s for a 3-day
   run on a database holding earlier runs. The HTTP timeout does not cancel the query, so every retry stacked another

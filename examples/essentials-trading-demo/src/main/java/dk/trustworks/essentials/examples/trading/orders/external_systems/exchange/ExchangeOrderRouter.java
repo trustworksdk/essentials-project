@@ -28,7 +28,7 @@ import dk.trustworks.essentials.examples.trading.orders.use_cases.record_exchang
 import org.slf4j.*;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
+import java.time.*;
 import java.util.List;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -57,14 +57,18 @@ public class ExchangeOrderRouter extends TradingDemoEventProcessor {
     private final OrderProcessingProperties    consumers;
     private final OrderForwardingProperties    forwarding;
 
+    private final RouterStageTimings           stageTimings;
+
     public ExchangeOrderRouter(EventProcessorDependencies dependencies,
                                ExchangeGateway gateway,
                                ExchangeReports reports,
                                Orders orders,
                                ExchangeSubmissionProperties submission,
                                OrderProcessingProperties consumers,
-                               OrderForwardingProperties forwarding) {
+                               OrderForwardingProperties forwarding,
+                               RouterStageTimings stageTimings) {
         super(dependencies);
+        this.stageTimings = requireNonNull(stageTimings, "No stageTimings provided");
         this.consumers = requireNonNull(consumers, "No consumers provided");
         this.forwarding = requireNonNull(forwarding, "No forwarding provided");
         this.gateway = requireNonNull(gateway, "No gateway provided");
@@ -99,7 +103,11 @@ public class ExchangeOrderRouter extends TradingDemoEventProcessor {
     @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
     void on(OrderPlaced e) {
         log.debug("Submitting order '{}' to the exchange", e.orderId());
+        var handlingStarted = stageTimings.isEnabled() ? Instant.now() : null;
         var result = submit(OrderSubmission.of(e));
+        if (handlingStarted != null) {
+            stageTimings.record(e.orderId(), handlingStarted, Instant.now());
+        }
         if (result.isRejected()) {
             log.debug("Exchange rejected order '{}': {}", e.orderId(), result.rejectReason());
             reports.received(RecordExchangeAnswer.rejected(e.orderId(), result.rejectReason()));

@@ -413,6 +413,12 @@ New, all additive: `DurableQueues.getQueueConsumers(QueueName)` / `Inboxes.getQu
 `MessageQueue.departedInstancesHoldingUnits()` on the shard-owned engine; `EventStoreSubscriptionManager.resetStoredResumePoint`
 and `exclusiveSubscriptionLockName`.
 
+### 2.11 `InvokeMessageHandlerMethod` exposes the message being handled (foundation)
+
+`InvokeMessageHandlerMethod` - the operation a `MessageHandlerInterceptor` sees around every `@MessageHandler` call -
+now has `message` and `messagPayload` as public final fields, like `methodToInvoke` and `invokeMethodOn` already were,
+so an interceptor can read the `Message` and its metadata without reflection. Additive; nothing to change.
+
 ## 3. Bug fixes
 
 | Area | Fix | Commit |
@@ -459,6 +465,14 @@ Not published; listed because they are the reference for how to use the framewor
 - **`essentials-trading-demo`: two instances started together on an empty database no longer fail on the projections'
   start-up DDL.** `CREATE TABLE IF NOT EXISTS` is not safe against itself; every DDL statement now runs behind
   `PostgresqlUtil.acquireBootstrapLock` (`config/TradingDemoSchema`).
+- **`essentials-trading-demo`: phase 6's hour-long run passes on one instance** - 60 business days at 100 orders/s
+  with a 600/s open burst, 426 893 orders, every check green, booked p99 under 2 s between bursts and each burst drained
+  in ~20 s (`docs/design/phase-6-realistic-load.md` §4.1). The load driver gained the steady-state check, store-size
+  sampling (`store-sample-every-days`), queue-depth sampling (`queue-sample-millis`) and, with
+  `trading-demo.orders.router-stage-timings.enabled`, a split of the router stage into queue wait, exchange call and
+  reports queue wait; its load report no longer times out on a database holding earlier runs. Under `compose` the CDC
+  inbox now deletes dispatched rows (`essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy: DELETE`) instead
+  of keeping them for the TTL job - note the `cdc-dispatcher` key: `dispatcher:` binds to nothing, silently.
 
 ---
 

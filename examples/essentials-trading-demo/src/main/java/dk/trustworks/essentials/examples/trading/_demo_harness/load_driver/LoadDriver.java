@@ -81,6 +81,7 @@ public final class LoadDriver {
     private double                         clockSpeed;
     private final List<Burst>              bursts    = new CopyOnWriteArrayList<>();
     private final List<Map<String, Object>> storeSamples = new CopyOnWriteArrayList<>();
+    private final List<Map.Entry<Instant, JsonNode>> queueSamples = new CopyOnWriteArrayList<>();
     private volatile Instant               faultOpened; // a fault window (F-2, F-4), on the driver's clock
     private volatile Instant               faultClosed;
     private volatile Instant               targetDown;  // F-4: when the restarted simulator stopped answering
@@ -115,6 +116,9 @@ public final class LoadDriver {
             faults.findSubscriptions(); // before the window, so a failure to reach the simulators stops the run early
         }
         scheduler.scheduleAtFixedRate(this::refreshQuotes, 0, 1, TimeUnit.SECONDS);
+        if (settings.queueSampleMillis() > 0) {
+            scheduler.scheduleAtFixedRate(this::sampleQueues, 0, settings.queueSampleMillis(), TimeUnit.MILLISECONDS);
+        }
         chooseActiveCustomers();
 
         var started     = System.nanoTime();
@@ -674,6 +678,9 @@ public final class LoadDriver {
         result.put("brokerage", server);
         result.put("steadyState", steady);
         result.put("storeSizes", storeSamples);
+        if (!queueSamples.isEmpty()) {
+            result.put("queueDepths", queueDepthSummary());
+        }
         result.put("openCases", openCases);
         result.put("missingStatements", missing);
         if (faultEvidence != null) {
@@ -696,6 +703,15 @@ public final class LoadDriver {
         log("steady state: %d buckets outside bursts, %s over 10 s; burst recovery (s after its end) max %s, per burst %s",
             steady.get("bucketsChecked"), steady.get("violations"), steady.get("maxRecoverySeconds"), steady.get("recoverySeconds"));
         logStoreGrowth();
+        if (!queueSamples.isEmpty()) {
+            @SuppressWarnings("unchecked")
+            var perQueue = (Map<String, Map<String, Object>>) queueDepthSummary().get("perQueue");
+            perQueue.entrySet().stream()
+                    .sorted(Comparator.comparingLong((Map.Entry<String, Map<String, Object>> e) -> (Long) e.getValue().get("max")).reversed())
+                    .limit(8)
+                    .forEach(e -> log("queue %-48s max %6d  per burst max p50 %6d  drained (< 100) s after burst end, max %s",
+                                      e.getKey(), e.getValue().get("max"), e.getValue().get("burstMaxMedian"), e.getValue().get("maxDrainSeconds")));
+        }
         if (faultEvidence != null) {
             faultEvidence.forEach((key, evidence) -> log("fault %s %-24s %s", settings.fault(), key, evidence));
         }
@@ -769,6 +785,54 @@ public final class LoadDriver {
         storeSamples.add(sample);
         var sizes = (JsonNode) sample.get("sizes");
         log("stores at %s: database %s, slot WAL %s", label, megabytes(sizes.path("databaseBytes").asLong()), sizes.path("slotRetainedWalBytes"));
+    }
+
+    private void sampleQueues() {
+        try {
+            var response = http.operatorGet("QUEUES", base() + "/api/admin/load-report/queue-depths");
+            if (response.ok()) {
+                queueSamples.add(Map.entry(Instant.now(), http.json(response)));
+            } else {
+                stats.count("queue-sample-failed");
+            }
+        } catch (RuntimeException e) {
+            stats.count("queue-sample-failed"); // never let a failed sample cancel the schedule
+        }
+    }
+
+    /**
+     * Per queue: its deepest sample, the median of each burst's deepest (open to 30 s after its end), and how long after
+     * a burst's end it took to get under 100 queued again; plus the raw series.
+     */
+    private Map<String, Object> queueDepthSummary() {
+        var names = new TreeSet<String>();
+        queueSamples.forEach(sample -> sample.getValue().properties().forEach(p -> names.add(p.getKey())));
+        var perQueue = new LinkedHashMap<String, Map<String, Object>>();
+        for (var name : names) {
+            var max = queueSamples.stream().mapToLong(sample -> sample.getValue().path(name).asLong()).max().orElse(0);
+            var burstMaxes = new ArrayList<Long>();
+            var drains = new ArrayList<Long>();
+            for (var burst : bursts) {
+                var windowEnd = burst.end().plusSeconds(30);
+                burstMaxes.add(queueSamples.stream().filter(sample -> !sample.getKey().isBefore(burst.open()) && sample.getKey().isBefore(windowEnd))
+                                           .mapToLong(sample -> sample.getValue().path(name).asLong()).max().orElse(0));
+                queueSamples.stream().filter(sample -> !sample.getKey().isBefore(burst.end()) && sample.getValue().path(name).asLong() < 100)
+                            .findFirst().ifPresent(sample -> drains.add(Duration.between(burst.end(), sample.getKey()).toSeconds()));
+            }
+            Collections.sort(burstMaxes);
+            var summary = new LinkedHashMap<String, Object>();
+            summary.put("max", max);
+            summary.put("burstMaxMedian", burstMaxes.isEmpty() ? 0L : burstMaxes.get(burstMaxes.size() / 2));
+            summary.put("maxDrainSeconds", drains.stream().mapToLong(Long::longValue).max().orElse(-1));
+            summary.put("burstMaxes", burstMaxes);
+            perQueue.put(name, summary);
+        }
+        var series = new ArrayList<Map<String, Object>>();
+        queueSamples.forEach(sample -> series.add(Map.of("at", sample.getKey().toString(), "depths", sample.getValue())));
+        var result = new LinkedHashMap<String, Object>();
+        result.put("perQueue", perQueue);
+        result.put("series", series);
+        return result;
     }
 
     private void logStoreGrowth() {
