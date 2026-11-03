@@ -108,10 +108,12 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
     private static final Duration CATCH_UP_RETRY_DELAY = Duration.ofSeconds(1);
 
     /**
-     * At most this many of the global orders a subscription still waits for (see {@link CdcDeliveryTracker#awaitedGaps})
-     * are asked for by order in one catch-up or back-fill - it bounds the {@code IN} list of that query
+     * A catch-up or back-fill loads the events within every range a subscription still waits for (see
+     * {@link CdcDeliveryTracker#awaitedRanges}): ranges at most this wide are listed order by order, at most this many
+     * orders per statement ({@code IN} list); a wider one - the middle of a wide gap - is read as a range, one statement
+     * each. So a statement per this many awaited orders, never one per order
      */
-    private static final int MAX_AWAITED_GAPS_TO_REQUERY = 1_000;
+    static final int MAX_AWAITED_ORDERS_PER_STATEMENT = 1_000;
 
     private final ConfigurableEventStore<CONFIG>                              eventStore;
     private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
@@ -630,7 +632,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 pageSize,
                 Optional.empty(),
                 deliveryGate,
-                () -> tracker.awaitedGaps(MAX_AWAITED_GAPS_TO_REQUERY));
+                tracker::awaitedRanges);
 
         // Dedup is the delivery tracker's: BackfillThenLiveOrdered records each event it hands downstream, and the
         // live source only drops what the tracker says was delivered already. The live source may therefore hand
@@ -909,11 +911,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                                                       pageSize,
                                                                       Optional.empty(),
                                                                       deliveryGate,
-                                                                      // Plus every gap kept in memory: it has no transient gap row the
-                                                                      // page's gap handler query could include, and is among the newest -
-                                                                      // past the tracker's lowest-first limit when many older orders are
-                                                                      // awaited (rolled-back appends)
-                                                                      () -> deliveryGate.withUnrecordedGaps(tracker.awaitedGaps(MAX_AWAITED_GAPS_TO_REQUERY)),
+                                                                      // Every gap still awaited, kept in memory or recorded: a selection
+                                                                      // (lowest first, newest rows first) missed a fill for good
+                                                                      tracker::awaitedRanges,
                                                                       cdcDeliveryScheduler)
                                .doOnComplete(() -> {
                                    if (recoveringFromOverflow.compareAndSet(true, false)) {
@@ -1060,7 +1060,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         static final int MAX_DEFERRED_ORDERS_PER_GAP          = 1_000;
         /**
          * The most orders one subscription keeps in memory as gaps - beyond, a gap is recorded at once. Also bounds what a
-         * catch-up loads by order on their account ({@link #withUnrecordedGaps})
+         * catch-up loads by order on their account (see {@link CdcDeliveryTracker#awaitedRanges})
          */
         static final int MAX_DEFERRED_ORDERS_PER_SUBSCRIPTION = 1_000;
 
@@ -1314,22 +1314,6 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             if (!defersGapRecording) return false;
             synchronized (deferredGapsLock) {
                 return unrecordedFillsNotDoneWith.containsKey(order);
-            }
-        }
-
-        /**
-         * @return {@code awaitedGaps} plus the orders of the gaps kept in memory not among them - for a catch-up to load
-         * by order (see {@code buildAdaptiveLiveSource}): a fill that committed while the subscription was off the bus is
-         * only in the database, and a gap kept in memory has no transient gap row for the catch-up's gap handler query to
-         * include
-         */
-        List<GlobalEventOrder> withUnrecordedGaps(List<GlobalEventOrder> awaitedGaps) {
-            if (!defersGapRecording) return awaitedGaps;
-            synchronized (deferredGapsLock) {
-                if (unrecordedGaps.isEmpty()) return awaitedGaps;
-                var union = new LinkedHashSet<>(awaitedGaps);
-                unrecordedGaps.forEach(order -> union.add(GlobalEventOrder.of(order)));
-                return List.copyOf(union);
             }
         }
 
@@ -1748,10 +1732,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             int pageSize,
             Optional<Tenant> tenant,
             DeliveryGate deliveryGate,
-            Supplier<List<GlobalEventOrder>> alsoLoadOnFirstPage
+            Supplier<List<LongRange>> awaitedOnFirstPage
                                              ) {
         return Flux.using(() -> Schedulers.newSingle("CDC-Backfill-" + aggregateType, true),
-                          scheduler -> backfillFlux(aggregateType, fromInclusive, headInclusive, pageSize, tenant, deliveryGate, alsoLoadOnFirstPage, scheduler),
+                          scheduler -> backfillFlux(aggregateType, fromInclusive, headInclusive, pageSize, tenant, deliveryGate, awaitedOnFirstPage, scheduler),
                           Scheduler::dispose,
                           // Dispose only after the terminal signal was delivered - it is delivered on the scheduler's own thread
                           false);
@@ -1768,10 +1752,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * @param headInclusive       read once, by the first page load on the scheduler - never on the subscribing thread.
      *                            Callers rely on it being read only after they attached their live source; it may be
      *                            memoized
-     * @param alsoLoadOnFirstPage global orders below {@code fromInclusive} to load by order along with the first page -
-     *                            the gaps a subscription still waits for (see {@link CdcDeliveryTracker#awaitedGaps}).
-     *                            Read on the worker. The first page is loaded for them even when there is nothing past
-     *                            {@code fromInclusive} up to the head
+     * @param awaitedOnFirstPage  the ranges below {@code fromInclusive} a subscription still waits for (see
+     *                            {@link CdcDeliveryTracker#awaitedRanges}) - every event within them is loaded before the
+     *                            first page ({@link #loadEventsWithin}) and handed out first. Read on the worker. Loaded
+     *                            even when there is nothing past {@code fromInclusive} up to the head
      */
     private Flux<PersistedEvent> backfillFlux(
             AggregateType aggregateType,
@@ -1780,7 +1764,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             int pageSize,
             Optional<Tenant> tenant,
             DeliveryGate deliveryGate,
-            Supplier<List<GlobalEventOrder>> alsoLoadOnFirstPage,
+            Supplier<List<LongRange>> awaitedOnFirstPage,
             Scheduler scheduler
                                              ) {
         return Flux.create(sink -> {
@@ -1809,9 +1793,12 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                         List<GlobalEventOrder> alsoLoad = List.of();
                         if (firstPage[0]) {
                             firstPage[0] = false;
-                            alsoLoad = alsoLoadOnFirstPage.get();
+                            loaded.addAll(loadEventsWithin(aggregateType, awaitedOnFirstPage.get()));
+                            if (!loaded.isEmpty()) {
+                                continue;
+                            }
                         }
-                        if (start > head[0] && alsoLoad.isEmpty()) {
+                        if (start > head[0]) {
                             sink.complete();
                             return;
                         }
@@ -1848,6 +1835,43 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             // On termination too: the worker of a shared scheduler must not keep pending page loads around
             sink.onDispose(worker);
         }, FluxSink.OverflowStrategy.ERROR);
+    }
+
+    /**
+     * Every event within {@code awaited} - the gaps a subscription still waits for - all tenants, ascending: an event that
+     * filled one of them while the subscription was off the bus is only in the database. Not one statement per order:
+     * ranges up to {@link #MAX_AWAITED_ORDERS_PER_STATEMENT} wide are listed, that many orders per statement; a wider one
+     * is read as a range. Awaited orders hold no event but a late commit's, so what is read is what is loaded. In one unit
+     * of work, joining one current on the calling thread
+     */
+    List<PersistedEvent> loadEventsWithin(AggregateType aggregateType, List<LongRange> awaited) {
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(awaited, "No awaited provided");
+        if (awaited.isEmpty()) return List.of();
+        return unitOfWorkFactory.withUnitOfWork(uow -> {
+            var events = new TreeMap<Long, PersistedEvent>();
+            var orders = new ArrayList<GlobalEventOrder>(MAX_AWAITED_ORDERS_PER_STATEMENT);
+            Runnable loadListed = () -> {
+                if (orders.isEmpty()) return;
+                eventStore.loadEventsByGlobalOrder(aggregateType, LongRange.only(orders.getFirst().longValue()), List.copyOf(orders), Optional.<Tenant>empty())
+                          .forEach(event -> events.put(event.globalEventOrder().longValue(), event));
+                orders.clear();
+            };
+            for (var range : awaited) {
+                long width = range.toInclusive - range.fromInclusive + 1;
+                if (width > MAX_AWAITED_ORDERS_PER_STATEMENT) {
+                    eventStore.loadEventsByGlobalOrder(aggregateType, range, List.of(), Optional.<Tenant>empty())
+                              .forEach(event -> events.put(event.globalEventOrder().longValue(), event));
+                    continue;
+                }
+                for (long order = range.fromInclusive; order <= range.toInclusive; order++) {
+                    orders.add(GlobalEventOrder.of(order));
+                    if (orders.size() == MAX_AWAITED_ORDERS_PER_STATEMENT) loadListed.run();
+                }
+            }
+            loadListed.run();
+            return List.copyOf(events.values());
+        });
     }
 
     /**

@@ -99,9 +99,56 @@ the same as before. An opt-out property would only control a cost; it would not 
 | Seeding from `getTransientGapsFor` at subscribe | A re-subscribe on a new manager reads the rows written by the last save or by the end of the previous subscription. A `retry()`/`repeat()` re-subscribe starts from the original start order, below everything |
 | Wide gaps / lower end (`addTransientGaps`) | Never deferred; written at once |
 | Subscription end inside a unit of work | The held gaps are written on a virtual thread of their own, and the ending thread waits for it, rather than writing in a unit of work the gate does not own |
-| Bus overflow catch-up, or any other move back onto the bus | The catch-up loads the gaps still awaited by order, because a fill that committed while the subscription was off the bus exists only in the database. The tracker lists the lowest 1 000 awaited orders. Before this change, the newest gaps were also picked up through their transient rows, which the page's gap-handler query includes newest first. A held gap has no row, so the gate now adds every order it holds (`withUnrecordedGaps`); the cap on held orders, 1 000 per subscription, also caps that addition. Without it, a burst with more than 1 000 older awaited orders (rolled-back appends) meant the fill was found only once older gaps had been given up. It then arrived after later events of the same aggregate, which made trading-demo views apply `OrderAccepted` before `OrderPlaced`, and after 120 s it became a permanent gap for an event that exists. Pinned by `a_gap_kept_in_memory_whose_fill_arrives_while_the_subscription_is_off_the_bus_is_filled_by_the_catch_up` |
+| Bus overflow catch-up, or any other move back onto the bus | The catch-up loads every event within every range the tracker awaits (`CdcDeliveryTracker.awaitedRanges`, see the section below), so a held gap is covered like any other. The first fix only added the held orders (`withUnrecordedGaps`, now removed). It was needed because, without it, a burst with more than 1 000 older awaited orders hid the fill until give-up: trading-demo views applied `OrderAccepted` before `OrderPlaced`, and existing events ended up as permanent gaps. Pinned by `a_gap_kept_in_memory_whose_fill_arrives_while_the_subscription_is_off_the_bus_is_filled_by_the_catch_up` |
 | Polling fallback / switches | One gate per subscription whatever the source. The delegate's polls record their own gaps as before |
 | Acknowledgement of fills | A fill of a held gap is never registered with `GapFillsAwaitingAcknowledgement`, so nothing is resolved for it. `dropped` does not acknowledge it to the delegate |
+
+## A catch-up re-reads every awaited gap
+
+This fixes a weakness that was there before this change: it was found while fixing the regression above, and it is on
+`main` too.
+
+**The problem.** A subscription moving onto the CDC bus first catches up from the event store. It reads past its highest
+delivered order, and it must also re-read every gap below that order, because a fill that committed while the
+subscription was off the bus exists only in the database. The catch-up asked for:
+
+- the tracker's lowest 1 000 awaited orders (`awaitedGaps(1000)`), and
+- the gap-handler query's transient rows: all of them up to 50, otherwise the 20 newest, the 10 lowest and 20 rotating.
+
+A gap that was neither among the lowest 1 000 nor selected by the rotation was missed. Its event then arrived only once
+the rotation happened to pick it, after later events of its own aggregate. If the rotation never picked it, the gap was
+given up after the gap timeout and recorded as a permanent gap over an event that exists.
+
+**The fix.** `CdcDeliveryTracker.awaitedRanges()` returns everything the tracker answers `isAwaited` for, as closed
+ranges:
+
+- the earlier gaps, with consecutive orders joined into one range;
+- the earlier middles (`GapMiddlesAwaitedInMemory.awaited()`);
+- every gap between the delivered runs above the watermark, including both ends and, for a wide gap, its middle.
+
+`CdcEventStore.loadEventsWithin` loads every event inside those ranges before the first page, all tenants, ascending, in
+one unit of work. Both the bus catch-up and the initial back-fill of `BackfillThenLiveOrdered` use it.
+
+**Cost.** It is bounded, never one statement per order:
+
+- A range of up to `MAX_AWAITED_ORDERS_PER_STATEMENT` (1 000) orders is listed order by order, with up to 1 000 orders per
+  statement (the existing `IN` list of `loadEventsByGlobalOrder`).
+- A wider range, the middle of a wide gap, is read as one indexed range scan. Awaited orders hold no event except a late
+  commit, so the scan returns only fills.
+- The tracker keeps at most 10 000 gaps, so the number of ranges is bounded too.
+
+In the trading demo's bursts (~1 300 orders awaited) that is 2 statements per catch-up, against 1 before.
+
+**Polling is not affected the same way, and is left as it is.**
+
+- `PollEventStoreTask` re-reads gaps through `TransientGapsQuerySelection` on every poll.
+- `PostgresqlEventStreamGapHandler` promotes a transient gap only if the query that asked for it did not return it, and
+  `findTransientGapsToIncludeInQuery` always adds the gaps that are due for promotion. So polling never gives up a gap
+  without asking for it, and its fill is never lost.
+- What remains is latency. With more than 50 outstanding gaps, a fill can arrive several polls late, after later events
+  of its own aggregate.
+- Asking for every gap on every poll, not once per catch-up, would put an `IN` list of every outstanding gap into every
+  poll. That is a separate cost decision, and polling is only CDC's fallback.
 
 ## Tests
 
@@ -113,6 +160,11 @@ the same as before. An opt-out property would only control a cost; it would not 
   Mutation-checked: with the flush in `beforeResumePointSave` removed, the late event is never delivered.
 - **Stop with an open gap.** The gap row is written, and the event is delivered after the restart.
 - **Rolled-back hole.** Nothing is written, and `isAwaitedAsGap` is true while the hole is held.
+- **Recorded gap no selection names.** A save records the gap. 3 000 lower orders are awaited and 30 newer gaps are
+  recorded above it, so it is neither among the lowest 1 000 nor among the newest 20 rows. The rotation would need 150
+  gap-handler queries to reach it, and the test records every gap a query included and asserts that none included this
+  one, so it fails deterministically against the old catch-up. Its fill is published while the subscription is off the
+  bus, and the catch-up loads it (`a_recorded_gap_that_no_selection_names_is_still_re_read_by_a_catch_up`).
 - **Bus overflow.** With 1 100 rolled-back orders awaited below a held gap, the fill is published while the subscription
   is off the bus, and the catch-up loads it. Without the fix the event never arrives. The test needs a bystander bus
   subscriber, because the bus retains events only while it has no subscriber at all.

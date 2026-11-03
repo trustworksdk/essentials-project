@@ -64,6 +64,10 @@ class CdcEventStoreDeferredGapRecordingIT extends AbstractLogicalReplicationPost
     private final List<EventStoreSubscriptionManager>                               managers = new CopyOnWriteArrayList<>();
     private ExecutorService                                                         heldTransactions;
     /**
+     * Every transient gap a query of the gap handler included - see {@link #setup()}
+     */
+    private final Set<Long>                                                         includedInGapHandlerQueries = ConcurrentHashMap.newKeySet();
+    /**
      * Another subscriber of the aggregate type on the bus, as in any real deployment: the bus retains nothing for a
      * subscription that left it while others remain
      */
@@ -78,7 +82,18 @@ class CdcEventStoreDeferredGapRecordingIT extends AbstractLogicalReplicationPost
                 SeparateTablePerAggregateTypeEventStreamConfigurationFactory.defaultConfiguration(EssentialsJSONEventSerializers.create())
         );
         persistenceStrategy.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);
-        var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory);
+        // The default selection and promotion, recording every gap a gap handler query includes
+        var defaultSelection = PostgresqlEventStreamGapHandler.ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection();
+        includedInGapHandlerQueries.clear();
+        var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(
+                unitOfWorkFactory,
+                Duration.ofSeconds(60),
+                (aggregateType, range, allTransientGaps) -> {
+                    var included = defaultSelection.resolveTransientGaps(aggregateType, range, allTransientGaps);
+                    if (included != null) included.forEach(gap -> includedInGapHandlerQueries.add(gap.longValue()));
+                    return included;
+                },
+                PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
         eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
                                          .setUnitOfWorkFactory(unitOfWorkFactory)
                                          .setPersistenceStrategy(persistenceStrategy)
@@ -288,6 +303,79 @@ class CdcEventStoreDeferredGapRecordingIT extends AbstractLogicalReplicationPost
         mayHandle.get().countDown();
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(received).containsAll(later));
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(received).contains(a.globalOrder()));
+    }
+
+    /**
+     * Every gap the subscription awaits is re-read by a catch-up, not only those some selection happens to name: a gap
+     * recorded as a transient gap that is neither among the tracker's lowest 1 000 awaited orders nor among the gap
+     * handler query's newest 20 / lowest 10 rows - its fill published while the subscription is off the bus - used to be
+     * found only by chance (the 20 rotating rows), else given up after the gap timeout: a permanent gap over an event
+     * that exists.
+     * <p>
+     * Deterministic against the old catch-up: 3 000 recorded gaps lie below the gap, so the rotation, which advances 20
+     * per gap handler query from the lowest, cannot reach it within this test's catch-up pages - and the test asserts
+     * that no gap handler query included it.
+     */
+    @Test
+    void a_recorded_gap_that_no_selection_names_is_still_re_read_by_a_catch_up() throws Exception {
+        var subscriberId = SubscriberId.of("recorded-and-caught-up");
+        // Saves often, so every gap kept in memory is recorded as a transient gap
+        var manager      = startManager("node-1", Duration.ofMillis(200));
+        var mayHandle    = new AtomicReference<>(new CountDownLatch(0));
+        var received     = new CopyOnWriteArrayList<Long>();
+        manager.subscribeToAggregateEventsAsynchronously(subscriberId,
+                                                         ORDERS,
+                                                         GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                         Optional.empty(),
+                                                         (PersistedEventHandler) event -> {
+                                                             try {
+                                                                 mayHandle.get().await(30, TimeUnit.SECONDS);
+                                                             } catch (InterruptedException e) {
+                                                                 Thread.currentThread().interrupt();
+                                                             }
+                                                             received.add(event.globalEventOrder().longValue());
+                                                         });
+        publish(appendAndCommit());
+        await().atMost(Duration.ofSeconds(10)).until(() -> received.size() == 1);
+        availability.active("deferred-gaps-slot");
+        awaitOnTheBus();
+
+        // 3 000 lower awaited orders: the tracker's lowest 1 000 are all below the gap that matters, and the rotation of
+        // the gap handler query would need 150 queries to reach it
+        rollBackAppends(3_000);
+        publishUntilReceived(received, appendAndCommit());
+        // The gap that matters, recorded by a save
+        var a = holdAppend();
+        publishUntilReceived(received, appendAndCommit());
+        await().atMost(Duration.ofSeconds(10)).until(() -> transientGapsOf(subscriberId).contains(GlobalEventOrder.of(a.globalOrder())));
+        // 30 newer recorded gaps: it is not among the gap handler query's newest 20 either
+        for (var i = 0; i < 30; i++) {
+            rollBackAppends(1);
+            publishUntilReceived(received, appendAndCommit());
+        }
+        await().atMost(Duration.ofSeconds(10)).until(() -> transientGapsOf(subscriberId).size() >= 3_000 + 1 + 30);
+        var lowerAwaited = transientGapsOf(subscriberId).stream().filter(gap -> gap.longValue() < a.globalOrder()).count();
+        var newerAwaited = transientGapsOf(subscriberId).stream().filter(gap -> gap.longValue() > a.globalOrder()).count();
+        assertThat(lowerAwaited).as("awaited below the gap - more than the tracker's lowest 1 000").isGreaterThanOrEqualTo(3_000);
+        assertThat(newerAwaited).as("recorded above the gap - more than the gap handler query's newest 20").isGreaterThanOrEqualTo(30);
+
+        // The subscriber stalls; the bus overflows its hand-over and the subscription leaves the bus
+        mayHandle.set(new CountDownLatch(1));
+        var later = new ArrayList<Long>();
+        for (var i = 0; i < 60; i++) {
+            var order = appendAndCommit();
+            later.add(order);
+            publish(order);
+        }
+        // ... and the fill is published while it is off the bus
+        a.commit();
+        publish(a.globalOrder());
+        mayHandle.get().countDown();
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(received).containsAll(later));
+        // The catch-ups are done: no gap handler query named the gap - only a complete re-read finds its fill
+        assertThat(includedInGapHandlerQueries).as("gaps the gap handler queries included").doesNotContain(a.globalOrder());
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(received).contains(a.globalOrder()));
     }
 
