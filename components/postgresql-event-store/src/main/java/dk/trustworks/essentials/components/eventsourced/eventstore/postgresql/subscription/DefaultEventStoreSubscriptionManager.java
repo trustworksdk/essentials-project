@@ -228,7 +228,10 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         requireNonNull(eventStorePollingInterval, "No eventStorePollingInterval provided");
         this.fencedLockManager = requireNonNull(fencedLockManager, "No fencedLockManager provided");
-        this.durableSubscriptionRepository = requireNonNull(durableSubscriptionRepository, "No durableSubscriptionRepository provided");
+        // Every resume point a managed subscription saves passes through it: an event store that keeps the gaps a subscription
+        // opens in memory records them before each save (see DeferredGapRecording)
+        this.durableSubscriptionRepository = GapRecordingBeforeSaveDurableSubscriptionRepository.wrapIfDeferringGapRecording(requireNonNull(durableSubscriptionRepository, "No durableSubscriptionRepository provided"),
+                                                                                                                            eventStore);
         this.snapshotResumePointsEvery = requireNonNull(snapshotResumePointsEvery, "No snapshotResumePointsEvery provided");
         this.snapshotResumePointsAfterEvents = snapshotResumePointsAfterEvents;
         this.eventStoreSubscriptionObserver = eventStore.getEventStoreSubscriptionObserver();

@@ -97,7 +97,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * - backfillFlux: Generates a flux of events during backfill, supporting pagination and optional gap handling.
  * - backfillOnePageAndEmit: Processes a single page of backfill operations, with support for emitting events to a consumer.
  */
-public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> implements ConfigurableEventStore<CONFIG>, AwaitedGapInspector {
+public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> implements ConfigurableEventStore<CONFIG>, AwaitedGapInspector, DeferredGapRecording {
 
     private static final Logger log = LoggerFactory.getLogger(CdcEventStore.class);
 
@@ -169,6 +169,18 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * subscribe of the subscriber that starts before the old one's end has run cannot hide either tracker
      */
     private final ConcurrentMap<SubscriberAndAggregateType, Set<CdcDeliveryTracker>> runningDeliveryTrackers = new ConcurrentHashMap<>();
+    /**
+     * The subscribers whose resume points are saved only after {@link #beforeResumePointSave} - see {@link DeferredGapRecording}
+     */
+    private final Set<SubscriberAndAggregateType>                                     gapRecordingDeferredFor   = ConcurrentHashMap.newKeySet();
+    /**
+     * Per subscriber, the resume point saves in progress - while one is, gates record the gaps they open at once
+     */
+    private final ConcurrentMap<SubscriberAndAggregateType, AtomicInteger>            resumePointSavesInProgress = new ConcurrentHashMap<>();
+    /**
+     * The delivery gates of the running subscriptions, whose deferred gaps {@link #beforeResumePointSave} records
+     */
+    private final ConcurrentMap<SubscriberAndAggregateType, Set<DeliveryGate>>         runningDeliveryGates      = new ConcurrentHashMap<>();
 
     /**
      * Create a {@link CdcEventStoreBuilder} that names every argument and accepts both plain values and
@@ -396,6 +408,57 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
     }
 
     private record SubscriberAndAggregateType(SubscriberId subscriberId, AggregateType aggregateType) {
+    }
+
+    /**
+     * See {@link DeferredGapRecording#deferGapRecordingUntilResumePointSave}: subscriptions of the subscriber that start
+     * from now on keep the narrow gaps they open in memory until a resume point save records them. Only with a
+     * {@link PostgresqlEventStreamGapHandler}, the gap handler that can record a gap without the event above it
+     * ({@link SubscriptionGapHandler#addTransientGaps}); with any other, gaps are recorded at once, as before
+     */
+    @Override
+    public void deferGapRecordingUntilResumePointSave(SubscriberId subscriberId, AggregateType aggregateType) {
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        if (eventStreamGapHandler instanceof PostgresqlEventStreamGapHandler) {
+            gapRecordingDeferredFor.add(new SubscriberAndAggregateType(subscriberId, aggregateType));
+        }
+    }
+
+    /**
+     * See {@link DeferredGapRecording#beforeResumePointSave}: from now on until the save is closed, the subscriber's gates
+     * record a gap the moment it opens; then the gaps they kept in memory are recorded, each gate's in a unit of work of
+     * its own. In that order, so a gap is either kept by a gate when this records its gaps, or recorded when it opens -
+     * whichever event the resume point read afterwards has moved past
+     */
+    @Override
+    public ResumePointSave beforeResumePointSave(SubscriberId subscriberId, AggregateType aggregateType) {
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        var key   = new SubscriberAndAggregateType(subscriberId, aggregateType);
+        var saves = resumePointSavesInProgress.computeIfAbsent(key, k -> new AtomicInteger());
+        saves.incrementAndGet();
+        ResumePointSave save = () -> saves.decrementAndGet();
+        try {
+            var gates = runningDeliveryGates.get(key);
+            if (gates != null) {
+                for (var gate : List.copyOf(gates)) {
+                    gate.recordDeferredGaps();
+                }
+            }
+            return save;
+        } catch (RuntimeException e) {
+            save.close();
+            throw e;
+        }
+    }
+
+    /**
+     * @return whether a resume point save of the subscriber is in progress - see {@link #beforeResumePointSave}
+     */
+    private boolean isResumePointSaveInProgress(SubscriberAndAggregateType key) {
+        var saves = resumePointSavesInProgress.get(key);
+        return saves != null && saves.get() > 0;
     }
 
     /**
@@ -986,6 +1049,36 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * bus's - except {@link #acknowledged}, which runs on the subscriber's.
      */
     private final class DeliveryGate implements DeliveryRecorder {
+        /**
+         * The widest gap kept in memory rather than recorded when it opens - concurrent appenders committing out of order
+         * open gaps of a few orders; a wider one is recorded at once
+         */
+        static final int MAX_DEFERRED_ORDERS_PER_GAP          = 1_000;
+        /**
+         * The most orders one subscription keeps in memory as gaps - beyond, a gap is recorded at once
+         */
+        static final int MAX_DEFERRED_ORDERS_PER_SUBSCRIPTION = 10_000;
+
+        /**
+         * @return {@code orders} as runs of consecutive orders, ascending
+         */
+        private static List<LongRange> runsOf(SortedSet<Long> orders) {
+            var  runs  = new ArrayList<LongRange>();
+            long from  = -1;
+            long to    = -1;
+            for (long order : orders) {
+                if (from >= 0 && order == to + 1) {
+                    to = order;
+                    continue;
+                }
+                if (from >= 0) runs.add(LongRange.between(from, to));
+                from = order;
+                to = order;
+            }
+            if (from >= 0) runs.add(LongRange.between(from, to));
+            return runs;
+        }
+
         private final CdcDeliveryTracker                        tracker;
         private final AggregateType                             aggregateType;
         private final Optional<SubscriberId>                    subscriberId;
@@ -1000,6 +1093,29 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * the subscriber is done with, and every event the gate drops
          */
         private volatile SubscriberAcknowledgement              delegateAcknowledgement = SubscriberAcknowledgement.create();
+        /**
+         * Whether the narrow gaps this subscription opens are kept in memory until a resume point save of the subscriber
+         * records them ({@link #recordDeferredGaps()}) - see {@link DeferredGapRecording}
+         */
+        private final boolean                                   defersGapRecording;
+        /**
+         * Guards the two collections below; held across {@link #recordDeferredGaps()}'s commit, so an acknowledgement
+         * never resolves a fill whose gap that is still recording. Taken before the gap handler's monitor, never after
+         */
+        private final Object                                    deferredGapsLock        = new Object();
+        /**
+         * The orders of the gaps opened and kept in memory - not recorded with the gap handler, not delivered, not given up
+         */
+        private final TreeSet<Long>                             unrecordedGaps          = new TreeSet<>();
+        /**
+         * The fills of gaps kept in memory, handed on and not done with: recorded as gaps by a save, unless the subscriber
+         * is done with them first
+         */
+        private final TreeMap<Long, PersistedEvent>             unrecordedFillsNotDoneWith = new TreeMap<>();
+        /**
+         * Once the subscription ended, every gap is recorded at once
+         */
+        private       boolean                                   ended;
 
         private DeliveryGate(CdcDeliveryTracker tracker, AggregateType aggregateType, Optional<SubscriberId> subscriberId, Optional<SubscriptionGapHandler> gapHandler) {
             this.tracker = tracker;
@@ -1014,6 +1130,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             if (this.gapHandler.isPresent()) {
                 tracker.collectTimedOutGaps();
             }
+            this.defersGapRecording = this.gapHandler.isPresent() && subscriberId.map(id -> gapRecordingDeferredFor.contains(new SubscriberAndAggregateType(id, aggregateType)))
+                                                                                    .orElse(false);
         }
 
         @Override
@@ -1022,8 +1140,17 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             var  delivery    = tracker.markDelivered(globalOrder);
             recordGivenUpGaps();
             switch (delivery.kind()) {
-                case OPENED_GAP -> recordOpenedGap(event, delivery.durablyAwaitedGapsBelow(globalOrder));
-                case FILLED_GAP -> gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.awaitAcknowledgement(List.of(event)));
+                case OPENED_GAP -> {
+                    var awaitedGaps = delivery.durablyAwaitedGapsBelow(globalOrder);
+                    if (!keptUnrecorded(awaitedGaps)) {
+                        recordOpenedGap(event, awaitedGaps);
+                    }
+                }
+                case FILLED_GAP -> {
+                    if (!filledAnUnrecordedGap(event)) {
+                        gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.awaitAcknowledgement(List.of(event)));
+                    }
+                }
                 case DUPLICATE -> dropped(event);
                 default -> {
                 }
@@ -1041,6 +1168,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         @Override
         public void dropped(PersistedEvent event) {
             if (gapFillsBeingHandedOn.isPresent() && gapFillsBeingHandedOn.get().isAwaiting(event)) {
+                return;
+            }
+            if (isFillOfAnUnrecordedGapNotDoneWith(event.globalEventOrder().longValue())) {
                 return;
             }
             delegateAcknowledgement.acknowledge(event);
@@ -1072,8 +1202,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * @throws RuntimeException a failure to resolve them inside the caller's unit of work - the gaps stay open
          */
         void acknowledged(List<PersistedEvent> events) {
+            // A fill of a gap kept in memory: done with, nothing was recorded - nothing to resolve
+            var fillsOfRecordedGaps = withoutFillsOfUnrecordedGaps(events);
             try {
-                gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.acknowledged(events));
+                gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.acknowledged(fillsOfRecordedGaps));
             } catch (RuntimeException e) {
                 try {
                     delegateAcknowledgement.acknowledge(events);
@@ -1124,6 +1256,146 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          */
         void subscriptionStarted() {
             subscriberId.ifPresent(id -> deliveryTrackerRunning(id, aggregateType, tracker));
+            if (defersGapRecording) {
+                runningDeliveryGates.computeIfAbsent(key(), k -> ConcurrentHashMap.newKeySet()).add(this);
+            }
+        }
+
+        private SubscriberAndAggregateType key() {
+            return new SubscriberAndAggregateType(subscriberId.orElseThrow(), aggregateType);
+        }
+
+        /**
+         * Keeps the gap below an event that opened it in memory instead of recording it - when this subscription defers
+         * gap recording, the gap is narrow (no middle awaited in memory only, at most {@link #MAX_DEFERRED_ORDERS_PER_GAP}
+         * orders), no more than {@link #MAX_DEFERRED_ORDERS_PER_SUBSCRIPTION} orders are kept, and no resume point save of
+         * the subscriber is in progress: the resume point that save reads may already be past this gap's event.
+         *
+         * @return true if kept, false if the gap is to be recorded now
+         */
+        private boolean keptUnrecorded(List<LongRange> awaitedGaps) {
+            if (!defersGapRecording || awaitedGaps.size() != 1) return false;
+            var  gap   = awaitedGaps.getFirst();
+            long width = gap.toInclusive - gap.fromInclusive + 1;
+            synchronized (deferredGapsLock) {
+                if (ended || width > MAX_DEFERRED_ORDERS_PER_GAP ||
+                        unrecordedGaps.size() + unrecordedFillsNotDoneWith.size() + width > MAX_DEFERRED_ORDERS_PER_SUBSCRIPTION ||
+                        isResumePointSaveInProgress(key())) {
+                    return false;
+                }
+                gap.stream().forEach(unrecordedGaps::add);
+                return true;
+            }
+        }
+
+        /**
+         * @return true if {@code fill} filled a gap kept in memory - then nothing is to be resolved when the subscriber is
+         * done with it, unless a save records its gap meanwhile
+         */
+        private boolean filledAnUnrecordedGap(PersistedEvent fill) {
+            if (!defersGapRecording) return false;
+            long order = fill.globalEventOrder().longValue();
+            synchronized (deferredGapsLock) {
+                if (!unrecordedGaps.remove(order)) return false;
+                unrecordedFillsNotDoneWith.put(order, fill);
+                return true;
+            }
+        }
+
+        /**
+         * @return true if {@code order} is the fill of a gap kept in memory that was handed on and is not done with
+         */
+        boolean isFillOfAnUnrecordedGapNotDoneWith(long order) {
+            if (!defersGapRecording) return false;
+            synchronized (deferredGapsLock) {
+                return unrecordedFillsNotDoneWith.containsKey(order);
+            }
+        }
+
+        /**
+         * @return {@code events} without the fills of gaps kept in memory, which are done with from now on
+         */
+        private List<PersistedEvent> withoutFillsOfUnrecordedGaps(List<PersistedEvent> events) {
+            if (!defersGapRecording) return events;
+            synchronized (deferredGapsLock) {
+                if (unrecordedFillsNotDoneWith.isEmpty()) return events;
+                return events.stream()
+                             .filter(event -> unrecordedFillsNotDoneWith.remove(event.globalEventOrder().longValue()) == null)
+                             .toList();
+            }
+        }
+
+        /**
+         * Records the gaps kept in memory with the gap handler ({@link SubscriptionGapHandler#addTransientGaps}, one call per
+         * run of consecutive orders), in a unit of work of its own - joining one current on the calling thread - and hands
+         * the fills of them that are not done with to {@link #gapFillsBeingHandedOn}, so the subscriber's acknowledgement
+         * resolves them as any other. Holds {@link #deferredGapsLock} until committed.
+         *
+         * @throws RuntimeException the gaps could not be recorded - they stay kept, for the next call
+         */
+        void recordDeferredGaps() {
+            if (!defersGapRecording) return;
+            synchronized (deferredGapsLock) {
+                if (unrecordedGaps.isEmpty() && unrecordedFillsNotDoneWith.isEmpty()) return;
+                var orders = new TreeSet<>(unrecordedGaps);
+                orders.addAll(unrecordedFillsNotDoneWith.keySet());
+                var runs    = runsOf(orders);
+                var handler = gapHandler.get();
+                var reconciliation = unitOfWorkFactory.withUnitOfWork(uow -> {
+                    synchronized (handler) {
+                        var recorded = GapReconciliation.NONE;
+                        for (var run : runs) {
+                            recorded = recorded.plus(handler.addTransientGaps(aggregateType, run));
+                        }
+                        return recorded;
+                    }
+                });
+                var fills = List.copyOf(unrecordedFillsNotDoneWith.values());
+                unrecordedGaps.clear();
+                unrecordedFillsNotDoneWith.clear();
+                if (!fills.isEmpty()) {
+                    gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.awaitAcknowledgement(fills));
+                }
+                log.debug("[{}-{}] Recorded the gap(s) {} kept in memory, before a resume point save", handler.subscriberId(), aggregateType, runs);
+                if (!reconciliation.isEmpty()) {
+                    eventStore.getEventStoreSubscriptionObserver().gapReconciliationOutcome(handler.subscriberId(), aggregateType, reconciliation);
+                }
+            }
+        }
+
+        /**
+         * The subscription ended: the gaps kept in memory are recorded now - a later save of the resume point, which may be
+         * past them, finds this gate gone. Not in a unit of work current on the ending thread, which the gate does not own:
+         * on a thread of its own then, waited for. A failure is logged: a restart from a resume point saved past those
+         * gaps then does not wait for them - as when recording an opened gap fails
+         */
+        private void recordDeferredGapsAtEnd() {
+            synchronized (deferredGapsLock) {
+                ended = true;
+            }
+            try {
+                if (unitOfWorkFactory.getCurrentUnitOfWork().isPresent()) {
+                    var failure = new AtomicReference<RuntimeException>();
+                    var thread = Thread.ofVirtual().name("Cdc-RecordDeferredGaps-" + aggregateType).start(() -> {
+                        try {
+                            recordDeferredGaps();
+                        } catch (RuntimeException e) {
+                            failure.set(e);
+                        }
+                    });
+                    thread.join();
+                    if (failure.get() != null) throw failure.get();
+                } else {
+                    recordDeferredGaps();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("[{}-{}] Interrupted while recording the gaps kept in memory as the subscription ended - a restart from a resume point saved past them will not wait for them",
+                         subscriberId.orElseThrow(), aggregateType, e);
+            } catch (RuntimeException e) {
+                log.warn("[{}-{}] Could not record the gaps kept in memory as the subscription ended - a restart from a resume point saved past them will not wait for them",
+                         subscriberId.orElseThrow(), aggregateType, e);
+            }
         }
 
         /**
@@ -1140,6 +1412,16 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * does {@link #isAwaitedAsGap} stop asking the tracker, so there is no moment neither of them answers for a middle.
          */
         void subscriptionEnded() {
+            if (defersGapRecording) {
+                try {
+                    recordDeferredGapsAtEnd();
+                } finally {
+                    runningDeliveryGates.computeIfPresent(key(), (key, gates) -> {
+                        gates.remove(this);
+                        return gates.isEmpty() ? null : gates;
+                    });
+                }
+            }
             try {
                 // In memory only, so whatever the thread: the middles of wide gaps still awaited, for the next subscription
                 tracker.handOverMiddlesAwaitedInMemoryOnly();
@@ -1180,7 +1462,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                           gapHandler.get().subscriberId(), aggregateType, givenUpInMemoryOnly);
             }
             // Ranges, one per gap end: the gap handler promotes each range in one go, not order by order
-            var givenUp = tracker.drainTimedOutGaps();
+            var givenUp = withoutUnrecordedGaps(tracker.drainTimedOutGaps());
             if (givenUp.isEmpty()) return;
             var handler = gapHandler.get();
             try {
@@ -1196,6 +1478,27 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 tracker.requeueTimedOutGaps(givenUp);
                 log.warn("[{}-{}] Could not record with the gap handler that the gap(s) {} were given up on - trying again with the next event delivered, else a later subscription waits for them again",
                          handler.subscriberId(), aggregateType, givenUp, e);
+            }
+        }
+
+        /**
+         * Forgets the given-up orders kept in memory: never recorded, there is nothing to give up - a resume point is never
+         * saved past a gap that is not recorded, so a restart reads its orders again. Leaves out a range kept in memory
+         * whole, so giving it up costs no statement
+         */
+        private List<LongRange> withoutUnrecordedGaps(List<LongRange> givenUp) {
+            if (!defersGapRecording || givenUp.isEmpty()) return givenUp;
+            synchronized (deferredGapsLock) {
+                if (unrecordedGaps.isEmpty()) return givenUp;
+                var toRecord = new ArrayList<LongRange>(givenUp.size());
+                for (var range : givenUp) {
+                    var kept  = unrecordedGaps.subSet(range.fromInclusive, true, range.toInclusive, true);
+                    long width = range.toInclusive - range.fromInclusive + 1;
+                    var allKept = kept.size() == width;
+                    kept.clear();
+                    if (!allKept) toRecord.add(range);
+                }
+                return toRecord;
             }
         }
 
@@ -1774,8 +2077,14 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
     }
 
     private boolean isAwaitedByARunningSubscription(SubscriberId subscriberId, AggregateType aggregateType, long globalEventOrder) {
-        var trackers = runningDeliveryTrackers.get(new SubscriberAndAggregateType(subscriberId, aggregateType));
-        return trackers != null && trackers.stream().anyMatch(tracker -> tracker.isAwaited(globalEventOrder));
+        var key      = new SubscriberAndAggregateType(subscriberId, aggregateType);
+        var trackers = runningDeliveryTrackers.get(key);
+        if (trackers != null && trackers.stream().anyMatch(tracker -> tracker.isAwaited(globalEventOrder))) {
+            return true;
+        }
+        // A fill of a gap kept in memory, handed on and not done with - no transient gap records it
+        var gates = runningDeliveryGates.get(key);
+        return gates != null && gates.stream().anyMatch(gate -> gate.isFillOfAnUnrecordedGapNotDoneWith(globalEventOrder));
     }
 
     @Override

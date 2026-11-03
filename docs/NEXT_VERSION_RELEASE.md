@@ -16,7 +16,8 @@ and two lock waits removed.
   that need them and take one horizon probe per pass; idle pumps can give their connections back; a cheaper message
   format.
 - Event store: concurrent gap give-ups no longer deadlock; a give-up costs what it gives up rather than every gap
-  outstanding; CDC hands out event JSON as stored.
+  outstanding; CDC hands out event JSON as stored; an out-of-order commit no longer costs every CDC subscriber a
+  commit of its own (§2.12).
 - Aggregates: an update no longer re-queries the newest snapshot, policies on declared aggregates apply to
   repositories built at startup (§1.1.2), and the default snapshot interval is 1000 events (§1.1.3).
 - Handler dispatch (`shared`): every aggregate event applied and every handler call no longer builds log messages that
@@ -418,6 +419,30 @@ and `exclusiveSubscriptionLockName`.
 `InvokeMessageHandlerMethod` - the operation a `MessageHandlerInterceptor` sees around every `@MessageHandler` call -
 now has `message` and `messagPayload` as public final fields, like `methodToInvoke` and `invokeMethodOn` already were,
 so an interceptor can read the `Message` and its metadata without reflection. Additive; nothing to change.
+
+### 2.12 CDC: an out-of-order commit no longer costs each subscriber a commit of its own (`postgresql-event-store`)
+
+The CDC bus delivers events in commit order. When appenders run concurrently, a lower global order often commits a few
+milliseconds after a higher one. Each time, every CDC subscription recorded the "gap" below the higher event as a
+transient gap: one extra transaction, on a pooled connection, before the event was handed on. A second statement then
+deleted the row once the late event arrived. In the trading demo, that came to ~550k inserts plus ~550k deletes in
+`transient_subscriber_gaps` and 407k reconcile statements over ~780k events. This on a machine whose throughput is
+bound by WAL flushes.
+
+The row only matters once a resume point past the gap is saved, so for subscriptions managed by an
+`EventStoreSubscriptionManager`, the subscription now keeps a narrow opened gap in memory. The gap is written only if it
+is still open when the subscriber's resume point is next saved (periodically, on stop, lock release or reset), and is
+always written before that save. A gap that fills before then costs no database write at all. The crash guarantee is
+unchanged: no resume point is saved past a gap that is not recorded.
+
+There is nothing to configure. A few cases still write the gap at once, as before:
+
+- direct `pollEvents` subscribers;
+- gap handlers other than `PostgresqlEventStreamGapHandler`;
+- gaps wider than 1 000 orders.
+
+New, additive: role interface `DeferredGapRecording`, implemented by `CdcEventStore`. An `EventStore` decorator that does
+not forward it simply keeps the old behaviour. Design and every save path: `docs/cdc-deferred-gap-recording.md`.
 
 ## 3. Bug fixes
 

@@ -1,0 +1,140 @@
+# CDC: deferred recording of opened gaps
+
+Status: implemented (`components/postgresql-event-store`), ships in the next release.
+
+## Problem
+
+The CDC bus delivers events in **commit** order. When appenders run concurrently, a transaction that took a lower
+`global_event_order` often commits after one that took a higher order. Each time that happens, a CDC subscription's
+`CdcDeliveryTracker` reports `OPENED_GAP` for the higher event, and `CdcEventStore.DeliveryGate.recordOpenedGap` used
+to write the gap at once. It did so in a `UnitOfWork` of its own (`reconcileGapsAndReport`, plus `addTransientGaps` for
+the lower end of a wide gap). The gap then filled a few milliseconds later, and the fill's `DELETE` ran in the
+subscriber's unit of work when it acknowledged the event. The result was one extra commit per out-of-order event per
+subscriber, on a pooled connection, before the event could be handed on.
+
+The trading demo measured it (10 business days, ~71k orders, ~780k events, CDC on):
+
+- `transient_subscriber_gaps` saw ~550k inserts and ~550k deletes.
+- The reconcile CTE (`WITH candidates AS ... permanent_gaps ...`) ran 407k times.
+- The machine is bound by WAL flush count, at ~17 fsyncs per order. `synchronous_commit=off` cut burst latency by a
+  third, and WAL-volume tuning did nothing, so every extra commit counts.
+- Thread dumps taken during bursts showed, per dump, ~2.6 threads waiting for a pool connection inside
+  `recordOpenedGap` and 3.3 threads waiting on PostgreSQL inside it.
+
+The demo only provides the evidence. Any CDC deployment with concurrent appenders pays the same cost.
+
+## Why the row exists
+
+A transient gap row exists for one reason: a subscription that restarts from a **saved** resume point must still wait
+for an event that commits late below that point. The tracker seeds itself from `getTransientGapsFor` when it
+subscribes. Resume points are not saved per event, though. They are saved:
+
+- periodically, by `DefaultEventStoreSubscriptionManager.saveResumePointsForAllSubscribers` (every
+  `snapshotResumePointsEvery`) and `saveResumePointsThatAdvancedPastThreshold`;
+- on stop, fenced-lock release and shutdown (`AbstractEventStoreSubscription.persistResumePointUntilSettled`);
+- on reset (`overrideResumePoint` in all four subscription types, and `resetStoredResumePoint`).
+
+Until a resume point past a gap has been saved, a crash resumes **below** the gap and reads its event again anyway.
+
+**Invariant:** no resume point is persisted past an open gap that is not durably recorded.
+
+## Design
+
+1. **`DeferredGapRecording`** is a new role interface on `EventStore`, implemented by `CdcEventStore`. It works the same
+   way as `AwaitedGapInspector`: a decorator that does not forward it turns the deferral off, and nothing else changes.
+   - `deferGapRecordingUntilResumePointSave(subscriber, aggregateType)` opts a subscriber in.
+   - `beforeResumePointSave(subscriber, aggregateType)` records the gaps held in memory and returns a `ResumePointSave`.
+     The caller closes it once the save is done.
+2. **The manager wraps its `DurableSubscriptionRepository`** in `GapRecordingBeforeSaveDurableSubscriptionRepository`
+   when its event store is a `DeferredGapRecording`.
+   - Reading or creating a resume point through the wrapper opts that subscriber in.
+   - `saveResumePoints` calls `beforeResumePointSave` for each changed resume point **before** the delegate reads its
+     value, and closes the windows after the save.
+   - If a resume point's gaps cannot be recorded, that resume point is not saved. It stays changed, and the next save
+     retries.
+   - Every save path listed above goes through this one repository, so it is the single choke point.
+3. **The `DeliveryGate` keeps a narrow opened gap in memory** (`unrecordedGaps`) instead of writing it, but only when all
+   of these hold:
+   - the subscriber opted in;
+   - the gap handler is a `PostgresqlEventStreamGapHandler`, because a flush needs `addTransientGaps`, which records a
+     gap without the event above it;
+   - the gap has no middle awaited in memory only, and is at most 1 000 orders wide;
+   - the subscription keeps at most 10 000 orders in memory;
+   - no resume point save of the subscriber is in progress.
+
+   If any condition fails, the gate writes the gap at once, as before.
+4. **What happens to a gap held in memory:**
+   - **It fills.** The fill goes to `unrecordedFillsNotDoneWith`, not to `GapFillsAwaitingAcknowledgement`. When the
+     subscriber is done with it (ack, or hand-on for a subscriber that does not acknowledge), it is simply forgotten. It
+     costs no insert and no delete.
+   - **A save happens first.** The save records every order still held, including fills the subscriber is not done
+     with, as transient gaps: one `addTransientGaps` per run of consecutive orders, in one unit of work per gate. It then
+     hands the fills to `GapFillsAwaitingAcknowledgement`, so they resolve as before.
+5. **Race closure.** `beforeResumePointSave` first increments a per-subscriber "save in progress" counter, then flushes
+   each gate under the gate's lock.
+   - The gate checks the counter under the same lock when it decides whether to keep a gap.
+   - The resume point can only move past a gap once the event that opened it has been handed on, which happens after
+     `deliver` returns.
+   - So every gap below the resume point that the save reads is either flushed by that save, or was opened while the
+     counter was raised and therefore written at once.
+   - The flush holds the gate lock across its commit, so an acknowledgement cannot forget a fill whose gap is being
+     written at that moment.
+   - Lock order is always gate lock, then gap-handler monitor.
+
+The deferral is not configurable. It keeps the invariant on every path, and with no subscriber opted in the behaviour is
+the same as before. An opt-out property would only control a cost; it would not change any guarantee.
+
+## Every path
+
+| Path | Coverage |
+|---|---|
+| Periodic save / threshold save | Wrapper → `beforeResumePointSave` before the delegate snapshots |
+| Stop, lock release, shutdown (`persistResumePointUntilSettled`) | Same wrapper. The gate also writes what it holds when the subscription ends (`subscriptionEnded`), so a save after the dispose finds nothing left unrecorded |
+| Reset (`overrideResumePoint`, `resetStoredResumePoint`) | Wrapper. A reset's later `resetTransientGapsFor` clears the rows as before |
+| `createResumePoint` | Writes the starting point, which is below anything delivered. Opts the subscriber in |
+| Processors (`advanceResumeFromAndIncluding`, `awaitProcessed`) | Advance the in-memory resume point only. Persisting it always goes through the repository. `InTransaction*` subscriptions use the event bus, not `pollEvents` |
+| Direct `pollEvents` without a manager | Never opted in, so gaps are written at once (unchanged) |
+| Give-up (`recordGivenUpGaps`) | Orders still held are dropped from memory. A range held whole is not passed to `giveUpTransientGapRanges`, so it costs no statement. Nothing was saved past such a gap, so a restart reads its orders again |
+| `isAwaitedAsGap` | An undelivered held gap is answered by the running tracker (`isAwaited`). A held fill the subscriber is not done with is answered by the running gate (`isFillOfAnUnrecordedGapNotDoneWith`). Both are written when the subscription ends, so the transient rows answer after that |
+| Seeding from `getTransientGapsFor` at subscribe | A re-subscribe on a new manager reads the rows written by the last save or by the end of the previous subscription. A `retry()`/`repeat()` re-subscribe starts from the original start order, below everything |
+| Wide gaps / lower end (`addTransientGaps`) | Never deferred; written at once |
+| Subscription end inside a unit of work | The held gaps are written on a virtual thread of their own, and the ending thread waits for it, rather than writing in a unit of work the gate does not own |
+| Polling fallback / switches | One gate per subscription whatever the source. The delegate's polls record their own gaps as before |
+| Acknowledgement of fills | A fill of a held gap is never registered with `GapFillsAwaitingAcknowledgement`, so nothing is resolved for it. `dropped` does not acknowledge it to the delegate |
+
+## Tests
+
+`CdcEventStoreDeferredGapRecordingIT` uses a trigger to count inserts into `transient_subscriber_gaps`:
+
+- **Gaps that open and fill between saves.** Five gaps open and fill, followed by a stop: zero inserts.
+- **Crash after a save.** A periodic save moves the resume point past an open gap, and the gap row exists. A second
+  manager then starts from that resume point without the first being stopped, and still receives the late event.
+  Mutation-checked: with the flush in `beforeResumePointSave` removed, the late event is never delivered.
+- **Stop with an open gap.** The gap row is written, and the event is delivered after the restart.
+- **Rolled-back hole.** Nothing is written, and `isAwaitedAsGap` is true while the hole is held.
+
+The existing pins still apply: `CdcEventStoreCommitOrderIT`, `CdcEventStoreGapFillAcknowledgementIT`,
+`CdcEventStoreConcurrentWritersIT`, `CdcEventStoreLiveTailHoleIT`, `CdcEventStoreAwaitedGapInspectorIT`, and
+`EventProcessorIT` / `ViewEventProcessorIT` (`awaitProcessed` with transient gaps).
+
+## Cost per out-of-order event, per subscriber
+
+| | Before | After |
+|---|---|---|
+| Fills before the next save | 1 own commit (reconcile CTE + insert) and 1 `DELETE` in the subscriber's UoW | No database write |
+| Still open at a save (for example rolled-back holes) | Same as above | The insert moves into one unit of work per gate per save. Give-up and fill resolution as before |
+
+## Risks
+
+- **Pool connections during a flush.** A flush holds the gate lock across its commit. An acknowledging subscriber
+  thread, which already holds a connection inside its own unit of work, can block on that lock while the flush waits for
+  a connection. This only matters with a pool smaller than the number of subscriber threads blocked behind one save. The
+  window is one short unit of work per save.
+- **A save inside a caller's unit of work.** The flush joins it, and the commit then happens after the gate lock is
+  released. If an acknowledgement races into that window, it can leave a stale transient row. That row causes one
+  duplicate delivery after a restart, which is within the at-least-once contract. The manager's save paths are not expected to run inside a
+  unit of work.
+- **Non-exclusive subscriptions on several instances** share one resume-point row. Another instance's save can move it
+  past a gap this instance holds. That is no weaker than before: the shared row could already move past events this
+  instance had not handled.
+- **Custom gap handlers and custom event-store decorators** keep the previous immediate writes.
