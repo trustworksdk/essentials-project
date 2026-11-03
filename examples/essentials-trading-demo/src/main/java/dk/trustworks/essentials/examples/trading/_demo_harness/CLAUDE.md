@@ -916,3 +916,13 @@ All checks passed in all three runs.
   p99 4.7 / 3.7 / 3.2 / 3.0 s on days 2 / 5 / 8 / 10, placed → submitted p99 2.7 s, router wait 1.8 s, reports wait
   1.7 s, filled → booked 0.9 s, 68 157 orders, every check passing. Within run-to-run noise of J, so the container
   costs nothing measurable, and it is the configuration that avoids the port relay on Docker Desktop too.
+- **Runs L and M: where the router's remaining wait is.** L (as K, with the `routerHandler` / `answerRecording` stages
+  and a 0.5 s sampler of the router inbox depth and its subscription's lag): a consumer is busy 8 ms per order (p99
+  44 ms), recording the answer 1 ms (p99 15 ms), and the subscription stays within about a second of the events. But
+  500-600 messages stand in the inbox through each open and drain at about the burst's own rate, ~600/s - with 16
+  permits that is ~25 ms per message held, three times the handler. M (router at 32): router wait p99 1.9 -> 0.9 s,
+  but the exchange-reports wait rose 1.6 -> 2.1 s, placed -> submitted stayed 2.7 s and booked p99 got no better
+  (day 10: 3.7 s against 3.1 s). Each stage drains about 600/s at 16; the open arrives at 600/s, so the remaining
+  ~3 s p99 is the pipeline at its ceiling. Raising one stage moves the queue to the next. What would lift the ceiling
+  is the per-message work around each handler (most likely reloading the forwarded event and acknowledging it -
+  not yet measured), not more consumers. The router stays at 16.
