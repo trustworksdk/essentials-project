@@ -301,7 +301,7 @@ quotes `ACME` by default). Done when every order released its hold and every fil
 pool) and the fixes since (CDC warm-up, shard-owned read plans, batched CDC inbox): **~196 completed orders/s on polling, ~184 on
 CDC**, end to end p50 ~30 s on CDC, every run alike. What bounds it now is per-event handling; see
 `docs/key-partitioned-event-processing.md` §5, "Two speeds, and where the ceiling sits now". With the `compose`
-profile's present settings - 8 / 8 / 8 consumers, a 40-connection pool, the processors forwarding in batches of 100 -
+profile's settings of the day - 8 / 8 / 8 consumers, a 40-connection pool, the processors forwarding in batches of 100 -
 it completes at **~366 orders/s**, end to end p50 ~16 s (same section, "Batched forward, built and measured"). The
 paragraph below is the 2026-10-19 reading.
 
@@ -886,3 +886,29 @@ latencies above are what to expect.
 
 The ~6 s p99 that remains is the demo's and the framework's own, and it rises slowly over a run in both
 configurations (H: 5.3 s on day 2, 6.6 s on day 10), which points at a cost growing with the stored data.
+
+### Inbox consumers at the opens, 2026-11-03
+
+Same recipe as "PostgreSQL through the port proxy" above, all on the direct connection, changing only the order
+flow's inbox consumers (`trading-demo.orders.consumers.*`) and the pool. Stage timings from
+`trading-demo.orders.router-stage-timings.enabled`.
+
+| | H: 8 / 8 / 8, pool 40 | I: router 16 | J: 16 / 16 / 16, pool 60 |
+|---|---|---|---|
+| Booked p99, days 2 / 5 / 8 / 10 | 5.3 / 6.0 / 6.3 / 6.6 s | 5.7 / 5.7 / 5.5 / 5.5 s | 4.5 / 3.3 / 3.1 / 2.9 s |
+| Router inbox wait p99 | 6.2 s | 1.7 s | 2.3 s |
+| Exchange-reports inbox wait p99 | 2.8 s | 3.6 s | 1.6 s |
+| Filled → booked p99 | 2.0 s | 3.6 s | 0.6 s |
+| JVM cores p95 | 4.9 | 4.9 | 4.9 |
+| Pool: peak active / peak waiting | 40 / 88 | 40 / 72 | 60 / 49 |
+
+All checks passed in all three runs.
+
+- **At 8 consumers every stage capped the 600/s open.** Each exchange call took 5 ms (p99 21 ms), yet the router
+  inbox queued about 930 orders per open. More router consumers only moved the backlog to the exchange-reports and
+  ledger inboxes (run I). All three at 16 halved the booked p99, for no more CPU.
+- **The p99 that rose over a run in H was backlog carried from one open into the next**, not stored data: in J it
+  falls over the run instead.
+- **The pool still peaks at 60.** Two instances at 60 need more than PostgreSQL's default of 100 connections, hence
+  `max_connections=200` in both compose files.
+- What is left is the router's 2.3 s queue wait at p99.

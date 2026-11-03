@@ -24,12 +24,13 @@ spring:
     # starter passed its runtime to its queues there were two runtimes holding 6, and a restart against
     # a database the demo had already run on failed start-up with the pool exhausted.
     #
-    # 40 since the order flow runs 8 / 8 / 8 inbox consumers (trading-demo.orders.consumers below), each holding a
-    # connection while it handles a message: on 20 they starved each other and did no better than the defaults (EF-2,
-    # docs/key-partitioned-event-processing.md section 5, M5). Two instances at 40 still fit PostgreSQL's default
-    # max_connections of 100.
+    # 60 since the order flow runs 16 / 16 / 16 inbox consumers (trading-demo.orders.consumers below); the exchange
+    # reports' and ledger consumers hold a connection while they handle a message. At 40 the pool ran full at every
+    # open with up to 88 requests waiting; at 60 it still peaks (up to 49 waiting) but the order flow drained twice as
+    # fast (_demo_harness/CLAUDE.md, "Inbox consumers at the opens"). Two instances at 60 need compose.yml's
+    # max_connections=200 - PostgreSQL's default of 100 is too few.
     hikari:
-      maximum-pool-size: 40
+      maximum-pool-size: 60
 
 essentials:
   immutable-jackson-module-enabled: true
@@ -145,10 +146,14 @@ trading-demo:
     # The order flow's two EventProcessors and the exchange reports' inbox. Batching the forward pays only together
     # with more inbox consumers; together they took the order flow from ~180 to ~366 completed orders/s (EF-2,
     # docs/key-partitioned-event-processing.md section 5, "Batched forward, built and measured").
+    #
+    # 16 each: at 8 every stage capped the 600/s open burst. Raising only the router moved the backlog to the next two
+    # inboxes; raising all three halved the booked p99 (5.3-6.6 s -> 2.9-4.5 s) for no more CPU
+    # (_demo_harness/CLAUDE.md, "Inbox consumers at the opens").
     consumers:
-      exchange-router: 8
-      ledger: 8
-      exchange-reports: 8
+      exchange-router: 16
+      ledger: 16
+      exchange-reports: 16
     forwarding:
       batch-size: 100
   # The projections (config/TradingDemoViewEventProcessor) handle up to this many events per unit of work instead of one

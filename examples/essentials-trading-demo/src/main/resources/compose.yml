@@ -24,7 +24,9 @@ services:
     # shared_preload_libraries is set here, and only here: the official image has no environment
     # variable for it. Loading pg_stat_statements is not enough on its own - the extension also has to
     # be created in the database, which the application does at startup when it can.
-    command: ["postgres", "-c", "shared_preload_libraries=pg_cron,pg_stat_statements", "-c", "cron.database_name=essentials-trading-demo", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10", "-c", "max_slot_wal_keep_size=2GB"]
+    # max_connections=200: two demo instances at their pool of 60 (application-compose.yml) need 120 plus the CDC
+    # tailers and psql, more than the default of 100.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_cron,pg_stat_statements", "-c", "cron.database_name=essentials-trading-demo", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10", "-c", "max_slot_wal_keep_size=2GB", "-c", "max_connections=200"]
 
   # ---- Simulators, behind the `simulators` compose profile ---------------------------------------
   # The exchange-simulator and the payment-gateway (docs/SIMULATOR_REQUIREMENTS.md). Built locally from the

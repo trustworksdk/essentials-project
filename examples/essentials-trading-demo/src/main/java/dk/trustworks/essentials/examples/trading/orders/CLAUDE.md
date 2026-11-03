@@ -61,12 +61,13 @@ books: an order is short-lived.
 
 `trading-demo.orders.consumers.*` (`OrderProcessingProperties`): threads on `Inbox:ExchangeOrderRouter`
 (`exchange-router`), `Inbox:OrderLedgerProcessor` (`ledger`) and `Inbox:Orders:ExchangeReports` (`exchange-reports`);
-code defaults 1 / 1 / 2, the `compose` profile runs **8 / 8 / 8 on a 40-connection pool**. Each inbox keeps one order's
+code defaults 1 / 1 / 2, the `compose` profile runs **16 / 16 / 16 on a 60-connection pool** (8 / 8 / 8 on 40 until
+2026-11-03: each stage capped the open burst; `_demo_harness/CLAUDE.md`, "Inbox consumers at the opens"). Each inbox keeps one order's
 messages in order on any number of threads. `trading-demo.orders.forwarding.batch-size` (`OrderForwardingProperties`,
 `EventProcessor#getForwardBatchSize()`): code default 1, `compose` **100**. The two only pay together: batching alone left
 ~180 completed orders/s, 8 / 8 / 8 alone gave ~298, both ~366 (EF-2 doc §5). More threads on a 20-connection pool did
-not help - each consumer holds a connection while it handles a message. Two instances at 40 fit PostgreSQL's
-`max_connections` of 100. The code defaults stay small so the tests, which run on a smaller pool, are unaffected.
+not help - each consumer holds a connection while it handles a message. Two instances at 60 need the compose
+PostgreSQL's `max_connections=200`. The code defaults stay small so the tests, which run on a smaller pool, are unaffected.
 
 ## Stub exchange
 

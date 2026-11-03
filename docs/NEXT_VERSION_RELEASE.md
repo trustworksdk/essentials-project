@@ -544,6 +544,11 @@ Not published; listed because they are the reference for how to use the framewor
   less CPU. The script uses the direct path when the container IP answers (Linux, the devcontainer) and falls back to
   `localhost:5432` otherwise (Docker Desktop on macOS and Windows) or with `PG_DIRECT=0`. Demo latency figures from
   before this change include the proxy (`_demo_harness/CLAUDE.md`, "PostgreSQL through the port proxy").
+- **`essentials-trading-demo`: the `compose` profile runs 16 inbox consumers on each order-flow stage, on a pool of 60,
+  and its PostgreSQL allows 200 connections.** At 8 each stage capped the 600/s market-open burst; raising all three
+  (router, exchange reports, ledger) took the burst days' booked p99 from 5.3-6.6 s to 2.9-4.5 s for no more CPU. Two
+  instances at a pool of 60 need more than PostgreSQL's default of 100 connections, hence `max_connections=200` in
+  both compose files (`_demo_harness/CLAUDE.md`, "Inbox consumers at the opens").
 
 ---
 
