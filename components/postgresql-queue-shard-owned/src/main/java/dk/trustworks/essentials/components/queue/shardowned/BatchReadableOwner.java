@@ -67,6 +67,14 @@ interface BatchReadableOwner extends LeasedOwner {
     boolean batchSweepDue();
 
     /**
+     * Whether this pass needs this owner's cursor read at all. An owner selected only to dispatch what it already holds
+     * or to flush acknowledgements does not, and the pump leaves it out of the batch rather than read for it.
+     */
+    default boolean batchReadWanted() {
+        return true;
+    }
+
+    /**
      * Hand this owner the rows the pump read on its behalf. Consumed by the next
      * {@link #pumpOnce(java.sql.Connection)} and then discarded.
      *

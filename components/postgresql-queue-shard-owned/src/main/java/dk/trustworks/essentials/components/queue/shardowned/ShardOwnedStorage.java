@@ -1813,6 +1813,112 @@ public final class ShardOwnedStorage {
         return boxed;
     }
 
+    /**
+     * What a head sweep found: the rows, and how long until this unit's next delayed row becomes visible.
+     *
+     * @param rows                   visible rows from the head, in {@code seq} order
+     * @param millisUntilNextVisible empty when nothing is delayed
+     */
+    public record OrderedSweep(List<OrderedRow> rows, OptionalLong millisUntilNextVisible) {
+    }
+
+    /**
+     * {@link #sweepOrderedFromHead} and {@link #millisUntilNextVisible(Connection, String, int)} in ONE statement: every
+     * sweep asked both, as two round trips. Each half of the {@code UNION ALL} is exactly the statement it replaces, so
+     * each keeps its own plan; the interval comes back as one extra row whose {@code seq} is NULL (the aggregate always
+     * returns a row, its value NULL when nothing is delayed). Still computed by the SERVER - see
+     * {@link #millisUntilNextVisible(Connection, String, int)}.
+     */
+    public OrderedSweep sweepOrderedFromHeadWithNextVisible(Connection connection, int shard, int limit) throws SQLException {
+        var sql = "(SELECT seq, msg_key, key_order, payload, payload_type, NULL::float8 AS until_ms FROM " + ORDERED_TABLE
+                + "  WHERE queue_id = ? AND shard = ? AND visible_at <= now() ORDER BY seq LIMIT " + limit + ")"
+                + " UNION ALL"
+                + " (SELECT NULL, NULL, NULL, NULL, NULL, (EXTRACT(EPOCH FROM (min(visible_at) - now())) * 1000)::float8"
+                + "  FROM " + ORDERED_TABLE + " WHERE queue_id = ? AND shard = ? AND visible_at > now())";
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            statement.setShort(3, queueId);
+            statement.setInt(4, shard);
+            try (var resultSet = statement.executeQuery()) {
+                var rows      = new ArrayList<OrderedRow>();
+                var untilNext = OptionalLong.empty();
+                while (resultSet.next()) {
+                    var seq = resultSet.getLong(1);
+                    if (resultSet.wasNull()) {
+                        var millis = resultSet.getDouble(6);
+                        if (!resultSet.wasNull()) {
+                            untilNext = OptionalLong.of(Math.max(0L, (long) millis));
+                        }
+                        continue;
+                    }
+                    rows.add(new OrderedRow(seq, resultSet.getString(2), resultSet.getLong(3),
+                                            resultSet.getBytes(4), resultSet.getInt(5)));
+                }
+                return new OrderedSweep(rows, untilNext);
+            }
+        }
+    }
+
+    /**
+     * What a batched head sweep found, by unit.
+     *
+     * @param rows                   rows by unit; a unit with none is absent
+     * @param millisUntilNextVisible by unit; a unit with nothing delayed is absent
+     */
+    public record BatchedOrderedSweep(Map<Integer, List<OrderedRow>> rows, Map<Integer, Long> millisUntilNextVisible) {
+        public static final BatchedOrderedSweep NONE = new BatchedOrderedSweep(Map.of(), Map.of());
+    }
+
+    /**
+     * {@link #sweepOrderedFromHeads} and {@link #millisUntilNextVisibleByShard} in ONE statement, for the same reason and
+     * in the same way as {@link #sweepOrderedFromHeadWithNextVisible}: each half of the {@code UNION ALL} is the
+     * statement it replaces (the {@code LATERAL} half keeps its structural nested loop), and an interval row is told
+     * apart by its NULL {@code seq}. The queue id is a PARAMETER - see {@link #readOrderedFromCursors}.
+     */
+    public BatchedOrderedSweep sweepOrderedFromHeadsWithNextVisible(Connection connection, short forQueueId,
+                                                                    int[] shards, int perShardLimit) throws SQLException {
+        if (shards.length == 0) {
+            return BatchedOrderedSweep.NONE;
+        }
+        var sql = "SELECT x.shard, x.seq, x.msg_key, x.key_order, x.payload, x.payload_type, NULL::float8 AS until_ms"
+                + " FROM unnest(?::int[]) AS s(shard),"
+                + " LATERAL (SELECT o.shard, o.seq, o.msg_key, o.key_order, o.payload, o.payload_type"
+                + "          FROM " + ORDERED_TABLE + " o"
+                + "          WHERE o.queue_id = ? AND o.shard = s.shard::smallint AND o.visible_at <= now()"
+                + "          ORDER BY o.seq LIMIT " + perShardLimit + ") x"
+                + " UNION ALL"
+                + " SELECT shard, NULL, NULL, NULL, NULL, NULL, (EXTRACT(EPOCH FROM (min(visible_at) - now())) * 1000)::float8"
+                + " FROM " + ORDERED_TABLE
+                + " WHERE queue_id = ? AND shard = ANY(?) AND visible_at > now() GROUP BY shard";
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
+            var shardArray = connection.createArrayOf("int", boxed(shards));
+            statement.setArray(1, shardArray);
+            statement.setShort(2, forQueueId);
+            statement.setShort(3, forQueueId);
+            statement.setArray(4, shardArray);
+            try (var resultSet = statement.executeQuery()) {
+                var rows      = new HashMap<Integer, List<OrderedRow>>();
+                var untilNext = new HashMap<Integer, Long>();
+                while (resultSet.next()) {
+                    var shard = resultSet.getInt(1);
+                    var seq   = resultSet.getLong(2);
+                    if (resultSet.wasNull()) {
+                        var millis = resultSet.getDouble(7);
+                        if (!resultSet.wasNull()) {
+                            untilNext.put(shard, Math.max(0L, (long) millis));
+                        }
+                        continue;
+                    }
+                    rows.computeIfAbsent(shard, ignored -> new ArrayList<>())
+                        .add(new OrderedRow(seq, resultSet.getString(3), resultSet.getLong(4),
+                                            resultSet.getBytes(5), resultSet.getInt(6)));
+                }
+                return new BatchedOrderedSweep(rows, untilNext);
+            }
+        }
+    }
+
     public List<OrderedRow> sweepOrderedFromHead(Connection connection, int shard, int limit) throws SQLException {
         var sql = "SELECT seq, msg_key, key_order, payload, payload_type FROM " + ORDERED_TABLE
                 + " WHERE queue_id = ? AND shard = ? AND visible_at <= now() ORDER BY seq LIMIT " + limit;

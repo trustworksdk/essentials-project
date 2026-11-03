@@ -125,6 +125,17 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
      */
     private BatchRead pendingBatch;
     /**
+     * Whether this owner's next pass reads from the cursor. Set by every reason a pass may find rows it does not hold -
+     * an enqueue's wake-up, a capped last read, a due sweep or delayed row, a watermark chase, a shed or drain, a
+     * takeover - and cleared only by a read, so none is lost to a pass that fails or is skipped. A pass selected for
+     * anything else (a handler returned and freed a key slot, a retry fell due, acknowledgements to flush) skips the
+     * read: under load those passes outnumbered the enqueues, and each one re-read the watermark window with its
+     * payloads. Pump thread only, like the cursor.
+     */
+    private boolean readWanted = true;
+    /** Whether the last cursor read returned as many rows as it asked for, and so may have stopped short. */
+    private boolean readCapped;
+    /**
      * Rows {@link #readAhead} read for this pass, consumed by the following {@link #pumpOnce}. Pump thread only.
      */
     private List<ShardOwnedStorage.OrderedRow> readAheadRows;
@@ -438,33 +449,41 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
 
     @Override
     public boolean needsAttention() {
-        if (wakeup.consume()) {
+        // Both flags, every time: each is test-and-clear, and a signal must not be left behind for a later pass.
+        var signalled = wakeup.consume();
+        if (wakeup.consumeRows()) {
+            readWanted = true;
+        }
+        if (signalled) {
             metrics.wakeupsHonoured.increment();
-            return true;
         }
         var now = System.nanoTime();
-        if (now - lastSweepNanos >= sweepIntervalNanos) {
-            return true;
-        }
-        if (nextVisibleAtNanos != Long.MAX_VALUE && now >= nextVisibleAtNanos) {
-            return true;
-        }
-        if (shedding.get() || draining.get()) {
-            // A shed only progresses when this owner is pumped, so it must not be skipped for being
-            // quiet — a shard nobody is enqueueing to is exactly the one that drains fastest. The
-            // same holds for a drain's acknowledgements.
-            return true;
+        // The reasons a pass may find rows this owner does not hold yet, each of which wants a cursor read. Sticky in
+        // readWanted until a pass reads, so a pass that fails or is skipped does not lose one.
+        if (readCapped
+                || now - lastSweepNanos >= sweepIntervalNanos
+                || (nextVisibleAtNanos != Long.MAX_VALUE && now >= nextVisibleAtNanos)
+                // A shed only progresses when this owner is pumped, so it must not be skipped for being
+                // quiet — a shard nobody is enqueueing to is exactly the one that drains fastest. The
+                // same holds for a drain's acknowledgements.
+                || shedding.get() || draining.get()) {
+            readWanted = true;
         }
         synchronized (stateLock) {
+            if (!watermarkCandidates.isEmpty() && now - lastHorizonProbeNanos >= settings.chaseDelayNanos()) {
+                // A value the watermark has not passed yet may have committed since. Paced by
+                // chaseDelay, as the hole chase this replaced was, so re-checking cannot spin.
+                readWanted = true;
+            }
+            if (readWanted || signalled) {
+                return true;
+            }
+            // The rest need no read: what they act on is already in memory. Selected all the same, but the pass
+            // dispatches and flushes without a cursor read (readWanted stays false).
             if (!retrySchedule.isEmpty() && retrySchedule.peek().dueNanos() <= now) {
                 return true;
             }
             if (!readyByKey.isEmpty() && activeKeys.get() < settings.keyConcurrency()) {
-                return true;
-            }
-            if (!watermarkCandidates.isEmpty() && now - lastHorizonProbeNanos >= settings.chaseDelayNanos()) {
-                // A value the watermark has not passed yet may have committed since. Paced by
-                // chaseDelay, as the hole chase this replaced was, so re-checking cannot spin.
                 return true;
             }
             return !pendingAcks.isEmpty() && now - lastAckFlushNanos >= settings.ackFlushIntervalNanos();
@@ -472,7 +491,14 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
     }
 
     @Override
+    public boolean batchReadWanted() {
+        return readWanted;
+    }
+
+    @Override
     public void onTakeover(Connection connection) throws SQLException {
+        // Also run on every reconnect, after which nothing says what arrived meanwhile
+        readWanted = true;
         if (!takeoverCharged) {
             var charged = storage.bumpOrderedAttemptsOnTakeover(connection, shard, settings.ackBatchSize(), instanceId, fence);
             if (charged == 0 && !storage.stillOwns("ordered", shard, instanceId, fence)) {
@@ -658,6 +684,9 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
         if (shedComplete.get() || pendingBatch != null) {
             return;
         }
+        if (!readWanted) {
+            return;
+        }
         readAheadRows = storage.readOrderedFromCursor(connection, shard, safeCursor, settings.readBatchSize());
         readAheadByNanos = System.nanoTime();
         metrics.orderedReadStatements.increment();
@@ -669,6 +698,10 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
      */
     @Override
     public boolean horizonProbeWanted() {
+        if (!readWanted) {
+            // No read this pass, so no probe to pair with one: pumpOnce would discard it.
+            return false;
+        }
         if (!watermarkCandidates.isEmpty()) {
             return true;
         }
@@ -708,35 +741,12 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
         // Read from the WATERMARK, not from the highest value seen, so a value whose transaction had
         // not committed when an earlier pass went by is read again rather than chased. The window
         // between the two is bounded by the horizon, not by the backlog, and `seen` deduplicates it.
-        List<ShardOwnedStorage.OrderedRow> rows;
-        // The limit the read was ISSUED with, which decides whether it may have stopped short of the backlog. The
-        // pump reads with the runtime's readBatchSize, which need not be this owner's: compared against a larger
-        // one, a truncated batch looked complete and the watermark stepped over rows it never read.
-        int readLimit;
-        if (batch != null) {
-            rows = batch.cursorRows();
-            readLimit = batch.cursorLimit();
-        } else if (readAhead != null) {
-            rows = readAhead;
-            readLimit = settings.readBatchSize();
-        } else {
-            readLimit = settings.readBatchSize();
-            rows = storage.readOrderedFromCursor(connection, shard, safeCursor, readLimit);
-            metrics.orderedReadStatements.increment();
+        if (batch != null || readAhead != null || readWanted) {
+            readFromCursor(connection, batch, readAhead, probe);
         }
-        // Counts owners SERVED, not statements issued — the two stopped being the same when the pump
-        // began batching. orderedReadStatements is the one to compare against.
-        metrics.cursorReads.increment();
-        var lastSeqRead = -1L;
-        for (var row : rows) {
-            maxSeen = Math.max(maxSeen, row.seq());
-            lastSeqRead = Math.max(lastSeqRead, row.seq());
-            accept(row);
-        }
-        // The new candidate's probe comes AFTER the read, never before: a transaction that allocates a value after
-        // the probe is not in the set, and treating it as retired would step over it. See ShardOwnedStorage. Retiring
-        // uses the PREVIOUS probe instead - see runningAtLastProbe.
-        advanceWatermark(connection, rows.size() >= readLimit ? lastSeqRead : READ_NOT_CAPPED, probe);
+        // else: selected only for what it already holds - a freed key slot, a due retry, acknowledgements to flush.
+        // Nothing can have arrived that a read would find (every such reason sets readWanted), so the pass skips the
+        // read and with it the watermark step, which only a read can feed.
 
         var now           = System.nanoTime();
         var sweptThisPass = false;
@@ -784,6 +794,46 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
         }
         adjustSweepBackoff(delivered, sweptThisPass);
         return delivered;
+    }
+
+    /**
+     * The cursor read of a pass, from the rows the pump read for it (batched or read ahead) or by itself, and the
+     * watermark step that read feeds.
+     */
+    private void readFromCursor(Connection connection, BatchRead batch, List<ShardOwnedStorage.OrderedRow> readAhead,
+                                Set<Long> probe) throws SQLException {
+        readWanted = false;
+        List<ShardOwnedStorage.OrderedRow> rows;
+        // The limit the read was ISSUED with, which decides whether it may have stopped short of the backlog. The
+        // pump reads with the runtime's readBatchSize, which need not be this owner's: compared against a larger
+        // one, a truncated batch looked complete and the watermark stepped over rows it never read.
+        int readLimit;
+        if (batch != null) {
+            rows = batch.cursorRows();
+            readLimit = batch.cursorLimit();
+        } else if (readAhead != null) {
+            rows = readAhead;
+            readLimit = settings.readBatchSize();
+        } else {
+            readLimit = settings.readBatchSize();
+            rows = storage.readOrderedFromCursor(connection, shard, safeCursor, readLimit);
+            metrics.orderedReadStatements.increment();
+        }
+        // Counts owners SERVED, not statements issued — the two stopped being the same when the pump
+        // began batching. orderedReadStatements is the one to compare against.
+        metrics.cursorReads.increment();
+        var lastSeqRead = -1L;
+        for (var row : rows) {
+            maxSeen = Math.max(maxSeen, row.seq());
+            lastSeqRead = Math.max(lastSeqRead, row.seq());
+            accept(row);
+        }
+        // The new candidate's probe comes AFTER the read, never before: a transaction that allocates a value after
+        // the probe is not in the set, and treating it as retired would step over it. See ShardOwnedStorage. Retiring
+        // uses the PREVIOUS probe instead - see runningAtLastProbe.
+        // Capped, the read may have stopped short of the backlog: the next pass reads again whatever selected it.
+        readCapped = rows.size() >= readLimit;
+        advanceWatermark(connection, readCapped ? lastSeqRead : READ_NOT_CAPPED, probe);
     }
 
     /**
@@ -976,8 +1026,9 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
             }
             activeKeys.decrementAndGet();
             dispatch.release();
-            // Capacity may have freed up, and the pump may be parked on its backstop.
-            wakeup.signal();
+            // Capacity may have freed up, and the pump may be parked on its backstop. Nothing new to read for it:
+            // the keys waiting for the slot are in readyByKey already.
+            wakeup.signalWithoutRows();
             if (noKeyInHandler) {
                 var action = whenNoKeyInHandler;
                 if (action != null) {
@@ -1463,15 +1514,14 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
     }
 
     private void sweep(Connection connection) throws SQLException {
-        var rows      = storage.sweepOrderedFromHead(connection, shard, settings.readBatchSize());
-        var untilNext = storage.millisUntilNextVisible(connection, ShardOwnedSchema.ORDERED_TABLE, shard);
-        metrics.orderedReadStatements.add(2);
-        applySweptRows(rows, untilNext);
+        var swept = storage.sweepOrderedFromHeadWithNextVisible(connection, shard, settings.readBatchSize());
+        metrics.orderedReadStatements.increment();
+        applySweptRows(swept.rows(), swept.millisUntilNextVisible());
     }
 
     /**
-     * The half of a sweep that is not a query, so it can be driven either by this owner's own two
-     * statements or by the pump's batched ones.
+     * The half of a sweep that is not a query, so it can be driven either by this owner's own
+     * statement or by the pump's batched one.
      */
     private void applySweptRows(List<ShardOwnedStorage.OrderedRow> rows, OptionalLong untilNext) {
         metrics.headSweeps.increment();

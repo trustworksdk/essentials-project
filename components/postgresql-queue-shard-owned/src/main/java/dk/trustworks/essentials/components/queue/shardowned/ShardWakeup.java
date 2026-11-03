@@ -37,6 +37,12 @@ final class ShardWakeup {
     private final ShardWakeup parent;
     private       boolean     signalled;
     /**
+     * Whether a signal since the last {@link #consumeRows()} may have meant new rows - every signal but
+     * {@link #signalWithoutRows()}. Kept apart from {@link #signalled} so an owner woken only to dispatch what it already
+     * holds (a handler returned and freed a key slot) can skip the read a new row would need.
+     */
+    private       boolean     rowsSignalled;
+    /**
      * On a pump's wake-up: the shards' wake-ups signalled since the pump last asked - see
      * {@link #takeSignalledChildren()}.
      */
@@ -75,8 +81,21 @@ final class ShardWakeup {
      * thing, because the owner drains everything it can see on each pass.
      */
     public void signal() {
+        signal(true);
+    }
+
+    /**
+     * {@link #signal()} for work that needs no read: the owner already holds what it is to do, as when a handler
+     * returned and freed a slot for a key that is waiting. Wakes exactly as {@link #signal()} does.
+     */
+    void signalWithoutRows() {
+        signal(false);
+    }
+
+    private void signal(boolean rows) {
         synchronized (lock) {
             signalled = true;
+            rowsSignalled |= rows;
             lock.notifyAll();
         }
         if (parent != null) {
@@ -107,6 +126,18 @@ final class ShardWakeup {
             taken.add(child);
         }
         return taken == null ? List.of() : taken;
+    }
+
+    /**
+     * Test and clear whether a signal since the last call may have meant new rows. Independent of {@link #consume()}:
+     * an owner asks both.
+     */
+    boolean consumeRows() {
+        synchronized (lock) {
+            var was = rowsSignalled;
+            rowsSignalled = false;
+            return was;
+        }
     }
 
     public boolean consume() {

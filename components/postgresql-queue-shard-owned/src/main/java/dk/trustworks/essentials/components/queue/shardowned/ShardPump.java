@@ -1118,8 +1118,8 @@ final class ShardPump implements Runnable {
     }
 
     /**
-     * Issue this pass's ordered-lane reads once per QUEUE, rather than once per shard. Three
-     * statements per queue per pass instead of three per shard — see {@link BatchReadableOwner} for
+     * Issue this pass's ordered-lane reads once per QUEUE, rather than once per shard. Two
+     * statements per queue per pass instead of two per shard — see {@link BatchReadableOwner} for
      * why that decides the affordable routing space, and for why it is an idle-cost mechanism.
      * <p>
      * <b>Grouped by queue id, not issued on this pump's storage handle.</b> A pump serves every queue
@@ -1140,7 +1140,8 @@ final class ShardPump implements Runnable {
     private void batchRead(Connection connection, List<LeasedOwner> attentive) {
         var batches = new LinkedHashMap<PumpFailures.BatchedRead, List<BatchReadableOwner>>();
         for (var owner : attentive) {
-            if (owner instanceof BatchReadableOwner readable) {
+            // An owner that wants no read this pass is left out of the batch, not read for: it is still pumped.
+            if (owner instanceof BatchReadableOwner readable && readable.batchReadWanted()) {
                 batches.computeIfAbsent(new PumpFailures.BatchedRead(readable.queueId(), readable.ownerMetrics()),
                                         ignored -> new ArrayList<>())
                        .add(readable);
@@ -1192,14 +1193,14 @@ final class ShardPump implements Runnable {
         for (var index = 0; index < sweeping.size(); index++) {
             sweptShards[index] = sweeping.get(index).shard();
         }
-        var sweptRows = storage.sweepOrderedFromHeads(connection, queueId, sweptShards,
-                                                      settings.readBatchSize());
-        var nextVisible = storage.millisUntilNextVisibleByShard(connection, queueId,
-                                                                ShardOwnedSchema.ORDERED_TABLE, sweptShards);
+        var sweep       = storage.sweepOrderedFromHeadsWithNextVisible(connection, queueId, sweptShards,
+                                                                       settings.readBatchSize());
+        var sweptRows   = sweep.rows();
+        var nextVisible = sweep.millisUntilNextVisible();
         // On the OWNERS' metrics, not this pump's: the runtime builds its own counters, so counting
         // here would be invisible to whoever calls queue.metrics(). The batch is grouped by those
         // metrics (batchRead), so every owner in it shares them.
-        batch.metrics().orderedReadStatements.add(sweptShards.length > 0 ? 3 : 1);
+        batch.metrics().orderedReadStatements.add(sweptShards.length > 0 ? 2 : 1);
 
         var isSweeping = Collections.newSetFromMap(new IdentityHashMap<BatchReadableOwner, Boolean>());
         isSweeping.addAll(sweeping);
