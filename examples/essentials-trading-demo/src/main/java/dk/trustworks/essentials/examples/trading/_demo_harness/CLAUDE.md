@@ -912,3 +912,7 @@ All checks passed in all three runs.
 - **The pool still peaks at 60.** Two instances at 60 need more than PostgreSQL's default of 100 connections, hence
   `max_connections=200` in both compose files.
 - What is left is the router's 2.3 s queue wait at p99.
+- **Run K: the same as J with the application in a container** (`./run-app-stack.sh 1`, `compose.app.yml`): booked
+  p99 4.7 / 3.7 / 3.2 / 3.0 s on days 2 / 5 / 8 / 10, placed → submitted p99 2.7 s, router wait 1.8 s, reports wait
+  1.7 s, filled → booked 0.9 s, 68 157 orders, every check passing. Within run-to-run noise of J, so the container
+  costs nothing measurable, and it is the configuration that avoids the port relay on Docker Desktop too.

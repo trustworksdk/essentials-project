@@ -148,8 +148,10 @@ through a published port and so pays the relay's cost on every statement.
 - **`provided` jars must be copied too** - Essentials declares slf4j and its other integrations provided; a
   runtime-scope copy failed at start with `ClassNotFoundException: org.slf4j.LoggerFactory`.
 - Verified 2026-11-03: 61 connections from the app container's own address, a 2-day load run with every order, fill
-  and payment check passing (booked p99 ~400 ms), and two instances sharing the shard units. Not yet measured at the
-  phase 6 load.
+  and payment check passing (booked p99 ~400 ms), and two instances sharing the shard units. At the phase 6 load (one
+  instance, 10 business days) it matches the host on the direct connection: booked p99 4.7 / 3.7 / 3.2 / 3.0 s on days
+  2 / 5 / 8 / 10 against 4.5 / 3.3 / 3.1 / 2.9 s, every check passing (`_demo_harness/CLAUDE.md`, "Inbox consumers at
+  the opens", run K).
 
 ## Load driver
 
