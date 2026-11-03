@@ -114,6 +114,17 @@ if [[ ! -f $classpath_file || pom.xml -nt $classpath_file ]]; then
   mvn -q dependency:build-classpath -Dmdep.outputFile="$classpath_file" -Dmdep.includeScope=runtime >/dev/null
 fi
 
+# PostgreSQL at the container's own IP where it answers from here, as run-instance.sh does: through localhost:5432 every
+# statement crosses Docker's userland port proxy, which cost about half the burst latency (_demo_harness/CLAUDE.md,
+# "PostgreSQL through the port proxy"). Docker Desktop (macOS, Windows), or PG_DIRECT=0: localhost:5432. Resolved once;
+# no fault here restarts PostgreSQL (F-4 restarts a simulator), so the address holds for the run.
+PG_HOST=localhost
+if [[ "${PG_DIRECT:-auto}" != "0" ]]; then
+  pg_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' essentials-trading-demo-postgresql 2>/dev/null || true)"
+  if [[ -n "$pg_ip" ]] && timeout 2 bash -c "</dev/tcp/${pg_ip}/5432" 2>/dev/null; then PG_HOST=$pg_ip; fi
+fi
+log "PostgreSQL at $PG_HOST:5432"
+
 # Instance n: port 8079+n, instance id demo-n. F-3 starts one a second time, into the same log, under the same id.
 # With two, each is capped at 3 GB of heap: by default a JVM may take 40 % of the machine, and three JVMs (two instances
 # and the driver) beside PostgreSQL's cache do not fit that.
@@ -123,7 +134,7 @@ start_instance() {
   "$JAVA" "${heap[@]}" -Dserver.port=$((8079 + n)) -cp "target/classes:$(cat "$classpath_file")" \
     dk.trustworks.essentials.examples.trading.TradingDemoApplication \
     --spring.profiles.active=compose,simulators --spring.docker.compose.enabled=false \
-    --spring.datasource.url="jdbc:postgresql://localhost:5432/$DB" \
+    --spring.datasource.url="jdbc:postgresql://$PG_HOST:5432/$DB" \
     --essentials.shard-owned-queue.instance-id=demo-$n >> "$OUT/app-$RUN$(suffix "$n").log" 2>&1 &
   echo $! > "$OUT/app-$RUN$(suffix "$n").pid"
 }

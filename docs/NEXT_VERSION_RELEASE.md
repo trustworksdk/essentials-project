@@ -542,7 +542,8 @@ Not published; listed because they are the reference for how to use the framewor
   Through `localhost:5432` every statement crossed `docker-proxy`. Connecting to the container's IP on the same load
   took the burst days' booked p50 from 557-878 ms to 208-324 ms and p99 from 9.6-11.1 s to 5.3-6.6 s, with about a core
   less CPU. The script uses the direct path when the container IP answers (Linux, the devcontainer) and falls back to
-  `localhost:5432` otherwise (Docker Desktop on macOS and Windows) or with `PG_DIRECT=0`. Demo latency figures from
+  `localhost:5432` otherwise (Docker Desktop on macOS and Windows) or with `PG_DIRECT=0`; `run-faults.sh` does the same
+  for the instances it starts. Demo latency figures from
   before this change include the proxy (`_demo_harness/CLAUDE.md`, "PostgreSQL through the port proxy").
 - **`essentials-trading-demo`: the `compose` profile runs 16 inbox consumers on each order-flow stage, on a pool of 60,
   and its PostgreSQL allows 200 connections.** At 8 each stage capped the 600/s market-open burst; raising all three
