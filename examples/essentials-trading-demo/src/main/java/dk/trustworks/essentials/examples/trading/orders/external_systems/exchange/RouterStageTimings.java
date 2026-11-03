@@ -37,7 +37,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 @Component
 public class RouterStageTimings {
-    public record Timing(Instant handlingStarted, Instant exchangeAnswered) {
+    public record Timing(Instant handlingStarted, Instant exchangeAnswered, Instant handlingFinished) {
     }
 
     private final boolean                            enabled;
@@ -55,7 +55,7 @@ public class RouterStageTimings {
         return enabled;
     }
 
-    void record(OrderId orderId, Instant handlingStarted, Instant exchangeAnswered) {
+    void record(OrderId orderId, Instant handlingStarted, Instant exchangeAnswered, Instant handlingFinished) {
         if (!enabled) {
             return;
         }
@@ -63,7 +63,7 @@ public class RouterStageTimings {
             dropped.incrementAndGet();
             return;
         }
-        timings.putIfAbsent(orderId.toString(), new Timing(handlingStarted, exchangeAnswered));
+        timings.putIfAbsent(orderId.toString(), new Timing(handlingStarted, exchangeAnswered, handlingFinished));
     }
 
     /**

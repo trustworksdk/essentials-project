@@ -144,6 +144,9 @@ public class LoadRunReport {
             stages.put("routerQueueWait", latency(timed.stream().mapToLong(e -> Duration.between(e.placedAt(), timings.get(e.orderId()).handlingStarted()).toMillis()).sorted().toArray()));
             stages.put("exchangeCall", latency(timed.stream().mapToLong(e -> Duration.between(timings.get(e.orderId()).handlingStarted(), timings.get(e.orderId()).exchangeAnswered()).toMillis()).sorted().toArray()));
             stages.put("reportsQueueWait", latency(timed.stream().mapToLong(e -> Duration.between(timings.get(e.orderId()).exchangeAnswered(), e.submittedAt()).toMillis()).sorted().toArray()));
+            // How long a router consumer is busy per order, and the part of it after the exchange answered
+            stages.put("routerHandler", latency(timed.stream().mapToLong(e -> Duration.between(timings.get(e.orderId()).handlingStarted(), timings.get(e.orderId()).handlingFinished()).toMillis()).sorted().toArray()));
+            stages.put("answerRecording", latency(timed.stream().mapToLong(e -> Duration.between(timings.get(e.orderId()).exchangeAnswered(), timings.get(e.orderId()).handlingFinished()).toMillis()).sorted().toArray()));
         }
 
         var placedPerBucket = new TreeMap<Instant, Long>();

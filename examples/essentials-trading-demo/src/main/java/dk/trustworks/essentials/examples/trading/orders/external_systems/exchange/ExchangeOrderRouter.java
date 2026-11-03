@@ -105,9 +105,7 @@ public class ExchangeOrderRouter extends TradingDemoEventProcessor {
         log.debug("Submitting order '{}' to the exchange", e.orderId());
         var handlingStarted = stageTimings.isEnabled() ? Instant.now() : null;
         var result = submit(OrderSubmission.of(e));
-        if (handlingStarted != null) {
-            stageTimings.record(e.orderId(), handlingStarted, Instant.now());
-        }
+        var exchangeAnswered = handlingStarted != null ? Instant.now() : null;
         if (result.isRejected()) {
             log.debug("Exchange rejected order '{}': {}", e.orderId(), result.rejectReason());
             reports.received(RecordExchangeAnswer.rejected(e.orderId(), result.rejectReason()));
@@ -116,6 +114,10 @@ public class ExchangeOrderRouter extends TradingDemoEventProcessor {
             reports.received(RecordExchangeAnswer.submitted(e.orderId(), result.exchangeOrderId()));
         }
         log.debug("Queued the exchange's answer for order '{}'", e.orderId());
+        if (handlingStarted != null) {
+            // After the answer is queued: how long a consumer is busy per order, not only the exchange call
+            stageTimings.record(e.orderId(), handlingStarted, exchangeAnswered, Instant.now());
+        }
     }
 
     /**
