@@ -17,9 +17,9 @@
 package dk.trustworks.essentials.examples.trading.identity.use_cases.register_user;
 
 import dk.trustworks.essentials.examples.trading.identity.aggregates.*;
+import dk.trustworks.essentials.examples.trading.identity.config.CredentialHashing;
 import dk.trustworks.essentials.reactive.command.*;
 import org.slf4j.*;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -39,19 +39,19 @@ public class RegisterUserHandler extends AnnotatedCommandHandler {
 
     private final Users           users;
     private final UserCredentials credentials;
-    private final PasswordEncoder passwordEncoder;
+    private final CredentialHashing credentialHashing;
 
-    public RegisterUserHandler(Users users, UserCredentials credentials, PasswordEncoder passwordEncoder) {
+    public RegisterUserHandler(Users users, UserCredentials credentials, CredentialHashing credentialHashing) {
         this.users = requireNonNull(users, "No users provided");
         this.credentials = requireNonNull(credentials, "No credentials provided");
-        this.passwordEncoder = requireNonNull(passwordEncoder, "No passwordEncoder provided");
+        this.credentialHashing = requireNonNull(credentialHashing, "No credentialHashing provided");
     }
 
     @CmdHandler
     public void handle(RegisterUser cmd) {
         requireNonNull(cmd, "No cmd provided");
         log.debug("===> Registering user '{}' <{}> with roles {}", cmd.userId(), cmd.email(), cmd.roles());
-        credentials.add(cmd.userId(), cmd.email(), passwordEncoder.encode(cmd.password()), cmd.roles());
+        credentials.add(cmd.userId(), cmd.email(), credentialHashing.hash(cmd.email().toString(), cmd.password()), cmd.roles());
         users.registerNewUser(new User(cmd.userId(), cmd.email(), cmd.displayName(), cmd.roles()));
     }
 }

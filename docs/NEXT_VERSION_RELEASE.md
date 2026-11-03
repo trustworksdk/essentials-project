@@ -473,6 +473,9 @@ Not published; listed because they are the reference for how to use the framewor
   reports queue wait; its load report no longer times out on a database holding earlier runs. Under `compose` the CDC
   inbox now deletes dispatched rows (`essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy: DELETE`) instead
   of keeping them for the TTL job - note the `cdc-dispatcher` key: `dispatcher:` binds to nothing, silently.
+  `reset-stack.sh` wipes the compose stack and its volumes before a run (the simulators' stores never prune and filled
+  the disk), and under `compose` the load driver's `@load.local` users are stored with `{noop}` password hashes
+  (`trading-demo.identity.unhashed-password-email-suffix`), so registering 10 000 of them no longer costs BCrypt.
 
 ---
 

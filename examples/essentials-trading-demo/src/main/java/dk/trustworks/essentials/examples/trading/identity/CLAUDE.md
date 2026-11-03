@@ -18,6 +18,9 @@ demo. **Credentials are not in it** (design decision Q-2).
   work rolls back, the API answers `409`.
 - **No credential in an event, a durable queue or a log line.** `RegisterUser` masks its password in `toString()` and
   is sent with `send`, never `sendAndDontWait`. A password change will touch only the table; it is not a domain event.
+- **Hash through `config/CredentialHashing`, never the `PasswordEncoder` directly.** BCrypt for everyone, except emails
+  ending in `trading-demo.identity.unhashed-password-email-suffix` (off by default; `@load.local` under `compose`, the load
+  driver's customers) stored `{noop}`. Login needs nothing: delegating encoder reads the id from the hash.
 - **Login reads the table, never the projection**, which is eventually consistent: a lock must apply to the very next
   request.
 

@@ -134,6 +134,12 @@ profile - it follows the exchange's business days. `./run-faults.sh <none|F-1|F-
 database (`trading_faults`) and simulators of its own, with one instance it starts and stops itself (two with
 `--instances=2`).
 
+- **`./reset-stack.sh` before every run.** Neither PostgreSQL nor the exchange-simulator prunes: one hour-long run left
+  ~6 GB in the database and ~8 GB in the exchange's volume, and a full disk crash-loops PostgreSQL mid-run. The script
+  refuses while an instance or the driver runs, removes the stack's volumes (PostgreSQL's anonymous one included) and
+  warns under 15 GB free. Under `compose` the driver's customers (`@load.local`) are stored `{noop}`
+  (`trading-demo.identity.unhashed-password-email-suffix`), so registering 10 000 again takes seconds, not minutes.
+
 ## Simulators profile
 
 `run-instance.sh N simulators` (or profile `compose,simulators`): the exchange-simulator (`localhost:18080`) and the

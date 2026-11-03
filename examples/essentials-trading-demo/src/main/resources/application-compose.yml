@@ -137,6 +137,10 @@ essentials:
         dispatched-row-policy: DELETE
 
 trading-demo:
+  identity:
+    # The load driver's customers (lda-<n>@load.local, one shared demo password) are stored {noop} instead of BCrypt:
+    # registering and logging in 10 000 of them took every load run minutes of the whole machine (identity/config/CredentialHashing).
+    unhashed-password-email-suffix: "@load.local"
   orders:
     # The order flow's two EventProcessors and the exchange reports' inbox. Batching the forward pays only together
     # with more inbox consumers; together they took the order flow from ~180 to ~366 completed orders/s (EF-2,
