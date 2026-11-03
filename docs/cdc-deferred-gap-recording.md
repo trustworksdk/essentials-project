@@ -99,6 +99,7 @@ the same as before. An opt-out property would only control a cost; it would not 
 | Seeding from `getTransientGapsFor` at subscribe | A re-subscribe on a new manager reads the rows written by the last save or by the end of the previous subscription. A `retry()`/`repeat()` re-subscribe starts from the original start order, below everything |
 | Wide gaps / lower end (`addTransientGaps`) | Never deferred; written at once |
 | Subscription end inside a unit of work | The held gaps are written on a virtual thread of their own, and the ending thread waits for it, rather than writing in a unit of work the gate does not own |
+| Bus overflow catch-up, or any other move back onto the bus | The catch-up loads the gaps still awaited by order, because a fill that committed while the subscription was off the bus exists only in the database. The tracker lists the lowest 1 000 awaited orders. Before this change, the newest gaps were also picked up through their transient rows, which the page's gap-handler query includes newest first. A held gap has no row, so the gate now adds every order it holds (`withUnrecordedGaps`); the cap on held orders, 1 000 per subscription, also caps that addition. Without it, a burst with more than 1 000 older awaited orders (rolled-back appends) meant the fill was found only once older gaps had been given up. It then arrived after later events of the same aggregate, which made trading-demo views apply `OrderAccepted` before `OrderPlaced`, and after 120 s it became a permanent gap for an event that exists. Pinned by `a_gap_kept_in_memory_whose_fill_arrives_while_the_subscription_is_off_the_bus_is_filled_by_the_catch_up` |
 | Polling fallback / switches | One gate per subscription whatever the source. The delegate's polls record their own gaps as before |
 | Acknowledgement of fills | A fill of a held gap is never registered with `GapFillsAwaitingAcknowledgement`, so nothing is resolved for it. `dropped` does not acknowledge it to the delegate |
 
@@ -112,6 +113,9 @@ the same as before. An opt-out property would only control a cost; it would not 
   Mutation-checked: with the flush in `beforeResumePointSave` removed, the late event is never delivered.
 - **Stop with an open gap.** The gap row is written, and the event is delivered after the restart.
 - **Rolled-back hole.** Nothing is written, and `isAwaitedAsGap` is true while the hole is held.
+- **Bus overflow.** With 1 100 rolled-back orders awaited below a held gap, the fill is published while the subscription
+  is off the bus, and the catch-up loads it. Without the fix the event never arrives. The test needs a bystander bus
+  subscriber, because the bus retains events only while it has no subscriber at all.
 
 The existing pins still apply: `CdcEventStoreCommitOrderIT`, `CdcEventStoreGapFillAcknowledgementIT`,
 `CdcEventStoreConcurrentWritersIT`, `CdcEventStoreLiveTailHoleIT`, `CdcEventStoreAwaitedGapInspectorIT`, and

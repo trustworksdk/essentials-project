@@ -34,7 +34,7 @@ import org.junit.jupiter.api.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.*;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME;
 import static org.assertj.core.api.Assertions.*;
@@ -63,6 +63,11 @@ class CdcEventStoreDeferredGapRecordingIT extends AbstractLogicalReplicationPost
     private PostgresqlDurableSubscriptionRepository                                 durableSubscriptionRepository;
     private final List<EventStoreSubscriptionManager>                               managers = new CopyOnWriteArrayList<>();
     private ExecutorService                                                         heldTransactions;
+    /**
+     * Another subscriber of the aggregate type on the bus, as in any real deployment: the bus retains nothing for a
+     * subscription that left it while others remain
+     */
+    private reactor.core.Disposable                                                 bystander;
 
     @BeforeEach
     void setup() {
@@ -93,6 +98,7 @@ class CdcEventStoreDeferredGapRecordingIT extends AbstractLogicalReplicationPost
                                             Optional.empty());
         durableSubscriptionRepository = new PostgresqlDurableSubscriptionRepository(jdbi, cdcEventStore);
         heldTransactions = Executors.newCachedThreadPool(runnable -> new Thread(runnable, "test-held-transaction"));
+        bystander = cdcBus.fluxForAggregate(ORDERS).subscribe();
 
         jdbi.useHandle(handle -> {
             handle.execute("CREATE TABLE IF NOT EXISTS transient_gap_inserts (gap_global_event_order bigint)");
@@ -108,6 +114,9 @@ class CdcEventStoreDeferredGapRecordingIT extends AbstractLogicalReplicationPost
     void cleanup() {
         if (heldTransactions != null) {
             heldTransactions.shutdownNow();
+        }
+        if (bystander != null) {
+            bystander.dispose();
         }
         unitOfWorkFactory.getCurrentUnitOfWork().ifPresent(UnitOfWork::rollback);
         managers.forEach(EventStoreSubscriptionManager::stop);
@@ -224,6 +233,64 @@ class CdcEventStoreDeferredGapRecordingIT extends AbstractLogicalReplicationPost
         assertThat(cdcEventStore.isAwaitedAsGap(subscriberId, ORDERS, GlobalEventOrder.of(a.globalOrder()))).as("awaited while kept in memory").isTrue();
     }
 
+    /**
+     * A subscription that falls behind the bus catches up from the event store: what it has not been handed past its
+     * highest delivered order, plus - by order - the gaps below it whose fill may have committed while it was off the bus.
+     * The tracker names at most {@code MAX_AWAITED_GAPS_TO_REQUERY} (1 000) of them, lowest first; a newer gap used to be
+     * covered by its transient gap row, which the catch-up's gap handler query includes newest first. A gap kept in memory
+     * has no row: with more than 1 000 older orders awaited (here: rolled-back appends), its fill - published while the
+     * subscription was off the bus - was not loaded, and reached the subscriber only once older gaps were given up, after
+     * later events of the same aggregate (trading demo: views applying OrderAccepted before OrderPlaced).
+     */
+    @Test
+    void a_gap_kept_in_memory_whose_fill_arrives_while_the_subscription_is_off_the_bus_is_filled_by_the_catch_up() throws Exception {
+        var subscriberId = SubscriberId.of("deferred-and-caught-up");
+        var manager      = startManager("node-1", Duration.ofHours(1));
+        var mayHandle    = new AtomicReference<>(new CountDownLatch(0));
+        var received     = new CopyOnWriteArrayList<Long>();
+        manager.subscribeToAggregateEventsAsynchronously(subscriberId,
+                                                         ORDERS,
+                                                         GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                         Optional.empty(),
+                                                         (PersistedEventHandler) event -> {
+                                                             try {
+                                                                 mayHandle.get().await(30, TimeUnit.SECONDS);
+                                                             } catch (InterruptedException e) {
+                                                                 Thread.currentThread().interrupt();
+                                                             }
+                                                             received.add(event.globalEventOrder().longValue());
+                                                         });
+        publish(appendAndCommit());
+        await().atMost(Duration.ofSeconds(10)).until(() -> received.size() == 1);
+        availability.active("deferred-gaps-slot");
+        awaitOnTheBus();
+
+        // More than 1 000 orders awaited below the gap that matters: a rolled-back batch of appends
+        rollBackAppends(1_100);
+        publishUntilReceived(received, appendAndCommit());
+
+        // The gap kept in memory
+        var a = holdAppend();
+        publishUntilReceived(received, appendAndCommit());
+        assertThat(transientGapsOf(subscriberId)).doesNotContain(GlobalEventOrder.of(a.globalOrder()));
+
+        // The subscriber stalls; the bus overflows its hand-over and the subscription leaves the bus
+        mayHandle.set(new CountDownLatch(1));
+        var later = new ArrayList<Long>();
+        for (var i = 0; i < 60; i++) {
+            var order = appendAndCommit();
+            later.add(order);
+            publish(order);
+        }
+        // ... and the fill is published while it is off the bus
+        a.commit();
+        publish(a.globalOrder());
+        mayHandle.get().countDown();
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(received).containsAll(later));
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(received).contains(a.globalOrder()));
+    }
+
     // ------------------------------------------------------------------------------------------------------------
 
     private List<Long> transientGapInserts() {
@@ -289,6 +356,15 @@ class CdcEventStoreDeferredGapRecordingIT extends AbstractLogicalReplicationPost
     private PersistedEvent load(long globalOrder) {
         return unitOfWorkFactory.withUnitOfWork(() -> eventStore.loadEventsByGlobalOrder(ORDERS, LongRange.only(globalOrder), List.of()).toList())
                                 .getFirst();
+    }
+
+    private void rollBackAppends(int count) {
+        assertThatThrownBy(() -> unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+            for (var i = 0; i < count; i++) {
+                appendTo(unitOfWork);
+            }
+            throw new RolledBack();
+        })).hasRootCauseInstanceOf(RolledBack.class);
     }
 
     private long appendAndCommit() {

@@ -909,7 +909,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                                                       pageSize,
                                                                       Optional.empty(),
                                                                       deliveryGate,
-                                                                      () -> tracker.awaitedGaps(MAX_AWAITED_GAPS_TO_REQUERY),
+                                                                      // Plus every gap kept in memory: it has no transient gap row the
+                                                                      // page's gap handler query could include, and is among the newest -
+                                                                      // past the tracker's lowest-first limit when many older orders are
+                                                                      // awaited (rolled-back appends)
+                                                                      () -> deliveryGate.withUnrecordedGaps(tracker.awaitedGaps(MAX_AWAITED_GAPS_TO_REQUERY)),
                                                                       cdcDeliveryScheduler)
                                .doOnComplete(() -> {
                                    if (recoveringFromOverflow.compareAndSet(true, false)) {
@@ -1055,9 +1059,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          */
         static final int MAX_DEFERRED_ORDERS_PER_GAP          = 1_000;
         /**
-         * The most orders one subscription keeps in memory as gaps - beyond, a gap is recorded at once
+         * The most orders one subscription keeps in memory as gaps - beyond, a gap is recorded at once. Also bounds what a
+         * catch-up loads by order on their account ({@link #withUnrecordedGaps})
          */
-        static final int MAX_DEFERRED_ORDERS_PER_SUBSCRIPTION = 10_000;
+        static final int MAX_DEFERRED_ORDERS_PER_SUBSCRIPTION = 1_000;
 
         /**
          * @return {@code orders} as runs of consecutive orders, ascending
@@ -1309,6 +1314,22 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             if (!defersGapRecording) return false;
             synchronized (deferredGapsLock) {
                 return unrecordedFillsNotDoneWith.containsKey(order);
+            }
+        }
+
+        /**
+         * @return {@code awaitedGaps} plus the orders of the gaps kept in memory not among them - for a catch-up to load
+         * by order (see {@code buildAdaptiveLiveSource}): a fill that committed while the subscription was off the bus is
+         * only in the database, and a gap kept in memory has no transient gap row for the catch-up's gap handler query to
+         * include
+         */
+        List<GlobalEventOrder> withUnrecordedGaps(List<GlobalEventOrder> awaitedGaps) {
+            if (!defersGapRecording) return awaitedGaps;
+            synchronized (deferredGapsLock) {
+                if (unrecordedGaps.isEmpty()) return awaitedGaps;
+                var union = new LinkedHashSet<>(awaitedGaps);
+                unrecordedGaps.forEach(order -> union.add(GlobalEventOrder.of(order)));
+                return List.copyOf(union);
             }
         }
 
