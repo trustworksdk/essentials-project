@@ -1,0 +1,77 @@
+# The demo application itself in containers, beside compose.yml's services. Used together with compose.yml, through
+# run-app-stack.sh:
+#
+#   ./run-app-stack.sh            # PostgreSQL, the simulators and one instance (http://localhost:8080)
+#   ./run-app-stack.sh 2          # two instances (http://localhost:8080, http://localhost:8081)
+#   ./run-app-stack.sh 1 observability
+#
+# Why: run on the host, the application reaches PostgreSQL through a published port, so every statement crosses a
+# user-space relay - Docker's port proxy on Linux, Docker Desktop's port forwarding on macOS and Windows. That hop cost
+# about half the burst latency (_demo_harness/CLAUDE.md, "PostgreSQL through the port proxy"). In a container on the
+# compose network the application talks to PostgreSQL, the simulators and the collector by service name, inside
+# Docker, on every platform. Only the browser and the load driver still come in through published ports.
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: app.Dockerfile
+  image: essentials-trading-demo-app:dev
+  restart: on-failure
+  depends_on:
+    postgresql:
+      condition: service_healthy
+  secrets:
+    - webhook_secret
+  environment: &app-environment
+    SPRING_PROFILES_ACTIVE: compose,simulators
+    # Spring's compose support would replace the datasource with the published port, and the image has no docker CLI
+    SPRING_DOCKER_COMPOSE_ENABLED: "false"
+    SPRING_DATASOURCE_URL: jdbc:postgresql://postgresql:5432/essentials-trading-demo
+    TRADING_DEMO_SIMULATORS_EXCHANGE_BASE_URL: http://exchange:8080
+    TRADING_DEMO_SIMULATORS_PAYMENT_GATEWAY_BASE_URL: http://payment-gateway:8081
+    TRADING_DEMO_SIMULATORS_WEBHOOK_SECRET_FILE: /run/secrets/webhook_secret
+    # Read only under the observability profile; the collector and Loki run only under that compose profile
+    MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://collector:4318/v1/metrics
+    MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: http://collector:4318/v1/traces
+    LOKI_URL: http://loki:3100/loki/api/v1/push
+
+services:
+  postgresql:
+    # compose.yml has none; the instances wait for it rather than crash-loop on a refused connection
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U essentials -d essentials-trading-demo"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app-1:
+    <<: *app
+    profiles: [app]
+    container_name: essentials-trading-demo-app-1
+    ports:
+      - "8080:8080"
+    environment:
+      <<: *app-environment
+      # A distinct id per instance is not optional - see run-instance.sh
+      ESSENTIALS_SHARD_OWNED_QUEUE_INSTANCE_ID: demo-1
+    networks:
+      default:
+        # The simulators deliver their webhooks to http://host.docker.internal:8080 (simulators/*.yaml), which on the
+        # host reaches instance 1. Here that name is instance 1's container, so webhooks stay inside Docker too.
+        aliases: [host.docker.internal]
+
+  app-2:
+    <<: *app
+    profiles: [app2]
+    container_name: essentials-trading-demo-app-2
+    ports:
+      - "8081:8080"
+    environment:
+      <<: *app-environment
+      ESSENTIALS_SHARD_OWNED_QUEUE_INSTANCE_ID: demo-2
+
+  # Without the host mapping, the simulators resolve host.docker.internal through Docker's DNS, to app-1's alias
+  exchange:
+    extra_hosts: !reset []
+  payment-gateway:
+    extra_hosts: !reset []

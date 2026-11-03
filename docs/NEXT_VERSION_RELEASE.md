@@ -550,6 +550,10 @@ Not published; listed because they are the reference for how to use the framewor
   (router, exchange reports, ledger) took the burst days' booked p99 from 5.3-6.6 s to 2.9-4.5 s for no more CPU. Two
   instances at a pool of 60 need more than PostgreSQL's default of 100 connections, hence `max_connections=200` in
   both compose files (`_demo_harness/CLAUDE.md`, "Inbox consumers at the opens").
+- **`essentials-trading-demo`: the whole demo can run in Docker** - `./run-app-stack.sh [1|2]` with `compose.app.yml`
+  and `app.Dockerfile` start one or two application instances in containers beside PostgreSQL and the simulators. On
+  Docker Desktop (macOS, Windows) this is how the application reaches PostgreSQL without a port relay, which on the
+  host costs about half the burst latency. Loki's URL in `logback-spring.xml` can now be set with `LOKI_URL`.
 
 ---
 

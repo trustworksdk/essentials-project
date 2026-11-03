@@ -133,6 +133,24 @@ for; one instance exercises none of its ownership, rebalancing or fencing.
   `spring.docker.compose.lifecycle-management: start-only`; the database outlives the demo and
   `docker compose down` stops it.
 
+## Whole demo in Docker (`compose.app.yml`)
+
+`./run-app-stack.sh [1|2] [observability]` builds the application image (`app.Dockerfile`, classes + runtime and
+provided jars copied from the module, compiled against `~/.m2`'s Essentials jars) and starts it beside PostgreSQL and
+the simulators: `app-1` on `localhost:8080`, `app-2` (compose profile `app2`) on `8081`. `./run-app-stack.sh down`
+stops the instances. The way to run the demo on Docker Desktop, where `run-instance.sh` can only reach PostgreSQL
+through a published port and so pays the relay's cost on every statement.
+
+- **Inside, everything is by service name** (`postgresql`, `exchange`, `payment-gateway`, `collector`, `loki`), set as
+  environment in `compose.app.yml`; Spring's compose support is off. `logback-spring.xml`'s Loki URL reads `LOKI_URL`.
+- **Webhooks reach `app-1` by a network alias.** The simulators post to `http://host.docker.internal:8080`; the
+  override drops their host mapping (`extra_hosts: !reset []`, compose 2.24+) and gives `app-1` that name.
+- **`provided` jars must be copied too** - Essentials declares slf4j and its other integrations provided; a
+  runtime-scope copy failed at start with `ClassNotFoundException: org.slf4j.LoggerFactory`.
+- Verified 2026-11-03: 61 connections from the app container's own address, a 2-day load run with every order, fill
+  and payment check passing (booked p99 ~400 ms), and two instances sharing the shard units. Not yet measured at the
+  phase 6 load.
+
 ## Load driver
 
 `./run-load.sh` (phase 6, `docs/design/phase-6-realistic-load.md`) drives running instances over HTTP as simulated
