@@ -1463,15 +1463,14 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
     }
 
     private void sweep(Connection connection) throws SQLException {
-        var rows      = storage.sweepOrderedFromHead(connection, shard, settings.readBatchSize());
-        var untilNext = storage.millisUntilNextVisible(connection, ShardOwnedSchema.ORDERED_TABLE, shard);
-        metrics.orderedReadStatements.add(2);
-        applySweptRows(rows, untilNext);
+        var swept = storage.sweepOrderedFromHeadWithNextVisible(connection, shard, settings.readBatchSize());
+        metrics.orderedReadStatements.increment();
+        applySweptRows(swept.rows(), swept.millisUntilNextVisible());
     }
 
     /**
-     * The half of a sweep that is not a query, so it can be driven either by this owner's own two
-     * statements or by the pump's batched ones.
+     * The half of a sweep that is not a query, so it can be driven either by this owner's own
+     * statement or by the pump's batched one.
      */
     private void applySweptRows(List<ShardOwnedStorage.OrderedRow> rows, OptionalLong untilNext) {
         metrics.headSweeps.increment();

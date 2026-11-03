@@ -14,7 +14,7 @@ and two lock waits removed.
 
 - Shard-owned engine and adapter: enqueues no longer serialise their commits on `NOTIFY`; pumps visit only the owners
   that need them and take one horizon probe per pass; idle pumps can give their connections back; a cheaper message
-  format; a queue depth read costs 3 statements instead of 69 (§2.13).
+  format; a queue depth read costs 3 statements instead of 69 (§2.13); a head sweep is one statement, not two (§2.14).
 - Event store: concurrent gap give-ups no longer deadlock; a give-up costs what it gives up rather than every gap
   outstanding; CDC hands out event JSON as stored; an out-of-order commit no longer costs every CDC subscriber a
   commit of its own (§2.12).
@@ -460,6 +460,25 @@ Measured (`ShardOwnedDepthCostIT`, benchmark-gated, 4 unordered shards, 200 read
 | empty | 3.21 → 0.24 ms | 6.36 → 0.57 ms |
 | 10 000 | 5.23 → 1.61 ms | 8.33 → 1.94 ms |
 | 100 000 | 22.3 → 13.6 ms | 27.1 → 19.1 ms |
+
+### 2.14 Shard-owned: a head sweep and its next-visible time are one statement (`postgresql-queue-shard-owned`)
+
+Every head sweep of an ordered unit - the safety net that recovers rows a cursor skipped and finds delayed messages
+that have become due - asked the database two things in two round trips: the visible rows from the head, and how long
+until the unit's next delayed row becomes visible. Both now come back from one `UNION ALL` statement, for a unit swept on
+its own and for the pump's batched sweep of every due unit of a queue. Each half is the statement it replaces, so each
+keeps its own plan (checked against a table vacuumed while drained, where a wrong plan
+hurts most). Correctness: `ShardOwnedBatchedReadIT` checks the one-statement sweep returns what the two statements
+return. Nothing to configure; behaviour is unchanged.
+
+Measured (`ShardOwnedOrderedLoadedCostIT` / `ShardOwnedOrderedIdleCostIT`, 3 alternating rounds against the previous
+commit):
+
+| Measure | Before | After |
+|---|---|---|
+| Read statements per delivered message | 3.82–3.98 | 3.34–3.67 |
+| Idle ordered queue, statements per 3 s | 90 | 62–68 |
+| Delivery p50 / p99 | 2.9 / 4.5–7.2 ms | 2.8–2.9 / 4.3–5.1 ms |
 
 ## 3. Bug fixes
 
