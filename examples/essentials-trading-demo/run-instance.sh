@@ -49,9 +49,9 @@
 # Maven will print "Failed to execute goal ... Process terminated" afterwards. That is the
 # plugin reporting that its child exited on a signal, not the application failing.
 #
-# The first instance starts PostgreSQL through Spring Boot's Docker Compose support;
-# later ones find it running and reuse it. Stop instance 1 last, or its shutdown
-# takes the database away from the others.
+# The first instance starts PostgreSQL (and the profiles' services) - by `docker compose up` below, or
+# through Spring Boot's Docker Compose support when that is the path taken; later ones find it running and
+# reuse it. Either way the database outlives every instance (start-only): `docker compose down` stops it.
 set -euo pipefail
 
 N="${1:?usage: run-instance.sh <instance-number> [extra-spring-profiles]}"
@@ -61,10 +61,41 @@ COMPOSE_PROFILES="$(echo "${2:-}" | tr ',' '\n' | grep -xE 'observability|simula
 
 cd "$(dirname "$0")/../.."
 
+# POSTGRESQL WITHOUT DOCKER'S PORT PROXY, where the container is reachable directly.
+#
+# Through `localhost:5432` every statement passes Docker's userland port proxy (docker-proxy): an extra hop each
+# way, and about a core of CPU under load. The demo issues many short statements per order, so that hop decided its
+# burst latency: measured on the same load, booked p50 557-878 ms -> 208-324 ms and p99 9.6-11.1 s -> 5.3-6.6 s
+# when connecting to the container's own IP instead (_demo_harness/CLAUDE.md, "PostgreSQL through the port proxy").
+#
+# So this script starts the compose services itself and, when the PostgreSQL container's IP answers from here (a Linux
+# host, a devcontainer running its own Docker), points the datasource at it and turns Spring's compose support off -
+# its service connection would otherwise replace the URL with the published port. Where the IP does not answer
+# (Docker Desktop on macOS or Windows keeps container IPs inside its VM), or with PG_DIRECT=0, nothing changes: the
+# application connects through localhost:5432 and Spring's compose support starts or reuses the containers as before.
+EXTRA_ARGS=""
+if [[ "${PG_DIRECT:-auto}" != "0" ]]; then
+    COMPOSE_FLAGS=()
+    for profile in ${COMPOSE_PROFILES//,/ }; do
+        COMPOSE_FLAGS+=(--profile "$profile")
+    done
+    if docker compose -f examples/essentials-trading-demo/compose.yml "${COMPOSE_FLAGS[@]}" up -d --wait >&2; then
+        PG_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' essentials-trading-demo-postgresql 2>/dev/null || true)"
+        if [[ -n "$PG_IP" ]] && timeout 2 bash -c "</dev/tcp/${PG_IP}/5432" 2>/dev/null; then
+            echo "run-instance: PostgreSQL directly at ${PG_IP}:5432, bypassing the port proxy (PG_DIRECT=0 to turn off)" >&2
+            EXTRA_ARGS=" --spring.docker.compose.enabled=false --spring.datasource.url=jdbc:postgresql://${PG_IP}:5432/essentials-trading-demo"
+        else
+            echo "run-instance: PostgreSQL container IP not reachable from here; connecting through localhost:5432" >&2
+        fi
+    else
+        echo "run-instance: 'docker compose up' failed; leaving it to Spring's compose support, through localhost:5432" >&2
+    fi
+fi
+
 JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/temurin-25-jdk-arm64}" \
 exec ./mvnw -o -pl examples/essentials-trading-demo -DskipDependencyCheck=true \
     -Dspring-boot.run.optimizedLaunch=false \
     -Dspring-boot.run.profiles="${PROFILES}" \
     -Dspring-boot.run.jvmArguments="-Dserver.port=${PORT}" \
-    -Dspring-boot.run.arguments="--essentials.shard-owned-queue.instance-id=demo-${N}${COMPOSE_PROFILES:+ --spring.docker.compose.profiles.active=${COMPOSE_PROFILES}}" \
+    -Dspring-boot.run.arguments="--essentials.shard-owned-queue.instance-id=demo-${N}${COMPOSE_PROFILES:+ --spring.docker.compose.profiles.active=${COMPOSE_PROFILES}}${EXTRA_ARGS}" \
     spring-boot:run

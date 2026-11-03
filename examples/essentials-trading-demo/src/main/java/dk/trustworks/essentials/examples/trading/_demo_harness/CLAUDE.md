@@ -849,3 +849,40 @@ customers, 1 000 active, 100/s with 300/s at opens, 10 business days), fresh dat
   ~1.4x as often. One run each.
 - **Still open: every fenced lock sits on whichever instance started first** and moves as one block on a crash - now
   the 35 subscription and view locks.
+
+### PostgreSQL through the port proxy, 2026-11-03 - half of every earlier burst latency
+
+Two runs on the same recipe (`compose,simulators`, one instance, 10 business days at 100 orders/s with a 600/s
+open burst, `reset-stack.sh` before each), differing only in how the application reached PostgreSQL. Run G used
+`localhost:5432`, the port Docker publishes, so every statement went through Docker's userland port proxy
+(`docker-proxy`). Run H connected to the PostgreSQL container's own IP.
+
+| Burst days 2-10 | Through the proxy (G) | Container IP (H) |
+|---|---|---|
+| Booked p50 | 557-878 ms | 208-324 ms |
+| Booked p99 | 9.6-11.1 s | 5.3-6.6 s |
+| Orders | 65 141 | 67 018 |
+| Machine busy cores, median | 4.5 | 3.7 |
+
+Every check passed in both runs. What pointed at it, before run H:
+
+- **The application was waiting, not working.** Thread dumps at a burst had almost no Java thread running and 18-36
+  waiting on a PostgreSQL reply, with 0-4 waiting for a pool connection. `pg_stat_activity` showed up to 28 sessions
+  idle in a transaction against 3-7 active, spread over ordinary transactions (aggregate loads, projection updates,
+  event inserts, savepoints): the time went between round trips.
+- **It was not commit cost.** `synchronous_commit=off` left the burst p99 where it was (8.7-10.2 s), and group commit
+  made it worse (12.3 s).
+- **The proxy itself used about a core** at the opens, beside about two for PostgreSQL.
+
+So `run-instance.sh` now connects to the container's IP whenever it answers from where the script runs (a Linux host,
+this devcontainer). It starts the compose services itself and turns Spring's compose support off, because that
+support's service connection would otherwise replace the URL with the published port. Where the IP does not answer
+(Docker Desktop on macOS or Windows keeps container IPs inside its VM), or with `PG_DIRECT=0`, it connects through
+`localhost:5432` as before.
+
+**Every load baseline before 2026-11-03 includes the proxy.** Compare a run only with one made the same way. The
+script prints which path it took. On a host where the direct path is not available the proxy's cost stays, and the
+latencies above are what to expect.
+
+The ~6 s p99 that remains is the demo's and the framework's own, and it rises slowly over a run in both
+configurations (H: 5.3 s on day 2, 6.6 s on day 10), which points at a cost growing with the stored data.

@@ -119,6 +119,13 @@ for; one instance exercises none of its ownership, rebalancing or fencing.
   released and the instance deregistered. Measured — 408 units held, 0 owned and no membership rows
   seconds later. Maven then prints `Failed to execute goal ... Process terminated`, which is the
   plugin reporting a child killed by a signal, not the application failing.
+- **`run-instance.sh` bypasses Docker's port proxy for PostgreSQL where it can.** When the PostgreSQL container's IP
+  answers (a Linux host, the devcontainer), it starts the compose services itself and runs the application with
+  `--spring.docker.compose.enabled=false` and the datasource at that IP. Through `localhost:5432` every statement
+  crosses `docker-proxy`, which cost about half the burst latency (`_demo_harness/CLAUDE.md`, "PostgreSQL through the
+  port proxy"). On Docker Desktop (macOS, Windows) the IP does not answer and it falls back to `localhost:5432`, the
+  same path as `PG_DIRECT=0`. A run of the application started any other way (an IDE, plain `spring-boot:run`) still
+  goes through the proxy.
 - **Instances may be stopped in any order, and that took a setting.** Spring Boot's Docker Compose
   support defaults to `start-and-stop`, so whichever instance started PostgreSQL took it down with
   it — every survivor then logged connection refusals forever, because each layer is built to ride

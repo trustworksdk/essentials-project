@@ -538,6 +538,12 @@ Not published; listed because they are the reference for how to use the framewor
   `reset-stack.sh` wipes the compose stack and its volumes before a run (the simulators' stores never prune and filled
   the disk), and under `compose` the load driver's `@load.local` users are stored with `{noop}` password hashes
   (`trading-demo.identity.unhashed-password-email-suffix`), so registering 10 000 of them no longer costs BCrypt.
+- **`essentials-trading-demo`: `run-instance.sh` connects to PostgreSQL without Docker's port proxy where it can.**
+  Through `localhost:5432` every statement crossed `docker-proxy`. Connecting to the container's IP on the same load
+  took the burst days' booked p50 from 557-878 ms to 208-324 ms and p99 from 9.6-11.1 s to 5.3-6.6 s, with about a core
+  less CPU. The script uses the direct path when the container IP answers (Linux, the devcontainer) and falls back to
+  `localhost:5432` otherwise (Docker Desktop on macOS and Windows) or with `PG_DIRECT=0`. Demo latency figures from
+  before this change include the proxy (`_demo_harness/CLAUDE.md`, "PostgreSQL through the port proxy").
 
 ---
 
