@@ -1597,22 +1597,13 @@ public final class PostgresqlMessageQueue implements MessageQueue {
 
     @Override
     public QueueDepth depth() throws SQLException {
-        var     unordered   = 0L;
-        Instant oldestReady = null;
-        for (var shard = 0; shard < shardCount; shard++) {
-            var depth = storage.depthOf(shard);
-            unordered += depth.count();
-            oldestReady = earliest(oldestReady, depth.oldestReadyAt());
-        }
-        // Counted against the ordered lane's own, fixed space rather than the unordered shard count.
-        var ordered = 0L;
-        for (var unit = 0; unit < orderedUnits(); unit++) {
-            var depth = storage.orderedDepthOf(unit);
-            ordered += depth.count();
-            oldestReady = earliest(oldestReady, depth.oldestReadyAt());
-        }
+        // One statement per lane, never one per shard or unit: the ordered lane alone has 64 units, and a depth
+        // read is what admin endpoints, health checks and gauges poll.
+        var unordered   = storage.unorderedDepth();
+        var ordered     = storage.orderedDepth();
+        var oldestReady = earliest(unordered.oldestReadyAt(), ordered.oldestReadyAt());
         var deadLetters = storage.deadLetterSummary();
-        return new QueueDepth(unordered, ordered, deadLetters.total(), oldestReady,
+        return new QueueDepth(unordered.count(), ordered.count(), deadLetters.total(), oldestReady,
                               deadLetters.parked(), deadLetters.blockedKeys());
     }
 

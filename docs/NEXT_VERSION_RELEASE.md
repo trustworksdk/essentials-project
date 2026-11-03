@@ -14,7 +14,7 @@ and two lock waits removed.
 
 - Shard-owned engine and adapter: enqueues no longer serialise their commits on `NOTIFY`; pumps visit only the owners
   that need them and take one horizon probe per pass; idle pumps can give their connections back; a cheaper message
-  format.
+  format; a queue depth read costs 3 statements instead of 69 (§2.13).
 - Event store: concurrent gap give-ups no longer deadlock; a give-up costs what it gives up rather than every gap
   outstanding; CDC hands out event JSON as stored; an out-of-order commit no longer costs every CDC subscriber a
   commit of its own (§2.12).
@@ -443,6 +443,23 @@ There is nothing to configure. A few cases still write the gap at once, as befor
 
 New, additive: role interface `DeferredGapRecording`, implemented by `CdcEventStore`. An `EventStore` decorator that does
 not forward it simply keeps the old behaviour. Design and every save path: `docs/cdc-deferred-gap-recording.md`.
+
+### 2.13 Shard-owned: a queue depth read is 3 statements, not 69 (`postgresql-queue-shard-owned`)
+
+`MessageQueue.depth()` - behind the adapter's `getTotalMessagesQueuedFor` / `getQueuedMessageCountsFor`, the admin
+API, the depth gauges and `Inbox.getNumberOfUndeliveredMessages` - counted every unordered shard and every one of the
+ordered lane's 64 units with a statement each: 69 statements per read. It now counts each lane with one queue-wide
+statement, plus the dead-letter summary. Same result (shards only ever grow, so the queue-wide count is the sum the
+loop added up). Anything that polls depth - a monitoring endpoint sampling every queue once a second, an inbox
+catch-up loop - costs 23x fewer statements.
+
+Measured (`ShardOwnedDepthCostIT`, benchmark-gated, 4 unordered shards, 200 reads per backlog):
+
+| Backlog per lane | p50 before → after | p99 before → after |
+|---|---|---|
+| empty | 3.21 → 0.24 ms | 6.36 → 0.57 ms |
+| 10 000 | 5.23 → 1.61 ms | 8.33 → 1.94 ms |
+| 100 000 | 22.3 → 13.6 ms | 27.1 → 19.1 ms |
 
 ## 3. Bug fixes
 

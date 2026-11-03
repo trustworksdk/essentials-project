@@ -1419,32 +1419,33 @@ public final class ShardOwnedStorage {
     }
 
     /**
-     * How many messages one unordered shard holds, and when the oldest of them that is ready for delivery
-     * became ready - in one statement, so {@link PostgresqlMessageQueue#depth()} costs no more round trips
-     * than counting alone. A row a live pull session holds is out for delivery, not ready; see
-     * {@link dk.trustworks.essentials.components.queue.shardowned.spi.QueueDepth#oldestReadyAt()} for what
+     * How many messages this queue's unordered lane holds, and when the oldest of them that is ready for delivery
+     * became ready - in one statement for every shard. A row a live pull session holds is out for delivery, not
+     * ready; see {@link dk.trustworks.essentials.components.queue.shardowned.spi.QueueDepth#oldestReadyAt()} for what
      * "ready" cannot exclude.
+     * <p>
+     * Not one statement per shard. Shards only ever grow, so the
+     * queue-wide count is exactly the sum the per-shard loop added up - at one statement per lane instead of one per
+     * shard, which for the ordered lane's 64 units was the difference between 3 and 69 statements per depth read.
      */
-    public ShardDepth depthOf(int shard) throws SQLException {
-        return shardDepth("SELECT count(*), min(visible_at) FILTER (WHERE visible_at <= now()" + notRowLeasedClause() + ")"
-                                  + " FROM " + UNORDERED_TABLE + " WHERE queue_id = ? AND shard = ?", shard);
+    public ShardDepth unorderedDepth() throws SQLException {
+        return queueDepth("SELECT count(*), min(visible_at) FILTER (WHERE visible_at <= now()" + notRowLeasedClause() + ")"
+                                  + " FROM " + UNORDERED_TABLE + " WHERE queue_id = ?");
     }
 
     /**
-     * {@link #depthOf(int)} for one unit of the ordered lane. The ordered lane has no pull sessions, so
-     * every visible row counts as ready - including one waiting behind its key's head while the head is
-     * being handled.
+     * {@link #unorderedDepth()} for the ordered lane. The ordered lane has no pull sessions, so every visible row
+     * counts as ready - including one waiting behind its key's head while the head is being handled.
      */
-    public ShardDepth orderedDepthOf(int unit) throws SQLException {
-        return shardDepth("SELECT count(*), min(visible_at) FILTER (WHERE visible_at <= now())"
-                                  + " FROM " + ORDERED_TABLE + " WHERE queue_id = ? AND shard = ?", unit);
+    public ShardDepth orderedDepth() throws SQLException {
+        return queueDepth("SELECT count(*), min(visible_at) FILTER (WHERE visible_at <= now())"
+                                  + " FROM " + ORDERED_TABLE + " WHERE queue_id = ?");
     }
 
-    private ShardDepth shardDepth(String sql, int shard) throws SQLException {
+    private ShardDepth queueDepth(String sql) throws SQLException {
         try (var connection = open();
              var statement = connection.prepareStatement(sql)) {
             statement.setShort(1, queueId);
-            statement.setInt(2, shard);
             try (var resultSet = statement.executeQuery()) {
                 resultSet.next();
                 var oldestReady = resultSet.getTimestamp(2);
@@ -1454,7 +1455,7 @@ public final class ShardOwnedStorage {
     }
 
     /**
-     * @param count         messages in the shard
+     * @param count         messages in the lane
      * @param oldestReadyAt when the oldest ready one became ready, or {@code null} when none is ready
      */
     public record ShardDepth(long count, Instant oldestReadyAt) {
