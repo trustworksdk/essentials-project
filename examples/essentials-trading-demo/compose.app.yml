@@ -34,6 +34,8 @@ x-app: &app
     MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://collector:4318/v1/metrics
     MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: http://collector:4318/v1/traces
     LOKI_URL: http://loki:3100/loki/api/v1/push
+    # Passed through from the shell that runs compose: the router's stage split in the load driver's report
+    TRADING_DEMO_ORDERS_ROUTER_STAGE_TIMINGS_ENABLED: ${TRADING_DEMO_ORDERS_ROUTER_STAGE_TIMINGS_ENABLED:-false}
 
 services:
   postgresql:
