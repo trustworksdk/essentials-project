@@ -370,7 +370,9 @@ every check passed; the full report goes to `target/load-driver/load-<run>.json`
   than one writer - root `CLAUDE.md`).
 - **Design §4's steady-state check**: `booked p99 under 10 s outside bursts, and from 30 s after each` - every 10 s
   placement bucket with a booking, except from one bucket before each open to 30 s after its burst (and a fault window
-  plus 30 s), must book its p99 under 10 s. The report's `steadyState` also gives each burst's recovery: seconds from its
+  plus 30 s), must book its p99 under 10 s. With trading sessions (D32) a 16 s session at 1440x lies wholly inside that
+  exclusion, so nothing was checked and every default run FAILed; with no bucket outside, every burst must instead
+  have recovered within 30 s (`judgedBy` in the report). The report's `steadyState` also gives each burst's recovery: seconds from its
   end to the first bucket back under 10 s.
 - **Design §5's stores** are sampled at the start, every `store-sample-every-days` closes (default 10; 0 = start and end
   only) and at the end, off the pacing loop; the report's `storeSizes` holds the series and the log ranks the top 15

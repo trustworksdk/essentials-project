@@ -745,7 +745,8 @@ public final class LoadDriver {
      * back under it within 30 s after each. Every 10 s placement bucket with a booking is checked, except those from one
      * bucket before a burst's open to 30 s after its end - and, in a fault run, the fault window and 30 s after it, which
      * the fault's own recovery check covers. A burst's recovery is how long after its end the first bucket placed came in
-     * under 10 s again.
+     * under 10 s again. When no bucket lies outside the bursts - a short session at a fast clock - every burst must have
+     * recovered within 30 s instead.
      */
     private Map<String, Object> outsideBursts(JsonNode server) {
         var buckets = new ArrayList<Map.Entry<Instant, Double>>();
@@ -775,8 +776,13 @@ public final class LoadDriver {
                    .findFirst()
                    .ifPresent(b -> recovery.add(Duration.between(burst.end(), b.getKey()).toSeconds()));
         }
+        // With trading sessions (D32) a short session can lie wholly inside its burst's exclusion - a 16 s session at
+        // 1440x against a 6 s burst plus 30 s - and nothing is left outside to check. Then the target's other half
+        // decides: every burst recovered, within the 30 s allowed. A run that measured neither still fails
+        var everyBurstRecovered = !bursts.isEmpty() && recovery.size() == bursts.size() && recovery.stream().allMatch(seconds -> seconds <= 30);
         var evidence = new LinkedHashMap<String, Object>();
-        evidence.put("passed", violations.isEmpty() && checked > 0);
+        evidence.put("passed", violations.isEmpty() && (checked > 0 || everyBurstRecovered));
+        evidence.put("judgedBy", checked > 0 ? "buckets outside bursts" : "burst recovery (no bucket outside the bursts)");
         evidence.put("bucketsChecked", checked);
         evidence.put("violations", violations);
         evidence.put("bursts", bursts.size());

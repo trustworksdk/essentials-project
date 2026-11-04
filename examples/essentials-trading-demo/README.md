@@ -47,6 +47,10 @@ Design notes per phase: [docs/design/](docs/design/). What the simulators must p
 
 ## Run Locally
 
+**[docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md)** is the guide: starting and stopping (`run-instance.sh`,
+`stop-instances.sh`, `reset-stack.sh`), the operator page `/ops`, the customer UI, what to show and what to look at,
+and polling versus CDC measured.
+
 From the repo root, PostgreSQL started by Spring Boot's Docker Compose support:
 
 ```bash

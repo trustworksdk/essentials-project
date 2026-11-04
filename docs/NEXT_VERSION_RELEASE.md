@@ -613,6 +613,13 @@ Not published; listed because they are the reference for how to use the framewor
   `BusinessDayClosed`, instead of midnight New York on the application's clock. The integration tests keep an
   always-open exchange. The simulator's operator clock endpoints are switched on (`clock.operator_control`).
 
+- **`essentials-trading-demo`: a guide, a stop script, and polling versus CDC measured.**
+  [`docs/DEMO_GUIDE.md`](../examples/essentials-trading-demo/docs/DEMO_GUIDE.md) covers starting, stopping and
+  resetting the stack, the operator page, the customer UI and what to show with each, and a measured comparison of the
+  demo on CDC, on polling and on polling woken by `NOTIFY` (CDC fastest and cheapest at the default load; `NOTIFY`
+  doubled the statements). `./stop-instances.sh` stops the instances, the load driver and the containers and keeps
+  the data. The load driver's steady-state check no longer fails every short run with trading sessions on: when no
+  placement falls outside the bursts, each burst must have recovered within 30 s instead.
 - **`essentials-trading-demo`: PostgreSQL's data is in a named volume, `postgres-data`**, like the simulators'
   `exchange-data` and `gateway-data`. It was anonymous, so recreating the database container (Docker Desktop, `up
   --force-recreate`) started an empty database next to simulators that remembered the earlier run, and every old fill
