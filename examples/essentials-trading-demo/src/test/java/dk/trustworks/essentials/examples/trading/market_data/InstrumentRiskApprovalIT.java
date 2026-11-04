@@ -59,7 +59,7 @@ import static org.awaitility.Awaitility.await;
         "trading-demo.risk-approval.rejected-symbols=RISKY"
 })
 @DirtiesContext // close while this class's container is still up; a cached context outlives it and stalls the next context switch
-class InstrumentRiskApprovalTest {
+class InstrumentRiskApprovalIT {
     /**
      * Generous for the same reason as {@code TradingDemoApplicationTest}'s: the automation and the projection both run
      * off event-store subscriptions over a durable-queue inbox behind a fenced lock, so catch-up time is a function of

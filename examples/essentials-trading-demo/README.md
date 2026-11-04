@@ -135,8 +135,11 @@ Every slice's endpoint is in its context's `CLAUDE.md`. The ones to start with:
 ## Tests
 
 ```bash
-mvn verify -pl :essentials-trading-demo       # unit + integration (needs Docker)
+mvn verify -pl :essentials-trading-demo              # unit tests only (~30 s) - what the reactor build runs
+mvn verify -pl :essentials-trading-demo -Ddemo.its   # + the integration tests (~6 min, needs Docker)
 ```
+
+The integration tests are opt-in: they test the demo, not the framework, and took ~6 minutes of every full build.
 
 The integration tests against the real simulators skip themselves when the images are not built locally - a skip
 there is not a pass.

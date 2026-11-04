@@ -46,6 +46,10 @@
              copy of these properties. -->
         <maven.deploy.skip>true</maven.deploy.skip>
         <skipPublishing>true</skipPublishing>
+        <!-- The demo's integration tests (Spring contexts, PostgreSQL and the simulators in Docker, ~6 minutes) are not
+             the framework's tests: the default build skips them and runs the demo's unit tests only. Run them with
+             -Ddemo.its (the demo-its profile below), e.g. `mvn verify -pl examples/essentials-trading-demo -Ddemo.its`. -->
+        <skipITs>true</skipITs>
         <loki-logback-appender.version>2.1.0</loki-logback-appender.version>
         <!-- The simulators' OpenAPI documents are copied into src/main/openapi, so the build needs nothing outside this
              repository. This is the version they were copied from; refresh them with
@@ -353,6 +357,18 @@
     </build>
 
     <profiles>
+        <profile>
+            <!-- -Ddemo.its: the demo's integration tests run, unless -DskipTests or -DskipITs says otherwise -->
+            <id>demo-its</id>
+            <activation>
+                <property>
+                    <name>demo.its</name>
+                </property>
+            </activation>
+            <properties>
+                <skipITs>${skipTests}</skipITs>
+            </properties>
+        </profile>
         <!-- Copies the simulators' OpenAPI documents from their published artifact into src/main/openapi. Run it after
              raising simulator-api-specs.version, and commit the result; the regular build never reads the artifact. -->
         <profile>

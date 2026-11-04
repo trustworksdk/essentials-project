@@ -669,6 +669,9 @@ Not published; listed because they are the reference for how to use the framewor
   panel, control and the steps of a trading day as it goes. Operator only, simulators profile only; API under
   `/api/admin/demo`.
 
+- **`essentials-trading-demo`'s integration tests are opt-in** (`-Ddemo.its`): they took ~6 minutes of every full
+  build and test the demo, not the framework. The reactor build runs the demo's unit tests only (~30 s).
+
 ## 6. Documentation
 
 - The LLM docs describe elastic pump connections, and their `InboxConfig.builder()` examples compile: that builder's
