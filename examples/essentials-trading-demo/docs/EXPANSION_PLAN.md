@@ -47,6 +47,7 @@ This file records decisions as they are taken. § Open questions lists what is s
 | D28 | **Phase 5 design decided** — [`design/phase-5-reconciliation.md`](design/phase-5-reconciliation.md) §7. Clearing statements stored as reference data with read-time breaks, as the bank's; a `ReconciliationCase` per break that is still there at the next business day's close, cleared if it goes first; resolving never books (the operator posts any `AdjustCash`, which the case records); a statement missing 2 business hours after the cutoff, configurable. | |
 | D29 | **Phase 6 design decided** — [`design/phase-6-realistic-load.md`](design/phase-6-realistic-load.md) §9. Load over HTTP from a separate driver JVM, customers in logged-in sessions; a configurable profile that starts small; one instance as the baseline, more on other hardware later; no comparison with `main` before the next release is merged in. | |
 | D30 | **Phase 7 design decided** — [`design/phase-7-customer-ui.md`](design/phase-7-customer-ui.md) §9. Thymeleaf shells with vanilla JS over the existing JSON API (no second read path); Portfolio, Trade and Funding under `/app`; Spring's login page; polling while visible, server-sent events later; a session-held CSRF token required on the customer API for session-authenticated requests (the operator API keeps the phase 1 exemption, the load driver sends the token); a customer `GET /api/market-data/instruments`; a `_customer_ui` package that is not a slice. | |
+| D31 | **Phase 8 design decided** — [`design/phase-8-demo-control.md`](design/phase-8-demo-control.md) §8. An operator page `/ops` that plays a trading day at any wall-clock time: exchange clock forward-only (pause, speed, skip to the open or close, advance days - jumps fast-forward through every close); continuous background traffic in the application, paced per exchange minute; the page explains itself (Q-8). `run-load.sh` stays for measurement. | |
 
 ---
 
@@ -98,6 +99,9 @@ Each phase ends with a load scenario and before/after measurements. Performance 
    the next release to be merged in (Q-5).*
 7. **Customer UI.** Portfolio, order ticket, funding.
    *Built (D30): Portfolio, Trade and Funding under `/app`, checked by hand in a browser against the simulators (place, fill, cancel, deposit, withdraw).*
+8. **Demo control.** An operator page that plays a trading day at any wall-clock time (exchange clock forward-only:
+   pause, speed, skip to the open or close, advance days) and runs continuous background traffic.
+   *Designed (D31); being built.*
 
 Later: fees and commission, multi-currency and FX, margin, corporate actions, the exchange expiring its own DAY orders (SR-17; until then the
 brokerage cancels them at the close, built in phase 3),
