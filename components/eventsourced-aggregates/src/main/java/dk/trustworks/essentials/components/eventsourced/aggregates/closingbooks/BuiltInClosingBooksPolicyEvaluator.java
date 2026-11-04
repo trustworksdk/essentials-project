@@ -39,6 +39,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
     private static final Logger log              = LoggerFactory.getLogger(BuiltInClosingBooksPolicyEvaluator.class);
     private static final String GAP_COUNTER_NAME = "essentials.closing_books.time_boundary_gap_detected";
+    private static final String UNKNOWN_BUSINESS_DATE_COUNTER_NAME = "essentials.closing_books.business_date_unknown";
+    private static final ZoneId UNUSED_ZONE_ID = ZoneId.of("UTC");
 
     private final AggregateType                 aggregateType;
     private final ClosingBooksDefaultPolicyType defaultPolicy;
@@ -50,6 +52,8 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
     private final Optional<MeterRegistry>       meterRegistry;
     private final ToLongFunction<AGGREGATE>     eventCountProvider;
     private final Function<AGGREGATE, String>   currentPeriodIdProvider;
+    private final ClosingBooksBusinessCalendar  businessCalendar;
+    private volatile boolean                    businessDateUnknown;
 
     /**
      * Constructs a new instance of the {@code BuiltInClosingBooksPolicyEvaluator}.
@@ -150,11 +154,47 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
                                               Optional<MeterRegistry> meterRegistry,
                                               ToLongFunction<AGGREGATE> eventCountProvider,
                                               Function<AGGREGATE, String> currentPeriodIdProvider) {
+        this(aggregateType,
+             defaultPolicy,
+             eventThreshold,
+             timeBoundary,
+             zoneId,
+             intervalDays,
+             clock,
+             meterRegistry,
+             eventCountProvider,
+             currentPeriodIdProvider,
+             null);
+    }
+
+    /**
+     * Constructs an evaluator whose {@link ClosingBooksTimeBoundary#END_OF_DAY} boundary may take its days from a
+     * business calendar ({@link ClosingBooksPeriodSource#BUSINESS_CALENDAR}).
+     *
+     * @param businessCalendar the business calendar, or {@code null} to evaluate on {@code clock} in {@code zoneId}.
+     *                         When set, {@code timeBoundary} must be {@code END_OF_DAY}, and {@code zoneId} and
+     *                         {@code clock} are not used and may be null
+     */
+    BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
+                                       ClosingBooksDefaultPolicyType defaultPolicy,
+                                       long eventThreshold,
+                                       ClosingBooksTimeBoundary timeBoundary,
+                                       ZoneId zoneId,
+                                       Integer intervalDays,
+                                       Clock clock,
+                                       Optional<MeterRegistry> meterRegistry,
+                                       ToLongFunction<AGGREGATE> eventCountProvider,
+                                       Function<AGGREGATE, String> currentPeriodIdProvider,
+                                       ClosingBooksBusinessCalendar businessCalendar) {
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
         this.defaultPolicy = requireNonNull(defaultPolicy, "No defaultPolicy provided");
         this.timeBoundary = requireNonNull(timeBoundary, "No timeBoundary provided");
-        this.zoneId = requireNonNull(zoneId, "No zoneId provided");
-        this.clock = requireNonNull(clock, "No clock provided");
+        this.businessCalendar = businessCalendar;
+        if (businessCalendar != null && timeBoundary != ClosingBooksTimeBoundary.END_OF_DAY) {
+            throw new IllegalArgumentException("A business calendar can only be used with time boundary END_OF_DAY, not " + timeBoundary);
+        }
+        this.zoneId = businessCalendar != null && zoneId == null ? UNUSED_ZONE_ID : requireNonNull(zoneId, "No zoneId provided");
+        this.clock = businessCalendar != null && clock == null ? Clock.systemUTC() : requireNonNull(clock, "No clock provided");
         this.meterRegistry = requireNonNull(meterRegistry, "No meterRegistry provided");
         this.eventCountProvider = requireNonNull(eventCountProvider, "No eventCountProvider provided");
         this.currentPeriodIdProvider = requiresCurrentPeriodIdProvider(defaultPolicy)
@@ -202,12 +242,24 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         return switch (defaultPolicy) {
             case MANUAL_ONLY -> "manual-only";
             case EVENT_COUNT -> "event-count threshold " + eventThreshold;
-            case TIME_BOUNDARY -> "time-boundary " + timeBoundary.name().toLowerCase().replace('_', '-') + " in zone " + zoneId;
-            case EVENT_COUNT_OR_TIME_BOUNDARY -> "event-count threshold " + eventThreshold
-                    + " or time-boundary " + timeBoundary.name().toLowerCase().replace('_', '-') + " in zone " + zoneId;
+            case TIME_BOUNDARY -> timeBoundaryDescription();
+            case EVENT_COUNT_OR_TIME_BOUNDARY -> "event-count threshold " + eventThreshold + " or " + timeBoundaryDescription();
             case EXPLICIT_ONLY -> "explicit-only";
             case UNSPECIFIED -> "unspecified";
         };
+    }
+
+    /**
+     * @return {@link ClosingBooksPeriodSource#BUSINESS_CALENDAR} when a business calendar is set, else
+     * {@link ClosingBooksPeriodSource#CLOCK}
+     */
+    public ClosingBooksPeriodSource periodSource() {
+        return businessCalendar != null ? ClosingBooksPeriodSource.BUSINESS_CALENDAR : ClosingBooksPeriodSource.CLOCK;
+    }
+
+    private String timeBoundaryDescription() {
+        var boundary = "time-boundary " + timeBoundary.name().toLowerCase().replace('_', '-');
+        return businessCalendar != null ? boundary + " on business calendar" : boundary + " in zone " + zoneId;
     }
 
     public <ID> ClosingBooksDecisionPolicy<ID, AGGREGATE> asDecisionPolicy() {
@@ -241,26 +293,56 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         }
 
         var currentPeriodId = currentPeriodIdProvider.apply(aggregate);
-        var evaluation = ClosingBooksTimeBoundaryCalculator.evaluate(timeBoundary,
+        ClosingBooksTimeBoundaryEvaluation evaluation;
+        if (businessCalendar != null) {
+            noteWhetherBusinessDateIsKnown();
+            evaluation = ClosingBooksTimeBoundaryCalculator.evaluate(businessCalendar, currentPeriodId);
+        } else {
+            evaluation = ClosingBooksTimeBoundaryCalculator.evaluate(timeBoundary,
                                                                      zoneId,
                                                                      clock,
                                                                      currentPeriodId,
                                                                      intervalDays);
+        }
         if (evaluation.gapDetected()) {
-            log.info("Detected closing-books time-boundary gap for aggregate type '{}': currentPeriod='{}', resolvedPeriod='{}', advancedPeriods={}, boundary={}, zoneId={}",
+            log.info("Detected closing-books time-boundary gap for aggregate type '{}': currentPeriod='{}', resolvedPeriod='{}', advancedPeriods={}, boundary={}, {}",
                      aggregateType,
                      currentPeriodId,
                      evaluation.resolvedPeriodId(),
                      evaluation.advancedPeriods(),
                      timeBoundary,
-                     zoneId);
+                     businessCalendar != null ? "on business calendar" : "zoneId=" + zoneId);
             meterRegistry.ifPresent(registry -> registry.counter(GAP_COUNTER_NAME,
                                                                  "aggregate_type", aggregateType.toString(),
                                                                  "time_boundary", timeBoundary.name(),
-                                                                 "policy_type", defaultPolicy.name())
+                                                                 "policy_type", defaultPolicy.name(),
+                                                                 "period_source", periodSource().name())
                                                         .increment());
         }
         return evaluation;
+    }
+
+    /**
+     * An unknown business date never rolls the books. It is counted every time and logged at WARN once each time the
+     * calendar stops knowing it (normally only before the calendar is loaded on start-up), at DEBUG otherwise.
+     */
+    private void noteWhetherBusinessDateIsKnown() {
+        if (businessCalendar.currentBusinessDate().isPresent()) {
+            if (businessDateUnknown) {
+                businessDateUnknown = false;
+                log.info("Closing-books business calendar for aggregate type '{}' knows the open business date again", aggregateType);
+            }
+            return;
+        }
+        if (!businessDateUnknown) {
+            businessDateUnknown = true;
+            log.warn("Closing-books business calendar for aggregate type '{}' does not know the open business date: no books roll until it does", aggregateType);
+        } else {
+            log.debug("Closing-books business calendar for aggregate type '{}' still does not know the open business date", aggregateType);
+        }
+        meterRegistry.ifPresent(registry -> registry.counter(UNKNOWN_BUSINESS_DATE_COUNTER_NAME,
+                                                             "aggregate_type", aggregateType.toString())
+                                                    .increment());
     }
 
     /**
@@ -290,6 +372,7 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         private MeterRegistry meterRegistry;
         private ToLongFunction<AGGREGATE> eventCountProvider;
         private Function<AGGREGATE, String> currentPeriodIdProvider;
+        private ClosingBooksBusinessCalendar businessCalendar;
 
         /**
          * @param aggregateType required
@@ -328,7 +411,7 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         }
 
         /**
-         * @param zoneId required
+         * @param zoneId required, unless a business calendar is set ({@link #setBusinessCalendar})
          * @return this builder
          */
         public Builder<AGGREGATE> setZoneId(ZoneId zoneId) {
@@ -346,7 +429,7 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         }
 
         /**
-         * @param clock required
+         * @param clock required, unless a business calendar is set ({@link #setBusinessCalendar})
          * @return this builder
          */
         public Builder<AGGREGATE> setClock(Clock clock) {
@@ -394,7 +477,22 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         }
 
         /**
+         * Takes the days of an {@link ClosingBooksTimeBoundary#END_OF_DAY} boundary from a business calendar instead of
+         * the clock ({@link ClosingBooksPeriodSource#BUSINESS_CALENDAR}): the books roll when the calendar records that
+         * a business day closed. With a calendar, {@link #setClock(Clock)} and {@link #setZoneId(ZoneId)} are not used
+         * and may be left unset, and any boundary other than {@code END_OF_DAY} is rejected by {@link #build()}.
+         *
+         * @param businessCalendar optional - {@code null} evaluates on the clock
+         * @return this builder
+         */
+        public Builder<AGGREGATE> setBusinessCalendar(ClosingBooksBusinessCalendar businessCalendar) {
+            this.businessCalendar = businessCalendar;
+            return this;
+        }
+
+        /**
          * @return the new {@link BuiltInClosingBooksPolicyEvaluator}
+         * @throws IllegalArgumentException if a business calendar is set with a boundary other than {@code END_OF_DAY}
          */
         public BuiltInClosingBooksPolicyEvaluator<AGGREGATE> build() {
             return new BuiltInClosingBooksPolicyEvaluator<>(aggregateType,
@@ -406,7 +504,8 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
                                                                      clock,
                                                                      Optional.ofNullable(meterRegistry),
                                                                      eventCountProvider,
-                                                                     currentPeriodIdProvider);
+                                                                     currentPeriodIdProvider,
+                                                                     businessCalendar);
         }
     }
 

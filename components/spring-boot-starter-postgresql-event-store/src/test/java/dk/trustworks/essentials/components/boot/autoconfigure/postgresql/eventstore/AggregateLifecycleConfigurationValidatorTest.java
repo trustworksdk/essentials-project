@@ -184,6 +184,32 @@ class AggregateLifecycleConfigurationValidatorTest {
     }
 
     @Test
+    void startup_fails_when_a_business_calendar_period_source_has_a_boundary_other_than_end_of_day() {
+        contextRunner
+                .withPropertyValues("essentials.eventstore.closing-books.enabled=true",
+                                    "essentials.eventstore.closing-books.aggregates.Vouchers.time-boundary=END_OF_WEEK",
+                                    "essentials.eventstore.closing-books.aggregates.Vouchers.period-source=BUSINESS_CALENDAR")
+                .withBean(TimeBoundaryAggregateWithoutBoundary.class)
+                .withBean(TimeBoundaryAggregateWithoutBoundaryNextGenerationFactory.class)
+                .run(ctx -> {
+                    assertThat(ctx.getStartupFailure()).isNotNull();
+                    assertThat(ctx.getStartupFailure()).hasMessageContaining("period source BUSINESS_CALENDAR with time boundary 'END_OF_WEEK'");
+                });
+    }
+
+    @Test
+    void startup_succeeds_with_a_business_calendar_period_source_and_ignores_the_zone_id() {
+        contextRunner
+                .withPropertyValues("essentials.eventstore.closing-books.enabled=true",
+                                    "essentials.eventstore.closing-books.aggregates.Vouchers.time-boundary=END_OF_DAY",
+                                    "essentials.eventstore.closing-books.aggregates.Vouchers.period-source=BUSINESS_CALENDAR",
+                                    "essentials.eventstore.closing-books.aggregates.Vouchers.zone-id=Atlantis/Lemuria")
+                .withBean(TimeBoundaryAggregateWithoutBoundary.class)
+                .withBean(TimeBoundaryAggregateWithoutBoundaryNextGenerationFactory.class)
+                .run(ctx -> assertThat(ctx.getStartupFailure()).isNull());
+    }
+
+    @Test
     void startup_succeeds_when_a_time_boundary_is_supplied_through_properties() {
         // The annotation leaves timeBoundary at NONE; the property supplies it.
         contextRunner

@@ -923,8 +923,43 @@ public class Account extends AggregateRoot<String, AccountEvent, Account> implem
 | `ClosingBooksDefaultPolicyType` | `UNSPECIFIED`, `MANUAL_ONLY`, `EVENT_COUNT`, `TIME_BOUNDARY`, `EVENT_COUNT_OR_TIME_BOUNDARY`, `EXPLICIT_ONLY` |
 | `ClosingBooksTimeBoundary` | `NONE`, `END_OF_DAY`, `EVERY_N_DAYS`, `END_OF_WEEK`, `END_OF_MONTH`, `END_OF_YEAR` |
 | `ClosingBooksDecision` | `KEEP_OPEN`, `CLOSE_ONLY`, `CLOSE_AND_OPEN_NEXT` |
+| `ClosingBooksPeriodSource` | `CLOCK` (default), `BUSINESS_CALENDAR` |
 
 **Period-id format must match the boundary**: `END_OF_DAY`/`EVERY_N_DAYS` → `yyyy-MM-dd`, `END_OF_WEEK` → `yyyy-Www`, `END_OF_MONTH` → `yyyy-MM`, `END_OF_YEAR` → `yyyy`.
+
+### Business-day boundary (`periodSource = BUSINESS_CALENDAR`)
+Books that roll at an exchange's or bank's close, not at midnight: keep `timeBoundary = END_OF_DAY` and set
+`periodSource = ClosingBooksPeriodSource.BUSINESS_CALENDAR` (annotation member, or `period-source` property). The days
+then come from a `ClosingBooksBusinessCalendar` the application supplies — `Optional<LocalDate> currentBusinessDate()` and
+`businessDaysClosedBetween(from, to)` — instead of `Clock` + zone. Period ids stay `yyyy-MM-dd`, so switching an existing
+aggregate needs no migration.
+
+```java
+var calendar = new InMemoryClosingBooksBusinessCalendar();          // thread-safe, volatile snapshot, no I/O per call
+calendar.recordClose(LocalDate.parse("2030-01-11"), LocalDate.parse("2030-01-14"));  // feed it from your own store/signal
+
+var evaluator = BuiltInClosingBooksPolicyEvaluator.<Account>builder()
+        .setAggregateType(ACCOUNTS)
+        .setDefaultPolicy(ClosingBooksDefaultPolicyType.TIME_BOUNDARY)
+        .setTimeBoundary(ClosingBooksTimeBoundary.END_OF_DAY)
+        .setBusinessCalendar(calendar)                               // clock and zone not needed
+        .setEventCountProvider(Account::eventCount)
+        .setCurrentPeriodIdProvider(Account::periodId)
+        .build();
+ClosingBooksTimeBoundaryCalculator.currentPeriodId(calendar);       // Optional<String>: seed for a new aggregate
+```
+
+- Friday → Monday is **one** period (`advancedPeriods` counts recorded closes, not calendar days); a gap is > 1.
+- **Unknown business date** (empty calendar, e.g. cold start) → **no rollover**, WARN once, counter
+  `essentials.closing_books.business_date_unknown`. Load recorded closes into the calendar before serving commands.
+- The calendar never moves an aggregate's period backwards; redelivered closes are no-ops, out-of-order closes fill
+  their place; a conflicting close (same date, other next date) keeps the first and is counted.
+- **The library does not persist closes** — store them yourself (a table fed by your end-of-day signal) and feed every
+  instance's calendar (e.g. LISTEN/NOTIFY plus a poll). Between instances a few mutations just after a close may book
+  into the closing day.
+- Only `END_OF_DAY`: any other boundary with a calendar fails `build()` and startup validation.
+- Gap counter gains tag `period_source`. Scheduled scans do not roll on the calendar (the built-in evaluator rolls on
+  `ON_ACCESS` only).
 
 ### Decision Policies
 `BuiltInClosingBooksPolicyEvaluator` implements the `ClosingBooksDefaultPolicyType` rules — **application code constructs it**, the framework never does. Custom rules via `ClosingBooksDecisionPolicies`:
@@ -1045,11 +1080,12 @@ essentials.eventstore.archives.filesystem-root-directory=/var/lib/essentials/arc
 - an automatic close-and-open-next policy and no `TypedClosingBooksNextGenerationFactory` for that aggregate
 - a `TIME_BOUNDARY`/`EVENT_COUNT_OR_TIME_BOUNDARY` policy and the resolved `time-boundary` is `NONE` — the boundary could never advance (use `EVENT_COUNT` if only the event-count half was intended)
 - a `TIME_BOUNDARY`/`EVENT_COUNT_OR_TIME_BOUNDARY` policy and the aggregate does not implement `HasClosingBooksPeriodId` — opt out with `essentials.eventstore.closing-books[.aggregates.<Type>].period-id-provided-externally=true` when a custom `currentPeriodIdProvider` supplies it
-- `zone-id` is not a valid IANA zone
+- `zone-id` is not a valid IANA zone (not checked with `period-source=business-calendar`)
+- `period-source=business-calendar` with any `time-boundary` other than `END_OF_DAY`
 
 **Gotcha**: closing a generation does **not** carry balances forward — emit an opening event via `TypedClosingBooksNextGenerationFactory`.
 
-**Test refs**: `ClosingBooksCoordinatorTest`, `ClosingBooksDecisionPoliciesTest`, `ClosingBooksLogicalAggregateRepositoryTest`, `BuiltInClosingBooksPolicyEvaluatorTest`, `ClosingBooksTimeBoundaryCalculatorTest`, `PostgresqlClosingBooksGenerationRepositoryIT`
+**Test refs**: `ClosingBooksCoordinatorTest`, `ClosingBooksDecisionPoliciesTest`, `ClosingBooksLogicalAggregateRepositoryTest`, `BuiltInClosingBooksPolicyEvaluatorTest`, `ClosingBooksTimeBoundaryCalculatorTest`, `BusinessCalendarClosingBooksTest`, `InMemoryClosingBooksBusinessCalendarTest`, `PostgresqlClosingBooksGenerationRepositoryIT`
 
 ---
 

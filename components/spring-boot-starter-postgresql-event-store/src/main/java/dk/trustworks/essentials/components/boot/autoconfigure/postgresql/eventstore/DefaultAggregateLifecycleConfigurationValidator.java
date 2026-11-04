@@ -163,8 +163,18 @@ public class DefaultAggregateLifecycleConfigurationValidator implements Aggregat
                                                         "'essentials.eventstore.closing-books.aggregates." + aggregateType + ".period-id-provided-externally=true'.");
             }
 
+            if (resolvedClosingBooksConfiguration.enabled() &&
+                resolvedClosingBooksConfiguration.periodSource() == ClosingBooksPeriodSource.BUSINESS_CALENDAR &&
+                resolvedClosingBooksConfiguration.timeBoundary() != ClosingBooksTimeBoundary.END_OF_DAY) {
+                throw new IllegalStateException("Aggregate '" + aggregateImplementationType.getName() + "' (aggregateType '" + aggregateType +
+                                                        "') uses period source BUSINESS_CALENDAR with time boundary '" + resolvedClosingBooksConfiguration.timeBoundary() +
+                                                        "', but a business calendar supplies business days only. Use time boundary END_OF_DAY, or period source CLOCK.");
+            }
+
             if (resolvedClosingBooksConfiguration.enabled()) {
-                validateZoneId(aggregateImplementationType, aggregateType, resolvedClosingBooksConfiguration);
+                if (resolvedClosingBooksConfiguration.periodSource() != ClosingBooksPeriodSource.BUSINESS_CALENDAR) {
+                    validateZoneId(aggregateImplementationType, aggregateType, resolvedClosingBooksConfiguration);
+                }
                 if (eventThresholdRequired(resolvedClosingBooksConfiguration.defaultPolicy())
                         && eventThresholdWasDefaulted(aggregateImplementationType, aggregateType)) {
                     log.warn("Aggregate '{}' (aggregateType '{}') uses '{}' policy but no event threshold is configured; using default {}. " +

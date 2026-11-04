@@ -19,6 +19,20 @@ proposes an additive way for an application to supply that calendar, so that clo
 compares an aggregate's period with the calendar's current business date instead of with
 `LocalDate.now(clock)`.
 
+**As built (2026-11-04):** Option A, as §3 describes, with these departures:
+
+- `currentBusinessDate()` returns `Optional<LocalDate>`: empty is the "unknown" of §5.4 (no rollover, WARN once per
+  transition, counter `essentials.closing_books.business_date_unknown`), instead of a dedicated exception.
+- `ClosingBooksTimeBoundaryCalculator.currentPeriodId(calendar)` returns `Optional<String>` for the same reason.
+- `evaluate(calendar, periodId)` never moves a period backwards (`resolvedPeriodId` is the later of the aggregate's
+  period and the open business date) and advances at least one period when the open business date is later, even if
+  the calendar is missing the closes in between.
+- The two records that gained `periodSource` (`ResolvedAggregateClosingBooksConfiguration`,
+  `ApiAggregateClosingBooksPolicy`) also gained a `builder()`; their previous constructors are deprecated for removal,
+  which the construction-ergonomics rules require of a constructor over five parameters.
+- Measured with a warmed-up loop rather than JMH (JMH is wired only into `postgresql-event-store`): calendar path
+  180-260 ns per `shouldRolloverOnAccess`, clock path 300-370 ns.
+
 ---
 
 ## 1. How period boundaries and period ids work today

@@ -480,6 +480,39 @@ commit):
 | Idle ordered queue, statements per 3 s | 90 | 62–68 |
 | Delivery p50 / p99 | 2.9 / 4.5–7.2 ms | 2.8–2.9 / 4.3–5.1 ms |
 
+### 2.15 Closing books can roll at a business day's close, not at midnight (`eventsourced-aggregates`, Spring Boot starter, admin API)
+
+An `END_OF_DAY` closing-books boundary can now take its days from an application-supplied business calendar instead of
+the clock: `@AggregateClosingBooksPolicy(timeBoundary = END_OF_DAY, periodSource = ClosingBooksPeriodSource.BUSINESS_CALENDAR)`
+(or `essentials.eventstore.closing-books[.aggregates.<Type>].period-source=business-calendar`), and the
+`BuiltInClosingBooksPolicyEvaluator` built with `setBusinessCalendar(calendar)`. The books then roll when the calendar
+records that a business day closed - an exchange's clearing cutoff, a bank's end of day - and never on weekends or
+holidays; Friday to Monday counts as one period, not three.
+
+- New SPI `ClosingBooksBusinessCalendar` (`currentBusinessDate()`, `businessDaysClosedBetween(from, to)`) and a
+  thread-safe `InMemoryClosingBooksBusinessCalendar` fed with `recordClose(businessDate, nextBusinessDate)`:
+  idempotent, never moves backwards, tolerates closes arriving out of order. The library does not persist closes;
+  the application stores them and feeds the calendar on every instance.
+- An unknown business date (an empty calendar on a cold start) never rolls the books; it is logged once at WARN and
+  counted (`essentials.closing_books.business_date_unknown`). The gap counter gains a `period_source` tag.
+- Period ids keep the `yyyy-MM-dd` format, so an aggregate moves between `CLOCK` and `BUSINESS_CALENDAR` without
+  migration. New calculator overloads `ClosingBooksTimeBoundaryCalculator.currentPeriodId(calendar)` and
+  `evaluate(calendar, periodId)`.
+- Startup validation rejects `BUSINESS_CALENDAR` with any boundary other than `END_OF_DAY`, and skips the `zone-id`
+  check for it.
+- The admin API's closing-books policy (`GET /aggregate-lifecycle/closing-books-policies`) gains a `periodSource`
+  property (a new response property; the generated Java client is regenerated).
+- `ResolvedAggregateClosingBooksConfiguration` and `ApiAggregateClosingBooksPolicy` gain a `periodSource` component and
+  a `builder()`. Their previous constructors still compile and default to `CLOCK`, deprecated for removal.
+
+Cost on the hot path (every mutating command evaluates it), a warmed-up loop of 2 million `shouldRolloverOnAccess`
+calls, 5 rounds on one JVM: the calendar path takes 180-260 ns, the clock-and-zone path 300-370 ns - the calendar reads a
+`volatile` snapshot and needs no zone conversion.
+
+Additive: an aggregate that does not set `periodSource` behaves as before. Not covered: business weeks or months, and
+rolling on a scheduled scan (the built-in evaluator rolls on access only). Design:
+`docs/closing-books-business-day-boundary.md`.
+
 ## 3. Bug fixes
 
 | Area | Fix | Commit |

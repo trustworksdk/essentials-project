@@ -1212,6 +1212,7 @@ public class EssentialsEventStoreProperties {
         private String                                             zoneId             = "UTC";
         private Integer                                            intervalDays;
         private boolean                                            periodIdProvidedExternally = false;
+        private ClosingBooksPeriodSource                           periodSource       = ClosingBooksPeriodSource.CLOCK;
         private Map<String, AggregateClosingBooksPolicyProperties> aggregates         = new LinkedHashMap<>();
 
         public boolean isEnabled() {
@@ -1266,6 +1267,20 @@ public class EssentialsEventStoreProperties {
             return intervalDays;
         }
 
+        /**
+         * Where an {@code END_OF_DAY} time boundary takes its days from: {@code CLOCK} (calendar days in
+         * {@code zone-id}, the default) or {@code BUSINESS_CALENDAR} (the business days of the
+         * {@code ClosingBooksBusinessCalendar} the application hands to its {@code BuiltInClosingBooksPolicyEvaluator};
+         * requires {@code time-boundary: END_OF_DAY}).
+         */
+        public ClosingBooksPeriodSource getPeriodSource() {
+            return periodSource;
+        }
+
+        public void setPeriodSource(ClosingBooksPeriodSource periodSource) {
+            this.periodSource = periodSource;
+        }
+
         public void setIntervalDays(Integer intervalDays) {
             this.intervalDays = intervalDays;
         }
@@ -1306,6 +1321,7 @@ public class EssentialsEventStoreProperties {
         private String                        zoneId;
         private Integer                       intervalDays;
         private Boolean                       periodIdProvidedExternally;
+        private ClosingBooksPeriodSource      periodSource;
 
         public Boolean getEnabled() {
             return enabled;
@@ -1357,6 +1373,20 @@ public class EssentialsEventStoreProperties {
 
         public Integer getIntervalDays() {
             return intervalDays;
+        }
+
+        /**
+         * Where an {@code END_OF_DAY} time boundary takes its days from: {@code CLOCK} (calendar days in
+         * {@code zone-id}, the default when neither this nor the global {@code period-source} is set) or {@code BUSINESS_CALENDAR} (the business days of the
+         * {@code ClosingBooksBusinessCalendar} the application hands to its {@code BuiltInClosingBooksPolicyEvaluator};
+         * requires {@code time-boundary: END_OF_DAY}).
+         */
+        public ClosingBooksPeriodSource getPeriodSource() {
+            return periodSource;
+        }
+
+        public void setPeriodSource(ClosingBooksPeriodSource periodSource) {
+            this.periodSource = periodSource;
         }
 
         public void setIntervalDays(Integer intervalDays) {
