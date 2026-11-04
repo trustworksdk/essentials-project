@@ -1,7 +1,8 @@
 # Phase 8 design - demo control
 
-**Status:** decided (2026-11-04) - every proposal accepted, and Q-8 added: the page explains what it shows. Decisions
-are marked **(Q-n)** in the text and collected in §8.
+**Status:** decided (2026-11-04) - every proposal accepted, and Q-8 added: the page explains what it shows. Research
+before building found two premises wrong (§1.1); Q-9 and Q-10 were decided on them, the same day. Decisions are marked
+**(Q-n)** in the text and collected in §8.
 **Plan:** [`../EXPANSION_PLAN.md`](../EXPANSION_PLAN.md) phase 8 ("Demo control").
 **Builds on:** the exchange simulator's clock (operator and test clock endpoints, already in the generated client), the
 phase 6 load driver's behaviour mix, the phase 7 customer UI and its page conventions.
@@ -22,16 +23,45 @@ It is a demo tool. Measurements stay with `run-load.sh`, which this phase does n
 
 ## 1. What exists
 
-- **The exchange clock is the system's clock for business time.** Business days, the books roll at each close,
-  settlement (T+1), day-order expiry and deposit clearing all follow the exchange's calendar and close events, not the
-  wall clock. The simulator's clock reports `{mode, now, running, speed}` and can be set (`to`), advanced
+- **The exchange clock is the system's clock for business time.** Business days, settlement (T+1), day-order expiry,
+  deposit clearing and reconciliation follow the exchange's calendar and close events, not the wall clock. The
+  simulator's clock reports `{mode, now, running, speed}` and can be set (`to`), advanced
   (`days/hours/minutes/seconds`), frozen, resumed and sped up - through the operator endpoints and the test endpoints of
-  the generated client. The load driver already advances it day by day.
+  the generated client. The books are the exception (§1.1).
 - **Traffic generators.** The phase 6 load driver (external, finite, reports pass/fail) and the older in-app generators
   under `_demo_harness` (funding, order flow, ledger, queue) - short measured runs, started through `/api/admin/...`, not
   continuous traffic.
 - **Operator UIs.** The Essentials admin console (`/essentials/admin`) shows the framework - queues, subscriptions,
   locks. Nothing shows the demo itself: the exchange's time and session, the traffic, the order and payment flow.
+
+### 1.1 Found before building
+
+Three things the decided design assumed were not so:
+
+- **The exchange has no trading sessions.** `simulators/exchange.yaml` leaves `sessions` empty, so every market is
+  always open and a business day is the time up to the 16:30 New York clearing cutoff; at the default speed (1440x) a
+  day passes every real minute. Sessions were left off so the accelerated clock would not reject most orders
+  `MARKET_CLOSED` (phase 6 §3). The simulator supports them (SR-16): `sessions.<MIC>: {open, close, time_zone}`, with
+  `MarketData.session` reporting `open` or `closed` and `DAY` orders expiring at the session close. Without them there
+  is no open or close to watch. **Decided (Q-9):** sessions on, 09:30-16:00 New York, for both markets (XNAS, XNYS).
+- **The books do not roll at the exchange's close.** `AccountClosingBooksPolicy` rolls at `END_OF_DAY` New York on the
+  wall clock - the interim until EF-1. A day played at 60x would settle, expire and clear on the exchange's days and
+  roll the books at real midnight. **Decided (Q-10):** build EF-1 in this phase (D24, design in
+  `docs/closing-books-business-day-boundary.md` at the repository root), then roll the accounts on the exchange's
+  `BusinessDayClosed`. EF-1b (rolling on a scheduled scan) stays a separate change: the demo rolls an account on its
+  next mutation.
+- **The operator clock endpoints are off.** `/api/clock/{freeze,resume,speed}` answer only with
+  `clock.operator_control`; it is switched on. Fast-forward uses the test endpoint `/test/clock/advance`, which
+  processes whatever falls due on the way before it returns (`test_control.enabled` is already on in the demo's
+  environment).
+
+What sessions change elsewhere:
+
+- **Customer UI.** An order placed while the market is closed is rejected `MARKET_CLOSED`. The order ticket shows
+  whether the market is open and disables placing while it is closed.
+- **Load driver.** It places orders only during the session and moves money outside it; its market-open burst is at
+  the session open. Phase 6 runs before and after this change are not directly comparable.
+- **Background traffic** (§4) as designed: money moves outside the session, orders inside it.
 
 ## 2. The page (Q-1)
 
@@ -59,7 +89,8 @@ operator narrates:
   every minute", "After the close: books rolling, trades settling", "Fast-forwarding: day 2 of 3, waiting for the
   close to be processed";
 - a short "what happens during a trading day" section: pre-open, the open and its burst, continuous trading, the close,
-  and what the system does after it (books roll, T+1 settlement, day orders expire, deposits clear, reconciliation runs),
+  and what the system does after it (day orders expire, the books roll, T+1 settlement, deposits clear, reconciliation
+  runs),
   each step linked to where it can be seen - Alice's screens, the panels, the Essentials admin console.
 
 ## 3. Clock control (Q-2, Q-3)
@@ -85,12 +116,14 @@ would skip that day's end-of-day processing. The page shows progress while it ru
 
 ### 3.1 To verify while building
 
-- Fast-forwarding several days quickly: the load driver does it already, but with its own pacing; the page's version must
-  wait for each close to be processed (the last close the app has processed, read from a view) before the next.
+- Fast-forwarding several days quickly: nothing does it yet (the load driver only follows the clock); the page's
+  version must wait for each close to be recorded (the app's business calendar, §1.1) before the next.
 - Starting the application while the exchange is closed, on a weekend or a holiday, and after a long pause: what the app
   does on its first close event, and that nothing waits for a close that was skipped.
-- Orders placed outside the session (by the background traffic or Alice): accepted and held until the open, or rejected
-  - whatever the exchange does, the UI must show it understandably.
+- Orders placed outside the session (by the background traffic or Alice): the exchange rejects them `MARKET_CLOSED`
+  (§1.1); the UI must show it understandably.
+- The books roll at the close the app has recorded (Q-10): after a fast-forward, every account touched on a day has one
+  generation per business day it was touched on, none on weekends or holidays.
 
 ## 4. Background traffic (Q-4, Q-5)
 
@@ -145,3 +178,5 @@ it is harness tooling. Imports follow the harness's existing practice: command t
 | **Q-6** | Access | Operator role only (§2) |
 | **Q-7** | Testing | IT for the endpoints (clock wrapper against the simulator container, traffic start/stop); the page checked by hand in a browser: play a day at 60x outside wall-clock market hours |
 | **Q-8** | Explanations | The page explains each panel, each control and the current state in words, plus a "what happens during a trading day" section (§2) |
+| **Q-9** | Trading sessions | On, 09:30-16:00 New York, both markets, through the simulator's existing `sessions` config; the order ticket shows the session, the load driver and the background traffic place orders only in it (§1.1) |
+| **Q-10** | Books at the close | EF-1 built in this phase; the accounts roll on the exchange's `BusinessDayClosed`. EF-1's open questions: business days only, the name `ClosingBooksBusinessCalendar`, no admin-API operation for the calendar's state yet, a short post-cutoff window accepted (§1.1) |

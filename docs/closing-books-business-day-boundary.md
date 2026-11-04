@@ -1,7 +1,8 @@
 # EF-1 — Business-Day Closing-Books Boundary
 
-**Status:** design proposal, not implemented. No code has changed. Questions 1, 2, 4, 5 and 6 of §8 are
-decided (see "Decided" there); 3 and 7–9 are still open.
+**Status:** decided (2026-11-04), being built in the trading demo's phase 8 (decision Q-10 of
+`examples/essentials-trading-demo/docs/design/phase-8-demo-control.md`). Every question of §8 is decided
+(see "Decided" there).
 **Module:** `components/eventsourced-aggregates` (package `…aggregates.closingbooks`), with small additive
 changes in `spring-boot-starter-postgresql-event-store` and the admin API contract.
 **Driven by:** the trading demo expansion, decisions D10, D20 and D22 in
@@ -433,7 +434,7 @@ The evaluation sits on every mutating command, so the number that matters is **a
 
 ## 8. Open questions for the maintainer
 
-**Decided** (recorded as D23 and D24 in the expansion plan):
+**Decided** (recorded as D23, D24 and D32 in the expansion plan):
 
 - **Q1:** the exchange stamps every execution with `tradeDate` and `intendedSettlementDate` (SR-29), because the
   domain needs them anyway, not for this feature. The current business date is **not** added to `GET /api/clock`;
@@ -442,8 +443,16 @@ The evaluation sits on every mutating command, so the number that matters is **a
 - **Q4:** the scheduled-scan gaps are a separate change, EF-1b.
 - **Q5:** an unknown business date means no rollover, with a warning and a metric.
 - **Q6:** the library ships only the SPI and an in-memory implementation; the application owns the store.
+- **Q3:** business days only. A calendar combined with any boundary other than `END_OF_DAY` is rejected when the
+  evaluator is built.
+- **Q7:** the name is `ClosingBooksBusinessCalendar`; the enum selecting it stays `ClosingBooksPeriodSource`.
+- **Q8:** no admin-API operation for the calendar's state yet. The closing-books policy endpoint gains `periodSource`
+  (§6.3); the demo shows its calendar on its own operator page. Adding the operation later is additive.
+- **Q9:** the short window is accepted: the demo uses option (b) of §5.2 (its table, an in-memory snapshot per
+  instance refreshed by `LISTEN/NOTIFY` with a poll as backstop), and a few mutations just after a close may be
+  booked into the closing day.
 
-The original questions follow; 3 and 7–9 are still open.
+The original questions follow.
 
 1. **Does the exchange stamp trades (and other events) with their `businessDate`, and can it expose the
    current business date on `GET /api/clock`?** The first enables exact event-time period assignment (§5.3);

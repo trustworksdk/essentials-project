@@ -48,6 +48,7 @@ This file records decisions as they are taken. § Open questions lists what is s
 | D29 | **Phase 6 design decided** — [`design/phase-6-realistic-load.md`](design/phase-6-realistic-load.md) §9. Load over HTTP from a separate driver JVM, customers in logged-in sessions; a configurable profile that starts small; one instance as the baseline, more on other hardware later; no comparison with `main` before the next release is merged in. | |
 | D30 | **Phase 7 design decided** — [`design/phase-7-customer-ui.md`](design/phase-7-customer-ui.md) §9. Thymeleaf shells with vanilla JS over the existing JSON API (no second read path); Portfolio, Trade and Funding under `/app`; Spring's login page; polling while visible, server-sent events later; a session-held CSRF token required on the customer API for session-authenticated requests (the operator API keeps the phase 1 exemption, the load driver sends the token); a customer `GET /api/market-data/instruments`; a `_customer_ui` package that is not a slice. | |
 | D31 | **Phase 8 design decided** — [`design/phase-8-demo-control.md`](design/phase-8-demo-control.md) §8. An operator page `/ops` that plays a trading day at any wall-clock time: exchange clock forward-only (pause, speed, skip to the open or close, advance days - jumps fast-forward through every close); continuous background traffic in the application, paced per exchange minute; the page explains itself (Q-8). `run-load.sh` stays for measurement. | |
+| D32 | **Phase 8 premises corrected** - [`design/phase-8-demo-control.md`](design/phase-8-demo-control.md) §1.1, Q-9 and Q-10. The exchange gets trading sessions (09:30-16:00 New York, both markets, the simulator's existing `sessions` config), so a played day has an open and a close; orders outside them are rejected `MARKET_CLOSED`, and the order ticket, the load driver and the background traffic respect the session. EF-1 is built in phase 8 and the accounts roll on `BusinessDayClosed`; EF-1's last open questions decided: business days only, `ClosingBooksBusinessCalendar`, no admin-API operation for the calendar yet, the short post-cutoff window accepted. | A trading day without an open or a close cannot be shown, and a page explaining that the books roll at the close must not be wrong about it. The demo exists to exercise the framework, and EF-1 was already designed (D24). |
 
 ---
 
@@ -101,7 +102,7 @@ Each phase ends with a load scenario and before/after measurements. Performance 
    *Built (D30): Portfolio, Trade and Funding under `/app`, checked by hand in a browser against the simulators (place, fill, cancel, deposit, withdraw).*
 8. **Demo control.** An operator page that plays a trading day at any wall-clock time (exchange clock forward-only:
    pause, speed, skip to the open or close, advance days) and runs continuous background traffic.
-   *Designed (D31); being built.*
+   *Designed (D31, premises corrected in D32: trading sessions on, EF-1 built in this phase); being built.*
 
 Later: fees and commission, multi-currency and FX, margin, corporate actions, the exchange expiring its own DAY orders (SR-17; until then the
 brokerage cancels them at the close, built in phase 3),
@@ -131,6 +132,7 @@ demo depends on it.
   (`END_OF_DAY` = midnight). Needed: a boundary whose current period comes from an application-supplied business
   calendar, advanced by an external signal, so `ON_ACCESS` evaluation compares an aggregate's period with the
   calendar's current business date. Shape decided in D24; design in `docs/closing-books-business-day-boundary.md`.
+  Being built in phase 8 (D32).
 - **EF-1b — Scheduled-scan closing books.** Found while designing EF-1: the built-in evaluator never rolls on a
   scan (`asDecisionPolicy()` answers keep-open), and a scan rollover seeds no period id and carries no state
   forward. Separate change, after EF-1.
