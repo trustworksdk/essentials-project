@@ -36,10 +36,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * neither does: a rejected or failed attempt leaves no row behind to swallow the retry. That is the simulators'
  * receiver rule "record an id only when the processing succeeded".
  * <p>
- * The message is an {@link OrderedMessage} keyed by the source's {@code aggregateId}, with the source's
- * {@code sequence} as its order. That keeps one external aggregate's events in order when they are queued together.
- * It does <em>not</em> reorder deliveries that arrive out of order (the queue delivers what is visible, in order) — a
- * consumer must tolerate that, and does by comparing sequences or by idempotency on the source's own ids.
+ * The message is an {@link OrderedMessage} keyed by the source's {@code aggregateId}, numbered in the order the events
+ * are queued here ({@code external_inbound_event_order}), under a per-key advisory lock held to commit, so one external
+ * aggregate's events are numbered in the order they are committed and handled one at a time, in that order. Not by the source's {@code sequence}: webhooks arrive in any order and the catch-up read brings a
+ * missed event late, so a lower sequence routinely arrived after a higher one, and the shard-owned engine reported each
+ * such key as delivered out of order - a warning meant for ordering bugs, made noise. Arrival order is also all the
+ * source's sequence ever gave: the queue delivers what is visible, it never waited for a lower one. A consumer
+ * tolerates any order, by comparing the source's sequences (in the envelope) or by idempotency on the source's ids.
  */
 @Component
 public class ExternalEventIntake {
@@ -64,6 +67,14 @@ public class ExternalEventIntake {
                                           )
                                           """);
         TradingDemoSchema.ddl(this.jdbcTemplate, "CREATE INDEX IF NOT EXISTS external_inbound_event_received_at ON external_inbound_event (received_at)");
+        TradingDemoSchema.ddl(this.jdbcTemplate, "CREATE SEQUENCE IF NOT EXISTS external_inbound_event_order");
+        // A database from before numbered messages by the source's sequence: start above every number used, so an
+        // aggregate still in flight is not numbered back below its earlier events
+        this.jdbcTemplate.queryForObject("""
+                                         SELECT setval('external_inbound_event_order',
+                                                       GREATEST((SELECT last_value FROM external_inbound_event_order),
+                                                                (SELECT coalesce(max(sequence), 0) + 1 FROM external_inbound_event)))
+                                         """, Long.class);
     }
 
     /**
@@ -77,6 +88,10 @@ public class ExternalEventIntake {
         requireNonNull(envelope, "No envelope provided");
         requireNonNull(inbox, "No inbox provided");
         return unitOfWorkFactory.withUnitOfWork(() -> {
+            // One key at a time until commit, so a key's numbers are committed in the order they are taken: an
+            // exchange order's events often arrive on two webhook requests at once, and the later number committed
+            // first. Only events of the same aggregate ever wait here
+            jdbcTemplate.queryForObject("SELECT pg_advisory_xact_lock(hashtext(?))", Object.class, consumer + ":" + envelope.aggregateId());
             var inserted = jdbcTemplate.update("""
                                                        INSERT INTO external_inbound_event (
                                                            consumer, event_id, source, sequence, event_type, aggregate_id, occurred_at, received_at
@@ -95,7 +110,9 @@ public class ExternalEventIntake {
             if (inserted == 0) {
                 return false;
             }
-            inbox.addMessageReceived(OrderedMessage.of(envelope, envelope.aggregateId(), envelope.sequence()));
+            // Taken under the key's lock, in the unit of work that enqueues: number order is commit order
+            var order = jdbcTemplate.queryForObject("SELECT nextval('external_inbound_event_order')", Long.class);
+            inbox.addMessageReceived(OrderedMessage.of(envelope, envelope.aggregateId(), order));
             return true;
         });
     }

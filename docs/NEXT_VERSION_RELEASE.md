@@ -611,6 +611,11 @@ Not published; listed because they are the reference for how to use the framewor
   `BusinessDayClosed`, instead of midnight New York on the application's clock. The integration tests keep an
   always-open exchange. The simulator's operator clock endpoints are switched on (`clock.operator_control`).
 
+- **`essentials-trading-demo`: quieter logs under load.** The exchange's and payment gateway's events are numbered in
+  the order the demo receives them, one key at a time, instead of by the source's sequence, so the shard-owned engine no
+  longer reports their webhook-and-catch-up arrival order as out-of-order delivery (around a thousand warnings a run
+  before). Deposit clearing at a close retries a conflict with the customer's own activity and logs a deposit left for
+  the next close on one line instead of with a stack trace.
 - **`essentials-trading-demo`: two local instances no longer log each other out in one browser.** The session cookie is
   named per instance, `TRADING_DEMO_SESSION_<instance-id>` (`demo-1`, `demo-2`), instead of `JSESSIONID`: browsers share
   cookies across ports, so logging in on `localhost:8081` replaced the session of `localhost:8080`. The load driver

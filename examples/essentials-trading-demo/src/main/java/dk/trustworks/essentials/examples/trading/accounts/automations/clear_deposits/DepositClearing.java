@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.examples.trading.accounts.automations.clear_deposits;
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.OptimisticAppendToStreamException;
+import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.accounts.use_cases.clear_deposit.ClearDeposit;
 import dk.trustworks.essentials.examples.trading.accounts.views.uncleared_deposits.UnclearedDepositsProjection;
 import dk.trustworks.essentials.examples.trading.integration.BusinessCalendar;
@@ -53,6 +55,7 @@ public class DepositClearing {
     private final UnclearedDepositsProjection    unclearedDeposits;
     private final CommandBus                     commandBus;
     private final ObjectProvider<BusinessCalendar> calendar;
+    private static final int                       ATTEMPTS = 5;
     private final ExecutorService                  clearing = Executors.newSingleThreadExecutor(Thread.ofPlatform().name("deposit-clearing").daemon().factory());
 
     public DepositClearing(UnclearedDepositsProjection unclearedDeposits, CommandBus commandBus, ObjectProvider<BusinessCalendar> calendar) {
@@ -83,14 +86,44 @@ public class DepositClearing {
         calendar.ifAvailable(businessCalendar -> businessCalendar.latestClosedBusinessDate().ifPresent(this::clearDepositsDueBy));
     }
 
+    /**
+     * A conflict on the account's stream - the customer acting on the account at the same moment - is decided again, up
+     * to {@link #ATTEMPTS} times, as the customer API does. A deposit still not cleared then stays in the view and is
+     * cleared at the next close: expected, so one line without the stack trace. Anything else keeps its stack trace.
+     */
+    private void clear(AccountId accountId, DepositId depositId, LocalDate businessDate) {
+        for (var attempt = 1; ; attempt++) {
+            try {
+                commandBus.send(new ClearDeposit(accountId, depositId));
+                return;
+            } catch (RuntimeException e) {
+                if (isConflict(e) && attempt < ATTEMPTS) {
+                    continue;
+                }
+                if (isConflict(e)) {
+                    log.info("Deposit '{}' of account '{}' did not clear on business day {}: the account kept changing under it ({} attempts); retried at the next close",
+                             depositId, accountId, businessDate, ATTEMPTS);
+                } else {
+                    log.warn("Deposit '{}' of account '{}' did not clear on business day {}; retried at the next close", depositId, accountId, businessDate, e);
+                }
+                return;
+            }
+        }
+    }
+
+    private static boolean isConflict(Throwable e) {
+        for (var cause = e; cause != null; cause = cause.getCause()) {
+            if (cause instanceof OptimisticAppendToStreamException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void clearDepositsDueBy(LocalDate businessDate) {
         var due = unclearedDeposits.clearingOnOrBefore(businessDate);
         for (var deposit : due) {
-            try {
-                commandBus.send(new ClearDeposit(deposit.accountId(), deposit.depositId()));
-            } catch (RuntimeException e) {
-                log.warn("Deposit '{}' of account '{}' did not clear on business day {}; retried at the next close", deposit.depositId(), deposit.accountId(), businessDate, e);
-            }
+            clear(deposit.accountId(), deposit.depositId(), businessDate);
         }
         if (!due.isEmpty()) {
             log.debug("Business day {} closed: cleared {} deposit(s)", businessDate, due.size());

@@ -80,6 +80,11 @@ public class BackgroundTraffic {
                                                                      InstrumentId.of("NVDA"), InstrumentId.of("AMZN"));
     private static final Duration    WINDOW                = Duration.ofMinutes(1);
     /**
+     * No new orders this close to the session's close: at a fast clock an order takes several exchange minutes to reach
+     * the exchange (100 ms is 2.4 exchange minutes at 1440x) and would arrive after the close, rejected MARKET_CLOSED.
+     */
+    private static final Duration    CLOSE_MARGIN          = Duration.ofMinutes(10);
+    /**
      * Below this buying power a customer sells what it holds, or deposits, instead of buying: the mix buys more than it
      * sells, and without it the customers run dry.
      */
@@ -197,7 +202,14 @@ public class BackgroundTraffic {
             times.removeIf(time -> time < cutoff);
             counts.put(kind, (long) times.size());
         });
-        var state     = clockState;
+        var state = clockState;
+        if (state == null) {
+            try {
+                state = clock.state(); // before the first tick has read it
+            } catch (RuntimeException e) {
+                state = null;
+            }
+        }
         var speed     = state != null ? state.speed().doubleValue() : 1;
         var perSecond = ordersPerExchangeMinute * speed / 60;
         return new Status(running != null, ordersPerExchangeMinute, perSecond, maxOrdersPerSecond, perSecond > maxOrdersPerSecond,
@@ -247,7 +259,11 @@ public class BackgroundTraffic {
         }
         var exchangeMinutes = realSeconds * state.speed().doubleValue() / 60;
         var exchangeNow     = state.now().plusNanos((long) ((now - clockReadAt) * state.speed().doubleValue()));
-        var phase           = state.phase();
+        // From the exchange's time now, extrapolated from the last reading - the reading's own phase can be 2 s old,
+        // which is 48 exchange minutes at 1440x
+        var phase           = clock.phase(exchangeNow);
+        var closingSoon     = "OPEN".equals(phase)
+                && !LocalDateTime.ofInstant(exchangeNow, ExchangeClockControl.NEW_YORK).toLocalTime().isBefore(ExchangeClockControl.SESSION_CLOSE.minus(CLOSE_MARGIN));
         if ("OPEN".equals(phase) && !"OPEN".equals(lastPhase) && lastPhase != null) {
             burstUntil = exchangeNow.plus(BURST); // the open's rush
         }
@@ -257,7 +273,10 @@ public class BackgroundTraffic {
             return;
         }
         paymentCredit += ordersPerExchangeMinute / 10 * exchangeMinutes;
-        if ("OPEN".equals(phase)) {
+        if (closingSoon) {
+            orderCredit = 0;
+            message = "Market closing - no new orders in its last 10 minutes; the customers only move money";
+        } else if ("OPEN".equals(phase)) {
             var burst = exchangeNow.isBefore(burstUntil);
             orderCredit += ordersPerExchangeMinute * (burst ? BURST_FACTOR : 1) * exchangeMinutes;
             message = burst ? "Market open - the open's burst" : "Market open - trading";
