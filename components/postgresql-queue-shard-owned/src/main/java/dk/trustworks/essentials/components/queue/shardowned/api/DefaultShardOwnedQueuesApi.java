@@ -108,8 +108,15 @@ public class DefaultShardOwnedQueuesApi implements ShardOwnedQueuesApi {
                         if (queue.isEmpty()) {
                             return Optional.empty();
                         }
-                        return queue.get().getMessage(messageId)
-                                    .map(message -> ApiShardOwnedMessage.from(queueName, message, includePayload));
+                        var live = queue.get().getMessage(messageId)
+                                        .map(message -> ApiShardOwnedMessage.from(queueName, message, includePayload));
+                        if (live.isPresent()) {
+                            return live;
+                        }
+                        // A dead letter keeps its id: the admin UI opens one from the dead-letter list by it, and found
+                        // nothing (404) while the message only lived there
+                        return queue.get().getDeadLetter(messageId)
+                                    .map(deadLetter -> ApiShardOwnedMessage.from(queueName, deadLetter, includePayload));
                     });
     }
 

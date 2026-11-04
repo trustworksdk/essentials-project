@@ -1213,7 +1213,7 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
         if (reportedBlocks.add(key)) {
             // Once per key, and further limited per consumer by BlockedKeyReport: a handler failing for
             // everything blocks every key with traffic, which was a WARN per key without end.
-            BlockedKeyReport.keyBlocked(metrics, storage.queueId(), shard, key, previous);
+            BlockedKeyReport.keyBlocked(metrics, storage, shard, key, previous);
         }
         metrics.keysBlockedByDeadLetter.increment();
     }

@@ -1641,6 +1641,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     @Override
+    public Optional<DeadLetter> getDeadLetter(MessageId messageId) throws SQLException {
+        requireNonNull(messageId, "No messageId provided");
+        return storage.findDeadLetter(messageId.shard(), messageId.sequence(), isOrdered(messageId))
+                      .map(row -> new DeadLetter(messageId, row.key(), row.keyOrder(), row.payload(), row.payloadType(),
+                                                 row.attempts(), row.error(), row.blockedByKeyOrder()));
+    }
+
+    @Override
     public boolean deleteMessage(MessageId messageId) throws SQLException {
         requireNonNull(messageId, "No messageId provided");
         // A dead letter keeps the id it had in its lane, so the same id addresses it after it is

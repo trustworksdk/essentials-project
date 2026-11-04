@@ -51,19 +51,26 @@ class BlockedKeyReportTest {
     @Test
     void the_first_blocked_key_warns_and_the_rest_are_counted_into_the_next_warning() {
         var metrics = new ShardOwnerMetrics();
+        // No database: the queue's name cannot be read, so the label falls back to its id
+        var noDatabase = (javax.sql.DataSource) java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+                                                                                       new Class<?>[]{javax.sql.DataSource.class},
+                                                                                       (proxy, method, args) -> {
+                                                                                           throw new java.sql.SQLException("no database");
+                                                                                       });
+        var storage = new ShardOwnedStorage(noDatabase, (short) 3);
 
-        BlockedKeyReport.keyBlocked(metrics, (short) 3, 13, "key-1", 0);
-        BlockedKeyReport.keyBlocked(metrics, (short) 3, 41, "key-2", 0);
-        BlockedKeyReport.keyBlocked(metrics, (short) 3, 7, "key-3", 4);
+        BlockedKeyReport.keyBlocked(metrics, storage, 13, "key-1", 0);
+        BlockedKeyReport.keyBlocked(metrics, storage, 41, "key-2", 0);
+        BlockedKeyReport.keyBlocked(metrics, storage, 7, "key-3", 4);
 
         assertThat(levels()).containsExactly(Level.WARN, Level.DEBUG, Level.DEBUG);
         assertThat(logged.list.getFirst().getFormattedMessage())
-                .contains("Queue 3, ordered shard 13: key 'key-1' is blocked at key_order 0")
+                .contains("Queue id 3, ordered shard 13: key 'key-1' is blocked at key_order 0")
                 .contains("0 other key(s) were blocked since the last of these warnings");
 
         // The minute is up: the next block warns again, and carries the two held back since.
         metrics.nextBlockedKeyWarningNanos.set(System.nanoTime() - 1);
-        BlockedKeyReport.keyBlocked(metrics, (short) 3, 9, "key-4", 0);
+        BlockedKeyReport.keyBlocked(metrics, storage, 9, "key-4", 0);
 
         assertThat(levels()).containsExactly(Level.WARN, Level.DEBUG, Level.DEBUG, Level.WARN);
         assertThat(logged.list.getLast().getFormattedMessage())

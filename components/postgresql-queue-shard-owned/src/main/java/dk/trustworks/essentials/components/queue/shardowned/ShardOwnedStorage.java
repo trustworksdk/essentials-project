@@ -148,6 +148,60 @@ public final class ShardOwnedStorage {
     /**
      * The queue every statement on this handle binds.
      */
+    private volatile String queueLabel;
+
+    /**
+     * The queue's name for a log line - {@code 'Inbox:Orders:ExchangeReports' (id 30)} - read from the registry the first
+     * time it is asked for and kept. The id alone ("Queue 30") told an operator nothing about where to look. Falls back
+     * to the id when the registry cannot be read; never throws, since it is only ever called to log.
+     */
+    public String queueLabel() {
+        var label = queueLabel;
+        if (label != null) {
+            return label;
+        }
+        try (var connection = open();
+             var statement = connection.prepareStatement("SELECT queue_name FROM " + REGISTRY_TABLE + " WHERE queue_id = ?")) {
+            statement.setShort(1, queueId);
+            try (var resultSet = statement.executeQuery()) {
+                label = resultSet.next() ? "'" + resultSet.getString(1) + "' (id " + queueId + ")" : "id " + queueId;
+            }
+        } catch (SQLException | RuntimeException e) {
+            return "id " + queueId;
+        }
+        queueLabel = label;
+        return label;
+    }
+
+    /**
+     * Read one dead letter by the id its message had in its lane - the same id {@link #findMessage} answers for a live
+     * message, and that a dead letter keeps when it is parked.
+     */
+    public Optional<DeadLetter> findDeadLetter(int shard, long seq, boolean ordered) throws SQLException {
+        try (var connection = open();
+             var statement = connection.prepareStatement(
+                     "SELECT source_lane, msg_key, seq, payload, attempts, last_error, shard, payload_type,"
+                             + " blocked_by_key_order, COALESCE(key_order, 0) FROM " + DLQ_TABLE
+                             + " WHERE queue_id = ? AND shard = ? AND seq = ? AND source_lane = ?")) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            statement.setLong(3, seq);
+            statement.setString(4, ordered ? "ordered" : "unordered");
+            try (var resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return Optional.empty();
+                }
+                // wasNull() answers for the most recent get: read blocked_by_key_order first (see deadLetters)
+                var blockedBy         = resultSet.getLong(9);
+                var blockedByKeyOrder = resultSet.wasNull() ? null : blockedBy;
+                return Optional.of(new DeadLetter(resultSet.getString(1), resultSet.getString(2), resultSet.getInt(7),
+                                                  resultSet.getLong(3), resultSet.getBytes(4), resultSet.getInt(5),
+                                                  resultSet.getString(6), resultSet.getInt(8),
+                                                  blockedByKeyOrder, resultSet.getLong(10)));
+            }
+        }
+    }
+
     public short queueId() {
         return queueId;
     }

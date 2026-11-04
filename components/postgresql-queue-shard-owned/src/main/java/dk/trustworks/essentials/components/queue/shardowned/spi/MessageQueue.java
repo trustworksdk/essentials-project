@@ -388,6 +388,17 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     List<DeadLetter> deadLetters(int offset, int limit) throws SQLException;
 
     /**
+     * One dead letter by the id its message had in its lane - a dead letter keeps that id when it is parked, so the id
+     * an operator saw in {@link #deadLetters} or a log line addresses it. {@link #getMessage} finds live messages only.
+     *
+     * @return the dead letter, or empty if no dead letter has that id. The default finds none; an engine that parks
+     * dead letters overrides it
+     */
+    default Optional<DeadLetter> getDeadLetter(MessageId messageId) throws SQLException {
+        return Optional.empty();
+    }
+
+    /**
      * Return a dead letter to its lane for redelivery, resetting its attempt count.
      *
      * @return true if it was still parked and has been resurrected
