@@ -5,6 +5,10 @@ Serves instrument reference data:
 - `GET /api/admin/instruments` — every instrument
 - `GET /api/admin/instruments/{instrumentId}` — one, 404 when absent
 
+The same two queries are also mapped under `/api/market-data/instruments`, where a customer may read them (the
+order ticket of the phase 7 customer UI needs names and suspension). One class-level `@RequestMapping` with both
+paths, so the slice keeps its one API file; nothing in the read model is operator-only.
+
 Two queries, one read model (`projection_instrument_details`), therefore one slice (§R2).
 
 ## Why it exists

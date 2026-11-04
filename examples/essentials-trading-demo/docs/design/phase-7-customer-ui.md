@@ -1,6 +1,7 @@
 # Phase 7 design — customer UI
 
-**Status:** decided (2026-11-04) - every proposal accepted, Q-5 narrowed while recording it (§5). Decisions are marked
+**Status:** decided and built (2026-11-04) - every proposal accepted, Q-5 narrowed while recording it (§5), two
+small departures while building (§7, §8). Decisions are marked
 **(Q-n)** in the text and collected in §9.
 **Plan:** [`../EXPANSION_PLAN.md`](../EXPANSION_PLAN.md) phase 7 ("Portfolio, order ticket, funding"); decision D12
 (Thymeleaf + vanilla JS, per the repository rule: no Node, no bundler, no JS framework).
@@ -109,6 +110,9 @@ no events, no commands and no views - so it takes the slice law's `_` prefix for
 gets a `CLAUDE.md` saying so, like `_demo_harness`. It may not import any
 context's code: it reaches the contexts only through HTTP from the browser, so the slice boundaries stay intact.
 
+*As built:* one import from a context's public surface, `identity.types.AuthenticatedUser`: opening an account needs the
+caller's `UserId`, which no API returns, so the page controller hands it to the page.
+
 ## 8. Testing (Q-8)
 
 There is no JS test runner without a JS toolchain, and none is wanted. Proposed:
@@ -120,6 +124,10 @@ There is no JS test runner without a JS toolchain, and none is wanted. Proposed:
 - the instruments endpoint tested as a customer;
 - the screens checked by hand in a browser (Playwright, driven from the session) against the running demo with the
   simulators: place, fill, cancel, deposit, withdraw. Not automated.
+
+*As built:* `CustomerUiIT` covers the first three points over real HTTP instead of MockMvc - form login, the session
+cookie, the token read from the page's `<meta>` tag - which is the path the browser and the load driver take, and
+needs no test dependencies beyond the ones the module has.
 
 ## 9. Decisions
 

@@ -97,7 +97,7 @@ Each phase ends with a load scenario and before/after measurements. Performance 
    *Built (D29): the load driver, the fault runs F-1 to F-5, one and two instances. The comparison with `main` waits for
    the next release to be merged in (Q-5).*
 7. **Customer UI.** Portfolio, order ticket, funding.
-   *Designed (D30); being built.*
+   *Built (D30): Portfolio, Trade and Funding under `/app`, checked by hand in a browser against the simulators (place, fill, cancel, deposit, withdraw).*
 
 Later: fees and commission, multi-currency and FX, margin, corporate actions, the exchange expiring its own DAY orders (SR-17; until then the
 brokerage cancels them at the close, built in phase 3),

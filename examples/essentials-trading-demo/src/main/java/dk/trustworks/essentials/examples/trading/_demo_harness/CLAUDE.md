@@ -353,7 +353,8 @@ load, and identical runs vary by tens of percent on the handling side.
 `./run-load.sh [--key=value ...]` against running instances (`docs/design/phase-6-realistic-load.md`). Customers
 `LDA-<n>` (user `lda-<n>@load.local`, password `load-driver-password`), registered, linked and funded on first use and
 reused by later runs; orders and payments `LD-<run>-O<n>` / `-D<n>` / `-W<n>`. Each customer logs in once through the
-form login (CSRF token from `/login`, then `JSESSIONID`) and is pinned to `base-urls[n % size]`. Open-loop: steady
+form login (CSRF token from `/login`, then `JSESSIONID`; since phase 7 also a `GET /app` for the session's CSRF token,
+sent on every write, so `LOGIN` timings from before include one request fewer; a write refused 403 re-logs in once) and is pinned to `base-urls[n % size]`. Open-loop: steady
 `orders-per-second`, `burst-orders-per-second` in the first `burst-fraction` of each business day (a close starts the
 day), `payments-per-second`; `business-days` closes. Settings and defaults: `LoadDriverSettings`. Exit code 0 only if
 every check passed; the full report goes to `target/load-driver/load-<run>.json`.

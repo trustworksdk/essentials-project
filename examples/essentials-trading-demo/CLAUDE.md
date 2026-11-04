@@ -28,13 +28,17 @@ mvn spring-boot:run -pl :essentials-trading-demo        # after `docker compose 
 The original showcase context, `brokerage` (`TradingAccount`, trades, settlements, its bootstrap, load generator,
 dashboard and admin page), was deleted in phase 4 (`docs/design/phase-4-settlement.md` Q-3): `accounts`, `orders` and
 `settlement` replaced it, and generation archival moved to `accounts`. The Essentials admin console shows closing
-books, snapshots, archives and lifecycle for every aggregate; a demo page on the new contexts comes with phase 7.
+books, snapshots, archives and lifecycle for every aggregate; customers have their own UI at `/app` (phase 7).
 
 All on the **aggregate write style** (§R5) — `AggregateRoot` + `StatefulAggregateRepository`. Sanctioned
 lane. Do **not** convert to `Decider`s.
 
 `_demo_harness/` is not a slice — load generators (queue, ledger, order flow), demo users, EF-2 measurement processors.
 `_`-prefixed, excluded from slice enumeration. Has its own `CLAUDE.md`.
+
+`_customer_ui/` is not a slice either: the customer's browser UI (phase 7) at `/app` - Portfolio, Trade, Funding -
+Thymeleaf shells whose scripts call the customer JSON API. Log in as `alice@demo.local` / `alice-demo-password`. Own
+`CLAUDE.md`.
 
 ## Gotchas
 
@@ -74,15 +78,19 @@ lane. Do **not** convert to `Decider`s.
 ## Login (phase 1)
 
 Spring Security guards everything (`config/TradingDemoSecurityConfiguration`): `OPERATOR` for the admin API and
-pages, the harness endpoints and the Essentials admin console; `CUSTOMER` or `OPERATOR` for `/api/accounts/**`;
-open for health, login and `/webhooks/**` (signed instead). Seeded users are in `application.yml`
+pages, the harness endpoints and the Essentials admin console; `CUSTOMER` or `OPERATOR` for `/api/accounts/**`,
+`/api/market-data/**` and the customer UI (`/`, `/app/**`); open for health, login, the UI's static assets and
+`/webhooks/**` (signed instead). Seeded users are in `application.yml`
 (`trading-demo.identity.seed-users`, demo passwords) — `operator@demo.local` / `operator-demo-password`.
 
 - **Tests calling HTTP must authenticate** — `restTemplate.withBasicAuth(...)` as the seeded operator. An
   unauthenticated `/api/**` call answers `401`; elsewhere it redirects to `/login`, which an HTTP client follows to a
   misleading `200`.
-- **CSRF is off for `/api/**`** because the vanilla-JS admin pages send no token. A demo simplification the
-  customer UI must not inherit.
+- **CSRF is required for a session-authenticated write to the customer API** (`/api/accounts/**`,
+  `/api/market-data/**`, phase 7 design §5): the customer pages render the token in `<meta name="_csrf">` and send it
+  back in that header; the load driver reads it from `/app` after each login. A request with HTTP Basic credentials
+  needs none. The operator API (every other `/api/**`) is still exempt, because the Essentials admin console calls it
+  on the operator's session without a token - a demo simplification, not a pattern.
 - **The Essentials admin API's SPIs stay all-access**; the filter chain is what guards them.
 
 ## Running more than one instance

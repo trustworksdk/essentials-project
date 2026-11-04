@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<!--/* The customer UI's shared fragments: <head> (with the session's CSRF token for api.js, design §5) and the header.
+       Every page is a shell; its script fills it from the JSON API (design §2). */-->
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head th:fragment="head(title)">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="_csrf" th:content="${_csrf.token}">
+    <meta name="_csrf_header" th:content="${_csrf.headerName}">
+    <title th:text="${title} + ' - Trading demo'">Trading demo</title>
+    <link rel="stylesheet" th:href="@{/customer_ui/customer.css}">
+    <link rel="icon" href="data:,">
+</head>
+<body>
+<header th:fragment="header" class="top">
+    <a class="brand" th:href="@{/app}">Trading demo</a>
+    <nav th:if="${accountId != null}" class="tabs" aria-label="Account pages">
+        <a th:href="@{/app/accounts/{id}/portfolio(id=${accountId})}" th:classappend="${page == 'portfolio'} ? 'active'">Portfolio</a>
+        <a th:href="@{/app/accounts/{id}/trade(id=${accountId})}" th:classappend="${page == 'trade'} ? 'active'">Trade</a>
+        <a th:href="@{/app/accounts/{id}/funding(id=${accountId})}" th:classappend="${page == 'funding'} ? 'active'">Funding</a>
+    </nav>
+    <div class="who">
+        <label th:if="${accountId != null}" class="account-pick">
+            <span class="visually-hidden">Account</span>
+            <select id="account-select" th:attr="data-account-id=${accountId},data-page=${page}">
+                <option th:value="${accountId}" th:text="${accountId}">account</option>
+            </select>
+        </label>
+        <span class="user" th:text="${username}">user</span>
+        <form th:action="@{/logout}" method="post">
+            <button type="submit" class="link">Log out</button>
+        </form>
+    </div>
+</header>
+<div th:fragment="messages" id="messages" class="messages" aria-live="polite"></div>
+</body>
+</html>

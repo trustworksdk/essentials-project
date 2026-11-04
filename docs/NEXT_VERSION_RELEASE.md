@@ -554,6 +554,13 @@ Not published; listed because they are the reference for how to use the framewor
   and `app.Dockerfile` start one or two application instances in containers beside PostgreSQL and the simulators. On
   Docker Desktop (macOS, Windows) this is how the application reaches PostgreSQL without a port relay, which on the
   host costs about half the burst latency. Loki's URL in `logback-spring.xml` can now be set with `LOKI_URL`.
+- **`essentials-trading-demo`: a customer UI** (phase 7, `docs/design/phase-7-customer-ui.md`). After login, `/app`
+  has Portfolio, Trade (order ticket beside a live quote, orders followed until filled) and Funding (bank account,
+  deposits, withdrawals, payments), as Thymeleaf shells with vanilla JS over the same JSON API the load driver uses.
+  Session-authenticated writes to the customer API (`/api/accounts/**`, `/api/market-data/**`) now need the session's
+  CSRF token, which every page renders in a `<meta>` tag; HTTP Basic clients are unaffected. A client of its own that
+  logs in through the form and writes on the session cookie must send the token, as the load driver now does. Customers
+  can read instrument reference data at `GET /api/market-data/instruments`.
 
 ---
 

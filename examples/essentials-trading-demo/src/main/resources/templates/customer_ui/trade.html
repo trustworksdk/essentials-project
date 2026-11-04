@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head th:replace="~{customer_ui/layout :: head('Trade')}"></head>
+<body th:attr="data-account-id=${accountId}">
+<header th:replace="~{customer_ui/layout :: header}"></header>
+<main>
+    <div th:replace="~{customer_ui/layout :: messages}"></div>
+    <div class="split">
+        <section class="card">
+            <h1>Order ticket</h1>
+            <form id="ticket" class="form-grid">
+                <label>Instrument
+                    <select name="instrumentId" required></select>
+                </label>
+                <fieldset class="segmented">
+                    <legend>Side</legend>
+                    <label><input type="radio" name="side" value="BUY" checked> Buy</label>
+                    <label><input type="radio" name="side" value="SELL"> Sell</label>
+                </fieldset>
+                <fieldset class="segmented">
+                    <legend>Type</legend>
+                    <label><input type="radio" name="type" value="MARKET" checked> Market</label>
+                    <label><input type="radio" name="type" value="LIMIT"> Limit</label>
+                </fieldset>
+                <label>Quantity
+                    <input name="quantity" type="number" min="1" step="1" value="1" required>
+                </label>
+                <label id="limit-price-field" hidden>Limit price
+                    <input name="limitPrice" type="number" min="0.01" step="0.01">
+                </label>
+                <label>Time in force
+                    <select name="timeInForce">
+                        <option value="DAY">Day</option>
+                        <option value="GTC">Good till cancelled</option>
+                    </select>
+                </label>
+                <p class="muted small" id="ticket-hint"></p>
+                <button type="submit" id="place">Place order</button>
+            </form>
+        </section>
+        <section class="card">
+            <h2 id="quote-title">Quote</h2>
+            <div class="figures">
+                <div><span class="label">Bid</span><span class="figure" id="quote-bid">–</span></div>
+                <div><span class="label">Ask</span><span class="figure" id="quote-ask">–</span></div>
+                <div><span class="label">Last</span><span class="figure" id="quote-last">–</span></div>
+            </div>
+            <p class="small" id="quote-state"></p>
+            <dl class="buckets compact">
+                <dt>Buying power</dt><dd id="buying-power">–</dd>
+                <dt>Sellable</dt><dd id="sellable">–</dd>
+            </dl>
+        </section>
+    </div>
+    <section class="card">
+        <h2>Orders</h2>
+        <div class="table-wrap">
+            <table>
+                <thead><tr>
+                    <th>Placed</th><th>Instrument</th><th>Side</th><th>Type</th><th class="num">Quantity</th><th class="num">Limit</th>
+                    <th class="num">Filled</th><th class="num">Average price</th><th>Status</th><th></th>
+                </tr></thead>
+                <tbody id="orders"><tr><td colspan="10" class="muted">Loading…</td></tr></tbody>
+            </table>
+        </div>
+    </section>
+</main>
+<script type="module" th:src="@{/customer_ui/trade.js}"></script>
+</body>
+</html>

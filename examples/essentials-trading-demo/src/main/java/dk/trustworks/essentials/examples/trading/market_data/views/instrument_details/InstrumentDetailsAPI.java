@@ -32,9 +32,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <p>
  * {@code InstrumentId} binds directly as a {@code @PathVariable} because {@code config/TradingDemoWebConfiguration}
  * imports {@code EssentialsWebMvcConfigurer}.
+ * <p>
+ * Served under two paths: the operator's {@code /api/admin/instruments}, beside the instrument writes, and the
+ * customer-readable {@code /api/market-data/instruments}, beside the quotes, for the order ticket (phase 7 design §6).
+ * Instrument reference data holds nothing a customer may not see.
  */
 @RestController
-@RequestMapping("/api/admin/instruments")
+@RequestMapping({"/api/admin/instruments", "/api/market-data/instruments"})
 public class InstrumentDetailsAPI {
     private final InstrumentDetailsQuery query;
 

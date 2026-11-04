@@ -31,6 +31,10 @@ import java.util.regex.Pattern;
  * The driver's HTTP side: one shared client, customers in logged-in sessions (Q-1) - the login form once, its
  * {@code JSESSIONID} after, so a session pays the password hash once, as a browser would - and the operator over HTTP
  * Basic for the few setup and report calls.
+ * <p>
+ * A customer's writes carry the session's CSRF token, as the customer UI's do (phase 7 design §5): after each login the
+ * session reads it once from a customer page's {@code <meta>} tags. A write refused with 403 is retried once after a
+ * fresh login - an expired session fails the CSRF check before it would fail authentication.
  */
 final class BrokerageHttp {
     record Response(int status, String body) {
@@ -39,7 +43,9 @@ final class BrokerageHttp {
         }
     }
 
-    private static final Pattern CSRF = Pattern.compile("name=\"_csrf\"[^>]*value=\"([^\"]+)\"");
+    private static final Pattern CSRF             = Pattern.compile("name=\"_csrf\"[^>]*value=\"([^\"]+)\"");
+    private static final Pattern CSRF_META        = Pattern.compile("<meta name=\"_csrf\" content=\"([^\"]+)\"");
+    private static final Pattern CSRF_HEADER_META = Pattern.compile("<meta name=\"_csrf_header\" content=\"([^\"]+)\"");
 
     private final HttpClient client = HttpClient.newBuilder()
                                                 .version(HttpClient.Version.HTTP_1_1)
@@ -71,6 +77,8 @@ final class BrokerageHttp {
         private final String    email;
         private final String    password;
         private volatile String cookie;
+        private volatile String csrfHeader;
+        private volatile String csrfToken;
 
         Session(String baseUrl, String email, String password) {
             this.baseUrl = baseUrl;
@@ -79,30 +87,38 @@ final class BrokerageHttp {
         }
 
         Response get(String step, String path) {
-            return withSession(step, () -> HttpRequest.newBuilder(URI.create(baseUrl + path)).GET());
+            return withSession(step, false, () -> HttpRequest.newBuilder(URI.create(baseUrl + path)).GET());
         }
 
         Response post(String step, String path, Object body) {
-            return withSession(step, () -> HttpRequest.newBuilder(URI.create(baseUrl + path))
+            return withSession(step, true, () -> HttpRequest.newBuilder(URI.create(baseUrl + path))
                                                       .header("Content-Type", "application/json")
                                                       .POST(body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(write(body))));
         }
 
         Response put(String step, String path, Object body) {
-            return withSession(step, () -> HttpRequest.newBuilder(URI.create(baseUrl + path))
+            return withSession(step, true, () -> HttpRequest.newBuilder(URI.create(baseUrl + path))
                                                       .header("Content-Type", "application/json")
                                                       .PUT(HttpRequest.BodyPublishers.ofString(write(body))));
         }
 
-        private Response withSession(String step, java.util.function.Supplier<HttpRequest.Builder> request) {
+        private Response withSession(String step, boolean write, java.util.function.Supplier<HttpRequest.Builder> request) {
             if (cookie == null && !login()) {
                 return new Response(401, "login failed");
             }
-            var response = send(step, request.get().header("Cookie", cookie));
-            if (response.status() == 401 && login()) {
-                response = send(step, request.get().header("Cookie", cookie));
+            var response = send(step, authenticated(request.get(), write));
+            if ((response.status() == 401 || (write && response.status() == 403)) && login()) {
+                response = send(step, authenticated(request.get(), write));
             }
             return response;
+        }
+
+        private HttpRequest.Builder authenticated(HttpRequest.Builder request, boolean write) {
+            request.header("Cookie", cookie);
+            if (write && csrfToken != null) {
+                request.header(csrfHeader, csrfToken);
+            }
+            return request;
         }
 
         synchronized boolean login() {
@@ -130,6 +146,17 @@ final class BrokerageHttp {
                     return false;
                 }
                 cookie = sessionCookie(answer).orElse(anonymous);
+                // Logging in replaced the session's CSRF token; read the new one from a customer page
+                var home = client.send(HttpRequest.newBuilder(URI.create(baseUrl + "/app")).header("Cookie", cookie).GET().build(),
+                                       HttpResponse.BodyHandlers.ofString());
+                var token  = CSRF_META.matcher(home.body());
+                var header = CSRF_HEADER_META.matcher(home.body());
+                if (home.statusCode() != 200 || !token.find() || !header.find()) {
+                    stats.record("LOGIN", System.nanoTime() - started, "NO_CSRF");
+                    return false;
+                }
+                csrfToken = token.group(1);
+                csrfHeader = header.group(1);
                 stats.record("LOGIN", System.nanoTime() - started, "302");
                 return true;
             } catch (IOException e) {
