@@ -9,6 +9,7 @@ What lives here is the machinery that makes the demo demonstrate something:
 | Component | What it is |
 |---|---|
 | `DemoUsersSeeder` | Registers the seeded users (`trading-demo.identity.seed-users`) at startup when absent |
+| `DemoAccountsSeeder` | Opens and funds the account of a seed user with an `account` block (Alice: `ACC-ALICE-1`, 100,000 USD) through `OpenAccount`, `LinkBankAccount` and `RequestDeposit` with the fixed id `SEED-<accountId>` - no-ops on a later start. Not `CreditDeposit`: handled deposit ids last one generation. Off with `trading-demo.identity.seed-accounts=false`, as in every test (`src/test/resources/config/application.yml`) |
 | `QueueLoadGenerator` | Drives the **shard-owned queue engine** on both lanes at once — sustained trickle plus on-demand spikes — and checks per-key ordering as messages arrive |
 | `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N`, `POST /faults?retries=N&poison=M&failures=K`, `POST /faults/blocked-key?behind=N` |
 | `LedgerLoadGenerator`, `LedgerLoadController` | Phase 1: buy cycles on the `accounts` ledger, `/api/admin/ledger-load` |

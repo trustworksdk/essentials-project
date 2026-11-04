@@ -37,8 +37,8 @@ lane. Do **not** convert to `Decider`s.
 `_`-prefixed, excluded from slice enumeration. Has its own `CLAUDE.md`.
 
 `_customer_ui/` is not a slice either: the customer's browser UI (phase 7) at `/app` - Portfolio, Trade, Funding -
-Thymeleaf shells whose scripts call the customer JSON API. Log in as `alice@demo.local` / `alice-demo-password`. Own
-`CLAUDE.md`.
+Thymeleaf shells whose scripts call the customer JSON API. Log in as `alice@demo.local` / `alice-demo-password`: her account
+`ACC-ALICE-1` is opened and funded with 100,000 USD at startup (`_demo_harness/DemoAccountsSeeder`). Own `CLAUDE.md`.
 
 ## Gotchas
 

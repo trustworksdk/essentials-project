@@ -561,6 +561,8 @@ Not published; listed because they are the reference for how to use the framewor
   CSRF token, which every page renders in a `<meta>` tag; HTTP Basic clients are unaffected. A client of its own that
   logs in through the form and writes on the session cookie must send the token, as the load driver now does. Customers
   can read instrument reference data at `GET /api/market-data/instruments`.
+  The demo customer `alice@demo.local` starts with a funded account, `ACC-ALICE-1` (100,000 USD, deposited through
+  the payment flow at startup; `trading-demo.identity.seed-accounts=false` turns it off).
 
 ---
 
