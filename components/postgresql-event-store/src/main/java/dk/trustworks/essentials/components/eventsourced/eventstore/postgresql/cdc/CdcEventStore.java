@@ -106,6 +106,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * database was unreachable (see {@link #buildAdaptiveLiveSource})
      */
     private static final Duration CATCH_UP_RETRY_DELAY = Duration.ofSeconds(1);
+    /**
+     * Falling behind the bus under a burst is routine and heals itself in milliseconds; each occurrence is logged at
+     * DEBUG, and at most once per this interval a subscription logs an INFO line counting them.
+     */
+    private static final Duration OVERFLOW_SUMMARY_INTERVAL = Duration.ofMinutes(1);
 
     /**
      * A catch-up or back-fill loads the events within every range a subscription still waits for (see
@@ -882,6 +887,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         var tracker                = deliveryGate.tracker;
         var catchUpOnAttach        = new AtomicBoolean(catchUpOnFirstAttach);
         var recoveringFromOverflow = new AtomicBoolean(false);
+        var overflowsSinceSummary  = new AtomicLong();
+        var lastOverflowSummaryAt  = new AtomicLong(System.nanoTime() - OVERFLOW_SUMMARY_INTERVAL.toNanos());
         return Flux.defer(() -> {
                        boolean catchUp    = catchUpOnAttach.getAndSet(true);
                        long    resumeFrom = tracker.highestDeliveredExclusive();
@@ -917,7 +924,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                                                       cdcDeliveryScheduler)
                                .doOnComplete(() -> {
                                    if (recoveringFromOverflow.compareAndSet(true, false)) {
-                                       log.info("[{}-{}] Caught up after falling behind the CDC bus - back on the bus after global order {}",
+                                       log.debug("[{}-{}] Caught up after falling behind the CDC bus - back on the bus after global order {}",
                                                 subscriberIdForLog, aggregateType, tracker.highestDeliveredExclusive() - 1);
                                    } else {
                                        log.debug("[{}-{}] Caught up from global order {} to {} - continuing from the CDC bus",
@@ -934,8 +941,18 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                        long      resumeFrom = tracker.highestDeliveredExclusive();
                        if (Exceptions.isOverflow(failure)) {
                            recoveringFromOverflow.set(true);
-                           log.warn("[{}-{}] Subscription fell more than {} events behind the CDC bus - catching up from global order {} and rejoining the bus",
-                                    subscriberIdForLog, aggregateType, pageSize, resumeFrom);
+                           // Routine under bursts, and self-healing: DEBUG each time, one INFO a minute counting them
+                           log.debug("[{}-{}] Subscription fell more than {} events behind the CDC bus - catching up from global order {} and rejoining the bus",
+                                     subscriberIdForLog, aggregateType, pageSize, resumeFrom);
+                           var overflows = overflowsSinceSummary.incrementAndGet();
+                           var now       = System.nanoTime();
+                           var last      = lastOverflowSummaryAt.get();
+                           if (now - last >= OVERFLOW_SUMMARY_INTERVAL.toNanos() && lastOverflowSummaryAt.compareAndSet(last, now)) {
+                               overflowsSinceSummary.addAndGet(-overflows);
+                               log.info("[{}-{}] Fell more than {} events behind the CDC bus {} time(s) since the last report (latest from global order {}); " +
+                                                "each time it caught up from the event store and rejoined the bus. Counted in the live-source overflow metric",
+                                        subscriberIdForLog, aggregateType, pageSize, overflows, resumeFrom);
+                           }
                            if (liveSourceOverflowCounter != null) liveSourceOverflowCounter.increment();
                            return Mono.just(retrySignal);
                        }
