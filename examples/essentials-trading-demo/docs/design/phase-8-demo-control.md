@@ -201,6 +201,9 @@ it is harness tooling. Imports follow the harness's existing practice: command t
   stream, so a conflict is decided again (5 times) as the customer API does; the mix buys more than it sells, so a
   customer below 20 000 USD of buying power sells what it holds or deposits; and a withdrawal asks only for what the
   account can withdraw now. Refusals are counted by reason on the page.
+- **Calm by default**: traffic starts at 2 orders per exchange minute and is capped at 10 real orders a second
+  (`trading-demo.demo-control.max-orders-per-second`); the page shows what the rate means at the clock's speed and
+  when the cap holds it. A first cap of 100 a second, with two instances, made a laptop run hot.
 - **Order ticket** (Q-9): `GET /api/market-data/sessions`; while the market is closed the ticket says so and its button
   is disabled. The exchange pulls its quotes outside the session, so the quote panel says why there is none.
 - **Tests**: `DemoControlIT` (skip to the open, advance a day through its close, refusals, traffic filling orders after

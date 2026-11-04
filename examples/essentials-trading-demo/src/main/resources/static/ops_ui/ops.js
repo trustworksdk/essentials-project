@@ -110,7 +110,11 @@ async function refreshClock() {
 
 async function refreshTraffic() {
     const traffic = await api('/api/admin/demo/traffic');
-    const state = traffic.running ? `Running at ${traffic.ordersPerExchangeMinute} orders per exchange minute, ${traffic.customers} customers. ` : '';
+    const perSecond = Number(traffic.ordersPerRealSecond).toFixed(1);
+    const cap = traffic.capped ? ` - capped at ${traffic.maxOrdersPerRealSecond} a second` : '';
+    const state = traffic.running
+        ? `Running at ${traffic.ordersPerExchangeMinute} orders per exchange minute (${perSecond} a real second at this speed${cap}), ${traffic.customers} customers. `
+        : `Stopped. At ${traffic.ordersPerExchangeMinute} per exchange minute it would send ${perSecond} orders a real second${cap}. `;
     setText('traffic-text', state + traffic.message);
     buckets('traffic-sent', traffic.lastMinute, 'Nothing sent in the last minute.');
     buckets('traffic-outcomes', traffic.outcomesLastMinute, 'No outcomes in the last minute.');

@@ -19,8 +19,8 @@ package dk.trustworks.essentials.examples.trading.reconciliation.views.known_exe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.examples.trading.orders.events.*;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
-import dk.trustworks.essentials.examples.trading.orders.events.OrderFilled;
 import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.stereotype.Service;
@@ -40,6 +40,17 @@ import java.util.List;
  * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
  * which opens one.
  */
+// Deliberately not handled: the startup summary warns about every sealed-hierarchy leaf a view neither handles nor lists here
+@IgnoresEventTypes({OrderAccepted.class,
+                    OrderCancelRequested.class,
+                    OrderCancelled.class,
+                    OrderClosed.class,
+                    OrderExpired.class,
+                    OrderExpiryRequested.class,
+                    OrderFilledAfterClose.class,
+                    OrderPlaced.class,
+                    OrderRejected.class,
+                    OrderSubmitted.class})
 @Service
 public class KnownExecutionsProjection extends TradingDemoViewEventProcessor {
     public KnownExecutionsProjection(ViewEventProcessorDependencies dependencies) {

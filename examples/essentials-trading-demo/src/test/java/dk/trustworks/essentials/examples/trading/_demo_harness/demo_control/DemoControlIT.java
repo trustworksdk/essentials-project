@@ -127,6 +127,8 @@ class DemoControlIT {
         // 09:25 at 60x: the open is 5 real seconds away
         await().atMost(TIMEOUT).untilAsserted(() -> assertThat(String.valueOf(traffic().get("outcomesLastMinute"))).contains("order FILLED"));
         assertThat(clock().get("phase")).isEqualTo("OPEN");
+        // 120 per exchange minute at 60x asks for 120 a real second: the cap (10 by default) holds it down
+        assertThat(traffic()).containsEntry("capped", true).containsEntry("maxOrdersPerRealSecond", 10);
 
         assertThat(operator().postForEntity("/api/admin/demo/traffic/stop", null, Map.class).getBody()).containsEntry("running", false);
         assertThat(operator().postForEntity("/api/admin/demo/clock/pause", null, Map.class).getStatusCode()).isEqualTo(HttpStatus.OK);

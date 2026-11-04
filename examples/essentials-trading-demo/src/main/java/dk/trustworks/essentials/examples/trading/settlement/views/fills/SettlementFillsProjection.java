@@ -19,10 +19,10 @@ package dk.trustworks.essentials.examples.trading.settlement.views.fills;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.examples.trading.orders.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
-import dk.trustworks.essentials.examples.trading.orders.events.OrderFilled;
 import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.stereotype.Service;
@@ -43,6 +43,17 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * which opens one; {@link #fill(ExecutionId)} reads through {@code getUnitOfWorkFactory().withUnitOfWork(uow -> …)}, which
  * joins the caller's unit of work or opens one.
  */
+// Deliberately not handled: the startup summary warns about every sealed-hierarchy leaf a view neither handles nor lists here
+@IgnoresEventTypes({OrderAccepted.class,
+                    OrderCancelRequested.class,
+                    OrderCancelled.class,
+                    OrderClosed.class,
+                    OrderExpired.class,
+                    OrderExpiryRequested.class,
+                    OrderFilledAfterClose.class,
+                    OrderPlaced.class,
+                    OrderRejected.class,
+                    OrderSubmitted.class})
 @Service
 public class SettlementFillsProjection extends TradingDemoViewEventProcessor {
 

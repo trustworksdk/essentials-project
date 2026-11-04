@@ -19,7 +19,7 @@ package dk.trustworks.essentials.examples.trading.orders.views.account_owners;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
-import dk.trustworks.essentials.examples.trading.accounts.events.AccountOpened;
+import dk.trustworks.essentials.examples.trading.accounts.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.AccountsAggregateTypes;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
@@ -38,6 +38,23 @@ import java.util.List;
  * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
  * which opens one.
  */
+// Deliberately not handled: the startup summary warns about every sealed-hierarchy leaf a view neither handles nor lists here
+@IgnoresEventTypes({AccountBooksClosed.class,
+                    CashAdjusted.class,
+                    CashWithdrawn.class,
+                    DepositCleared.class,
+                    DepositCredited.class,
+                    DepositReturned.class,
+                    FundsHeld.class,
+                    FundsReleased.class,
+                    SettlementAmountCorrected.class,
+                    SharesReleased.class,
+                    SharesReserved.class,
+                    TradeBooked.class,
+                    TradeBookingReversed.class,
+                    TradeSettled.class,
+                    UnknownReferenceIgnored.class,
+                    WithdrawalReturnCredited.class})
 @Service
 public class AccountOwnersProjection extends TradingDemoViewEventProcessor {
     public AccountOwnersProjection(ViewEventProcessorDependencies dependencies) {

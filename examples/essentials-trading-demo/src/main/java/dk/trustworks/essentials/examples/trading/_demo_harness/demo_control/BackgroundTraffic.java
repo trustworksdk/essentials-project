@@ -56,7 +56,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The customers use the same commands as real ones, sent on the command bus: market and marketable limit buys, sells of
  * what they hold, resting limit buys of which half are cancelled, deposits and withdrawals - the load driver's mix
  * (phase 6 §2). The rate is set in orders per <em>exchange</em> minute, so a faster clock means faster traffic and a
- * day looks like a day at any speed, capped at {@link #MAX_ORDERS_PER_SECOND} real. Orders go in only while the market
+ * day looks like a day at any speed, capped at {@code trading-demo.demo-control.max-orders-per-second} real orders
+ * per second (10 by default: two instances on a laptop must stay cool). Orders go in only while the market
  * is open, with a burst for the first {@link #BURST} after the open; deposits and withdrawals run through the whole
  * business day. The customers are this instance's own ({@code BG-<instance>-<n>}), opened and funded on first use and
  * kept across restarts, so Alice's screens show only her account.
@@ -65,7 +66,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 @ConditionalOnProperty(prefix = "trading-demo.simulators", name = {"exchange.base-url", "webhook-secret-file"})
 public class BackgroundTraffic {
     private static final Logger      log                   = LoggerFactory.getLogger(BackgroundTraffic.class);
-    static final         int         MAX_ORDERS_PER_SECOND = 100;
+    /**
+     * The starting rate: calm at any speed - at 1440x it is 48 orders per real second, which the cap brings down.
+     */
+    static final         double      DEFAULT_ORDERS_PER_EXCHANGE_MINUTE = 2;
     static final         Duration    BURST                 = Duration.ofMinutes(15);
     private static final int         BURST_FACTOR          = 4;
     private static final int         CUSTOMERS             = 20;
@@ -86,13 +90,16 @@ public class BackgroundTraffic {
      *
      * @param running                 whether it runs
      * @param ordersPerExchangeMinute the rate
+     * @param ordersPerRealSecond     what the rate asks for at the clock's speed, before the cap
+     * @param maxOrdersPerRealSecond  the cap ({@code trading-demo.demo-control.max-orders-per-second})
+     * @param capped                  whether the cap holds the rate down
      * @param customers               the simulated customers
      * @param lastMinute              what it sent in the last real minute, by kind
      * @param outcomesLastMinute      what became of its orders and payments in the last real minute, by status
      * @param message                 what it is doing, in words
      */
-    public record Status(boolean running, double ordersPerExchangeMinute, int customers, Map<String, Long> lastMinute,
-                         Map<String, Long> outcomesLastMinute, String message) {
+    public record Status(boolean running, double ordersPerExchangeMinute, double ordersPerRealSecond, int maxOrdersPerRealSecond,
+                         boolean capped, int customers, Map<String, Long> lastMinute, Map<String, Long> outcomesLastMinute, String message) {
     }
 
     private final CommandBus           commandBus;
@@ -102,6 +109,7 @@ public class BackgroundTraffic {
     private final ExchangeClockControl clock;
     private final JdbcTemplate         jdbcTemplate;
     private final String               prefix;
+    private final int                  maxOrdersPerSecond;
     private final ScheduledExecutorService ticker  = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("background-traffic").daemon().factory());
     private final ExecutorService          actions = Executors.newFixedThreadPool(4, Thread.ofPlatform().name("background-traffic-action-", 0).daemon().factory());
     private final Semaphore                inFlight = new Semaphore(64);
@@ -111,7 +119,7 @@ public class BackgroundTraffic {
     private final List<AccountId>          customers = new CopyOnWriteArrayList<>();
 
     private volatile ScheduledFuture<?>          running;
-    private volatile double                      ordersPerExchangeMinute = 30;
+    private volatile double                      ordersPerExchangeMinute = DEFAULT_ORDERS_PER_EXCHANGE_MINUTE;
     private volatile String                      message                 = "Stopped";
     private volatile ExchangeClockControl.ClockState clockState;
     private volatile long                        clockReadAt;
@@ -127,7 +135,8 @@ public class BackgroundTraffic {
                              AccountOverviewQuery overviews,
                              ExchangeClockControl clock,
                              JdbcTemplate jdbcTemplate,
-                             @Value("${essentials.shard-owned-queue.instance-id:local}") String instanceId) {
+                             @Value("${essentials.shard-owned-queue.instance-id:local}") String instanceId,
+                             @Value("${trading-demo.demo-control.max-orders-per-second:10}") int maxOrdersPerSecond) {
         this.commandBus = requireNonNull(commandBus, "No commandBus provided");
         this.quotes = requireNonNull(quotes, "No quotes provided");
         this.positions = requireNonNull(positions, "No positions provided");
@@ -135,6 +144,10 @@ public class BackgroundTraffic {
         this.clock = requireNonNull(clock, "No clock provided");
         this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
         this.prefix = "BG-" + requireNonNull(instanceId, "No instanceId provided").replaceAll("[^A-Za-z0-9]", "") + "-";
+        if (maxOrdersPerSecond < 1) {
+            throw new IllegalArgumentException("trading-demo.demo-control.max-orders-per-second must be at least 1, was " + maxOrdersPerSecond);
+        }
+        this.maxOrdersPerSecond = maxOrdersPerSecond;
     }
 
     public synchronized Status start(double ordersPerExchangeMinute) {
@@ -184,7 +197,11 @@ public class BackgroundTraffic {
             times.removeIf(time -> time < cutoff);
             counts.put(kind, (long) times.size());
         });
-        return new Status(running != null, ordersPerExchangeMinute, customers.size(), counts, outcomes(), message);
+        var state     = clockState;
+        var speed     = state != null ? state.speed().doubleValue() : 1;
+        var perSecond = ordersPerExchangeMinute * speed / 60;
+        return new Status(running != null, ordersPerExchangeMinute, perSecond, maxOrdersPerSecond, perSecond > maxOrdersPerSecond,
+                          customers.size(), counts, outcomes(), message);
     }
 
     private Map<String, Long> outcomes() {
@@ -248,7 +265,7 @@ public class BackgroundTraffic {
             orderCredit = 0;
             message = "Market closed - the customers only move money";
         }
-        var maxPerTick = MAX_ORDERS_PER_SECOND * realSeconds;
+        var maxPerTick = maxOrdersPerSecond * realSeconds;
         orderCredit = Math.min(orderCredit, maxPerTick + 1);
         paymentCredit = Math.min(paymentCredit, maxPerTick + 1);
         for (; orderCredit >= 1; orderCredit--) {

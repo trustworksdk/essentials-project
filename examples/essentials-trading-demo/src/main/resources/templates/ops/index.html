@@ -99,11 +99,13 @@
         <p class="now" id="traffic-text">Reading...</p>
         <div class="controls">
             <div class="control">
-                <label class="inline">Orders per exchange minute <input type="number" id="rate" min="0" max="600" value="30"></label>
+                <label class="inline">Orders per exchange minute <input type="number" id="rate" min="0" max="600" step="0.5" value="2"></label>
                 <button type="button" id="traffic-start">Start</button>
                 <button type="button" id="traffic-rate">Set rate</button>
                 <button type="button" id="traffic-stop">Stop</button>
-                <p class="hint">Start opens and funds 20 customers the first time. The rate can be changed while it runs.</p>
+                <p class="hint">Start opens and funds 20 customers the first time. The rate can be changed while it runs.
+                    At 60x, 2 orders per exchange minute are 2 a second; at 1440x, 48 a second. The instance caps the
+                    traffic at a set number of orders per real second, so a fast clock cannot overload the machine.</p>
             </div>
             <div class="control">
                 <button type="button" id="traffic-burst">Fire a burst</button>

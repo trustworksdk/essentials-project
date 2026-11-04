@@ -41,6 +41,9 @@ import java.util.List;
  * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
  * which opens one.
  */
+// Deliberately not handled: the startup summary warns about every sealed-hierarchy leaf a view neither handles nor lists here
+@IgnoresEventTypes({DepositFailed.class,
+                    WithdrawalFailed.class})
 @Service
 public class KnownPaymentsProjection extends TradingDemoViewEventProcessor {
     public KnownPaymentsProjection(ViewEventProcessorDependencies dependencies) {

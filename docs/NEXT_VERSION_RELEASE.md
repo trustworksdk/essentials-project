@@ -620,8 +620,8 @@ Not published; listed because they are the reference for how to use the framewor
   1440x, skip to just before the next open or close, advance a number of business days - always forward, and every
   jump passes each close in turn and waits until the application has processed it, so day orders expire, the books
   roll, trades settle and deposits clear as they would have. It runs background traffic in the application (simulated
-  customers on the command bus, the load driver's mix, a rate per exchange minute, orders only while the market is
-  open with a burst after the open), shows the system's orders, payments and reconciliation cases, and explains each
+  customers on the command bus, the load driver's mix, a rate per exchange minute - 2 by default, capped at 10 real
+  orders a second - orders only while the market is open with a burst after the open), shows the system's orders, payments and reconciliation cases, and explains each
   panel, control and the steps of a trading day as it goes. Operator only, simulators profile only; API under
   `/api/admin/demo`.
 

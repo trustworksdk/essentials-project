@@ -46,6 +46,21 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * which opens one; {@link #clearingOnOrBefore(LocalDate)} reads through {@code getUnitOfWorkFactory().withUnitOfWork(uow -> …)},
  * which joins the caller's unit of work or opens one.
  */
+// Deliberately not handled: the startup summary warns about every sealed-hierarchy leaf a view neither handles nor lists here
+@IgnoresEventTypes({AccountBooksClosed.class,
+                    AccountOpened.class,
+                    CashAdjusted.class,
+                    CashWithdrawn.class,
+                    FundsHeld.class,
+                    FundsReleased.class,
+                    SettlementAmountCorrected.class,
+                    SharesReleased.class,
+                    SharesReserved.class,
+                    TradeBooked.class,
+                    TradeBookingReversed.class,
+                    TradeSettled.class,
+                    UnknownReferenceIgnored.class,
+                    WithdrawalReturnCredited.class})
 @Service
 public class UnclearedDepositsProjection extends TradingDemoViewEventProcessor {
     public UnclearedDepositsProjection(ViewEventProcessorDependencies dependencies) {

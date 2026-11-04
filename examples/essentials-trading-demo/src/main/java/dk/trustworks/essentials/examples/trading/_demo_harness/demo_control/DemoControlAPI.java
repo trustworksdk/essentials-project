@@ -102,7 +102,7 @@ public class DemoControlAPI {
 
     @PostMapping("/traffic/start")
     public BackgroundTraffic.Status startTraffic(@RequestBody(required = false) Rate rate) {
-        return traffic.start(rate != null ? rate.ordersPerExchangeMinute() : 30);
+        return traffic.start(rate != null ? rate.ordersPerExchangeMinute() : BackgroundTraffic.DEFAULT_ORDERS_PER_EXCHANGE_MINUTE);
     }
 
     @PutMapping("/traffic/rate")
