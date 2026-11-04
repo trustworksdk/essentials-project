@@ -85,6 +85,12 @@ essentials:
     lock-confirmation-interval: 5s
     lock-time-out: 12s
     release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation: false
+    # Spread the exclusive processors' and consumers' fenced locks over the running instances (release notes 2.9):
+    # without it the first instance to start takes all ~35 and a second one only takes over when the first dies. Each
+    # lock has a preferred instance; a holder hands at most one lock every two confirmation intervals (10 s) to an
+    # instance that prefers it, so a second instance gets its share within a few minutes. Each move pauses that one
+    # processor for a few seconds, on every start and stop - which /ops shows under "Fenced locks".
+    spread-locks: true
   event-store:
     identifier-column-type: text
     json-column-type: jsonb

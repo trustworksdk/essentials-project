@@ -611,6 +611,9 @@ Not published; listed because they are the reference for how to use the framewor
   `BusinessDayClosed`, instead of midnight New York on the application's clock. The integration tests keep an
   always-open exchange. The simulator's operator clock endpoints are switched on (`clock.operator_control`).
 
+- **`essentials-trading-demo` spreads its fenced locks over the instances** (`compose` profile,
+  `essentials.fenced-lock-manager.spread-locks`, §2.9): a second instance takes its share of the exclusive processors
+  within a few minutes instead of standing by until the first one dies, and `/ops` shows the locks each instance holds.
 - **`essentials-trading-demo`: a database reset without the simulators is named once, not reported per order.** When
   the database is new but the simulators remember an earlier run (their volumes kept), the demo logs one WARN saying so
   and how to reset both (`reset-stack.sh`), and the replayed orders and payments it never placed are logged at DEBUG

@@ -127,6 +127,7 @@ async function refreshOverview() {
     buckets('orders-by-status', overview.ordersByStatus, 'No orders yet.');
     buckets('payments-by-status', overview.paymentsByStatus, 'No payments yet.');
     buckets('cases-by-state', overview.casesByState, 'No reconciliation cases.');
+    buckets('locks-by-instance', overview.fencedLocksByInstance, 'No locks held.');
 }
 
 function act(id, call, after = refreshClock) {

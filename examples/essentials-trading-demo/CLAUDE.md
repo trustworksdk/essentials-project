@@ -204,6 +204,10 @@ must add in `docs/SIMULATOR_REQUIREMENTS.md`. Shared receiving mechanics in `int
   keeps `business_day_closed` in memory (loaded at start, updated after commit, polled every 1 s for other instances).
 - **Under this profile orders go to the exchange-simulator**, not the stub (`orders/CLAUDE.md`, "Exchange-simulator
   adapter").
+- **Fenced locks are spread over the instances** (`spread-locks: true`, `compose` profile): a second instance gets its
+  share of the ~35 exclusive processors' locks one at a time, every 10 s; measured with two instances started one
+  after the other: 35/0, then 17/18 after 3 minutes, settled at 13/22 (each lock's preferred instance) after ~4.5.
+  Each move pauses that processor a few seconds. `/ops` shows locks per instance.
 - **Scripts run on macOS too**: POSIX `df` in `reset-stack.sh`; `timeout` (absent on macOS) only guards the direct
   container-IP probe, which Docker Desktop could not reach anyway.
 - **Reset the demo's database and the exchange together.** The exchange keeps its state in the `exchange-data`

@@ -133,7 +133,7 @@ class DemoControlIT {
         assertThat(operator().postForEntity("/api/admin/demo/traffic/stop", null, Map.class).getBody()).containsEntry("running", false);
         assertThat(operator().postForEntity("/api/admin/demo/clock/pause", null, Map.class).getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(clock().get("running")).isEqualTo(false);
-        assertThat(operator().getForEntity("/api/admin/demo/overview", Map.class).getBody()).containsKey("ordersByStatus");
+        assertThat(operator().getForEntity("/api/admin/demo/overview", Map.class).getBody()).containsKeys("ordersByStatus", "fencedLocksByInstance");
     }
 
     @Test

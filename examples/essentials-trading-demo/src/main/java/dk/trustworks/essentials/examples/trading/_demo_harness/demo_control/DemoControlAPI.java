@@ -51,9 +51,11 @@ public class DemoControlAPI {
     }
 
     /**
-     * What the system holds now, from the views: orders and payments by status, reconciliation cases by state.
+     * What the system holds now, from the views: orders and payments by status, reconciliation cases by state, and how
+     * many fenced locks - exclusive processors and consumers - each instance holds.
      */
-    public record Overview(Map<String, Long> ordersByStatus, Map<String, Long> paymentsByStatus, Map<String, Long> casesByState) {
+    public record Overview(Map<String, Long> ordersByStatus, Map<String, Long> paymentsByStatus, Map<String, Long> casesByState,
+                           Map<String, Long> fencedLocksByInstance) {
     }
 
     public DemoControlAPI(ExchangeClockControl clock, BackgroundTraffic traffic, JdbcTemplate jdbcTemplate) {
@@ -124,7 +126,10 @@ public class DemoControlAPI {
     public Overview overview() {
         return new Overview(counts("SELECT status AS k, count(*) AS n FROM projection_orders GROUP BY status"),
                             counts("SELECT lower(kind) || ' ' || status AS k, count(*) AS n FROM projection_funding_payment GROUP BY kind, status"),
-                            counts("SELECT state AS k, count(*) AS n FROM projection_reconciliation_case GROUP BY state"));
+                            counts("SELECT state AS k, count(*) AS n FROM projection_reconciliation_case GROUP BY state"),
+                            // Held locks per lock manager (host:pid); the __member rows are the spreading's membership
+                            counts("SELECT locked_by_lockmanager_instance_id AS k, count(*) AS n FROM fenced_locks " +
+                                   "WHERE locked_by_lockmanager_instance_id IS NOT NULL AND lock_name NOT LIKE '\\_\\_member:%' GROUP BY 1"));
     }
 
     private Map<String, Long> counts(String sql) {

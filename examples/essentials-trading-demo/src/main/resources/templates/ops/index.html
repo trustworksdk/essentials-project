@@ -136,6 +136,10 @@
             <div><h2>Orders</h2><dl class="buckets compact" id="orders-by-status"></dl></div>
             <div><h2>Payments</h2><dl class="buckets compact" id="payments-by-status"></dl></div>
             <div><h2>Reconciliation cases</h2><dl class="buckets compact" id="cases-by-state"></dl></div>
+            <div><h2>Fenced locks</h2><dl class="buckets compact" id="locks-by-instance"></dl>
+                <p class="hint">Each exclusive processor or consumer runs where its lock is held. With several
+                    instances the locks spread over them; a newly started instance gets its share within a few minutes,
+                    one lock at a time.</p></div>
         </div>
     </section>
 
