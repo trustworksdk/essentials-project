@@ -24,6 +24,8 @@ if pgrep -f 'load_driver.LoadDriver' >/dev/null; then
 fi
 
 # PostgreSQL's data is an anonymous volume (the image's VOLUME), which `down -v` does not always remove: note it first
+# The database's volume is named (postgres-data) and goes with `down -v`. This also removes the anonymous volume a
+# stack from before it was named still has attached.
 pg_volume=$(docker inspect essentials-trading-demo-postgresql \
               --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' 2>/dev/null || true)
 

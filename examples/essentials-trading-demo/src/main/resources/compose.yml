@@ -17,6 +17,12 @@ services:
     restart: unless-stopped
     ports:
       - "5432:5432"
+    # A named volume, like the simulators' below. Without one the image's VOLUME made it anonymous: recreating the
+    # container (Docker Desktop, up --force-recreate) started an empty database while the simulators kept their state,
+    # and each old database stayed behind as a hash-named volume. Named, it survives a recreate like the simulators'
+    # do, and `down -v` (reset-stack.sh) removes all three together.
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
     environment:
       POSTGRES_USER: essentials
       POSTGRES_PASSWORD: password
@@ -177,6 +183,7 @@ secrets:
     file: ../../simulators/secrets/webhook-secret.txt
 
 volumes:
+  postgres-data:
   exchange-data:
   gateway-data:
   prometheus:

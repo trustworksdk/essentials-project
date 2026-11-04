@@ -214,8 +214,10 @@ must add in `docs/SIMULATOR_REQUIREMENTS.md`. Shared receiving mechanics in `int
   volume, and every consumer's catch-up reader reads the exchange's event log from the start on a fresh database. A
   fresh database against an exchange that remembers turns the old run's events into reports for orders this database
   never had; acceptances and cancellations for an unknown order end as dead letters in `Inbox:Orders:ExchangeReports`
-  (seen: 100 after one earlier run). `POST /test/reset` on the exchange, or remove only the
-  simulators' own volumes, next to dropping the database - `docker compose down -v` also deletes the demo's PostgreSQL data.
+  (seen: 100 after one earlier run; `EarlierRunCheck` WARNs once when it sees it). All three live in named volumes -
+  `postgres-data`, `exchange-data`, `gateway-data` - so recreating containers keeps them together and `./reset-stack.sh`
+  (`down -v`) removes them together. PostgreSQL's used to be anonymous (the image's `VOLUME`): a recreated container got
+  an empty database next to simulators that remembered, which is how a run ended with `BG-local` fills for orders it never had.
 - **The Finnhub API key is never committed.** It lives in `simulators/secrets/finnhub.env` (gitignored; template
   `finnhub.env.example`), which both compose files load as an optional `env_file` for the exchange, so a run without
   it still starts - with no live price feed (D15, D16).

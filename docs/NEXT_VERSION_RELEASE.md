@@ -613,6 +613,11 @@ Not published; listed because they are the reference for how to use the framewor
   `BusinessDayClosed`, instead of midnight New York on the application's clock. The integration tests keep an
   always-open exchange. The simulator's operator clock endpoints are switched on (`clock.operator_control`).
 
+- **`essentials-trading-demo`: PostgreSQL's data is in a named volume, `postgres-data`**, like the simulators'
+  `exchange-data` and `gateway-data`. It was anonymous, so recreating the database container (Docker Desktop, `up
+  --force-recreate`) started an empty database next to simulators that remembered the earlier run, and every old fill
+  and settlement report became a dead letter. Now the three are kept and removed together (`./reset-stack.sh`). A
+  database from before the change is not carried over: reset once.
 - **`essentials-trading-demo` spreads its fenced locks over the instances** (`compose` profile,
   `essentials.fenced-lock-manager.spread-locks`, §2.9): a second instance takes its share of the exclusive processors
   within a few minutes instead of standing by until the first one dies, and `/ops` shows the locks each instance holds.
