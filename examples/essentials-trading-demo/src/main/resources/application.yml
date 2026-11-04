@@ -1,3 +1,13 @@
+# The session cookie is named per instance. Browsers keep cookies per host, not per port, so two instances on one
+# machine (localhost:8080 and localhost:8081) that both used JSESSIONID logged each other out: a login on one replaced
+# the other's cookie, and an open page polling the other instance lost its session. The instance id is what
+# run-instance.sh and compose.app.yml set (demo-1, demo-2); without one, the port.
+server:
+  servlet:
+    session:
+      cookie:
+        name: TRADING_DEMO_SESSION_${essentials.shard-owned-queue.instance-id:${server.port:8080}}
+
 spring:
   application:
     name: essentials-trading-demo

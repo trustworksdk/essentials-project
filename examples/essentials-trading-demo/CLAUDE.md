@@ -44,6 +44,10 @@ Thymeleaf shells whose scripts call the customer JSON API. Log in as `alice@demo
 
 ## Gotchas
 
+- **The session cookie is per instance**: `TRADING_DEMO_SESSION_<instance-id>` (or `_<port>`), not `JSESSIONID`
+  (`application.yml`). Browsers share cookies across ports, so with one name two local instances logged each other out
+  in the same browser. Anything that picks the session cookie by name must match the prefix (`BrokerageHttp`).
+
 - **Event-type FQCNs changed in the slice refactor.** Essentials persists the concrete class name; no
   upcasting is provided. An existing demo database is unreadable — `docker compose down -v` first.
 - **A policy annotation only takes effect if the aggregate is declared.** Each context has one

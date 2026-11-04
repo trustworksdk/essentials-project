@@ -29,7 +29,7 @@ import java.util.regex.Pattern;
 
 /**
  * The driver's HTTP side: one shared client, customers in logged-in sessions (Q-1) - the login form once, its
- * {@code JSESSIONID} after, so a session pays the password hash once, as a browser would - and the operator over HTTP
+ * session cookie after ({@code TRADING_DEMO_SESSION_<instance>}), so a session pays the password hash once, as a browser would - and the operator over HTTP
  * Basic for the few setup and report calls.
  * <p>
  * A customer's writes carry the session's CSRF token, as the customer UI's do (phase 7 design §5): after each login the
@@ -232,7 +232,8 @@ final class BrokerageHttp {
 
     private static Optional<String> sessionCookie(HttpResponse<?> response) {
         return response.headers().allValues("Set-Cookie").stream()
-                       .filter(value -> value.startsWith("JSESSIONID="))
+                       // Per instance since the cookie name carries the instance id (application.yml); JSESSIONID for an older build
+                       .filter(value -> value.startsWith("TRADING_DEMO_SESSION_") || value.startsWith("JSESSIONID="))
                        .map(value -> value.substring(0, value.contains(";") ? value.indexOf(';') : value.length()))
                        .findFirst();
     }

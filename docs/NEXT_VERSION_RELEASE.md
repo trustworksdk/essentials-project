@@ -610,6 +610,10 @@ Not published; listed because they are the reference for how to use the framewor
   `BusinessDayClosed`, instead of midnight New York on the application's clock. The integration tests keep an
   always-open exchange. The simulator's operator clock endpoints are switched on (`clock.operator_control`).
 
+- **`essentials-trading-demo`: two local instances no longer log each other out in one browser.** The session cookie is
+  named per instance, `TRADING_DEMO_SESSION_<instance-id>` (`demo-1`, `demo-2`), instead of `JSESSIONID`: browsers share
+  cookies across ports, so logging in on `localhost:8081` replaced the session of `localhost:8080`. The load driver
+  reads the new name.
 - **`essentials-trading-demo`: an operator page, `/ops`** (phase 8, `docs/design/phase-8-demo-control.md`), to play a
   trading day at any wall-clock time. It drives the exchange-simulator's clock - pause, resume, speeds from 1x to
   1440x, skip to just before the next open or close, advance a number of business days - always forward, and every
