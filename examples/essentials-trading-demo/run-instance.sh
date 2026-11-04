@@ -81,7 +81,8 @@ if [[ "${PG_DIRECT:-auto}" != "0" ]]; then
     done
     if docker compose -f examples/essentials-trading-demo/compose.yml "${COMPOSE_FLAGS[@]}" up -d --wait >&2; then
         PG_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' essentials-trading-demo-postgresql 2>/dev/null || true)"
-        if [[ -n "$PG_IP" ]] && timeout 2 bash -c "</dev/tcp/${PG_IP}/5432" 2>/dev/null; then
+        # macOS has no `timeout`; there Docker Desktop keeps container IPs inside its VM anyway, so the published port it is
+        if [[ -n "$PG_IP" ]] && command -v timeout >/dev/null && timeout 2 bash -c "</dev/tcp/${PG_IP}/5432" 2>/dev/null; then
             echo "run-instance: PostgreSQL directly at ${PG_IP}:5432, bypassing the port proxy (PG_DIRECT=0 to turn off)" >&2
             EXTRA_ARGS=" --spring.docker.compose.enabled=false --spring.datasource.url=jdbc:postgresql://${PG_IP}:5432/essentials-trading-demo"
         else

@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.examples.trading.funding.use_cases.record_payment_outcome;
 
+import dk.trustworks.essentials.examples.trading.integration.EarlierRunCheck;
+import org.springframework.beans.factory.annotation.Autowired;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.funding.aggregates.*;
 import dk.trustworks.essentials.examples.trading.funding.types.PaymentKind;
@@ -36,6 +38,22 @@ public class RecordPaymentOutcomeHandler extends AnnotatedCommandHandler {
 
     private final Deposits    deposits;
     private final Withdrawals withdrawals;
+
+    private volatile EarlierRunCheck earlierRunCheck;
+
+    /**
+     * Present under the simulators profile: while the simulators replay an earlier run's events into a new database,
+     * an unknown reference is expected and logged at DEBUG ({@link EarlierRunCheck}).
+     */
+    @Autowired(required = false)
+    void setEarlierRunCheck(EarlierRunCheck earlierRunCheck) {
+        this.earlierRunCheck = earlierRunCheck;
+    }
+
+    private boolean replayingAnEarlierRun() {
+        var check = earlierRunCheck;
+        return check != null && check.simulatorsFromAnEarlierRun();
+    }
 
     public RecordPaymentOutcomeHandler(Deposits deposits, Withdrawals withdrawals) {
         this.deposits = requireNonNull(deposits, "No deposits provided");
@@ -72,7 +90,11 @@ public class RecordPaymentOutcomeHandler extends AnnotatedCommandHandler {
         }
     }
 
-    private static void unknown(RecordPaymentOutcome cmd) {
+    private void unknown(RecordPaymentOutcome cmd) {
+        if (replayingAnEarlierRun()) {
+            log.debug("Ignoring the payment gateway's {} for a {} from an earlier run: '{}'", cmd.outcome(), cmd.kind(), cmd.reference());
+            return;
+        }
         log.warn("Ignoring the payment gateway's {} for a {} this brokerage never requested: '{}'", cmd.outcome(), cmd.kind(), cmd.reference());
     }
 }

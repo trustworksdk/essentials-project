@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.examples.trading.orders.use_cases.record_fill;
 
+import dk.trustworks.essentials.examples.trading.integration.EarlierRunCheck;
+import org.springframework.beans.factory.annotation.Autowired;
 import dk.trustworks.essentials.examples.trading.orders.aggregates.*;
 import dk.trustworks.essentials.reactive.command.*;
 import org.slf4j.*;
@@ -36,6 +38,22 @@ public class RecordFillHandler extends AnnotatedCommandHandler {
     private final Orders                orders;
     private final UnknownExchangeOrders unknownExchangeOrders;
 
+    private volatile EarlierRunCheck earlierRunCheck;
+
+    /**
+     * Present under the simulators profile: while the simulators replay an earlier run's events into a new database,
+     * an unknown reference is expected and logged at DEBUG ({@link EarlierRunCheck}).
+     */
+    @Autowired(required = false)
+    void setEarlierRunCheck(EarlierRunCheck earlierRunCheck) {
+        this.earlierRunCheck = earlierRunCheck;
+    }
+
+    private boolean replayingAnEarlierRun() {
+        var check = earlierRunCheck;
+        return check != null && check.simulatorsFromAnEarlierRun();
+    }
+
     public RecordFillHandler(Orders orders, UnknownExchangeOrders unknownExchangeOrders) {
         this.orders = requireNonNull(orders, "No orders provided");
         this.unknownExchangeOrders = requireNonNull(unknownExchangeOrders, "No unknownExchangeOrders provided");
@@ -47,7 +65,11 @@ public class RecordFillHandler extends AnnotatedCommandHandler {
         orders.findOrder(cmd.orderId())
               .ifPresentOrElse(order -> order.recordFill(cmd.executionId(), cmd.quantity(), cmd.price(), cmd.tradeDate(), cmd.settlementDate()),
                                () -> {
-                                   log.warn("Exchange reported execution '{}' for unknown order '{}': recorded as an operator case", cmd.executionId(), cmd.orderId());
+                                   if (replayingAnEarlierRun()) {
+                                       log.debug("Exchange reported execution '{}' for unknown order '{}' from an earlier run: recorded as an operator case", cmd.executionId(), cmd.orderId());
+                                   } else {
+                                       log.warn("Exchange reported execution '{}' for unknown order '{}': recorded as an operator case", cmd.executionId(), cmd.orderId());
+                                   }
                                    unknownExchangeOrders.recordFill(cmd.orderId(), cmd.executionId(), cmd.quantity(), cmd.price(), cmd.tradeDate(), cmd.settlementDate());
                                });
     }

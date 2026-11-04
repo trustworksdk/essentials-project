@@ -204,6 +204,8 @@ must add in `docs/SIMULATOR_REQUIREMENTS.md`. Shared receiving mechanics in `int
   keeps `business_day_closed` in memory (loaded at start, updated after commit, polled every 1 s for other instances).
 - **Under this profile orders go to the exchange-simulator**, not the stub (`orders/CLAUDE.md`, "Exchange-simulator
   adapter").
+- **Scripts run on macOS too**: POSIX `df` in `reset-stack.sh`; `timeout` (absent on macOS) only guards the direct
+  container-IP probe, which Docker Desktop could not reach anyway.
 - **Reset the demo's database and the exchange together.** The exchange keeps its state in the `exchange-data`
   volume, and every consumer's catch-up reader reads the exchange's event log from the start on a fresh database. A
   fresh database against an exchange that remembers turns the old run's events into reports for orders this database

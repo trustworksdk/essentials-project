@@ -611,6 +611,10 @@ Not published; listed because they are the reference for how to use the framewor
   `BusinessDayClosed`, instead of midnight New York on the application's clock. The integration tests keep an
   always-open exchange. The simulator's operator clock endpoints are switched on (`clock.operator_control`).
 
+- **`essentials-trading-demo`: a database reset without the simulators is named once, not reported per order.** When
+  the database is new but the simulators remember an earlier run (their volumes kept), the demo logs one WARN saying so
+  and how to reset both (`reset-stack.sh`), and the replayed orders and payments it never placed are logged at DEBUG
+  instead of a WARN each. `reset-stack.sh` and the run scripts also work on macOS.
 - **`essentials-trading-demo`: quieter logs under load.** The exchange's and payment gateway's events are numbered in
   the order the demo receives them, one key at a time, instead of by the source's sequence, so the shard-owned engine no
   longer reports their webhook-and-catch-up arrival order as out-of-order delivery (around a thousand warnings a run

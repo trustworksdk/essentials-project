@@ -121,7 +121,7 @@ fi
 PG_HOST=localhost
 if [[ "${PG_DIRECT:-auto}" != "0" ]]; then
   pg_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' essentials-trading-demo-postgresql 2>/dev/null || true)"
-  if [[ -n "$pg_ip" ]] && timeout 2 bash -c "</dev/tcp/${pg_ip}/5432" 2>/dev/null; then PG_HOST=$pg_ip; fi
+  if [[ -n "$pg_ip" ]] && command -v timeout >/dev/null && timeout 2 bash -c "</dev/tcp/${pg_ip}/5432" 2>/dev/null; then PG_HOST=$pg_ip; fi
 fi
 log "PostgreSQL at $PG_HOST:5432"
 

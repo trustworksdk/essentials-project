@@ -32,7 +32,8 @@ if [[ -n $pg_volume ]] && docker volume inspect "$pg_volume" >/dev/null 2>&1; th
   docker volume rm "$pg_volume" >/dev/null
 fi
 
-free_gb=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+# POSIX df (macOS has no -B or --output): available 1K blocks, in GB
+free_gb=$(df -Pk / | awk 'NR == 2 { print int($4 / 1048576) }')
 echo "Stack reset. Free on /: ${free_gb} GB"
 if (( free_gb < 15 )); then
   echo "WARNING: under 15 GB free - an hour-long run needs ~14 GB (PostgreSQL and the exchange's store)" >&2
