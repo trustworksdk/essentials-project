@@ -46,6 +46,7 @@ This file records decisions as they are taken. § Open questions lists what is s
 | D27 | **Phase 4 design decided** — [`design/phase-4-settlement.md`](design/phase-4-settlement.md) §8. A `settlement` context per execution; a failed, cancelled or rejected settlement reverses the booking and is an operator case; a corrected amount is a ledger fact; closing prices value the accounts; `brokerage` deleted, with its dashboard and admin page (generation archival moved to `accounts`). | |
 | D28 | **Phase 5 design decided** — [`design/phase-5-reconciliation.md`](design/phase-5-reconciliation.md) §7. Clearing statements stored as reference data with read-time breaks, as the bank's; a `ReconciliationCase` per break that is still there at the next business day's close, cleared if it goes first; resolving never books (the operator posts any `AdjustCash`, which the case records); a statement missing 2 business hours after the cutoff, configurable. | |
 | D29 | **Phase 6 design decided** — [`design/phase-6-realistic-load.md`](design/phase-6-realistic-load.md) §9. Load over HTTP from a separate driver JVM, customers in logged-in sessions; a configurable profile that starts small; one instance as the baseline, more on other hardware later; no comparison with `main` before the next release is merged in. | |
+| D30 | **Phase 7 design decided** — [`design/phase-7-customer-ui.md`](design/phase-7-customer-ui.md) §9. Thymeleaf shells with vanilla JS over the existing JSON API (no second read path); Portfolio, Trade and Funding under `/app`; Spring's login page; polling while visible, server-sent events later; a session-held CSRF token required on the customer API for session-authenticated requests (the operator API keeps the phase 1 exemption, the load driver sends the token); a customer `GET /api/market-data/instruments`; a `_customer_ui` package that is not a slice. | |
 
 ---
 
@@ -93,7 +94,10 @@ Each phase ends with a load scenario and before/after measurements. Performance 
    case workflow.
    *Built (D28): clearing and bank breaks one for one, missing statements, cases opened at the next close.*
 6. **Realistic load.** User-session load model, market-open burst, multiple instances, benchmarks against `main`.
+   *Built (D29): the load driver, the fault runs F-1 to F-5, one and two instances. The comparison with `main` waits for
+   the next release to be merged in (Q-5).*
 7. **Customer UI.** Portfolio, order ticket, funding.
+   *Designed (D30); being built.*
 
 Later: fees and commission, multi-currency and FX, margin, corporate actions, the exchange expiring its own DAY orders (SR-17; until then the
 brokerage cancels them at the close, built in phase 3),
