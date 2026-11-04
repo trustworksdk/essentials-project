@@ -27,6 +27,7 @@ import dk.trustworks.essentials.shared.Lifecycle;
 import io.micrometer.core.instrument.*;
 import org.jdbi.v3.core.*;
 import org.postgresql.PGConnection;
+import org.postgresql.replication.LogSequenceNumber;
 import org.postgresql.replication.PGReplicationStream;
 import org.postgresql.replication.fluent.logical.ChainedLogicalStreamBuilder;
 import org.slf4j.*;
@@ -493,13 +494,16 @@ public class WalReplicationTailer implements Lifecycle {
                 //    so Postgres can advance confirmed_flush_lsn even when pgoutput has nothing
                 //    to emit (publication quiet), preventing WAL retention from growing on idle
                 //    slots.
-                //  - Max-idle detection: if no message arrives for maxIdleDuration, throw a
+                //  - Max-idle detection: if the server shows no sign of life for maxIdleDuration, throw a
                 //    StaleReplicationStreamException so the outer reconnect loop fires. Protects
                 //    against silently half-open TCP sockets where readPending() returns null
-                //    forever without the connection reporting as dead.
+                //    forever without the connection reporting as dead. A sign of life is a data
+                //    message, or the server's WAL position moving on: its keepalives carry it, so a
+                //    stream whose publication is quiet while the database writes elsewhere is alive.
                 long lastHeartbeatNs   = System.nanoTime();
                 long lastIdleLsnPushNs = System.nanoTime();
                 long lastMessageAtNs   = System.nanoTime();
+                LogSequenceNumber lastServerLsn = stream.getLastReceiveLSN();
                 long maxIdleNs = tailerProperties.getMaxIdleDuration() == null
                                  ? 0L
                                  : tailerProperties.getMaxIdleDuration().toNanos();
@@ -519,13 +523,20 @@ public class WalReplicationTailer implements Lifecycle {
                             forceIdleLsnPush(stream);
                             lastIdleLsnPushNs = nowNs;
                         }
+                        // The server's keepalives move the received WAL position on while the publication is quiet:
+                        // the connection is alive, so it is not stale
+                        var serverLsn = stream.getLastReceiveLSN();
+                        if (serverLsn != null && !serverLsn.equals(lastServerLsn)) {
+                            lastServerLsn = serverLsn;
+                            lastMessageAtNs = nowNs;
+                        }
                         // Stale-stream detection. Zero-threshold disables the check; positive
                         // threshold forces a reconnect when exceeded.
                         if (maxIdleNs > 0 && nowNs - lastMessageAtNs >= maxIdleNs) {
                             long idleMs = TimeUnit.NANOSECONDS.toMillis(nowNs - lastMessageAtNs);
                             long maxMs  = TimeUnit.NANOSECONDS.toMillis(maxIdleNs);
                             throw new StaleReplicationStreamException(msg(
-                                    "[{}] CDC stream idle for {} ms — exceeded maxIdleDuration ({} ms). " +
+                                    "[{}] CDC stream silent for {} ms (no data, WAL position unchanged) — exceeded maxIdleDuration ({} ms). " +
                                             "Treating as half-open TCP / stale stream and forcing a reconnect. " +
                                             "Tune essentials.eventstore.cdc.wal-replication-tailer.max-idle-duration " +
                                             "if this fires on genuinely-idle-but-healthy streams.",
@@ -555,7 +566,10 @@ public class WalReplicationTailer implements Lifecycle {
             availability.failed(slotName, e.getMessage());
             WalReplicationTailerErrorHandler.Decision decision = errorHandler.onStreamError(slotName, e);
 
-            if (decision == WalReplicationTailerErrorHandler.Decision.RETRY_CONNECTION) {
+            if (e instanceof StaleReplicationStreamException) {
+                // A routine safeguard, not a fault: the server sent nothing at all for maxIdleDuration
+                log.info("[{}] {} - reconnecting", slotName, e.getMessage());
+            } else if (decision == WalReplicationTailerErrorHandler.Decision.RETRY_CONNECTION) {
                 // No stack trace here: the rethrow below reaches runPollLoop, whose "streamOnce failed" line logs
                 // this same exception with the attempt, duration and LSN context. Logging it twice made one
                 // dropped connection - a suspended laptop, a wal_sender_timeout - read as two separate failures.
@@ -704,6 +718,12 @@ public class WalReplicationTailer implements Lifecycle {
         long durMs = (System.nanoTime() - startNs) / 1_000_000;
         long nextBackoffMs = (long) Math.min(tailerProperties.getMaxPollBackoffInterval().toMillis(),
                                              backoffMs * tailerProperties.getBackOffFactor());
+        if (e instanceof StaleReplicationStreamException) {
+            // Already logged by streamOnce, without a stack trace: an expected reconnect, not a failure
+            log.info("[{}] CDC stream reconnects after a silent stream (attempt #{}, durationMs={}, lastAckedLsn={})",
+                     slotName, attempt, durMs, lastAckedLsn.get());
+            return;
+        }
         log.warn("[{}] CDC streamOnce failed (attempt #{}, durationMs={}, backoffMsNext={}, " +
                          "messages={}, inboxWrites={}, inboxWriteFailures={}, handlerFailures={}, " +
                          "lastReceiveLsn={}, lastAckedLsn={}, lastMsgPreview='{}')",

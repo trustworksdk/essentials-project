@@ -152,6 +152,67 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
 
 
     @Test
+    void a_quiet_stream_whose_server_position_moves_is_not_reconnected_as_stale() throws Exception {
+        // The server's keepalives carry its WAL position; with a 2 s wal_sender_timeout it sends one every second.
+        // WAL that decodes to no message (a checkpoint) moves that position on while no data message arrives.
+        var streamErrors = runQuietTailer(true);
+        assertThat(streamErrors).as("a live connection is never treated as stale").isEmpty();
+    }
+
+    @Test
+    void a_stream_that_shows_no_sign_of_life_is_still_reconnected_as_stale() throws Exception {
+        var streamErrors = runQuietTailer(false);
+        assertThat(streamErrors).isNotEmpty();
+        assertThat(streamErrors.getFirst()).isInstanceOf(StaleReplicationStreamException.class);
+    }
+
+    /**
+     * Runs a tailer with a 3 s max-idle on a publication that stays quiet for 9 s, optionally writing WAL that decodes
+     * to nothing, and returns the stream errors it reported.
+     */
+    private List<Exception> runQuietTailer(boolean moveTheServerPosition) throws Exception {
+        String slotName     = "slot_" + UUID.randomUUID().toString().replace("-", "");
+        var    streamErrors = new CopyOnWriteArrayList<Exception>();
+        var handler = new WalReplicationTailerErrorHandler() {
+            @Override
+            public Decision onMessageError(String slot, String json, Exception error) {
+                return Decision.RETRY_CONNECTION;
+            }
+
+            @Override
+            public Decision onStreamError(String slot, Exception error) {
+                streamErrors.add(error);
+                return Decision.RETRY_CONNECTION;
+            }
+        };
+        var props = WalReplicationTailerProperties.defaults(Duration.ofMillis(25), Duration.ofMillis(100), Duration.ofSeconds(1), Duration.ofMillis(200));
+        props.setMaxIdleDuration(Duration.ofSeconds(3));
+        jdbi.useHandle(h -> {
+            h.execute("alter system set wal_sender_timeout = '2s'");
+            h.execute("select pg_reload_conf()");
+        });
+        var tailer = inboxTailer(slotName, inboxRepository, props, PgSlotMode.CREATE_IF_MISSING, new CdcAvailability(), Optional.empty(), Optional.of(handler));
+        try {
+            tailer.startAndAwaitReady(Duration.ofSeconds(10));
+            var until = System.nanoTime() + Duration.ofSeconds(9).toNanos();
+            while (System.nanoTime() < until) {
+                if (moveTheServerPosition) {
+                    jdbi.useHandle(h -> h.execute("checkpoint"));
+                }
+                Thread.sleep(300);
+            }
+            return List.copyOf(streamErrors);
+        } finally {
+            tailer.stop();
+            jdbi.useHandle(h -> {
+                h.execute("alter system reset wal_sender_timeout");
+                h.execute("select pg_reload_conf()");
+                h.execute("select pg_drop_replication_slot(slot_name) from pg_replication_slots where slot_name = ? and not active", slotName);
+            });
+        }
+    }
+
+    @Test
     void writes_a_burst_of_messages_to_the_inbox_in_batches() {
         // One transaction per message capped CDC at ~1 500 events/s; a burst must be written a batch at a time
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");

@@ -354,7 +354,8 @@ public class CdcProperties {
         private boolean  includeTimestamp          = true;
         private boolean  includeLsn                = true;
         /**
-         * Hard ceiling on how long the tailer will sit on a silent replication stream before
+         * Hard ceiling on how long the tailer will sit on a silent replication stream - no data message, and no
+         * server keepalive that moved the received WAL position on - before
          * treating it as stale (half-open TCP, server-side state gone dark, etc.) and forcing
          * a reconnect. The tailer already ack's the current read LSN every 30s to keep Postgres
          * advancing {@code confirmed_flush_lsn} even on idle streams, but a genuinely broken

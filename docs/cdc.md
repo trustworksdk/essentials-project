@@ -757,11 +757,14 @@ Three mechanisms in [`WalReplicationTailer`](../components/postgresql-event-stor
    `confirmed_flush_lsn` would stick at the slot's start position and WAL would
    accumulate even on a perfectly healthy slot.
 
-3. **Stale-stream reconnect** (`maxIdleDuration`, default 5 min): if no message at
-   all has arrived in that window — including the keep-alives that PostgreSQL sends
-   every `wal_sender_timeout / 2` — the tailer assumes the connection has gone dark
-   (half-open TCP, server-side state lost) and forces a reconnect, which restarts
-   the slot's `restart_lsn` ack cycle from scratch.
+3. **Stale-stream reconnect** (`maxIdleDuration`, default 5 min): if the server has
+   shown no sign of life in that window - no data message, and no keep-alive (sent
+   every `wal_sender_timeout / 2`) that moved the received WAL position on - the
+   tailer assumes the connection has gone dark (half-open TCP, server-side state
+   lost) and forces a reconnect, which restarts the slot's `restart_lsn` ack cycle
+   from scratch. It logs this at INFO, without a stack trace. A publication that is
+   quiet while the database writes elsewhere is alive and is not reconnected; a
+   database that writes no WAL at all for the whole window still is.
 
 ### 5.3 What can still cause the slot to grow
 
@@ -957,7 +960,7 @@ All keys live under `cdc.*` in [`CdcProperties`](../components/postgresql-event-
 | `cdc.walReplicationTailer.replicationStatusInterval`      | `1s`             | Heartbeat interval to server.                                                                        |
 | `cdc.walReplicationTailer.jitterRatio`                    | `0.2`            | Jitter applied to backoff sleeps.                                                                    |
 | `cdc.walReplicationTailer.backOffFactor`                  | `2`              | Exponential factor.                                                                                  |
-| `cdc.walReplicationTailer.maxIdleDuration`                | `5min`           | Force reconnect if no message arrives in this window. `Duration.ZERO` disables.                      |
+| `cdc.walReplicationTailer.maxIdleDuration`                | `5min`           | Force reconnect if neither a message nor a keep-alive moving the WAL position arrives in this window. `Duration.ZERO` disables. |
 | `cdc.walReplicationTailer.idleLsnPushInterval`            | `30s`            | Cadence at which the tailer force-acks the current receive LSN on an idle stream so `confirmed_flush_lsn` keeps advancing. Tighten only if `wal_sender_timeout` is below 60s; cannot be disabled. |
 | `cdc.walReplicationTailer.inboxWriteBatchSize`            | `500`            | WAL messages written to the inbox per transaction (INBOX mode); the stream is acknowledged after it commits. `1` restores per-message writes. |
 | `cdc.walReplicationTailer.inboxWriteMaxDelay`             | `50ms`           | Longest a received message waits for its batch to fill while the stream keeps delivering; a stream that runs dry is written at once. |

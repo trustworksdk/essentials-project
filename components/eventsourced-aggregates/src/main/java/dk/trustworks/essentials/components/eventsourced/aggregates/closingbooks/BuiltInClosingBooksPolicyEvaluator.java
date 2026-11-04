@@ -221,8 +221,9 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         return switch (defaultPolicy) {
             case MANUAL_ONLY, EXPLICIT_ONLY, UNSPECIFIED -> false;
             case EVENT_COUNT -> eventThresholdReached(aggregate);
-            case TIME_BOUNDARY -> timeBoundaryEvaluation(aggregate).boundaryAdvanced();
-            case EVENT_COUNT_OR_TIME_BOUNDARY -> eventThresholdReached(aggregate) || timeBoundaryEvaluation(aggregate).boundaryAdvanced();
+            case TIME_BOUNDARY -> timeBoundaryEvaluation(aggregate, true).boundaryAdvanced();
+            // The boundary is always evaluated, so a gap is reported even when the event count alone rolls the books
+            case EVENT_COUNT_OR_TIME_BOUNDARY -> timeBoundaryEvaluation(aggregate, true).boundaryAdvanced() | eventThresholdReached(aggregate);
         };
     }
 
@@ -235,7 +236,8 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
      */
     public String nextPeriodId(AGGREGATE aggregate) {
         requireNonNull(aggregate, "No aggregate provided");
-        return timeBoundaryEvaluation(aggregate).resolvedPeriodId();
+        // Not reported again: the rollover decision that precedes this call already logged and counted any gap
+        return timeBoundaryEvaluation(aggregate, false).resolvedPeriodId();
     }
 
     public String description() {
@@ -286,7 +288,11 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         return currentPeriodIdProvider;
     }
 
-    private ClosingBooksTimeBoundaryEvaluation timeBoundaryEvaluation(AGGREGATE aggregate) {
+    /**
+     * @param report whether to log and count a gap or an unknown business date - once per decision, from
+     *               {@link #shouldRolloverOnAccess}, not again from {@link #nextPeriodId}
+     */
+    private ClosingBooksTimeBoundaryEvaluation timeBoundaryEvaluation(AGGREGATE aggregate, boolean report) {
         var currentPeriodIdProvider = currentPeriodIdProvider();
         if (timeBoundary == ClosingBooksTimeBoundary.NONE) {
             return new ClosingBooksTimeBoundaryEvaluation(currentPeriodIdProvider.apply(aggregate), 0);
@@ -295,7 +301,9 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         var currentPeriodId = currentPeriodIdProvider.apply(aggregate);
         ClosingBooksTimeBoundaryEvaluation evaluation;
         if (businessCalendar != null) {
-            noteWhetherBusinessDateIsKnown();
+            if (report) {
+                noteWhetherBusinessDateIsKnown();
+            }
             evaluation = ClosingBooksTimeBoundaryCalculator.evaluate(businessCalendar, currentPeriodId);
         } else {
             evaluation = ClosingBooksTimeBoundaryCalculator.evaluate(timeBoundary,
@@ -304,7 +312,7 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
                                                                      currentPeriodId,
                                                                      intervalDays);
         }
-        if (evaluation.gapDetected()) {
+        if (report && evaluation.gapDetected()) {
             log.info("Detected closing-books time-boundary gap for aggregate type '{}': currentPeriod='{}', resolvedPeriod='{}', advancedPeriods={}, boundary={}, {}",
                      aggregateType,
                      currentPeriodId,
