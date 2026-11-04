@@ -38,6 +38,7 @@ public class LatestMarketQuotes implements MarketQuotes {
     private final Map<InstrumentId, MarketQuote> quotes = new ConcurrentHashMap<>();
     private final Duration                       staleAfter;
     private final Clock                          clock;
+    private final MarketQuoteFeed                feed;
 
     @Autowired
     public LatestMarketQuotes(MarketQuoteFeed feed, MarketQuotesProperties properties) {
@@ -45,7 +46,7 @@ public class LatestMarketQuotes implements MarketQuotes {
     }
 
     LatestMarketQuotes(MarketQuoteFeed feed, MarketQuotesProperties properties, Clock clock) {
-        requireNonNull(feed, "No feed provided");
+        this.feed = requireNonNull(feed, "No feed provided");
         this.staleAfter = requireNonNull(properties, "No properties provided").getStaleAfter();
         this.clock = requireNonNull(clock, "No clock provided");
         feed.subscribe(this::received);
@@ -87,5 +88,13 @@ public class LatestMarketQuotes implements MarketQuotes {
 
     private boolean isStale(MarketQuote quote) {
         return quote.receivedAt().plus(staleAfter).isBefore(clock.instant());
+    }
+
+    /**
+     * Each instrument's trading session as the feed last saw it; empty for an instrument whose market has no session
+     * (always open).
+     */
+    public Map<InstrumentId, MarketSession> sessions() {
+        return feed.sessions();
     }
 }

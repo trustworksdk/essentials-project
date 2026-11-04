@@ -4,7 +4,7 @@ kind: view
 bc: market_data
 owner: market-data-team
 status: live
-summary: "The latest quote per instrument from the exchange's market-data feed, in memory; answers what a marketable order trades at now."
+summary: "The latest quote per instrument from the exchange's market-data feed, in memory, and whether each market is in its trading session; answers what a marketable order trades at now."
 generator: essentials
 language: java
 
@@ -13,6 +13,7 @@ provides: [MarketQuotes]
 endpoints:
   - { method: GET, path: "/api/market-data/quotes", auth: customer }
   - { method: GET, path: "/api/market-data/quotes/{instrumentId}", auth: customer }
+  - { method: GET, path: "/api/market-data/sessions", auth: customer }
 reads:
   - { name: MarketQuote }
 invariants:

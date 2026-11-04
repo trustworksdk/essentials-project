@@ -65,6 +65,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
                              triggerMode = ClosingBooksTriggerMode.ON_ACCESS,
                              defaultPolicy = ClosingBooksDefaultPolicyType.TIME_BOUNDARY,
                              timeBoundary = ClosingBooksTimeBoundary.END_OF_DAY,
+                             periodSource = ClosingBooksPeriodSource.BUSINESS_CALENDAR,
                              zoneId = "America/New_York")
 public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Account> implements HasClosingBooksPeriodId {
     private static final int COST_SCALE = 6;

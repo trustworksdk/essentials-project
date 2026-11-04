@@ -34,9 +34,10 @@ import java.util.concurrent.atomic.*;
  * {@code business-days} closes of the exchange's calendar places orders at a steady rate and at a burst rate in the
  * first part of each business day (§3), with account reads before each order and a stream of deposits and withdrawals.
  * Customers act only inside a business day of the exchange's calendar ({@code GET /api/calendar}), from its local
- * midnight to its cutoff, so every trade is dated the day it is placed: no weekend or holiday trading, which the exchange
- * (run without trading sessions) would otherwise accept and date the next business day - one settlement date would then
- * carry three days of trading.
+ * midnight to its cutoff, so every trade is dated the day it is placed: no weekend or holiday trading. Orders go in only
+ * during the exchange's trading session ({@code session}, 09:30-16:00 New York since D32; outside it the exchange
+ * rejects them {@code MARKET_CLOSED}), and the open burst starts at the session's open; deposits and withdrawals run
+ * through the whole business day.
  * The customers active in a business day are drawn afresh at each close. Then it waits for every order and payment to
  * reach its outcome, for one more close so reconciliation has run, and reports: its own request latencies and outcomes,
  * and what the brokerage recorded ({@code GET /api/admin/load-report}), reconciliation cases and missing statements.
@@ -150,9 +151,10 @@ public final class LoadDriver {
                     readClock();
                 }
             }
-            var open = tradingOpen();
+            var businessDay = tradingOpen();
+            var open        = businessDay && inSession();
             if (open && !wasOpen) {
-                dayStarted = now; // the open: a business day's window begins
+                dayStarted = now; // the session opens: the burst begins
                 var opened = Instant.now();
                 bursts.add(new Burst(opened, opened.plusMillis((long) (settings.burstFraction() * dayMillis))));
                 if (faultOpened == null && closes == settings.faultAtDay() - 1) {
@@ -175,11 +177,15 @@ public final class LoadDriver {
             var inBurst = dayStarted >= 0 && (now - dayStarted) / 1e6 < settings.burstFraction() * dayMillis;
             var seconds = (now - lastTick) / 1e9;
             lastTick = now;
-            if (!open) {
+            if (!businessDay) {
                 continue;
             }
-            orderCredit += (inBurst ? settings.burstOrdersPerSecond() : settings.ordersPerSecond()) * seconds;
             payCredit += settings.paymentsPerSecond() * seconds;
+            if (open) {
+                orderCredit += (inBurst ? settings.burstOrdersPerSecond() : settings.ordersPerSecond()) * seconds;
+            } else {
+                orderCredit = 0; // nothing builds up while the market is closed
+            }
             for (; orderCredit >= 1; orderCredit--) {
                 start(this::orderAction);
             }
@@ -254,6 +260,18 @@ public final class LoadDriver {
         var now    = clockReading.plusNanos((long) ((System.nanoTime() - clockReadAt) * clockSpeed));
         var cutoff = cutoffs.get(now.atZone(calendarZone).toLocalDate());
         return cutoff != null && now.isBefore(cutoff);
+    }
+
+    /**
+     * Whether the exchange's clock is inside its trading session (always, with {@code --session=none}).
+     */
+    private boolean inSession() {
+        if (settings.session().equals("none")) {
+            return true;
+        }
+        var hours = settings.session().split("-");
+        var now   = clockReading.plusNanos((long) ((System.nanoTime() - clockReadAt) * clockSpeed)).atZone(calendarZone).toLocalTime();
+        return !now.isBefore(LocalTime.parse(hours[0])) && now.isBefore(LocalTime.parse(hours[1]));
     }
 
     // ---- setup

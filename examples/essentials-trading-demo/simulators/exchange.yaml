@@ -46,6 +46,8 @@ clock:
   start: "2030-01-07T13:00:00Z"
   running: true
   speed: 1440
+  # Lets the demo's operator page (/ops) pause, resume and change the speed through /api/clock (D31, D32).
+  operator_control: true
 # The exchange owns the instruments (D18): ACME, the order flow's and the order tests' instrument, and the demo's ten
 # seed instruments, listed at startup with an InstrumentListed each. The id is the demo's InstrumentId (its symbol). SAP and NOVO-B are listed as their US ADRs, quoted under SAP
 # and NVO, since the demo trades USD only (D3). One-cent ticks, lots of one share.
@@ -74,8 +76,13 @@ price_sources:
 # quote, and the brokerage refuses market orders ("No current price").
 liquidity:
   default: { mode: "on", max_inventory: 10000000 }
-# No trading sessions: every market is always open, so the accelerated clock does not reject most orders MARKET_CLOSED.
-# A DAY order then rests until the business day's cutoff (clearing.cutoff below) and expires there.
+# Trading sessions (SR-16, D32): both markets trade 09:30-16:00 New York on business days, so a played trading day has a
+# pre-open, an open, a close and an after-close. Outside a session the exchange rejects new orders MARKET_CLOSED, and a
+# DAY order expires at its session's close. The business day itself still ends at the clearing cutoff (16:30, below).
+# The integration tests run without this block (SimulatorImages.demoExchange): they assume an always-open market.
+sessions:
+  XNAS: { open: "09:30", close: "16:00", time_zone: America/New_York }
+  XNYS: { open: "09:30", close: "16:00", time_zone: America/New_York }
 settlement:
   mode: simulated
   settlement_days: 1

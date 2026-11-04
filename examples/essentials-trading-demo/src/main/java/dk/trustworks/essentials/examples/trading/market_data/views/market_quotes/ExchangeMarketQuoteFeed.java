@@ -76,6 +76,8 @@ public class ExchangeMarketQuoteFeed implements MarketQuoteFeed, SmartLifecycle 
     /**
      * One instrument's latest known top of book and last trade, and the epoch and {@code mdSequence} they are as of.
      */
+    private final Map<InstrumentId, MarketSession> sessions = new ConcurrentHashMap<>();
+
     private record Top(Money bid, Money ask, Money last, long epoch, long mdSequence) {
         /**
          * Whether a message of {@code epoch} and {@code sequence} is newer than this; {@code orSame} for a snapshot,
@@ -209,6 +211,7 @@ public class ExchangeMarketQuoteFeed implements MarketQuoteFeed, SmartLifecycle 
 
     private void onQuote(JsonNode quote, long connection) {
         var instrumentId = InstrumentId.of(quote.get("instrumentId").asString());
+        recordSession(instrumentId, quote);
         var sequence     = quote.get("mdSequence").asLong();
         tops.compute(instrumentId, (id, current) -> current == null || current.isOlderThan(connection, sequence, false)
                                                     ? new Top(price(quote.get("bestBid")), price(quote.get("bestAsk")), current != null ? current.last() : null, connection, sequence)
@@ -243,6 +246,7 @@ public class ExchangeMarketQuoteFeed implements MarketQuoteFeed, SmartLifecycle 
             for (var instrument : objectMapper.readTree(response.body())) {
                 var instrumentId = InstrumentId.of(instrument.get("instrumentId").asString());
                 var sequence     = instrument.get("mdSequence").asLong();
+                recordSession(instrumentId, instrument);
                 var lastTrade    = instrument.get("lastTrade");
                 var last         = lastTrade == null || lastTrade.isNull() ? null : usd(lastTrade.get("price").asString());
                 tops.compute(instrumentId, (id, current) -> current == null || current.isOlderThan(connection, sequence, true)
@@ -254,6 +258,22 @@ public class ExchangeMarketQuoteFeed implements MarketQuoteFeed, SmartLifecycle 
             Thread.currentThread().interrupt();
         } catch (Exception e) {
             log.debug("Exchange market-data snapshot failed: {}", e.toString());
+        }
+    }
+
+    @Override
+    public Map<InstrumentId, MarketSession> sessions() {
+        return Map.copyOf(sessions);
+    }
+
+    /**
+     * The snapshot carries each instrument's {@code session} ({@code open}/{@code closed}); a stream message that
+     * carries it too is taken as well.
+     */
+    private void recordSession(InstrumentId instrumentId, JsonNode message) {
+        var session = message.get("session");
+        if (session != null && session.isString()) {
+            sessions.put(instrumentId, "open".equals(session.asString()) ? MarketSession.OPEN : MarketSession.CLOSED);
         }
     }
 

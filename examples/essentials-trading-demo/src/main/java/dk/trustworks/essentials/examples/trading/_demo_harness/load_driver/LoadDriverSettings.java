@@ -28,6 +28,9 @@ import java.util.*;
  * @param population          customers {@code LDA-0} .. {@code LDA-<population-1>}, registered and funded once, reused
  * @param activePerDay        customers active in a business day, drawn afresh at each close
  * @param ordersPerSecond     the steady order rate
+ * @param session              the exchange's trading session, {@code HH:mm-HH:mm} in the calendar's time zone, as
+ *                             {@code simulators/exchange.yaml} sets it (D32): orders are placed only inside it, money
+ *                             moves through the whole business day. {@code none} for an exchange run without sessions
  * @param burstOrdersPerSecond the order rate at each business day's open, for {@code burstFraction} of a business day's
  *                            real length after it
  * @param readsPerOrder       account reads a customer makes before each order
@@ -85,7 +88,8 @@ public record LoadDriverSettings(List<String> baseUrls,
                                  String faultTarget,
                                  int faultInstance,
                                  int storeSampleEveryDays,
-                                 long queueSampleMillis) {
+                                 long queueSampleMillis,
+                                 String session) {
     static final Set<String> FAULTS = Set.of("none", "F-1", "F-2", "F-3", "F-4", "F-5");
 
 
@@ -131,7 +135,8 @@ public record LoadDriverSettings(List<String> baseUrls,
                 take(values, "fault-target", "exchange"),
                 Integer.parseInt(take(values, "fault-instance", "1")),
                 Integer.parseInt(take(values, "store-sample-every-days", "10")),
-                Long.parseLong(take(values, "queue-sample-millis", "0")));
+                Long.parseLong(take(values, "queue-sample-millis", "0")),
+                take(values, "session", "09:30-16:00"));
         if (!values.isEmpty()) {
             throw new IllegalArgumentException("Unknown settings: " + values.keySet());
         }

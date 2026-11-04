@@ -64,19 +64,35 @@ async function refreshQuote() {
     } catch (error) {
         if (error.status !== 404) throw error;
     }
+    const sessions = await api('/api/market-data/sessions').catch(() => ({}));
     if (id !== selected()) return;
+    showSession(sessions[id]);
     setText('quote-bid', money(quote?.bid));
     setText('quote-ask', money(quote?.ask));
     setText('quote-last', money(quote?.last));
     const state = document.getElementById('quote-state');
     state.className = 'small ' + (quote == null || quote.stale ? 'warn' : 'muted');
-    state.textContent = quote == null ? 'No quote yet - a market order needs one.'
+    state.textContent = quote == null && sessions[id] === 'CLOSED' ? 'No quote while the market is closed: the exchange quotes again at the open.'
+        : quote == null ? 'No quote yet - a market order needs one.'
         : quote.stale ? 'Stale quote: the exchange has not sent a price for a while.'
         : `Live, received ${time(quote.receivedAt)}`;
     if (form.elements.type.value === 'LIMIT' && !form.elements.limitPrice.value && quote) {
         const price = form.elements.side.value === 'BUY' ? quote.ask : quote.bid;
         if (price?.amount != null) form.elements.limitPrice.value = Number(price.amount).toFixed(2);
     }
+}
+
+/**
+ * The exchange's trading session (09:30-16:00 New York on its clock): outside it the exchange rejects new orders, so
+ * the ticket says so and does not offer to place one. No session reported means a market that is always open.
+ */
+function showSession(session) {
+    const note = document.getElementById('market-session');
+    const closed = session === 'CLOSED';
+    note.hidden = session == null;
+    note.className = 'small ' + (closed ? 'warn' : 'good');
+    note.textContent = closed ? 'Market closed: the exchange takes orders from the open, 09:30 New York on its clock.' : 'Market open.';
+    document.getElementById('place').disabled = closed;
 }
 
 async function refreshAccount() {

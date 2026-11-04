@@ -356,8 +356,9 @@ load, and identical runs vary by tens of percent on the handling side.
 reused by later runs; orders and payments `LD-<run>-O<n>` / `-D<n>` / `-W<n>`. Each customer logs in once through the
 form login (CSRF token from `/login`, then `JSESSIONID`; since phase 7 also a `GET /app` for the session's CSRF token,
 sent on every write, so `LOGIN` timings from before include one request fewer; a write refused 403 re-logs in once) and is pinned to `base-urls[n % size]`. Open-loop: steady
-`orders-per-second`, `burst-orders-per-second` in the first `burst-fraction` of each business day (a close starts the
-day), `payments-per-second`; `business-days` closes. Settings and defaults: `LoadDriverSettings`. Exit code 0 only if
+`orders-per-second`, `burst-orders-per-second` in the first `burst-fraction` of each business day (from the session's open), `payments-per-second`; `business-days` closes.
+Orders only inside the exchange's session (`--session`, default `09:30-16:00`, `none` for an exchange without
+sessions; D32), money through the whole business day. Runs before D32 traded the whole business day: not comparable. Settings and defaults: `LoadDriverSettings`. Exit code 0 only if
 every check passed; the full report goes to `target/load-driver/load-<run>.json`.
 
 - **`main`, not Spring.** A Spring Boot app in this module would start every context and the Docker Compose support.

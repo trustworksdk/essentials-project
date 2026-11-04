@@ -16,6 +16,9 @@
 
 package dk.trustworks.essentials.examples.trading.market_data.views.market_quotes;
 
+import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
+
+import java.util.Map;
 import java.util.function.Consumer;
 
 /**
@@ -28,4 +31,12 @@ import java.util.function.Consumer;
  */
 public interface MarketQuoteFeed {
     void subscribe(Consumer<MarketQuote> listener);
+
+    /**
+     * Each instrument's trading session as the feed last saw it. Empty for an instrument the feed knows no session of -
+     * a feed without sessions, such as {@link SyntheticMarketQuoteFeed}, whose market is always open.
+     */
+    default Map<InstrumentId, MarketSession> sessions() {
+        return Map.of();
+    }
 }

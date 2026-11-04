@@ -599,6 +599,15 @@ Not published; listed because they are the reference for how to use the framewor
 
 ---
 
+- **`essentials-trading-demo`: the exchange has trading hours, and the accounts roll their books at its close**
+  (D32). `simulators/exchange.yaml` turns on the simulator's trading sessions, 09:30-16:00 New York on both markets:
+  outside them the exchange rejects orders `MARKET_CLOSED`, the order ticket says the market is closed and does not
+  offer to place one (`GET /api/market-data/sessions`), and the load driver places orders only in the session
+  (`--session`, `none` for an exchange without sessions), so load runs from before are not directly comparable. The
+  accounts' closing books use the new business-calendar boundary (§2.15) fed from the exchange's recorded
+  `BusinessDayClosed`, instead of midnight New York on the application's clock. The integration tests keep an
+  always-open exchange. The simulator's operator clock endpoints are switched on (`clock.operator_control`).
+
 ## 6. Documentation
 
 - The LLM docs describe elastic pump connections, and their `InboxConfig.builder()` examples compile: that builder's

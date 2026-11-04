@@ -53,10 +53,54 @@ public final class SimulatorImages {
     /**
      * {@link #exchange()} with the demo's own configuration ({@code simulators/exchange.yaml}): its instruments, synthetic
      * reference prices and the liquidity provider quoting them, so orders trade.
+     * <p>
+     * Without the configuration's trading sessions: the tests start the clock before the open and assume an always-open
+     * market, where a DAY order rests until the business day's cutoff. {@link #exchangeWithTradingSessions()} keeps them.
      */
     @SuppressWarnings("resource")
     public static GenericContainer<?> exchangeAsTheDemoRunsIt() {
-        return exchange().withCopyFileToContainer(MountableFile.forHostPath("simulators/exchange.yaml"), "/etc/exchange/exchange.yaml")
+        return exchangeWithConfiguration(MountableFile.forHostPath(withoutTradingSessions()));
+    }
+
+    /**
+     * {@link #exchange()} with the demo's own configuration exactly as it is, trading sessions included.
+     */
+    public static GenericContainer<?> exchangeWithTradingSessions() {
+        return exchangeWithConfiguration(MountableFile.forHostPath("simulators/exchange.yaml"));
+    }
+
+    /**
+     * {@code simulators/exchange.yaml} without its top-level {@code sessions:} block, written to a temporary file.
+     */
+    static java.nio.file.Path withoutTradingSessions() {
+        try {
+            var kept      = new java.util.ArrayList<String>();
+            var inSession = false;
+            for (var line : java.nio.file.Files.readAllLines(java.nio.file.Path.of("simulators/exchange.yaml"))) {
+                if (line.startsWith("sessions:")) {
+                    inSession = true;
+                    continue;
+                }
+                if (inSession && (line.startsWith(" ") || line.isBlank())) {
+                    continue;
+                }
+                inSession = false;
+                kept.add(line);
+            }
+            var file = java.nio.file.Files.createTempFile("exchange-without-sessions", ".yaml");
+            file.toFile().deleteOnExit();
+            java.nio.file.Files.write(file, kept);
+            // createTempFile makes it owner-only; the exchange runs as another user in its container
+            file.toFile().setReadable(true, false);
+            return file;
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
+
+    @SuppressWarnings("resource")
+    private static GenericContainer<?> exchangeWithConfiguration(MountableFile configuration) {
+        return exchange().withCopyFileToContainer(configuration, "/etc/exchange/exchange.yaml")
                          // The secret its webhook subscriptions sign with, where compose puts it
                          .withCopyFileToContainer(MountableFile.forHostPath("simulators/secrets/webhook-secret.txt"), "/run/secrets/webhook_secret")
                          .withEnv("EXCHANGE_CONFIG", "/etc/exchange/exchange.yaml");

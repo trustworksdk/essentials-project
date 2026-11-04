@@ -20,15 +20,16 @@ import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
+import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The current market, for customers deciding on an order. This instance's view of the feed.
+ * The current market, for customers deciding on an order: the quotes, and whether each market is in its trading
+ * session. This instance's view of the feed.
  */
 @RestController
-@RequestMapping("/api/market-data/quotes")
+@RequestMapping("/api/market-data")
 public class MarketQuotesAPI {
     private final LatestMarketQuotes quotes;
 
@@ -36,13 +37,22 @@ public class MarketQuotesAPI {
         this.quotes = requireNonNull(quotes, "No quotes provided");
     }
 
-    @GetMapping
+    @GetMapping("/quotes")
     public List<MarketQuote> all() {
         return quotes.all();
     }
 
-    @GetMapping("/{instrumentId}")
+    @GetMapping("/quotes/{instrumentId}")
     public ResponseEntity<MarketQuote> quote(@PathVariable InstrumentId instrumentId) {
         return quotes.find(instrumentId).map(ResponseEntity::ok).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Each instrument's trading session, {@code OPEN} or {@code CLOSED}, as the exchange last reported it (SR-16). An
+     * instrument missing from the answer has no session: its market is always open.
+     */
+    @GetMapping("/sessions")
+    public Map<InstrumentId, MarketSession> sessions() {
+        return quotes.sessions();
     }
 }

@@ -38,6 +38,10 @@ everything else: their command type, their one API file, their handler and their
   `LatestMarketQuotes` lets an *equal* `mdSequence` refresh a quote. Stale means "the exchange stopped confirming it",
   not "the price did not move" - otherwise a quiet book (a closed market, live prices) refuses every market buy `422`.
 - **An empty side (`bestBid`/`bestAsk` null) publishes nothing**; the last quote goes stale rather than be trusted.
+- **Trading sessions (D32)**: outside the session the exchange pulls its quotes, so no quote says the market is closed.
+  `ExchangeMarketQuoteFeed` records each instrument's `session` from the snapshot (every half `stale-after`) and any
+  stream message carrying it; `GET /api/market-data/sessions` answers `OPEN`/`CLOSED` per instrument, nothing for a
+  market without sessions (the synthetic feed).
 - **`mdSequence` restarts at 1 whenever the exchange starts**, so it orders quotes only within one run of the exchange.
   Every subscription starts an epoch; quotes are ordered by (epoch, `mdSequence`) (`MarketQuote.isOlderThan`). By
   sequence alone a restarted exchange's quotes were all "older" and every quote stayed stale for good (phase 6 F-4).
