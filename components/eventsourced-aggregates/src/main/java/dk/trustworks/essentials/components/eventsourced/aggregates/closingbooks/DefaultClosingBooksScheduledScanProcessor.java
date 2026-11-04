@@ -52,6 +52,11 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
     private final ClosingBooksManagementMeasurementSupport            measurementSupport;
     private final Clock                                               clock;
     private final Duration                                            scanRetryDelay;
+    /**
+     * Set by the {@link Builder} only; {@code null} rolls only the generation row (see {@link ClosingBooksScanRollover}).
+     */
+    private volatile ClosingBooksScanRollover<ID, AGGREGATE>          scanRollover;
+    private final java.util.concurrent.atomic.AtomicBoolean          warnedRowOnlyRollover = new java.util.concurrent.atomic.AtomicBoolean();
 
     /**
      * Constructs a DefaultClosingBooksScheduledScanProcessor instance with the specified components.
@@ -204,8 +209,15 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
         var resultingGeneration = coordinator.evaluatePolicy(generation.logicalAggregateId(),
                                                              aggregate,
                                                              ClosingBooksTriggerMode.SCHEDULED_SCAN,
-                                                             policy);
+                                                             policy,
+                                                             scanRollover);
         if (resultingGeneration.generation() > generation.generation()) {
+            if (scanRollover == null && warnedRowOnlyRollover.compareAndSet(false, true)) {
+                log.warn("Closing books scan rolled aggregateType '{}' without a ClosingBooksScanRollover: the next generation starts with an empty " +
+                                 "stream - no closing event, no state carried forward, no period id. Set one on the scan processor's builder " +
+                                 "(setScanRollover) to roll as on access. Logged once",
+                         aggregateType);
+            }
             log.info("Closing books scan rolled aggregateType '{}' logicalAggregateId '{}' from generation '{}' to '{}'",
                      aggregateType,
                      generation.logicalAggregateId(),
@@ -248,6 +260,20 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
         private MeterRegistry meterRegistryOptional;
         private Clock clock;
         private Duration scanRetryDelay;
+        private ClosingBooksScanRollover<ID, AGGREGATE> scanRollover;
+
+        /**
+         * How a scan rolls an aggregate on {@link ClosingBooksDecision#CLOSE_AND_OPEN_NEXT}: the application's own
+         * rollover - its closing event and its next generation through its next-generation factory - as on access.
+         * Without one a scan rolls only the generation row and the next generation starts empty (EF-1b).
+         *
+         * @param scanRollover optional
+         * @return this builder
+         */
+        public Builder<ID, AGGREGATE> setScanRollover(ClosingBooksScanRollover<ID, AGGREGATE> scanRollover) {
+            this.scanRollover = scanRollover;
+            return this;
+        }
 
         /**
          * @param aggregateType required
@@ -337,7 +363,7 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
          * @return the new {@link DefaultClosingBooksScheduledScanProcessor}
          */
         public DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> build() {
-            return new DefaultClosingBooksScheduledScanProcessor<>(aggregateType,
+            var processor = new DefaultClosingBooksScheduledScanProcessor<>(aggregateType,
                                                                                 generationRepository,
                                                                                 aggregateLoader,
                                                                                 policy,
@@ -345,6 +371,8 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
                                                                                 Optional.ofNullable(meterRegistryOptional),
                                                                                 clock,
                                                                                 scanRetryDelay);
+            processor.scanRollover = scanRollover;
+            return processor;
         }
     }
 

@@ -172,6 +172,23 @@ public class ClosingBooksCoordinator<ID> {
                                                               AGGREGATE aggregate,
                                                               ClosingBooksTriggerMode triggerMode,
                                                               ClosingBooksDecisionPolicy<ID, AGGREGATE> policy) {
+        return evaluatePolicy(logicalAggregateId, aggregate, triggerMode, policy, null);
+    }
+
+    /**
+     * Evaluate a closing-books policy, rolling with the application's own rollover on {@code CLOSE_AND_OPEN_NEXT}.
+     *
+     * @param rollover performs the rollover - the aggregate's closing event and its next generation, through the
+     *                 application's next-generation factory (EF-1b) - inside the generation lock and a unit of work. With
+     *                 {@code null}, {@code CLOSE_AND_OPEN_NEXT} rolls only the generation row, as
+     *                 {@link #closeAndOpenNextGeneration(LogicalAggregateId)} does
+     * @return the generation that is current afterwards, or the closed one if none is open
+     */
+    public <AGGREGATE> AggregateGeneration<ID> evaluatePolicy(LogicalAggregateId<ID> logicalAggregateId,
+                                                              AGGREGATE aggregate,
+                                                              ClosingBooksTriggerMode triggerMode,
+                                                              ClosingBooksDecisionPolicy<ID, AGGREGATE> policy,
+                                                              ClosingBooksScanRollover<ID, AGGREGATE> rollover) {
         requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
         requireNonNull(aggregate, "No aggregate provided");
         requireNonNull(triggerMode, "No triggerMode provided");
@@ -183,12 +200,13 @@ public class ClosingBooksCoordinator<ID> {
         // closeAndOpenNextGeneration is a no-op.
         return generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> {
             var currentGeneration = resolveOrOpenCurrentGeneration(logicalAggregateId);
-            var decision = policy.decide(new ClosingBooksEvaluationContext<>(aggregateType,
-                                                                             logicalAggregateId,
-                                                                             currentGeneration,
-                                                                             aggregate,
-                                                                             triggerMode,
-                                                                             OffsetDateTime.now(clock)));
+            var context  = new ClosingBooksEvaluationContext<>(aggregateType,
+                                                               logicalAggregateId,
+                                                               currentGeneration,
+                                                               aggregate,
+                                                               triggerMode,
+                                                               OffsetDateTime.now(clock));
+            var decision = policy.decide(context);
 
             measurementSupport.incrementPolicyDecision(aggregateType, decision, triggerMode);
 
@@ -200,9 +218,23 @@ public class ClosingBooksCoordinator<ID> {
                     yield closed;
                 }
                 // Counts its own generations_closed / generations_opened, so nothing is added here.
-                case CLOSE_AND_OPEN_NEXT -> closeAndOpenNextGeneration(logicalAggregateId);
+                case CLOSE_AND_OPEN_NEXT -> rollover == null
+                                            ? closeAndOpenNextGeneration(logicalAggregateId)
+                                            : rollWith(rollover, context);
             };
         });
+    }
+
+    /**
+     * The application's rollover, in one unit of work under the generation lock already held: its repository's
+     * {@code closeAndOpenNextGeneration} re-enters both. Answers the generation current afterwards.
+     */
+    private <AGGREGATE> AggregateGeneration<ID> rollWith(ClosingBooksScanRollover<ID, AGGREGATE> rollover,
+                                                         ClosingBooksEvaluationContext<ID, AGGREGATE> context) {
+        unitOfWorkFactory.usingUnitOfWork(uow -> rollover.rollover(context));
+        var logicalAggregateId = context.logicalAggregateId();
+        return generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId)
+                                   .orElseGet(() -> generationRepository.loadGenerations(aggregateType, logicalAggregateId).getLast());
     }
 
     private AggregateGeneration<ID> openFirstGeneration(LogicalAggregateId<ID> logicalAggregateId) {

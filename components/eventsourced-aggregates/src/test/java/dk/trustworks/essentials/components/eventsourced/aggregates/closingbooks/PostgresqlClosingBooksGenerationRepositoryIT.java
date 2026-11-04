@@ -127,6 +127,39 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
         assertThat(repository.loadGenerations(ACCOUNTS, logicalAggregateId)).hasSize(1);
     }
 
+    /**
+     * EF-1b: a scan's rollover runs inside the generation lock and a unit of work, and the application's own rollover
+     * takes both again (its repository's closeAndOpenNextGeneration). On PostgreSQL that must re-enter, not wait for
+     * itself; and a rollover that fails must roll the whole decision back.
+     */
+    @Test
+    void a_scan_rollover_re_enters_the_generation_lock_and_its_failure_rolls_back() {
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var coordinator = new ClosingBooksCoordinator<>(ACCOUNTS,
+                                                        repository,
+                                                        (type, id, generation) -> id.value() + "#" + generation,
+                                                        unitOfWorkFactory);
+        coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        ClosingBooksDecisionPolicy<String, String> roll = context -> ClosingBooksDecision.CLOSE_AND_OPEN_NEXT;
+
+        var rolled = coordinator.evaluatePolicy(logicalAggregateId, "aggregate", ClosingBooksTriggerMode.SCHEDULED_SCAN, roll,
+                                                context -> coordinator.closeAndOpenNextGeneration(context.logicalAggregateId()));
+        assertThat(rolled.generation()).isEqualTo(2);
+        assertThat(rolled.isOpen()).isTrue();
+
+        assertThatThrownBy(() -> coordinator.evaluatePolicy(logicalAggregateId, "aggregate", ClosingBooksTriggerMode.SCHEDULED_SCAN, roll,
+                                                            context -> {
+                                                                coordinator.closeAndOpenNextGeneration(context.logicalAggregateId());
+                                                                throw new IllegalStateException("the next-generation factory failed");
+                                                            }))
+                .rootCause()
+                .hasMessage("the next-generation factory failed");
+        assertThat(repository.resolveCurrentGeneration(ACCOUNTS, logicalAggregateId))
+                .as("the rollover's close and open rolled back with it")
+                .hasValueSatisfying(current -> assertThat(current.generation()).isEqualTo(2));
+        assertThat(repository.loadGenerations(ACCOUNTS, logicalAggregateId)).hasSize(2);
+    }
+
     @Test
     void cannot_open_a_new_generation_while_another_generation_is_open() {
         var logicalAggregateId = new LogicalAggregateId<>("Account-123");

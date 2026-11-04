@@ -19,6 +19,11 @@ proposes an additive way for an application to supply that calendar, so that clo
 compares an aggregate's period with the calendar's current business date instead of with
 `LocalDate.now(clock)`.
 
+**EF-1b, as built (2026-11-04):** a scheduled scan rolls through the application's own rollover,
+`ClosingBooksScanRollover` on the scan processor's builder, run inside the generation lock and a unit of work; the
+built-in evaluator's `asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)` lets a time boundary (or the business
+calendar) roll idle aggregates. Without a rollover a scan still rolls only the generation row, and says so once.
+
 **As built (2026-11-04):** Option A, as §3 describes, with these departures:
 
 - `currentBusinessDate()` returns `Optional<LocalDate>`: empty is the "unknown" of §5.4 (no rollover, WARN once per

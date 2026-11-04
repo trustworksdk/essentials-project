@@ -164,6 +164,30 @@ class BusinessCalendarClosingBooksTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void a_policy_rolling_on_scans_rolls_an_idle_aggregate_the_plain_one_keeps_it_open() {
+        var evaluator = evaluator(weekClosedThrough(WED), ClosingBooksTimeBoundary.END_OF_DAY, null);
+        var idle      = new TestAggregate(WED.toString());
+
+        assertThat(evaluator.<String>asDecisionPolicy().decide(context(idle, ClosingBooksTriggerMode.SCHEDULED_SCAN)))
+                .as("unchanged: a scan never rolled with the plain policy").isEqualTo(ClosingBooksDecision.KEEP_OPEN);
+        var rollingOnScans = evaluator.<String>asDecisionPolicyRollingOn(ClosingBooksTriggerMode.ON_ACCESS, ClosingBooksTriggerMode.SCHEDULED_SCAN);
+        assertThat(rollingOnScans.decide(context(idle, ClosingBooksTriggerMode.SCHEDULED_SCAN))).isEqualTo(ClosingBooksDecision.CLOSE_AND_OPEN_NEXT);
+        assertThat(rollingOnScans.decide(context(idle, ClosingBooksTriggerMode.ON_ACCESS))).isEqualTo(ClosingBooksDecision.CLOSE_AND_OPEN_NEXT);
+        assertThat(rollingOnScans.decide(context(new TestAggregate(THU.toString()), ClosingBooksTriggerMode.SCHEDULED_SCAN)))
+                .as("the open business date: nothing to roll").isEqualTo(ClosingBooksDecision.KEEP_OPEN);
+    }
+
+    private static ClosingBooksEvaluationContext<String, TestAggregate> context(TestAggregate aggregate, ClosingBooksTriggerMode triggerMode) {
+        var logicalId = new LogicalAggregateId<>("A-1");
+        return new ClosingBooksEvaluationContext<>(AggregateType.of("Accounts"),
+                                                   logicalId,
+                                                   new AggregateGeneration<>(AggregateType.of("Accounts"), logicalId, 1, "A-1#1", GenerationState.OPEN, java.time.OffsetDateTime.now(), java.util.Optional.empty()),
+                                                   aggregate,
+                                                   triggerMode,
+                                                   java.time.OffsetDateTime.now());
+    }
+
     private static BuiltInClosingBooksPolicyEvaluator<TestAggregate> evaluator(ClosingBooksBusinessCalendar calendar,
                                                                                ClosingBooksTimeBoundary boundary,
                                                                                SimpleMeterRegistry registry) {

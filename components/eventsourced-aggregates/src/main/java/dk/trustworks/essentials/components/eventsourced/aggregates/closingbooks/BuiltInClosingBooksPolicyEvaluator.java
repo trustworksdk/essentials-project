@@ -264,6 +264,26 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         return businessCalendar != null ? boundary + " on business calendar" : boundary + " in zone " + zoneId;
     }
 
+    /**
+     * Like {@link #asDecisionPolicy()}, rolling on the given trigger modes - typically
+     * {@code ON_ACCESS, SCHEDULED_SCAN}, so a scan rolls an idle aggregate whose boundary has passed (EF-1b).
+     * <p>
+     * Roll on a scan only with a {@link ClosingBooksScanRollover} on the scan processor: without one a scan rollover
+     * opens the next generation with an empty stream - no closing event, no carried-forward state, no period id.
+     *
+     * @param triggerMode  a trigger mode to roll on
+     * @param triggerModes further trigger modes to roll on
+     * @return the decision policy
+     */
+    public <ID> ClosingBooksDecisionPolicy<ID, AGGREGATE> asDecisionPolicyRollingOn(ClosingBooksTriggerMode triggerMode,
+                                                                                   ClosingBooksTriggerMode... triggerModes) {
+        requireNonNull(triggerMode, "No triggerMode provided");
+        var modes = java.util.EnumSet.of(triggerMode, triggerModes);
+        return context -> modes.contains(context.triggerMode()) && shouldRolloverOnAccess(context.aggregate())
+                          ? ClosingBooksDecision.CLOSE_AND_OPEN_NEXT
+                          : ClosingBooksDecision.KEEP_OPEN;
+    }
+
     public <ID> ClosingBooksDecisionPolicy<ID, AGGREGATE> asDecisionPolicy() {
         return context -> context.triggerMode() == ClosingBooksTriggerMode.ON_ACCESS && shouldRolloverOnAccess(context.aggregate())
                           ? ClosingBooksDecision.CLOSE_AND_OPEN_NEXT

@@ -958,8 +958,8 @@ ClosingBooksTimeBoundaryCalculator.currentPeriodId(calendar);       // Optional<
   instance's calendar (e.g. LISTEN/NOTIFY plus a poll). Between instances a few mutations just after a close may book
   into the closing day.
 - Only `END_OF_DAY`: any other boundary with a calendar fails `build()` and startup validation.
-- Gap counter gains tag `period_source`. Scheduled scans do not roll on the calendar (the built-in evaluator rolls on
-  `ON_ACCESS` only).
+- Gap counter gains tag `period_source`. Idle aggregates roll on a scheduled scan only with
+  `asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)` plus a `ClosingBooksScanRollover` (below).
 
 ### Decision Policies
 `BuiltInClosingBooksPolicyEvaluator` implements the `ClosingBooksDefaultPolicyType` rules — **application code constructs it**, the framework never does. Custom rules via `ClosingBooksDecisionPolicies`:
@@ -1043,7 +1043,28 @@ unitOfWorkFactory.usingUnitOfWork(uow -> repository.load(new LogicalAggregateId<
 
 ### Scheduled Scans
 `ClosingBooksManager` (`Lifecycle`) polls `ClosingBooksScheduledScanProcessor`s under a `FencedLockManager` lock — one node at a time. Required for `SCHEDULED_SCAN` and for time-boundary policies on idle aggregates.
+
+**A scan rolls only the generation row unless given a `ClosingBooksScanRollover`** - the next generation then starts
+with an empty stream: no closing event, no carried-forward state, no period id (logged WARN once). Give the scan the
+same rollover the app does on access; it runs inside the generation lock and a unit of work, and a throw rolls the
+decision back and defers the generation. The built-in evaluator's `asDecisionPolicy()` never rolls on a scan;
+`asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)` does.
+
 ```java
+var scanProcessor = DefaultClosingBooksScheduledScanProcessor.<AccountId, Account>builder()
+        .setAggregateType(ACCOUNTS)
+        .setGenerationRepository(generationRepository)                  // a ClosingBooksOpenGenerationRepository (PostgresqlClosingBooksGenerationRepository)
+        .setAggregateLoader(streamId -> accountRepository.tryLoadGeneration(streamId))   // your loader
+        .setPolicy(evaluator.asDecisionPolicyRollingOn(ClosingBooksTriggerMode.ON_ACCESS, ClosingBooksTriggerMode.SCHEDULED_SCAN))
+        .setCoordinator(setup.coordinator())
+        .setScanRollover(context -> {                                   // what you do on access
+            var account    = context.aggregate();
+            var nextPeriod = evaluator.nextPeriodId(account);
+            account.closeBooks(nextPeriod);                             // the domain's closing event
+            logicalRepository.closeAndOpenNextGeneration(context.logicalAggregateId(), account, nextPeriod, nextGenerationFactory);
+        })
+        .build();
+
 new ClosingBooksManager(List.of(scanProcessor),
                         new ClosingBooksManagerSettings(Duration.ofMinutes(5), 100, Duration.ofSeconds(5)),
                         fencedLockManager,

@@ -513,6 +513,24 @@ Additive: an aggregate that does not set `periodSource` behaves as before. Not c
 rolling on a scheduled scan (the built-in evaluator rolls on access only). Design:
 `docs/closing-books-business-day-boundary.md`.
 
+### 2.16 Scheduled closing books can roll an aggregate the way the application does on access (`eventsourced-aggregates`)
+
+A scheduled scan that decided `CLOSE_AND_OPEN_NEXT` only closed the generation row and opened the next one with an
+empty stream: no closing event in the old generation, no state carried forward, no period id. That is why
+`BuiltInClosingBooksPolicyEvaluator.asDecisionPolicy()` never rolls on a scan, and why idle aggregates under a time
+boundary did not roll at all.
+
+- **`ClosingBooksScanRollover`**, set with `DefaultClosingBooksScheduledScanProcessor.builder().setScanRollover(...)`:
+  the application's own rollover - its closing event and `ClosingBooksLogicalAggregateRepository.closeAndOpenNextGeneration`
+  with its next-generation factory and the next period id. The scan runs it inside the aggregate's generation lock and a
+  unit of work; a failure rolls the decision back and defers the generation, as any scan failure does.
+- **`BuiltInClosingBooksPolicyEvaluator.asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)`** rolls on scans too, so a
+  passed time boundary - or a closed business day under `periodSource = BUSINESS_CALENDAR` (§2.15) - rolls idle aggregates.
+- `ClosingBooksCoordinator.evaluatePolicy(..., rollover)` is the overload behind it.
+
+Additive: without a rollover a scan behaves as before, and logs a WARN once the first time it rolls a generation row
+only. `asDecisionPolicy()` is unchanged.
+
 ## 3. Bug fixes
 
 | Area | Fix | Commit |

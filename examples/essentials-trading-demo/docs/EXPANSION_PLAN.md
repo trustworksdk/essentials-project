@@ -136,7 +136,8 @@ demo depends on it.
   Built in phase 8 (D32).
 - **EF-1b — Scheduled-scan closing books.** Found while designing EF-1: the built-in evaluator never rolls on a
   scan (`asDecisionPolicy()` answers keep-open), and a scan rollover seeds no period id and carries no state
-  forward. Separate change, after EF-1.
+  forward. *Built 2026-11-04: `ClosingBooksScanRollover` (the application's rollover, run by the scan) and
+  `asDecisionPolicyRollingOn`. The demo still rolls on access.*
 - **EF-2 — Key-partitioned event processing on the shard-owned engine (candidate, from phase 1 measurements).**
   `EventProcessor`/`ViewEventProcessor` always consume exclusively (one instance cluster-wide behind a fenced lock),
   and so does a `SingleGlobalConsumer` inbox. On the shard-owned engine that throws away what the engine is for: it

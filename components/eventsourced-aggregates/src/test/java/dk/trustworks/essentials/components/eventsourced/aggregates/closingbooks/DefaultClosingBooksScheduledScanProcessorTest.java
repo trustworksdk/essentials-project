@@ -105,6 +105,88 @@ class DefaultClosingBooksScheduledScanProcessorTest {
     }
 
     /**
+     * EF-1b: with a rollover the scan rolls as the application does on access - here the hook stands in for the
+     * application's closing event and next-generation factory - instead of switching only the generation row.
+     */
+    @Test
+    void a_scan_rolls_with_the_applications_rollover_when_one_is_set() {
+        var aggregateType      = AggregateType.of("Orders");
+        var clock              = Clock.fixed(Instant.parse("2026-03-29T10:15:30Z"), ZoneOffset.UTC);
+        var logicalAggregateId = new LogicalAggregateId<>("Order-123");
+        var repository         = new InMemoryClosingBooksGenerationResolver<String>();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline(),
+                                                        clock);
+        var currentGeneration = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        var acceptedOrder     = new Order(OrderId.random(), CustomerId.random(), 1234);
+        acceptedOrder.accept();
+        var rolledWith = new java.util.ArrayList<ClosingBooksEvaluationContext<String, Order>>();
+
+        var processor = DefaultClosingBooksScheduledScanProcessor.<String, Order>builder()
+                                                                 .setAggregateType(aggregateType)
+                                                                 .setGenerationRepository(repository)
+                                                                 .setAggregateLoader(streamAggregateId -> java.util.Optional.of(acceptedOrder))
+                                                                 .setPolicy(ClosingBooksDecisionPolicies.closeAndOpenNextWhenAggregate(order -> order.accepted))
+                                                                 .setCoordinator(coordinator)
+                                                                 .setClock(clock)
+                                                                 .setScanRetryDelay(Duration.ofMinutes(5))
+                                                                 .setScanRollover(context -> {
+                                                                     rolledWith.add(context);
+                                                                     coordinator.closeAndOpenNextGeneration(context.logicalAggregateId());
+                                                                 })
+                                                                 .build();
+
+        assertThat(processor.processNextBatch(10)).isEqualTo(1);
+
+        assertThat(rolledWith).singleElement().satisfies(context -> {
+            assertThat(context.triggerMode()).isEqualTo(ClosingBooksTriggerMode.SCHEDULED_SCAN);
+            assertThat(context.currentGeneration().generation()).isEqualTo(currentGeneration.generation());
+            assertThat(context.aggregate()).isSameAs(acceptedOrder);
+        });
+        assertThat(repository.resolveCurrentGeneration(aggregateType, logicalAggregateId))
+                .hasValueSatisfying(open -> assertThat(open.generation()).isEqualTo(2L));
+    }
+
+    @Test
+    void a_rollover_that_fails_leaves_the_generation_open_and_defers_it() {
+        var aggregateType      = AggregateType.of("Orders");
+        var clock              = Clock.fixed(Instant.parse("2026-03-29T10:15:30Z"), ZoneOffset.UTC);
+        var logicalAggregateId = new LogicalAggregateId<>("Order-123");
+        var repository         = new InMemoryClosingBooksGenerationResolver<String>();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline(),
+                                                        clock);
+        coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        var acceptedOrder = new Order(OrderId.random(), CustomerId.random(), 1234);
+        acceptedOrder.accept();
+
+        var processor = DefaultClosingBooksScheduledScanProcessor.<String, Order>builder()
+                                                                 .setAggregateType(aggregateType)
+                                                                 .setGenerationRepository(repository)
+                                                                 .setAggregateLoader(streamAggregateId -> java.util.Optional.of(acceptedOrder))
+                                                                 .setPolicy(ClosingBooksDecisionPolicies.closeAndOpenNextWhenAggregate(order -> order.accepted))
+                                                                 .setCoordinator(coordinator)
+                                                                 .setClock(clock)
+                                                                 .setScanRetryDelay(Duration.ofMinutes(5))
+                                                                 .setScanRollover(context -> {
+                                                                     throw new IllegalStateException("the next-generation factory failed");
+                                                                 })
+                                                                 .build();
+
+        assertThat(processor.processNextBatch(10)).isZero();
+
+        assertThat(repository.resolveCurrentGeneration(aggregateType, logicalAggregateId))
+                .hasValueSatisfying(open -> assertThat(open.generation()).isEqualTo(1L));
+        assertThat(repository.loadOpenGenerations(aggregateType, 10, OffsetDateTime.now(clock)))
+                .describedAs("deferred, so it does not head every batch")
+                .isEmpty();
+    }
+
+    /**
      * A batch is the oldest N open generations, so a generation the scan can never make progress on used to sit at the
      * head of every batch forever. With a batch size of 1 that starves the younger generation completely.
      */
