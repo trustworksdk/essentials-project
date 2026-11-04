@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<!--/* The operator page (phase 8, docs/design/phase-8-demo-control.md). A shell: ops.js fills it from /api/admin/demo.
+       It explains itself (Q-8): every panel says what it shows, every control what it does. */-->
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="_csrf" th:content="${_csrf.token}">
+    <meta name="_csrf_header" th:content="${_csrf.headerName}">
+    <title>Demo control - Trading demo</title>
+    <link rel="stylesheet" th:href="@{/customer_ui/customer.css}">
+    <link rel="stylesheet" th:href="@{/ops_ui/ops.css}">
+    <link rel="icon" href="data:,">
+</head>
+<body>
+<header class="top">
+    <a class="brand" th:href="@{/ops}">Trading demo - demo control</a>
+    <nav class="tabs" aria-label="Other pages">
+        <a th:href="@{/app}">Customer UI</a>
+        <a th:href="@{/essentials/admin}">Essentials admin console</a>
+    </nav>
+    <div class="who">
+        <span class="user" th:text="${username}">operator</span>
+        <form th:action="@{/logout}" method="post">
+            <button type="submit" class="link">Log out</button>
+        </form>
+    </div>
+</header>
+<div id="messages" class="messages" aria-live="polite"></div>
+<main class="ops">
+    <p class="intro">
+        This page runs the demo. The exchange is a simulator with a clock of its own: you can play a trading day whenever
+        it suits the audience, at a speed of your choosing, while simulated customers trade in the background. Everything
+        the system does follows the exchange's clock, not the wall clock.
+    </p>
+
+    <section class="card" id="clock-panel">
+        <h1>Exchange clock</h1>
+        <p class="explain">
+            The exchange's clock is the system's business time. Its trading day (09:30-16:00 New York), its close and the
+            end of its business day (16:30) drive everything after them: orders are taken only while the market is open,
+            day orders expire at the close, and the accounts close their books when the business day ends. The clock
+            only goes forward; going back means resetting the demo (<code>reset-stack.sh</code>).
+        </p>
+        <p class="now" id="phase-text">Reading the exchange's clock...</p>
+        <p class="muted" id="speed-text"></p>
+        <div class="figures">
+            <div><span class="label">Exchange time (New York)</span><span class="figure" id="exchange-time">–</span></div>
+            <div><span class="label">Open business date</span><span class="figure" id="business-date">–</span></div>
+            <div><span class="label">Last close processed</span><span class="figure" id="last-close">–</span></div>
+        </div>
+        <p class="job" id="job" hidden></p>
+
+        <div class="controls">
+            <div class="control">
+                <button type="button" id="pause">Pause</button>
+                <button type="button" id="resume">Resume</button>
+                <p class="hint">Stops or restarts the exchange's clock. Nothing happens on the exchange while it is paused.</p>
+            </div>
+            <div class="control">
+                <div class="speeds" id="speeds">
+                    <button type="button" data-speed="1">1x</button>
+                    <button type="button" data-speed="10">10x</button>
+                    <button type="button" data-speed="60">60x</button>
+                    <button type="button" data-speed="300">300x</button>
+                    <button type="button" data-speed="1440">1440x</button>
+                </div>
+                <p class="hint">How fast exchange time runs. A trading day (6.5 hours) takes 6.5 hours at 1x, 39 minutes at
+                    10x, 6.5 minutes at 60x, 78 seconds at 300x and 16 seconds at 1440x.</p>
+            </div>
+            <div class="control">
+                <button type="button" id="skip-open">Skip to the next open</button>
+                <p class="hint">Moves the exchange to 5 minutes before the next session opens, so the open is seen to
+                    happen. Every close on the way is processed first.</p>
+            </div>
+            <div class="control">
+                <button type="button" id="skip-close">Skip to the next close</button>
+                <p class="hint">Moves the exchange to 5 minutes before the market closes.</p>
+            </div>
+            <div class="control">
+                <label class="inline">Advance <input type="number" id="advance-days" min="1" max="20" value="1"> business days</label>
+                <button type="button" id="advance">Advance</button>
+                <p class="hint">Plays that many closes one after another, each fully processed before the next, and stops
+                    5 minutes before the following open. Weekends and holidays are skipped as the exchange's calendar says.</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="card" id="traffic-panel">
+        <h1>Background traffic</h1>
+        <p class="explain">
+            Simulated customers using the same commands a real customer's clicks send: market and limit buys, sells of
+            what they hold, limit orders left resting and some cancelled, deposits and withdrawals. They keep the system
+            busy so the customer UI and the views below have something to show. The rate is per <em>exchange</em> minute,
+            so it follows the clock's speed. Orders go in only while the market is open, with a burst after the open;
+            outside the session the customers only move money. They have accounts of their own (<code>BG-...</code>), so
+            Alice sees only hers.
+        </p>
+        <p class="now" id="traffic-text">Reading...</p>
+        <div class="controls">
+            <div class="control">
+                <label class="inline">Orders per exchange minute <input type="number" id="rate" min="0" max="600" value="30"></label>
+                <button type="button" id="traffic-start">Start</button>
+                <button type="button" id="traffic-rate">Set rate</button>
+                <button type="button" id="traffic-stop">Stop</button>
+                <p class="hint">Start opens and funds 20 customers the first time. The rate can be changed while it runs.</p>
+            </div>
+            <div class="control">
+                <button type="button" id="traffic-burst">Fire a burst</button>
+                <p class="hint">Four times the rate for the next 15 exchange minutes, like the rush at the open. Only while
+                    the market is open.</p>
+            </div>
+        </div>
+        <div class="split">
+            <div>
+                <h2>Sent in the last minute</h2>
+                <dl class="buckets compact" id="traffic-sent"></dl>
+            </div>
+            <div>
+                <h2>Outcomes in the last minute</h2>
+                <dl class="buckets compact" id="traffic-outcomes"></dl>
+            </div>
+        </div>
+    </section>
+
+    <section class="card" id="system-panel">
+        <h1>System at a glance</h1>
+        <p class="explain">
+            What the system holds now, read from its views (the read models the customer and operator screens use).
+            The framework's own machinery - queues, subscriptions, locks, closing books - is in the
+            <a th:href="@{/essentials/admin}">Essentials admin console</a>.
+        </p>
+        <div class="split three">
+            <div><h2>Orders</h2><dl class="buckets compact" id="orders-by-status"></dl></div>
+            <div><h2>Payments</h2><dl class="buckets compact" id="payments-by-status"></dl></div>
+            <div><h2>Reconciliation cases</h2><dl class="buckets compact" id="cases-by-state"></dl></div>
+        </div>
+    </section>
+
+    <section class="card" id="trading-day">
+        <h1>What happens during a trading day</h1>
+        <ol class="day">
+            <li><strong>Before the open (until 09:30).</strong> The exchange takes no orders: the customer UI's order
+                ticket says the market is closed. Customers can still deposit and withdraw.</li>
+            <li><strong>The open (09:30).</strong> The market opens and orders flow in, with a rush in the first minutes -
+                the background traffic's burst. Watch the orders count climb below, and Alice's
+                <a th:href="@{/app}">Trade</a> page take orders again.</li>
+            <li><strong>Continuous trading.</strong> Each order travels placed - submitted - filled - booked: the exchange
+                fills it, the fill comes back as an event, and the account books the trade and releases what it held.</li>
+            <li><strong>The close (16:00).</strong> The exchange stops taking orders. Day orders still open expire.</li>
+            <li><strong>The end of the business day (16:30).</strong> The exchange closes its business day and says so
+                with an event. The system then
+                <ul>
+                    <li>rolls each account's books into the next business day as it is next touched (a new generation in
+                        the Essentials admin console's closing books),</li>
+                    <li>settles the day's trades on the next business day (T+1),</li>
+                    <li>clears deposits that are due,</li>
+                    <li>receives the clearinghouse's and the bank's statements, and reconciles them; anything that does
+                        not match becomes a reconciliation case at the next close.</li>
+                </ul>
+            </li>
+        </ol>
+    </section>
+</main>
+<script type="module" th:src="@{/ops_ui/ops.js}"></script>
+</body>
+</html>

@@ -1,8 +1,8 @@
 # Phase 8 design - demo control
 
-**Status:** decided (2026-11-04) - every proposal accepted, and Q-8 added: the page explains what it shows. Research
-before building found two premises wrong (§1.1); Q-9 and Q-10 were decided on them, the same day. Decisions are marked
-**(Q-n)** in the text and collected in §8.
+**Status:** decided and built (2026-11-04) - every proposal accepted, and Q-8 added: the page explains what it shows.
+Research before building found two premises wrong (§1.1); Q-9 and Q-10 were decided on them, the same day. As built:
+§9. Decisions are marked **(Q-n)** in the text and collected in §8.
 **Plan:** [`../EXPANSION_PLAN.md`](../EXPANSION_PLAN.md) phase 8 ("Demo control").
 **Builds on:** the exchange simulator's clock (operator and test clock endpoints, already in the generated client), the
 phase 6 load driver's behaviour mix, the phase 7 customer UI and its page conventions.
@@ -180,3 +180,31 @@ it is harness tooling. Imports follow the harness's existing practice: command t
 | **Q-8** | Explanations | The page explains each panel, each control and the current state in words, plus a "what happens during a trading day" section (§2) |
 | **Q-9** | Trading sessions | On, 09:30-16:00 New York, both markets, through the simulator's existing `sessions` config; the order ticket shows the session, the load driver and the background traffic place orders only in it (§1.1) |
 | **Q-10** | Books at the close | EF-1 built in this phase; the accounts roll on the exchange's `BusinessDayClosed`. EF-1's open questions: business days only, the name `ClosingBooksBusinessCalendar`, no admin-API operation for the calendar's state yet, a short post-cutoff window accepted (§1.1) |
+
+## 9. As built
+
+- **EF-1 first** (`83b7cce47`), then sessions and the accounts'
+  business-day books (`53a2a69a8`), then the page. The design note `docs/closing-books-business-day-boundary.md` has
+  EF-1's own as-built notes.
+- **Code** in `_demo_harness/demo_control/` (`OpsPage`, `DemoControlAPI`, `ExchangeClockControl`, `BackgroundTraffic`),
+  the page in `templates/ops/index.html` and `static/ops_ui/` (on the customer UI's stylesheet). Simulators profile
+  only: without the exchange there is no clock to drive.
+- **Endpoints** as §5, plus `GET /api/admin/demo/overview` for the third panel (orders and payments by status,
+  reconciliation cases by state, from the views' tables). Skip and advance answer `202` with the job; a second jump, or
+  pause/resume during one, is `409`.
+- **Advance N business days** runs the next N closes and stops 5 minutes before the following open, so the next thing
+  the audience sees is an open. A jump freezes the clock while it steps and resumes it after, if it was running.
+- **Speeds** 1, 10, 60, 300 and 1440x (the stack's default).
+- **The market's phase** (pre-open, open, after the close, closed for the night, no trading day) comes from the
+  exchange's clock and its calendar, not the market-data feed's session (which lags by up to half `stale-after`).
+- **Traffic** as §4, with three things the first live run showed: actions on one customer's account conflict on its
+  stream, so a conflict is decided again (5 times) as the customer API does; the mix buys more than it sells, so a
+  customer below 20 000 USD of buying power sells what it holds or deposits; and a withdrawal asks only for what the
+  account can withdraw now. Refusals are counted by reason on the page.
+- **Order ticket** (Q-9): `GET /api/market-data/sessions`; while the market is closed the ticket says so and its button
+  is disabled. The exchange pulls its quotes outside the session, so the quote panel says why there is none.
+- **Tests**: `DemoControlIT` (skip to the open, advance a day through its close, refusals, traffic filling orders after
+  the open at 60x, a customer refused), `TradingSessionsIT`, `AccountBooksAtTheExchangeCloseIT`. Checked by hand in a
+  browser against the running stack: paused at 60x, skipped to 09:25, Alice's ticket closed and disabled; resumed,
+  the open's burst filled orders, her ticket open; advanced two business days through both closes.
+

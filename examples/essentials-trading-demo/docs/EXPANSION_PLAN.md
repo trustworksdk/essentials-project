@@ -102,7 +102,8 @@ Each phase ends with a load scenario and before/after measurements. Performance 
    *Built (D30): Portfolio, Trade and Funding under `/app`, checked by hand in a browser against the simulators (place, fill, cancel, deposit, withdraw).*
 8. **Demo control.** An operator page that plays a trading day at any wall-clock time (exchange clock forward-only:
    pause, speed, skip to the open or close, advance days) and runs continuous background traffic.
-   *Designed (D31, premises corrected in D32: trading sessions on, EF-1 built in this phase); being built.*
+   *Built (D31, D32): the operator page `/ops` - exchange clock, background traffic, system at a glance - with trading
+   sessions on the exchange and EF-1, so the accounts roll their books at the exchange's close.*
 
 Later: fees and commission, multi-currency and FX, margin, corporate actions, the exchange expiring its own DAY orders (SR-17; until then the
 brokerage cancels them at the close, built in phase 3),
@@ -132,7 +133,7 @@ demo depends on it.
   (`END_OF_DAY` = midnight). Needed: a boundary whose current period comes from an application-supplied business
   calendar, advanced by an external signal, so `ON_ACCESS` evaluation compares an aggregate's period with the
   calendar's current business date. Shape decided in D24; design in `docs/closing-books-business-day-boundary.md`.
-  Being built in phase 8 (D32).
+  Built in phase 8 (D32).
 - **EF-1b — Scheduled-scan closing books.** Found while designing EF-1: the built-in evaluator never rolls on a
   scan (`asDecisionPolicy()` answers keep-open), and a scan rollover seeds no period id and carries no state
   forward. Separate change, after EF-1.

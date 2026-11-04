@@ -33,8 +33,10 @@ books, snapshots, archives and lifecycle for every aggregate; customers have the
 All on the **aggregate write style** (§R5) — `AggregateRoot` + `StatefulAggregateRepository`. Sanctioned
 lane. Do **not** convert to `Decider`s.
 
-`_demo_harness/` is not a slice — load generators (queue, ledger, order flow), demo users, EF-2 measurement processors.
-`_`-prefixed, excluded from slice enumeration. Has its own `CLAUDE.md`.
+`_demo_harness/` is not a slice — load generators (queue, ledger, order flow), demo users, EF-2 measurement processors,
+and the operator page `/ops` (phase 8, `simulators` profile only): play a trading day at any wall-clock time (pause,
+speed, skip to the open or close, advance business days through every close) and run background traffic. Log in as
+`operator@demo.local` / `operator-demo-password`. `_`-prefixed, excluded from slice enumeration. Has its own `CLAUDE.md`.
 
 `_customer_ui/` is not a slice either: the customer's browser UI (phase 7) at `/app` - Portfolio, Trade, Funding -
 Thymeleaf shells whose scripts call the customer JSON API. Log in as `alice@demo.local` / `alice-demo-password`: her account
