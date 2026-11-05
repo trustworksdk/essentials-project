@@ -455,12 +455,12 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
     }
 
     /**
-     * The longest a partial batch waits for more events before it is forwarded. Default 20 ms.
+     * The longest a partial batch waits for more events before it is forwarded. Default {@link #DEFAULT_BATCH_MAX_LATENCY}.
      *
      * @return the maximum time a partial batch waits
      */
     protected Duration getForwardMaxLatency() {
-        return Duration.ofMillis(20);
+        return DEFAULT_BATCH_MAX_LATENCY;
     }
 
     /**

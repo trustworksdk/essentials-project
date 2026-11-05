@@ -408,12 +408,12 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
 
     /**
      * The longest a partial batch waits for more events before it is handled, when {@link #getDirectHandlingBatchSize()}
-     * is above {@code 1}. Default 20 ms.
+     * is above {@code 1}. Default {@link #DEFAULT_BATCH_MAX_LATENCY}.
      *
      * @return the maximum time a partial batch waits
      */
     protected Duration getDirectHandlingMaxLatency() {
-        return Duration.ofMillis(20);
+        return DEFAULT_BATCH_MAX_LATENCY;
     }
 
     @Override

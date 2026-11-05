@@ -78,6 +78,13 @@ import static java.util.stream.Collectors.toMap;
  * as well as the processor's name.
  */
 public abstract class AbstractEventProcessor implements Lifecycle {
+    /**
+     * The default longest time a partial batch waits for more events before it is forwarded or handled, 20 ms: returned by
+     * {@code EventProcessor.getForwardMaxLatency()}, {@code PartitionedViewEventProcessor.getForwardMaxLatency()} and
+     * {@code ViewEventProcessor.getDirectHandlingMaxLatency()}.
+     */
+    public static final Duration DEFAULT_BATCH_MAX_LATENCY = Duration.ofMillis(20);
+
     protected final Logger log = LoggerFactory.getLogger(this.getClass());
 
     protected final EventStoreSubscriptionManager eventStoreSubscriptionManager;
