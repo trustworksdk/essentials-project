@@ -24,7 +24,7 @@ import org.slf4j.*;
 
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.*;
 
@@ -74,7 +74,7 @@ final class StoppedEverywhereReset {
      */
     static final Duration START_WAITS_FOR_RESET = Duration.ofSeconds(60);
 
-    private static final ConcurrentHashMap<LockName, ReentrantLock> LOCAL_MONITORS = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<LockName, ReentrantLock> LOCAL_MONITORS = new ConcurrentHashMap<>();
 
     private StoppedEverywhereReset() {
     }
@@ -97,6 +97,9 @@ final class StoppedEverywhereReset {
      * @param startConsuming registers the queue consumer
      * @throws IllegalStateException if a reset is still in progress after {@code waitForReset}
      */
+    // PMD.CloseResource: the reset lock is released in the finally via releaseLogging, which logs a failed release instead
+    // of throwing, so a failed release does not fail the start - try-with-resources would call FencedLock.close(), which declares a checked Exception
+    @SuppressWarnings("PMD.CloseResource")
     static void startConsumingExclusiveOfAReset(String processorName, FencedLockManager lockManager, Duration waitForReset, Runnable startConsuming) {
         requireNonNull(lockManager, "lockManager is null");
         requireNonNull(waitForReset, "waitForReset is null");

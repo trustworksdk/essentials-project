@@ -337,6 +337,7 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
         }
     }
 
+    @SuppressWarnings("PMD.LooseCoupling") // MessageMetaData is the type OrderedMessage takes as its meta data, not a choice of Map implementation
     private OrderedMessage toQueuedMessage(PersistedEvent event) {
         var aggregateType = event.aggregateType();
         var key           = qualifiedKey(aggregateType, resolveAggregateIdSerializer(aggregateType).serialize(event.aggregateId()));
@@ -382,6 +383,7 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
      * so a re-forward of one still queued after a reader failover is absorbed by the queue.
      */
     public static final class EventPayloadOrderedMessage extends OrderedMessage implements IdentifiedByKeyAndOrder {
+        @SuppressWarnings("PMD.LooseCoupling") // MessageMetaData is the type OrderedMessage's constructor takes, not a choice of Map implementation
         EventPayloadOrderedMessage(Object payload, String key, long order, MessageMetaData metaData) {
             super(payload, key, order, metaData);
         }
