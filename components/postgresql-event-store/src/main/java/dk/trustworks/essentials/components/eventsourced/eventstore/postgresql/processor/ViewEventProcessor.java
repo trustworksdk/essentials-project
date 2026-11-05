@@ -336,11 +336,9 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                     public int handleBatch(List<PersistedEvent> events) {
                         // The keys of this batch's events queued, asked of the queue once for the whole batch and kept
                         // up to date as the batch queues more - see handlePersistedEvent
-                        var keysQueuedInBatch = keysQueuedBeforeBatch(events);
-                        var checkedUpFront    = keysQueuedInBatch != null;
-                        if (!checkedUpFront) {
-                            keysQueuedInBatch = new HashSet<>();
-                        }
+                        var keysQueuedUpFront = keysQueuedBeforeBatch(events);
+                        var checkedUpFront    = keysQueuedUpFront.isPresent();
+                        var keysQueuedInBatch = keysQueuedUpFront.orElseGet(HashSet::new);
                         for (var event : events) {
                             handlePersistedEvent(event, keysQueuedInBatch, checkedUpFront);
                         }
@@ -517,10 +515,10 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
      * work's connection. A batch of 100 used to ask up to 100 times, each a round trip and - on an engine that took its
      * own connection for it - a second pooled connection while the batch's sat idle in its transaction.
      *
-     * @return the keys queued, or {@code null} if the queue could not answer, in which case every event asks for itself
+     * @return the keys queued, or {@link Optional#empty()} if the queue could not answer, in which case every event asks for itself
      * as event-by-event handling does
      */
-    private Set<String> keysQueuedBeforeBatch(List<PersistedEvent> events) {
+    private Optional<Set<String>> keysQueuedBeforeBatch(List<PersistedEvent> events) {
         var keys = new LinkedHashSet<String>();
         for (var event : events) {
             if (!hasNoHandlerFor(event)) {
@@ -528,13 +526,13 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
             }
         }
         if (keys.isEmpty()) {
-            return new HashSet<>();
+            return Optional.of(new HashSet<>());
         }
         try {
-            return new HashSet<>(durableQueues.getKeysWithOrderedMessagesQueued(durableQueueName, keys));
+            return Optional.of(new HashSet<>(durableQueues.getKeysWithOrderedMessagesQueued(durableQueueName, keys)));
         } catch (RuntimeException e) {
             logger.debug("[{}] Could not ask the queue for {} key(s) at once; asking per event", getProcessorName(), keys.size(), e);
-            return null;
+            return Optional.empty();
         }
     }
 
