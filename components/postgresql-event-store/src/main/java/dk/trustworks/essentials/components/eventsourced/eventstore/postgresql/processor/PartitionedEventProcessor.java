@@ -65,8 +65,11 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * </ul>
  * The consumption mode is fixed ({@link #getInboxMessageConsumptionMode()} is final): the contract is the class.
  * <p>
- * Every reset override delegates to {@link StoppedEverywhereReset}'s shared reset, as {@link PartitionedViewEventProcessor}'s
- * do: a reset overload added to {@link AbstractEventProcessor} must be overridden onto it in both classes, or it resets live.
+ * Every reset method is {@code final} here and routes onto {@link StoppedEverywhereReset}'s shared reset, as
+ * {@link PartitionedViewEventProcessor}'s do, so a subclass cannot skip the stopped-everywhere check. To act on a reset,
+ * override {@link #onSubscriptionsReset(AggregateType, GlobalEventOrder)}, which the shared reset calls per aggregate type.
+ * {@code PartitionedProcessorResetRoutingTest} fails on a {@code reset*}/{@code doReset*} method of a superclass that is not
+ * overridden {@code final} in each partitioned processor that inherits it.
  */
 public abstract class PartitionedEventProcessor extends EventProcessor {
     /**
@@ -124,11 +127,54 @@ public abstract class PartitionedEventProcessor extends EventProcessor {
     }
 
     /**
+     * Reset every subscription to the first event and purge the {@link Inbox} - only while the processor is stopped on
+     * every instance, see {@link #resetSubscriptions(Map, boolean, Consumer)}.
+     *
+     * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
+     */
+    @Override
+    public final void resetAllSubscriptions() {
+        super.resetAllSubscriptions();
+    }
+
+    /**
+     * Reset the given aggregate types' subscriptions, and optionally purge the {@link Inbox} - only while the processor is
+     * stopped on every instance, see {@link #resetSubscriptions(Map, boolean, Consumer)}.
+     *
+     * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
+     */
+    @Override
+    public final void resetSubscriptions(Map<AggregateType, GlobalEventOrder> resetAggregateSubscriptionsFromAndIncluding,
+                                         boolean resetInbox) {
+        super.resetSubscriptions(resetAggregateSubscriptionsFromAndIncluding, resetInbox);
+    }
+
+    /**
+     * Reset the given aggregate types' subscriptions without purging the {@link Inbox} - only while the processor is
+     * stopped on every instance, see {@link #resetSubscriptions(Map, boolean, Consumer)}.
+     */
+    @Override
+    protected final void resetSubscriptions(Map<AggregateType, GlobalEventOrder> resetAggregateSubscriptionsFromAndIncluding) {
+        super.resetSubscriptions(resetAggregateSubscriptionsFromAndIncluding);
+    }
+
+    /**
+     * Reset the subscription's aggregate type, and optionally purge the {@link Inbox} - only while the processor is
+     * stopped on every instance, see {@link #doResetSubscription(EventStoreSubscription, GlobalEventOrder, boolean, Consumer)}.
+     */
+    @Override
+    public final void doResetSubscription(EventStoreSubscription eventStoreSubscription,
+                                          GlobalEventOrder resubscribeFromAndIncluding,
+                                          boolean resetInbox) {
+        super.doResetSubscription(eventStoreSubscription, resubscribeFromAndIncluding, resetInbox);
+    }
+
+    /**
      * Every aggregate type the processor reacts to - not only those this instance has subscriptions for, as it may never
      * have read.
      */
     @Override
-    protected void resetAllSubscriptions(Consumer<QueueName> resetDurableQueueCallback) {
+    protected final void resetAllSubscriptions(Consumer<QueueName> resetDurableQueueCallback) {
         resetSubscriptions(StoppedEverywhereReset.everyAggregateTypeFromTheFirstEvent(this), true, resetDurableQueueCallback);
     }
 
@@ -141,9 +187,9 @@ public abstract class PartitionedEventProcessor extends EventProcessor {
      * it has no {@link Inbox} for the callback to act on, and purges the {@link Inbox} itself.
      */
     @Override
-    protected void resetSubscriptions(Map<AggregateType, GlobalEventOrder> resetAggregateSubscriptionsFromAndIncluding,
-                                      boolean resetDurableQueue,
-                                      Consumer<QueueName> resetDurableQueueCallback) {
+    protected final void resetSubscriptions(Map<AggregateType, GlobalEventOrder> resetAggregateSubscriptionsFromAndIncluding,
+                                            boolean resetDurableQueue,
+                                            Consumer<QueueName> resetDurableQueueCallback) {
         StoppedEverywhereReset.resetProcessor(this, this::resetTarget, resetAggregateSubscriptionsFromAndIncluding, resetDurableQueue,
                                               purgingWith(resetDurableQueueCallback), false);
     }
@@ -156,7 +202,7 @@ public abstract class PartitionedEventProcessor extends EventProcessor {
      *
      * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
      */
-    public void resetAllSubscriptionsIgnoringDepartedInstances() {
+    public final void resetAllSubscriptionsIgnoringDepartedInstances() {
         StoppedEverywhereReset.resetProcessor(this, this::resetTarget, StoppedEverywhereReset.everyAggregateTypeFromTheFirstEvent(this), true,
                                               purgingWith(queueName -> purgeInbox()), true);
     }
@@ -198,10 +244,10 @@ public abstract class PartitionedEventProcessor extends EventProcessor {
      * the processor is stopped on every instance.
      */
     @Override
-    protected void doResetSubscription(EventStoreSubscription eventStoreSubscription,
-                                       GlobalEventOrder resubscribeFromAndIncluding,
-                                       boolean resetDurableQueue,
-                                       Consumer<QueueName> resetDurableQueueCallback) {
+    protected final void doResetSubscription(EventStoreSubscription eventStoreSubscription,
+                                             GlobalEventOrder resubscribeFromAndIncluding,
+                                             boolean resetDurableQueue,
+                                             Consumer<QueueName> resetDurableQueueCallback) {
         resetSubscriptions(StoppedEverywhereReset.subscriptionsAggregateType(eventStoreSubscription, resubscribeFromAndIncluding), resetDurableQueue, resetDurableQueueCallback);
     }
 

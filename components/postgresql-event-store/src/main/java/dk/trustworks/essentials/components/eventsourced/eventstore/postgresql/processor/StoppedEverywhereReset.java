@@ -64,7 +64,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * Both processors route every reset path - {@code resetAllSubscriptions(Consumer)}, {@code resetSubscriptions(Map, boolean, Consumer)},
  * {@code doResetSubscription} (4-arg) and {@code resetAllSubscriptionsIgnoringDepartedInstances()} - onto
  * {@link #resetProcessor(AbstractEventProcessor, Function, Map, boolean, Consumer, boolean)}, which holds the steps they
- * share; each processor passes only what differs, as a {@link ResetTarget}.
+ * share; each processor passes only what differs, as a {@link ResetTarget}. Every reset method of both processors is
+ * {@code final}, so a subclass cannot route around it; {@code PartitionedProcessorResetRoutingTest} fails on a reset method
+ * of a superclass that is not overridden {@code final} in each partitioned processor that inherits it.
  */
 final class StoppedEverywhereReset {
     private static final Logger log = LoggerFactory.getLogger(StoppedEverywhereReset.class);

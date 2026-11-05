@@ -422,6 +422,10 @@ A starting instance registers its queue consumer while holding `<processorName>:
 start and a reset exclude each other (within one JVM as well). The reset can run on any instance, including one that never
 read: it moves the stored resume points itself (new `EventStoreSubscriptionManager.resetStoredResumePoint`).
 
+The reset methods of both partitioned classes are `final`, so a subclass cannot route a reset around these checks. To act
+on a reset - for instance code a `ViewEventProcessor` ran in an overridden `resetSubscriptions` - override
+`onSubscriptionsReset(AggregateType, GlobalEventOrder)`, which the reset calls once per aggregate type.
+
 New, all additive: `DurableQueues.getQueueConsumers(QueueName)` / `Inboxes.getQueueConsumers(InboxName)` returning
 `QueueConsumers(liveInstances, departedInstancesHoldingUnits)` (empty by default, answered by the shard-owned adapter);
 `MessageQueue.departedInstancesHoldingUnits()` on the shard-owned engine; `EventStoreSubscriptionManager.resetStoredResumePoint`
