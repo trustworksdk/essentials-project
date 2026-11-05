@@ -50,8 +50,16 @@ Until a resume point past a gap has been saved, a crash resumes **below** the ga
    - Reading or creating a resume point through the wrapper opts that subscriber in.
    - `saveResumePoints` calls `beforeResumePointSave` for each changed resume point **before** the delegate reads its
      value, and closes the windows after the save.
-   - If a resume point's gaps cannot be recorded, that resume point is not saved. It stays changed, and the next save
-     retries.
+   - Whether a resume point is changed is not stable: its subscription can advance it at any moment. So the wrapper
+     hands the delegate only the resume points it opened a window for. A resume point found unchanged is left out, and
+     if it advances right after the check, a later save takes it. Handing it on would let the delegate write it with no
+     window open.
+   - If a resume point's gaps cannot be recorded, that resume point is not saved and stays changed. The other resume
+     points are saved, and then `saveResumePoints` throws (`GapsNotRecordedException`, the first failure as its cause).
+     The periodic save logs it, and the next periodic save tries again. A stop or lock release stops settling the resume
+     point at once instead of retrying until its timeout. During shutdown, an IO failure marks the database unreachable.
+     A reset (`resetFrom` / `resetStoredResumePoint`) whose gaps could not be written now fails with an exception
+     instead of reporting a reset whose resume point was not saved.
    - Every save path listed above goes through this one repository, so it is the single choke point.
 3. **The `DeliveryGate` keeps a narrow opened gap in memory** (`unrecordedGaps`) instead of writing it, but only when all
    of these hold:
@@ -99,7 +107,7 @@ the same as before. An opt-out property would only control a cost; it would not 
 | Seeding from `getTransientGapsFor` at subscribe | A re-subscribe on a new manager reads the rows written by the last save or by the end of the previous subscription. A `retry()`/`repeat()` re-subscribe starts from the original start order, below everything |
 | Wide gaps / lower end (`addTransientGaps`) | Never deferred; written at once |
 | Subscription end inside a unit of work or a Spring transaction | The held gaps are written on a virtual thread of their own, rather than in a unit of work the gate does not own. The ending thread waits for it at most 10 s (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`); if the wait runs out it logs a WARN and the subscription ends, and the write goes on and commits when it can |
-| Save inside a unit of work or a Spring transaction | Same as the subscription end: written on a virtual thread of their own, waited for at most 10 s. If the wait runs out, that resume point is not saved, and the next save tries again |
+| Save inside a unit of work or a Spring transaction | Same as the subscription end: written on a virtual thread of their own, waited for at most 10 s. If the wait runs out, that resume point is not saved, and the save throws after saving the others |
 | Bus overflow catch-up, or any other move back onto the bus | The catch-up loads every event within every range the tracker awaits (`CdcDeliveryTracker.awaitedRanges`, see the section below), so a held gap is covered like any other. The first fix only added the held orders (`withUnrecordedGaps`, now removed). It was needed because, without it, a burst with more than 1 000 older awaited orders hid the fill until give-up: trading-demo views applied `OrderAccepted` before `OrderPlaced`, and existing events ended up as permanent gaps. Pinned by `a_gap_kept_in_memory_whose_fill_arrives_while_the_subscription_is_off_the_bus_is_filled_by_the_catch_up` |
 | Polling fallback / switches | One gate per subscription whatever the source. The delegate's polls record their own gaps as before |
 | Acknowledgement of fills | A fill of a held gap is never registered with `GapFillsAwaitingAcknowledgement`, so nothing is resolved for it. `dropped` does not acknowledge it to the delegate |
@@ -194,7 +202,7 @@ The existing pins still apply: `CdcEventStoreCommitOrderIT`, `CdcEventStoreGapFi
   the saving thread waits for it at most 10 s (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`). The flush then needs a
   second connection while the caller holds one. If the caller's unit of work holds a lock the flush needs, the wait runs
   out instead of hanging, since PostgreSQL cannot see that wait as a deadlock. That resume point is then not saved (the
-  repository logs a WARN, and the next save tries again). The flush goes on, keeping the gate lock, until the caller's
+  repository throws after saving the others, and the caller logs it). The flush goes on, keeping the gate lock, until the caller's
   transaction ends. The manager's save paths are not expected to run inside a unit of work.
 - **Non-exclusive subscriptions on several instances** share one resume-point row. Another instance's save can move it
   past a gap this instance holds. That is no weaker than before: the shared row could already move past events this

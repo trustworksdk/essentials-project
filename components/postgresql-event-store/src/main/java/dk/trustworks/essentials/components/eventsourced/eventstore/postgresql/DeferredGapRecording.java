@@ -33,7 +33,9 @@ import dk.trustworks.essentials.components.foundation.types.SubscriberId;
  * {@link #deferGapRecordingUntilResumePointSave(SubscriberId, AggregateType)} for a subscriber and aggregate type, it must
  * call {@link #beforeResumePointSave(SubscriberId, AggregateType)} before <i>every</i> save of that resume point - before
  * it reads the value it is going to write - and close the returned {@link ResumePointSave} once the save is done (or
- * failed). The {@code DefaultEventStoreSubscriptionManager} does so for every subscription it manages, through the
+ * failed). Whether a resume point is changed is not stable - its subscription may advance it at any moment - so a saver
+ * that skips this call for a resume point it found unchanged must not save that resume point in the same save either. The
+ * {@code DefaultEventStoreSubscriptionManager} does so for every subscription it manages, through the
  * {@code DurableSubscriptionRepository} it saves resume points with. A subscriber nobody registered keeps the gaps it opens
  * recorded at once.
  * <p>
@@ -62,7 +64,10 @@ public interface DeferredGapRecording {
      * @param subscriberId  the subscriber
      * @param aggregateType the aggregate type it subscribes to
      * @return to close once the resume point was saved, or the save failed
-     * @throws RuntimeException the gaps could not be recorded, or not in time - the caller must then not save the resume point
+     * @throws RuntimeException the gaps could not be recorded, or not in time - the caller must then not save the resume
+     *                          point, and should report that save as failed to whoever asked for it, as the
+     *                          {@code DefaultEventStoreSubscriptionManager}'s repository does: it throws once it has saved
+     *                          the other resume points
      */
     ResumePointSave beforeResumePointSave(SubscriberId subscriberId, AggregateType aggregateType);
 

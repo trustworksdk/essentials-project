@@ -508,6 +508,13 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
             if (!resumePoints.isEmpty()) {
                 durableSubscriptionRepository.saveResumePoints(resumePoints);
             }
+        } catch (GapRecordingBeforeSaveDurableSubscriptionRepository.GapsNotRecordedException e) {
+            // The other resume points were saved; these stay changed, so the next periodic save tries them again
+            if (IOExceptionUtil.isIOException(e)) {
+                log.debug("Not all ResumePoint's were stored - Experienced a Connection issue, this can happen during JVM or application shutdown: {}", e.getMessage());
+            } else {
+                log.warn("Not all ResumePoint's were stored - the next periodic save tries again", e);
+            }
         } catch (Exception e) {
             if (IOExceptionUtil.isIOException(e)) {
                 log.debug(msg("Failed to store ResumePoint's for the {} subscriber(s) - Experienced a Connection issue, this can happen during JVM or application shutdown", subscribers.size()));

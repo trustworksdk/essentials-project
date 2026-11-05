@@ -20,8 +20,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
-import org.slf4j.*;
-
 import java.util.*;
 import java.util.function.Function;
 
@@ -35,12 +33,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * every resume point a managed subscription persists passes through: the periodic saves, the saves on stop and on lock
  * release, and those of a reset.
  * <p>
- * A resume point whose gaps could not be recorded is not saved - logged, and left changed, so the next save tries again:
- * a saved resume point past a gap nobody recorded would lose the gap's event on a restart.
+ * A resume point whose gaps could not be recorded is not saved, and left changed: a saved resume point past a gap nobody
+ * recorded would lose the gap's event on a restart. The other resume points of the same save are saved, and then the save
+ * throws a {@link GapsNotRecordedException}: the periodic save logs it and tries again next time, a stop or lock release
+ * logs a WARN and goes on without settling the resume point, a shutdown counts it as a failed cleanup step and marks the
+ * database unreachable when the failure was an IO failure, and a reset fails with it.
  */
 final class GapRecordingBeforeSaveDurableSubscriptionRepository implements DurableSubscriptionRepository {
-    private static final Logger log = LoggerFactory.getLogger(GapRecordingBeforeSaveDurableSubscriptionRepository.class);
-
     private final DurableSubscriptionRepository delegate;
     private final DeferredGapRecording          deferredGapRecording;
 
@@ -101,32 +100,70 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
     }
 
     /**
-     * Records the gaps kept in memory for each resume point's subscriber before the delegate reads and writes it - and,
-     * until it has, records every gap opened at once. A resume point whose gaps could not be recorded is left out
+     * Records the gaps kept in memory for each changed resume point's subscriber before the delegate reads and writes it -
+     * and, until it has, records every gap opened at once. Only those resume points are handed to the delegate: one found
+     * unchanged here is left out, as it would not be written anyway, so that one its subscription advances after this
+     * check is never written without its gaps recorded - a later save takes it.
+     *
+     * @throws GapsNotRecordedException after the delegate saved the other resume points, when the gaps of one or more
+     *                                  resume points could not be recorded - those were not saved and stay changed
      */
     @Override
     public void saveResumePoints(Collection<SubscriptionResumePoint> resumePoints) {
         requireNonNull(resumePoints, "No resumePoints provided");
-        var saves   = new ArrayList<DeferredGapRecording.ResumePointSave>(resumePoints.size());
-        var savable  = new ArrayList<SubscriptionResumePoint>(resumePoints.size());
+        var                     saves       = new ArrayList<DeferredGapRecording.ResumePointSave>(resumePoints.size());
+        var                     savable     = new ArrayList<SubscriptionResumePoint>(resumePoints.size());
+        GapsNotRecordedException notRecorded = null;
         try {
             for (var resumePoint : resumePoints) {
-                // Unchanged resume points are not written - and have no gap to record before
+                // Whether a resume point is changed is not stable - its subscription may advance it any moment. The
+                // delegate reads it again later, so one found unchanged here must not reach it: it would be written,
+                // should it advance meanwhile, with no save window open for its gaps
                 if (!resumePoint.isChanged()) {
-                    savable.add(resumePoint);
                     continue;
                 }
                 try {
                     saves.add(deferredGapRecording.beforeResumePointSave(resumePoint.getSubscriberId(), resumePoint.getAggregateType()));
                     savable.add(resumePoint);
                 } catch (RuntimeException e) {
-                    log.warn("[{}-{}] Could not record the gaps the subscription opened - not saving its resume point {} now, the next save tries again",
-                             resumePoint.getSubscriberId(), resumePoint.getAggregateType(), resumePoint.getResumeFromAndIncluding(), e);
+                    notRecorded = GapsNotRecordedException.adding(notRecorded, resumePoint, e);
                 }
             }
-            delegate.saveResumePoints(savable);
+            if (!savable.isEmpty()) {
+                delegate.saveResumePoints(savable);
+            }
+        } catch (RuntimeException e) {
+            if (notRecorded != null) {
+                e.addSuppressed(notRecorded);
+            }
+            throw e;
         } finally {
             saves.forEach(DeferredGapRecording.ResumePointSave::close);
+        }
+        if (notRecorded != null) {
+            throw notRecorded;
+        }
+    }
+
+    /**
+     * The gaps kept in memory for one or more resume points could not be recorded, so those resume points were not saved
+     * (they stay {@link SubscriptionResumePoint#isChanged() changed}); the other resume points of the same call were. The
+     * cause is the first resume point's failure - so an unreachable database is classified as one
+     * ({@code IOExceptionUtil.isIOException} reads the root cause) - and each further failure is suppressed
+     */
+    static final class GapsNotRecordedException extends RuntimeException {
+        private GapsNotRecordedException(String message, Throwable cause) {
+            super(message, cause);
+        }
+
+        static GapsNotRecordedException adding(GapsNotRecordedException earlier, SubscriptionResumePoint resumePoint, RuntimeException failure) {
+            var message = "Could not record the gaps kept in memory of [" + resumePoint.getSubscriberId() + "-" + resumePoint.getAggregateType() +
+                    "] - its resume point " + resumePoint.getResumeFromAndIncluding() + " was not saved: " + failure.getMessage();
+            if (earlier == null) {
+                return new GapsNotRecordedException(message, failure);
+            }
+            earlier.addSuppressed(new GapsNotRecordedException(message, failure));
+            return earlier;
         }
     }
 
