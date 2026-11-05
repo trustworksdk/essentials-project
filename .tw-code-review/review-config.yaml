@@ -73,18 +73,18 @@ reviews:
   # catches cross-module unit breaks; ITs come from the fixer's own commands.
   fix:
     enabled: true
-    test_command: "mvn test -q"
+    test_command: "mvn test -q -T 1C"
     max_rounds: 3 # fixer rounds per unit before it is parked and asked about
     max_review_rounds: 3 # fix → /incremental rounds per /fix run
     reviewers: auto # auto | all | one — the fix-reviewer lenses per unit
     commit_subject: "fix: {title} ({ids})" # placeholders {title} {ids} {review}
-    full_suite: per-unit # per-unit | per-round — per-round runs test_command once per round (slow suites)
+    full_suite: per-round # per-unit | per-round — per-round runs test_command once per round (slow suites)
     skip_tests_for_docs: true # a unit that changed only documentation runs no tests
-    compile_command: "" # a round that changed only comments or docs runs this alone (and one reviewer), e.g. "mvn -q compile"; empty: the tests as always
+    compile_command: "mvn -q -T 1C compile" # a round that changed only comments or docs runs this alone (and one reviewer), e.g. "mvn -q compile"; empty: the tests as always
     env_repair_command: "mvn -q -pl {module} clean" # on warn=env-suspect:<module> in an untouched module: run once, re-test, e.g. "mvn -q -pl {module} clean"; empty: by hand
     orchestrator_rounds: 1 # rounds /fix may add to a unit it is not yet satisfied with
     glossary: "" # a file of terms whose scope matters, put in every fixer brief
-    repo_rules: "" # a file of rules every change follows, put in every fixer brief
+    repo_rules: ".tw-code-review/fix-rules.md" # a file of rules every change follows, put in every fixer brief
     later_round_min_severity: major # from round 2: leave the run's own minor follow-ups open (major)
     regression_min_severity: major # the last round's own fixes raised one at or above it: one extra round on those (off: none)
     fill_subject: "docs: name the commits of fix round {round} ({units})" # fill-hashes' commit
