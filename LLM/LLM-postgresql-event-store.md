@@ -633,6 +633,9 @@ two apart, so the refusal lasts as long as the unit is held. After a crash: star
 having made sure the old process is gone - `resetAllSubscriptionsIgnoringDepartedInstances()`. A start registers its
 consumer under `<processorName>:reset`, which the reset holds, so a start never slips in mid-reset. The reset may run on
 any instance, also one that never read.
+The reset methods of both partitioned processors are `final`, so a subclass cannot route a reset around these checks;
+to act on a reset (for example, code a `ViewEventProcessor` ran in an overridden `resetSubscriptions`), override
+`onSubscriptionsReset(AggregateType, GlobalEventOrder)`, which the reset calls once per aggregate type it resets.
 
 #### Blocking I/O in a handler: `UnitOfWorkMode.NONE`
 

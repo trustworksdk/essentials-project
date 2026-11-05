@@ -572,7 +572,7 @@ only. `asDecisionPolicy()` is unchanged.
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md).
 
-- `0.60.1-1` - the LLM docs describe elastic pump connections, wake-after-commit, `JSONSerializer.readProperties` and
+- `0.60.1-2` - the LLM docs describe elastic pump connections, wake-after-commit, `JSONSerializer.readProperties` and
   the batched forward, and their `InboxConfig.builder()` examples compile; they describe `PartitionedViewEventProcessor` and the
   partitioned reset (§2.10), and the slice tooling recognises both partitioned processors as event processors.
 

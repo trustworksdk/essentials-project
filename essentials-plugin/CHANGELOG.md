@@ -3,10 +3,12 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
-## 0.60.1-1 — targets Essentials 0.60.1
+## 0.60.1-2 — targets Essentials 0.60.1
+
 - **`PartitionedViewEventProcessor` and the partitioned reset** — the event-store reference describes the view
   counterpart of `PartitionedEventProcessor` and that both partitioned processors reset only while stopped on every
-  instance (trap `ESS-137`). `slice-check`, `slice-map` and enrichment recognise `PartitionedEventProcessor` and
+  instance (trap `ESS-137`), with reset methods that are `final`: a subclass acts on a reset by overriding
+  `onSubscriptionsReset`. `slice-check`, `slice-map` and enrichment recognise `PartitionedEventProcessor` and
   `PartitionedViewEventProcessor` as event processors; a slice built on one was not counted as a processor before.
   The reference also describes the partitioned view's opt-in to forward event payloads instead of references, and
   that switching a `ViewEventProcessor` to it needs its queue drained first: the queue key changes, so a left-over
