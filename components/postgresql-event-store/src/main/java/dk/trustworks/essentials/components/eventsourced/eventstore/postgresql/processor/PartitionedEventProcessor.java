@@ -152,6 +152,8 @@ public abstract class PartitionedEventProcessor extends EventProcessor {
     /**
      * Reset the given aggregate types' subscriptions without purging the {@link Inbox} - only while the processor is
      * stopped on every instance, see {@link #resetSubscriptions(Map, boolean, Consumer)}.
+     *
+     * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
      */
     @Override
     protected final void resetSubscriptions(Map<AggregateType, GlobalEventOrder> resetAggregateSubscriptionsFromAndIncluding) {
@@ -161,6 +163,8 @@ public abstract class PartitionedEventProcessor extends EventProcessor {
     /**
      * Reset the subscription's aggregate type, and optionally purge the {@link Inbox} - only while the processor is
      * stopped on every instance, see {@link #doResetSubscription(EventStoreSubscription, GlobalEventOrder, boolean, Consumer)}.
+     *
+     * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
      */
     @Override
     public final void doResetSubscription(EventStoreSubscription eventStoreSubscription,
@@ -172,6 +176,8 @@ public abstract class PartitionedEventProcessor extends EventProcessor {
     /**
      * Every aggregate type the processor reacts to - not only those this instance has subscriptions for, as it may never
      * have read.
+     *
+     * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
      */
     @Override
     protected final void resetAllSubscriptions(Consumer<QueueName> resetDurableQueueCallback) {
@@ -185,6 +191,8 @@ public abstract class PartitionedEventProcessor extends EventProcessor {
      * <p>
      * The purge calls {@code resetDurableQueueCallback} on an instance that started the processor; on one that never did,
      * it has no {@link Inbox} for the callback to act on, and purges the {@link Inbox} itself.
+     *
+     * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
      */
     @Override
     protected final void resetSubscriptions(Map<AggregateType, GlobalEventOrder> resetAggregateSubscriptionsFromAndIncluding,
@@ -242,6 +250,8 @@ public abstract class PartitionedEventProcessor extends EventProcessor {
     /**
      * Resets the subscription's aggregate type through {@link #resetSubscriptions(Map, boolean, Consumer)}: refused unless
      * the processor is stopped on every instance.
+     *
+     * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
      */
     @Override
     protected final void doResetSubscription(EventStoreSubscription eventStoreSubscription,

@@ -76,6 +76,14 @@ import static java.util.stream.Collectors.toMap;
  * configurations such as message handler interceptors, subscription policies, and processing logic.
  * This class requires concrete subclasses to define the set of {@link AggregateType}s they are reacting to
  * as well as the processor's name.
+ * <p>
+ * <h3>Naming a reset method</h3>
+ * A method of this class or of {@link EventProcessor} that moves a subscription's resume point (e.g. through
+ * {@link EventStoreSubscription#resetFrom}) or purges the processor's durable queue or {@link Inbox} must be named
+ * {@code reset*} or {@code doReset*}. {@link PartitionedEventProcessor} and {@link PartitionedViewEventProcessor} reset
+ * only while stopped on every instance, through {@code StoppedEverywhereReset}; {@code PartitionedProcessorResetRoutingTest}
+ * finds the methods each of them must override {@code final} onto that check by this name prefix alone. A method named
+ * otherwise is inherited by them unchecked, and would reset while they run.
  */
 public abstract class AbstractEventProcessor implements Lifecycle {
     /**

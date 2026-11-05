@@ -528,6 +528,8 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
     /**
      * Reset the given aggregate types' subscriptions without purging the queue - only while the processor is stopped on
      * every instance, see {@link #resetSubscriptions(Map, boolean, Consumer)}.
+     *
+     * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
      */
     @Override
     protected final void resetSubscriptions(Map<AggregateType, GlobalEventOrder> resetAggregateSubscriptionsFromAndIncluding) {
@@ -537,6 +539,8 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
     /**
      * Every aggregate type the processor reacts to - not only those this instance has subscriptions for, as it may never
      * have read.
+     *
+     * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
      */
     @Override
     protected final void resetAllSubscriptions(Consumer<QueueName> resetDurableQueueCallback) {
@@ -547,6 +551,8 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
      * The one path every reset of this processor takes: refused unless the processor is stopped on every instance, then
      * the stored resume points are moved, the queue purged (if asked) and {@link #onSubscriptionsReset(AggregateType, GlobalEventOrder)}
      * called per aggregate type - see {@link StoppedEverywhereReset}.
+     *
+     * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
      */
     @Override
     protected final void resetSubscriptions(Map<AggregateType, GlobalEventOrder> resetAggregateSubscriptionsFromAndIncluding,
@@ -584,6 +590,8 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
     /**
      * Resets the subscription's aggregate type through {@link #resetSubscriptions(Map, boolean, Consumer)}: refused unless
      * the processor is stopped on every instance.
+     *
+     * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
      */
     @Override
     protected final void doResetSubscription(EventStoreSubscription eventStoreSubscription,

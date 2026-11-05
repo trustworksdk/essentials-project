@@ -30,7 +30,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * A new {@code reset*}/{@code doReset*} method on {@link AbstractEventProcessor} or {@link EventProcessor} fails this
  * test until it is overridden {@code final} in each partitioned processor that inherits it; that override must route onto
- * {@link StoppedEverywhereReset}, which this test does not check. Subclasses customise a reset through
+ * {@link StoppedEverywhereReset}, which this test does not check - {@link PartitionedProcessorResetRefusedWhileStartedTest}
+ * calls each reset entry point on a started processor and checks that it is refused. The methods are found by their
+ * {@code reset*}/{@code doReset*} name alone, the convention {@link AbstractEventProcessor}'s class javadoc states. Subclasses customise a reset through
  * {@link AbstractEventProcessor#onSubscriptionsReset}, which the shared reset calls per aggregate type.
  */
 class PartitionedProcessorResetRoutingTest {
