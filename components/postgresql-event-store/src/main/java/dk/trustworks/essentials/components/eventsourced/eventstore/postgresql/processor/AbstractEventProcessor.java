@@ -707,13 +707,29 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     /**
      * Says at start which retry budget a queue consumer runs with: the derived default's, or that the processor chose its
      * own. One line, so an operator reading a dead letter can tell how long it was retried.
+     * <p>
+     * The policy in use counts as the default only when it has the default's delays <em>and</em> classifies errors the
+     * same way: {@link RedeliveryPolicy#equals(Object)} leaves the {@link MessageDeliveryErrorHandler} out, so a policy
+     * that keeps the derived delays but sets its own handler (for example {@code alwaysRetryOn(...)}) is logged as the
+     * processor's own, with its handler.
      */
     protected final void logRedeliveryPolicy(String processorName, RedeliveryPolicy inUse, FailoverRedeliveryPolicy derivedDefault) {
-        if (inUse.equals(derivedDefault.policy())) {
+        if (inUse.equals(derivedDefault.policy()) && sameDeliveryErrorHandler(inUse.getDeliveryErrorHandler(), derivedDefault.policy().getDeliveryErrorHandler())) {
             log.info("[{}] {}", processorName, derivedDefault.describe());
         } else {
             log.info("[{}] Uses its own RedeliveryPolicy: {}", processorName, inUse);
         }
+    }
+
+    /**
+     * The {@link MessageDeliveryErrorHandler}s implement no {@code equals}, and every build of the derived default creates
+     * a new one, so two handlers count as the same when they are equal, or of the same class with the same
+     * {@code toString()} - which for the built-in handlers names the exceptions they classify. A handler whose
+     * {@code toString()} is the identity default (a lambda) is never the same as another instance.
+     */
+    private static boolean sameDeliveryErrorHandler(MessageDeliveryErrorHandler inUse, MessageDeliveryErrorHandler derivedDefault) {
+        return inUse.equals(derivedDefault) ||
+                (inUse.getClass() == derivedDefault.getClass() && inUse.toString().equals(derivedDefault.toString()));
     }
 
     /**
