@@ -387,7 +387,11 @@ its share of the aggregates, each message in a `UnitOfWork` of its own together 
 - **The queue key is `<aggregateType>|<aggregateId>`** (`PartitionedViewEventProcessor.qualifiedKey`), so two aggregate
   types sharing an id are two keys. Handlers still see the plain id.
 - **Switching from `ViewEventProcessor`** keeps the resume point, lock and queue names. Stop the view on every instance
-  first and deploy the new class everywhere before starting it again.
+  first and deploy the new class everywhere before starting it again. **Drain the queue first:** the queue key changes
+  from the plain aggregate id to `<aggregateType>|<aggregateId>`, so a pending redelivery or dead letter the old
+  processor left in `<processorName>:queue` is not ordered with newer events of the same aggregate - it is applied on
+  top of them - and `awaitProcessed` does not see it. Wait until `getTotalMessagesQueuedFor` is 0 and every dead letter
+  is resolved; nothing enforces this at start-up.
 - **Forward payloads, opt-in:** `forwardsEventPayloads()` returning `true` puts each event itself in the queue instead
   of a reference, so the handling side does not load it from the event store again. Measured in the trading demo (two
   instances, one 8-core machine, 80 000 ledger commands, medians of 3): command drain 47.4 s → 42.2 s, CPU 118 s → 109 s,

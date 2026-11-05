@@ -609,6 +609,10 @@ public class AccountActivityProjection extends PartitionedViewEventProcessor {
 - **`forwardsEventPayloads()`** (default `false`): `true` queues each event itself instead of a reference, saving the
   event-store load per event on the handling side, for larger queue rows (measured: ~8 % less CPU, ~11 % more WAL).
 - **Switching from `ViewEventProcessor`** keeps resume point, lock and queue names - stop the view on every instance first.
+  **Drain the queue first**: the key changes from the plain aggregate id to `<aggregateType>|<aggregateId>`, so a
+  redelivery or dead letter the old processor left in `<processorName>:queue` is not ordered with newer events of the
+  same aggregate (it lands on top of them) and `awaitProcessed` does not see it. Wait for
+  `getTotalMessagesQueuedFor` to reach 0 and resolve every dead letter before switching; nothing checks this at start.
 
 #### Resetting a partitioned processor
 

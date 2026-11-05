@@ -94,6 +94,15 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <b>Switching an existing {@link ViewEventProcessor} to this class</b> keeps its resume point, lock and queue names.
  * Stop the view on every instance first, and deploy the new class everywhere before starting it again: a cluster that
  * mixes the two would handle one view both inline and partitioned.
+ * <p>
+ * <b>Drain the queue before switching.</b> The queue name stays, but the key does not: {@link ViewEventProcessor}
+ * queues a failed event under the plain aggregate id, this class under {@code <aggregateType>|<aggregateId>}. A message
+ * the old processor left in {@code <processorName>:queue} - a pending redelivery or a dead letter - is therefore not
+ * ordered with the events this class queues for the same aggregate: newer events are handled first, and the old message
+ * is applied on top of them when it is redelivered or resurrected. {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)}
+ * does not see it either. Before the switch, let {@link DurableQueues#getTotalMessagesQueuedFor(QueueName)} reach
+ * {@code 0} and resolve every dead letter ({@link DurableQueues#getTotalDeadLetterMessagesQueuedFor(QueueName)}).
+ * Nothing enforces this at start-up.
  */
 public abstract class PartitionedViewEventProcessor extends AbstractEventProcessor {
     /**
