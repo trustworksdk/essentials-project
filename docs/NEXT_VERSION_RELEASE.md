@@ -453,7 +453,11 @@ always written before that save. A gap that fills before then costs no database 
 unchanged: no resume point is saved past a gap that is not recorded. The gap is written in a transaction of its own,
 committed before the save goes on, also when the save runs inside a unit of work of the caller's, or inside a Spring
 transaction with no unit of work bound yet - a rollback of that unit of work or transaction cannot take it back. There, the write runs on a virtual thread and is waited for at most 10 s; if that
-runs out, the resume point is not saved and the next save tries again. A save whose gaps could not be written (that
+runs out, the resume point is not saved and the next save tries again. While such a write still runs, a later save or the
+subscription's end on that thread waits for it at most 10 s too, instead of hanging. Any acknowledgement, on any
+thread, waits for a running gap recording at most 10 s and then fails, and the gap of a gap fill it acknowledged is
+recorded and stays open, so a later subscription delivers that event again. `awaitProcessed` likewise waits for it at
+most 10 s per check and then treats the event as not processed yet (`<!-- fix:U-002 -->`). A save whose gaps could not be written (that
 timeout, or an unreachable database) saves the other resume points and then fails, so a stop or lock release stops
 retrying it at once and a shutdown treats an unreachable database as one, instead of retrying it every 100 ms for up
 to 5 s. A reset (`EventStoreSubscription#resetFrom`, `DefaultEventStoreSubscriptionManager#resetStoredResumePoint`)

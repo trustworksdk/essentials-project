@@ -329,6 +329,83 @@ class CdcEventStoreDeliveryGateTest {
         assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).containsExactly(LongRange.only(2));
     }
 
+    /**
+     * A recording on a virtual thread that outlasts the wait - blocked, say, by a lock the saving thread's unit of work
+     * holds - keeps the gate lock until it commits. The saving thread, still in that unit of work, must not then wait for
+     * the gate lock without a limit: not on a second save, not acknowledging a fill, not ending the subscription
+     */
+    @Test
+    void a_thread_whose_recording_outlasted_the_wait_does_not_wait_for_the_gate_lock_without_a_limit() throws Exception {
+        setupDeferringGapRecording();
+        cdcEventStore.deferredGapsRecordingWait(Duration.ofMillis(200));
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var received        = subscribe(Optional.of(acknowledgement));
+        // 2 fills a gap kept in memory and is not acknowledged yet; 5 opens a gap kept in memory
+        poll(1, 3, 2, 5);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 2L, 5L)));
+        var recordingMayEnd = new CountDownLatch(1);
+        gapHandler.addingTransientGapsMayEnd = recordingMayEnd;
+        try {
+            var outcomes = new CopyOnWriteArrayList<String>();
+            var callerWithUnitOfWork = Thread.ofPlatform().daemon().unstarted(() -> {
+                outcomes.add(outcomeOf(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close()));
+                outcomes.add(outcomeOf(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close()));
+                outcomes.add(outcomeOf(() -> acknowledgement.acknowledge(event(2))));
+                // As awaitProcessed asks it: an order the gate holds nothing for is still awaited, as far as it can tell
+                outcomes.add(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(7)) ? "awaited" : "not awaited");
+                outcomes.add(outcomeOf(() -> subscriptions.forEach(Disposable::dispose)));
+            });
+            doAnswer(inv -> Thread.currentThread().equals(callerWithUnitOfWork) ? Optional.of(mock(EventStoreUnitOfWork.class)) : Optional.empty())
+                    .when(uowFactory).getCurrentUnitOfWork();
+            callerWithUnitOfWork.start();
+            callerWithUnitOfWork.join(Duration.ofSeconds(5));
+
+            assertThat(callerWithUnitOfWork.isAlive()).as("waits for the gate lock without a limit").isFalse();
+            assertThat(outcomes).containsExactly("IllegalStateException", "IllegalStateException", "IllegalStateException", "awaited", "returned");
+            assertThat(delegateAcknowledged).as("acknowledged to the delegate although the gate could not tell").contains(2L);
+        } finally {
+            recordingMayEnd.countDown();
+        }
+        // The recording goes on, and records the gaps once what blocked it is gone
+        await().atMost(Duration.ofSeconds(5))
+               .untilAsserted(() -> assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).contains(LongRange.only(2), LongRange.only(4)));
+    }
+
+    /**
+     * An acknowledgement on a thread whose interrupt flag is set - a handler's backoff the polling/CDC source switch
+     * interrupted - still takes the gate lock when it is free
+     */
+    @Test
+    void an_acknowledgement_on_an_interrupted_thread_takes_a_free_gate_lock() throws Exception {
+        setupDeferringGapRecording();
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var received        = subscribe(Optional.of(acknowledgement));
+        // 2 fills a gap kept in memory and is not acknowledged yet
+        poll(1, 3, 2);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 2L)));
+        var outcome = new CopyOnWriteArrayList<String>();
+        var interrupted = Thread.ofPlatform().daemon().unstarted(() -> {
+            Thread.currentThread().interrupt();
+            outcome.add(outcomeOf(() -> acknowledgement.acknowledge(event(2))));
+        });
+        interrupted.start();
+        interrupted.join(Duration.ofSeconds(5));
+
+        assertThat(outcome).containsExactly("returned");
+        // Done with before any save: nothing is left to record
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+        assertThat(gapHandler.transientGapsAdded).isEmpty();
+    }
+
+    private static String outcomeOf(Runnable action) {
+        try {
+            action.run();
+            return "returned";
+        } catch (RuntimeException e) {
+            return e.getClass().getSimpleName();
+        }
+    }
+
     @Test
     void a_recording_on_a_virtual_thread_that_does_not_end_is_waited_for_no_longer_than_the_wait() throws Exception {
         var mayEnd = new CountDownLatch(1);
@@ -495,6 +572,8 @@ class CdcEventStoreDeliveryGateTest {
         private volatile int               findTransientGapsCalls;
         private volatile boolean           failGivingUp;
         private volatile boolean           failResolving;
+        /** When set, {@code addTransientGaps} waits for it - as for a lock another unit of work holds */
+        private volatile CountDownLatch    addingTransientGapsMayEnd;
 
         private RecordingGapHandler(Duration giveUpThreshold) {
             this.giveUpThreshold = giveUpThreshold;
@@ -532,6 +611,15 @@ class CdcEventStoreDeliveryGateTest {
 
         @Override
         public GapReconciliation addTransientGaps(AggregateType aggregateType, LongRange gaps) {
+            var mayEnd = addingTransientGapsMayEnd;
+            if (mayEnd != null) {
+                try {
+                    mayEnd.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+            }
             transientGapsAdded.add(new TransientGapsAdded(gaps, Thread.currentThread()));
             return GapReconciliation.NONE;
         }

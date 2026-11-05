@@ -45,6 +45,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.*;
 import java.util.stream.*;
 
@@ -188,6 +189,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * The delivery gates of the running subscriptions, whose deferred gaps {@link #beforeResumePointSave} records
      */
     private final ConcurrentMap<SubscriberAndAggregateType, Set<DeliveryGate>>         runningDeliveryGates      = new ConcurrentHashMap<>();
+    /**
+     * How long a thread with a unit of work current waits for a gate's deferred gap recording, or for the gate lock that
+     * recording holds - {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT}, unless a test shortens it
+     */
+    private volatile Duration                                                         deferredGapsRecordingWait = DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT;
 
     /**
      * Create a {@link CdcEventStoreBuilder} that names every argument and accepts both plain values and
@@ -467,11 +473,19 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         } catch (TimeoutException e) {
             save.close();
             throw new IllegalStateException("Recording the gaps of " + subscriberId + " for " + aggregateType + " kept in memory did not finish within " +
-                                                    DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT + ", before a resume point save", e);
+                                                    deferredGapsRecordingWait + ", before a resume point save", e);
         } catch (RuntimeException e) {
             save.close();
             throw e;
         }
+    }
+
+    /**
+     * For tests: how long a thread with a unit of work current waits for a gate's deferred gap recording, or for the gate
+     * lock that recording holds - {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT} by default
+     */
+    void deferredGapsRecordingWait(Duration wait) {
+        deferredGapsRecordingWait = requireNonNull(wait, "No wait provided");
     }
 
     /**
@@ -1125,7 +1139,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         /**
          * How long a thread with a unit of work current waits for the gaps kept in memory to be recorded on a virtual thread
          * of their own (see {@link #recordDeferredGapsCommitted()}): one short unit of work, unless a lock the waiting
-         * thread's unit of work holds blocks it - then the wait ends instead of hanging the save or the subscription's end
+         * thread's unit of work holds blocks it - then the wait ends instead of hanging the save or the subscription's end.
+         * Also the longest an acknowledgement waits for {@link #deferredGapsLock} (see {@link #withoutFillsOfUnrecordedGaps}),
+         * and {@link #isAwaitedAsGap}'s check of a held fill (see {@link #isAwaitedAsFillOfAnUnrecordedGap})
          */
         static final Duration DEFERRED_GAPS_RECORDING_WAIT = Duration.ofSeconds(10);
 
@@ -1170,9 +1186,13 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         private final boolean                                   defersGapRecording;
         /**
          * Guards the two collections below; held across {@link #recordDeferredGaps()}'s commit, so an acknowledgement
-         * never resolves a fill whose gap that is still recording. Taken before the gap handler's monitor, never after
+         * never resolves a fill whose gap that is still recording. Taken before the gap handler's monitor, never after.
+         * A save's emptiness check, the subscription's end, an acknowledgement and {@link #isAwaitedAsGap}'s check of a
+         * held fill ({@link #isAwaitedAsFillOfAnUnrecordedGap}) never wait for it without a limit: each may run inside a
+         * unit of work, and a recording that outlasted {@link #DEFERRED_GAPS_RECORDING_WAIT} may hold it while it waits for
+         * a lock that very unit of work holds, a wait PostgreSQL cannot see as a deadlock
          */
-        private final Object                                    deferredGapsLock        = new Object();
+        private final ReentrantLock                             deferredGapsLock        = new ReentrantLock();
         /**
          * The orders of the gaps opened and kept in memory - not recorded with the gap handler, not delivered, not given up
          */
@@ -1183,9 +1203,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          */
         private final TreeMap<Long, PersistedEvent>             unrecordedFillsNotDoneWith = new TreeMap<>();
         /**
-         * Once the subscription ended, every gap is recorded at once
+         * Once the subscription ended, every gap is recorded at once. Read under {@link #deferredGapsLock}, written without
+         * it (see {@link #recordDeferredGapsAtEnd()})
          */
-        private       boolean                                   ended;
+        private volatile boolean                                ended;
 
         private DeliveryGate(CdcDeliveryTracker tracker, AggregateType aggregateType, Optional<SubscriberId> subscriberId, Optional<SubscriptionGapHandler> gapHandler) {
             this.tracker = tracker;
@@ -1267,14 +1288,17 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * another tenant's event the tenant filter drops, and for an event a subscriber that does not acknowledge was
          * handed. Resolves the gaps of the gap fills among them (see {@link GapFillsAwaitingAcknowledgement#acknowledged}),
          * and acknowledges them to the delegate's polls - also when resolving them failed, so the delegate is never left
-         * waiting for a fill it handed on.
+         * waiting for a fill it handed on. Never waits for {@link #deferredGapsLock} longer than
+         * {@code deferredGapsRecordingWait} (see {@link #withoutFillsOfUnrecordedGaps}): the subscriber's unit of work may
+         * hold a lock a recording that holds it waits for.
          *
-         * @throws RuntimeException a failure to resolve them inside the caller's unit of work - the gaps stay open
+         * @throws RuntimeException a failure to resolve them inside the caller's unit of work, or a recording of the gaps
+         *                          kept in memory that held {@link #deferredGapsLock} past that wait - the gaps stay open
          */
         void acknowledged(List<PersistedEvent> events) {
-            // A fill of a gap kept in memory: done with, nothing was recorded - nothing to resolve
-            var fillsOfRecordedGaps = withoutFillsOfUnrecordedGaps(events);
             try {
+                // A fill of a gap kept in memory: done with, nothing was recorded - nothing to resolve
+                var fillsOfRecordedGaps = withoutFillsOfUnrecordedGaps(events);
                 gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.acknowledged(fillsOfRecordedGaps));
             } catch (RuntimeException e) {
                 try {
@@ -1347,7 +1371,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             if (!defersGapRecording || awaitedGaps.size() != 1) return false;
             var  gap   = awaitedGaps.getFirst();
             long width = gap.toInclusive - gap.fromInclusive + 1;
-            synchronized (deferredGapsLock) {
+            deferredGapsLock.lock();
+            try {
                 if (ended || width > MAX_DEFERRED_ORDERS_PER_GAP ||
                         unrecordedGaps.size() + unrecordedFillsNotDoneWith.size() + width > MAX_DEFERRED_ORDERS_PER_SUBSCRIPTION ||
                         isResumePointSaveInProgress(key())) {
@@ -1355,6 +1380,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 }
                 gap.stream().forEach(unrecordedGaps::add);
                 return true;
+            } finally {
+                deferredGapsLock.unlock();
             }
         }
 
@@ -1365,10 +1392,13 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         private boolean filledAnUnrecordedGap(PersistedEvent fill) {
             if (!defersGapRecording) return false;
             long order = fill.globalEventOrder().longValue();
-            synchronized (deferredGapsLock) {
+            deferredGapsLock.lock();
+            try {
                 if (!unrecordedGaps.remove(order)) return false;
                 unrecordedFillsNotDoneWith.put(order, fill);
                 return true;
+            } finally {
+                deferredGapsLock.unlock();
             }
         }
 
@@ -1377,21 +1407,77 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          */
         boolean isFillOfAnUnrecordedGapNotDoneWith(long order) {
             if (!defersGapRecording) return false;
-            synchronized (deferredGapsLock) {
+            deferredGapsLock.lock();
+            try {
                 return unrecordedFillsNotDoneWith.containsKey(order);
+            } finally {
+                deferredGapsLock.unlock();
             }
         }
 
         /**
+         * {@link #isFillOfAnUnrecordedGapNotDoneWith} for {@link #isAwaitedAsGap}, which {@code awaitProcessed} may ask
+         * inside a unit of work: waits for {@link #deferredGapsLock} at most {@code deferredGapsRecordingWait}
+         *
+         * @return true if {@code order} is the fill of a gap kept in memory that was handed on and is not done with - and
+         * also when the lock was not free within the wait or the thread was interrupted waiting for it: still awaited,
+         * as far as the gate can tell, so the caller asks again later
+         */
+        boolean isAwaitedAsFillOfAnUnrecordedGap(long order) {
+            if (!defersGapRecording) return false;
+            try {
+                if (!tryLockWithin(deferredGapsRecordingWait)) return true;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return true;
+            }
+            try {
+                return unrecordedFillsNotDoneWith.containsKey(order);
+            } finally {
+                deferredGapsLock.unlock();
+            }
+        }
+
+        /**
+         * Takes {@link #deferredGapsLock} at once when it is free, whatever the thread's interrupt flag - else waits for it
+         * at most {@code wait}
+         *
+         * @return true if taken
+         * @throws InterruptedException the lock was not free, and the thread was interrupted while waiting for it
+         */
+        private boolean tryLockWithin(Duration wait) throws InterruptedException {
+            return deferredGapsLock.tryLock() || deferredGapsLock.tryLock(wait.toNanos(), TimeUnit.NANOSECONDS);
+        }
+
+        /**
+         * Runs on the subscriber's thread, possibly inside its unit of work: waits for {@link #deferredGapsLock} at most
+         * {@code deferredGapsRecordingWait}
+         *
          * @return {@code events} without the fills of gaps kept in memory, which are done with from now on
+         * @throws IllegalStateException the lock was not free within the wait, or the thread was interrupted waiting for
+         *                               it - nothing is done with: a fill of a gap kept in memory among them keeps its gap,
+         *                               recorded by the recording under way or by a later one, so a later subscription
+         *                               delivers it again
          */
         private List<PersistedEvent> withoutFillsOfUnrecordedGaps(List<PersistedEvent> events) {
             if (!defersGapRecording) return events;
-            synchronized (deferredGapsLock) {
+            var wait = deferredGapsRecordingWait;
+            try {
+                if (!tryLockWithin(wait)) {
+                    throw new IllegalStateException("[" + subscriberId.orElseThrow() + "-" + aggregateType + "] The gaps kept in memory were still being recorded after " + wait +
+                                                            " - could not tell which of the acknowledged events fill them");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("[" + subscriberId.orElseThrow() + "-" + aggregateType + "] Interrupted while waiting for the gaps kept in memory to be recorded", e);
+            }
+            try {
                 if (unrecordedFillsNotDoneWith.isEmpty()) return events;
                 return events.stream()
                              .filter(event -> unrecordedFillsNotDoneWith.remove(event.globalEventOrder().longValue()) == null)
                              .toList();
+            } finally {
+                deferredGapsLock.unlock();
             }
         }
 
@@ -1402,21 +1488,30 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * restart wait for their events. With such a unit of work, or a Spring transaction it would join
          * ({@link TransactionProbe#isUnitOfWorkActive}), the gaps are recorded on a virtual thread of their own,
          * waited for at most {@link #DEFERRED_GAPS_RECORDING_WAIT}.
+         * <p>
+         * With a unit of work current, the calling thread never waits for {@link #deferredGapsLock} itself: a recording
+         * that outlasted an earlier wait may still hold it, blocked by a lock that unit of work holds. If another thread
+         * holds the lock, the virtual thread finds out whether there is anything to record, and the calling thread waits for
+         * it no longer than for any recording.
          *
          * @throws InterruptedException the calling thread was interrupted while waiting - the recording goes on
          * @throws TimeoutException     the recording did not end within {@link #DEFERRED_GAPS_RECORDING_WAIT}, for example
-         *                              blocked by a lock the calling thread's unit of work holds - it goes on, and the gaps
-         *                              stay kept until it commits
+         *                              blocked by a lock the calling thread's unit of work holds, or behind a recording
+         *                              that is - it goes on, and the gaps stay kept until it commits
          * @throws RuntimeException     the gaps could not be recorded - they stay kept, for the next call
          */
         void recordDeferredGapsCommitted() throws InterruptedException, TimeoutException {
             if (!defersGapRecording) return;
-            synchronized (deferredGapsLock) {
-                if (unrecordedGaps.isEmpty() && unrecordedFillsNotDoneWith.isEmpty()) return;
+            if (deferredGapsLock.tryLock()) {
+                try {
+                    if (unrecordedGaps.isEmpty() && unrecordedFillsNotDoneWith.isEmpty()) return;
+                } finally {
+                    deferredGapsLock.unlock();
+                }
             }
             // The probe also sees a Spring transaction with no unit of work bound yet, which withUnitOfWork would join
             if (TransactionProbe.isUnitOfWorkActive(unitOfWorkFactory)) {
-                runOnAVirtualThreadWaitingAtMost("Cdc-RecordDeferredGaps-" + aggregateType, DEFERRED_GAPS_RECORDING_WAIT, this::recordDeferredGaps);
+                runOnAVirtualThreadWaitingAtMost("Cdc-RecordDeferredGaps-" + aggregateType, deferredGapsRecordingWait, this::recordDeferredGaps);
             } else {
                 recordDeferredGaps();
             }
@@ -1433,7 +1528,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          */
         private void recordDeferredGaps() {
             if (!defersGapRecording) return;
-            synchronized (deferredGapsLock) {
+            deferredGapsLock.lock();
+            try {
                 if (unrecordedGaps.isEmpty() && unrecordedFillsNotDoneWith.isEmpty()) return;
                 var orders = new TreeSet<>(unrecordedGaps);
                 orders.addAll(unrecordedFillsNotDoneWith.keySet());
@@ -1458,6 +1554,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 if (!reconciliation.isEmpty()) {
                     eventStore.getEventStoreSubscriptionObserver().gapReconciliationOutcome(handler.subscriberId(), aggregateType, reconciliation);
                 }
+            } finally {
+                deferredGapsLock.unlock();
             }
         }
 
@@ -1468,12 +1566,12 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * {@link #DEFERRED_GAPS_RECORDING_WAIT} - the ending thread's unit of work may hold a lock that recording needs,
          * a wait PostgreSQL cannot see as a deadlock. A failure, or a wait that runs out, is logged and the subscription
          * ends: a restart from a resume point saved past those gaps before they are recorded then does not wait for them -
-         * as when recording an opened gap fails. A recording that outlasts the wait goes on, and records them when it commits
+         * as when recording an opened gap fails. A recording that outlasts the wait goes on, and records them when it commits.
+         * {@link #ended} is set without {@link #deferredGapsLock}, which a recording that outlasted an earlier wait may
+         * hold: a gap kept before is recorded here, as this takes that lock afterwards, and one about to be kept is refused
          */
         private void recordDeferredGapsAtEnd() {
-            synchronized (deferredGapsLock) {
-                ended = true;
-            }
+            ended = true;
             try {
                 recordDeferredGapsCommitted();
             } catch (InterruptedException e) {
@@ -1483,7 +1581,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             } catch (TimeoutException e) {
                 log.warn("[{}-{}] Recording the gaps kept in memory as the subscription ended did not finish within {} - ending the subscription; " +
                                  "a restart from a resume point saved past them before they are recorded will not wait for them",
-                         subscriberId.orElseThrow(), aggregateType, DEFERRED_GAPS_RECORDING_WAIT, e);
+                         subscriberId.orElseThrow(), aggregateType, deferredGapsRecordingWait, e);
             } catch (RuntimeException e) {
                 log.warn("[{}-{}] Could not record the gaps kept in memory as the subscription ended - a restart from a resume point saved past them will not wait for them",
                          subscriberId.orElseThrow(), aggregateType, e);
@@ -1580,7 +1678,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          */
         private List<LongRange> withoutUnrecordedGaps(List<LongRange> givenUp) {
             if (!defersGapRecording || givenUp.isEmpty()) return givenUp;
-            synchronized (deferredGapsLock) {
+            deferredGapsLock.lock();
+            try {
                 if (unrecordedGaps.isEmpty()) return givenUp;
                 var toRecord = new ArrayList<LongRange>(givenUp.size());
                 for (var range : givenUp) {
@@ -1591,6 +1690,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                     if (!allKept) toRecord.add(range);
                 }
                 return toRecord;
+            } finally {
+                deferredGapsLock.unlock();
             }
         }
 
@@ -2173,7 +2274,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * the same, only the read may be duplicated.
      * <p>
      * Asks a running subscription's tracker under the tracker's monitor, which its delivering threads take for every event
-     * - briefly, and never the bus thread's.
+     * - briefly, and never the bus thread's. A running subscription's held fills are checked under its delivery gate's lock,
+     * waited for at most {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT}: when that lock is not free within the wait
+     * (a deferred-gap recording that outlasted its own wait may still hold it) or the thread is interrupted waiting for it,
+     * the order is answered as still awaited, so {@code awaitProcessed} reports it as not yet processed and asks again.
      */
     @Override
     public boolean isAwaitedAsGap(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder globalEventOrder) {
@@ -2216,7 +2320,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         }
         // A fill of a gap kept in memory, handed on and not done with - no transient gap records it
         var gates = runningDeliveryGates.get(key);
-        return gates != null && gates.stream().anyMatch(gate -> gate.isFillOfAnUnrecordedGapNotDoneWith(globalEventOrder));
+        return gates != null && gates.stream().anyMatch(gate -> gate.isAwaitedAsFillOfAnUnrecordedGap(globalEventOrder));
     }
 
     @Override
