@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.p
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 
 import java.time.Duration;
-import java.util.Optional;
+import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -38,24 +38,27 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <p>
  * The flip side: a message that can never succeed dead-letters after minutes, not seconds, and the messages behind it on
  * the same key wait meanwhile.
- *
- * @param policy        the policy
- * @param retriesFor    how long the policy keeps retrying, in total
- * @param lockTimeOut   the lock timeout it was derived from
- * @param queueWindow   the queue window it was derived from
+ * <p>
+ * Built only by {@link #outlasting(Optional, Optional)}, so {@link #retriesFor()} is always what {@link #policy()} waits
+ * in total.
  */
-public record FailoverRedeliveryPolicy(RedeliveryPolicy policy, Duration retriesFor, Duration lockTimeOut, Duration queueWindow) {
+public final class FailoverRedeliveryPolicy {
     static final int      DEFAULT_LOCK_TIME_OUT_SECONDS = 15;
     static final int      DEFAULT_QUEUE_WINDOW_SECONDS  = 30;
     static final int      SAFETY_FACTOR                 = 4;
     static final Duration FIRST_DELAY                   = Duration.ofMillis(200);
     static final Duration MAX_DELAY                     = Duration.ofSeconds(10);
 
-    public FailoverRedeliveryPolicy {
-        requireNonNull(policy, "No policy provided");
-        requireNonNull(retriesFor, "No retriesFor provided");
-        requireNonNull(lockTimeOut, "No lockTimeOut provided");
-        requireNonNull(queueWindow, "No queueWindow provided");
+    private final RedeliveryPolicy policy;
+    private final Duration         retriesFor;
+    private final Duration         lockTimeOut;
+    private final Duration         queueWindow;
+
+    private FailoverRedeliveryPolicy(RedeliveryPolicy policy, Duration retriesFor, Duration lockTimeOut, Duration queueWindow) {
+        this.policy = requireNonNull(policy, "No policy provided");
+        this.retriesFor = requireNonNull(retriesFor, "No retriesFor provided");
+        this.lockTimeOut = requireNonNull(lockTimeOut, "No lockTimeOut provided");
+        this.queueWindow = requireNonNull(queueWindow, "No queueWindow provided");
     }
 
     /**
@@ -69,23 +72,75 @@ public record FailoverRedeliveryPolicy(RedeliveryPolicy policy, Duration retries
         var lock   = lockTimeOut.orElse(Duration.ofSeconds(DEFAULT_LOCK_TIME_OUT_SECONDS));
         var queue  = queueWindow.orElse(Duration.ofSeconds(DEFAULT_QUEUE_WINDOW_SECONDS));
         var budget = lock.plus(queue).multipliedBy(SAFETY_FACTOR);
-        // Same arithmetic as RedeliveryPolicy.calculateNextRedeliveryDelay: redelivery 0 waits FIRST_DELAY, redelivery n >= 1
-        // waits FIRST_DELAY x 2^(n-1), capped at MAX_DELAY
+        // Ask the backoff policy itself for each delay, so the total cannot drift from what it waits;
+        // the delays do not depend on the redelivery limit, so the probe's limit is irrelevant
+        var probe        = backoff(Integer.MAX_VALUE);
         var redeliveries = 0;
         var total        = Duration.ZERO;
         while (total.compareTo(budget) < 0) {
-            var delay = redeliveries == 0 ? FIRST_DELAY : FIRST_DELAY.multipliedBy(1L << Math.min(redeliveries - 1, 30));
-            total = total.plus(delay.compareTo(MAX_DELAY) > 0 ? MAX_DELAY : delay);
+            total = total.plus(probe.calculateNextRedeliveryDelay(redeliveries));
             redeliveries++;
         }
-        var policy = RedeliveryPolicy.exponentialBackoff()
-                                     .setInitialRedeliveryDelay(FIRST_DELAY)
-                                     .setFollowupRedeliveryDelay(FIRST_DELAY)
-                                     .setFollowupRedeliveryDelayMultiplier(2.0d)
-                                     .setMaximumFollowupRedeliveryDelayThreshold(MAX_DELAY)
-                                     .setMaximumNumberOfRedeliveries(redeliveries)
-                                     .build();
-        return new FailoverRedeliveryPolicy(policy, total, lock, queue);
+        return new FailoverRedeliveryPolicy(backoff(redeliveries), total, lock, queue);
+    }
+
+    private static RedeliveryPolicy backoff(int maximumNumberOfRedeliveries) {
+        return RedeliveryPolicy.exponentialBackoff()
+                               .setInitialRedeliveryDelay(FIRST_DELAY)
+                               .setFollowupRedeliveryDelay(FIRST_DELAY)
+                               .setFollowupRedeliveryDelayMultiplier(2.0d)
+                               .setMaximumFollowupRedeliveryDelayThreshold(MAX_DELAY)
+                               .setMaximumNumberOfRedeliveries(maximumNumberOfRedeliveries)
+                               .build();
+    }
+
+    /**
+     * @return the policy
+     */
+    public RedeliveryPolicy policy() {
+        return policy;
+    }
+
+    /**
+     * @return how long {@link #policy()} keeps retrying, in total
+     */
+    public Duration retriesFor() {
+        return retriesFor;
+    }
+
+    /**
+     * @return the lock timeout it was derived from
+     */
+    public Duration lockTimeOut() {
+        return lockTimeOut;
+    }
+
+    /**
+     * @return the queue window it was derived from
+     */
+    public Duration queueWindow() {
+        return queueWindow;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof FailoverRedeliveryPolicy that)) {
+            return false;
+        }
+        return policy.equals(that.policy) && retriesFor.equals(that.retriesFor) && lockTimeOut.equals(that.lockTimeOut) && queueWindow.equals(that.queueWindow);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(policy, retriesFor, lockTimeOut, queueWindow);
+    }
+
+    @Override
+    public String toString() {
+        return "FailoverRedeliveryPolicy[policy=" + policy + ", retriesFor=" + retriesFor + ", lockTimeOut=" + lockTimeOut + ", queueWindow=" + queueWindow + "]";
     }
 
     /**

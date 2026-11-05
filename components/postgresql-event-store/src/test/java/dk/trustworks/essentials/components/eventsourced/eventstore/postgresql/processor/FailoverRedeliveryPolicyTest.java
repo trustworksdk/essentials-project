@@ -63,6 +63,21 @@ class FailoverRedeliveryPolicyTest {
     }
 
     @Test
+    void it_can_only_be_built_by_outlasting_so_its_total_always_matches_its_policy() {
+        assertThat(FailoverRedeliveryPolicy.class.getConstructors()).isEmpty();
+    }
+
+    @Test
+    void two_built_from_the_same_timeouts_are_equal() {
+        var first  = FailoverRedeliveryPolicy.outlasting(Optional.of(Duration.ofSeconds(5)), Optional.of(Duration.ofSeconds(10)));
+        var second = FailoverRedeliveryPolicy.outlasting(Optional.of(Duration.ofSeconds(5)), Optional.of(Duration.ofSeconds(10)));
+
+        assertThat(first).isEqualTo(second);
+        assertThat(first.hashCode()).isEqualTo(second.hashCode());
+        assertThat(first).isNotEqualTo(FailoverRedeliveryPolicy.outlasting(Optional.empty(), Optional.empty()));
+    }
+
+    @Test
     void it_describes_itself_for_the_start_up_log() {
         assertThat(FailoverRedeliveryPolicy.outlasting(Optional.empty(), Optional.empty()).describe())
                 .contains("24 redeliveries")
