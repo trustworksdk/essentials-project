@@ -549,8 +549,13 @@ holds a pooled connection while it handles a message - size the pool for it.
 ```
 
 Switching either way keeps the processor's resume point and fenced lock (same subscriber id). With a batch, the
-`SubscriptionErrorPolicy` applies to the batch as a whole, and an override of `forwardEventToInbox` still applies to
-each event in it.
+`SubscriptionErrorPolicy` retries and stops at the batch as a whole. A policy that skips first forwards the failed
+batch's events again one per unit of work, each tried once more on its own without the policy's retries, so the skip
+loses only the events that cannot be forwarded on their own either. Up to a batch is still skipped when that replay
+cannot run at all (the database unreachable), when a stopping policy turns into a skip after `AutoResume.maxAttempts()`
+resumes, and when the processor cannot read its policy (no `getSubscriptionErrorPolicy()` override and an
+`EventStoreSubscriptionManager` other than `DefaultEventStoreSubscriptionManager`). An override of
+`forwardEventToInbox` still applies to each event, in a batch and in the replay.
 
 #### Several instances: `PartitionedEventProcessor`
 
@@ -605,6 +610,9 @@ public class AccountActivityProjection extends PartitionedViewEventProcessor {
   failover, redelivery when a unit moves). No `FENCED_LOCK_TOKEN` metadata. `UnitOfWorkMode.NONE` is refused.
 - **Refuses to start** without `DurableQueues.keepsKeyOrderAcrossInstances()` - the shard-owned engine, everywhere.
 - **Queue key** is `<aggregateType>|<aggregateId>`; handlers see the plain id as `OrderedMessage.getKey()`.
+- **A forward that fails:** as for a batched `EventProcessor` - the `SubscriptionErrorPolicy` retries and stops at a
+  batch as a whole; a policy that skips first queues the failed batch's events again one per unit of work, so the skip
+  loses only the events that cannot be queued on their own either (the same cases as there still skip up to a batch).
 - **Lag** = reader lag + queue depth of `<processorName>:queue`; the resume point means *forwarded*.
 - **`forwardsEventPayloads()`** (default `false`): `true` queues each event itself instead of a reference, saving the
   event-store load per event on the handling side, for larger queue rows (measured: ~8 % less CPU, ~11 % more WAL).
