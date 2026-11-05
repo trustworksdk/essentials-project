@@ -514,6 +514,10 @@ public class WalReplicationTailer implements Lifecycle {
                     if (msg == null) {
                         // The stream has nothing more right now: write what has arrived before waiting for more
                         flushInbox(stream);
+                        if (stopping.get()) {
+                            // A STOP may have left messages unwritten: the idle LSN push below would acknowledge them
+                            break;
+                        }
                         handleNullPoll();
                         if (nowNs - lastHeartbeatNs >= HEARTBEAT_INTERVAL_NANOS) {
                             logConnectedHeartbeat();
@@ -1176,6 +1180,8 @@ public class WalReplicationTailer implements Lifecycle {
      * them. Should the batch fail, it is written again message by message through {@link #persistMessage}, so the
      * error handler decides per message exactly as it does for an unbatched write: {@code CONTINUE} skips the message,
      * {@code STOP} ends streaming with the rest unacknowledged, {@code RETRY_CONNECTION} rethrows to reconnect.
+     * After a {@code STOP} nothing is acknowledged, also not through {@link #forceIdleLsnPush}: the caller checks
+     * {@link #stopping} before anything else acknowledges.
      */
     private void flushInbox(PGReplicationStream stream) throws Exception {
         if (pendingInbox.isEmpty()) {
@@ -1340,8 +1346,11 @@ public class WalReplicationTailer implements Lifecycle {
      * start position — which holds WAL indefinitely and has been observed to correlate with
      * sender throttling / disconnection. Safe to call even when the LSN hasn't changed:
      * in that case we skip the setter calls and just re-send the keepalive status.
+     * Pushes nothing once {@link #stopping} is set: a {@code STOP} decision can leave received messages unwritten, and
+     * acknowledging the received position would confirm them.
      */
     private void forceIdleLsnPush(PGReplicationStream stream) {
+        if (stopping.get()) return;
         try {
             var currentLsn = stream.getLastReceiveLSN();
             if (currentLsn == null) return;

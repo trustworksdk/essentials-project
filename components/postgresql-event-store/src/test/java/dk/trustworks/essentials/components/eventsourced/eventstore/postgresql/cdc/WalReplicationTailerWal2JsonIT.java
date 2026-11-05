@@ -506,6 +506,65 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
     }
 
     @Test
+    void a_stop_while_writing_a_failed_batch_one_by_one_acknowledges_nothing_also_not_through_the_idle_lsn_push() {
+        // A STOP in flushInbox's message-by-message fallback leaves the batch unwritten. The idle LSN push that follows
+        // an empty poll used to acknowledge the stream's received position anyway, moving the slot past WAL that never
+        // reached the inbox, so it was never streamed again
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+        var messageErrors = new AtomicInteger(0);
+        CdcInboxRepository alwaysFailingInbox = new CdcInboxRepository(unitOfWorkFactory) {
+            @Override
+            public boolean insertIfAbsent(String slot, String lsn, byte[] payloadBytes) {
+                throw new RuntimeException("Simulated fatal inbox write failure");
+            }
+
+            @Override
+            public boolean[] insertAllIfAbsent(String slot, List<InboxInsert> messages) {
+                throw new RuntimeException("Simulated fatal inbox batch write failure");
+            }
+        };
+        var handler = new WalReplicationTailerErrorHandler() {
+            @Override
+            public Decision onMessageError(String slot, String json, Exception error) {
+                messageErrors.incrementAndGet();
+                return Decision.STOP;
+            }
+
+            @Override
+            public Decision onStreamError(String slot, Exception error) {
+                return Decision.STOP;
+            }
+        };
+        var props = WalReplicationTailerProperties.defaults(Duration.ofMillis(20), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100));
+        // A 1 ns interval makes every empty poll due for an idle LSN push, so without the stop check the poll that writes the batch would be followed by one
+        props.setIdleLsnPushInterval(Duration.ofNanos(1));
+        var tailer = inboxTailer(slotName, alwaysFailingInbox, props, PgSlotMode.CREATE_IF_MISSING, new CdcAvailability(), Optional.empty(), Optional.of(handler));
+        try {
+            tailer.startAndAwaitReady(Duration.ofSeconds(10));
+            var walPositionBeforeTheMessage = jdbi.withHandle(h -> h.createQuery("select pg_current_wal_lsn()::text").mapTo(String.class).one());
+            jdbi.useHandle(h -> h.execute("insert into " + TEST_TABLE + "(payload) values(?)", "payload-stop-idle-push-" + UUID.randomUUID()));
+
+            Awaitility.await()
+                      .atMost(Duration.ofSeconds(10))
+                      .pollInterval(Duration.ofMillis(50))
+                      .untilAsserted(() -> {
+                          assertThat(messageErrors.get()).isGreaterThanOrEqualTo(1);
+                          assertThat(tailer.getStatus().slotLockAcquired()).isFalse();
+                      });
+
+            var confirmedPastTheUnwrittenMessage = jdbi.withHandle(h -> h.createQuery("select confirmed_flush_lsn > cast(:before as pg_lsn) from pg_replication_slots where slot_name = :slot")
+                                                                          .bind("before", walPositionBeforeTheMessage)
+                                                                          .bind("slot", slotName)
+                                                                          .mapTo(Boolean.class)
+                                                                          .one());
+            assertThat(confirmedPastTheUnwrittenMessage).as("the slot is not confirmed past the message the STOP left unwritten").isFalse();
+        } finally {
+            tailer.stop();
+            jdbi.useHandle(h -> h.execute("select pg_drop_replication_slot(slot_name) from pg_replication_slots where slot_name = ? and not active", slotName));
+        }
+    }
+
+    @Test
     void stream_error_continue_keeps_loop_alive_until_slot_appears() {
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
