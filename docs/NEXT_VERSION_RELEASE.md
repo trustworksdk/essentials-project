@@ -458,7 +458,7 @@ timeout, or an unreachable database) saves the other resume points and then fail
 retrying it at once and a shutdown treats an unreachable database as one, instead of retrying it every 100 ms for up
 to 5 s. A reset (`EventStoreSubscription#resetFrom`, `DefaultEventStoreSubscriptionManager#resetStoredResumePoint`)
 whose gaps could not be written now fails with an exception instead of reporting a reset whose resume point was not
-saved (`<!-- fix:U-001 -->`).
+saved (`85ad4303e`).
 
 There is nothing to configure. A few cases still write the gap at once, as before:
 
