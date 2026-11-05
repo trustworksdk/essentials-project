@@ -453,7 +453,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
      * under a savepoint - see {@link #handleDirectlyUnderSavepoint(OrderedMessage)}.
      * <p>
      * An event this processor has no {@link MessageHandler} for is passed over before any of that - see
-     * {@link #hasNoHandlerFor(PersistedEvent)}.
+     * {@link #hasNoHandlerFor(PatternMatchingMessageHandler, PersistedEvent)}.
      *
      * @param keysQueuedInBatch handling in a batch: the keys of the batch's events queued so far, which this method adds
      *                          to when it queues one. An event for such a key is queued without asking the queue, so a
@@ -466,7 +466,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
      *                          again per event
      */
     private void handlePersistedEvent(PersistedEvent event, Set<String> keysQueuedInBatch, boolean checkedUpFront) {
-        if (hasNoHandlerFor(event)) {
+        if (hasNoHandlerFor(patternMatchingMessageHandlerDelegate, event)) {
             logger.trace("[{}:{}] No handler for event '{}' - passed over", event.aggregateType(), event.aggregateId(), event.event().getEventTypeOrNamePersistenceValue());
             return;
         }
@@ -521,7 +521,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
     private Optional<Set<String>> keysQueuedBeforeBatch(List<PersistedEvent> events) {
         var keys = new LinkedHashSet<String>();
         for (var event : events) {
-            if (!hasNoHandlerFor(event)) {
+            if (!hasNoHandlerFor(patternMatchingMessageHandlerDelegate, event)) {
                 keys.add(resolveAggregateIdSerializer(event.aggregateType()).serialize(event.aggregateId()));
             }
         }
@@ -546,11 +546,16 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
      * <p>
      * An event whose Java type is not known (a named event, or a class that cannot be loaded) takes the full path, as
      * before.
+     * <p>
+     * Shared with {@link PartitionedViewEventProcessor}, which passes over the same events before it forwards a batch.
+     *
+     * @param messageHandler the processor's {@link PatternMatchingMessageHandler}
+     * @param event          the event to check
      */
-    private boolean hasNoHandlerFor(PersistedEvent event) {
+    static boolean hasNoHandlerFor(PatternMatchingMessageHandler messageHandler, PersistedEvent event) {
         try {
             return event.event().getEventType().isPresent() &&
-                    !patternMatchingMessageHandlerDelegate.handlesMessageWithPayload(event.event().getEventTypeAsJavaClass().get());
+                    !messageHandler.handlesMessageWithPayload(event.event().getEventTypeAsJavaClass().get());
         } catch (RuntimeException unresolvableType) {
             return false;
         }

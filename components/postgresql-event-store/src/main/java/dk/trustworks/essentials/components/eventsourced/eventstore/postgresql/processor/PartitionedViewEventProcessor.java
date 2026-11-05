@@ -89,7 +89,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * the reset into the reset view. Checked, not assumed: the reset refuses while the processor is started on this
  * instance, while any instance holds its reader lock, and while the queue implementation counts any instance consuming
  * the queue; and a starting instance cannot register its consumer while a reset runs. It can run on any instance, as it
- * moves the stored resume points itself. Details: {@link StoppedEverywhereReset}.
+ * moves the stored resume points itself. Details: {@link StoppedEverywhereReset}. Every reset override delegates to
+ * {@link StoppedEverywhereReset}'s shared reset, as {@link PartitionedEventProcessor}'s do: a reset overload added to
+ * {@link AbstractEventProcessor} must be overridden onto it in both classes, or it resets live.
  * <p>
  * <b>Switching an existing {@link ViewEventProcessor} to this class</b> keeps its resume point, lock and queue names.
  * Stop the view on every instance first, and deploy the new class everywhere before starting it again: a cluster that
@@ -320,7 +322,9 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
     void forwardBatch(List<PersistedEvent> events) {
         var messages = new ArrayList<OrderedMessage>(events.size());
         for (var event : events) {
-            if (hasNoHandlerFor(event)) {
+            // As ViewEventProcessor decides it: an event whose Java type is not known is forwarded, so a failure to resolve
+            // it shows as a dead letter instead of a silently missing event
+            if (ViewEventProcessor.hasNoHandlerFor(patternMatchingMessageHandlerDelegate, event)) {
                 if (unhandledEventTypes != null) {
                     unhandledEventTypes.report(event);
                 }
@@ -380,20 +384,6 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
     public static final class EventPayloadOrderedMessage extends OrderedMessage implements IdentifiedByKeyAndOrder {
         EventPayloadOrderedMessage(Object payload, String key, long order, MessageMetaData metaData) {
             super(payload, key, order, metaData);
-        }
-    }
-
-    /**
-     * True if no {@link MessageHandler} method matches the event's type - as {@link ViewEventProcessor} decides it. An
-     * event whose Java type is not known is forwarded, so a failure to resolve it shows as a dead letter instead of a
-     * silently missing event.
-     */
-    private boolean hasNoHandlerFor(PersistedEvent event) {
-        try {
-            return event.event().getEventType().isPresent() &&
-                    !patternMatchingMessageHandlerDelegate.handlesMessageWithPayload(event.event().getEventTypeAsJavaClass().get());
-        } catch (RuntimeException unresolvableType) {
-            return false;
         }
     }
 
@@ -536,10 +526,7 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
      */
     @Override
     protected void resetAllSubscriptions(Consumer<QueueName> resetDurableQueueCallback) {
-        var resetParameters = new LinkedHashMap<AggregateType, GlobalEventOrder>();
-        requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null")
-                .forEach(aggregateType -> resetParameters.put(aggregateType, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER));
-        resetSubscriptions(resetParameters, true, resetDurableQueueCallback);
+        resetSubscriptions(StoppedEverywhereReset.everyAggregateTypeFromTheFirstEvent(this), true, resetDurableQueueCallback);
     }
 
     /**
@@ -551,7 +538,8 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
     protected void resetSubscriptions(Map<AggregateType, GlobalEventOrder> resetAggregateSubscriptionsFromAndIncluding,
                                       boolean resetDurableQueue,
                                       Consumer<QueueName> resetDurableQueueCallback) {
-        guardedReset(resetAggregateSubscriptionsFromAndIncluding, resetDurableQueue, resetDurableQueueCallback, false);
+        StoppedEverywhereReset.resetProcessor(this, this::resetTarget, resetAggregateSubscriptionsFromAndIncluding, resetDurableQueue,
+                                              resetDurableQueueCallback, false);
     }
 
     /**
@@ -563,43 +551,20 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
      * @throws IllegalStateException if the processor runs on this or another instance, or that cannot be checked
      */
     public void resetAllSubscriptionsIgnoringDepartedInstances() {
-        var resetParameters = new LinkedHashMap<AggregateType, GlobalEventOrder>();
-        requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null")
-                .forEach(aggregateType -> resetParameters.put(aggregateType, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER));
-        guardedReset(resetParameters, true, durableQueues::purgeQueue, true);
+        StoppedEverywhereReset.resetProcessor(this, this::resetTarget, StoppedEverywhereReset.everyAggregateTypeFromTheFirstEvent(this), true,
+                                              durableQueues::purgeQueue, true);
     }
 
-    private void guardedReset(Map<AggregateType, GlobalEventOrder> resetAggregateSubscriptionsFromAndIncluding,
-                              boolean resetDurableQueue,
-                              Consumer<QueueName> resetDurableQueueCallback,
-                              boolean ignoreDepartedInstances) {
-        requireNonNull(resetAggregateSubscriptionsFromAndIncluding, "resetAggregateSubscriptionsFromAndIncluding is null");
-        requireNonNull(resetDurableQueueCallback, "resetDurableQueueCallback is null");
-        var processorName = requireNonNull(getProcessorName(), "getProcessorName() returned null");
-        var reactsTo      = requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null");
-        resetAggregateSubscriptionsFromAndIncluding.keySet().forEach(aggregateType -> {
-            if (!reactsTo.contains(aggregateType)) {
-                throw new IllegalArgumentException(msg("[{}] Cannot reset subscription for {} '{}' since the processor doesn't subscribe to events for this aggregate type",
-                                                       processorName, AggregateType.class.getSimpleName(), aggregateType));
-            }
-        });
+    /**
+     * The reader lock is the processor's own ({@code <processorName>:lock}); the queue is {@code <processorName>:queue}.
+     */
+    private StoppedEverywhereReset.ResetTarget resetTarget(String processorName) {
         var queueName = QueueName.of(processorName + ":queue");
-        StoppedEverywhereReset.reset(processorName,
-                                     started,
-                                     fencedLockManager,
-                                     List.of(LockName.of(processorName + ":lock")),
-                                     "queue '" + queueName + "'",
-                                     () -> durableQueues.getQueueConsumers(queueName),
-                                     ignoreDepartedInstances,
-                                     () -> {
-                                         resetAggregateSubscriptionsFromAndIncluding.forEach((aggregateType, from) ->
-                                                 eventStoreSubscriptionManager.resetStoredResumePoint(resolveSubscriberId(aggregateType, processorName), aggregateType, from));
-                                         if (resetDurableQueue) {
-                                             logger.info("[{}] Purging queue '{}'", processorName, queueName);
-                                             resetDurableQueueCallback.accept(queueName);
-                                         }
-                                         resetAggregateSubscriptionsFromAndIncluding.forEach(this::onSubscriptionsReset);
-                                     });
+        return new StoppedEverywhereReset.ResetTarget(fencedLockManager,
+                                                      List.of(LockName.of(processorName + ":lock")),
+                                                      queueName,
+                                                      "queue '" + queueName + "'",
+                                                      () -> durableQueues.getQueueConsumers(queueName));
     }
 
     /**
@@ -611,9 +576,7 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
                                        GlobalEventOrder resubscribeFromAndIncluding,
                                        boolean resetDurableQueue,
                                        Consumer<QueueName> resetDurableQueueCallback) {
-        requireNonNull(eventStoreSubscription, "eventStoreSubscription is null");
-        requireNonNull(resubscribeFromAndIncluding, "resubscribeFromAndIncluding is null");
-        resetSubscriptions(Map.of(eventStoreSubscription.aggregateType(), resubscribeFromAndIncluding), resetDurableQueue, resetDurableQueueCallback);
+        resetSubscriptions(StoppedEverywhereReset.subscriptionsAggregateType(eventStoreSubscription, resubscribeFromAndIncluding), resetDurableQueue, resetDurableQueueCallback);
     }
 
     @Override

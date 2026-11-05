@@ -16,6 +16,9 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor;
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStoreSubscription;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import org.slf4j.*;
 
@@ -23,9 +26,9 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.Supplier;
+import java.util.function.*;
 
-import dk.trustworks.essentials.components.foundation.messaging.queue.QueueConsumers;
+import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -57,6 +60,11 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * </ol>
  * Without {@code ignoreDepartedInstances} the check has no time bound: a departed instance counts for as long as it holds
  * part of the queue.
+ * <p>
+ * Both processors route every reset path - {@code resetAllSubscriptions(Consumer)}, {@code resetSubscriptions(Map, boolean, Consumer)},
+ * {@code doResetSubscription} (4-arg) and {@code resetAllSubscriptionsIgnoringDepartedInstances()} - onto
+ * {@link #resetProcessor(AbstractEventProcessor, Function, Map, boolean, Consumer, boolean)}, which holds the steps they
+ * share; each processor passes only what differs, as a {@link ResetTarget}.
  */
 final class StoppedEverywhereReset {
     private static final Logger log = LoggerFactory.getLogger(StoppedEverywhereReset.class);
@@ -194,6 +202,99 @@ final class StoppedEverywhereReset {
             }
             monitor.unlock();
         }
+    }
+
+    /**
+     * What differs between the partitioned processors' resets: where the processor's reader locks and queue are.
+     *
+     * @param lockManager      the lock manager the processor's start and readers use
+     * @param readerLocks      the locks the processor's reader holds while it reads
+     * @param queueName        the processor's queue, handed to the purge callback
+     * @param queueDescription names the processor's queue in a refusal and in the purge's log line
+     * @param queueConsumers   asks the queue implementation who may be handling the queue
+     */
+    record ResetTarget(FencedLockManager lockManager,
+                       List<LockName> readerLocks,
+                       QueueName queueName,
+                       String queueDescription,
+                       Supplier<Optional<QueueConsumers>> queueConsumers) {
+    }
+
+    /**
+     * @param processor the processor to reset
+     * @return every aggregate type the processor reacts to, each from the first event - not only those this instance has
+     * subscriptions for, as it may never have read
+     */
+    static Map<AggregateType, GlobalEventOrder> everyAggregateTypeFromTheFirstEvent(AbstractEventProcessor processor) {
+        requireNonNull(processor, "processor is null");
+        var resetParameters = new LinkedHashMap<AggregateType, GlobalEventOrder>();
+        requireNonNull(processor.reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null")
+                .forEach(aggregateType -> resetParameters.put(aggregateType, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER));
+        return resetParameters;
+    }
+
+    /**
+     * @param eventStoreSubscription      the subscription whose aggregate type is reset
+     * @param resubscribeFromAndIncluding the global event order to restart from and including
+     * @return the reset parameters of that one aggregate type
+     */
+    static Map<AggregateType, GlobalEventOrder> subscriptionsAggregateType(EventStoreSubscription eventStoreSubscription, GlobalEventOrder resubscribeFromAndIncluding) {
+        requireNonNull(eventStoreSubscription, "eventStoreSubscription is null");
+        requireNonNull(resubscribeFromAndIncluding, "resubscribeFromAndIncluding is null");
+        return Map.of(eventStoreSubscription.aggregateType(), resubscribeFromAndIncluding);
+    }
+
+    /**
+     * The one path every reset of a partitioned processor takes: checks that the processor reacts to every aggregate type
+     * asked for, then runs {@link #reset} with the processor's {@link ResetTarget} - the stored resume points are moved,
+     * the queue purged (if asked) and {@code onSubscriptionsReset} called per aggregate type.
+     *
+     * @param processor                 the processor to reset
+     * @param resetTarget               the processor's {@link ResetTarget}, given its name; asked only once the aggregate
+     *                                  types are checked
+     * @param resetFromAndIncluding     the aggregate types to reset, each with the global event order to restart from and
+     *                                  including
+     * @param resetDurableQueue         purge the processor's queue
+     * @param resetDurableQueueCallback purges the queue it is given
+     * @param ignoreDepartedInstances   see {@link #reset}
+     * @throws IllegalArgumentException if the processor does not react to one of the aggregate types
+     * @throws IllegalStateException    as {@link #reset}
+     */
+    static void resetProcessor(AbstractEventProcessor processor,
+                               Function<String, ResetTarget> resetTarget,
+                               Map<AggregateType, GlobalEventOrder> resetFromAndIncluding,
+                               boolean resetDurableQueue,
+                               Consumer<QueueName> resetDurableQueueCallback,
+                               boolean ignoreDepartedInstances) {
+        requireNonNull(processor, "processor is null");
+        requireNonNull(resetTarget, "resetTarget is null");
+        requireNonNull(resetFromAndIncluding, "resetAggregateSubscriptionsFromAndIncluding is null");
+        requireNonNull(resetDurableQueueCallback, "resetDurableQueueCallback is null");
+        var processorName = requireNonNull(processor.getProcessorName(), "getProcessorName() returned null");
+        var reactsTo      = requireNonNull(processor.reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null");
+        resetFromAndIncluding.keySet().forEach(aggregateType -> {
+            if (!reactsTo.contains(aggregateType)) {
+                throw new IllegalArgumentException(msg("[{}] Cannot reset subscription for {} '{}' since the processor doesn't subscribe to events for this aggregate type",
+                                                       processorName, AggregateType.class.getSimpleName(), aggregateType));
+            }
+        });
+        var target = requireNonNull(resetTarget.apply(processorName), "resetTarget returned null");
+        reset(processorName,
+              processor.isStarted(),
+              target.lockManager(),
+              target.readerLocks(),
+              target.queueDescription(),
+              target.queueConsumers(),
+              ignoreDepartedInstances,
+              () -> {
+                  resetFromAndIncluding.forEach((aggregateType, from) ->
+                          processor.eventStoreSubscriptionManager.resetStoredResumePoint(AbstractEventProcessor.resolveSubscriberId(aggregateType, processorName), aggregateType, from));
+                  if (resetDurableQueue) {
+                      log.info("[{}] Purging {}", processorName, target.queueDescription());
+                      resetDurableQueueCallback.accept(target.queueName());
+                  }
+                  resetFromAndIncluding.forEach(processor::onSubscriptionsReset);
+              });
     }
 
     private static void releaseLogging(String processorName, FencedLock lock) {
