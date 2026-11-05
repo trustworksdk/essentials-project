@@ -457,7 +457,7 @@ runs out, the resume point is not saved and the next save tries again. While suc
 subscription's end on that thread waits for it at most 10 s too, instead of hanging. Any acknowledgement, on any
 thread, waits for a running gap recording at most 10 s and then fails, and the gap of a gap fill it acknowledged is
 recorded and stays open, so a later subscription delivers that event again. `awaitProcessed` likewise waits for it at
-most 10 s per check and then treats the event as not processed yet (`<!-- fix:U-002 -->`). A save whose gaps could not be written (that
+most 10 s per check and then treats the event as not processed yet (`8b99e122e`). A save whose gaps could not be written (that
 timeout, or an unreachable database) saves the other resume points and then fails, so a stop or lock release stops
 retrying it at once and a shutdown treats an unreachable database as one, instead of retrying it every 100 ms for up
 to 5 s. A reset (`EventStoreSubscription#resetFrom`, `DefaultEventStoreSubscriptionManager#resetStoredResumePoint`)
