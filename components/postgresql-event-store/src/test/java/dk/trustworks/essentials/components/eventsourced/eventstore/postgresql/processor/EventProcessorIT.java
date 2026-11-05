@@ -450,6 +450,40 @@ public class EventProcessorIT {
         assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isZero();
     }
 
+    /**
+     * A batch whose forward keeps failing for one of its events, under a skipping SubscriptionErrorPolicy: the batch's
+     * events are forwarded again one per unit of work before the skip, so the skip loses that one event, not the whole batch
+     */
+    @Test
+    void a_skipped_batch_loses_only_the_event_that_cannot_be_forwarded() {
+        testProcessor.shutDownForTesting(eventStoreSubscriptionManager);
+        var orders   = IntStream.range(0, 8).mapToObj(i -> OrderId.random()).toList();
+        var poisoned = orders.get(3);
+        // Appended in one unit of work before the processor subscribes, so its first batch holds them all
+        unitOfWorkFactory.usingUnitOfWork(() -> orders.forEach(orderId -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "batched")))));
+
+        var skipping = new SkippingBatchedTestOrderEventProcessor(new EventProcessorDependencies(eventStoreSubscriptionManager,
+                                                                                                 new Inboxes.DurableQueueBasedInboxes(durableQueues, fencedLockManager),
+                                                                                                 commandBus,
+                                                                                                 List.of()),
+                                                                  eventStore,
+                                                                  poisoned);
+        testProcessor = skipping;
+        skipping.start();
+
+        var others = orders.stream().filter(orderId -> !orderId.equals(poisoned)).toList();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() ->
+            others.forEach(orderId -> assertThat(unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(TEST_ORDERS, orderId).get().eventList()))
+                    .as("order %s, in the batch with the event that cannot be forwarded", orderId)
+                    .extracting(event -> (Object) event.event().getEventTypeAsJavaClass().get())
+                    .containsExactly(OrderPlacedEvent.class, OrderConfirmedEvent.class)));
+        assertThat(skipping.getOrderPlacedEventCounter().get()).isEqualTo(others.size());
+        assertThat(skipping.forwardAttemptsOfPoisoned.get()).as("tried in the batch, then on its own").isGreaterThanOrEqualTo(2);
+        assertThat(unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(TEST_ORDERS, poisoned).get().eventList()))
+                .extracting(event -> (Object) event.event().getEventTypeAsJavaClass().get())
+                .containsExactly(OrderPlacedEvent.class);
+    }
+
     @Test
     public void testResetAllSubscriptions() {
         IntStream.range(0, 5).forEach(i -> {
@@ -804,6 +838,34 @@ public class EventProcessorIT {
         @Override
         protected void forwardEventToInbox(PersistedEvent event, Inbox forwardToInbox) {
             forwardedInBatches.incrementAndGet();
+            super.forwardEventToInbox(event, forwardToInbox);
+        }
+    }
+
+    /**
+     * {@link BatchedTestOrderEventProcessor} with a skipping {@link SubscriptionErrorPolicy} that cannot forward the events
+     * of one order
+     */
+    public static class SkippingBatchedTestOrderEventProcessor extends BatchedTestOrderEventProcessor {
+        final AtomicInteger forwardAttemptsOfPoisoned = new AtomicInteger();
+        private final OrderId poisoned;
+
+        public SkippingBatchedTestOrderEventProcessor(EventProcessorDependencies eventProcessorDependencies, PostgresqlEventStore<?> eventStore, OrderId poisoned) {
+            super(eventProcessorDependencies, eventStore);
+            this.poisoned = poisoned;
+        }
+
+        @Override
+        protected Optional<SubscriptionErrorPolicy> getSubscriptionErrorPolicy() {
+            return Optional.of(SubscriptionErrorPolicy.skip());
+        }
+
+        @Override
+        protected void forwardEventToInbox(PersistedEvent event, Inbox forwardToInbox) {
+            if (poisoned.equals(event.aggregateId())) {
+                forwardAttemptsOfPoisoned.incrementAndGet();
+                throw new IllegalStateException("Cannot forward the events of order " + poisoned);
+            }
             super.forwardEventToInbox(event, forwardToInbox);
         }
     }

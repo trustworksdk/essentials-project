@@ -307,6 +307,12 @@ the first one started. `PartitionedEventProcessor` is the alternative, chosen by
 - **Be aware:** handlers run on several instances at once, for different aggregates - not for a handler that keeps
   in-memory state across aggregates or calls something that accepts one caller only. Handlers of different aggregates
   writing one shared stream conflict on it more often (the inbox redelivers them). Handlers must be idempotent.
+- **A forward that fails:** the `SubscriptionErrorPolicy` retries and stops at a batch as a whole. A policy that skips
+  first forwards the failed batch's events again one per unit of work, each tried once more on its own, without the
+  policy's retries, so the skip loses only the events that cannot be forwarded on their own either - not the whole batch. This applies to every
+  `EventProcessor` with `getForwardBatchSize()` above 1, and to `PartitionedViewEventProcessor` (§2.10). Up to a batch
+  is still skipped when the replay cannot run at all (the database unreachable), and when a stopping policy turns into
+  a skip after `AutoResume.maxAttempts` resumes. (`<!-- fix:U-001 -->`)
 
 Whether a queue keeps key order across instances is the new `DurableQueues.keepsKeyOrderAcrossInstances()` /
 `Inboxes.keepsKeyOrderAcrossInstances()`: `false` by default, `true` for the shard-owned adapter.
@@ -384,6 +390,9 @@ its share of the aggregates, each message in a `UnitOfWork` of its own together 
   through the queue (a few ms across instances); no `FENCED_LOCK_TOKEN` metadata; handlers must be idempotent (guard rows
   with the event order). `UnitOfWorkMode.NONE` handlers are refused, as by `ViewEventProcessor`.
 - **Refuses to start** where `DurableQueues.keepsKeyOrderAcrossInstances()` is `false`: it needs the shard-owned engine.
+- **A batch the `SubscriptionErrorPolicy` skips** is first queued again one event per unit of work, as described in
+  §2.7 (each tried once more on its own, without the policy's retries), so the skip loses only the events that cannot be
+  queued on their own either.
 - **The queue key is `<aggregateType>|<aggregateId>`** (`PartitionedViewEventProcessor.qualifiedKey`), so two aggregate
   types sharing an id are two keys. Handlers still see the plain id.
 - **Switching from `ViewEventProcessor`** keeps the resume point, lock and queue names. Stop the view on every instance

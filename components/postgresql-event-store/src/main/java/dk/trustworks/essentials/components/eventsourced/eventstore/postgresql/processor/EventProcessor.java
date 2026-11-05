@@ -453,7 +453,9 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     /**
      * The batched forward: each batch's events are forwarded with {@link #forwardEventToInbox} - an override still
      * applies - inside the one unit of work the batch is handled in, which also advances the resume point. A batch that
-     * fails rolls back whole, forwards included, and is retried as the {@link SubscriptionErrorPolicy} says.
+     * fails rolls back whole, forwards included, and is retried as the {@link SubscriptionErrorPolicy} says. When the
+     * policy gives up on it and skips, its events are forwarded again one per unit of work first, so the skip loses only
+     * the events that fail again - see {@link #forwardFailedBatchOneEventPerUnitOfWork}.
      */
     private EventStoreSubscription subscribeForwardingInBatches(SubscriberId subscriberId,
                                                                 AggregateType aggregateType,
@@ -478,6 +480,11 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                     }
 
                     @Override
+                    public boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure) {
+                        return forwardFailedBatchOneEventPerUnitOfWork(events, failure, event -> forwardEventToInbox(event, inbox));
+                    }
+
+                    @Override
                     public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
                         return getSubscriptionErrorPolicy();
                     }
@@ -497,8 +504,12 @@ public abstract class EventProcessor extends AbstractEventProcessor {
      * resume point, so a processor can switch either way without losing its place, but one commit per batch. Forwarding
      * event by event bounded a forwarding processor at about 850 events/s, and a chain of them - the trading demo's order
      * flow - at the slowest one's commit rate (EF-2, {@code docs/key-partitioned-event-processing.md} §5). What a batch
-     * changes: the {@link SubscriptionErrorPolicy} applies to the batch as a whole, and an event is forwarded only once
-     * its batch is full or {@link #getForwardMaxLatency()} has passed.
+     * changes: the {@link SubscriptionErrorPolicy} retries and stops at the batch as a whole, and an event is forwarded
+     * only once its batch is full or {@link #getForwardMaxLatency()} has passed. A policy that skips first forwards the
+     * failed batch's events again one per unit of work, each tried once more on its own, without the policy's retries, so
+     * the skip loses only the events that fail on their own as well. A stop that turns into a skip after
+     * {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()} resumes, and a skip whose replay itself cannot run (the
+     * database unreachable), still lose up to a batch of events.
      *
      * @return the most events forwarded in one unit of work; values below {@code 2} forward event by event
      */
