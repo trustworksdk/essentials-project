@@ -55,11 +55,14 @@ public interface DeferredGapRecording {
      * Records durably every gap of the subscriber's running subscriptions still kept in memory, and records every gap they
      * open from now on at once, until the returned {@link ResumePointSave} is closed - so that the resume point the caller
      * is about to read and save can be past no gap that is not recorded.
+     * <p>
+     * May be called with a unit of work of the caller's current on the calling thread (or a Spring transaction with no unit of work bound yet), but never records the gaps in it: they are recorded in a unit of work of their own, committed before this returns, so a
+     * rollback of the caller's unit of work cannot take them back once they are no longer kept in memory.
      *
      * @param subscriberId  the subscriber
      * @param aggregateType the aggregate type it subscribes to
      * @return to close once the resume point was saved, or the save failed
-     * @throws RuntimeException the gaps could not be recorded - the caller must then not save the resume point
+     * @throws RuntimeException the gaps could not be recorded, or not in time - the caller must then not save the resume point
      */
     ResumePointSave beforeResumePointSave(SubscriberId subscriberId, AggregateType aggregateType);
 

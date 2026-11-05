@@ -450,7 +450,10 @@ The row only matters once a resume point past the gap is saved, so for subscript
 `EventStoreSubscriptionManager`, the subscription now keeps a narrow opened gap in memory. The gap is written only if it
 is still open when the subscriber's resume point is next saved (periodically, on stop, lock release or reset), and is
 always written before that save. A gap that fills before then costs no database write at all. The crash guarantee is
-unchanged: no resume point is saved past a gap that is not recorded.
+unchanged: no resume point is saved past a gap that is not recorded. The gap is written in a transaction of its own,
+committed before the save goes on, also when the save runs inside a unit of work of the caller's, or inside a Spring
+transaction with no unit of work bound yet - a rollback of that unit of work or transaction cannot take it back. There, the write runs on a virtual thread and is waited for at most 10 s; if that
+runs out, the resume point is not saved and the next save tries again.
 
 There is nothing to configure. A few cases still write the gap at once, as before:
 

@@ -36,7 +36,7 @@ import reactor.core.publisher.Sinks;
 
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.*;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -301,7 +301,79 @@ class CdcEventStoreDeliveryGateTest {
         await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 5L)));
     }
 
+    /**
+     * A resume point save whose caller has a unit of work current must not record the gaps kept in memory in it: the gate
+     * forgets them once recorded, so a rollback of the caller's unit of work would lose them, and the next save - past
+     * the gap - would record nothing that makes a restart wait for the gap's event
+     */
+    @Test
+    void gaps_kept_in_memory_stay_recorded_when_the_unit_of_work_current_on_the_saving_thread_rolls_back() throws Exception {
+        setupDeferringGapRecording();
+        var received = subscribe();
+        poll(1, 3);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L)));
+        assertThat(gapHandler.transientGapsAdded).as("kept in memory").isEmpty();
+
+        // A save on a thread whose own unit of work then rolls back
+        var callerWithUnitOfWork = Thread.ofPlatform().unstarted(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close());
+        doAnswer(inv -> Thread.currentThread().equals(callerWithUnitOfWork) ? Optional.of(mock(EventStoreUnitOfWork.class)) : Optional.empty())
+                .when(uowFactory).getCurrentUnitOfWork();
+        callerWithUnitOfWork.start();
+        callerWithUnitOfWork.join(Duration.ofSeconds(5));
+        assertThat(callerWithUnitOfWork.isAlive()).isFalse();
+        gapHandler.transientGapsAdded.removeIf(added -> callerWithUnitOfWork.equals(added.thread()));
+
+        // A later save with no unit of work current
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+
+        assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).containsExactly(LongRange.only(2));
+    }
+
+    @Test
+    void a_recording_on_a_virtual_thread_that_does_not_end_is_waited_for_no_longer_than_the_wait() throws Exception {
+        var mayEnd = new CountDownLatch(1);
+        try {
+            var started = System.nanoTime();
+            assertThatThrownBy(() -> CdcEventStore.runOnAVirtualThreadWaitingAtMost("blocked-recording", Duration.ofMillis(100), () -> {
+                try {
+                    mayEnd.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            })).isInstanceOf(TimeoutException.class);
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+        } finally {
+            mayEnd.countDown();
+        }
+    }
+
+    @Test
+    void a_recording_on_a_virtual_thread_that_fails_in_time_throws_its_failure() {
+        var failure = new IllegalStateException("Recording failed");
+        assertThatThrownBy(() -> CdcEventStore.runOnAVirtualThreadWaitingAtMost("failing-recording", Duration.ofSeconds(5), () -> {
+            throw failure;
+        })).isSameAs(failure);
+    }
+
     // ------------------------------------------------------------------------------------------------------------
+
+    /**
+     * As {@link #setup(Duration)}, with the gap handler a {@link PostgresqlEventStreamGapHandler} - the one that can record
+     * a gap without its event - and {@link #SUBSCRIBER} opted in to keeping narrow gaps in memory until a resume point save
+     */
+    @SuppressWarnings("unchecked")
+    private void setupDeferringGapRecording() {
+        setup(Duration.ofSeconds(10));
+        PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> gapHandlers = mock(PostgresqlEventStreamGapHandler.class);
+        when(gapHandlers.gapHandlerFor(any())).thenReturn(gapHandler);
+        cdcEventStore = new CdcEventStore<>(delegate,
+                                            uowFactory,
+                                            gapHandlers,
+                                            new CdcEventBus(),
+                                            new CdcProperties(),
+                                            new CdcAvailability());
+        cdcEventStore.deferGapRecordingUntilResumePointSave(SUBSCRIBER, ORDERS);
+    }
 
     /**
      * Writes a tenant's column value in lower case, so "ACME" and "acme" are the same tenant
@@ -406,6 +478,12 @@ class CdcEventStoreDeliveryGateTest {
     }
 
     /**
+     * One {@code addTransientGaps} call, and the thread it ran on - so a test can tell which unit of work it was in
+     */
+    private record TransientGapsAdded(LongRange gaps, Thread thread) {
+    }
+
+    /**
      * Records what the gate asks of it, and has no transient gaps recorded from before
      */
     private static final class RecordingGapHandler implements SubscriptionGapHandler {
@@ -413,6 +491,7 @@ class CdcEventStoreDeliveryGateTest {
         private final List<Reconciliation> reconciliations       = new CopyOnWriteArrayList<>();
         private final List<List<Long>>     givenUp               = new CopyOnWriteArrayList<>();
         private final List<List<Long>>     resolved              = new CopyOnWriteArrayList<>();
+        private final List<TransientGapsAdded> transientGapsAdded = new CopyOnWriteArrayList<>();
         private volatile int               findTransientGapsCalls;
         private volatile boolean           failGivingUp;
         private volatile boolean           failResolving;
@@ -449,6 +528,12 @@ class CdcEventStoreDeliveryGateTest {
             if (failResolving) throw new IllegalStateException("Resolving failed");
             resolved.add(gapFills.stream().map(event -> event.globalEventOrder().longValue()).toList());
             return new GapReconciliation(0, gapFills.size(), 0);
+        }
+
+        @Override
+        public GapReconciliation addTransientGaps(AggregateType aggregateType, LongRange gaps) {
+            transientGapsAdded.add(new TransientGapsAdded(gaps, Thread.currentThread()));
+            return GapReconciliation.NONE;
         }
 
         @Override
