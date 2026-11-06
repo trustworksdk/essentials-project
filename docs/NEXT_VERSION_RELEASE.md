@@ -342,7 +342,7 @@ the first one started. `PartitionedEventProcessor` is the alternative, chosen by
   its stack trace. Whether the policy skips is read from the policy the batched subscription was built with, handed to the
   new `BatchedPersistedEventHandler.handOffFailedBatch(events, failure, subscriptionErrorPolicy)` overload (by default it
   delegates to the two-argument one), so a skipping policy now also replays a batch under an `EventStoreSubscriptionManager`
-  other than `DefaultEventStoreSubscriptionManager`, where it used to skip the whole batch. (`c5e495008`, `b05d29a79`, `cf71a917f`, `be5c1190a`, `<!-- fix:U-004 -->`)
+  other than `DefaultEventStoreSubscriptionManager`, where it used to skip the whole batch. (`c5e495008`, `b05d29a79`, `cf71a917f`, `be5c1190a`, `304fc2a47`)
 
 Whether a queue keeps key order across instances is the new `DurableQueues.keepsKeyOrderAcrossInstances()` /
 `Inboxes.keepsKeyOrderAcrossInstances()`: `false` by default, `true` for the shard-owned adapter.
