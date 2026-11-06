@@ -1256,6 +1256,16 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     }
 
     /**
+     * What {@link #mayAcquireUnderLockSpreading(LockName)} read about a lock: free to take (absent, unlocked, held by
+     * this instance or timed out), held by another instance, or unreadable because the lookup failed.
+     */
+    private enum SpreadingLockState {
+        FREE,
+        HELD,
+        UNREADABLE
+    }
+
+    /**
      * Whether {@link #asyncLockAcquiringTick} may try to acquire a lock this instance does not hold, under
      * {@link #lockSpreading}: always when spreading is off, for a membership lock, or when this instance is the lock's
      * preferred owner; otherwise only once this instance has seen the lock free for {@link LockSpreading#acquireGrace()}.
@@ -1274,16 +1284,19 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             seenFreeByNonPreferredOwnerSinceNanos.remove(lockName);
             return true;
         }
-        var existingLock = withUnitOfWork(uow -> lockStorage.lookupLockInDB(this, uow, lockName),
-                                          e -> null);
-        if (existingLock == null) {
+        var state = withUnitOfWork(uow -> {
+                                       var existingLock = lockStorage.lookupLockInDB(this, uow, lockName);
+                                       var free = existingLock.isEmpty()
+                                               || !existingLock.get().isLocked()
+                                               || existingLock.get().isLockedByThisLockManagerInstance()
+                                               || isLockTimedOut(existingLock.get());
+                                       return free ? SpreadingLockState.FREE : SpreadingLockState.HELD;
+                                   },
+                                   e -> SpreadingLockState.UNREADABLE);
+        if (state == SpreadingLockState.UNREADABLE) {
             return true;
         }
-        var free = existingLock.isEmpty()
-                || !existingLock.get().isLocked()
-                || existingLock.get().isLockedByThisLockManagerInstance()
-                || isLockTimedOut(existingLock.get());
-        if (!free) {
+        if (state == SpreadingLockState.HELD) {
             seenFreeByNonPreferredOwnerSinceNanos.remove(lockName);
             return false;
         }
