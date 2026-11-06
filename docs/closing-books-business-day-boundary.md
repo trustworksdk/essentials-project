@@ -115,13 +115,21 @@ skipped periods are not materialised as empty generations; the gap is only logge
   (`TradingAccounts.java:94-114`) loads the account, asks `TradingAccountClosingBooksPolicy.shouldRolloverOnAccess`,
   and if true calls `account.closeBooks(nextPeriodId)` (`TradingAccount.java:188-196`) and
   `ClosingBooksLogicalAggregateRepository.closeAndOpenNextGeneration(id, account, hint, factory)`
-  (`ClosingBooksLogicalAggregateRepository.java:212-227`), with the next period id as the hint.
+  (`ClosingBooksLogicalAggregateRepository.java:212-227`), with the next period id as the hint. That call closes
+  whichever generation is open once it holds the generation lock, and the account was loaded before: had another
+  command rolled the account in between, it would close the newer generation and build the next one from the older
+  account's state. The `accounts` context that replaced `TradingAccounts` (`Accounts.closeAndOpenNextGeneration`)
+  now calls `closeAndOpenNextGenerationGuarded(id, account, hint, factory)`, which throws
+  `ClosingBooksGenerationMovedException`, closing nothing, in that case.
 - **`SCHEDULED_SCAN`** runs `ClosingBooksManager` under a fenced lock (`ClosingBooksManager.java:130`);
-  `DefaultClosingBooksScheduledScanProcessor.processNextBatch` (`:140-175`) loads the oldest open generations
-  and calls `ClosingBooksCoordinator.evaluatePolicy(..., SCHEDULED_SCAN, policy)` (`:202-207`). The
-  coordinator evaluates under the generation lock (`ClosingBooksCoordinator.java:171-205`) and, on
-  `CLOSE_AND_OPEN_NEXT`, calls `closeAndOpenNextGeneration(logicalAggregateId)` (`:141-166`), which only rolls
-  the **generation row**: no next-generation factory runs and no period hint reaches the new generation.
+  `DefaultClosingBooksScheduledScanProcessor.processNextBatch` loads the oldest open generations and, for each, calls
+  `ClosingBooksCoordinator.evaluateScannedGeneration(generation, aggregateLoader, policy, scanRollover)`. The
+  coordinator takes the generation lock and a unit of work, skips a generation that is no longer the open one
+  (`generation_moved`), and only then loads the aggregate through the loader, so the policy and the rollover see the
+  aggregate of the generation they decide on, in the unit of work the rollover commits in. On `CLOSE_AND_OPEN_NEXT`
+  without a scan rollover it calls `closeAndOpenNextGeneration(logicalAggregateId)`, which only rolls the
+  **generation row**: no next-generation factory runs and no period hint reaches the new generation. With one, the
+  application's rollover runs instead (EF-1b, above).
 
 Two consequences matter for this design and exist today, independent of business days:
 
@@ -335,7 +343,10 @@ doubled rollover: the generation row change runs under the generation lock
 generation both append `AccountBooksClosed` to the same stream, so optimistic concurrency should reject
 the second. The demo calls the rollover outside `evaluatePolicy`, so this depends on the generation-row
 write and the event append sharing one unit of work. That is not verified here; the contention IT in §7.2
-must prove it.
+must prove it. Since the demo rolls through `closeAndOpenNextGenerationGuarded`, the generation row has a guard of its
+own: the second instance's rollover finds, under the generation lock (a PostgreSQL advisory lock, so shared by the
+instances), that the generation its account was loaded from is no longer open, and throws
+`ClosingBooksGenerationMovedException` before closing anything.
 
 That window is **not unique to multiple instances**, and it is not the biggest one. Even with one instance,
 the exchange emits `BusinessDayClosed` at the cutoff and we receive it after webhook latency, and because

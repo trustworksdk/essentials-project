@@ -16,10 +16,14 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.shared.functional.CheckedConsumer;
 import dk.trustworks.essentials.shared.functional.CheckedFunction;
+
+import java.util.function.Supplier;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -95,5 +99,55 @@ final class InlineUnitOfWorkFactories {
             throw new RuntimeException(e);
         }
         return factory;
+    }
+
+    /**
+     * Like {@link #inline()}, but every exception thrown inside {@code withUnitOfWork}/{@code usingUnitOfWork} reaches
+     * the caller wrapped in a {@link UnitOfWorkException}, whether the call is outermost or nested - as
+     * {@code UnitOfWorkFactory.withUnitOfWork} does. {@link #inline()} passes exceptions through unwrapped, so a test
+     * that asserts which exception a caller gets from a real factory uses this one.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    static HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> wrapping() {
+        HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> factory = mock(HandleAwareUnitOfWorkFactory.class);
+        var uow = mock(HandleAwareUnitOfWork.class);
+        try {
+            when(factory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(invocation -> {
+                CheckedFunction<HandleAwareUnitOfWork, ?> function = invocation.getArgument(0);
+                try {
+                    return function.apply(uow);
+                } catch (Exception e) {
+                    throw new UnitOfWorkException(e);
+                }
+            });
+            doAnswer(invocation -> {
+                CheckedConsumer<HandleAwareUnitOfWork> consumer = invocation.getArgument(0);
+                try {
+                    consumer.accept(uow);
+                } catch (Exception e) {
+                    throw new UnitOfWorkException(e);
+                }
+                return null;
+            }).when(factory).usingUnitOfWork(any(CheckedConsumer.class));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return factory;
+    }
+
+    /**
+     * An in-memory generation repository whose {@code withGenerationLock} runs inside
+     * {@code unitOfWorkFactory.withUnitOfWork}, as {@code PostgresqlClosingBooksGenerationRepository}'s does. With
+     * {@link #wrapping()}, an exception thrown under the lock reaches the caller wrapped by the lock too.
+     */
+    static <ID> InMemoryClosingBooksGenerationResolver<ID> generationLockInUnitOfWork(HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> unitOfWorkFactory) {
+        return new InMemoryClosingBooksGenerationResolver<>() {
+            @Override
+            public <R> R withGenerationLock(AggregateType aggregateType,
+                                            LogicalAggregateId<ID> logicalAggregateId,
+                                            Supplier<R> rollover) {
+                return unitOfWorkFactory.withUnitOfWork(uow -> super.withGenerationLock(aggregateType, logicalAggregateId, rollover));
+            }
+        };
     }
 }

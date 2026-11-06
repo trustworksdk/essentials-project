@@ -1038,8 +1038,13 @@ unitOfWorkFactory.usingUnitOfWork(uow -> repository.load(new LogicalAggregateId<
 | `tryLoad(id)` / `load(id)` | From the open generation; `load` throws if none is open |
 | `resolveCurrentGeneration(id)` / `resolveOrOpenCurrentGeneration(id)` | Inspect, or open generation 1 on demand |
 | `loadOrOpen(id, …)` | Load, opening the first generation for a new aggregate |
-| `closeAndOpenNextGeneration(id, …)` | Explicit rollover — close + open in ONE UoW |
+| `closeAndOpenNextGeneration(id, …)` | Explicit rollover — close + open in ONE UoW. Closes whichever generation is open under the generation lock: safe for an aggregate loaded while holding that lock (a scan rollover) |
+| `closeAndOpenNextGenerationGuarded(id, currentAggregate, hint, factory)` | Same, for an aggregate loaded before the call (on access, a command handler): throws `ClosingBooksGenerationMovedException`, closing nothing, when the generation `currentAggregate`'s stream id names is no longer the open one |
 | `save(aggregate)` | Delegates to the underlying `StatefulAggregateRepository` |
+
+`ClosingBooksCoordinator` has the same guard: `closeAndOpenNextGeneration(AggregateGeneration expected)` and
+`evaluatePolicy(AggregateGeneration loadedFrom, aggregate, triggerMode, policy, rollover)`. The unguarded
+`evaluatePolicy(id, aggregate, …)` decides on whatever generation is open once the lock is held.
 
 `ClosingBooksStatefulAggregateRepository` is the thinner variant (3 type params) that only maps logical id → open generation's stream id.
 

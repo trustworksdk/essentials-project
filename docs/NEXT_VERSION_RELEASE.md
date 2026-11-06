@@ -596,10 +596,38 @@ boundary did not roll at all.
   passed time boundary - or a closed business day under `periodSource = BUSINESS_CALENDAR` (§2.15) - rolls idle aggregates.
 - `ClosingBooksCoordinator.evaluatePolicy(..., rollover)` is the public overload for a custom
   `ClosingBooksScheduledScanProcessor`, which must load the aggregate from the open generation in its own unit of work;
-  the built-in scan uses its own guarded path.
+  the built-in scan uses its own guarded path. A custom processor that loads the aggregate before the call should use
+  the guarded overload of §2.17.
 
 Additive: without a rollover a scan behaves as before, and logs a WARN once the first time it rolls a generation row
 only. `asDecisionPolicy()` is unchanged.
+
+### 2.17 Guarded closing-books rollovers refuse an aggregate from a generation that has since rolled (`eventsourced-aggregates`)
+
+`ClosingBooksLogicalAggregateRepository.closeAndOpenNextGeneration(id, currentAggregate, hint, factory)` and
+`ClosingBooksCoordinator.evaluatePolicy(id, aggregate, triggerMode, policy[, rollover])` close whichever generation is
+open once they hold the generation lock; nothing checks that the aggregate the caller passes was loaded from it. An
+aggregate loaded before the call - on access, in a command handler, in a custom scan processor - can belong to a
+generation another caller rolled in between, and the open generation is then closed and the next one built from the
+older generation's state. Guarded variants refuse instead:
+
+- **`ClosingBooksLogicalAggregateRepository.closeAndOpenNextGenerationGuarded(id, currentAggregate, hint, factory)`** -
+  the generation is the one `currentAggregate`'s own aggregate id (its stream id) names, so the caller passes nothing
+  extra;
+- **`ClosingBooksCoordinator.closeAndOpenNextGeneration(AggregateGeneration expectedCurrentGeneration)`** and
+  **`ClosingBooksCoordinator.evaluatePolicy(AggregateGeneration loadedFrom, aggregate, triggerMode, policy, rollover)`**.
+
+Under the generation lock, before anything is closed or the policy is asked, each compares the open generation's
+stream id with the expected one, and throws **`ClosingBooksGenerationMovedException`** (an `IllegalStateException`)
+when they differ: nothing is closed or opened, and the policy, the rollover and the next-generation factory are not
+called. Reload and decide again. The comparison uses the open generation the unguarded methods already resolve, so it
+costs no extra database round trip. A refusal by either guarded `closeAndOpenNextGeneration` is counted in
+`essentials.aggregate_closing_books.rollover.outcome` with `outcome=generation_moved`, not `failed`; a refusal by the
+guarded `evaluatePolicy` counts no policy decision.
+
+Additive: the existing methods are unchanged; their javadoc now says when they are safe (the aggregate was loaded
+while holding the generation lock, as the built-in scan's rollover does) and points to the guarded variant. The
+`essentials-trading-demo` rolls its accounts with the guarded repository method (`<!-- fix:U-001 -->`).
 
 ## 3. Bug fixes
 

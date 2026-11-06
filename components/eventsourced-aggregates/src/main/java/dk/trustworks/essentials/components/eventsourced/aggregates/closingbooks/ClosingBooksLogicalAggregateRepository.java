@@ -201,6 +201,14 @@ public class ClosingBooksLogicalAggregateRepository<LOGICAL_ID,
     /**
      * Closes the current aggregate generation and opens the next generation, returning
      * the newly created next-generation aggregate.
+     * <p>
+     * This closes whichever generation is open once the generation lock is held; nothing checks that
+     * {@code currentAggregate} was loaded from it. That is safe only when the caller loaded {@code currentAggregate} while
+     * already holding the generation lock - as a {@link ClosingBooksScanRollover} run by the built-in scan does. A caller
+     * that loaded it earlier (on access, in a command handler, in a custom {@link ClosingBooksScheduledScanProcessor})
+     * should use {@link #closeAndOpenNextGenerationGuarded(LogicalAggregateId, StatefulAggregate, Object, ClosingBooksNextGenerationFactory)}:
+     * here a generation another caller rolled in between would be closed, and the next generation built from the
+     * older generation's {@code currentAggregate}.
      *
      * @param logicalAggregateId the identifier of the logical aggregate to be transitioned to the next generation
      * @param currentAggregate the instance of the current aggregate that is being closed
@@ -217,7 +225,56 @@ public class ClosingBooksLogicalAggregateRepository<LOGICAL_ID,
         requireNonNull(currentAggregate, "No currentAggregate provided");
         requireNonNull(nextGenerationFactory, "No nextGenerationFactory provided");
 
-        var generation = coordinator.closeAndOpenNextGeneration(logicalAggregateId);
+        return openNextGeneration(logicalAggregateId,
+                                  coordinator.closeAndOpenNextGeneration(logicalAggregateId),
+                                  currentAggregate,
+                                  hint,
+                                  nextGenerationFactory);
+    }
+
+    /**
+     * Closes the generation {@code currentAggregate} was loaded from and opens the next generation, returning the newly
+     * created next-generation aggregate - but only while that generation is still the open one.
+     * <p>
+     * The guarded form of
+     * {@link #closeAndOpenNextGeneration(LogicalAggregateId, StatefulAggregate, Object, ClosingBooksNextGenerationFactory)}
+     * for an aggregate loaded before the call, e.g. with {@link #load(LogicalAggregateId)} on access or in a command
+     * handler. The generation is identified by {@code currentAggregate}'s own aggregate id - the stream id of the
+     * generation it was loaded from - so the caller passes nothing extra. Under the generation lock, and before anything
+     * is closed, the open generation's stream id is compared with it; when another caller rolled or closed that
+     * generation in between, nothing is closed or opened, the factory is not called and
+     * {@link ClosingBooksGenerationMovedException} is thrown. Reload and decide again. The comparison uses the open
+     * generation the unguarded form resolves anyway, so it costs no extra database round trip.
+     *
+     * @param logicalAggregateId    the identifier of the logical aggregate to be transitioned to the next generation
+     * @param currentAggregate      the aggregate loaded from the generation to close; its {@code aggregateId()} must be set
+     * @param hint                  additional context or data that may assist in creating the next-generation aggregate
+     * @param nextGenerationFactory a factory responsible for creating the next-generation aggregate instance
+     * @return the newly created next-generation aggregate
+     * @throws IllegalArgumentException             if any of the parameters, or {@code currentAggregate}'s aggregate id, is null
+     * @throws ClosingBooksGenerationMovedException if the generation {@code currentAggregate} was loaded from is no longer the open one
+     */
+    public <HINT> AGGREGATE_IMPL_TYPE closeAndOpenNextGenerationGuarded(LogicalAggregateId<LOGICAL_ID> logicalAggregateId,
+                                                                        AGGREGATE_IMPL_TYPE currentAggregate,
+                                                                        HINT hint,
+                                                                        ClosingBooksNextGenerationFactory<LOGICAL_ID, STREAM_ID, AGGREGATE_IMPL_TYPE, HINT> nextGenerationFactory) {
+        requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
+        requireNonNull(currentAggregate, "No currentAggregate provided");
+        requireNonNull(nextGenerationFactory, "No nextGenerationFactory provided");
+        var loadedFromStreamId = streamIdSerializer.serialize(requireNonNull(currentAggregate.aggregateId(), "currentAggregate has no aggregateId"));
+
+        return openNextGeneration(logicalAggregateId,
+                                  coordinator.closeAndOpenNext(logicalAggregateId, loadedFromStreamId),
+                                  currentAggregate,
+                                  hint,
+                                  nextGenerationFactory);
+    }
+
+    private <HINT> AGGREGATE_IMPL_TYPE openNextGeneration(LogicalAggregateId<LOGICAL_ID> logicalAggregateId,
+                                                          AggregateGeneration<LOGICAL_ID> generation,
+                                                          AGGREGATE_IMPL_TYPE currentAggregate,
+                                                          HINT hint,
+                                                          ClosingBooksNextGenerationFactory<LOGICAL_ID, STREAM_ID, AGGREGATE_IMPL_TYPE, HINT> nextGenerationFactory) {
         var nextAggregate = nextGenerationFactory.createNextGeneration(currentAggregate,
                                                                        new ClosingBooksAggregateInstantiationContext<>(logicalAggregateId,
                                                                                                                       deserializeStreamId(generation.streamAggregateId()),

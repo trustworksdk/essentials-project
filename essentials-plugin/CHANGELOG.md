@@ -3,6 +3,16 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-8 — targets Essentials 0.60.1
+
+- **Guarded closing-books rollovers** — the eventsourced-aggregates reference describes
+  `ClosingBooksLogicalAggregateRepository.closeAndOpenNextGenerationGuarded(id, currentAggregate, hint, factory)` and
+  the coordinator's guarded `closeAndOpenNextGeneration(AggregateGeneration)` and
+  `evaluatePolicy(AggregateGeneration loadedFrom, …)`, which throw `ClosingBooksGenerationMovedException`, closing
+  nothing, when the aggregate's generation is no longer the open one, and says the unguarded
+  `closeAndOpenNextGeneration` closes whichever generation is open under the generation lock. No skill, rule or script
+  changed.
+
 ## 0.60.1-7 — targets Essentials 0.60.1
 
 - **Default inbox retry budget** — the postgresql-event-store reference says the queue's

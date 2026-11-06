@@ -1737,7 +1737,8 @@ unitOfWorkFactory.usingUnitOfWork(uow -> {
 | `load(id)` | Load from the open generation; throws if no generation is open |
 | `resolveCurrentGeneration(id)` / `resolveOrOpenCurrentGeneration(id)` | Inspect, or open generation `1` on demand |
 | `loadOrOpen(id, …)` | Load, opening the first generation if the aggregate is new |
-| `closeAndOpenNextGeneration(id, …)` | Explicit rollover; returns the aggregate in the new generation |
+| `closeAndOpenNextGeneration(id, …)` | Explicit rollover; returns the aggregate in the new generation. Closes whichever generation is open under the generation lock |
+| `closeAndOpenNextGenerationGuarded(id, currentAggregate, hint, factory)` | The same rollover for an aggregate loaded before the call: throws `ClosingBooksGenerationMovedException`, closing nothing, when the generation `currentAggregate` was loaded from is no longer the open one |
 | `save(aggregate)` | Delegates to the underlying `StatefulAggregateRepository` |
 
 `closeAndOpenNextGeneration(...)` runs the close + open pair inside a **single** `UnitOfWork`: a crash between the

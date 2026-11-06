@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -135,18 +136,53 @@ public class ClosingBooksCoordinator<ID> {
      * exception between the two repository calls rolls back the close, leaving the previous
      * generation {@code OPEN} for safe retry rather than stranding the aggregate with no open
      * generation.
+     * <p>
+     * This closes whichever generation is open once the generation lock is held. A caller that decided to roll on the
+     * strength of an aggregate it loaded before taking the lock should use
+     * {@link #closeAndOpenNextGeneration(AggregateGeneration)}, which refuses when that generation is no longer the open one.
      *
      * @throws IllegalStateException if no open generation exists
      */
     public AggregateGeneration<ID> closeAndOpenNextGeneration(LogicalAggregateId<ID> logicalAggregateId) {
         requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
+        return closeAndOpenNext(logicalAggregateId, null);
+    }
+
+    /**
+     * Close {@code expectedCurrentGeneration} and immediately open the next generation, atomically - but only while it
+     * is still the open generation of its logical aggregate.
+     * <p>
+     * The guarded form of {@link #closeAndOpenNextGeneration(LogicalAggregateId)}: under the generation lock and in the
+     * same unit of work, the open generation is compared with {@code expectedCurrentGeneration} by stream id before
+     * anything is closed. When another caller rolled or closed it in between, nothing is closed or opened and
+     * {@link ClosingBooksGenerationMovedException} is thrown; the rollover is then counted with outcome
+     * {@code generation_moved}, not {@code failed}. The comparison uses the open generation that the unguarded form
+     * resolves anyway, so it costs no extra database round trip.
+     *
+     * @param expectedCurrentGeneration the generation the caller loaded its aggregate from
+     * @return the newly opened generation
+     * @throws ClosingBooksGenerationMovedException if {@code expectedCurrentGeneration} is no longer the open generation
+     */
+    public AggregateGeneration<ID> closeAndOpenNextGeneration(AggregateGeneration<ID> expectedCurrentGeneration) {
+        requireNonNull(expectedCurrentGeneration, "No expectedCurrentGeneration provided");
+        return closeAndOpenNext(expectedCurrentGeneration.logicalAggregateId(), expectedCurrentGeneration.streamAggregateId());
+    }
+
+    /**
+     * Close the open generation and open the next one. When {@code expectedStreamAggregateId} is not {@code null}, refuse
+     * with {@link ClosingBooksGenerationMovedException} unless the open generation has that stream id.
+     */
+    AggregateGeneration<ID> closeAndOpenNext(LogicalAggregateId<ID> logicalAggregateId, String expectedStreamAggregateId) {
         // The counters are incremented after the UnitOfWork returns, never inside it: a rollback must not leave a
         // count claiming a generation was closed that the database then rolled back.
         try {
             var nextGeneration = measurementSupport.recordRollover(aggregateType,
                                                                     () -> generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> unitOfWorkFactory.withUnitOfWork(uow -> {
-                                                                        generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId)
-                                                                                            .orElseThrow(() -> new IllegalStateException("No open generation exists for logicalAggregateId '" + logicalAggregateId + "'"));
+                                                                        var openGeneration = generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId);
+                                                                        if (expectedStreamAggregateId != null) {
+                                                                            requireStillOpen(logicalAggregateId, expectedStreamAggregateId, openGeneration);
+                                                                        }
+                                                                        openGeneration.orElseThrow(() -> new IllegalStateException("No open generation exists for logicalAggregateId '" + logicalAggregateId + "'"));
                                                                         generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
                                                                         // The repository decides the next generation number and feeds it to the generator, so the stream id it
                                                                         // persists always names the generation on the row it is stored with.
@@ -160,13 +196,51 @@ public class ClosingBooksCoordinator<ID> {
             measurementSupport.recordRolloverTimestamp(aggregateType, clock.millis());
             return nextGeneration;
         } catch (RuntimeException e) {
+            var generationMoved = generationMovedWrappedIn(e);
+            if (generationMoved != null) {
+                measurementSupport.incrementRolloverOutcome(aggregateType, "generation_moved");
+                throw generationMoved;
+            }
             measurementSupport.incrementRolloverOutcome(aggregateType, "failed");
             throw e;
         }
     }
 
     /**
+     * The {@link ClosingBooksGenerationMovedException} that {@code e} is, or that the unit of work wrapped in it:
+     * {@code UnitOfWorkFactory.withUnitOfWork} rethrows whatever its function throws as a {@link UnitOfWorkException},
+     * whether it created the unit of work or joined one, and the PostgreSQL generation lock runs in one as well. Only
+     * {@link UnitOfWorkException} layers are unwrapped, so a refusal some other exception carries as its cause is not
+     * taken for this operation's own. Answers {@code null} when there is none.
+     */
+    private static ClosingBooksGenerationMovedException generationMovedWrappedIn(RuntimeException e) {
+        Throwable candidate = e;
+        // Throwable.getCause() answers null for an exception that is its own cause, so this loop always ends
+        while (candidate instanceof UnitOfWorkException && candidate.getCause() != null) {
+            candidate = candidate.getCause();
+        }
+        return candidate instanceof ClosingBooksGenerationMovedException generationMoved ? generationMoved : null;
+    }
+
+    /**
+     * Throw {@link ClosingBooksGenerationMovedException} unless {@code openGeneration} is the generation with
+     * {@code expectedStreamAggregateId}. The caller holds the generation lock.
+     */
+    private void requireStillOpen(LogicalAggregateId<ID> logicalAggregateId,
+                                  String expectedStreamAggregateId,
+                                  Optional<AggregateGeneration<ID>> openGeneration) {
+        if (openGeneration.isEmpty() || !openGeneration.get().streamAggregateId().equals(expectedStreamAggregateId)) {
+            throw new ClosingBooksGenerationMovedException(logicalAggregateId, expectedStreamAggregateId, openGeneration.orElse(null));
+        }
+    }
+
+    /**
      * Evaluate a closing-books policy against the current generation and aggregate instance.
+     * <p>
+     * As with the overload taking a rollover, nothing checks that {@code aggregate} belongs to the generation that is open
+     * once the generation lock is held; see there, and
+     * {@link #evaluatePolicy(AggregateGeneration, Object, ClosingBooksTriggerMode, ClosingBooksDecisionPolicy, ClosingBooksScanRollover)}
+     * for the guarded form.
      */
     public <AGGREGATE> AggregateGeneration<ID> evaluatePolicy(LogicalAggregateId<ID> logicalAggregateId,
                                                               AGGREGATE aggregate,
@@ -182,6 +256,14 @@ public class ClosingBooksCoordinator<ID> {
      * generation lock is held; nothing checks that the two belong together. Load the aggregate from that generation,
      * in the unit of work this is called in - the rollover joins it - or a closing event the rollover records on the
      * aggregate is not persisted. The scheduled scan does both for you.
+     * <p>
+     * So this is safe only when {@code aggregate} cannot belong to an older generation: the caller loaded it while
+     * already holding the generation lock, or the policy can only answer {@code KEEP_OPEN}. Otherwise - an aggregate
+     * loaded before the call, as on access or in a custom {@link ClosingBooksScheduledScanProcessor} - a generation
+     * another caller rolled in between would be closed on the strength of an older generation's aggregate, and the
+     * rollover would build the next generation from that older state. Use
+     * {@link #evaluatePolicy(AggregateGeneration, Object, ClosingBooksTriggerMode, ClosingBooksDecisionPolicy, ClosingBooksScanRollover)}
+     * there, which refuses instead.
      *
      * @param rollover performs the rollover - the aggregate's closing event and its next generation, through the
      *                 application's next-generation factory (EF-1b) - inside the generation lock and a unit of work. With
@@ -205,6 +287,55 @@ public class ClosingBooksCoordinator<ID> {
         // closeAndOpenNextGeneration is a no-op.
         return generationRepository.withGenerationLock(aggregateType, logicalAggregateId,
                                                        () -> decide(resolveOrOpenCurrentGeneration(logicalAggregateId), aggregate, triggerMode, policy, rollover));
+    }
+
+    /**
+     * Evaluate a closing-books policy for an aggregate loaded from {@code loadedFrom}, but only while that is still the
+     * open generation of its logical aggregate.
+     * <p>
+     * The guarded form of
+     * {@link #evaluatePolicy(LogicalAggregateId, Object, ClosingBooksTriggerMode, ClosingBooksDecisionPolicy, ClosingBooksScanRollover)}:
+     * under the generation lock the open generation is compared with {@code loadedFrom} by stream id. When another caller
+     * rolled or closed it in between, the policy and the rollover are not called, nothing is closed or opened, and
+     * {@link ClosingBooksGenerationMovedException} is thrown. Otherwise the policy and the rollover receive
+     * {@code aggregate} with {@code loadedFrom}'s generation, exactly as the unguarded form would. The comparison uses the
+     * open generation that the unguarded form resolves anyway, so it costs no extra database round trip.
+     * <p>
+     * Unlike the unguarded form this never opens a first generation: {@code loadedFrom} was open when the aggregate was
+     * loaded, so an empty logical aggregate means it was closed since. As there, load the aggregate in the unit of work
+     * this is called in, or a closing event the rollover records on it is not persisted.
+     *
+     * @param loadedFrom  the generation {@code aggregate} was loaded from
+     * @param aggregate   the aggregate loaded from {@code loadedFrom}'s stream
+     * @param triggerMode what triggered the evaluation
+     * @param policy      the decision policy
+     * @param rollover    performs the rollover on {@code CLOSE_AND_OPEN_NEXT}, inside the generation lock and a unit of work;
+     *                    with {@code null} only the generation row is rolled
+     * @return the generation that is current afterwards, or the closed one if none is open
+     * @throws ClosingBooksGenerationMovedException if {@code loadedFrom} is no longer the open generation
+     */
+    public <AGGREGATE> AggregateGeneration<ID> evaluatePolicy(AggregateGeneration<ID> loadedFrom,
+                                                              AGGREGATE aggregate,
+                                                              ClosingBooksTriggerMode triggerMode,
+                                                              ClosingBooksDecisionPolicy<ID, AGGREGATE> policy,
+                                                              ClosingBooksScanRollover<ID, AGGREGATE> rollover) {
+        requireNonNull(loadedFrom, "No loadedFrom provided");
+        requireNonNull(aggregate, "No aggregate provided");
+        requireNonNull(triggerMode, "No triggerMode provided");
+        requireNonNull(policy, "No policy provided");
+
+        var logicalAggregateId = loadedFrom.logicalAggregateId();
+        try {
+            return generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> {
+                var openGeneration = generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId);
+                requireStillOpen(logicalAggregateId, loadedFrom.streamAggregateId(), openGeneration);
+                return decide(openGeneration.get(), aggregate, triggerMode, policy, rollover);
+            });
+        } catch (RuntimeException e) {
+            // The PostgreSQL generation lock runs in a unit of work, which wraps the refusal.
+            var generationMoved = generationMovedWrappedIn(e);
+            throw generationMoved != null ? generationMoved : e;
+        }
     }
 
     /**

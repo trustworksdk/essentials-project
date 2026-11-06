@@ -80,11 +80,16 @@ public class Accounts {
         return repository.open(new LogicalAggregateId<>(accountId), factory::apply);
     }
 
+    /**
+     * Rolls {@code currentAccount}'s generation to the next one. {@code currentAccount} was loaded before the generation
+     * lock is taken, so the guarded rollover is used: if another command rolled the account in between, this throws
+     * {@link ClosingBooksGenerationMovedException} instead of closing the newer generation from the older one's state.
+     */
     public Account closeAndOpenNextGeneration(AccountId accountId, Account currentAccount, PeriodId nextPeriodId) {
         requireNonNull(accountId, "No accountId provided");
         requireNonNull(currentAccount, "No currentAccount provided");
         requireNonNull(nextPeriodId, "No nextPeriodId provided");
-        return repository.closeAndOpenNextGeneration(new LogicalAggregateId<>(accountId), currentAccount, nextPeriodId, nextGenerationFactory);
+        return repository.closeAndOpenNextGenerationGuarded(new LogicalAggregateId<>(accountId), currentAccount, nextPeriodId, nextGenerationFactory);
     }
 
     public long currentGeneration(AccountId accountId) {
