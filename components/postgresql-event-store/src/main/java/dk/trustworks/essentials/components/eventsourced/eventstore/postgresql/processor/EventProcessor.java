@@ -455,7 +455,8 @@ public abstract class EventProcessor extends AbstractEventProcessor {
      * applies - inside the one unit of work the batch is handled in, which also advances the resume point. A batch that
      * fails rolls back whole, forwards included, and is retried as the {@link SubscriptionErrorPolicy} says. When the
      * policy gives up on it and skips, its events are forwarded again one per unit of work first, so the skip loses only
-     * the events that fail again - see {@link #forwardFailedBatchOneEventPerUnitOfWork}.
+     * the events that fail again, or, once two events in a row fail with an I/O or connection failure, also the events
+     * after the second - see {@link #forwardFailedBatchOneEventPerUnitOfWork}.
      */
     private EventStoreSubscription subscribeForwardingInBatches(SubscriberId subscriberId,
                                                                 AggregateType aggregateType,

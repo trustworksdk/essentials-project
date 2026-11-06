@@ -795,9 +795,12 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * When the policy <b>skips</b> ({@link SubscriptionErrorPolicy#stopsOnError()} {@code false}), the batch's events are
      * forwarded again one per {@link UnitOfWork}, so an event that still cannot be forwarded no longer takes the batch's
      * other events with it: the skip loses the events that fail again. Each event is tried once more, without the policy's
-     * retries. The replay stops at the first failure {@link IOExceptionUtil#isIOException(Throwable)} classifies as an
-     * I/O, connection or transaction failure (the database unreachable, say): that failure is not specific to the event,
-     * so the events after it are not tried and the skip loses them too, instead of each waiting for the same failure. Only
+     * retries. The replay stops when two events in a row fail with a failure {@link IOExceptionUtil#isIOException(Throwable)}
+     * classifies as an I/O, connection or transaction failure (the database unreachable, say): such a failure repeated
+     * is not specific to the event, so the events after the second are not tried and the skip loses them too, instead of
+     * each waiting for the same failure. A single such failure (a stale pooled connection, an {@code IOException} from an
+     * override of the forward) does not stop it: the next event is tried, and the replay goes on when it does not fail
+     * with one too. Only
      * the first failure is logged with its stack trace; the later ones are logged without it and reach the subscriber as suppressed
      * exceptions of the first.
      * <p>
@@ -811,8 +814,8 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * @param forwardEvent            forwards one event; called inside a {@link UnitOfWork} of its own
      * @return true if every event of the batch was forwarded; false if the policy stops
      * @throws RuntimeException the failure of the first event that could not be forwarded (those of the others added as
-     *                          suppressed), after every other event was forwarded, or after the first I/O or connection
-     *                          failure: the policy then skips the batch
+     *                          suppressed), after every other event was forwarded, or after the second event in a row
+     *                          that failed with an I/O or connection failure: the policy then skips the batch
      */
     boolean forwardFailedBatchOneEventPerUnitOfWork(List<PersistedEvent> events,
                                                     Throwable batchFailure,
@@ -824,10 +827,13 @@ public abstract class AbstractEventProcessor implements Lifecycle {
         log.warn(msg("[{}] Forwarding the batch [#{} - #{}] failed and its SubscriptionErrorPolicy skips it - forwarding its {} events again one per UnitOfWork",
                      getProcessorName(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), events.size()), batchFailure);
         RuntimeException firstFailure = null;
+        // Whether the event tried just before this one failed with an I/O or connection failure
+        var previousFailedWithIOFailure = false;
         for (var index = 0; index < events.size(); index++) {
             var event = events.get(index);
             try {
                 eventStore.getUnitOfWorkFactory().usingUnitOfWork(() -> forwardEvent.accept(event));
+                previousFailedWithIOFailure = false;
             } catch (RuntimeException failure) {
                 if (firstFailure == null) {
                     log.error(msg("[{}] Could not forward the event with global-event-order {} ({} '{}', event-order {}) on its own either - it is skipped",
@@ -839,15 +845,18 @@ public abstract class AbstractEventProcessor implements Lifecycle {
                                  getProcessorName(), event.globalEventOrder(), event.aggregateType(), event.aggregateId(), event.eventOrder(), failure));
                     firstFailure.addSuppressed(failure);
                 }
-                if (IOExceptionUtil.isIOException(failure)) {
-                    // Not specific to the event: the events after it would each wait for the same connection failure
+                var failedWithIOFailure = IOExceptionUtil.isIOException(failure);
+                if (failedWithIOFailure && previousFailedWithIOFailure) {
+                    // Two events in a row: not a one-off (a stale pooled connection) but the database gone - the events
+                    // after it would each wait for the same connection failure
                     var notTried = events.size() - index - 1;
                     if (notTried > 0) {
-                        log.warn(msg("[{}] Stopped forwarding the batch [#{} - #{}] again at global-event-order {}: the failure is an I/O or connection failure, not specific to the event - its {} later event(s) are not tried and are skipped with it",
+                        log.warn(msg("[{}] Stopped forwarding the batch [#{} - #{}] again at global-event-order {}: it is the second event in a row that failed with an I/O or connection failure - its {} later event(s) are not tried and are skipped with it",
                                      getProcessorName(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), event.globalEventOrder(), notTried));
                     }
                     break;
                 }
+                previousFailedWithIOFailure = failedWithIOFailure;
             }
         }
         if (firstFailure != null) {

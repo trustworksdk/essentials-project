@@ -37,33 +37,75 @@ import static org.mockito.Mockito.*;
 
 /**
  * {@link AbstractEventProcessor#forwardFailedBatchOneEventPerUnitOfWork(List, Throwable, SubscriptionErrorPolicy, Consumer)}
- * tries every event of a failed batch once more on its own when the policy handed over skips, but stops at the first failure that is not specific to the event - an I/O or
- * connection failure - instead of letting every later event wait for the same failure.
+ * tries every event of a failed batch once more on its own when the policy handed over skips, but stops once two events
+ * in a row fail with an I/O or connection failure - the database gone, not specific to the event - instead of letting
+ * every later event wait for the same failure. A single such failure does not stop it.
  * <p>
  * Mocks only: the unit of work factory runs the forward inline, so no database is involved.
  */
 class ForwardFailedBatchOneEventPerUnitOfWorkTest {
 
     @Test
-    void stops_at_a_connection_failure_and_rethrows_it_without_trying_the_later_events() {
+    void stops_at_the_second_connection_failure_in_a_row_and_rethrows_the_first_without_trying_the_later_events() {
+        var firstConnectionFailure  = new RuntimeException("Could not forward", new ConnectException("Connection refused"));
+        var secondConnectionFailure = new RuntimeException("Could not forward", new ConnectException("Connection refused"));
+        var forwarded               = new ArrayList<PersistedEvent>();
+        var events                  = events(4);
+
+        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
+            forwarded.add(event);
+            throw forwarded.size() == 1 ? firstConnectionFailure : secondConnectionFailure;
+        })).isSameAs(firstConnectionFailure)
+           .satisfies(thrown -> assertThat(thrown.getSuppressed()).containsExactly(secondConnectionFailure));
+
+        assertThat(forwarded).containsExactly(events.get(0), events.get(1));
+    }
+
+    @Test
+    void goes_on_after_a_single_connection_failure_and_forwards_the_later_events() {
         var connectionFailure = new RuntimeException("Could not forward", new ConnectException("Connection refused"));
         var forwarded         = new ArrayList<PersistedEvent>();
         var events            = events(4);
 
         assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
             forwarded.add(event);
-            throw connectionFailure;
-        })).isSameAs(connectionFailure);
+            if (event.equals(events.getFirst())) {
+                throw connectionFailure;
+            }
+        })).isSameAs(connectionFailure)
+           .satisfies(thrown -> assertThat(thrown.getSuppressed()).isEmpty());
 
-        assertThat(forwarded).containsExactly(events.getFirst());
+        assertThat(forwarded).containsExactlyElementsOf(events);
     }
 
     @Test
-    void stops_at_a_jdbi_connection_failure_after_an_event_specific_one() {
-        var eventSpecificFailure = new IllegalStateException("event 1 cannot be forwarded");
-        var connectionFailure    = new RuntimeException(new ConnectionException(new SQLException("Connection is gone")));
-        var forwarded            = new ArrayList<PersistedEvent>();
-        var events               = events(4);
+    void does_not_stop_at_connection_failures_that_are_not_in_a_row() {
+        var event1Failure = new RuntimeException("Could not forward", new ConnectException("Connection refused"));
+        var event3Failure = new RuntimeException("Could not forward", new ConnectException("Connection refused"));
+        var forwarded     = new ArrayList<PersistedEvent>();
+        var events        = events(4);
+
+        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
+            forwarded.add(event);
+            if (event.equals(events.get(0))) {
+                throw event1Failure;
+            }
+            if (event.equals(events.get(2))) {
+                throw event3Failure;
+            }
+        })).isSameAs(event1Failure)
+           .satisfies(thrown -> assertThat(thrown.getSuppressed()).containsExactly(event3Failure));
+
+        assertThat(forwarded).containsExactlyElementsOf(events);
+    }
+
+    @Test
+    void stops_at_the_second_jdbi_connection_failure_in_a_row_after_an_event_specific_one() {
+        var eventSpecificFailure    = new IllegalStateException("event 1 cannot be forwarded");
+        var firstConnectionFailure  = new RuntimeException(new ConnectionException(new SQLException("Connection is gone")));
+        var secondConnectionFailure = new RuntimeException(new ConnectionException(new SQLException("Connection is gone")));
+        var forwarded               = new ArrayList<PersistedEvent>();
+        var events                  = events(5);
 
         assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
             forwarded.add(event);
@@ -71,12 +113,15 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
                 throw eventSpecificFailure;
             }
             if (event.equals(events.get(1))) {
-                throw connectionFailure;
+                throw firstConnectionFailure;
+            }
+            if (event.equals(events.get(2))) {
+                throw secondConnectionFailure;
             }
         })).isSameAs(eventSpecificFailure)
-           .satisfies(thrown -> assertThat(thrown.getSuppressed()).containsExactly(connectionFailure));
+           .satisfies(thrown -> assertThat(thrown.getSuppressed()).containsExactly(firstConnectionFailure, secondConnectionFailure));
 
-        assertThat(forwarded).containsExactly(events.get(0), events.get(1));
+        assertThat(forwarded).containsExactly(events.get(0), events.get(1), events.get(2));
     }
 
     @Test
