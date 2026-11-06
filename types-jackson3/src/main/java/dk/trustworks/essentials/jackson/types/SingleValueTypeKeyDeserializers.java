@@ -52,6 +52,11 @@ final class SingleValueTypeKeyDeserializers implements KeyDeserializers {
             @Override
             @SuppressWarnings({"unchecked", "rawtypes"})
             public Object deserializeKey(String key, DeserializationContext context) {
+                if (NumberType.class.isAssignableFrom(rawType)) {
+                    // A key is bounded only by the name-length limit: hold a numeric key to the number-length limit
+                    // before parsing it, as a quoted number value is
+                    QuotedNumbers.checkLength(context.streamReadConstraints(), key);
+                }
                 var value = rawValueOf(key, rawType);
                 if (value == null) {
                     // An unsupported value-type family: report it the way Jackson would have, rather than guessing.

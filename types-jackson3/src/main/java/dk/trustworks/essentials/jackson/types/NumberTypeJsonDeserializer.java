@@ -72,9 +72,10 @@ public class NumberTypeJsonDeserializer<T extends NumberType<?, ?>> extends Valu
         // persisted with WRITE_NUMBERS_AS_STRINGS - or written by a producer that quotes large numbers - stops loading.
         if (token == JsonToken.VALUE_STRING) {
             var text = p.getString().trim();
-            // Held to the same number-length limit as a JSON number; the refusal is not a NumberFormatException
-            QuotedNumbers.checkLength(p, text);
             try {
+                // Held to the same number-length limit as a JSON number; over-long number-shaped text is refused with a
+                // StreamConstraintsException, over-long text that is not a number with a NumberFormatException
+                QuotedNumbers.checkLength(p, text);
                 return (T) SingleValueType.from(parseText(p, text), (Class) concreteType);
             } catch (NumberFormatException | ArithmeticException e) {
                 return (T) ctxt.handleWeirdStringValue(concreteType,

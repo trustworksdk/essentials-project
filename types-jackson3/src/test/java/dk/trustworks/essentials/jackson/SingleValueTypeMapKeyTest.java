@@ -19,12 +19,15 @@ package dk.trustworks.essentials.jackson;
 import tools.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.jackson.model.*;
 import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
+import dk.trustworks.essentials.types.*;
 import org.junit.jupiter.api.Test;
+import tools.jackson.core.exc.StreamConstraintsException;
 import tools.jackson.core.type.TypeReference;
 
+import java.math.*;
 import java.util.Map;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 /**
  * A map keyed by a value type must round-trip without any per-property annotation.
@@ -62,5 +65,34 @@ class SingleValueTypeMapKeyTest {
         assertThat(json).isEqualTo("{\"7\":\"seven\"}");
         assertThat(objectMapper.<Map<Quantity, String>>readValue(json, new TypeReference<Map<Quantity, String>>() {}))
                 .isEqualTo(original);
+    }
+
+    /**
+     * A key is bounded only by the name-length limit, so a numeric key is held to the number-length limit before it is
+     * parsed, as a quoted number value is.
+     */
+    @Test
+    void a_numeric_key_longer_than_the_number_length_limit_is_refused_before_it_is_parsed() {
+        var tooLong    = "1".repeat(1001);
+        var atTheLimit = "1".repeat(1000);
+
+        assertThatThrownBy(() -> objectMapper.readValue("{\"" + tooLong + "\":\"x\"}", new TypeReference<Map<KeyBigInteger, String>>() {}))
+                .isInstanceOf(StreamConstraintsException.class);
+        assertThatThrownBy(() -> objectMapper.readValue("{\"" + tooLong + ".5\":\"x\"}", new TypeReference<Map<KeyBigDecimal, String>>() {}))
+                .isInstanceOf(StreamConstraintsException.class);
+        assertThat(objectMapper.<Map<KeyBigInteger, String>>readValue("{\"" + atTheLimit + "\":\"x\"}", new TypeReference<Map<KeyBigInteger, String>>() {}))
+                .containsOnlyKeys(new KeyBigInteger(new BigInteger(atTheLimit)));
+    }
+
+    public static class KeyBigInteger extends BigIntegerType<KeyBigInteger> {
+        public KeyBigInteger(BigInteger value) {
+            super(value);
+        }
+    }
+
+    public static class KeyBigDecimal extends BigDecimalType<KeyBigDecimal> {
+        public KeyBigDecimal(BigDecimal value) {
+            super(value);
+        }
     }
 }

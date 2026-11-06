@@ -95,6 +95,25 @@ class MoneyDeserializerTest {
     }
 
     @Test
+    void a_quoted_amount_longer_than_the_number_length_limit_that_is_not_a_number_reaches_the_problem_handler() {
+        var tooLongText = "a".repeat(1001);
+        var lenientMapper = objectMapper.rebuild()
+                                        .addHandler(new DeserializationProblemHandler() {
+                                            @Override
+                                            public Object handleWeirdStringValue(DeserializationContext ctxt, Class<?> targetType, String valueToConvert, String failureMsg) {
+                                                return targetType == BigDecimal.class ? BigDecimal.ZERO : NOT_HANDLED;
+                                            }
+                                        })
+                                        .build();
+
+        assertThatThrownBy(() -> objectMapper.readValue("{\"amount\":\"" + tooLongText + "\",\"currency\":\"USD\"}", Money.class))
+                .isInstanceOf(MismatchedInputException.class)
+                .isNotInstanceOf(StreamConstraintsException.class);
+        var money = lenientMapper.readValue("{\"amount\":\"" + tooLongText + "\",\"currency\":\"USD\"}", Money.class);
+        assertThat(money).isEqualTo(Money.of(Amount.of(BigDecimal.ZERO), CurrencyCode.of("USD")));
+    }
+
+    @Test
     void a_quoted_amount_at_the_number_length_limit_still_reads() {
         var atTheLimit = "1".repeat(1000);
 

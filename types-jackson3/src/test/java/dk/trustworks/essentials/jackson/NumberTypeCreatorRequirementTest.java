@@ -19,6 +19,8 @@ package dk.trustworks.essentials.jackson;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.exc.StreamConstraintsException;
 import tools.jackson.databind.*;
+import tools.jackson.databind.deser.DeserializationProblemHandler;
+import tools.jackson.databind.exc.InvalidFormatException;
 import dk.trustworks.essentials.jackson.types.*;
 import dk.trustworks.essentials.types.*;
 import org.junit.jupiter.api.*;
@@ -160,6 +162,31 @@ class NumberTypeCreatorRequirementTest {
                     .isInstanceOf(StreamConstraintsException.class);
             var atTheLimit = "1".repeat(1000);
             assertThat(objectMapper.readValue("\"" + atTheLimit + "\"", Amount.class).value()).isEqualByComparingTo(atTheLimit);
+        }
+
+        /**
+         * Only number-shaped text is held to the number-length limit: longer text with a character no number has is
+         * reported as not a valid number, through {@code handleWeirdStringValue}, so a problem handler still sees it.
+         */
+        @Test
+        void test_a_quoted_text_longer_than_the_number_length_limit_that_is_not_a_number_reaches_the_problem_handler() {
+            var tooLongText = "a".repeat(1001);
+            var digitsThenText = "1".repeat(1001) + "x";
+            var lenientMapper = objectMapper.rebuild()
+                                            .addHandler(new DeserializationProblemHandler() {
+                                                @Override
+                                                public Object handleWeirdStringValue(DeserializationContext ctxt, Class<?> targetType, String valueToConvert, String failureMsg) {
+                                                    return targetType == Amount.class ? Amount.of(BigDecimal.ZERO) : NOT_HANDLED;
+                                                }
+                                            })
+                                            .build();
+
+            assertThatThrownBy(() -> objectMapper.readValue("\"" + tooLongText + "\"", Amount.class))
+                    .isInstanceOf(InvalidFormatException.class);
+            assertThatThrownBy(() -> objectMapper.readValue("\"" + digitsThenText + "\"", PlainBigInteger.class))
+                    .isInstanceOf(InvalidFormatException.class);
+            assertThat(lenientMapper.readValue("\"" + tooLongText + "\"", Amount.class).value()).isEqualByComparingTo("0");
+            assertThat(lenientMapper.readValue("\"" + digitsThenText + "\"", Amount.class).value()).isEqualByComparingTo("0");
         }
 
         /**
