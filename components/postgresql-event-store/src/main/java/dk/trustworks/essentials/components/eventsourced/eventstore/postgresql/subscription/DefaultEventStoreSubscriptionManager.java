@@ -75,6 +75,11 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
      * held subscriptions it did not reach stay out of here, and a repeated subscribe for one of them logs at INFO, not WARN
      */
     private final    Set<EventStoreSubscription>                                              startReturned = ConcurrentHashMap.newKeySet();
+    /**
+     * Rate-limits the WARN of a periodic or threshold save whose gaps could not be recorded. Used only on the resume-point
+     * scheduler thread
+     */
+    private final    GapsNotRecordedWarnings                                                  gapsNotRecordedWarnings = new GapsNotRecordedWarnings(log, System::nanoTime);
     private          ScheduledFuture<?>                                                       saveResumePointsFuture;
     private          ScheduledFuture<?>                                                       saveAdvancedResumePointsFuture;
     private final    boolean                                                                  startLifeCycles;
@@ -497,23 +502,26 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
      * {@link SubscriptionResumePoint} and S6 in docs/subscription-improvements.md
      */
     private void saveResumePointsOfActiveSubscribers(Predicate<SubscriptionResumePoint> filter) {
+        List<SubscriptionResumePoint> resumePoints = List.of();
         try {
-            var resumePoints = subscribers.values()
-                                          .stream()
-                                          .filter(EventStoreSubscription::isActive)
-                                          .map(EventStoreSubscription::currentResumePoint)
-                                          .flatMap(Optional::stream)
-                                          .filter(filter)
-                                          .collect(Collectors.toList());
+            resumePoints = subscribers.values()
+                                      .stream()
+                                      .filter(EventStoreSubscription::isActive)
+                                      .map(EventStoreSubscription::currentResumePoint)
+                                      .flatMap(Optional::stream)
+                                      .filter(filter)
+                                      .collect(Collectors.toList());
             if (!resumePoints.isEmpty()) {
                 durableSubscriptionRepository.saveResumePoints(resumePoints);
+                gapsNotRecordedWarnings.saved(resumePoints);
             }
         } catch (GapRecordingBeforeSaveDurableSubscriptionRepository.GapsNotRecordedException e) {
             // The other resume points were saved; these stay changed, so the next periodic save tries them again
             if (IOExceptionUtil.isIOException(e)) {
                 log.debug("Not all ResumePoint's were stored - Experienced a Connection issue, this can happen during JVM or application shutdown: {}", e.getMessage());
             } else {
-                log.warn("Not all ResumePoint's were stored - the next periodic save tries again", e);
+                // Each check retries a resume point that keeps failing - see GapsNotRecordedWarnings for what is logged when
+                gapsNotRecordedWarnings.notSaved(resumePoints, e);
             }
         } catch (Exception e) {
             if (IOExceptionUtil.isIOException(e)) {

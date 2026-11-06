@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.shared.functional.tuple.Pair;
 import java.util.*;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
@@ -178,6 +179,11 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
      * ({@code IOExceptionUtil.isIOException} reads the root cause) - and each further failure is suppressed
      */
     static final class GapsNotRecordedException extends RuntimeException {
+        /**
+         * The message of each resume point's failure, by its subscriber and aggregate type, in the order they failed
+         */
+        private final Map<Pair<SubscriberId, AggregateType>, String> notRecorded = new LinkedHashMap<>();
+
         private GapsNotRecordedException(String message, Throwable cause) {
             super(message, cause);
         }
@@ -185,11 +191,22 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
         static GapsNotRecordedException adding(GapsNotRecordedException earlier, SubscriptionResumePoint resumePoint, RuntimeException failure) {
             var message = "Could not record the gaps kept in memory of [" + resumePoint.getSubscriberId() + "-" + resumePoint.getAggregateType() +
                     "] - its resume point " + resumePoint.getResumeFromAndIncluding() + " was not saved: " + failure.getMessage();
+            GapsNotRecordedException result;
             if (earlier == null) {
-                return new GapsNotRecordedException(message, failure);
+                result = new GapsNotRecordedException(message, failure);
+            } else {
+                earlier.addSuppressed(new GapsNotRecordedException(message, failure));
+                result = earlier;
             }
-            earlier.addSuppressed(new GapsNotRecordedException(message, failure));
-            return earlier;
+            result.notRecorded.putIfAbsent(Pair.of(resumePoint.getSubscriberId(), resumePoint.getAggregateType()), message);
+            return result;
+        }
+
+        /**
+         * @return the message of each resume point that was not saved, by its subscriber and aggregate type
+         */
+        Map<Pair<SubscriberId, AggregateType>, String> notRecorded() {
+            return Collections.unmodifiableMap(notRecorded);
         }
     }
 
