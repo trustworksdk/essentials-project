@@ -72,8 +72,10 @@ public class NumberTypeJsonDeserializer<T extends NumberType<?, ?>> extends Valu
         // persisted with WRITE_NUMBERS_AS_STRINGS - or written by a producer that quotes large numbers - stops loading.
         if (token == JsonToken.VALUE_STRING) {
             var text = p.getString().trim();
+            // Held to the same number-length limit as a JSON number; the refusal is not a NumberFormatException
+            QuotedNumbers.checkLength(p, text);
             try {
-                return (T) SingleValueType.from(parseText(text), (Class) concreteType);
+                return (T) SingleValueType.from(parseText(p, text), (Class) concreteType);
             } catch (NumberFormatException | ArithmeticException e) {
                 return (T) ctxt.handleWeirdStringValue(concreteType,
                                                        text,
@@ -113,10 +115,20 @@ public class NumberTypeJsonDeserializer<T extends NumberType<?, ?>> extends Valu
     /**
      * The {@code …ValueExact} calls are what stop a quoted {@code "2.5"} from becoming {@code 2} for an integral type -
      * they throw {@link ArithmeticException} rather than truncate.
+     * <p>
+     * A {@link BigInteger} is bounded by the parser's BigInteger scale constraint before {@code toBigIntegerExact}, as
+     * Jackson bounds a {@link BigDecimal} it converts to a {@link BigInteger}: a short text with an extreme exponent
+     * ({@code "1e9999999"}) would otherwise be expanded here. The resulting {@link tools.jackson.core.exc.StreamConstraintsException}
+     * is neither a {@link NumberFormatException} nor an {@link ArithmeticException}, so it is not turned into a weird-string
+     * report.
      */
-    private Number parseText(String text) {
+    private Number parseText(JsonParser p, String text) {
         if (numberClass == BigDecimal.class) return new BigDecimal(text);
-        if (numberClass == BigInteger.class) return new BigDecimal(text).toBigIntegerExact();
+        if (numberClass == BigInteger.class) {
+            var decimal = new BigDecimal(text);
+            p.streamReadConstraints().validateBigIntegerScale(decimal.scale());
+            return decimal.toBigIntegerExact();
+        }
         if (numberClass == Long.class) return new BigDecimal(text).longValueExact();
         if (numberClass == Integer.class) return new BigDecimal(text).intValueExact();
         if (numberClass == Short.class) return new BigDecimal(text).shortValueExact();

@@ -17,12 +17,14 @@
 package dk.trustworks.essentials.jackson;
 
 import tools.jackson.core.JacksonException;
+import tools.jackson.core.exc.StreamConstraintsException;
 import tools.jackson.databind.*;
 import dk.trustworks.essentials.jackson.types.*;
 import dk.trustworks.essentials.types.*;
 import org.junit.jupiter.api.*;
 
 import java.math.*;
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -140,6 +142,42 @@ class NumberTypeCreatorRequirementTest {
             assertThat(objectMapper.readValue("\"2\"", PlainLong.class).value()).isEqualTo(2L);
             assertThat(objectMapper.readValue("\"2\"", PlainBigInteger.class).value()).isEqualTo(BigInteger.TWO);
             assertThat(objectMapper.readValue("\"2.5\"", PlainDouble.class).value()).isEqualTo(2.5d);
+        }
+
+        @Test
+        void test_a_quoted_number_longer_than_the_number_length_limit_is_refused_like_a_numeric_one() {
+            var tooLong = "1".repeat(1001);
+
+            assertThatThrownBy(() -> objectMapper.readValue(tooLong, Amount.class))
+                    .isInstanceOf(StreamConstraintsException.class);
+            assertThatThrownBy(() -> objectMapper.readValue("\"" + tooLong + "\"", Amount.class))
+                    .isInstanceOf(StreamConstraintsException.class);
+            assertThatThrownBy(() -> objectMapper.readValue("\"" + tooLong + ".5\"", Amount.class))
+                    .isInstanceOf(StreamConstraintsException.class);
+            assertThatThrownBy(() -> objectMapper.readValue("\"" + tooLong + "\"", PlainLong.class))
+                    .isInstanceOf(StreamConstraintsException.class);
+            assertThatThrownBy(() -> objectMapper.readValue("\"" + tooLong + "\"", PlainDouble.class))
+                    .isInstanceOf(StreamConstraintsException.class);
+            var atTheLimit = "1".repeat(1000);
+            assertThat(objectMapper.readValue("\"" + atTheLimit + "\"", Amount.class).value()).isEqualByComparingTo(atTheLimit);
+        }
+
+        /**
+         * A short text with an extreme exponent passes the length check, but turning it into a {@link BigInteger} would
+         * expand 10^9999999 inside the deserializer. The numeric path refuses that token before converting it.
+         */
+        @Test
+        void test_a_quoted_big_integer_with_an_extreme_exponent_is_refused_before_it_is_expanded() {
+            Assertions.assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+                assertThatThrownBy(() -> objectMapper.readValue("\"1e9999999\"", PlainBigInteger.class))
+                        .isInstanceOf(StreamConstraintsException.class);
+                assertThatThrownBy(() -> objectMapper.readValue("\"1e-9999999\"", PlainBigInteger.class))
+                        .isInstanceOf(StreamConstraintsException.class);
+                assertThatThrownBy(() -> objectMapper.readValue("\"1e999999999\"", PlainBigInteger.class))
+                        .isInstanceOf(StreamConstraintsException.class);
+            });
+            assertThat(objectMapper.readValue("\"2\"", PlainBigInteger.class).value()).isEqualTo(BigInteger.TWO);
+            assertThat(objectMapper.readValue("\"2e3\"", PlainBigInteger.class).value()).isEqualTo(BigInteger.valueOf(2000));
         }
     }
 

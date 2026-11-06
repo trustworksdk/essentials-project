@@ -19,6 +19,7 @@ package dk.trustworks.essentials.jackson;
 import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import dk.trustworks.essentials.types.*;
 import org.junit.jupiter.api.Test;
+import tools.jackson.core.exc.StreamConstraintsException;
 import tools.jackson.databind.*;
 import tools.jackson.databind.deser.DeserializationProblemHandler;
 import tools.jackson.databind.exc.MismatchedInputException;
@@ -79,6 +80,27 @@ class MoneyDeserializerTest {
         var money = lenientMapper.readValue("{\"amount\":\"abc\",\"currency\":\"USD\"}", Money.class);
 
         assertThat(money).isEqualTo(Money.of(Amount.of(BigDecimal.ZERO), CurrencyCode.of("USD")));
+    }
+
+    @Test
+    void a_quoted_amount_longer_than_the_number_length_limit_is_refused_like_a_numeric_one() {
+        var tooLong = "1".repeat(1001);
+
+        assertThatThrownBy(() -> objectMapper.readValue("{\"amount\":" + tooLong + ",\"currency\":\"USD\"}", Money.class))
+                .isInstanceOf(StreamConstraintsException.class);
+        assertThatThrownBy(() -> objectMapper.readValue("{\"amount\":\"" + tooLong + "\",\"currency\":\"USD\"}", Money.class))
+                .isInstanceOf(StreamConstraintsException.class);
+        assertThatThrownBy(() -> objectMapper.readValue("{\"amount\":\"-" + tooLong + ".5\",\"currency\":\"USD\"}", Money.class))
+                .isInstanceOf(StreamConstraintsException.class);
+    }
+
+    @Test
+    void a_quoted_amount_at_the_number_length_limit_still_reads() {
+        var atTheLimit = "1".repeat(1000);
+
+        var money = objectMapper.readValue("{\"amount\":\"" + atTheLimit + "\",\"currency\":\"USD\"}", Money.class);
+
+        assertThat(money.getAmount().value()).isEqualTo(new BigDecimal(atTheLimit));
     }
 
     @Test

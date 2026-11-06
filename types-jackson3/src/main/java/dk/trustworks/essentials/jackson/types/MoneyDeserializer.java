@@ -46,6 +46,8 @@ public final class MoneyDeserializer extends StdDeserializer<Money> {
                         amount = p.getDecimalValue();
                     } else if (value == JsonToken.VALUE_STRING) {
                         var text = p.getString().trim();
+                        // Held to the same number-length limit as a JSON number; the refusal is not a NumberFormatException
+                        QuotedNumbers.checkLength(p, text);
                         try {
                             amount = new BigDecimal(text);
                         } catch (NumberFormatException e) {
