@@ -700,10 +700,15 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
         readAheadRows = null;
         var probe = passProbe;
         passProbe = null;
-        // A probe counts only if issued after the rows this pass takes in were read
-        var rowsReadBy = batch != null ? batch.readByNanos() : readAhead != null ? readAheadByNanos : Long.MAX_VALUE;
-        if (probe != null && passProbeIssuedNanos - rowsReadBy <= 0) {
-            probe = null;
+        // A probe counts only if issued after the rows this pass takes in were read. With no rows read yet, the read
+        // happens below, after the probe, so the probe is never used. Said with a flag, not a sentinel nanoTime value:
+        // nanoTime may be negative, and a difference against Long.MAX_VALUE then overflows and keeps the probe.
+        if (probe != null) {
+            var rowsReadBeforeProbe = (batch != null || readAhead != null)
+                                      && passProbeIssuedNanos - (batch != null ? batch.readByNanos() : readAheadByNanos) > 0;
+            if (!rowsReadBeforeProbe) {
+                probe = null;
+            }
         }
         // Read from the WATERMARK, not from the highest value seen, so a value whose transaction had
         // not committed when an earlier pass went by is read again rather than chased. The window
