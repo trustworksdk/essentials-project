@@ -11,8 +11,11 @@ targets, with a `-N` suffix for plugin-only releases.
   `evaluatePolicy(AggregateGeneration loadedFrom, …)`, which throw `ClosingBooksGenerationMovedException`, closing
   nothing, when the aggregate's generation is no longer the open one, and says the unguarded
   `closeAndOpenNextGeneration` closes whichever generation is open under the generation lock. It also says a refusal
-  leaves the caller's unit of work usable rather than rollback-only, and that a change already recorded on the stale
-  aggregate is still appended at commit. No skill, rule or script changed.
+  leaves the caller's unit of work usable rather than rollback-only, except that
+  `closeAndOpenNextGenerationGuarded` marks it rollback-only when `currentAggregate` holds uncommitted changes (a
+  unit of work that joined a Spring-managed transaction it did not start ignores that mark, so there the exception
+  must propagate to roll back), and that with the coordinator's guarded methods a change already recorded on the stale aggregate is still appended at
+  commit. No skill, rule or script changed.
 
 ## 0.60.1-7 — targets Essentials 0.60.1
 

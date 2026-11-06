@@ -120,10 +120,9 @@ skipped periods are not materialised as empty generations; the gap is only logge
   command rolled the account in between, it would close the newer generation and build the next one from the older
   account's state. The `accounts` context that replaced `TradingAccounts` (`Accounts.closeAndOpenNextGeneration`)
   now calls `closeAndOpenNextGenerationGuarded(id, account, hint, factory)`, which throws
-  `ClosingBooksGenerationMovedException`, closing nothing, in that case. The refusal does not mark the command's unit
-  of work rollback-only, so a caller could reload and decide again in it; the demo records `closeBooks` on the account
-  before the call, and that event would still be appended at commit, so it does not catch the exception and lets the
-  unit of work roll back instead.
+  `ClosingBooksGenerationMovedException`, closing nothing, in that case. The demo records `closeBooks` on the account
+  before the call, so the account holds an uncommitted change, and the refusal therefore marks the command's unit of
+  work rollback-only: the stale `AccountBooksClosed` is never appended. The demo does not catch the exception.
 - **`SCHEDULED_SCAN`** runs `ClosingBooksManager` under a fenced lock (`ClosingBooksManager.java:130`);
   `DefaultClosingBooksScheduledScanProcessor.processNextBatch` loads the oldest open generations and, for each, calls
   `ClosingBooksCoordinator.evaluateScannedGeneration(generation, aggregateLoader, policy, scanRollover)`. The
@@ -349,9 +348,8 @@ write and the event append sharing one unit of work. That is not verified here; 
 must prove it. Since the demo rolls through `closeAndOpenNextGenerationGuarded`, the generation row has a guard of its
 own: the second instance's rollover finds, under the generation lock (a PostgreSQL advisory lock, so shared by the
 instances), that the generation its account was loaded from is no longer open, and throws
-`ClosingBooksGenerationMovedException` before closing anything. The refusal itself leaves that instance's unit of
-work usable; the exception propagating out of the command is what rolls it back, together with the `AccountBooksClosed`
-the command recorded on the stale account.
+`ClosingBooksGenerationMovedException` before closing anything. As the command recorded `AccountBooksClosed` on the
+stale account first, the refusal marks that instance's unit of work rollback-only, so the event is never appended.
 
 That window is **not unique to multiple instances**, and it is not the biggest one. Even with one instance,
 the exchange emits `BusinessDayClosed` at the cutoff and we receive it after webhook latency, and because

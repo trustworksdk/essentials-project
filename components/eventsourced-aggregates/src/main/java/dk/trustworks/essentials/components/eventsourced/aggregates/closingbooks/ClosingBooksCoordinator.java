@@ -163,7 +163,8 @@ public class ClosingBooksCoordinator<ID> {
      * <p>
      * The refusal is thrown only after the generation lock and the unit-of-work scopes this enters have returned, so it
      * does not mark a unit of work the caller holds rollback-only: the caller can reload from the open generation and
-     * decide again in that same unit of work.
+     * decide again in that same unit of work - when nothing was recorded on the aggregate loaded from
+     * {@code expectedCurrentGeneration}, as this cannot see it (see {@link ClosingBooksGenerationMovedException}).
      *
      * @param expectedCurrentGeneration the generation the caller loaded its aggregate from
      * @return the newly opened generation
@@ -176,9 +177,21 @@ public class ClosingBooksCoordinator<ID> {
 
     /**
      * Close the open generation and open the next one. When {@code expectedStreamAggregateId} is not {@code null}, refuse
-     * with {@link ClosingBooksGenerationMovedException} unless the open generation has that stream id.
+     * with {@link ClosingBooksGenerationMovedException} unless the open generation has that stream id. A refusal leaves
+     * the unit of work this joins usable.
      */
     AggregateGeneration<ID> closeAndOpenNext(LogicalAggregateId<ID> logicalAggregateId, String expectedStreamAggregateId) {
+        return closeAndOpenNext(logicalAggregateId, expectedStreamAggregateId, false);
+    }
+
+    /**
+     * As {@link #closeAndOpenNext(LogicalAggregateId, String)}, but when {@code rollbackOnRefusal} is {@code true} a
+     * refusal also marks the unit of work this joins rollback-only, with the refusal as cause - for a caller whose
+     * aggregate, loaded from the expected generation, holds changes that must not be appended to that generation's stream
+     * once it has moved. The refusal is still thrown only after the lock and the unit of work have returned, and is
+     * counted with outcome {@code generation_moved}.
+     */
+    AggregateGeneration<ID> closeAndOpenNext(LogicalAggregateId<ID> logicalAggregateId, String expectedStreamAggregateId, boolean rollbackOnRefusal) {
         // The counters are incremented after the UnitOfWork returns, never inside it: a rollback must not leave a
         // count claiming a generation was closed that the database then rolled back.
         Guarded<AggregateGeneration<ID>> rolled;
@@ -191,6 +204,11 @@ public class ClosingBooksCoordinator<ID> {
                                                                if (refusal != null) {
                                                                    // Returned, not thrown: an exception thrown through a joined withUnitOfWork marks the
                                                                    // caller's unit of work rollback-only, and nothing has been written yet.
+                                                                   // Unless the caller's aggregate recorded changes on the moved generation:
+                                                                   // then the unit of work must not commit them.
+                                                                   if (rollbackOnRefusal) {
+                                                                       uow.markAsRollbackOnly(refusal);
+                                                                   }
                                                                    return Guarded.refused(refusal);
                                                                }
                                                            }
@@ -334,7 +352,9 @@ public class ClosingBooksCoordinator<ID> {
      * {@code aggregate} with {@code loadedFrom}'s generation, exactly as the unguarded form would. The comparison uses the
      * open generation that the unguarded form resolves anyway, so it costs no extra database round trip. The refusal is
      * thrown only after the generation lock has returned, so it does not mark a unit of work the caller holds
-     * rollback-only: the caller can reload from the open generation and evaluate again in that same unit of work.
+     * rollback-only: the caller can reload from the open generation and evaluate again in that same unit of work - when
+     * nothing was recorded on {@code aggregate} first, which this does not check (see
+     * {@link ClosingBooksGenerationMovedException}).
      * <p>
      * Unlike the unguarded form this never opens a first generation: {@code loadedFrom} was open when the aggregate was
      * loaded, so an empty logical aggregate means it was closed since. As there, load the aggregate in the unit of work

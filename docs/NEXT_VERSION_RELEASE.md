@@ -627,11 +627,17 @@ Under the generation lock, before anything is closed or the policy is asked, eac
 stream id with the expected one, and throws **`ClosingBooksGenerationMovedException`** (an `IllegalStateException`)
 when they differ: nothing is closed or opened, and the policy, the rollover and the next-generation factory are not
 called. Reload and decide again. The refusal is thrown only after the generation lock and the unit-of-work scopes the
-guarded method enters have returned, so it does not mark the caller's unit of work rollback-only: the reload and the
+guarded method enters have returned, so by itself it does not mark the caller's unit of work rollback-only (unless the
+aggregate holds uncommitted changes, below): the reload and the
 new decision can run, and commit, in the unit of work the aggregate was loaded in. The aggregate from the moved
 generation stays registered with that unit of work, though, so a change already recorded on it (a closing event
-recorded before the guarded call) is still appended at commit; a caller that recorded one rethrows and retries in a new
-unit of work. The comparison uses the open generation the unguarded methods already resolve, so it costs no extra
+recorded before the guarded call) would be appended to the moved generation's stream at commit.
+`closeAndOpenNextGenerationGuarded` checks for that: when `currentAggregate` holds uncommitted changes, its refusal
+marks the unit of work rollback-only, with the refusal as cause, so that unit of work rolls back instead of committing
+the stale change, and the retry runs in a new unit of work. A unit of work that joined a Spring-managed transaction it
+did not start (e.g. inside a `@Transactional` method) ignores that mark: there, let the exception propagate out of the
+transaction (do not catch it) so it rolls back. The coordinator's guarded methods do not check the aggregate; a caller that recorded a change
+on it rethrows and retries in a new unit of work. The comparison uses the open generation the unguarded methods already resolve, so it costs no extra
 database round trip. A refusal by either guarded `closeAndOpenNextGeneration` is counted in
 `essentials.aggregate_closing_books.rollover.outcome` with `outcome=generation_moved`, not `failed`; a refusal by the
 guarded `evaluatePolicy` counts no policy decision.

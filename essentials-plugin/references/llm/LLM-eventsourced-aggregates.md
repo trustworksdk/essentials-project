@@ -1046,11 +1046,15 @@ unitOfWorkFactory.usingUnitOfWork(uow -> repository.load(new LogicalAggregateId<
 `evaluatePolicy(AggregateGeneration loadedFrom, aggregate, triggerMode, policy, rollover)`. The unguarded
 `evaluatePolicy(id, aggregate, …)` decides on whatever generation is open once the lock is held.
 
-A guarded refusal is thrown only after the generation lock and its unit-of-work scopes have returned, so it does not
-mark the caller's `UnitOfWork` rollback-only: reload from the open generation and decide again in the same unit of
+A guarded refusal is thrown only after the generation lock and its unit-of-work scopes have returned, so by itself it
+does not mark the caller's `UnitOfWork` rollback-only (unless the aggregate holds uncommitted changes, below): reload from the open generation and decide again in the same unit of
 work. ⚠️ The stale aggregate stays registered with that unit of work, so a change already recorded on it (a closing
-event recorded before the guarded call) is still appended at commit — after recording one, rethrow and retry in a new
-unit of work.
+event recorded before the guarded call) would be appended to the moved generation's stream at commit.
+`closeAndOpenNextGenerationGuarded` checks for that: when `currentAggregate` holds uncommitted changes, its refusal
+marks the `UnitOfWork` rollback-only (cause = the refusal) — retry in a new unit of work. A `UnitOfWork` that joined a
+Spring-managed transaction it did not start (e.g. inside `@Transactional`) ignores that mark — there, let the exception
+propagate out of the transaction (do not catch it) so it rolls back. The coordinator's guarded
+methods do not check the aggregate — after recording a change on it, rethrow and retry in a new unit of work.
 
 `ClosingBooksStatefulAggregateRepository` is the thinner variant (3 type params) that only maps logical id → open generation's stream id.
 

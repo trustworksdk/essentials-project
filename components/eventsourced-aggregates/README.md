@@ -1746,11 +1746,16 @@ two rolls the close back, leaving the previous generation `OPEN` for a safe retr
 aggregate with no open generation.
 
 A `ClosingBooksGenerationMovedException` from a guarded method is thrown only after the generation lock and its
-unit-of-work scopes have returned, so it does not mark the caller's `UnitOfWork` rollback-only: reload the aggregate
-from the generation that is open now and decide again in the same unit of work. The aggregate from the moved
+unit-of-work scopes have returned, so by itself it does not mark the caller's `UnitOfWork` rollback-only (unless the
+aggregate holds uncommitted changes, below): reload the aggregate from the generation that is open now and decide
+again in the same unit of work. The aggregate from the moved
 generation stays registered with that unit of work, though, so a change already recorded on it (a closing event
-recorded before the guarded call) is still appended at commit; after recording one, rethrow and retry in a new unit of
-work.
+recorded before the guarded call) would be appended to the moved generation's stream at commit.
+`closeAndOpenNextGenerationGuarded` checks for that: when `currentAggregate` holds uncommitted changes, its refusal
+marks the `UnitOfWork` rollback-only, with the refusal as cause, so retry in a new unit of work. A `UnitOfWork` that
+joined a Spring-managed transaction it did not start (e.g. inside a `@Transactional` method) ignores that mark: there,
+let the exception propagate out of the transaction (do not catch it) so it rolls back. The coordinator's
+guarded methods do not check the aggregate; after recording a change on it, rethrow and retry in a new unit of work.
 
 > **Carrying state forward is your job.** Closing a generation does not copy balances into the new stream. Emit an
 > opening/carry-forward event on the new generation — that is what `ClosingBooksNextGenerationFactory` /
