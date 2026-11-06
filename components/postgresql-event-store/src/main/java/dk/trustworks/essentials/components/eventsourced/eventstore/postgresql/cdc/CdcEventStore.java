@@ -442,11 +442,12 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * See {@link DeferredGapRecording#beforeResumePointSave}: from now on until the save is closed, the subscriber's gates
      * record a gap the moment it opens; then the gaps they kept in memory are recorded, each gate's in a unit of work of
      * its own, committed before this returns - never in a unit of work current on the calling thread, which could roll
-     * back after the gates forgot the gaps. With such a unit of work, or a Spring transaction it would join, each gate records on a virtual thread of its own,
-     * and the calling thread waits for the gates' recordings at most {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT} in
-     * total for this call, not per gate: a gate with gaps still to record, reached once that wait has run out, throws at
-     * once without starting its recording. In that order, so a gap is either kept by a gate when this records its gaps, or recorded when it opens -
-     * whichever event the resume point read afterwards has moved past
+     * back after the gates forgot the gaps. With such a unit of work, or a Spring transaction it would join, each gate
+     * records on a virtual thread of its own, and the calling thread waits for the gates' recordings at most
+     * {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT} in total for this call, not per gate: a gate with gaps still to
+     * record, reached once that wait has run out, throws at once without starting its recording. In that order, so a gap
+     * is either kept by a gate when this records its gaps, or recorded when it opens - whichever event the resume point
+     * read afterwards has moved past
      *
      * @throws IllegalStateException the wait for the gates' recordings ran out, or the calling thread was interrupted while
      *                               waiting - the caller must not save the resume point, and should not call this for
@@ -1519,8 +1520,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * returns - never in a unit of work current on the calling thread, which the gate does not own: it could roll back
          * after the gate forgot the gaps, and a resume point saved past them later would then have nothing that makes a
          * restart wait for their events. With such a unit of work, or a Spring transaction it would join
-         * ({@link TransactionProbe#isUnitOfWorkActive}), the gaps are recorded on a virtual thread of their own,
-         * waited for at most {@link #DEFERRED_GAPS_RECORDING_WAIT}.
+         * ({@link TransactionProbe#isUnitOfWorkActive}), the gaps are recorded on a virtual thread of their own, waited
+         * for at most {@link #DEFERRED_GAPS_RECORDING_WAIT}. Recording them in that unit of work and forgetting them only
+         * once it commits, as {@link GapFillsAwaitingAcknowledgement} forgets its fills, was not taken: the save window
+         * closes before the caller commits, so gaps kept from then on and a fill acknowledged meanwhile would have to be
+         * told apart from the recorded gaps - and the manager's saves are not expected to run inside a unit of work.
          * <p>
          * With a unit of work current, the calling thread never waits for {@link #deferredGapsLock} itself: a recording
          * that outlasted an earlier wait may still hold it, blocked by a lock that unit of work holds. If another thread
@@ -1612,13 +1616,14 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         /**
          * The subscription ended: the gaps kept in memory are recorded now - a later save of the resume point, which may be
          * past them, finds this gate gone. In a unit of work of its own ({@link #recordDeferredGapsCommitted()}): with a unit
-         * of work, or a Spring transaction it would join, current on the ending thread, on a virtual thread of its own, waited for at most
-         * {@link #DEFERRED_GAPS_RECORDING_WAIT} - the ending thread's unit of work may hold a lock that recording needs,
-         * a wait PostgreSQL cannot see as a deadlock. A failure, or a wait that runs out, is logged and the subscription
-         * ends: a restart from a resume point saved past those gaps before they are recorded then does not wait for them -
-         * as when recording an opened gap fails. A recording that outlasts the wait goes on, and records them when it commits.
-         * {@link #ended} is set without {@link #deferredGapsLock}, which a recording that outlasted an earlier wait may
-         * hold: a gap kept before is recorded here, as this takes that lock afterwards, and one about to be kept is refused
+         * of work, or a Spring transaction it would join, current on the ending thread, on a virtual thread of its own,
+         * waited for at most {@link #DEFERRED_GAPS_RECORDING_WAIT} - the ending thread's unit of work may hold a lock that
+         * recording needs, a wait PostgreSQL cannot see as a deadlock. A failure, or a wait that runs out, is logged and
+         * the subscription ends: a restart from a resume point saved past those gaps before they are recorded then does
+         * not wait for them - as when recording an opened gap fails. A recording that outlasts the wait goes on, and
+         * records them when it commits. {@link #ended} is set without {@link #deferredGapsLock}, which a recording that
+         * outlasted an earlier wait may hold: a gap kept before is recorded here, as this takes that lock afterwards, and
+         * one about to be kept is refused
          */
         private void recordDeferredGapsAtEnd() {
             ended = true;

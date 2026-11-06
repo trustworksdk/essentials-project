@@ -196,26 +196,32 @@ The existing pins still apply: `CdcEventStoreCommitOrderIT`, `CdcEventStoreGapFi
   a connection. This only matters with a pool smaller than the number of subscriber threads blocked behind one save. The
   window is one short unit of work per save.
 - **A save inside a caller's unit of work.** The flush never joins it. Joining would let the gate forget the gaps before
-  the caller commits, and a rollback would then lose them: the next save, past them, would record nothing. With a unit
-  of work, or a Spring transaction the unit of work factory would join, current on the saving thread
-  (`TransactionProbe.isUnitOfWorkActive`), each gate flushes on a virtual thread of its own, in its own unit of work, and
-  the saving thread waits for the flushes at most 10 s (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`) per resume point:
-  one wait shared by all of the subscriber's gates (`CdcEventStore.beforeResumePointSave`). The flush then needs a
-  second connection while the caller holds one. If the caller's unit of work holds a lock the flush needs, the wait runs
-  out instead of hanging, since PostgreSQL cannot see that wait as a deadlock. That resume point is then not saved, and
-  neither are the changed resume points after it in the same save: the repository does not flush them, as their flushes
-  could be blocked by the same lock and would each wait again
-  (`GapRecordingBeforeSaveDurableSubscriptionRepository.saveResumePoints`). It throws after saving the others, and the
-  caller logs it. The flush goes on, keeping the gate lock, until the caller's
-  transaction ends; should it fail after the wait ran out, the failure is logged at WARN (`CdcEventStore.runOnAVirtualThreadWaitingAtMost`),
-  as no caller is waiting for it any more, and the gaps stay kept for the next flush. Until the
-  caller's transaction ends, the four paths that may run inside that unit of work do not wait for the gate lock
-  without a limit, as the flush may be waiting for it: a second save finds the lock taken and hands its check to a new
-  virtual thread, waited for at most 10 s again; the subscription's end marks the gate ended without the lock; an
-  acknowledgement waits for the lock at most 10 s, then throws, leaving a held fill's gap to be recorded, so a later
-  subscription delivers the event again; and `isAwaitedAsGap`'s check of a held fill (asked by `awaitProcessed`) waits
-  for it at most 10 s, then answers that the event is still awaited. The manager's save paths are not expected to run
-  inside a unit of work.
+  the caller commits, and a rollback would then lose them: the next save, past them, would record nothing. Joining and
+  forgetting the gaps only once the caller commits, as `GapFillsAwaitingAcknowledgement` forgets its fills, was
+  considered and not taken. The save window closes when the repository is done with the save (`ResumePointSave.close()`
+  in the `finally` of `GapRecordingBeforeSaveDurableSubscriptionRepository.saveResumePoints`), before the caller
+  commits. From then on the gates keep the gaps that open in memory again, beside the recorded ones whose rows are
+  not committed yet, so the commit callback would have to tell the two apart; and a fill of a recorded gap, forgotten
+  on its acknowledgement in that window as a gap kept in memory is, would leave the gap's row behind once the caller
+  commits. As the manager's save paths are not expected to run inside a unit of work, the bounded waits below are a
+  safety net, and were kept rather than that protocol. With a unit of work, or a Spring transaction the unit of work
+  factory would join, current on the saving thread (`TransactionProbe.isUnitOfWorkActive`), each gate flushes on a
+  virtual thread of its own, in its own unit of work, and the saving thread waits for the flushes at most 10 s
+  (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`) per resume point: one wait shared by all of the subscriber's gates
+  (`CdcEventStore.beforeResumePointSave`). The flush then needs a second connection while the caller holds one. If the
+  caller's unit of work holds a lock the flush needs, the wait runs out instead of hanging, since PostgreSQL cannot see
+  that wait as a deadlock. That resume point is then not saved, and neither are the changed resume points after it in
+  the same save: the repository does not flush them, as their flushes could be blocked by the same lock and would each
+  wait again (`GapRecordingBeforeSaveDurableSubscriptionRepository.saveResumePoints`). It throws after saving the
+  others, and the caller logs it. The flush goes on, keeping the gate lock, until the caller's transaction ends; should
+  it fail after the wait ran out, the failure is logged at WARN (`CdcEventStore.runOnAVirtualThreadWaitingAtMost`), as
+  no caller is waiting for it any more, and the gaps stay kept for the next flush. Until the caller's transaction ends,
+  the four paths that may run inside that unit of work do not wait for the gate lock without a limit, as the flush may
+  be waiting for it: a second save finds the lock taken and hands its check to a new virtual thread, waited for at most
+  10 s again; the subscription's end marks the gate ended without the lock; an acknowledgement waits for the lock at
+  most 10 s, then throws, leaving a held fill's gap to be recorded, so a later subscription delivers the event again;
+  and `isAwaitedAsGap`'s check of a held fill (asked by `awaitProcessed`) waits for it at most 10 s, then answers that
+  the event is still awaited.
 - **Non-exclusive subscriptions on several instances** share one resume-point row. Another instance's save can move it
   past a gap this instance holds. That is no weaker than before: the shared row could already move past events this
   instance had not handled.
