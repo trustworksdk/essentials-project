@@ -450,8 +450,9 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
      * forwarded once it is full or {@link #getForwardMaxLatency()} has passed. The {@code SubscriptionErrorPolicy} retries
      * and stops at a batch as a whole; a policy that skips first forwards the failed batch's events again one per unit of
      * work, each tried once more on its own, without the policy's retries, so the skip loses only the events that fail on
-     * their own as well (see {@link EventProcessor#getForwardBatchSize()}
-     * for when a skip still loses up to a batch).
+     * their own as well. An event that fails there with an I/O or connection failure is tried once more at once in a new
+     * unit of work; the replay stops only when that retry fails the same way and the database does not answer a probe
+     * either (see {@link EventProcessor#getForwardBatchSize()} for when a skip still loses up to a batch).
      *
      * @return the most events forwarded in one unit of work; values below {@code 1} count as {@code 1}
      */

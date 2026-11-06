@@ -551,7 +551,10 @@ holds a pooled connection while it handles a message - size the pool for it.
 Switching either way keeps the processor's resume point and fenced lock (same subscriber id). With a batch, the
 `SubscriptionErrorPolicy` retries and stops at the batch as a whole. A policy that skips first forwards the failed
 batch's events again one per unit of work, each tried once more on its own without the policy's retries, so the skip
-loses only the events that cannot be forwarded on their own either. Up to a batch is still skipped when that replay
+loses only the events that cannot be forwarded on their own either. An event that fails there with an I/O or
+connection failure (as `IOExceptionUtil.isIOException` classifies it) is tried once more at once in a new unit of work;
+if that retry fails the same way and a `SELECT 1` probe of the database fails too, the replay stops and the skip takes
+the batch's untried rest. Up to a batch is still skipped when that replay
 cannot run at all (the database unreachable), and when a stopping policy turns into a skip after `AutoResume.maxAttempts()`
 resumes. Whether the policy skips is read from the policy the subscription was built with, whichever
 `EventStoreSubscriptionManager` built it. An override of

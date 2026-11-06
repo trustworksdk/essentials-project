@@ -333,14 +333,16 @@ the first one started. `PartitionedEventProcessor` is the alternative, chosen by
   policy's retries, so the skip loses only the events that cannot be forwarded on their own either - not the whole batch. This applies to every
   `EventProcessor` with `getForwardBatchSize()` above 1, and to `PartitionedViewEventProcessor` (§2.10). Up to a batch
   is still skipped when the replay cannot run at all (the database unreachable), and when a stopping policy turns into
-  a skip after `AutoResume.maxAttempts` resumes. The replay stops when two events in a row fail with an I/O or
-  connection failure, as `IOExceptionUtil.isIOException` classifies it, and skips the batch's later events untried,
-  instead of each of them waiting for its own connection timeout on the subscription's thread. A single such failure
-  (a stale pooled connection, say) does not stop it: the next event is tried. Of the events that fail again, only the first is logged with
+  a skip after `AutoResume.maxAttempts` resumes. An event that fails with an I/O or connection failure, as
+  `IOExceptionUtil.isIOException` classifies it, is tried once more at once in a new unit of work, so a one-off (a
+  stale pooled connection, say) does not cost it. When it fails that way again, the replay probes the database with a
+  `SELECT 1` in a unit of work of its own: if the probe fails too, the replay stops and skips the batch's later events
+  untried, instead of each of them waiting for its own connection timeout on the subscription's thread; if the probe
+  succeeds, the failure is specific to the event and the next event is tried. Of the events that fail again, only the first is logged with
   its stack trace. Whether the policy skips is read from the policy the batched subscription was built with, handed to the
   new `BatchedPersistedEventHandler.handOffFailedBatch(events, failure, subscriptionErrorPolicy)` overload (by default it
   delegates to the two-argument one), so a skipping policy now also replays a batch under an `EventStoreSubscriptionManager`
-  other than `DefaultEventStoreSubscriptionManager`, where it used to skip the whole batch. (`c5e495008`, `b05d29a79`, `cf71a917f`, `be5c1190a`)
+  other than `DefaultEventStoreSubscriptionManager`, where it used to skip the whole batch. (`c5e495008`, `b05d29a79`, `cf71a917f`, `be5c1190a`, `<!-- fix:U-004 -->`)
 
 Whether a queue keeps key order across instances is the new `DurableQueues.keepsKeyOrderAcrossInstances()` /
 `Inboxes.keepsKeyOrderAcrossInstances()`: `false` by default, `true` for the shard-owned adapter.
