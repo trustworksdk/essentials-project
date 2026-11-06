@@ -443,12 +443,15 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * record a gap the moment it opens; then the gaps they kept in memory are recorded, each gate's in a unit of work of
      * its own, committed before this returns - never in a unit of work current on the calling thread, which could roll
      * back after the gates forgot the gaps. With such a unit of work, or a Spring transaction it would join, each gate records on a virtual thread of its own,
-     * waited for at most {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT}. In that order, so a gap is either kept by a
-     * gate when this records its gaps, or recorded when it opens - whichever event the resume point read afterwards has
-     * moved past
+     * and the calling thread waits for the gates' recordings at most {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT} in
+     * total for this call, not per gate: a gate with gaps still to record, reached once that wait has run out, throws at
+     * once without starting its recording. In that order, so a gap is either kept by a gate when this records its gaps, or recorded when it opens -
+     * whichever event the resume point read afterwards has moved past
      *
-     * @throws IllegalStateException the wait for a gate's recording ran out, or the calling thread was interrupted while
-     *                               waiting - the caller must not save the resume point
+     * @throws IllegalStateException the wait for the gates' recordings ran out, or the calling thread was interrupted while
+     *                               waiting - the caller must not save the resume point, and should not call this for
+     *                               the other resume points of the same save either: with its unit of work still current,
+     *                               their recordings may be blocked the same way
      */
     @Override
     public ResumePointSave beforeResumePointSave(SubscriberId subscriberId, AggregateType aggregateType) {
@@ -461,8 +464,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         try {
             var gates = runningDeliveryGates.get(key);
             if (gates != null) {
+                // One wait for the whole save, shared by its gates - not one wait per gate
+                var waitEndsAt = System.nanoTime() + deferredGapsRecordingWait.toNanos();
                 for (var gate : List.copyOf(gates)) {
-                    gate.recordDeferredGapsCommitted();
+                    gate.recordDeferredGapsCommitted(waitEndsAt);
                 }
             }
             return save;
@@ -1501,6 +1506,18 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * @throws RuntimeException     the gaps could not be recorded - they stay kept, for the next call
          */
         void recordDeferredGapsCommitted() throws InterruptedException, TimeoutException {
+            recordDeferredGapsCommitted(System.nanoTime() + deferredGapsRecordingWait.toNanos());
+        }
+
+        /**
+         * {@link #recordDeferredGapsCommitted()}, with the wait on a virtual thread ending at {@code waitEndsAt} (a
+         * {@link System#nanoTime()} value) rather than {@link #DEFERRED_GAPS_RECORDING_WAIT} from now - so a resume point
+         * save waits for all of its gates within one wait. Should it have run out already, no recording is started.
+         *
+         * @throws TimeoutException the recording did not end before {@code waitEndsAt}, or that had passed already - the
+         *                          gaps stay kept until a recording commits
+         */
+        void recordDeferredGapsCommitted(long waitEndsAt) throws InterruptedException, TimeoutException {
             if (!defersGapRecording) return;
             if (deferredGapsLock.tryLock()) {
                 try {
@@ -1511,7 +1528,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             }
             // The probe also sees a Spring transaction with no unit of work bound yet, which withUnitOfWork would join
             if (TransactionProbe.isUnitOfWorkActive(unitOfWorkFactory)) {
-                runOnAVirtualThreadWaitingAtMost("Cdc-RecordDeferredGaps-" + aggregateType, deferredGapsRecordingWait, this::recordDeferredGaps);
+                var waitLeft = waitEndsAt - System.nanoTime();
+                if (waitLeft <= 0) {
+                    throw new TimeoutException("No time was left to record the gaps of " + aggregateType + " kept in memory");
+                }
+                runOnAVirtualThreadWaitingAtMost("Cdc-RecordDeferredGaps-" + aggregateType, Duration.ofNanos(waitLeft), this::recordDeferredGaps);
             } else {
                 recordDeferredGaps();
             }

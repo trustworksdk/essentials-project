@@ -369,6 +369,45 @@ class CdcEventStoreDeliveryGateTest {
         // The recording goes on, and records the gaps once what blocked it is gone
         await().atMost(Duration.ofSeconds(5))
                .untilAsserted(() -> assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).contains(LongRange.only(2), LongRange.only(4)));
+        // Once only, by the recording that outlasted the wait; the next save records nothing again
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+        assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).containsExactly(LongRange.only(2), LongRange.only(4));
+
+        // The saves whose wait ran out closed their window: a new subscription keeps the gaps it opens in memory again,
+        // rather than recording them at once
+        var reconciliationsBefore = gapHandler.reconciliations.size();
+        var resubscribed          = subscribe();
+        await().atMost(Duration.ofSeconds(5)).until(() -> resubscribed.equals(List.of(1L, 3L, 2L, 5L)));
+        assertThat(gapHandler.reconciliations).as("opened gaps recorded at once").hasSize(reconciliationsBefore);
+        assertThat(gapHandler.transientGapsAdded).hasSize(2);
+    }
+
+    /**
+     * A save waits for its gates' recordings within one wait, not one wait per gate: a gate's recording gets only what
+     * the gates before it left of the wait, so a save with a unit of work current never stalls once per gate
+     */
+    @Test
+    void a_save_waits_for_all_of_its_gates_recordings_within_one_wait() throws Exception {
+        setupDeferringGapRecording();
+        cdcEventStore.deferredGapsRecordingWait(Duration.ofSeconds(1));
+        // Two running subscriptions of the subscriber, each keeping gap 2 in memory
+        var first  = subscribe();
+        var second = subscribe();
+        poll(1, 3);
+        await().atMost(Duration.ofSeconds(5)).until(() -> first.equals(List.of(1L, 3L)) && second.equals(List.of(1L, 3L)));
+        // Each gate's recording takes 600 ms: the first ends within the wait, the second not within what is left of it
+        gapHandler.addingTransientGapsTakes = Duration.ofMillis(600);
+        var outcome              = new CopyOnWriteArrayList<String>();
+        var callerWithUnitOfWork = Thread.ofPlatform().daemon().unstarted(() -> outcome.add(outcomeOf(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close())));
+        doAnswer(inv -> Thread.currentThread().equals(callerWithUnitOfWork) ? Optional.of(mock(EventStoreUnitOfWork.class)) : Optional.empty())
+                .when(uowFactory).getCurrentUnitOfWork();
+        callerWithUnitOfWork.start();
+        callerWithUnitOfWork.join(Duration.ofSeconds(5));
+
+        assertThat(outcome).as("the second gate's recording was given a wait of its own").containsExactly("IllegalStateException");
+        // The second recording goes on, and records its gaps once it ends
+        await().atMost(Duration.ofSeconds(5))
+               .untilAsserted(() -> assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).containsExactly(LongRange.only(2), LongRange.only(2)));
     }
 
     /**
@@ -574,6 +613,8 @@ class CdcEventStoreDeliveryGateTest {
         private volatile boolean           failResolving;
         /** When set, {@code addTransientGaps} waits for it - as for a lock another unit of work holds */
         private volatile CountDownLatch    addingTransientGapsMayEnd;
+        /** When set (and no latch is), each {@code addTransientGaps} call takes this long - a slow, but not blocked, statement */
+        private volatile Duration          addingTransientGapsTakes;
 
         private RecordingGapHandler(Duration giveUpThreshold) {
             this.giveUpThreshold = giveUpThreshold;
@@ -612,9 +653,14 @@ class CdcEventStoreDeliveryGateTest {
         @Override
         public GapReconciliation addTransientGaps(AggregateType aggregateType, LongRange gaps) {
             var mayEnd = addingTransientGapsMayEnd;
-            if (mayEnd != null) {
+            var takes  = addingTransientGapsTakes;
+            if (mayEnd != null || takes != null) {
                 try {
-                    mayEnd.await();
+                    if (mayEnd != null) {
+                        mayEnd.await();
+                    } else {
+                        new CountDownLatch(1).await(takes.toNanos(), TimeUnit.NANOSECONDS);
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException(e);

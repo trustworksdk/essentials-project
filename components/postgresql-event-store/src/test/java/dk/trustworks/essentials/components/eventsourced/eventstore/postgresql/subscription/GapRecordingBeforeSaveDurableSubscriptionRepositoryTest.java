@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.time.*;
 import java.util.*;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.*;
@@ -125,6 +126,34 @@ class GapRecordingBeforeSaveDurableSubscriptionRepositoryTest {
         assertThat(handedToDelegate).containsExactly(saved.getSubscriberId());
         assertThat(failing.isChanged()).isTrue();
         assertThat(gapRecording.openWindows).isEmpty();
+    }
+
+    /**
+     * A wait for the recording that ran out - blocked, say, by a lock the caller's unit of work holds - would run out for
+     * every later resume point blocked by the same lock: those are not tried, so one save waits once, not once per resume point
+     */
+    @Test
+    void after_a_recording_wait_runs_out_the_later_resume_points_of_the_save_are_not_tried_and_not_saved() {
+        var timedOut = persistedResumePoint("timed-out");
+        var later    = persistedResumePoint("later");
+        timedOut.advanceResumeFromAndIncluding(GlobalEventOrder.of(20));
+        later.advanceResumeFromAndIncluding(GlobalEventOrder.of(20));
+        var gapRecording = mock(DeferredGapRecording.class);
+        when(gapRecording.beforeResumePointSave(timedOut.getSubscriberId(), ORDERS))
+                .thenThrow(new IllegalStateException("did not finish", new TimeoutException("recording blocked")));
+        var delegate = mock(DurableSubscriptionRepository.class);
+
+        var repository = new GapRecordingBeforeSaveDurableSubscriptionRepository(delegate, gapRecording);
+        var thrown = catchThrowable(() -> repository.saveResumePoints(List.of(timedOut, later)));
+
+        verify(gapRecording, never()).beforeResumePointSave(later.getSubscriberId(), ORDERS);
+        verifyNoInteractions(delegate);
+        assertThat(thrown).isInstanceOf(GapRecordingBeforeSaveDurableSubscriptionRepository.GapsNotRecordedException.class)
+                          .hasMessageContaining("timed-out")
+                          .hasRootCauseInstanceOf(TimeoutException.class);
+        assertThat(thrown.getSuppressed()).singleElement()
+                                          .satisfies(skipped -> assertThat(skipped).hasMessageContaining("later").hasMessageContaining("not tried"));
+        assertThat(later.isChanged()).as("left to the next save").isTrue();
     }
 
     @Test

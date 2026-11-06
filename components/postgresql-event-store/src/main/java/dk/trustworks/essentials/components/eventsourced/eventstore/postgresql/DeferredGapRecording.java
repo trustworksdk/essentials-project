@@ -67,7 +67,7 @@ public interface DeferredGapRecording {
      * @throws RuntimeException the gaps could not be recorded, or not in time - the caller must then not save the resume
      *                          point, and should report that save as failed to whoever asked for it, as the
      *                          {@code DefaultEventStoreSubscriptionManager}'s repository does: it throws once it has saved
-     *                          the other resume points
+     *                          the resume points whose gaps were recorded
      */
     ResumePointSave beforeResumePointSave(SubscriberId subscriberId, AggregateType aggregateType);
 

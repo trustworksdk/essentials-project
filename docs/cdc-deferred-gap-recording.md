@@ -107,7 +107,7 @@ the same as before. An opt-out property would only control a cost; it would not 
 | Seeding from `getTransientGapsFor` at subscribe | A re-subscribe on a new manager reads the rows written by the last save or by the end of the previous subscription. A `retry()`/`repeat()` re-subscribe starts from the original start order, below everything |
 | Wide gaps / lower end (`addTransientGaps`) | Never deferred; written at once |
 | Subscription end inside a unit of work or a Spring transaction | The held gaps are written on a virtual thread of their own, rather than in a unit of work the gate does not own. The ending thread waits for it at most 10 s (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`); if the wait runs out it logs a WARN and the subscription ends, and the write goes on and commits when it can |
-| Save inside a unit of work or a Spring transaction | Same as the subscription end: written on a virtual thread of their own, waited for at most 10 s. If the wait runs out, that resume point is not saved, and the save throws after saving the others |
+| Save inside a unit of work or a Spring transaction | Same as the subscription end: written on a virtual thread of their own. All the subscriber's running subscriptions share one wait of at most 10 s per resume point. If the wait runs out, that resume point and the changed resume points after it in the same save are not saved, without waiting for them, and the save throws after saving the others |
 | Bus overflow catch-up, or any other move back onto the bus | The catch-up loads every event within every range the tracker awaits (`CdcDeliveryTracker.awaitedRanges`, see the section below), so a held gap is covered like any other. The first fix only added the held orders (`withUnrecordedGaps`, now removed). It was needed because, without it, a burst with more than 1 000 older awaited orders hid the fill until give-up: trading-demo views applied `OrderAccepted` before `OrderPlaced`, and existing events ended up as permanent gaps. Pinned by `a_gap_kept_in_memory_whose_fill_arrives_while_the_subscription_is_off_the_bus_is_filled_by_the_catch_up` |
 | Polling fallback / switches | One gate per subscription whatever the source. The delegate's polls record their own gaps as before |
 | Acknowledgement of fills | A fill of a held gap is never registered with `GapFillsAwaitingAcknowledgement`, so nothing is resolved for it. `dropped` does not acknowledge it to the delegate |
@@ -199,10 +199,14 @@ The existing pins still apply: `CdcEventStoreCommitOrderIT`, `CdcEventStoreGapFi
   the caller commits, and a rollback would then lose them: the next save, past them, would record nothing. With a unit
   of work, or a Spring transaction the unit of work factory would join, current on the saving thread
   (`TransactionProbe.isUnitOfWorkActive`), each gate flushes on a virtual thread of its own, in its own unit of work, and
-  the saving thread waits for it at most 10 s (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`). The flush then needs a
+  the saving thread waits for the flushes at most 10 s (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`) per resume point:
+  one wait shared by all of the subscriber's gates (`CdcEventStore.beforeResumePointSave`). The flush then needs a
   second connection while the caller holds one. If the caller's unit of work holds a lock the flush needs, the wait runs
-  out instead of hanging, since PostgreSQL cannot see that wait as a deadlock. That resume point is then not saved (the
-  repository throws after saving the others, and the caller logs it). The flush goes on, keeping the gate lock, until the caller's
+  out instead of hanging, since PostgreSQL cannot see that wait as a deadlock. That resume point is then not saved, and
+  neither are the changed resume points after it in the same save: the repository does not flush them, as their flushes
+  could be blocked by the same lock and would each wait again
+  (`GapRecordingBeforeSaveDurableSubscriptionRepository.saveResumePoints`). It throws after saving the others, and the
+  caller logs it. The flush goes on, keeping the gate lock, until the caller's
   transaction ends. Meanwhile the four paths that may run inside that unit of work do not wait for the gate lock
   without a limit, as the flush may be waiting for it: a second save finds the lock taken and hands its check to a new
   virtual thread, waited for at most 10 s again; the subscription's end marks the gate ended without the lock; an

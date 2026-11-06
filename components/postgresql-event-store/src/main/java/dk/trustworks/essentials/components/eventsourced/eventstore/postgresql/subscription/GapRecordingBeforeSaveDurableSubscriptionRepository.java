@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import java.util.*;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -104,9 +105,15 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
      * and, until it has, records every gap opened at once. Only those resume points are handed to the delegate: one found
      * unchanged here is left out, as it would not be written anyway, so that one its subscription advances after this
      * check is never written without its gaps recorded - a later save takes it.
+     * <p>
+     * Once waiting for one resume point's gaps to be recorded has run out or been interrupted (a {@link TimeoutException}
+     * or {@link InterruptedException} in the failure's cause chain), the gaps of the changed resume points after it are
+     * not recorded in this call either, and those are not saved: with the caller's unit of work still current, their
+     * recordings may be blocked by the same lock, and each would wait in turn. So one call waits for that at most once.
      *
      * @throws GapsNotRecordedException after the delegate saved the other resume points, when the gaps of one or more
-     *                                  resume points could not be recorded - those were not saved and stay changed
+     *                                  resume points could not be recorded, or were not tried after a wait that ran out
+     *                                  - those were not saved and stay changed
      */
     @Override
     public void saveResumePoints(Collection<SubscriptionResumePoint> resumePoints) {
@@ -114,6 +121,7 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
         var                     saves       = new ArrayList<DeferredGapRecording.ResumePointSave>(resumePoints.size());
         var                     savable     = new ArrayList<SubscriptionResumePoint>(resumePoints.size());
         GapsNotRecordedException notRecorded = null;
+        RuntimeException         waitRanOut  = null;
         try {
             for (var resumePoint : resumePoints) {
                 // Whether a resume point is changed is not stable - its subscription may advance it any moment. The
@@ -122,11 +130,20 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
                 if (!resumePoint.isChanged()) {
                     continue;
                 }
+                if (waitRanOut != null) {
+                    notRecorded = GapsNotRecordedException.adding(notRecorded, resumePoint,
+                                                                  new IllegalStateException("not tried, as waiting for the gaps of an earlier resume point of this save to be recorded ran out or was interrupted",
+                                                                                            waitRanOut));
+                    continue;
+                }
                 try {
                     saves.add(deferredGapRecording.beforeResumePointSave(resumePoint.getSubscriberId(), resumePoint.getAggregateType()));
                     savable.add(resumePoint);
                 } catch (RuntimeException e) {
                     notRecorded = GapsNotRecordedException.adding(notRecorded, resumePoint, e);
+                    if (isWaitThatRanOutOrWasInterrupted(e)) {
+                        waitRanOut = e;
+                    }
                 }
             }
             if (!savable.isEmpty()) {
@@ -143,6 +160,15 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
         if (notRecorded != null) {
             throw notRecorded;
         }
+    }
+
+    private static boolean isWaitThatRanOutOrWasInterrupted(Throwable failure) {
+        for (var cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof TimeoutException || cause instanceof InterruptedException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
