@@ -470,7 +470,9 @@ subscription's end on that thread waits for it at most 10 s too, instead of hang
 thread, waits for a running gap recording at most 10 s and then returns as usual, so it never fails the subscriber's
 handler or stops the subscription through its error policy; the gap recording resolves the gap of a gap fill it
 acknowledged once that recording commits (`<!-- fix:U-001 -->`). `awaitProcessed` likewise waits for it at
-most 10 s per check and then treats the event as not processed yet (`8b99e122e`). Delivering an event no longer waits
+most 10 s per check and then treats the event as not processed yet (`8b99e122e`); that is one wait per check however
+many subscriptions the subscriber runs, not one per subscription, and while such a recording runs every event of that
+subscriber and aggregate type counts as not processed yet (`<!-- fix:U-002 -->`). Delivering an event no longer waits
 without a limit for the gate's lock while such a recording holds it, but an event that opens a gap that must be
 recorded at once still waits for that recording (`<!-- fix:U-001 -->`). A save whose gaps could not be written (that
 timeout, or an unreachable database) saves the other resume points and then fails, so a stop or lock release stops

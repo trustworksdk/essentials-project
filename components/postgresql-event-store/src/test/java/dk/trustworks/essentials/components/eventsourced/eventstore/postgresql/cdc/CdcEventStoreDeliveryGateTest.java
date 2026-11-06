@@ -41,6 +41,7 @@ import reactor.core.publisher.Sinks;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -498,6 +499,86 @@ class CdcEventStoreDeliveryGateTest {
     }
 
     /**
+     * {@code isAwaitedAsGap} asks every running gate of the subscriber for a held fill within one wait, not one wait per
+     * gate: a gate whose lock frees within the wait leaves the next gate only what is left of it. Here the first gate's
+     * lock frees part-way through the wait and the second gate's lock is then held past its end, so the order is
+     * answered as still awaited once the one wait runs out - rather than after a second wait, as not awaited
+     */
+    @Test
+    void is_awaited_as_gap_asks_all_running_gates_for_a_held_fill_within_one_wait() throws Exception {
+        var secondGapHandler = new RecordingGapHandler(Duration.ofSeconds(10));
+        setupDeferringGapRecording(List.of(secondGapHandler));
+        cdcEventStore.deferredGapsRecordingWait(Duration.ofMillis(200));
+        // Two running subscriptions of the subscriber, each keeping gap 2 in memory, each with a gap handler of its own
+        var first  = subscribe();
+        var second = subscribe();
+        poll(1, 3);
+        await().atMost(Duration.ofSeconds(5)).until(() -> first.equals(List.of(1L, 3L)) && second.equals(List.of(1L, 3L)));
+        var handlers  = List.of(gapHandler, secondGapHandler);
+        var mayEnd       = new CountDownLatch(1);
+        var secondMayEnd = new CountDownLatch(1);
+        handlers.forEach(handler -> handler.addingTransientGapsMayEnd = mayEnd);
+        var uowThreads = new CopyOnWriteArrayList<Thread>();
+        doAnswer(inv -> uowThreads.contains(Thread.currentThread()) ? Optional.of(mock(EventStoreUnitOfWork.class)) : Optional.empty())
+                .when(uowFactory).getCurrentUnitOfWork();
+        try {
+            // A save stops at the gate asked first, whose recording blocks: its gap handler tells which gate that is
+            assertThat(saveWithAUnitOfWork(uowThreads)).isEqualTo("IllegalStateException");
+            var askedFirst  = handlers.stream().filter(handler -> handler.addingTransientGapsCalls.get() == 1).findFirst().orElseThrow();
+            var askedSecond = askedFirst.equals(gapHandler) ? secondGapHandler : gapHandler;
+            // The first gate's recording ends; the next save passes that gate, now empty, and the second gate's recording
+            // blocks, holding its gate lock until the test ends
+            askedSecond.addingTransientGapsMayEnd = secondMayEnd;
+            mayEnd.countDown();
+            await().atMost(Duration.ofSeconds(5)).until(() -> askedFirst.transientGapsAdded.size() == 1);
+            assertThat(saveWithAUnitOfWork(uowThreads)).isEqualTo("IllegalStateException");
+            await().atMost(Duration.ofSeconds(5)).until(() -> askedSecond.addingTransientGapsCalls.get() == 1);
+            // 5 opens the gap 4 in the first gate; the second keeps it without its lock
+            poll(5);
+            await().atMost(Duration.ofSeconds(5)).until(() -> first.size() == 3 && second.size() == 3);
+            // The first gate's next recording holds its gate lock 700 ms, past which the second gate's stays held
+            var wait = Duration.ofSeconds(1);
+            cdcEventStore.deferredGapsRecordingWait(wait);
+            askedFirst.addingTransientGapsMayEnd = null;
+            askedFirst.addingTransientGapsTakes = Duration.ofMillis(700);
+            var saving = Thread.ofPlatform().daemon().unstarted(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close());
+            uowThreads.add(saving);
+            saving.start();
+            await().atMost(Duration.ofSeconds(5)).pollInterval(Duration.ofMillis(1)).until(() -> askedFirst.addingTransientGapsCalls.get() == 2);
+
+            var outcome = new CopyOnWriteArrayList<String>();
+            var took    = new CopyOnWriteArrayList<Duration>();
+            var asking  = Thread.ofPlatform().daemon().start(() -> {
+                var started = System.nanoTime();
+                // As awaitProcessed asks it: an order no gate holds a fill for
+                outcome.add(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(7)) ? "awaited" : "not awaited");
+                took.add(Duration.ofNanos(System.nanoTime() - started));
+            });
+            asking.join(Duration.ofSeconds(5));
+            saving.join(Duration.ofSeconds(5));
+
+            // The first gate's lock freed after 700 ms; the second gate had what was left of the one wait, not a wait of its own
+            assertThat(outcome).as("the second gate's lock was still held").containsExactly("awaited");
+            assertThat(took.getFirst()).as("one wait for all gates, not one per gate").isLessThan(Duration.ofMillis(1_400));
+        } finally {
+            mayEnd.countDown();
+            secondMayEnd.countDown();
+        }
+    }
+
+    /**
+     * @return the outcome of a resume point save on a new thread with a unit of work current
+     */
+    private String saveWithAUnitOfWork(List<Thread> uowThreads) throws InterruptedException {
+        var outcome = new CopyOnWriteArrayList<String>();
+        var saving  = Thread.ofPlatform().daemon().unstarted(() -> outcome.add(outcomeOf(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close())));
+        uowThreads.add(saving);
+        saving.start();
+        saving.join(Duration.ofSeconds(5));
+        return outcome.isEmpty() ? "still running" : outcome.getFirst();
+    }
+
+    /**
      * An acknowledgement on a thread whose interrupt flag is set - a handler's backoff the polling/CDC source switch
      * interrupted - still takes the gate lock when it is free
      */
@@ -654,9 +735,18 @@ class CdcEventStoreDeliveryGateTest {
      */
     @SuppressWarnings("unchecked")
     private void setupDeferringGapRecording() {
+        setupDeferringGapRecording(List.of());
+    }
+
+    /**
+     * As {@link #setupDeferringGapRecording()}, the first subscription given {@link #gapHandler} and each later one the
+     * next of {@code laterSubscriptionsGapHandlers}, so their recordings do not share a gap handler's monitor
+     */
+    @SuppressWarnings("unchecked")
+    private void setupDeferringGapRecording(List<RecordingGapHandler> laterSubscriptionsGapHandlers) {
         setup(Duration.ofSeconds(10));
         PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> gapHandlers = mock(PostgresqlEventStreamGapHandler.class);
-        when(gapHandlers.gapHandlerFor(any())).thenReturn(gapHandler);
+        when(gapHandlers.gapHandlerFor(any())).thenReturn(gapHandler, laterSubscriptionsGapHandlers.toArray(RecordingGapHandler[]::new));
         cdcEventStore = new CdcEventStore<>(delegate,
                                             uowFactory,
                                             gapHandlers,
@@ -792,6 +882,8 @@ class CdcEventStoreDeliveryGateTest {
         private volatile Duration          addingTransientGapsTakes;
         /** When set, {@code getTransientGapsFor} reports the gaps added and not resolved since - as the database would */
         private volatile boolean           reportsRecordedTransientGaps;
+        /** How many {@code addTransientGaps} calls have started */
+        private final AtomicInteger        addingTransientGapsCalls = new AtomicInteger();
 
         private RecordingGapHandler(Duration giveUpThreshold) {
             this.giveUpThreshold = giveUpThreshold;
@@ -829,6 +921,7 @@ class CdcEventStoreDeliveryGateTest {
 
         @Override
         public GapReconciliation addTransientGaps(AggregateType aggregateType, LongRange gaps) {
+            addingTransientGapsCalls.incrementAndGet();
             var mayEnd = addingTransientGapsMayEnd;
             var takes  = addingTransientGapsTakes;
             if (mayEnd != null || takes != null) {

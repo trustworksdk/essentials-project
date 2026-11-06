@@ -1562,19 +1562,43 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
 
         /**
          * {@link #isFillOfAnUnrecordedGapNotDoneWith} for {@link #isAwaitedAsGap}, which {@code awaitProcessed} may ask
-         * inside a unit of work: waits for {@link #deferredGapsLock} at most {@code deferredGapsRecordingWait}
+         * inside a unit of work: takes {@link #deferredGapsLock} at once when it is free, else waits for it until
+         * {@code waitEndsAt} at the latest - one wait {@link #isAwaitedAsGap} shares among all running gates of the
+         * subscriber, not one wait per gate
          *
+         * @param waitEndsAt a {@link System#nanoTime()} value; once it has passed, the lock is only tried
          * @return true if {@code order} is the fill of a gap kept in memory that was handed on and is not done with - and
-         * also when the lock was not free within the wait or the thread was interrupted waiting for it: still awaited,
-         * as far as the gate can tell, so the caller asks again later
+         * also when the lock was not free by {@code waitEndsAt} or the thread was interrupted waiting for it: still
+         * awaited, as far as the gate can tell, so the caller asks again later
          */
-        boolean isAwaitedAsFillOfAnUnrecordedGap(long order) {
+        boolean isAwaitedAsFillOfAnUnrecordedGap(long order, long waitEndsAt) {
             if (!defersGapRecording) return false;
-            if (!tryLockOrRestoreInterrupt(deferredGapsRecordingWait)) return true;
+            if (!tryLockUntilOrRestoreInterrupt(waitEndsAt)) return true;
             try {
                 return unrecordedFillsNotDoneWith.containsKey(order);
             } finally {
                 deferredGapsLock.unlock();
+            }
+        }
+
+        /**
+         * {@link #tryLockOrRestoreInterrupt}, with the wait ending at {@code waitEndsAt} rather than a wait from now: takes
+         * {@link #deferredGapsLock} at once when it is free, whatever the thread's interrupt flag - else waits for it
+         * only for what is left until {@code waitEndsAt}, and not at all once that has passed. An interrupt while waiting
+         * counts as not taken, and the thread's interrupt flag is set again
+         *
+         * @param waitEndsAt a {@link System#nanoTime()} value
+         * @return true if taken
+         */
+        private boolean tryLockUntilOrRestoreInterrupt(long waitEndsAt) {
+            if (deferredGapsLock.tryLock()) return true;
+            var waitLeft = waitEndsAt - System.nanoTime();
+            if (waitLeft <= 0) return false;
+            try {
+                return deferredGapsLock.tryLock(waitLeft, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
             }
         }
 
@@ -2491,9 +2515,13 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * <p>
      * Asks a running subscription's tracker under the tracker's monitor, which its delivering threads take for every event
      * - briefly, and never the bus thread's. A running subscription's held fills are checked under its delivery gate's lock,
-     * waited for at most {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT}: when that lock is not free within the wait
-     * (a deferred-gap recording that outlasted its own wait may still hold it) or the thread is interrupted waiting for it,
-     * the order is answered as still awaited, so {@code awaitProcessed} reports it as not yet processed and asks again.
+     * waited for at most {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT} per call, shared by all of the subscriber's
+     * running subscriptions of the aggregate type - not one wait per subscription: a gate asked after another one has
+     * only what is left of the wait, and once it has run out its lock is only tried. When a gate's lock is not free by
+     * then (a deferred-gap recording that outlasted its own wait may still hold it) or the thread is interrupted waiting
+     * for it, the order is answered as still awaited, so {@code awaitProcessed} reports it as not yet processed and asks
+     * again. That answer is conservative: while such a recording holds the lock, every order of the subscriber and
+     * aggregate type is answered as awaited - also one no gap or held fill is about - until that recording ends.
      */
     @Override
     public boolean isAwaitedAsGap(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder globalEventOrder) {
@@ -2536,7 +2564,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         }
         // A fill of a gap kept in memory, handed on and not done with - no transient gap records it
         var gates = runningDeliveryGates.get(key);
-        return gates != null && gates.stream().anyMatch(gate -> gate.isAwaitedAsFillOfAnUnrecordedGap(globalEventOrder));
+        if (gates == null) return false;
+        // One wait for the whole question, shared by the gates - not one wait per gate
+        var waitEndsAt = System.nanoTime() + deferredGapsRecordingWait.toNanos();
+        return gates.stream().anyMatch(gate -> gate.isAwaitedAsFillOfAnUnrecordedGap(globalEventOrder, waitEndsAt));
     }
 
     @Override
