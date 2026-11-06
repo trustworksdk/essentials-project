@@ -469,19 +469,19 @@ the next save (`6a32ac597`). While such a write still runs, a later save or the
 subscription's end on that thread waits for it at most 10 s too, instead of hanging. Any acknowledgement, on any
 thread, waits for a running gap recording at most 10 s and then returns as usual, so it never fails the subscriber's
 handler or stops the subscription through its error policy; the gap recording resolves the gap of a gap fill it
-acknowledged once that recording commits (`<!-- fix:U-001 -->`). `awaitProcessed` likewise waits for it at
+acknowledged once that recording commits (`fc5127f70`). `awaitProcessed` likewise waits for it at
 most 10 s per check and then treats the event as not processed yet (`8b99e122e`); that is one wait per check however
 many subscriptions the subscriber runs, not one per subscription, and while such a recording runs every event of that
-subscriber and aggregate type counts as not processed yet (`<!-- fix:U-002 -->`). Delivering an event no longer waits
+subscriber and aggregate type counts as not processed yet (`a01c8e746`). Delivering an event no longer waits
 without a limit for the gate's lock while such a recording holds it, but an event that opens a gap that must be
-recorded at once still waits for that recording (`<!-- fix:U-001 -->`). A save whose gaps could not be written (that
+recorded at once still waits for that recording (`fc5127f70`). A save whose gaps could not be written (that
 timeout, or an unreachable database) saves the other resume points and then fails, so a stop or lock release stops
 retrying it at once and a shutdown treats an unreachable database as one, instead of retrying it every 100 ms for up
 to 5 s. A reset (`EventStoreSubscription#resetFrom`, `DefaultEventStoreSubscriptionManager#resetStoredResumePoint`)
 whose gaps could not be written now fails with an exception instead of reporting a reset whose resume point was not
 saved (`85ad4303e`). When the manager's periodic or threshold save keeps failing that way for a subscriber and
 aggregate type, the first failure is logged at WARN with its stack trace, the repeats at DEBUG, and one WARN a minute
-counts them, instead of a WARN with a stack trace on every check (`<!-- fix:U-008 -->`).
+counts them, instead of a WARN with a stack trace on every check (`5476460cc`).
 
 There is nothing to configure. A few cases still write the gap at once, as before:
 
