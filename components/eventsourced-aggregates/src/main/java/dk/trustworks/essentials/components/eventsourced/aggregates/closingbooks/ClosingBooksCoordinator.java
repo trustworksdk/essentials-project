@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkStatus;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -27,6 +28,7 @@ import java.time.OffsetDateTime;
 import java.util.Optional;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Coordinates generation lifecycle transitions for one {@link AggregateType}.
@@ -375,7 +377,10 @@ public class ClosingBooksCoordinator<ID> {
      * </ul>
      *
      * @param scannedGeneration the generation as the scan read it
-     * @param aggregateLoader   loads the aggregate of the generation's stream; called at most once, under the lock
+     * @param aggregateLoader   loads the aggregate of the generation's stream; called at most once, under the lock. When it
+     *                          returns an aggregate but leaves the unit of work rollback-only (it caught an exception from
+     *                          a nested {@code withUnitOfWork}), nothing is decided and the call fails with an exception
+     *                          whose cause chain holds an {@link IllegalStateException} naming the loader
      * @param policy            the decision policy
      * @param rollover          the application's rollover for {@code CLOSE_AND_OPEN_NEXT}, or {@code null} to roll only
      *                          the generation row
@@ -399,6 +404,14 @@ public class ClosingBooksCoordinator<ID> {
             var aggregate = aggregateLoader.load(currentGeneration.get().streamAggregateId());
             if (aggregate.isEmpty()) {
                 return new ScanEvaluation<>(ScanOutcome.AGGREGATE_MISSING, currentGeneration.get());
+            }
+            if (uow.status() == UnitOfWorkStatus.MarkedForRollbackOnly) {
+                // A nested withUnitOfWork inside the loader threw and the loader caught it: the unit of work this shares
+                // can no longer commit, so a decision or a rollover made in it would be rolled back unseen.
+                throw new IllegalStateException(msg("The closing books aggregateLoader for aggregateType '{}' left the scan's unit of work marked rollback-only while loading streamAggregateId '{}' - a loader must report a missing aggregate by returning Optional.empty(), not by catching an exception from a unit of work it joined",
+                                                    aggregateType,
+                                                    currentGeneration.get().streamAggregateId()),
+                                                uow.getCauseOfRollback());
             }
             return new ScanEvaluation<>(ScanOutcome.DECIDED,
                                         decide(currentGeneration.get(), aggregate.get(), ClosingBooksTriggerMode.SCHEDULED_SCAN, policy, rollover));

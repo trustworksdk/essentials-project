@@ -591,7 +591,13 @@ boundary did not roll at all.
   `context.currentGeneration()` and a closing event recorded on it is persisted with the rollover (when the loader's
   repository joins the unit of work, as a `StatefulAggregateRepository` does). A generation rolled or closed after the
   scan read it - by a command that rolled on access in between - is left alone (`generation_moved` outcome) instead of
-  being rolled again from the older generation's aggregate (`3c9f7defe`).
+  being rolled again from the older generation's aggregate (`3c9f7defe`). Because the loader runs in that unit of work,
+  it must report a missing aggregate by returning `Optional.empty()` (for example via `tryLoad`), not by catching an
+  exception from a nested `withUnitOfWork`: the nested call marks the shared unit of work rollback-only even when the
+  loader catches the exception. An empty result is still counted as `aggregate_missing`; a loader that returns an
+  aggregate but leaves the unit of work rollback-only now gets no decision, is counted as `failed` and logged with an
+  `IllegalStateException` naming the loader in the cause chain, and its generation is deferred, instead of a decision and rollover that
+  could never commit (`<!-- fix:U-002 -->`).
 - **`BuiltInClosingBooksPolicyEvaluator.asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)`** rolls on scans too, so a
   passed time boundary - or a closed business day under `periodSource = BUSINESS_CALENDAR` (§2.15) - rolls idle aggregates.
 - `ClosingBooksCoordinator.evaluatePolicy(..., rollover)` is the public overload for a custom

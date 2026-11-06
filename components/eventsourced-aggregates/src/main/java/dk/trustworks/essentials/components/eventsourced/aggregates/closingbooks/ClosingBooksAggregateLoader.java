@@ -34,6 +34,15 @@ public interface ClosingBooksAggregateLoader<AGGREGATE> {
      * Loads an aggregate of the specified type associated with the given stream aggregate identifier.
      * This method serves as a mechanism for retrieving an aggregate from a data source
      * or storage based on its unique identifier.
+     * <p>
+     * The built-in scheduled scan ({@link DefaultClosingBooksScheduledScanProcessor}) calls this under the generation
+     * lock, inside the unit of work its policy decision and rollover run in, so a {@code withUnitOfWork} or repository
+     * call made here joins that unit of work. A nested {@code withUnitOfWork} that throws marks the joined unit of work
+     * rollback-only, even when this method catches the exception. So report a missing aggregate by returning
+     * {@link Optional#empty()} - for example from {@code StatefulAggregateRepository.tryLoad} - never by catching an
+     * exception thrown from a nested {@code withUnitOfWork}. When the unit of work is left rollback-only, the scan
+     * still counts an empty result as {@code aggregate_missing}, but treats a returned aggregate as a failure
+     * (outcome {@code failed}) instead of deciding on it, because nothing it decided could be committed.
      *
      * @param streamAggregateId the unique identifier of the stream aggregate to load
      * @return an {@code Optional} containing the loaded aggregate if found, or empty if no aggregate is associated with the given identifier

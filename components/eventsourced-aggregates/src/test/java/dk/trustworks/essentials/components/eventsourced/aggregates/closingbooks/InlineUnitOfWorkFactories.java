@@ -18,11 +18,13 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkStatus;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.shared.functional.CheckedConsumer;
 import dk.trustworks.essentials.shared.functional.CheckedFunction;
 
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -62,6 +64,10 @@ final class InlineUnitOfWorkFactories {
      * Like {@link #inline()}, but each outermost {@code withUnitOfWork}/{@code usingUnitOfWork} gets its own mock
      * {@link HandleAwareUnitOfWork}, a nested call joins it, and {@code getCurrentUnitOfWork()} answers the one in
      * progress on the calling thread - as the real factories do. Lets a test tell which unit of work a call ran in.
+     * <p>
+     * As in {@code UnitOfWorkFactory.withUnitOfWork}, a nested {@code withUnitOfWork} that throws marks the joined unit
+     * of work rollback-only - its {@code status()} turns {@link UnitOfWorkStatus#MarkedForRollbackOnly} and
+     * {@code getCauseOfRollback()} answers the exception - and rethrows it wrapped in a {@link UnitOfWorkException}.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     static HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> joining() {
@@ -72,9 +78,15 @@ final class InlineUnitOfWorkFactories {
             when(factory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(invocation -> {
                 CheckedFunction<HandleAwareUnitOfWork, ?> function = invocation.getArgument(0);
                 if (current.get() != null) {
-                    return function.apply(current.get());
+                    var joined = current.get();
+                    try {
+                        return function.apply(joined);
+                    } catch (Exception e) {
+                        joined.markAsRollbackOnly(e);
+                        throw new UnitOfWorkException(e);
+                    }
                 }
-                current.set(mock(HandleAwareUnitOfWork.class));
+                current.set(trackingRollbackOnly(mock(HandleAwareUnitOfWork.class)));
                 try {
                     return function.apply(current.get());
                 } finally {
@@ -84,10 +96,16 @@ final class InlineUnitOfWorkFactories {
             doAnswer(invocation -> {
                 CheckedConsumer<HandleAwareUnitOfWork> consumer = invocation.getArgument(0);
                 if (current.get() != null) {
-                    consumer.accept(current.get());
+                    var joined = current.get();
+                    try {
+                        consumer.accept(joined);
+                    } catch (Exception e) {
+                        joined.markAsRollbackOnly(e);
+                        throw new UnitOfWorkException(e);
+                    }
                     return null;
                 }
-                current.set(mock(HandleAwareUnitOfWork.class));
+                current.set(trackingRollbackOnly(mock(HandleAwareUnitOfWork.class)));
                 try {
                     consumer.accept(current.get());
                 } finally {
@@ -99,6 +117,23 @@ final class InlineUnitOfWorkFactories {
             throw new RuntimeException(e);
         }
         return factory;
+    }
+
+    /**
+     * Make the mock {@code unitOfWork} answer {@link UnitOfWorkStatus#Started} until {@code markAsRollbackOnly} is
+     * called, then {@link UnitOfWorkStatus#MarkedForRollbackOnly} with that call's cause.
+     */
+    private static HandleAwareUnitOfWork trackingRollbackOnly(HandleAwareUnitOfWork unitOfWork) {
+        var status = new AtomicReference<>(UnitOfWorkStatus.Started);
+        var cause  = new AtomicReference<Throwable>();
+        when(unitOfWork.status()).thenAnswer(invocation -> status.get());
+        when(unitOfWork.getCauseOfRollback()).thenAnswer(invocation -> cause.get());
+        doAnswer(invocation -> {
+            cause.set(invocation.getArgument(0));
+            status.set(UnitOfWorkStatus.MarkedForRollbackOnly);
+            return null;
+        }).when(unitOfWork).markAsRollbackOnly(any());
+        return unitOfWork;
     }
 
     /**

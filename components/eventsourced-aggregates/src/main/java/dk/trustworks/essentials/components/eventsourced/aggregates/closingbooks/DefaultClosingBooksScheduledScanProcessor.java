@@ -302,7 +302,9 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
         }
 
         /**
-         * @param aggregateLoader required; called under the generation lock, in the unit of work the decision and the rollover run in, so a repository load inside it joins that unit of work
+         * @param aggregateLoader required; called under the generation lock, in the unit of work the decision and the rollover run in, so a repository load inside it joins that unit of work. Report a missing
+         *                        aggregate by returning {@code Optional.empty()} (e.g. via {@code tryLoad}), never by catching an exception from a nested
+         *                        {@code withUnitOfWork}: that leaves the shared unit of work rollback-only (see {@link ClosingBooksAggregateLoader#load(String)})
          * @return this builder
          */
         public Builder<ID, AGGREGATE> setAggregateLoader(ClosingBooksAggregateLoader<AGGREGATE> aggregateLoader) {
