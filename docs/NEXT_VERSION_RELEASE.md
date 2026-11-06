@@ -333,7 +333,10 @@ the first one started. `PartitionedEventProcessor` is the alternative, chosen by
   policy's retries, so the skip loses only the events that cannot be forwarded on their own either - not the whole batch. This applies to every
   `EventProcessor` with `getForwardBatchSize()` above 1, and to `PartitionedViewEventProcessor` (§2.10). Up to a batch
   is still skipped when the replay cannot run at all (the database unreachable), and when a stopping policy turns into
-  a skip after `AutoResume.maxAttempts` resumes. (`c5e495008`)
+  a skip after `AutoResume.maxAttempts` resumes. The replay stops at the first I/O or connection failure, as
+  `IOExceptionUtil.isIOException` classifies it, and skips the batch's later events untried, instead of each of them
+  waiting for its own connection timeout on the subscription's thread. Of the events that fail again, only the first is logged with
+  its stack trace. (`c5e495008`, `<!-- fix:U-001 -->`)
 
 Whether a queue keeps key order across instances is the new `DurableQueues.keepsKeyOrderAcrossInstances()` /
 `Inboxes.keepsKeyOrderAcrossInstances()`: `false` by default, `true` for the shard-owned adapter.
