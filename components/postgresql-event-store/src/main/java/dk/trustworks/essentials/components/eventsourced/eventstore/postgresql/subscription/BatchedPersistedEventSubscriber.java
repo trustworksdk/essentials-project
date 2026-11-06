@@ -645,15 +645,17 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
     }
 
     /**
-     * Offer the failed batch to {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable)} before the
+     * Offer the failed batch to {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable, SubscriptionErrorPolicy)},
+     * with this subscriber's policy, before the
      * {@link SubscriptionErrorPolicy} gives up on it. Runs before the {@code doFinally} that advances the resume point, so
      * the resume point only moves past the batch once the handler has taken it over
      *
      * @return true if the handler took the batch over
      */
-    private boolean handedOffToEventHandler(List<PersistedEvent> batch, Throwable failure) {
+    // Package-private for BatchedPersistedEventSubscriberHandOffTest
+    boolean handedOffToEventHandler(List<PersistedEvent> batch, Throwable failure) {
         try {
-            if (eventHandler.handOffFailedBatch(batch, failure)) {
+            if (eventHandler.handOffFailedBatch(batch, failure, subscriptionErrorPolicy)) {
                 log.debug("[{}-{}] The {} event handler took over the failed batch [#{} - #{}] - the {} SubscriptionErrorPolicy does not give up on it",
                           eventStoreSubscription.subscriberId(),
                           eventStoreSubscription.aggregateType(),

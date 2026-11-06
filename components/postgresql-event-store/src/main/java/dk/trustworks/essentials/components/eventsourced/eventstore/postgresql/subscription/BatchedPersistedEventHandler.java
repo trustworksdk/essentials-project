@@ -93,6 +93,22 @@ public interface BatchedPersistedEventHandler {
     }
 
     /**
+     * {@link #handOffFailedBatch(List, Throwable)}, also given the {@link SubscriptionErrorPolicy} that gave up on the
+     * batch - the policy the {@link BatchedPersistedEventSubscriber} was built with, so the handler need not work out for
+     * itself which policy applies (its own {@link #subscriptionErrorPolicy()} or the {@link EventStoreSubscriptionManager}'s).
+     * This is the method the {@link BatchedPersistedEventSubscriber} calls; override it instead of the two-argument one
+     * when what the handler does depends on whether the policy stops or skips.
+     *
+     * @param events                  the batch whose handling failed, in order
+     * @param failure                 the failure the {@link SubscriptionErrorPolicy} gave up on
+     * @param subscriptionErrorPolicy the policy the subscriber handles the batch's failures with
+     * @return see {@link #handOffFailedBatch(List, Throwable)}; the default delegates to it
+     */
+    default boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure, SubscriptionErrorPolicy subscriptionErrorPolicy) {
+        return handOffFailedBatch(events, failure);
+    }
+
+    /**
      * The {@link SubscriptionErrorPolicy} for the batched subscription this handler is subscribed with, in place of the
      * policy of the {@link EventStoreSubscriptionManager}. See {@link SubscriptionErrorPolicy} for which setting wins.
      * <p>

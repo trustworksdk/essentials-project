@@ -3,6 +3,16 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-9 — targets Essentials 0.60.1
+
+- **Failed-batch hand-off policy** — the postgresql-event-store reference describes the overload
+  `BatchedPersistedEventHandler#handOffFailedBatch(events, failure, subscriptionErrorPolicy)`, which the batched
+  subscriber calls with the policy that gave up on the batch and which by default delegates to the two-argument one.
+  An `EventProcessor` reads whether that policy skips from it, whichever `EventStoreSubscriptionManager` built the
+  subscription, so the reference no longer lists a manager other than `DefaultEventStoreSubscriptionManager` as a case
+  where a failed batch is skipped whole. It also names the methods `ViewEventProcessor` uses: `handOffFailedEvent` and
+  the two-argument `handOffFailedBatch`. No skill, rule or script changed.
+
 ## 0.60.1-8 — targets Essentials 0.60.1
 
 - **Guarded closing-books rollovers** — the eventsourced-aggregates reference describes

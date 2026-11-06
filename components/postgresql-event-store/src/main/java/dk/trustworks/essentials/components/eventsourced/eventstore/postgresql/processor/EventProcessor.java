@@ -480,8 +480,8 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                     }
 
                     @Override
-                    public boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure) {
-                        return forwardFailedBatchOneEventPerUnitOfWork(events, failure, event -> forwardEventToInbox(event, inbox));
+                    public boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure, SubscriptionErrorPolicy subscriptionErrorPolicy) {
+                        return forwardFailedBatchOneEventPerUnitOfWork(events, failure, subscriptionErrorPolicy, event -> forwardEventToInbox(event, inbox));
                     }
 
                     @Override

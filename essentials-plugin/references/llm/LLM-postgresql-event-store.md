@@ -552,9 +552,9 @@ Switching either way keeps the processor's resume point and fenced lock (same su
 `SubscriptionErrorPolicy` retries and stops at the batch as a whole. A policy that skips first forwards the failed
 batch's events again one per unit of work, each tried once more on its own without the policy's retries, so the skip
 loses only the events that cannot be forwarded on their own either. Up to a batch is still skipped when that replay
-cannot run at all (the database unreachable), when a stopping policy turns into a skip after `AutoResume.maxAttempts()`
-resumes, and when the processor cannot read its policy (no `getSubscriptionErrorPolicy()` override and an
-`EventStoreSubscriptionManager` other than `DefaultEventStoreSubscriptionManager`). An override of
+cannot run at all (the database unreachable), and when a stopping policy turns into a skip after `AutoResume.maxAttempts()`
+resumes. Whether the policy skips is read from the policy the subscription was built with, whichever
+`EventStoreSubscriptionManager` built it. An override of
 `forwardEventToInbox` still applies to each event, in a batch and in the replay.
 
 #### Several instances: `PartitionedEventProcessor`
@@ -1851,8 +1851,10 @@ protected Optional<SubscriptionErrorPolicy> getSubscriptionErrorPolicy() {   // 
 the event's `UnitOfWork` was rolled back - so take the event over in a `UnitOfWork` of your own (e.g. queue it). Return `true` and the
 subscription carries on as if the event had been handled: no skip, no stop, no `handleEventFailed` callback, the resume point moves past
 it. Return `false`, or throw, and the policy gives up as usual. Async subscriptions only, not in-transaction ones. A batched subscription's
-`BatchedPersistedEventHandler#handOffFailedBatch(events, failure)` is the same for a whole batch. `ViewEventProcessor` uses the first to
-queue failures it could not queue in the subscription's `UnitOfWork`, and the second to handle a failed batch again event by event - see
+`BatchedPersistedEventHandler#handOffFailedBatch(events, failure)` is the same for a whole batch; the subscriber calls its
+overload `handOffFailedBatch(events, failure, subscriptionErrorPolicy)`, which hands over the policy that gave up on the batch and by
+default delegates to the two-argument one. `ViewEventProcessor` uses `handOffFailedEvent` to
+queue failures it could not queue in the subscription's `UnitOfWork`, and the two-argument `handOffFailedBatch` to handle a failed batch again event by event - see
 [ViewEventProcessor](#vieweventprocessor).
 
 **Retries block only their own subscription.** They are synchronous on the subscription's delivery thread (that is what keeps

@@ -336,7 +336,10 @@ the first one started. `PartitionedEventProcessor` is the alternative, chosen by
   a skip after `AutoResume.maxAttempts` resumes. The replay stops at the first I/O or connection failure, as
   `IOExceptionUtil.isIOException` classifies it, and skips the batch's later events untried, instead of each of them
   waiting for its own connection timeout on the subscription's thread. Of the events that fail again, only the first is logged with
-  its stack trace. (`c5e495008`, `<!-- fix:U-001 -->`)
+  its stack trace. Whether the policy skips is read from the policy the batched subscription was built with, handed to the
+  new `BatchedPersistedEventHandler.handOffFailedBatch(events, failure, subscriptionErrorPolicy)` overload (by default it
+  delegates to the two-argument one), so a skipping policy now also replays a batch under an `EventStoreSubscriptionManager`
+  other than `DefaultEventStoreSubscriptionManager`, where it used to skip the whole batch. (`c5e495008`, `<!-- fix:U-001 -->`, `<!-- fix:U-002 -->`)
 
 Whether a queue keeps key order across instances is the new `DurableQueues.keepsKeyOrderAcrossInstances()` /
 `Inboxes.keepsKeyOrderAcrossInstances()`: `false` by default, `true` for the shard-owned adapter.

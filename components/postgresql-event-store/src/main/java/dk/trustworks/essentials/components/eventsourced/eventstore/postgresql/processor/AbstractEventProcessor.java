@@ -20,7 +20,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.BatchedPersistedEventHandler;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.DefaultEventStoreSubscriptionManager;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.BatchedPersistedEventSubscriber;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.PersistedEventHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy;
@@ -788,7 +788,9 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     /**
      * What the batched forwards ({@link EventProcessor#getForwardBatchSize()}, {@link PartitionedViewEventProcessor}) do
      * with a batch the {@link SubscriptionErrorPolicy} gave up on, as their
-     * {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable)}.
+     * {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable, SubscriptionErrorPolicy)}. Whether the policy
+     * skips or stops is read from the policy the {@link BatchedPersistedEventSubscriber} hands over - the one it was built
+     * with - so it holds whichever {@link EventStoreSubscriptionManager} built the subscription.
      * <p>
      * When the policy <b>skips</b> ({@link SubscriptionErrorPolicy#stopsOnError()} {@code false}), the batch's events are
      * forwarded again one per {@link UnitOfWork}, so an event that still cannot be forwarded no longer takes the batch's
@@ -799,23 +801,24 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * the first failure is logged with its stack trace; the later ones are logged without it and reach the subscriber as suppressed
      * exceptions of the first.
      * <p>
-     * When the policy <b>stops</b>, or this processor's {@link EventStoreSubscriptionManager} is not a
-     * {@link DefaultEventStoreSubscriptionManager} and its policy cannot be read, nothing is forwarded and the batch is left
-     * to the policy: the subscription stops at the batch's first event and forwards the whole batch again once it is
-     * resumed. A stop that turns into a skip after {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()} resumes skips
-     * the whole batch.
+     * When the policy <b>stops</b>, nothing is forwarded and the batch is left to the policy: the subscription stops at the
+     * batch's first event and forwards the whole batch again once it is resumed. A stop that turns into a skip after
+     * {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()} resumes skips the whole batch.
      *
-     * @param events       the batch the policy gave up on, in order
-     * @param batchFailure the failure the policy gave up on
-     * @param forwardEvent forwards one event; called inside a {@link UnitOfWork} of its own
-     * @return true if every event of the batch was forwarded; false if the policy stops, or cannot be read
+     * @param events                  the batch the policy gave up on, in order
+     * @param batchFailure            the failure the policy gave up on
+     * @param subscriptionErrorPolicy the policy the subscriber handles the batch's failures with
+     * @param forwardEvent            forwards one event; called inside a {@link UnitOfWork} of its own
+     * @return true if every event of the batch was forwarded; false if the policy stops
      * @throws RuntimeException the failure of the first event that could not be forwarded (those of the others added as
      *                          suppressed), after every other event was forwarded, or after the first I/O or connection
      *                          failure: the policy then skips the batch
      */
-    boolean forwardFailedBatchOneEventPerUnitOfWork(List<PersistedEvent> events, Throwable batchFailure, Consumer<PersistedEvent> forwardEvent) {
-        var skips = effectiveSubscriptionErrorPolicy().map(policy -> !policy.stopsOnError()).orElse(false);
-        if (!skips) {
+    boolean forwardFailedBatchOneEventPerUnitOfWork(List<PersistedEvent> events,
+                                                    Throwable batchFailure,
+                                                    SubscriptionErrorPolicy subscriptionErrorPolicy,
+                                                    Consumer<PersistedEvent> forwardEvent) {
+        if (subscriptionErrorPolicy.stopsOnError()) {
             return false;
         }
         log.warn(msg("[{}] Forwarding the batch [#{} - #{}] failed and its SubscriptionErrorPolicy skips it - forwarding its {} events again one per UnitOfWork",
@@ -851,22 +854,6 @@ public abstract class AbstractEventProcessor implements Lifecycle {
             throw firstFailure;
         }
         return true;
-    }
-
-    /**
-     * @return the {@link SubscriptionErrorPolicy} this processor's subscriptions are given: its own
-     * {@link #getSubscriptionErrorPolicy()}, else the {@link DefaultEventStoreSubscriptionManager}'s; empty when neither
-     * can be read
-     */
-    private Optional<SubscriptionErrorPolicy> effectiveSubscriptionErrorPolicy() {
-        var own = getSubscriptionErrorPolicy();
-        if (own != null && own.isPresent()) {
-            return own;
-        }
-        if (eventStoreSubscriptionManager instanceof DefaultEventStoreSubscriptionManager manager) {
-            return Optional.of(manager.getSubscriptionErrorPolicy());
-        }
-        return Optional.empty();
     }
 
     /**

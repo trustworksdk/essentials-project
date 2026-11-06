@@ -298,8 +298,8 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
                     }
 
                     @Override
-                    public boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure) {
-                        return forwardFailedBatchOneEventPerUnitOfWork(events, failure, event -> forwardBatch(List.of(event)));
+                    public boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure, SubscriptionErrorPolicy subscriptionErrorPolicy) {
+                        return forwardFailedBatchOneEventPerUnitOfWork(events, failure, subscriptionErrorPolicy, event -> forwardBatch(List.of(event)));
                     }
 
                     @Override

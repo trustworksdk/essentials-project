@@ -36,8 +36,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * {@link AbstractEventProcessor#forwardFailedBatchOneEventPerUnitOfWork(List, Throwable, Consumer)} tries every event of
- * a failed batch once more on its own, but stops at the first failure that is not specific to the event - an I/O or
+ * {@link AbstractEventProcessor#forwardFailedBatchOneEventPerUnitOfWork(List, Throwable, SubscriptionErrorPolicy, Consumer)}
+ * tries every event of a failed batch once more on its own when the policy handed over skips, but stops at the first failure that is not specific to the event - an I/O or
  * connection failure - instead of letting every later event wait for the same failure.
  * <p>
  * Mocks only: the unit of work factory runs the forward inline, so no database is involved.
@@ -50,7 +50,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var forwarded         = new ArrayList<PersistedEvent>();
         var events            = events(4);
 
-        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), event -> {
+        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
             forwarded.add(event);
             throw connectionFailure;
         })).isSameAs(connectionFailure);
@@ -65,7 +65,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var forwarded            = new ArrayList<PersistedEvent>();
         var events               = events(4);
 
-        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), event -> {
+        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
             forwarded.add(event);
             if (event.equals(events.get(0))) {
                 throw eventSpecificFailure;
@@ -86,7 +86,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var forwarded     = new ArrayList<PersistedEvent>();
         var events        = events(4);
 
-        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), event -> {
+        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
             forwarded.add(event);
             if (event.equals(events.get(1))) {
                 throw event2Failure;
@@ -97,6 +97,28 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         })).isSameAs(event2Failure)
            .satisfies(thrown -> assertThat(thrown.getSuppressed()).containsExactly(event4Failure));
 
+        assertThat(forwarded).containsExactlyElementsOf(events);
+    }
+
+    @Test
+    void forwards_nothing_when_the_policy_handed_over_stops() {
+        var forwarded = new ArrayList<PersistedEvent>();
+
+        var allForwarded = processor().forwardFailedBatchOneEventPerUnitOfWork(events(3), new RuntimeException("batch failed"), SubscriptionErrorPolicy.stop(), forwarded::add);
+
+        assertThat(allForwarded).isFalse();
+        assertThat(forwarded).isEmpty();
+    }
+
+    @Test
+    void forwards_every_event_when_the_policy_handed_over_skips_whatever_the_subscription_manager_is() {
+        // Neither the processor's own policy nor a DefaultEventStoreSubscriptionManager's to read: only the policy handed over
+        var forwarded = new ArrayList<PersistedEvent>();
+        var events    = events(3);
+
+        var allForwarded = processor(Optional.empty()).forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), forwarded::add);
+
+        assertThat(allForwarded).isTrue();
         assertThat(forwarded).containsExactlyElementsOf(events);
     }
 
@@ -112,8 +134,12 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         return events;
     }
 
-    @SuppressWarnings("unchecked")
     private static AbstractEventProcessor processor() {
+        return processor(Optional.of(SubscriptionErrorPolicy.skip()));
+    }
+
+    @SuppressWarnings({"unchecked", "OptionalUsedAsFieldOrParameterType"})
+    private static AbstractEventProcessor processor(Optional<SubscriptionErrorPolicy> ownPolicy) {
         var unitOfWorkFactory = mock(EventStoreUnitOfWorkFactory.class);
         // Runs the forward inline, as its own unit of work would
         doAnswer(invocation -> {
@@ -130,6 +156,6 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var inboxes = mock(Inboxes.class);
         when(inboxes.getOrCreateInbox(any(InboxConfig.class), any(Consumer.class))).thenReturn(inbox);
 
-        return new ProcessorSubscriptionErrorPolicyTest.PolicyEventProcessor(subscriptionManager, inboxes, Optional.of(SubscriptionErrorPolicy.skip()));
+        return new ProcessorSubscriptionErrorPolicyTest.PolicyEventProcessor(subscriptionManager, inboxes, ownPolicy);
     }
 }
