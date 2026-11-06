@@ -216,12 +216,22 @@ The existing pins still apply: `CdcEventStoreCommitOrderIT`, `CdcEventStoreGapFi
   others, and the caller logs it. The flush goes on, keeping the gate lock, until the caller's transaction ends; should
   it fail after the wait ran out, the failure is logged at WARN (`CdcEventStore.runOnAVirtualThreadWaitingAtMost`), as
   no caller is waiting for it any more, and the gaps stay kept for the next flush. Until the caller's transaction ends,
-  the four paths that may run inside that unit of work do not wait for the gate lock without a limit, as the flush may
-  be waiting for it: a second save finds the lock taken and hands its check to a new virtual thread, waited for at most
-  10 s again; the subscription's end marks the gate ended without the lock; an acknowledgement waits for the lock at
-  most 10 s, then throws, leaving a held fill's gap to be recorded, so a later subscription delivers the event again;
-  and `isAwaitedAsGap`'s check of a held fill (asked by `awaitProcessed`) waits for it at most 10 s, then answers that
-  the event is still awaited.
+  only the flush itself, which runs on a thread with no unit of work, waits for the gate lock without a limit. Every
+  other path either does not wait for it or waits at most 10 s, since a thread that waits for this subscription may be
+  the one whose unit of work blocks the flush. A second save finds the lock taken and hands its check to a new virtual
+  thread, waited for at most 10 s again. The subscription's end marks the gate ended without the lock. An
+  acknowledgement waits for the lock at most 10 s and then returns as usual, so it never fails the subscriber's handler
+  or reaches its error policy: its events are acknowledged to the delegate's poll, and the flush settles them once it
+  ends. A held fill among them is then done with if the flush failed, and otherwise the gap the flush recorded for it is
+  resolved in the flush's own unit of work. `isAwaitedAsGap`'s check of a held fill (asked by `awaitProcessed`) waits
+  for the lock at most 10 s, then answers that the event is still awaited. The delivering thread waits for it at most
+  10 s per check. A gap an event opens is then kept without the lock and taken in by the lock's next holder; recording
+  it at once would wait for the gap handler's monitor, which the blocked flush holds too. A fill is treated as the fill
+  of a recorded gap. A dropped event is treated as a held fill, so it is not acknowledged to the delegate's poll. Gaps
+  the tracker gave up on only try the lock, and otherwise go back to the tracker for the next event. A gap recorded at
+  once (a wide gap, or one that is not kept during a save, after the end or over the limit), and the recording of
+  given-up gaps, still wait for the gap handler's monitor without a limit (`DeliveryGate.recordOpenedGap`,
+  `DeliveryGate.recordGivenUpGaps`), and the blocked flush holds that monitor.
 - **Non-exclusive subscriptions on several instances** share one resume-point row. Another instance's save can move it
   past a gap this instance holds. That is no weaker than before: the shared row could already move past events this
   instance had not handled.

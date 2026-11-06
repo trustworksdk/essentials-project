@@ -365,7 +365,8 @@ class CdcEventStoreDeliveryGateTest {
             callerWithUnitOfWork.join(Duration.ofSeconds(5));
 
             assertThat(callerWithUnitOfWork.isAlive()).as("waits for the gate lock without a limit").isFalse();
-            assertThat(outcomes).containsExactly("IllegalStateException", "IllegalStateException", "IllegalStateException", "awaited", "returned");
+            // The acknowledgement returns rather than fail the subscriber's handler, and with it the error policy
+            assertThat(outcomes).containsExactly("IllegalStateException", "IllegalStateException", "returned", "awaited", "returned");
             assertThat(delegateAcknowledged).as("acknowledged to the delegate although the gate could not tell").contains(2L);
         } finally {
             recordingMayEnd.countDown();
@@ -384,6 +385,88 @@ class CdcEventStoreDeliveryGateTest {
         await().atMost(Duration.ofSeconds(5)).until(() -> resubscribed.equals(List.of(1L, 3L, 2L, 5L)));
         assertThat(gapHandler.reconciliations).as("opened gaps recorded at once").hasSize(reconciliationsBefore);
         assertThat(gapHandler.transientGapsAdded).hasSize(2);
+    }
+
+    /**
+     * An acknowledgement that could not take the gate lock within the wait leaves its fill to the recording that holds
+     * the lock: once that recording committed, the fill's recorded gap is resolved, and the event is no longer awaited
+     */
+    @Test
+    void an_acknowledgement_that_timed_out_behind_a_recording_has_its_fill_s_gap_resolved_once_the_recording_commits() throws Exception {
+        setupDeferringGapRecording();
+        cdcEventStore.deferredGapsRecordingWait(Duration.ofMillis(200));
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var received        = subscribe(Optional.of(acknowledgement));
+        // 2 fills a gap kept in memory and is not acknowledged yet; 5 opens a gap kept in memory
+        poll(1, 3, 2, 5);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 2L, 5L)));
+        gapHandler.reportsRecordedTransientGaps = true;
+        var recordingMayEnd = new CountDownLatch(1);
+        gapHandler.addingTransientGapsMayEnd = recordingMayEnd;
+        try {
+            var outcomes = new CopyOnWriteArrayList<String>();
+            var callerWithUnitOfWork = Thread.ofPlatform().daemon().unstarted(() -> {
+                outcomes.add(outcomeOf(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close()));
+                outcomes.add(outcomeOf(() -> acknowledgement.acknowledge(event(2))));
+            });
+            doAnswer(inv -> Thread.currentThread().equals(callerWithUnitOfWork) ? Optional.of(mock(EventStoreUnitOfWork.class)) : Optional.empty())
+                    .when(uowFactory).getCurrentUnitOfWork();
+            callerWithUnitOfWork.start();
+            callerWithUnitOfWork.join(Duration.ofSeconds(5));
+
+            assertThat(callerWithUnitOfWork.isAlive()).isFalse();
+            assertThat(outcomes).containsExactly("IllegalStateException", "returned");
+            assertThat(gapHandler.resolved).as("left to the recording").isEmpty();
+        } finally {
+            recordingMayEnd.countDown();
+        }
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(gapHandler.resolved).containsExactly(List.of(2L)));
+        assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).containsExactly(LongRange.only(2), LongRange.only(4));
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(2))).as("the acknowledged fill").isFalse();
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(4))).as("the gap still open").isTrue();
+    }
+
+    /**
+     * While a recording that outlasted the wait holds the gate lock, the delivering thread waits for it no longer than
+     * the wait: a duplicate of a held fill is not acknowledged to the delegate's poll, and a gap an event opens is kept
+     * without the lock - not recorded at once, which would wait for the gap handler the recording is blocked in - and
+     * recorded by the next save
+     */
+    @Test
+    void delivering_does_not_wait_for_the_gate_lock_without_a_limit_while_a_recording_holds_it() throws Exception {
+        setupDeferringGapRecording();
+        cdcEventStore.deferredGapsRecordingWait(Duration.ofMillis(200));
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var received        = subscribe(Optional.of(acknowledgement));
+        poll(1, 3, 2, 5);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 2L, 5L)));
+        var recordingMayEnd = new CountDownLatch(1);
+        gapHandler.addingTransientGapsMayEnd = recordingMayEnd;
+        try {
+            var outcome              = new CopyOnWriteArrayList<String>();
+            var callerWithUnitOfWork = Thread.ofPlatform().daemon().unstarted(() -> outcome.add(outcomeOf(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close())));
+            doAnswer(inv -> Thread.currentThread().equals(callerWithUnitOfWork) ? Optional.of(mock(EventStoreUnitOfWork.class)) : Optional.empty())
+                    .when(uowFactory).getCurrentUnitOfWork();
+            callerWithUnitOfWork.start();
+            callerWithUnitOfWork.join(Duration.ofSeconds(5));
+            assertThat(outcome).containsExactly("IllegalStateException");
+            var reconciliationsBefore = gapHandler.reconciliations.size();
+
+            // A duplicate of the held fill 2, then 8, which opens the gap 6..7
+            poll(2, 8);
+
+            await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 2L, 5L, 8L)));
+            assertThat(delegateAcknowledged).as("a held fill, as far as the gate can tell").doesNotContain(2L);
+            assertThat(gapHandler.reconciliations).as("kept, not recorded at once").hasSize(reconciliationsBefore);
+        } finally {
+            recordingMayEnd.countDown();
+        }
+
+        await().atMost(Duration.ofSeconds(5))
+               .untilAsserted(() -> assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).contains(LongRange.only(2), LongRange.only(4)));
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+        assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).contains(LongRange.between(6, 7));
     }
 
     /**
@@ -707,6 +790,8 @@ class CdcEventStoreDeliveryGateTest {
         private volatile CountDownLatch    addingTransientGapsMayEnd;
         /** When set (and no latch is), each {@code addTransientGaps} call takes this long - a slow, but not blocked, statement */
         private volatile Duration          addingTransientGapsTakes;
+        /** When set, {@code getTransientGapsFor} reports the gaps added and not resolved since - as the database would */
+        private volatile boolean           reportsRecordedTransientGaps;
 
         private RecordingGapHandler(Duration giveUpThreshold) {
             this.giveUpThreshold = giveUpThreshold;
@@ -776,7 +861,11 @@ class CdcEventStoreDeliveryGateTest {
 
         @Override
         public List<GlobalEventOrder> getTransientGapsFor(AggregateType aggregateType) {
-            return List.of();
+            if (!reportsRecordedTransientGaps) return List.of();
+            var open = new TreeSet<Long>();
+            transientGapsAdded.forEach(added -> added.gaps().stream().forEach(open::add));
+            resolved.forEach(open::removeAll);
+            return open.stream().map(GlobalEventOrder::of).toList();
         }
 
         @Override
