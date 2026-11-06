@@ -597,7 +597,7 @@ boundary did not roll at all.
   loader catches the exception. An empty result is still counted as `aggregate_missing`; a loader that returns an
   aggregate but leaves the unit of work rollback-only now gets no decision, is counted as `failed` and logged with an
   `IllegalStateException` naming the loader in the cause chain, and its generation is deferred, instead of a decision and rollover that
-  could never commit (`<!-- fix:U-002 -->`).
+  could never commit (`29758d717`).
 - **`BuiltInClosingBooksPolicyEvaluator.asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)`** rolls on scans too, so a
   passed time boundary - or a closed business day under `periodSource = BUSINESS_CALENDAR` (§2.15) - rolls idle aggregates.
 - `ClosingBooksCoordinator.evaluatePolicy(..., rollover)` is the public overload for a custom
@@ -633,7 +633,7 @@ guarded `evaluatePolicy` counts no policy decision.
 
 Additive: the existing methods are unchanged; their javadoc now says when they are safe (the aggregate was loaded
 while holding the generation lock, as the built-in scan's rollover does) and points to the guarded variant. The
-`essentials-trading-demo` rolls its accounts with the guarded repository method (`<!-- fix:U-001 -->`).
+`essentials-trading-demo` rolls its accounts with the guarded repository method (`aad1916a3`).
 
 ## 3. Bug fixes
 
