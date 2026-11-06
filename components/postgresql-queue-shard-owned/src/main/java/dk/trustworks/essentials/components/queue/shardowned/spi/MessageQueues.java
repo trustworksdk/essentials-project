@@ -54,8 +54,10 @@ public interface MessageQueues {
     Optional<MessageQueue> findQueue(QueueName queueName) throws SQLException;
 
     /**
-     * The lease TTL the queues run with: how long an ordered unit or shard of an instance that died stays unserved before
-     * another instance takes it. Empty (the default) when the implementation does not say.
+     * The lease TTL the queues are configured with: how long after an instance died its ordered units and shards become
+     * takeable by another instance, which then takes them on its next heartbeat tick - the whole window is
+     * {@code ShardOwnedQueue.maxUnservedAfterInstanceLoss(leaseTtl)}. Empty (the default) when the implementation does not
+     * say.
      */
     default Optional<Duration> leaseTtl() {
         return Optional.empty();

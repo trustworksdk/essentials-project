@@ -160,9 +160,11 @@ of that aggregate waited behind the dead letter. Measured in the trading demo: o
 
 The default now outlasts a failover: it starts at 200 ms, doubles to a 10 s cap, and retries for 4 × (lock timeout +
 the queue's window), derived from the actual settings - the lock manager's `lockTimeOut`, and the new
-`DurableQueues.maxUnservedAfterInstanceLoss()` (`message-handling-timeout` on `PostgresqlDurableQueues` and MongoDB, the
-lease TTL on the shard-owned engine). With the defaults that is 24 redeliveries over about 3 minutes. `start()` logs the
-budget in one line.
+`DurableQueues.maxUnservedAfterInstanceLoss()` (`message-handling-timeout` on `PostgresqlDurableQueues` and MongoDB; on
+the shard-owned engine the lease TTL plus one heartbeat interval, a third of the lease TTL, since a surviving instance
+takes a dead one's units only on its next heartbeat tick after the lease TTL has passed). With a 15 s lock timeout and a
+30 s queue window that is 24 redeliveries over about 3 minutes; on the shard-owned engine with its default 30 s lease
+TTL (a 40 s window) it is 28 redeliveries over about 3.7 minutes. `start()` logs the budget in one line.
 
 - **What changes for you:** a message that can never succeed (a bug, a poison message) now dead-letters after minutes,
   and later messages of its aggregate wait that long. A message that succeeds on an early retry is unaffected.

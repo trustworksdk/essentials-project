@@ -332,6 +332,30 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         return new ShardOwnedQueueBuilder();
     }
 
+    /**
+     * The longest an ordered unit or shard of an instance that died stays unserved before a surviving instance takes
+     * it, for queues configured with {@code leaseTtl}: the lease TTL the queue runs with (the configured one, raised to
+     * 1 s when shorter) plus one heartbeat interval. A dead instance's units become takeable once its instance row is
+     * older than the lease TTL, and a survivor only takes them on its next heartbeat tick, which runs every third of
+     * that lease TTL. The survivor's acquisition and its read of the unit's messages come on top.
+     *
+     * @param leaseTtl the configured lease TTL ({@code ShardOwnerSettings.leaseTtl()})
+     * @return the lease TTL the queue runs with plus one heartbeat interval
+     */
+    public static Duration maxUnservedAfterInstanceLoss(Duration leaseTtl) {
+        requireNonNull(leaseTtl, "No leaseTtl provided");
+        var leaseTtlMillis = effectiveLeaseTtlMillis(leaseTtl.toMillis());
+        return Duration.ofMillis(leaseTtlMillis + heartbeatIntervalMillis(leaseTtlMillis));
+    }
+
+    /**
+     * The lease TTL a queue runs with for a configured one: never shorter than 1 s. Keep in step with the floor each
+     * start applies when it sets {@link #leaseTtlMillis}.
+     */
+    static long effectiveLeaseTtlMillis(long configuredLeaseTtlMillis) {
+        return Math.max(1_000L, configuredLeaseTtlMillis);
+    }
+
     private volatile long lastSharedInstanceIdWarningNanos;
 
     public ShardOwnedQueue(DataSource dataSource, short queueId, int shardCount, String instanceId) {
@@ -1338,6 +1362,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * than every 200 ms.
      */
     private long heartbeatIntervalMillis() {
+        return heartbeatIntervalMillis(leaseTtlMillis);
+    }
+
+    /**
+     * The heartbeat interval for a lease TTL the queue runs with: a third of it, and no more often than every 200 ms.
+     */
+    static long heartbeatIntervalMillis(long leaseTtlMillis) {
         return Math.max(200L, leaseTtlMillis / 3);
     }
 

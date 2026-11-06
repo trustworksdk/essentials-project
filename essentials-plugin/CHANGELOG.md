@@ -3,6 +3,13 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-4 — targets Essentials 0.60.1
+
+- **Shard-owned `leaseTtl`** — the shard-owned reference's settings table says `leaseTtl` is how long after its
+  owner dies without releasing a shard becomes takeable, and that a survivor takes it on its next heartbeat tick,
+  so it stays unserved for up to `leaseTtl` plus one heartbeat interval; it said the shard stayed unserved for
+  `leaseTtl`. No skill, rule or script changed.
+
 ## 0.60.1-3 — targets Essentials 0.60.1
 
 - **`Money` JSON** — the types-jackson and types-integrations references show `Money`'s `amount` as a JSON number

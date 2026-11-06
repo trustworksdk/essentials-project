@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedQueue;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
 // Single-type imports, not the package: shardowned.spi and foundation...queue BOTH export QueueName,
 // Message and QueuedMessage. Those three are written out in full wherever an engine one is meant, so
@@ -339,12 +340,14 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     }
 
     /**
-     * The engine's lease TTL: an ordered unit or shard of an instance that died is taken by another once its lease is that
-     * old.
+     * The engine's lease TTL plus one heartbeat interval ({@link ShardOwnedQueue#maxUnservedAfterInstanceLoss(Duration)}):
+     * an ordered unit or shard of an instance that died becomes takeable once the instance's row is older than the lease
+     * TTL, and a surviving instance takes it on its next heartbeat tick, every third of the lease TTL. Empty when the
+     * engine does not say what its lease TTL is.
      */
     @Override
     public Optional<Duration> maxUnservedAfterInstanceLoss() {
-        return queues.leaseTtl();
+        return queues.leaseTtl().map(ShardOwnedQueue::maxUnservedAfterInstanceLoss);
     }
 
     /**
