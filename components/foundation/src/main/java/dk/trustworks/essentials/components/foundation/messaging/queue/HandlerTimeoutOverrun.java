@@ -26,8 +26,9 @@ import java.util.concurrent.atomic.*;
 
 /**
  * Notices a handler that ran longer than its queue gives a delivery before it takes the message back as stuck
- * ({@link DurableQueues#maxUnservedAfterInstanceLoss()}: {@code message-handling-timeout} on {@code PostgresqlDurableQueues}
- * and MongoDB). Past that point the queue may already have delivered the message a second time, so two attempts ran
+ * ({@link DurableQueues#messageHandlingTimeout()}: {@code message-handling-timeout} on {@code PostgresqlDurableQueues}
+ * and MongoDB - not {@link DurableQueues#maxUnservedAfterInstanceLoss()}, which adds the reset cadence and would warn
+ * late). Past that point the queue may already have delivered the message a second time, so two attempts ran
  * at once - for an {@link OrderedMessage}, the same key in two handlers.
  * <p>
  * Counted every time and logged at most once a minute per queue: a handler that is slow is usually slow every time, and

@@ -167,11 +167,22 @@ of that aggregate waited behind the dead letter. Measured in the trading demo: o
 
 The default now outlasts a failover: it starts at 200 ms, doubles to a 10 s cap, and retries for 4 × (lock timeout +
 the queue's window), derived from the actual settings - the lock manager's `lockTimeOut`, and the new
-`DurableQueues.maxUnservedAfterInstanceLoss()` (`message-handling-timeout` on `PostgresqlDurableQueues` and MongoDB; on
-the shard-owned engine the lease TTL plus one heartbeat interval, a third of the lease TTL, since a surviving instance
-takes a dead one's units only on its next heartbeat tick after the lease TTL has passed). With a 15 s lock timeout and a
-30 s queue window that is 24 redeliveries over about 3 minutes; on the shard-owned engine with its default 30 s lease
-TTL (a 40 s window) it is 28 redeliveries over about 3.7 minutes. `start()` logs the budget in one line.
+`DurableQueues.maxUnservedAfterInstanceLoss()`: the time until delivery can actually resume after an instance is lost,
+the implementation's own detection interval included. On `PostgresqlDurableQueues` and MongoDB it is twice the
+`message-handling-timeout`: a surviving instance's stuck-message reset takes back claims at least one timeout old, but
+runs at most once per timeout per queue, so a claim made just after a reset is only taken back by the one after the next.
+On the shard-owned engine it is the lease TTL plus one heartbeat interval, a third of the lease TTL, since a surviving
+instance takes a dead one's units only on its next heartbeat tick after the lease TTL has passed. With the PostgreSQL
+and MongoDB starters' 15 s lock timeout and 30 s `message-handling-timeout` (a 60 s window) that is 36 redeliveries
+over about 5 minutes; an earlier build of this change counted the timeout once (a 30 s window) and gave 24 redeliveries
+over about 3 minutes.
+On the shard-owned engine with its default 30 s lease TTL (a 40 s window) it is 28 redeliveries over about 3.7 minutes.
+A queue that does not report a window counts as 30 s: with a 15 s lock timeout, 24 redeliveries over about 3 minutes.
+`start()` logs the budget in one line.
+
+A handler that runs longer than the `message-handling-timeout` is still WARNed about at the timeout itself, not at the
+longer window: the consumers read the new `DurableQueues.messageHandlingTimeout()`, since a stuck-message reset may
+deliver the message a second time as soon as its claim is that old.
 
 - **What changes for you:** a message that can never succeed (a bug, a poison message) now dead-letters after minutes,
   and later messages of its aggregate wait that long. A message that succeeds on an early retry is unaffected.
@@ -179,7 +190,8 @@ TTL (a 40 s window) it is 28 redeliveries over about 3.7 minutes. `start()` logs
   that already overrides them is unaffected. `FailoverRedeliveryPolicy.outlasting(...)` sizes your own `Inbox` policies
   the same way.
 - New additive SPI methods, all with defaults: `FencedLockManager.getLockTimeOut()`,
-  `DurableQueues`/`Inboxes.maxUnservedAfterInstanceLoss()`, `EventStoreSubscriptionManager.getFencedLockManager()`, and
+  `DurableQueues`/`Inboxes.maxUnservedAfterInstanceLoss()`, `DurableQueues.messageHandlingTimeout()`,
+  `EventStoreSubscriptionManager.getFencedLockManager()`, and
   the shard-owned `MessageQueues.leaseTtl()`.
 
 #### 1.1.5 A failed command is no longer logged at ERROR by `AnnotatedCommandHandler` (`reactive`)

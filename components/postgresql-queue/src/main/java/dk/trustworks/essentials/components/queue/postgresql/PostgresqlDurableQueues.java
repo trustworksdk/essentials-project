@@ -148,7 +148,13 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
     private   Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory;
     private   int                                        messageHandlingTimeoutMs;
-    private final LocalEnqueueSignal                     localEnqueueSignal = new LocalEnqueueSignal();
+    /**
+     * {@link #messageHandlingTimeout()} and {@link #maxUnservedAfterInstanceLoss()}, computed once from
+     * {@link #messageHandlingTimeoutMs}: both consumers read the first after every handler call
+     */
+    private   Optional<Duration>                         messageHandlingTimeout;
+    private   Optional<Duration>                         maxUnservedAfterInstanceLoss;
+    private final LocalEnqueueSignal                    localEnqueueSignal = new LocalEnqueueSignal();
     /**
      * Per queue: whether the ordered claim currently uses {@link DurableQueuesSql#buildOrderedHeadScanSqlStatement}
      * rather than {@link DurableQueuesSql#buildOrderedSqlStatement} - see {@link OrderedClaimStatementChooser}
@@ -382,6 +388,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         }
 
         messageHandlingTimeoutMs = (int) requireNonNull(messageHandlingTimeout, "No messageHandlingTimeout provided").toMillis();
+        this.messageHandlingTimeout = Optional.of(Duration.ofMillis(messageHandlingTimeoutMs));
+        this.maxUnservedAfterInstanceLoss = Optional.of(Duration.ofMillis(2L * messageHandlingTimeoutMs));
         addInterceptor(new SingleOperationTransactionDurableQueuesInterceptor(unitOfWorkFactory));
         this.multiTableChangeListener.ifPresent(listener -> listener.addDuplicationFilterAsFirst(new QueueNameDuplicationFilter()));
 
@@ -768,12 +776,29 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
-     * The {@code messageHandlingTimeout}: a message claimed by a consumer that dies becomes deliverable again once its
-     * claim is that old.
+     * Twice the {@code messageHandlingTimeout}. A message claimed by a consumer that dies is only taken back by a
+     * surviving instance's stuck-message reset ({@link #resetMessagesStuckBeingDelivered(QueueName)}), which resets claims
+     * older than the timeout and runs at most once per timeout per queue on each instance. A claim made just after a
+     * reset is not yet old enough at the next one, so it is taken back by the one after that: up to two timeouts after
+     * the claim.
+     * <p>
+     * Left out: the consumer's poll, which runs the reset and claims the message. Its interval is set per consumer
+     * ({@code ConsumeFromQueue#getPollingInterval()}, or the centralized fetcher's) and can grow while the queue is idle
+     * up to the polling optimizer's ceiling; this method takes no queue, so it cannot name one, and with the default
+     * intervals it is small against the timeout.
      */
     @Override
     public Optional<Duration> maxUnservedAfterInstanceLoss() {
-        return Optional.of(Duration.ofMillis(messageHandlingTimeoutMs));
+        return maxUnservedAfterInstanceLoss;
+    }
+
+    /**
+     * The {@code messageHandlingTimeout}: once a claim is that old, a stuck-message reset may take the message back and
+     * deliver it again while its first handler still runs.
+     */
+    @Override
+    public Optional<Duration> messageHandlingTimeout() {
+        return messageHandlingTimeout;
     }
 
     /**

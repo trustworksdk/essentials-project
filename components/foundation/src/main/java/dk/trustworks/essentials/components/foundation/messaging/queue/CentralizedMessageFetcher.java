@@ -525,7 +525,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                 }
             } finally {
                 handlerTimeoutOverruns.computeIfAbsent(queueName, name -> new HandlerTimeoutOverrun())
-                                      .check(queueName, handlerStartedAtNanos, durableQueues.maxUnservedAfterInstanceLoss());
+                                      .check(queueName, handlerStartedAtNanos, durableQueues.messageHandlingTimeout());
                 releaseOrderedKey(queueName, message);
                 registration.activeWorkers.decrementAndGet();
                 refillIfSaturated(registration);

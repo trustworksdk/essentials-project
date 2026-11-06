@@ -3,6 +3,13 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-7 — targets Essentials 0.60.1
+
+- **Default inbox retry budget** — the postgresql-event-store reference says the queue's
+  `maxUnservedAfterInstanceLoss()` is twice the `message-handling-timeout` on `PostgresqlDurableQueues`, since the
+  stuck-message reset runs at most once per timeout, so the default budget is about 5 minutes with the PostgreSQL
+  starter's defaults; it said about 3 minutes. No skill, rule or script changed.
+
 ## 0.60.1-6 — targets Essentials 0.60.1
 
 - **Business-calendar period source** — the eventsourced-aggregates reference says a business calendar with a boundary

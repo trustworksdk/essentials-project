@@ -111,6 +111,12 @@ public final class MongoDurableQueues implements DurableQueues {
     private volatile boolean                           started;
     private          int                               messageHandlingTimeoutMs;
     /**
+     * {@link #messageHandlingTimeout()} and {@link #maxUnservedAfterInstanceLoss()}, computed once from
+     * {@link #messageHandlingTimeoutMs}: the consumer reads the first after every handler call
+     */
+    private          Optional<Duration>                messageHandlingTimeout;
+    private          Optional<Duration>                maxUnservedAfterInstanceLoss;
+    /**
      * Contains the timestamp of the last performed {@link #resetMessagesStuckBeingDelivered(QueueName)} check
      */
     protected        ConcurrentMap<QueueName, Instant> lastResetStuckMessagesCheckTimestamps = new ConcurrentHashMap<>();
@@ -173,6 +179,8 @@ public final class MongoDurableQueues implements DurableQueues {
         // Retained for callers that supply one; each queue operation runs in its own transaction regardless.
         this.unitOfWorkFactory = unitOfWorkFactory;
         this.messageHandlingTimeoutMs = (int) requireNonNull(messageHandlingTimeout, "No messageHandlingTimeout instance provided").toMillis();
+        this.messageHandlingTimeout = Optional.of(Duration.ofMillis(messageHandlingTimeoutMs));
+        this.maxUnservedAfterInstanceLoss = Optional.of(Duration.ofMillis(2L * messageHandlingTimeoutMs));
         log.info("Using messageHandlingTimeout: {} seconds", messageHandlingTimeout);
         this.jsonSerializer = requireNonNull(jsonSerializer, "No messagePayloadObjectMapper");
         this.sharedQueueCollectionName = requireNonNull(sharedQueueCollectionName, "No sharedQueueCollectionName provided").toLowerCase(Locale.ROOT);
@@ -373,12 +381,29 @@ public final class MongoDurableQueues implements DurableQueues {
     }
 
     /**
-     * The {@code messageHandlingTimeout}: a message claimed by a consumer that dies becomes deliverable again once its
-     * claim is that old.
+     * Twice the {@code messageHandlingTimeout}. A message claimed by a consumer that dies is only taken back by a
+     * surviving instance's stuck-message reset ({@link #resetMessagesStuckBeingDelivered(QueueName)}), which resets claims
+     * at least the timeout old and runs at most once per timeout per queue on each instance. A claim made just after a
+     * reset is not yet old enough at the next one, so it is taken back by the one after that: up to two timeouts after
+     * the claim.
+     * <p>
+     * Left out: the consumer's poll, which runs the reset and claims the message. Its interval is set per consumer
+     * ({@code ConsumeFromQueue#getPollingInterval()}) and can grow while the queue is idle up to the polling optimizer's
+     * ceiling; this method takes no queue, so it cannot name one, and with the default intervals it is small against the
+     * timeout.
      */
     @Override
     public Optional<Duration> maxUnservedAfterInstanceLoss() {
-        return Optional.of(Duration.ofMillis(messageHandlingTimeoutMs));
+        return maxUnservedAfterInstanceLoss;
+    }
+
+    /**
+     * The {@code messageHandlingTimeout}: once a claim is that old, a stuck-message reset may take the message back and
+     * deliver it again while its first handler still runs.
+     */
+    @Override
+    public Optional<Duration> messageHandlingTimeout() {
+        return messageHandlingTimeout;
     }
 
     @Override

@@ -342,8 +342,10 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     /**
      * The engine's lease TTL plus one heartbeat interval ({@link ShardOwnedQueue#maxUnservedAfterInstanceLoss(Duration)}):
      * an ordered unit or shard of an instance that died becomes takeable once the instance's row is older than the lease
-     * TTL, and a surviving instance takes it on its next heartbeat tick, every third of the lease TTL. Empty when the
-     * engine does not say what its lease TTL is.
+     * TTL, and a surviving instance takes it on its next heartbeat tick, every third of the lease TTL. The lease TTL is
+     * the one the engine runs with (the configured one, raised to 1 s when shorter). Left out, as the engine method that
+     * defines the figure precisely says: the survivor's acquisition of the unit and its read of the unit's messages,
+     * which come on top. Empty when the engine does not say what its lease TTL is.
      */
     @Override
     public Optional<Duration> maxUnservedAfterInstanceLoss() {

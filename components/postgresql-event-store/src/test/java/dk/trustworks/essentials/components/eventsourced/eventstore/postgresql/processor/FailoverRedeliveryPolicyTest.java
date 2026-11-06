@@ -41,6 +41,20 @@ class FailoverRedeliveryPolicyTest {
         assertThat(failover.policy().getMaximumNumberOfRedeliveries()).isEqualTo(24);
     }
 
+    /**
+     * The figures {@code docs/NEXT_VERSION_RELEASE.md} quotes for the starters' defaults: {@code PostgresqlDurableQueues}
+     * and {@code MongoDurableQueues} report twice their 30 s message-handling timeout (the stuck-message reset's cadence
+     * included). The PostgreSQL and MongoDB starters both default to a 15 s lock timeout and a 30 s message-handling
+     * timeout, so this one case covers both.
+     */
+    @Test
+    void with_the_starters_defaults_it_retries_for_about_five_minutes() {
+        var failover = FailoverRedeliveryPolicy.outlasting(Optional.of(Duration.ofSeconds(15)), Optional.of(Duration.ofSeconds(60)));
+        // 4 x (15 + 60) = 300 s: 12.8 s in 7 redeliveries, then 29 of 10 s
+        assertThat(failover.policy().getMaximumNumberOfRedeliveries()).isEqualTo(36);
+        assertThat(failover.retriesFor()).isEqualTo(Duration.ofMillis(302_800));
+    }
+
     @Test
     void it_derives_from_the_timeouts_it_is_given() {
         var failover = FailoverRedeliveryPolicy.outlasting(Optional.of(Duration.ofSeconds(5)), Optional.of(Duration.ofSeconds(10)));

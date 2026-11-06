@@ -524,7 +524,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                 return retryMessage(queuedMessage, e, redeliveryDelay);
             }
         } finally {
-            handlerTimeoutOverrun.check(queueName, handlerStartedAtNanos, durableQueues.maxUnservedAfterInstanceLoss());
+            handlerTimeoutOverrun.check(queueName, handlerStartedAtNanos, durableQueues.messageHandlingTimeout());
         }
     }
 

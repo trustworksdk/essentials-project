@@ -296,13 +296,36 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * The longest a message being handled by an instance that dies stays unserved before another instance can deliver
-     * it again: the time until the implementation gives up on the dead consumer (a message-handling timeout, a lease).
-     * Callers size retries that must outlast a failover by it - a handler that waits for another processor's work, for
-     * example, must keep retrying until that work has failed over.
+     * it again: the time until delivery can actually resume after the instance is lost. That is the time until the
+     * implementation gives up on the dead consumer (a message-handling timeout, a lease) <b>plus</b> the implementation's
+     * own detection interval - how long it can take before a surviving instance acts on that (a heartbeat tick, a
+     * stuck-message reset that runs on a cadence). Callers size retries that must outlast a failover by it - a handler
+     * that waits for another processor's work, for example, must keep retrying until that work has failed over.
+     * <p>
+     * An implementation may leave out a latency that does not depend on the window it reports - a consumer's poll
+     * interval, the query that claims the message - and says in its own documentation what it leaves out and why.
+     * <p>
+     * This is not how long a handler may run before its message can be delivered a second time beside it: that is
+     * {@link #messageHandlingTimeout()}.
      *
      * @return the window, or {@link Optional#empty()} (the default) for an implementation that does not say
      */
     default Optional<Duration> maxUnservedAfterInstanceLoss() {
+        return Optional.empty();
+    }
+
+    /**
+     * How long a delivery may run before the implementation may take its message back as stuck and deliver it again,
+     * while the first handler may still be running: the message-handling timeout of an implementation that resets
+     * stuck deliveries by age. The consumers WARN about a handler that ran longer ({@code HandlerTimeoutOverrun}).
+     * <p>
+     * Shorter than {@link #maxUnservedAfterInstanceLoss()} when the implementation only looks for stuck deliveries on a
+     * cadence: a delivery can be taken back as soon as it is this old, but may stay unserved for longer.
+     *
+     * @return the timeout, or {@link Optional#empty()} (the default) for an implementation that does not take a delivery
+     * back on a timeout, or does not say
+     */
+    default Optional<Duration> messageHandlingTimeout() {
         return Optional.empty();
     }
 
