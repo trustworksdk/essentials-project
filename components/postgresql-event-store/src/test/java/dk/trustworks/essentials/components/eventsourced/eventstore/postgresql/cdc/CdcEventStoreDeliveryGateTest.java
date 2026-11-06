@@ -16,6 +16,9 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
@@ -31,6 +34,7 @@ import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.functional.CheckedFunction;
 import dk.trustworks.essentials.types.LongRange;
 import org.junit.jupiter.api.*;
+import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
 import reactor.core.publisher.Sinks;
 
@@ -461,6 +465,94 @@ class CdcEventStoreDeliveryGateTest {
         } finally {
             mayEnd.countDown();
         }
+    }
+
+    @Test
+    void a_recording_on_a_virtual_thread_that_fails_after_the_wait_ran_out_is_logged_at_warn() throws Exception {
+        var warnings = new ListAppender<ILoggingEvent>();
+        var logger   = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(CdcEventStore.class);
+        warnings.start();
+        logger.addAppender(warnings);
+        var mayFail = new CountDownLatch(1);
+        var failure = new IllegalStateException("Recording failed late");
+        try {
+            assertThatThrownBy(() -> CdcEventStore.runOnAVirtualThreadWaitingAtMost("late-failing-recording", Duration.ofMillis(100), () -> {
+                try {
+                    mayFail.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                throw failure;
+            })).isInstanceOf(TimeoutException.class);
+            mayFail.countDown();
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(lateFailureWarnings(warnings)).hasSize(1));
+            var warning = lateFailureWarnings(warnings).getFirst();
+            assertThat(warning.getFormattedMessage()).contains("late-failing-recording");
+            assertThat(warning.getThrowableProxy().getMessage()).isEqualTo(failure.getMessage());
+        } finally {
+            mayFail.countDown();
+            logger.detachAppender(warnings);
+        }
+    }
+
+    @Test
+    void a_recording_on_a_virtual_thread_that_fails_after_the_waiter_was_interrupted_is_logged_at_warn() throws Exception {
+        var warnings = new ListAppender<ILoggingEvent>();
+        var logger   = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(CdcEventStore.class);
+        warnings.start();
+        logger.addAppender(warnings);
+        var mayFail = new CountDownLatch(1);
+        var failure = new IllegalStateException("Recording failed after an interrupt");
+        try {
+            // Interrupted before it waits, the waiter's join throws at once, while the recording goes on
+            Thread.currentThread().interrupt();
+            assertThatThrownBy(() -> CdcEventStore.runOnAVirtualThreadWaitingAtMost("interrupted-recording", Duration.ofSeconds(5), () -> {
+                try {
+                    mayFail.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                throw failure;
+            })).isInstanceOf(InterruptedException.class);
+            mayFail.countDown();
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(lateFailureWarnings(warnings)).hasSize(1));
+            var warning = lateFailureWarnings(warnings).getFirst();
+            assertThat(warning.getFormattedMessage()).contains("interrupted-recording");
+            assertThat(warning.getThrowableProxy().getMessage()).isEqualTo(failure.getMessage());
+        } finally {
+            Thread.interrupted();
+            mayFail.countDown();
+            logger.detachAppender(warnings);
+        }
+    }
+
+    @Test
+    void a_recording_on_a_virtual_thread_that_fails_in_time_is_not_logged_as_a_late_failure() {
+        var warnings = new ListAppender<ILoggingEvent>();
+        var logger   = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(CdcEventStore.class);
+        warnings.start();
+        logger.addAppender(warnings);
+        try {
+            assertThatThrownBy(() -> CdcEventStore.runOnAVirtualThreadWaitingAtMost("failing-in-time-recording", Duration.ofSeconds(5), () -> {
+                throw new IllegalStateException("Recording failed");
+            })).isInstanceOf(IllegalStateException.class);
+            assertThat(lateFailureWarnings(warnings)).isEmpty();
+        } finally {
+            logger.detachAppender(warnings);
+        }
+    }
+
+    private static List<ILoggingEvent> lateFailureWarnings(ListAppender<ILoggingEvent> appender) {
+        List<ILoggingEvent> logged;
+        synchronized (appender) { // the appender appends under its own monitor, from the virtual thread
+            logged = List.copyOf(appender.list);
+        }
+        return logged.stream()
+                     .filter(event -> event.getLevel() == Level.WARN)
+                     .filter(event -> event.getFormattedMessage().contains("no caller sees this failure"))
+                     .toList();
     }
 
     @Test

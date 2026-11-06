@@ -495,21 +495,41 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
 
     /**
      * Runs {@code action} on a virtual thread named {@code threadName} and waits for it at most {@code wait}. On time, what
-     * it threw is thrown here; past the wait it goes on, unwaited for
+     * it threw is thrown here; past the wait or an interrupt it goes on, unwaited for, and should it then fail, that
+     * failure is logged at WARN (once, by whichever of the two threads sees both the failure and the waiter gone), as no
+     * caller sees it
      *
-     * @throws InterruptedException the calling thread was interrupted while waiting
+     * @throws InterruptedException the calling thread was interrupted while waiting; {@code action} goes on
      * @throws TimeoutException     {@code action} did not end within {@code wait}
      */
     static void runOnAVirtualThreadWaitingAtMost(String threadName, Duration wait, Runnable action) throws InterruptedException, TimeoutException {
         var failure = new AtomicReference<Throwable>();
+        // RUNNING, then FAILED (set by the virtual thread) and/or WAITER_GAVE_UP (set by the waiter): the side that
+        // finds the other's mark already set logs the failure no caller sees, so it is logged exactly once
+        var outcome = new AtomicInteger(RUNNING);
         var thread = Thread.ofVirtual().name(threadName).start(() -> {
             try {
                 action.run();
             } catch (Throwable e) {
                 failure.set(e);
+                if (outcome.getAndSet(FAILED) == WAITER_GAVE_UP) {
+                    logFailureNoCallerSees(threadName, wait, e);
+                }
             }
         });
-        if (!thread.join(wait)) {
+        boolean ended;
+        try {
+            ended = thread.join(wait);
+        } catch (InterruptedException e) {
+            if (outcome.getAndSet(WAITER_GAVE_UP) == FAILED) {
+                logFailureNoCallerSees(threadName, wait, failure.get());
+            }
+            throw e;
+        }
+        if (!ended) {
+            if (outcome.getAndSet(WAITER_GAVE_UP) == FAILED) {
+                logFailureNoCallerSees(threadName, wait, failure.get());
+            }
             throw new TimeoutException(threadName + " did not end within " + wait);
         }
         switch (failure.get()) {
@@ -519,6 +539,14 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             case Error e -> throw e;
             default -> throw new IllegalStateException(failure.get());
         }
+    }
+
+    private static final int RUNNING        = 0;
+    private static final int FAILED         = 1;
+    private static final int WAITER_GAVE_UP = 2;
+
+    private static void logFailureNoCallerSees(String threadName, Duration wait, Throwable failure) {
+        log.warn("'{}' failed after its caller stopped waiting for it (the wait of {} ran out or the caller was interrupted), so no caller sees this failure", threadName, wait, failure);
     }
 
     /**
@@ -1502,7 +1530,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * @throws InterruptedException the calling thread was interrupted while waiting - the recording goes on
          * @throws TimeoutException     the recording did not end within {@link #DEFERRED_GAPS_RECORDING_WAIT}, for example
          *                              blocked by a lock the calling thread's unit of work holds, or behind a recording
-         *                              that is - it goes on, and the gaps stay kept until it commits
+         *                              that is - it goes on, and the gaps stay kept until it commits; should it fail
+         *                              instead, that is logged at WARN and the gaps stay kept for the next call
          * @throws RuntimeException     the gaps could not be recorded - they stay kept, for the next call
          */
         void recordDeferredGapsCommitted() throws InterruptedException, TimeoutException {
