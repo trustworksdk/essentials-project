@@ -105,7 +105,7 @@ Base package: `dk.trustworks.essentials.types`
 |---------------|-------------|---------|
 | `CharSequenceType` | String | `"ORD-123"` |
 | `NumberType` | Number | `99.99` |
-| `Money` | Object | `{"amount":"99.99","currency":"USD"}` |
+| `Money` | Object | `{"amount":99.99,"currency":"USD"}` |
 | `JSR310SingleValueType` | ISO-8601 | `"2024-01-15T10:30:00Z"` |
 
 ### Type Requirements
@@ -599,7 +599,7 @@ public class OrderController {
 - ⚠️ Jackson 3 only (`types-jackson3`); `com.fasterxml.jackson.databind` imports become `tools.jackson.databind`
 - ⚠️ `JSR310SingleValueType` needs `@JsonCreator` on constructor
 - ⚠️ Map keys typed by value types need no annotation; J2 `@JsonDeserialize(keyUsing = ...)` is silently ignored
-- ⚠️ `Money` serializes as object `{"amount":"...","currency":"..."}`, not single value
+- ⚠️ `Money` serializes as object `{"amount":<number>,"currency":"..."}`, not single value
 
 ### JDBI
 - ⚠️ Register **both** ArgumentFactory (params) and ColumnMapper (results)

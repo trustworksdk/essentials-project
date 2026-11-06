@@ -576,6 +576,7 @@ only. `asDecisionPolicy()` is unchanged.
 | Event processors on the shard-owned engine | After an unclean failover of an `EventProcessor`'s reader (the lock holder crashed, or was cut off), the new reader re-forwards the events since the last resume-point snapshot, and some of them are usually still queued. The ordered lane refuses a second message under the same key and order (primary key), so the forward failed: the subscription retried three times, stopped, was auto-resumed 10 s later, and repeated that until the originals had been handled - a stall as long as the backlog, with ERROR logs, after every such failover. Forwarded event references now carry the new marker `IdentifiedByKeyAndOrder`. The adapter still enqueues them with the plain insert, but once such an enqueue is refused as a duplicate it writes that queue's marked messages with the engine's new `MessageQueue.enqueueIfAbsent` (additive default methods) for 10 minutes, so the reader's ordinary retry succeeds: one failed attempt and a WARN per failover instead of a stop. Not always "if absent", because that insert costs about 25 % more time and 11 % more WAL per message (measured, batches of 100). Every other ordered enqueue still refuses a reused key and order. Reproducer: `EventProcessorReForwardOnShardOwnedIT`. `PostgresqlDurableQueues`/MongoDB unchanged | - |
 | Shard-owned queue (unordered lane) | A message the head sweep delivered ahead of the cursor, and that was handled and acknowledged before the cursor reached it, was recorded as a gap the moment the cursor read past it. Nothing was lost, but the owner then looked the message up every `chaseDelay` (2 ms) until `holeExpiry` (10 s), about 3 400 extra statements each time, and acknowledged later messages one by one instead of as a range for that long. It happened in roughly one run in three of a 2 000 msg/s benchmark. Messages delivered ahead of the cursor are now remembered until the cursor passes them, and any delivery of a message that left a gap clears it. | - |
 | Event store (CDC) | When a CDC subscription falls behind the bus and catches up, or moves onto the bus after polling, it must re-read the gaps it is still waiting for. The event that fills one may have committed while the subscription was off the bus, and is then only in the database. The catch-up asked for only the lowest 1 000 awaited global orders, plus the 50 transient gaps the gap handler's query selects (20 newest, 10 lowest, 20 rotating). With more outstanding gaps than that, which happens in bursts with many rolled-back appends, an older but not-lowest gap's late event was missed. It was then delivered after later events of its own aggregate, or never: after the gap timeout it was given up and recorded as a permanent gap over an event that exists. A catch-up now reads every awaited gap. Narrow gaps are listed in batches of up to 1 000 global orders per statement, and the middle of a wide gap is read as one range, so the cost is about one statement per 1 000 awaited orders, never one per order. Nothing to change. Polling was not affected: a gap is always asked for before it is given up. Design: `docs/cdc-deferred-gap-recording.md`. | - |
+| `Money` JSON (`types-jackson3`) | `MoneyDeserializer` reads a quoted amount, `{"amount":"99.99","currency":"USD"}`, as the number it holds, the way a `NumberType` field already reads a quoted number. The LLM docs showed that quoted form as `Money`'s format, though `Money` is written with the amount as a JSON number; they now show `{"amount":99.99,"currency":"USD"}`. A numeric amount keeps the scale it was written with, as before; a quoted amount that is not a number, or an amount that is neither a number nor a string, is refused with a `MismatchedInputException`. What `Money` writes is unchanged. | `<!-- fix:U-001 -->` |
 
 ---
 
@@ -584,6 +585,8 @@ only. `asDecisionPolicy()` is unchanged.
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md).
 
+- `0.60.1-3` - the LLM docs show `Money`'s `amount` as a JSON number, the form it is written in, and say a quoted
+  amount is also read (§3).
 - `0.60.1-2` - the LLM docs describe elastic pump connections, wake-after-commit, `JSONSerializer.readProperties` and
   the batched forward, and their `InboxConfig.builder()` examples compile; they describe `PartitionedViewEventProcessor` and the
   partitioned reset (§2.10), and the slice tooling recognises both partitioned processors as event processors.
@@ -705,6 +708,8 @@ Not published; listed because they are the reference for how to use the framewor
 
 - The LLM docs describe elastic pump connections, and their `InboxConfig.builder()` examples compile: that builder's
   methods take no `set` prefix (`inboxName`, `redeliveryPolicy`, ...), unlike `OutboxConfigBuilder`'s.
+- The LLM docs and the `types-jackson3` README show `Money` as `{"amount":99.99,"currency":"USD"}`, with the amount a
+  JSON number as it is written; they showed it quoted (§3).
 
 ---
 

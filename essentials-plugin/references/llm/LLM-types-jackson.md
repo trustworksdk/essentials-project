@@ -144,7 +144,7 @@ public final class MoneyDeserializer extends StdDeserializer<Money> {
 }
 ```
 
-Expects: `{"amount":"...", "currency":"..."}`
+Expects: `{"amount":99.99, "currency":"USD"}` — `amount` a JSON number, kept at the scale it was written with (a quoted number such as `"99.99"` is also read); both properties required, in any order; other properties ignored.
 
 ---
 
@@ -154,7 +154,7 @@ Expects: `{"amount":"...", "currency":"..."}`
 |----------------------------------------------|-------------|---------|
 | `CharSequenceType` subclasses | String | `"ORD-123"` |
 | `NumberType` subclasses | Number | `99.99` |
-| `Money` | Object | `{"amount":"99.99","currency":"USD"}` |
+| `Money` | Object | `{"amount":99.99,"currency":"USD"}` |
 | `JSR310SingleValueType` subclasses | ISO-8601 string | `"2024-01-15T10:30:00Z"` |
 
 ---
@@ -435,7 +435,7 @@ No issue was found for this exact combination.
 - ⚠️ `NumberType` subclasses need only the value-typed constructor — `NumberTypeJsonDeserializers` handles the family. A fraction is **refused** by the integral bases rather than truncated, and quoted numbers still read
 - ⚠️ `JSR310SingleValueType` needs `@JsonCreator` on constructor
 - ⚠️ Map keys typed by a value type need no annotation; a Jackson 2 `@JsonDeserialize(keyUsing = ...)` is silently ignored
-- ⚠️ `Money` serializes as `{"amount":"...","currency":"..."}` object, not single value
+- ⚠️ `Money` serializes as `{"amount":<number>,"currency":"..."}` object, not single value
 - ⚠️ Factory `createObjectMapper()` disables getter, `is`-getter and setter detection - uses fields only. Before the next release after 0.60.0 it left `is`-getters on, so a public `isX()` added a property
 - ⚠️ All registered types are from `dk.trustworks.essentials.types` — the **Java** hierarchy. Kotlin value types need `jackson-module-kotlin`
 - ⚠️ This module covers `@RequestBody`/`@ResponseBody` and persistence. `@PathVariable`/`@RequestParam` is `types-spring-web`, a separate mechanism

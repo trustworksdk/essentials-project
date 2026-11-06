@@ -3,6 +3,14 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-3 — targets Essentials 0.60.1
+
+- **`Money` JSON** — the types-jackson and types-integrations references show `Money`'s `amount` as a JSON number
+  (`{"amount":99.99,"currency":"USD"}`), which is what the serializer writes; they showed it quoted. The
+  types-jackson reference says `MoneyDeserializer` keeps the amount at the scale it was written with, also reads a
+  quoted number, needs both properties in any order and ignores other properties.
+  No skill, rule or script changed.
+
 ## 0.60.1-2 — targets Essentials 0.60.1
 
 - **`PartitionedViewEventProcessor` and the partitioned reset** — the event-store reference describes the view

@@ -31,8 +31,9 @@ public final class MoneyDeserializer extends StdDeserializer<Money> {
     @Override
     public Money deserialize(JsonParser p, DeserializationContext ctxt) throws JacksonException {
         // Read as a stream: building a JsonNode tree per Money to read two properties out of it was 1.2 % of the
-        // trading demo's CPU under load. Accepts what the tree version accepted: a numeric amount, kept at the scale it
-        // was written with, the properties in any order, and any other property ignored
+        // trading demo's CPU under load. Accepts a numeric amount, kept at the scale it was written with, or a quoted
+        // number ("99.99", as NumberTypeJsonDeserializer reads one), the properties in any order, and any other
+        // property ignored
         var        token        = p.currentToken() == JsonToken.START_OBJECT ? p.nextToken() : p.currentToken();
         BigDecimal amount       = null;
         String     currencyCode = null;
@@ -41,10 +42,18 @@ public final class MoneyDeserializer extends StdDeserializer<Money> {
             var value = p.nextToken();
             switch (name) {
                 case "amount" -> {
-                    if (!value.isNumeric()) {
-                        return (Money) ctxt.reportInputMismatch(this, "Money 'amount' must be a JSON number, but was %s", value);
+                    if (value.isNumeric()) {
+                        amount = p.getDecimalValue();
+                    } else if (value == JsonToken.VALUE_STRING) {
+                        var text = p.getString().trim();
+                        try {
+                            amount = new BigDecimal(text);
+                        } catch (NumberFormatException e) {
+                            amount = (BigDecimal) ctxt.handleWeirdStringValue(BigDecimal.class, text, "not a valid Money 'amount'");
+                        }
+                    } else {
+                        return (Money) ctxt.reportInputMismatch(this, "Money 'amount' must be a JSON number or a quoted number, but was %s", value);
                     }
-                    amount = p.getDecimalValue();
                 }
                 case "currency" -> currencyCode = p.getString();
                 default -> p.skipChildren();
