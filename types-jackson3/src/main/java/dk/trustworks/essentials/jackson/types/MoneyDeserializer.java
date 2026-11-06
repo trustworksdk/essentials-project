@@ -58,7 +58,15 @@ public final class MoneyDeserializer extends StdDeserializer<Money> {
                         return (Money) ctxt.reportInputMismatch(this, "Money 'amount' must be a JSON number or a quoted number, but was %s", value);
                     }
                 }
-                case "currency" -> currencyCode = p.getString();
+                case "currency" -> {
+                    if (value == JsonToken.VALUE_STRING) {
+                        currencyCode = p.getString();
+                    } else {
+                        // Step over an object or array value first, so the parser is not left inside it
+                        p.skipChildren();
+                        return (Money) ctxt.reportInputMismatch(this, "Money 'currency' must be a JSON string, but was %s", value);
+                    }
+                }
                 default -> p.skipChildren();
             }
         }

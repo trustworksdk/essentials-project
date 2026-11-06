@@ -30,7 +30,8 @@ import static org.assertj.core.api.Assertions.*;
 
 /**
  * Pins the input {@code MoneyDeserializer} accepts: a numeric amount kept at the scale it was written with, a quoted
- * number read to the same value, the properties in any order, other properties ignored, and both properties required.
+ * number read to the same value, a currency given as a JSON string, the properties in any order, other properties ignored,
+ * and both properties required.
  */
 class MoneyDeserializerTest {
     private final ObjectMapper objectMapper = EssentialTypesJacksonModule.createObjectMapper();
@@ -127,6 +128,16 @@ class MoneyDeserializerTest {
         assertThatThrownBy(() -> objectMapper.readValue("{\"amount\":true,\"currency\":\"USD\"}", Money.class))
                 .isInstanceOf(MismatchedInputException.class)
                 .hasMessageContaining("Money 'amount' must be a JSON number or a quoted number");
+    }
+
+    @Test
+    void a_currency_that_is_not_a_string_is_refused() {
+        for (var currency : new String[]{"null", "840", "true", "{\"code\":\"USD\"}", "[\"USD\"]"}) {
+            assertThatThrownBy(() -> objectMapper.readValue("{\"amount\":1.00,\"currency\":" + currency + "}", Money.class))
+                    .as("currency %s", currency)
+                    .isInstanceOf(MismatchedInputException.class)
+                    .hasMessageContaining("Money 'currency' must be a JSON string");
+        }
     }
 
     @Test
