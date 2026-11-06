@@ -53,4 +53,47 @@ final class InlineUnitOfWorkFactories {
         }
         return factory;
     }
+
+    /**
+     * Like {@link #inline()}, but each outermost {@code withUnitOfWork}/{@code usingUnitOfWork} gets its own mock
+     * {@link HandleAwareUnitOfWork}, a nested call joins it, and {@code getCurrentUnitOfWork()} answers the one in
+     * progress on the calling thread - as the real factories do. Lets a test tell which unit of work a call ran in.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    static HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> joining() {
+        HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> factory = mock(HandleAwareUnitOfWorkFactory.class);
+        var current = new ThreadLocal<HandleAwareUnitOfWork>();
+        try {
+            when(factory.getCurrentUnitOfWork()).thenAnswer(invocation -> java.util.Optional.ofNullable(current.get()));
+            when(factory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(invocation -> {
+                CheckedFunction<HandleAwareUnitOfWork, ?> function = invocation.getArgument(0);
+                if (current.get() != null) {
+                    return function.apply(current.get());
+                }
+                current.set(mock(HandleAwareUnitOfWork.class));
+                try {
+                    return function.apply(current.get());
+                } finally {
+                    current.remove();
+                }
+            });
+            doAnswer(invocation -> {
+                CheckedConsumer<HandleAwareUnitOfWork> consumer = invocation.getArgument(0);
+                if (current.get() != null) {
+                    consumer.accept(current.get());
+                    return null;
+                }
+                current.set(mock(HandleAwareUnitOfWork.class));
+                try {
+                    consumer.accept(current.get());
+                } finally {
+                    current.remove();
+                }
+                return null;
+            }).when(factory).usingUnitOfWork(any(CheckedConsumer.class));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return factory;
+    }
 }

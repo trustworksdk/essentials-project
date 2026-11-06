@@ -554,10 +554,17 @@ boundary did not roll at all.
 - **`ClosingBooksScanRollover`**, set with `DefaultClosingBooksScheduledScanProcessor.builder().setScanRollover(...)`:
   the application's own rollover - its closing event and `ClosingBooksLogicalAggregateRepository.closeAndOpenNextGeneration`
   with its next-generation factory and the next period id. The scan runs it inside the aggregate's generation lock and a
-  unit of work; a failure rolls the decision back and defers the generation, as any scan failure does.
+  unit of work; a failure rolls the decision back and defers the generation, as any scan failure does. The scan calls
+  its aggregate loader in that same lock and unit of work, so `context.aggregate()` belongs to
+  `context.currentGeneration()` and a closing event recorded on it is persisted with the rollover (when the loader's
+  repository joins the unit of work, as a `StatefulAggregateRepository` does). A generation rolled or closed after the
+  scan read it - by a command that rolled on access in between - is left alone (`generation_moved` outcome) instead of
+  being rolled again from the older generation's aggregate (`<!-- fix:U-001 -->`).
 - **`BuiltInClosingBooksPolicyEvaluator.asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)`** rolls on scans too, so a
   passed time boundary - or a closed business day under `periodSource = BUSINESS_CALENDAR` (§2.15) - rolls idle aggregates.
-- `ClosingBooksCoordinator.evaluatePolicy(..., rollover)` is the overload behind it.
+- `ClosingBooksCoordinator.evaluatePolicy(..., rollover)` is the public overload for a custom
+  `ClosingBooksScheduledScanProcessor`, which must load the aggregate from the open generation in its own unit of work;
+  the built-in scan uses its own guarded path.
 
 Additive: without a rollover a scan behaves as before, and logs a WARN once the first time it rolls a generation row
 only. `asDecisionPolicy()` is unchanged.

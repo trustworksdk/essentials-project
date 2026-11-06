@@ -20,7 +20,9 @@ compares an aggregate's period with the calendar's current business date instead
 `LocalDate.now(clock)`.
 
 **EF-1b, as built (2026-11-04):** a scheduled scan rolls through the application's own rollover,
-`ClosingBooksScanRollover` on the scan processor's builder, run inside the generation lock and a unit of work; the
+`ClosingBooksScanRollover` on the scan processor's builder, run inside the generation lock and a unit of work - the
+same ones the scan loads the aggregate in, so the rollover's aggregate belongs to the generation it rolls and a closing
+event recorded on it is persisted, and a generation rolled on access after the scan read it is left alone; the
 built-in evaluator's `asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)` lets a time boundary (or the business
 calendar) roll idle aggregates. Without a rollover a scan still rolls only the generation row, and says so once.
 

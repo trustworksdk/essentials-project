@@ -1047,8 +1047,11 @@ unitOfWorkFactory.usingUnitOfWork(uow -> repository.load(new LogicalAggregateId<
 **A scan rolls only the generation row unless given a `ClosingBooksScanRollover`** - the next generation then starts
 with an empty stream: no closing event, no carried-forward state, no period id (logged WARN once). Give the scan the
 same rollover the app does on access; it runs inside the generation lock and a unit of work, and a throw rolls the
-decision back and defers the generation. The built-in evaluator's `asDecisionPolicy()` never rolls on a scan;
-`asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)` does.
+decision back and defers the generation. The scan calls the aggregate loader in that same lock and unit of work, from
+the generation it decides on: `context.aggregate()` belongs to `context.currentGeneration()` and may be mutated - a
+closing event recorded on it is persisted with the rollover when the loader's repository joins the unit of work, as a
+`StatefulAggregateRepository` does. A generation rolled or closed after the scan read it is left alone. The built-in
+evaluator's `asDecisionPolicy()` never rolls on a scan; `asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)` does.
 
 ```java
 var scanProcessor = DefaultClosingBooksScheduledScanProcessor.<AccountId, Account>builder()

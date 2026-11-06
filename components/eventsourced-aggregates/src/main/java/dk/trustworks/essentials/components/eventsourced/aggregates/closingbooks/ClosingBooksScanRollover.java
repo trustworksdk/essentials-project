@@ -28,8 +28,13 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks
  * with its next-generation factory and the next period id as the hint - exactly what an on-access rollover does.
  * <p>
  * Called by {@link DefaultClosingBooksScheduledScanProcessor} inside the aggregate's generation lock and a unit of
- * work, after the policy decided {@code CLOSE_AND_OPEN_NEXT} for the generation in the context. If it throws, the unit
- * of work rolls back and the generation stays open; the scan defers it and tries again later.
+ * work, after the policy decided {@code CLOSE_AND_OPEN_NEXT} for the generation in the context. The scan loads
+ * {@code context.aggregate()} through its {@link ClosingBooksAggregateLoader} in that same lock and unit of work, from
+ * {@code context.currentGeneration()}'s stream, so the aggregate belongs to the generation in the context and may be
+ * mutated: a closing event recorded on it is persisted when the unit of work commits, provided the loader loads it
+ * through a repository that joins the unit of work. A generation rolled or closed after the scan read it is left
+ * alone, never handed to the rollover. If it throws, the unit of work rolls back and the generation stays open; the
+ * scan defers it and tries again later.
  *
  * @param <ID>        the logical aggregate id type
  * @param <AGGREGATE> the aggregate type

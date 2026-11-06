@@ -3,6 +3,15 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-5 — targets Essentials 0.60.1
+
+- **Closing-books scheduled scan** — the eventsourced-aggregates reference says the scan calls the aggregate loader
+  inside the generation lock and the rollover's unit of work, from the generation it decides on: the rollover's
+  `context.aggregate()` belongs to `context.currentGeneration()` and may be mutated, and a closing event recorded on
+  it is persisted with the rollover when the loader's repository joins the unit of work, as a
+  `StatefulAggregateRepository` does. A generation rolled or closed after the scan read it is left alone.
+  No skill, rule or script changed.
+
 ## 0.60.1-4 — targets Essentials 0.60.1
 
 - **Shard-owned `leaseTtl`** — the shard-owned reference's settings table says `leaseTtl` is how long after its

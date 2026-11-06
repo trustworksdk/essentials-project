@@ -177,6 +177,11 @@ public class ClosingBooksCoordinator<ID> {
 
     /**
      * Evaluate a closing-books policy, rolling with the application's own rollover on {@code CLOSE_AND_OPEN_NEXT}.
+     * <p>
+     * The policy and the rollover receive {@code aggregate} as given, with the generation that is open once the
+     * generation lock is held; nothing checks that the two belong together. Load the aggregate from that generation,
+     * in the unit of work this is called in - the rollover joins it - or a closing event the rollover records on the
+     * aggregate is not persisted. The scheduled scan does both for you.
      *
      * @param rollover performs the rollover - the aggregate's closing event and its next generation, through the
      *                 application's next-generation factory (EF-1b) - inside the generation lock and a unit of work. With
@@ -198,36 +203,114 @@ public class ClosingBooksCoordinator<ID> {
         // acting on a generation another caller has meanwhile closed or rolled would either fail outright or close a
         // generation the policy never saw. Both lock implementations are reentrant, so the nested acquisition in
         // closeAndOpenNextGeneration is a no-op.
-        return generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> {
-            var currentGeneration = resolveOrOpenCurrentGeneration(logicalAggregateId);
-            var context  = new ClosingBooksEvaluationContext<>(aggregateType,
-                                                               logicalAggregateId,
-                                                               currentGeneration,
-                                                               aggregate,
-                                                               triggerMode,
-                                                               OffsetDateTime.now(clock));
-            var decision = policy.decide(context);
+        return generationRepository.withGenerationLock(aggregateType, logicalAggregateId,
+                                                       () -> decide(resolveOrOpenCurrentGeneration(logicalAggregateId), aggregate, triggerMode, policy, rollover));
+    }
 
-            measurementSupport.incrementPolicyDecision(aggregateType, decision, triggerMode);
+    /**
+     * What {@link #evaluateScannedGeneration} did with the generation a scheduled scan read.
+     */
+    enum ScanOutcome {
+        /** The policy decided on the generation the scan read; {@link ScanEvaluation#generation()} is current afterwards. */
+        DECIDED,
+        /**
+         * The generation the scan read was no longer the open one once the generation lock was held (it was rolled or
+         * closed in between); nothing was loaded or decided. {@link ScanEvaluation#generation()} is the open
+         * generation, or the scanned one when none is open.
+         */
+        GENERATION_MOVED,
+        /** The aggregate loader found no aggregate for the generation's stream; nothing was decided. */
+        AGGREGATE_MISSING
+    }
 
-            return switch (decision) {
-                case KEEP_OPEN -> currentGeneration;
-                case CLOSE_ONLY -> {
-                    var closed = generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
-                    measurementSupport.incrementGenerationsClosed(aggregateType);
-                    yield closed;
-                }
-                // Counts its own generations_closed / generations_opened, so nothing is added here.
-                case CLOSE_AND_OPEN_NEXT -> rollover == null
-                                            ? closeAndOpenNextGeneration(logicalAggregateId)
-                                            : rollWith(rollover, context);
-            };
-        });
+    /**
+     * The result of {@link #evaluateScannedGeneration}.
+     */
+    record ScanEvaluation<ID>(ScanOutcome outcome, AggregateGeneration<ID> generation) {
+    }
+
+    /**
+     * Evaluate a closing-books policy for a generation a scheduled scan read from its batch.
+     * <p>
+     * Unlike {@link #evaluatePolicy(LogicalAggregateId, Object, ClosingBooksTriggerMode, ClosingBooksDecisionPolicy, ClosingBooksScanRollover)},
+     * which takes an aggregate the caller already loaded, this loads the aggregate itself, inside the generation lock
+     * and in the unit of work the decision and the rollover run in. So:
+     * <ul>
+     *     <li>the aggregate the policy and the rollover see always belongs to the generation in the context - a
+     *     generation rolled or closed after the scan read it is left alone ({@link ScanOutcome#GENERATION_MOVED}),
+     *     instead of being closed on the strength of an older generation's aggregate;</li>
+     *     <li>the aggregate is registered with the unit of work that commits the rollover, so a closing event the
+     *     rollover records on it is persisted with the rollover.</li>
+     * </ul>
+     *
+     * @param scannedGeneration the generation as the scan read it
+     * @param aggregateLoader   loads the aggregate of the generation's stream; called at most once, under the lock
+     * @param policy            the decision policy
+     * @param rollover          the application's rollover for {@code CLOSE_AND_OPEN_NEXT}, or {@code null} to roll only
+     *                          the generation row
+     */
+    <AGGREGATE> ScanEvaluation<ID> evaluateScannedGeneration(AggregateGeneration<ID> scannedGeneration,
+                                                             ClosingBooksAggregateLoader<AGGREGATE> aggregateLoader,
+                                                             ClosingBooksDecisionPolicy<ID, AGGREGATE> policy,
+                                                             ClosingBooksScanRollover<ID, AGGREGATE> rollover) {
+        requireNonNull(scannedGeneration, "No scannedGeneration provided");
+        requireNonNull(aggregateLoader, "No aggregateLoader provided");
+        requireNonNull(policy, "No policy provided");
+
+        var logicalAggregateId = scannedGeneration.logicalAggregateId();
+        // On PostgreSQL the lock already runs in a unit of work and this joins it; the in-memory lock has none, so this
+        // is the one the load, the decision and the rollover share.
+        return generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> unitOfWorkFactory.withUnitOfWork(uow -> {
+            var currentGeneration = generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId);
+            if (currentGeneration.isEmpty() || currentGeneration.get().generation() != scannedGeneration.generation()) {
+                return new ScanEvaluation<>(ScanOutcome.GENERATION_MOVED, currentGeneration.orElse(scannedGeneration));
+            }
+            var aggregate = aggregateLoader.load(currentGeneration.get().streamAggregateId());
+            if (aggregate.isEmpty()) {
+                return new ScanEvaluation<>(ScanOutcome.AGGREGATE_MISSING, currentGeneration.get());
+            }
+            return new ScanEvaluation<>(ScanOutcome.DECIDED,
+                                        decide(currentGeneration.get(), aggregate.get(), ClosingBooksTriggerMode.SCHEDULED_SCAN, policy, rollover));
+        }));
+    }
+
+    /**
+     * Decide on {@code currentGeneration} and act on the decision. The caller holds the generation lock.
+     */
+    private <AGGREGATE> AggregateGeneration<ID> decide(AggregateGeneration<ID> currentGeneration,
+                                                       AGGREGATE aggregate,
+                                                       ClosingBooksTriggerMode triggerMode,
+                                                       ClosingBooksDecisionPolicy<ID, AGGREGATE> policy,
+                                                       ClosingBooksScanRollover<ID, AGGREGATE> rollover) {
+        var logicalAggregateId = currentGeneration.logicalAggregateId();
+        var context = new ClosingBooksEvaluationContext<>(aggregateType,
+                                                          logicalAggregateId,
+                                                          currentGeneration,
+                                                          aggregate,
+                                                          triggerMode,
+                                                          OffsetDateTime.now(clock));
+        var decision = policy.decide(context);
+
+        measurementSupport.incrementPolicyDecision(aggregateType, decision, triggerMode);
+
+        return switch (decision) {
+            case KEEP_OPEN -> currentGeneration;
+            case CLOSE_ONLY -> {
+                var closed = generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
+                measurementSupport.incrementGenerationsClosed(aggregateType);
+                yield closed;
+            }
+            // Counts its own generations_closed / generations_opened, so nothing is added here.
+            case CLOSE_AND_OPEN_NEXT -> rollover == null
+                                        ? closeAndOpenNextGeneration(logicalAggregateId)
+                                        : rollWith(rollover, context);
+        };
     }
 
     /**
      * The application's rollover, in one unit of work under the generation lock already held: its repository's
-     * {@code closeAndOpenNextGeneration} re-enters both. Answers the generation current afterwards.
+     * {@code closeAndOpenNextGeneration} re-enters both, and it joins the caller's unit of work when there is one (the
+     * scan's, which loaded the aggregate). Answers the generation current afterwards.
      */
     private <AGGREGATE> AggregateGeneration<ID> rollWith(ClosingBooksScanRollover<ID, AGGREGATE> rollover,
                                                          ClosingBooksEvaluationContext<ID, AGGREGATE> context) {
