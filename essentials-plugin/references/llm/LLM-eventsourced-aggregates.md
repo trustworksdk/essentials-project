@@ -1046,6 +1046,12 @@ unitOfWorkFactory.usingUnitOfWork(uow -> repository.load(new LogicalAggregateId<
 `evaluatePolicy(AggregateGeneration loadedFrom, aggregate, triggerMode, policy, rollover)`. The unguarded
 `evaluatePolicy(id, aggregate, …)` decides on whatever generation is open once the lock is held.
 
+A guarded refusal is thrown only after the generation lock and its unit-of-work scopes have returned, so it does not
+mark the caller's `UnitOfWork` rollback-only: reload from the open generation and decide again in the same unit of
+work. ⚠️ The stale aggregate stays registered with that unit of work, so a change already recorded on it (a closing
+event recorded before the guarded call) is still appended at commit — after recording one, rethrow and retry in a new
+unit of work.
+
 `ClosingBooksStatefulAggregateRepository` is the thinner variant (3 type params) that only maps logical id → open generation's stream id.
 
 ### Scheduled Scans

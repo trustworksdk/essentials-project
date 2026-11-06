@@ -626,8 +626,13 @@ older generation's state. Guarded variants refuse instead:
 Under the generation lock, before anything is closed or the policy is asked, each compares the open generation's
 stream id with the expected one, and throws **`ClosingBooksGenerationMovedException`** (an `IllegalStateException`)
 when they differ: nothing is closed or opened, and the policy, the rollover and the next-generation factory are not
-called. Reload and decide again. The comparison uses the open generation the unguarded methods already resolve, so it
-costs no extra database round trip. A refusal by either guarded `closeAndOpenNextGeneration` is counted in
+called. Reload and decide again. The refusal is thrown only after the generation lock and the unit-of-work scopes the
+guarded method enters have returned, so it does not mark the caller's unit of work rollback-only: the reload and the
+new decision can run, and commit, in the unit of work the aggregate was loaded in. The aggregate from the moved
+generation stays registered with that unit of work, though, so a change already recorded on it (a closing event
+recorded before the guarded call) is still appended at commit; a caller that recorded one rethrows and retries in a new
+unit of work. The comparison uses the open generation the unguarded methods already resolve, so it costs no extra
+database round trip. A refusal by either guarded `closeAndOpenNextGeneration` is counted in
 `essentials.aggregate_closing_books.rollover.outcome` with `outcome=generation_moved`, not `failed`; a refusal by the
 guarded `evaluatePolicy` counts no policy decision.
 

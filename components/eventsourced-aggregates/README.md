@@ -1745,6 +1745,13 @@ unitOfWorkFactory.usingUnitOfWork(uow -> {
 two rolls the close back, leaving the previous generation `OPEN` for a safe retry rather than stranding the
 aggregate with no open generation.
 
+A `ClosingBooksGenerationMovedException` from a guarded method is thrown only after the generation lock and its
+unit-of-work scopes have returned, so it does not mark the caller's `UnitOfWork` rollback-only: reload the aggregate
+from the generation that is open now and decide again in the same unit of work. The aggregate from the moved
+generation stays registered with that unit of work, though, so a change already recorded on it (a closing event
+recorded before the guarded call) is still appended at commit; after recording one, rethrow and retry in a new unit of
+work.
+
 > **Carrying state forward is your job.** Closing a generation does not copy balances into the new stream. Emit an
 > opening/carry-forward event on the new generation — that is what `ClosingBooksNextGenerationFactory` /
 > `TypedClosingBooksNextGenerationFactory` are for.

@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkStatus;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -303,6 +304,73 @@ class ClosingBooksCoordinatorTest {
 
         assertThat(policyCalls).hasValue(0);
         assertThat(repository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
+    }
+
+    /**
+     * The caller of a guarded operation holds a unit of work - the one it loaded its aggregate in. A refusal must leave
+     * it usable, so the documented recovery (reload and decide again) commits in that same unit of work.
+     */
+    @Test
+    void a_guarded_close_and_open_next_generation_refusal_leaves_the_callers_unit_of_work_usable_for_a_retry() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var unitOfWorkFactory  = InlineUnitOfWorkFactories.joining();
+        var repository         = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
+        var meterRegistry      = new SimpleMeterRegistry();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        unitOfWorkFactory,
+                                                        Clock.systemUTC(),
+                                                        Optional.of(meterRegistry));
+        var generation1 = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        coordinator.closeAndOpenNextGeneration(logicalAggregateId);
+
+        var generation3 = unitOfWorkFactory.withUnitOfWork(uow -> {
+            assertThatThrownBy(() -> coordinator.closeAndOpenNextGeneration(generation1))
+                    .isInstanceOf(ClosingBooksGenerationMovedException.class);
+            assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
+
+            var rolled = coordinator.closeAndOpenNextGeneration(coordinator.resolveCurrentGeneration(logicalAggregateId).orElseThrow());
+            assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
+            return rolled;
+        });
+
+        assertThat(generation3.generation()).isEqualTo(3);
+        assertThat(meterRegistry.get("essentials.aggregate_closing_books.rollover.outcome")
+                                .tag("outcome", "generation_moved").counter().count()).isEqualTo(1.0);
+        assertThat(meterRegistry.find("essentials.aggregate_closing_books.rollover.outcome").tag("outcome", "failed").counter()).isNull();
+    }
+
+    @Test
+    void a_guarded_evaluate_policy_refusal_leaves_the_callers_unit_of_work_usable_for_a_retry() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var unitOfWorkFactory  = InlineUnitOfWorkFactories.joining();
+        var repository         = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        unitOfWorkFactory);
+        var generation1 = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        coordinator.closeAndOpenNextGeneration(logicalAggregateId);
+        ClosingBooksDecisionPolicy<String, String> rollPolicy = context -> ClosingBooksDecision.CLOSE_AND_OPEN_NEXT;
+
+        var generation3 = unitOfWorkFactory.withUnitOfWork(uow -> {
+            assertThatThrownBy(() -> coordinator.evaluatePolicy(generation1, "generation-1-aggregate", ClosingBooksTriggerMode.ON_ACCESS, rollPolicy, null))
+                    .isInstanceOf(ClosingBooksGenerationMovedException.class);
+            assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
+
+            var rolled = coordinator.evaluatePolicy(coordinator.resolveCurrentGeneration(logicalAggregateId).orElseThrow(),
+                                                    "generation-2-aggregate",
+                                                    ClosingBooksTriggerMode.ON_ACCESS,
+                                                    rollPolicy,
+                                                    null);
+            assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
+            return rolled;
+        });
+
+        assertThat(generation3.generation()).isEqualTo(3);
     }
 
     @Test

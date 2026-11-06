@@ -10,8 +10,9 @@ targets, with a `-N` suffix for plugin-only releases.
   the coordinator's guarded `closeAndOpenNextGeneration(AggregateGeneration)` and
   `evaluatePolicy(AggregateGeneration loadedFrom, …)`, which throw `ClosingBooksGenerationMovedException`, closing
   nothing, when the aggregate's generation is no longer the open one, and says the unguarded
-  `closeAndOpenNextGeneration` closes whichever generation is open under the generation lock. No skill, rule or script
-  changed.
+  `closeAndOpenNextGeneration` closes whichever generation is open under the generation lock. It also says a refusal
+  leaves the caller's unit of work usable rather than rollback-only, and that a change already recorded on the stale
+  aggregate is still appended at commit. No skill, rule or script changed.
 
 ## 0.60.1-7 — targets Essentials 0.60.1
 

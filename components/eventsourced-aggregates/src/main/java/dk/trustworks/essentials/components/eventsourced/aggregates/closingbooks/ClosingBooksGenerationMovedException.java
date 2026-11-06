@@ -32,6 +32,16 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * {@link ClosingBooksLogicalAggregateRepository#closeAndOpenNextGenerationGuarded(LogicalAggregateId, dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregate, Object, ClosingBooksNextGenerationFactory)}.
  * Reload the aggregate from the generation that is open now and decide again, or drop the operation when the roll that
  * got there first already did what it wanted.
+ * <p>
+ * The guarded operations throw this only after the generation lock and the unit-of-work scopes they enter have
+ * returned, so the refusal does not mark the caller's unit of work rollback-only: the reload and the new decision can
+ * run, and commit, in the unit of work the caller loaded its aggregate in. This holds for the guard's own refusal only;
+ * any other exception thrown inside a unit of work the caller joined still marks it rollback-only.
+ * <p>
+ * The aggregate loaded from the moved generation stays registered with that unit of work: a change already recorded on
+ * it (a closing event recorded before the guarded call) is still appended to the moved generation's stream when the
+ * unit of work commits. Retry in the same unit of work only when no such change was recorded; otherwise let the unit of work
+ * roll back - rethrow - and retry in a new one.
  */
 public class ClosingBooksGenerationMovedException extends IllegalStateException {
     private final transient LogicalAggregateId<?>  logicalAggregateId;

@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.Stat
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateEventStream;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkStatus;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
@@ -187,6 +188,52 @@ class ClosingBooksLogicalAggregateRepositoryTest {
 
         assertThat(factoryCalls).hasValue(0);
         assertThat(generationRepository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
+    }
+
+    /**
+     * The caller of the guarded rollover holds a unit of work - the one it loaded the aggregate in. A refusal must leave
+     * it usable, so the documented recovery (reload and decide again) commits in that same unit of work.
+     */
+    @Test
+    void a_guarded_close_and_open_next_generation_refusal_leaves_the_callers_unit_of_work_usable_for_a_retry() {
+        var aggregateType        = AggregateType.of("Accounts");
+        var unitOfWorkFactory    = InlineUnitOfWorkFactories.joining();
+        var generationRepository = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
+        @SuppressWarnings("unchecked")
+        var delegate = mock(StatefulAggregateRepository.class);
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        generationRepository,
+                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation,
+                                                        unitOfWorkFactory);
+        var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
+                                                                                                               delegate,
+                                                                                                               coordinator,
+                                                                                                               ClosingBooksIdSerializer.stringBased());
+        var logicalAggregateId = new LogicalAggregateId<>("account-1");
+        when(delegate.save(any(TestAggregate.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        var generation1Aggregate = repository.open(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId()));
+        var generation2Aggregate = repository.closeAndOpenNextGeneration(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId()));
+
+        var generation3Aggregate = unitOfWorkFactory.withUnitOfWork(uow -> {
+            assertThatThrownBy(() -> repository.closeAndOpenNextGenerationGuarded(logicalAggregateId,
+                                                                                  generation1Aggregate,
+                                                                                  "next-period",
+                                                                                  (aggregate, context, hint) -> new TestAggregate(context.streamAggregateId())))
+                    .isInstanceOf(ClosingBooksGenerationMovedException.class);
+            assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
+
+            // Reloaded from the generation that is open now, and decided again in the same unit of work
+            var rolled = repository.closeAndOpenNextGenerationGuarded(logicalAggregateId,
+                                                                      generation2Aggregate,
+                                                                      "next-period",
+                                                                      (aggregate, context, hint) -> new TestAggregate(context.streamAggregateId()));
+            assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
+            return rolled;
+        });
+
+        assertThat(generation3Aggregate.aggregateId()).isEqualTo("account-1#3");
+        assertThat(generationRepository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(3);
     }
 
     @Test
