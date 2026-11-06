@@ -212,7 +212,14 @@ final class ShardPump implements Runnable {
         Throwable endFailed = null;
         synchronized (deathLock) {
             owners.add(owner);
-            byWakeup.computeIfAbsent(owner.wakeup(), ignored -> ConcurrentHashMap.newKeySet()).add(owner);
+            // Added inside compute, atomically with forgetWakeup's removal of an emptied set: added to the set after the
+            // map lookup instead, the owner could join a set the pump thread has just emptied of the unit's old owner
+            // and is about to unmap, and would then be missing from byWakeup for its whole tenure.
+            byWakeup.compute(owner.wakeup(), (ignored, ownersOf) -> {
+                var held = ownersOf != null ? ownersOf : ConcurrentHashMap.<LeasedOwner>newKeySet();
+                held.add(owner);
+                return held;
+            });
             added.add(owner);
             // ShardRuntime routes new shards to live pumps, so this is reached only when none is left, or when the pump
             // died between the shard being placed on it and being handed to it (ShardRuntime.Placement). Either way
@@ -953,14 +960,15 @@ final class ShardPump implements Runnable {
         forgetWakeup(owner);
     }
 
+    /**
+     * Unmap {@code owner} from its unit's wake-up, and the wake-up once no owner is left. Atomic per wake-up with
+     * {@link #add}, so a new owner of the same unit added meanwhile is never unmapped with the set it joined.
+     */
     private void forgetWakeup(LeasedOwner owner) {
-        var ownersOf = byWakeup.get(owner.wakeup());
-        if (ownersOf != null) {
+        byWakeup.computeIfPresent(owner.wakeup(), (ignored, ownersOf) -> {
             ownersOf.remove(owner);
-            if (ownersOf.isEmpty()) {
-                byWakeup.remove(owner.wakeup(), ownersOf);
-            }
-        }
+            return ownersOf.isEmpty() ? null : ownersOf;
+        });
     }
 
     /**
