@@ -957,7 +957,9 @@ ClosingBooksTimeBoundaryCalculator.currentPeriodId(calendar);       // Optional<
 - **The library does not persist closes** — store them yourself (a table fed by your end-of-day signal) and feed every
   instance's calendar (e.g. LISTEN/NOTIFY plus a poll). Between instances a few mutations just after a close may book
   into the closing day.
-- Only `END_OF_DAY`: any other boundary with a calendar fails `build()` and startup validation.
+- Only `END_OF_DAY`: any other boundary with a calendar fails `build()` and startup validation — except `NONE` under a
+  policy other than `TIME_BOUNDARY`/`EVENT_COUNT_OR_TIME_BOUNDARY`, which never reads the calendar. (`nextPeriodId`
+  evaluates the boundary for every policy, so e.g. `EVENT_COUNT` with `END_OF_DAY` takes its period ids from the calendar.)
 - Gap counter gains tag `period_source`. Idle aggregates roll on a scheduled scan only with
   `asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)` plus a `ClosingBooksScanRollover` (below).
 
@@ -1105,7 +1107,7 @@ essentials.eventstore.archives.filesystem-root-directory=/var/lib/essentials/arc
 - a `TIME_BOUNDARY`/`EVENT_COUNT_OR_TIME_BOUNDARY` policy and the resolved `time-boundary` is `NONE` — the boundary could never advance (use `EVENT_COUNT` if only the event-count half was intended)
 - a `TIME_BOUNDARY`/`EVENT_COUNT_OR_TIME_BOUNDARY` policy and the aggregate does not implement `HasClosingBooksPeriodId` — opt out with `essentials.eventstore.closing-books[.aggregates.<Type>].period-id-provided-externally=true` when a custom `currentPeriodIdProvider` supplies it
 - `zone-id` is not a valid IANA zone (not checked with `period-source=business-calendar`)
-- `period-source=business-calendar` with any `time-boundary` other than `END_OF_DAY`
+- `period-source=business-calendar` with any `time-boundary` other than `END_OF_DAY` — except `NONE` under a policy other than `TIME_BOUNDARY`/`EVENT_COUNT_OR_TIME_BOUNDARY` (the calendar is never read there, so such an aggregate may inherit a global `business-calendar`)
 
 **Gotcha**: closing a generation does **not** carry balances forward — emit an opening event via `TypedClosingBooksNextGenerationFactory`.
 

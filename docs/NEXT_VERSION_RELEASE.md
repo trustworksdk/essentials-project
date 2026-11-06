@@ -529,8 +529,11 @@ holidays; Friday to Monday counts as one period, not three.
 - Period ids keep the `yyyy-MM-dd` format, so an aggregate moves between `CLOCK` and `BUSINESS_CALENDAR` without
   migration. New calculator overloads `ClosingBooksTimeBoundaryCalculator.currentPeriodId(calendar)` and
   `evaluate(calendar, periodId)`.
-- Startup validation rejects `BUSINESS_CALENDAR` with any boundary other than `END_OF_DAY`, and skips the `zone-id`
-  check for it.
+- Startup validation and `BuiltInClosingBooksPolicyEvaluator.build()` reject `BUSINESS_CALENDAR` with any boundary
+  other than `END_OF_DAY`, and startup validation skips the `zone-id` check for it. The one exception is boundary
+  `NONE` under a policy other than `TIME_BOUNDARY` or `EVENT_COUNT_OR_TIME_BOUNDARY`, where the calendar is never read:
+  an `EVENT_COUNT`, `MANUAL_ONLY` or `EXPLICIT_ONLY` aggregate that keeps the default boundary `NONE` still starts when
+  it inherits a global `period-source=business-calendar`.
 - The admin API's closing-books policy (`GET /aggregate-lifecycle/closing-books-policies`) gains a `periodSource`
   property (a new response property; the generated Java client is regenerated).
 - `ResolvedAggregateClosingBooksConfiguration` and `ApiAggregateClosingBooksPolicy` gain a `periodSource` component and

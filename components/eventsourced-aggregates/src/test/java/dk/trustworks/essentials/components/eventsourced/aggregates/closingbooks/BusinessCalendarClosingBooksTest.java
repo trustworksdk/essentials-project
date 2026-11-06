@@ -159,6 +159,44 @@ class BusinessCalendarClosingBooksTest {
     }
 
     @Test
+    void an_event_count_evaluator_with_no_boundary_accepts_a_business_calendar_it_never_reads() {
+        var evaluator = eventCountEvaluator(weekClosedThrough(FRI), ClosingBooksTimeBoundary.NONE);
+
+        assertThat(evaluator.periodSource()).isEqualTo(ClosingBooksPeriodSource.BUSINESS_CALENDAR);
+        assertThat(evaluator.shouldRolloverOnAccess(new TestAggregate(MON.toString()))).isTrue();
+        assertThat(evaluator.nextPeriodId(new TestAggregate(MON.toString()))).isEqualTo(MON.toString());
+        assertThat(evaluator.description()).isEqualTo("event-count threshold 2");
+    }
+
+    @Test
+    void an_event_count_evaluator_with_an_end_of_day_boundary_takes_its_next_period_id_from_the_business_calendar() {
+        var evaluator = eventCountEvaluator(weekClosedThrough(WED), ClosingBooksTimeBoundary.END_OF_DAY);
+
+        assertThat(evaluator.periodSource()).isEqualTo(ClosingBooksPeriodSource.BUSINESS_CALENDAR);
+        assertThat(evaluator.nextPeriodId(new TestAggregate(WED.toString()))).isEqualTo("2030-01-10");
+    }
+
+    @Test
+    void an_event_count_evaluator_rejects_a_business_calendar_with_a_boundary_other_than_none_or_end_of_day() {
+        assertThatThrownBy(() -> eventCountEvaluator(weekClosedThrough(FRI), ClosingBooksTimeBoundary.END_OF_MONTH))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("END_OF_DAY");
+    }
+
+    private static BuiltInClosingBooksPolicyEvaluator<TestAggregate> eventCountEvaluator(ClosingBooksBusinessCalendar calendar,
+                                                                                         ClosingBooksTimeBoundary boundary) {
+        return BuiltInClosingBooksPolicyEvaluator.<TestAggregate>builder()
+                                                 .setAggregateType(AggregateType.of("Accounts"))
+                                                 .setDefaultPolicy(ClosingBooksDefaultPolicyType.EVENT_COUNT)
+                                                 .setEventThreshold(2)
+                                                 .setTimeBoundary(boundary)
+                                                 .setBusinessCalendar(calendar)
+                                                 .setEventCountProvider(aggregate -> 2)
+                                                 .setCurrentPeriodIdProvider(TestAggregate::periodId)
+                                                 .build();
+    }
+
+    @Test
     void without_a_business_calendar_the_evaluator_still_needs_a_clock() {
         assertThatThrownBy(() -> evaluator(null, ClosingBooksTimeBoundary.END_OF_DAY, null))
                 .isInstanceOf(IllegalArgumentException.class);

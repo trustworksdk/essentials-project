@@ -198,6 +198,39 @@ class AggregateLifecycleConfigurationValidatorTest {
     }
 
     @Test
+    void startup_succeeds_when_a_global_business_calendar_period_source_reaches_an_event_count_aggregate() {
+        // An EVENT_COUNT aggregate whose boundary stays NONE never reads the calendar, so it
+        // inherits the global BUSINESS_CALENDAR and must still start.
+        contextRunner
+                .withPropertyValues("essentials.eventstore.closing-books.enabled=true",
+                                    "essentials.eventstore.closing-books.period-source=BUSINESS_CALENDAR",
+                                    "essentials.eventstore.closing-books.aggregates.Customers.default-policy=EVENT_COUNT")
+                .withBean(OnAccessClosingBooksAggregate.class)
+                .withBean(OnAccessClosingBooksAggregateNextGenerationFactory.class)
+                .run(ctx -> {
+                    assertThat(ctx.getStartupFailure()).isNull();
+                    assertThat(ctx).hasSingleBean(AggregateLifecycleConfigurationValidator.class);
+                });
+    }
+
+    @Test
+    void startup_fails_when_a_global_business_calendar_period_source_reaches_an_event_count_aggregate_with_a_boundary_other_than_end_of_day() {
+        // A boundary other than NONE is evaluated by nextPeriodId whatever the policy, so the calendar is read
+        // and the boundary must be END_OF_DAY - as BuiltInClosingBooksPolicyEvaluator.build() requires.
+        contextRunner
+                .withPropertyValues("essentials.eventstore.closing-books.enabled=true",
+                                    "essentials.eventstore.closing-books.period-source=BUSINESS_CALENDAR",
+                                    "essentials.eventstore.closing-books.aggregates.Customers.default-policy=EVENT_COUNT",
+                                    "essentials.eventstore.closing-books.aggregates.Customers.time-boundary=END_OF_WEEK")
+                .withBean(OnAccessClosingBooksAggregate.class)
+                .withBean(OnAccessClosingBooksAggregateNextGenerationFactory.class)
+                .run(ctx -> {
+                    assertThat(ctx.getStartupFailure()).isNotNull();
+                    assertThat(ctx.getStartupFailure()).hasMessageContaining("period source BUSINESS_CALENDAR with time boundary 'END_OF_WEEK'");
+                });
+    }
+
+    @Test
     void startup_succeeds_with_a_business_calendar_period_source_and_ignores_the_zone_id() {
         contextRunner
                 .withPropertyValues("essentials.eventstore.closing-books.enabled=true",

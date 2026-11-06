@@ -3,6 +3,14 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-6 — targets Essentials 0.60.1
+
+- **Business-calendar period source** — the eventsourced-aggregates reference says a business calendar with a boundary
+  other than `END_OF_DAY` fails `build()` and startup validation except boundary `NONE` under a policy other than
+  `TIME_BOUNDARY`/`EVENT_COUNT_OR_TIME_BOUNDARY`, where the calendar is never read, so such an aggregate may inherit a
+  global `period-source=business-calendar`; it said every boundary other than `END_OF_DAY` failed.
+  No skill, rule or script changed.
+
 ## 0.60.1-5 — targets Essentials 0.60.1
 
 - **Closing-books scheduled scan** — the eventsourced-aggregates reference says the scan calls the aggregate loader

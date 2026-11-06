@@ -172,8 +172,10 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
      * business calendar ({@link ClosingBooksPeriodSource#BUSINESS_CALENDAR}).
      *
      * @param businessCalendar the business calendar, or {@code null} to evaluate on {@code clock} in {@code zoneId}.
-     *                         When set, {@code timeBoundary} must be {@code END_OF_DAY}, and {@code zoneId} and
-     *                         {@code clock} are not used and may be null
+     *                         When set, {@code zoneId} and {@code clock} are not used and may be null, and
+     *                         {@code timeBoundary} must be {@code END_OF_DAY} - except that a policy other than
+     *                         {@code TIME_BOUNDARY} or {@code EVENT_COUNT_OR_TIME_BOUNDARY} may keep boundary
+     *                         {@code NONE}, where the calendar is never read
      */
     BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
                                        ClosingBooksDefaultPolicyType defaultPolicy,
@@ -190,7 +192,11 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         this.defaultPolicy = requireNonNull(defaultPolicy, "No defaultPolicy provided");
         this.timeBoundary = requireNonNull(timeBoundary, "No timeBoundary provided");
         this.businessCalendar = businessCalendar;
-        if (businessCalendar != null && timeBoundary != ClosingBooksTimeBoundary.END_OF_DAY) {
+        // The calendar is read wherever the boundary is evaluated (shouldRolloverOnAccess for a time-boundary policy,
+        // nextPeriodId for every policy) unless the boundary is NONE. Only a policy that is not a time-boundary one
+        // may keep a NONE boundary, so only there is a calendar never read and its boundary left unchecked
+        if (businessCalendar != null && !businessCalendarIsNeverRead(defaultPolicy, timeBoundary) &&
+                timeBoundary != ClosingBooksTimeBoundary.END_OF_DAY) {
             throw new IllegalArgumentException("A business calendar can only be used with time boundary END_OF_DAY, not " + timeBoundary);
         }
         this.zoneId = businessCalendar != null && zoneId == null ? UNUSED_ZONE_ID : requireNonNull(zoneId, "No zoneId provided");
@@ -295,6 +301,14 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
     }
 
     private static boolean requiresCurrentPeriodIdProvider(ClosingBooksDefaultPolicyType defaultPolicy) {
+        return usesTimeBoundary(defaultPolicy);
+    }
+
+    private static boolean businessCalendarIsNeverRead(ClosingBooksDefaultPolicyType defaultPolicy, ClosingBooksTimeBoundary timeBoundary) {
+        return !usesTimeBoundary(defaultPolicy) && timeBoundary == ClosingBooksTimeBoundary.NONE;
+    }
+
+    private static boolean usesTimeBoundary(ClosingBooksDefaultPolicyType defaultPolicy) {
         return switch (defaultPolicy) {
             case TIME_BOUNDARY, EVENT_COUNT_OR_TIME_BOUNDARY -> true;
             case MANUAL_ONLY, EVENT_COUNT, EXPLICIT_ONLY, UNSPECIFIED -> false;
@@ -508,7 +522,9 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
          * Takes the days of an {@link ClosingBooksTimeBoundary#END_OF_DAY} boundary from a business calendar instead of
          * the clock ({@link ClosingBooksPeriodSource#BUSINESS_CALENDAR}): the books roll when the calendar records that
          * a business day closed. With a calendar, {@link #setClock(Clock)} and {@link #setZoneId(ZoneId)} are not used
-         * and may be left unset, and any boundary other than {@code END_OF_DAY} is rejected by {@link #build()}.
+         * and may be left unset. Any boundary other than {@code END_OF_DAY} is rejected by {@link #build()}, except
+         * boundary {@code NONE} for a policy other than {@code TIME_BOUNDARY} or {@code EVENT_COUNT_OR_TIME_BOUNDARY},
+         * which never reads the calendar.
          *
          * @param businessCalendar optional - {@code null} evaluates on the clock
          * @return this builder
@@ -520,7 +536,9 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
 
         /**
          * @return the new {@link BuiltInClosingBooksPolicyEvaluator}
-         * @throws IllegalArgumentException if a business calendar is set with a boundary other than {@code END_OF_DAY}
+         * @throws IllegalArgumentException if a business calendar is set with a boundary other than {@code END_OF_DAY},
+         *                                  unless the boundary is {@code NONE} and the policy is neither
+         *                                  {@code TIME_BOUNDARY} nor {@code EVENT_COUNT_OR_TIME_BOUNDARY}
          */
         public BuiltInClosingBooksPolicyEvaluator<AGGREGATE> build() {
             return new BuiltInClosingBooksPolicyEvaluator<>(aggregateType,
