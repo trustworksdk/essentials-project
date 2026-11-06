@@ -137,9 +137,16 @@ made that happen before a resolution, and an application resolves while building
 closing-books policy. Application beans are created before auto-configured ones, so those resolutions found empty
 registries and silently got the global defaults, which the caching provider then kept.
 
-Both configuration resolvers now wait for the registrar. If you declare aggregates and build their repositories as
-beans, the values you annotated now apply where the defaults applied before - snapshot interval and mode, closing-books
-trigger, boundary and time zone. In the trading demo, `Account` was snapshotted every 10 events instead of 100 and
+The starter's default policy registries now register the declared aggregates' policies themselves before they answer
+their first read, so every reader sees them: the starter's configuration resolvers, a resolver you supply in their
+place, and a bean of yours resolving while it is being built. The one exception is a read made while an
+`EssentialsAggregateDeclarations` bean (or something it depends on) is itself being created: it sees the registry
+without the declared policies. This does not cover a policy registry bean you supply yourself: it still gets the
+declared policies only when `AggregateDeclarationPolicyRegistrar` runs; to be safe for reads made before that, it
+must register them itself with `AggregateDeclarationPolicyRegistrar.registerDeclaredSnapshotPolicies` /
+`registerDeclaredClosingBooksPolicies`. If you declare aggregates and build their repositories as beans, the values
+you annotated now apply where the defaults applied before - snapshot interval and mode, closing-books trigger,
+boundary and time zone. In the trading demo, `Account` was snapshotted every 10 events instead of 100 and
 closed its books at UTC end of day instead of New York's. Check your annotations say what you want.
 `DeclaredAggregatePolicyResolutionOrderTest` reproduces it.
 

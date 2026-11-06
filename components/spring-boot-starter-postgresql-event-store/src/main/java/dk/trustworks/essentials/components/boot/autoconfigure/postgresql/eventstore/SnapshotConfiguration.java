@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsProperties;
+import dk.trustworks.essentials.components.eventsourced.aggregates.EssentialsAggregateDeclarations;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
@@ -66,14 +67,26 @@ public class SnapshotConfiguration {
      * Provides an {@link AggregateSnapshotPolicyRegistry} bean for managing aggregate snapshot policies.
      * If a custom implementation of {@link AggregateSnapshotPolicyRegistry} is not defined, this method
      * supplies a default in-memory implementation.
+     * <p>
+     * The default registry registers the {@link AggregateSnapshotPolicy} of every
+     * {@link EssentialsAggregateDeclarations declared} aggregate before it answers its first read, so every reader -
+     * including an application-supplied {@link AggregateSnapshotConfigurationResolver} or an application bean resolving
+     * while it is being built - sees the declared policies; the one exception is a read made while an
+     * {@link EssentialsAggregateDeclarations} bean (or something it depends on) is itself being created, which sees the
+     * registry without them. This does not cover an application-supplied registry: it gets them from
+     * {@link AggregateDeclarationPolicyRegistrar} only when that registrar runs (it needs
+     * {@link ClosingBooksConfiguration}), so a read before then finds them missing; such a registry must register the declared policies itself
+     * (see {@link AggregateDeclarationPolicyRegistrar#registerDeclaredSnapshotPolicies}) to be safe for early readers.
      *
+     * @param declarations every {@link EssentialsAggregateDeclarations} bean in the context; may be empty. Read on the
+     *                     registry's first read, not here
      * @return an instance of {@link AggregateSnapshotPolicyRegistry}, specifically an
      *         {@link InMemoryAggregateSnapshotPolicyRegistry}.
      */
     @Bean
     @ConditionalOnMissingBean
-    public AggregateSnapshotPolicyRegistry aggregateSnapshotPolicyRegistry() {
-        return new InMemoryAggregateSnapshotPolicyRegistry();
+    public AggregateSnapshotPolicyRegistry aggregateSnapshotPolicyRegistry(ObjectProvider<EssentialsAggregateDeclarations> declarations) {
+        return new DeclaredPoliciesAggregateSnapshotPolicyRegistry(() -> declarations.orderedStream().toList());
     }
 
     /**
@@ -99,25 +112,15 @@ public class SnapshotConfiguration {
      * @param properties the {@link EssentialsEventStoreProperties} providing configuration properties
      *                   for the event store and snapshot behavior.
      * @param registry   the {@link AggregateSnapshotPolicyRegistry} managing the snapshot policies
-     *                   for the aggregates.
-     * @param declarationPolicyRegistrar the registrar copying declared aggregates' policies into {@code registry};
-     *                                   absent when {@link ClosingBooksConfiguration} is not active
-     * <p>
-     * Takes the {@link AggregateDeclarationPolicyRegistrar} so that it has run before anything can resolve: an
-     * application resolves its aggregates' configuration while its own beans are being built (a
-     * {@code StatefulAggregateRepository} bean does, through its snapshot repository provider), application beans are
-     * created before auto-configured ones, and a resolution that came first found empty registries and silently got
-     * the global defaults for every declared aggregate.
+     *                   for the aggregates. The default registry holds the declared aggregates' policies from its
+     *                   first read on (see {@link #aggregateSnapshotPolicyRegistry}).
      * @return an instance of {@link AggregateSnapshotConfigurationResolver} for resolving snapshot
      *         configurations based on the provided properties and policies.
      */
     @Bean
     @ConditionalOnMissingBean
     public AggregateSnapshotConfigurationResolver aggregateSnapshotConfigurationResolver(EssentialsEventStoreProperties properties,
-                                                                                        AggregateSnapshotPolicyRegistry registry,
-                                                                                        ObjectProvider<AggregateDeclarationPolicyRegistrar> declarationPolicyRegistrar) {
-        // Created - and so registered - before this resolver exists; see above
-        declarationPolicyRegistrar.getIfAvailable();
+                                                                                        AggregateSnapshotPolicyRegistry registry) {
         return new DefaultAggregateSnapshotConfigurationResolver(properties, registry);
     }
 

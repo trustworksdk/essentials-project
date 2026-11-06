@@ -18,6 +18,17 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.events
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 
+/**
+ * Resolves the closing-books configuration of an aggregate type from the properties and its registered policy.
+ * <p>
+ * An application-supplied implementation that reads the starter's default {@code AggregateClosingBooksPolicyRegistry}
+ * sees the policies of the {@code EssentialsAggregateDeclarations}-declared aggregates, also while the application's
+ * beans are still being built; nothing has to wait for {@link AggregateDeclarationPolicyRegistrar}. The one exception
+ * is a read made while an {@code EssentialsAggregateDeclarations} bean (or something it depends on) is itself being
+ * created, which sees the registry without them. The starter does not do this for an application-supplied registry:
+ * such a registry has the declared policies before the registrar runs only when it registers them itself (see
+ * {@link AggregateDeclarationPolicyRegistrar#registerDeclaredClosingBooksPolicies}).
+ */
 public interface AggregateClosingBooksConfigurationResolver {
     ResolvedAggregateClosingBooksConfiguration resolve(AggregateType aggregateType,
                                                        Class<?> aggregateImplementationType);

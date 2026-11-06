@@ -18,7 +18,7 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.EssentialsAggregateDeclarations;
-import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateClosingBooksPolicy;
+import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import org.junit.jupiter.api.Test;
@@ -29,12 +29,13 @@ import org.springframework.context.annotation.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * A declared aggregate's policy annotations reach the registries through {@link AggregateDeclarationPolicyRegistrar},
- * and an application resolves its aggregate's configuration while its own beans are being built - a
+ * An application resolves its aggregate's configuration while its own beans are being built - a
  * {@code StatefulAggregateRepository} bean resolves its snapshot repository in its builder. Application beans are
- * created before auto-configured ones, so a resolution that does not wait for the registrar finds empty registries and
+ * created before auto-configured ones, so a resolution that reads a registry not yet holding the declared policies
  * silently gets the global defaults: the trading demo's {@code @AggregateSnapshotPolicy(everyNEvents = 100)} snapshotted
- * every 10 events. These tests resolve from application beans and expect the annotations.
+ * every 10 events. The default registries register the declared policies before their first read. These tests resolve
+ * from application beans, through the starter's resolvers and through application-supplied ones, and expect the
+ * annotations.
  */
 class DeclaredAggregatePolicyResolutionOrderTest {
     private static final AggregateType DECLARED = AggregateType.of("Declared");
@@ -63,6 +64,58 @@ class DeclaredAggregatePolicyResolutionOrderTest {
             assertThat(resolved.zoneId()).isEqualTo("America/New_York");
             assertThat(resolved.enabled()).isFalse();
         });
+    }
+
+    /**
+     * The registries are populated with the declared policies whoever reads them: an application that replaces both
+     * resolvers with its own still gets the annotation values, not the global defaults.
+     */
+    @Test
+    void declared_policies_apply_to_an_application_supplied_resolver_resolving_while_the_application_starts() {
+        contextRunner.withUserConfiguration(ApplicationSuppliedResolvers.class)
+                     .run(ctx -> {
+                         assertThat(ctx).hasNotFailed();
+                         assertThat(ctx.getBean(AggregateSnapshotConfigurationResolver.class)).isInstanceOf(ApplicationSnapshotResolver.class);
+                         assertThat(ctx.getBean(AggregateClosingBooksConfigurationResolver.class)).isInstanceOf(ApplicationClosingBooksResolver.class);
+
+                         var snapshot = ctx.getBean(ResolvedAggregateSnapshotConfiguration.class);
+                         assertThat(snapshot.everyNEvents()).isEqualTo(7);
+                         assertThat(snapshot.mode()).isEqualTo(SnapshotExecutionMode.ASYNC_IN_MEMORY);
+
+                         var closingBooks = ctx.getBean(ResolvedAggregateClosingBooksConfiguration.class);
+                         assertThat(closingBooks.zoneId()).isEqualTo("America/New_York");
+                         assertThat(closingBooks.enabled()).isFalse();
+                     });
+    }
+
+    /**
+     * Replaces both auto-configured resolvers, so nothing in the starter's resolver beans orders the reads
+     */
+    @Configuration
+    static class ApplicationSuppliedResolvers {
+        @Bean
+        AggregateSnapshotConfigurationResolver applicationSnapshotResolver(EssentialsEventStoreProperties properties,
+                                                                           AggregateSnapshotPolicyRegistry registry) {
+            return new ApplicationSnapshotResolver(properties, registry);
+        }
+
+        @Bean
+        AggregateClosingBooksConfigurationResolver applicationClosingBooksResolver(EssentialsEventStoreProperties properties,
+                                                                                   AggregateClosingBooksPolicyRegistry registry) {
+            return new ApplicationClosingBooksResolver(properties, registry);
+        }
+    }
+
+    static class ApplicationSnapshotResolver extends DefaultAggregateSnapshotConfigurationResolver {
+        ApplicationSnapshotResolver(EssentialsEventStoreProperties properties, AggregateSnapshotPolicyRegistry registry) {
+            super(properties, registry);
+        }
+    }
+
+    static class ApplicationClosingBooksResolver extends DefaultAggregateClosingBooksConfigurationResolver {
+        ApplicationClosingBooksResolver(EssentialsEventStoreProperties properties, AggregateClosingBooksPolicyRegistry registry) {
+            super(properties, registry);
+        }
     }
 
     /**
