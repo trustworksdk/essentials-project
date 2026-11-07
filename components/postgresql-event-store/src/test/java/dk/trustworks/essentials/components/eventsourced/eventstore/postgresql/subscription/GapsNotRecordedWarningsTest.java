@@ -22,6 +22,7 @@ import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.shared.functional.tuple.Pair;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
 
@@ -32,7 +33,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class GapsNotRecordedWarningsTest {
-    private static final AggregateType ORDERS = AggregateType.of("Orders");
+    private static final AggregateType ORDERS                              = AggregateType.of("Orders");
+    private static final long          SUMMARY_INTERVAL_PASSED_SINCE_START = GapsNotRecordedWarnings.SUMMARY_INTERVAL.toNanos();
 
     private final AtomicLong                  nanoTime = new AtomicLong();
     private       Logger                      logger;
@@ -99,6 +101,53 @@ class GapsNotRecordedWarningsTest {
         assertThat(logged(Level.WARN)).hasSize(2).allSatisfy(warn -> assertThat(warn.getThrowableProxy()).isNotNull());
     }
 
+    @Test
+    void a_subscriber_that_stopped_being_active_while_failing_WARNs_with_the_stack_trace_when_it_fails_again() {
+        var orderView = resumePoint("OrderView");
+        warnings.notSaved(List.of(orderView), notRecorded(orderView));
+        // Stopped, unsubscribed or lost its lock: no later save includes its resume point
+        warnings.forgetAllBut(Set.of());
+        nanoTime.addAndGet(Duration.ofHours(2).toNanos());
+
+        warnings.notSaved(List.of(orderView), notRecorded(orderView));
+
+        assertThat(logged(Level.WARN)).hasSize(2).allSatisfy(warn -> assertThat(warn.getThrowableProxy()).isNotNull());
+    }
+
+    @Test
+    void forgetting_the_inactive_keeps_an_active_subscriber_that_is_failing() {
+        var orderView = resumePoint("OrderView");
+        warnings.notSaved(List.of(orderView), notRecorded(orderView));
+        warnings.forgetAllBut(Set.of(Pair.of(orderView.getSubscriberId(), ORDERS)));
+
+        warnings.notSaved(List.of(orderView), notRecorded(orderView));
+
+        assertThat(logged(Level.WARN)).hasSize(1);
+        assertThat(warnings.isTrackingAny()).isTrue();
+    }
+
+    @Test
+    void a_newly_failing_subscriber_does_not_reset_the_count_of_one_already_failing() {
+        var orderView   = resumePoint("OrderView");
+        var invoiceView = resumePoint("InvoiceView");
+        warnings.notSaved(List.of(orderView, invoiceView), notRecorded(orderView));
+        for (int failure = 0; failure < 3; failure++) {
+            nanoTime.addAndGet(Duration.ofSeconds(1).toNanos());
+            warnings.notSaved(List.of(orderView, invoiceView), notRecorded(orderView));
+        }
+        nanoTime.addAndGet(Duration.ofSeconds(1).toNanos());
+        // InvoiceView fails for the first time, with OrderView failing once more
+        warnings.notSaved(List.of(orderView, invoiceView), notRecorded(orderView, invoiceView));
+
+        nanoTime.set(SUMMARY_INTERVAL_PASSED_SINCE_START);
+        warnings.notSaved(List.of(orderView, invoiceView), notRecorded(orderView));
+
+        var warns = logged(Level.WARN);
+        assertThat(warns).hasSize(3);
+        assertThat(warns.get(2).getThrowableProxy()).isNull();
+        assertThat(warns.get(2).getFormattedMessage()).contains("OrderView").contains("5 time(s)");
+    }
+
     private List<ILoggingEvent> logged(Level level) {
         return logAppender.list.stream().filter(event -> level.equals(event.getLevel())).toList();
     }
@@ -107,7 +156,11 @@ class GapsNotRecordedWarningsTest {
         return new SubscriptionResumePoint(SubscriberId.of(subscriber), ORDERS, GlobalEventOrder.of(10), OffsetDateTime.now(Clock.systemUTC()));
     }
 
-    private static GapRecordingBeforeSaveDurableSubscriptionRepository.GapsNotRecordedException notRecorded(SubscriptionResumePoint resumePoint) {
-        return GapRecordingBeforeSaveDurableSubscriptionRepository.GapsNotRecordedException.adding(null, resumePoint, new IllegalStateException("gap handler failed"));
+    private static GapRecordingBeforeSaveDurableSubscriptionRepository.GapsNotRecordedException notRecorded(SubscriptionResumePoint... resumePoints) {
+        GapRecordingBeforeSaveDurableSubscriptionRepository.GapsNotRecordedException result = null;
+        for (var resumePoint : resumePoints) {
+            result = GapRecordingBeforeSaveDurableSubscriptionRepository.GapsNotRecordedException.adding(result, resumePoint, new IllegalStateException("gap handler failed"));
+        }
+        return result;
     }
 }

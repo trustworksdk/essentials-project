@@ -504,6 +504,15 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     private void saveResumePointsOfActiveSubscribers(Predicate<SubscriptionResumePoint> filter) {
         List<SubscriptionResumePoint> resumePoints = List.of();
         try {
+            if (gapsNotRecordedWarnings.isTrackingAny()) {
+                // A subscription that stopped, was unsubscribed or lost its lock while failing is in no later save - forget it.
+                // Taken before the filter: an active subscription below the threshold is still failing
+                gapsNotRecordedWarnings.forgetAllBut(subscribers.entrySet()
+                                                                .stream()
+                                                                .filter(subscription -> subscription.getValue().isActive())
+                                                                .map(Map.Entry::getKey)
+                                                                .collect(Collectors.toSet()));
+            }
             resumePoints = subscribers.values()
                                       .stream()
                                       .filter(EventStoreSubscription::isActive)

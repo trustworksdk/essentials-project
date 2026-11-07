@@ -108,13 +108,15 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
      * check is never written without its gaps recorded - a later save takes it.
      * <p>
      * Once waiting for one resume point's gaps to be recorded has run out or been interrupted (a {@link TimeoutException}
-     * or {@link InterruptedException} in the failure's cause chain), the gaps of the changed resume points after it are
-     * not recorded in this call either, and those are not saved: with the caller's unit of work still current, their
-     * recordings may be blocked by the same lock, and each would wait in turn. So one call waits for that at most once.
+     * or {@link InterruptedException} in the failure's cause chain), the changed resume points after it are tried with no
+     * wait left ({@link DeferredGapRecording#beforeResumePointSave(SubscriberId, AggregateType, long)} with a deadline that
+     * has passed): with the caller's unit of work still current, their recordings may be blocked by the same lock, and
+     * each would wait in turn. So one call waits for that at most once. One whose recording does not need to be waited for
+     * - nothing to record, say - is still saved; one whose recording would be waited for fails at once and is not saved.
      *
      * @throws GapsNotRecordedException after the delegate saved the other resume points, when the gaps of one or more
-     *                                  resume points could not be recorded, or were not tried after a wait that ran out
-     *                                  - those were not saved and stay changed
+     *                                  resume points could not be recorded, or not without a wait after a wait that ran
+     *                                  out - those were not saved and stay changed
      */
     @Override
     public void saveResumePoints(Collection<SubscriptionResumePoint> resumePoints) {
@@ -122,7 +124,7 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
         var                     saves       = new ArrayList<DeferredGapRecording.ResumePointSave>(resumePoints.size());
         var                     savable     = new ArrayList<SubscriptionResumePoint>(resumePoints.size());
         GapsNotRecordedException notRecorded = null;
-        RuntimeException         waitRanOut  = null;
+        var                      waitRanOut  = false;
         try {
             for (var resumePoint : resumePoints) {
                 // Whether a resume point is changed is not stable - its subscription may advance it any moment. The
@@ -131,19 +133,15 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
                 if (!resumePoint.isChanged()) {
                     continue;
                 }
-                if (waitRanOut != null) {
-                    notRecorded = GapsNotRecordedException.adding(notRecorded, resumePoint,
-                                                                  new IllegalStateException("not tried, as waiting for the gaps of an earlier resume point of this save to be recorded ran out or was interrupted",
-                                                                                            waitRanOut));
-                    continue;
-                }
                 try {
-                    saves.add(deferredGapRecording.beforeResumePointSave(resumePoint.getSubscriberId(), resumePoint.getAggregateType()));
+                    saves.add(waitRanOut
+                              ? deferredGapRecording.beforeResumePointSave(resumePoint.getSubscriberId(), resumePoint.getAggregateType(), System.nanoTime())
+                              : deferredGapRecording.beforeResumePointSave(resumePoint.getSubscriberId(), resumePoint.getAggregateType()));
                     savable.add(resumePoint);
                 } catch (RuntimeException e) {
                     notRecorded = GapsNotRecordedException.adding(notRecorded, resumePoint, e);
                     if (isWaitThatRanOutOrWasInterrupted(e)) {
-                        waitRanOut = e;
+                        waitRanOut = true;
                     }
                 }
             }

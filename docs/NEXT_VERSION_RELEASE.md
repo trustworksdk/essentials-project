@@ -487,8 +487,9 @@ always written before that save. A gap that fills before then costs no database 
 unchanged: no resume point is saved past a gap that is not recorded. The gap is written in a transaction of its own,
 committed before the save goes on, also when the save runs inside a unit of work of the caller's, or inside a Spring
 transaction with no unit of work bound yet - a rollback of that unit of work or transaction cannot take it back. There, the write runs on a virtual thread and is waited for at most 10 s per resume point, however many
-subscriptions the subscriber runs; if that runs out, that resume point and the changed resume points after it in the same
-save are not saved, without a wait of their own, and the next save tries them again (`9fa05c32c`). Should that
+subscriptions the subscriber runs; if that runs out, that resume point is not saved, and the changed resume points after
+it in the same save get no wait of their own: one with no gaps to write is still saved, one whose write would have to be
+waited for is not, and the next save tries those again (`9fa05c32c`, `<!-- fix:U-002 -->`). Should that
 write fail after the wait ran out, the failure is logged at WARN, naming the write's thread, and its gaps stay kept for
 the next save (`6a32ac597`). While such a write still runs, a later save or the
 subscription's end on that thread waits for it at most 10 s too, instead of hanging. Any acknowledgement, on any
@@ -509,7 +510,9 @@ to 5 s. A reset (`EventStoreSubscription#resetFrom`, `DefaultEventStoreSubscript
 whose gaps could not be written now fails with an exception instead of reporting a reset whose resume point was not
 saved (`85ad4303e`). When the manager's periodic or threshold save keeps failing that way for a subscriber and
 aggregate type, the first failure is logged at WARN with its stack trace, the repeats at DEBUG, and one WARN a minute
-counts them, instead of a WARN with a stack trace on every check (`5476460cc`).
+counts them, instead of a WARN with a stack trace on every check (`5476460cc`). Another subscriber's first failure no
+longer restarts that count, and a subscription that is no longer active is forgotten, so a failure after it subscribes
+again is a WARN with its stack trace again (`<!-- fix:U-002 -->`).
 
 There is nothing to configure. A few cases still write the gap at once, as before:
 

@@ -35,8 +35,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <p>
  * Per subscriber and aggregate type: the first failure is a WARN with the stack trace, the failures after it are DEBUG, and
  * once {@link #SUMMARY_INTERVAL} has passed since its last WARN the next failure is one WARN line, without a stack trace,
- * counting them. A save that no longer fails for a subscriber and aggregate type forgets it, so its next failure is a WARN
- * with the stack trace again.
+ * counting them. A save that no longer fails for a subscriber and aggregate type forgets it, and so does a save once its
+ * subscription is no longer active ({@link #forgetAllBut(Set)}), so its next failure is a WARN with the stack trace again.
+ * One subscriber's first failure never restarts the count of another that is already failing.
  * <p>
  * Not thread-safe: used only on the manager's single resume-point scheduler thread
  */
@@ -46,7 +47,8 @@ final class GapsNotRecordedWarnings {
     private final Logger       log;
     private final LongSupplier nanoTime;
     /**
-     * Each subscriber and aggregate type whose resume point the last save that included it could not save
+     * Each subscriber and aggregate type, of an active subscription, whose resume point the last save that included it
+     * could not save
      */
     private final Map<Pair<SubscriberId, AggregateType>, Failing> failing = new HashMap<>();
 
@@ -80,17 +82,22 @@ final class GapsNotRecordedWarnings {
                 }
             });
         }
-        var now = nanoTime.getAsLong();
-        if (notRecorded.keySet().stream().anyMatch(key -> !failing.containsKey(key))) {
+        var now           = nanoTime.getAsLong();
+        var anyNewlyFails = notRecorded.keySet().stream().anyMatch(key -> !failing.containsKey(key));
+        if (anyNewlyFails) {
             log.warn("Not all ResumePoint's were stored - the next periodic save tries again. While the same subscriber's resume point keeps failing, " +
                              "its failures are logged at DEBUG, with one WARN a minute counting them", e);
-            notRecorded.keySet().forEach(key -> failing.put(key, new Failing(now)));
-            return;
         }
         var summarised = 0;
         for (var entry : notRecorded.entrySet()) {
             var key        = entry.getKey();
             var stillFails = failing.get(key);
+            if (stillFails == null) {
+                // Reported by the WARN with the stack trace above
+                failing.put(key, new Failing(now));
+                continue;
+            }
+            // Already failing: counted towards its own summary, also when another subscriber's first failure was WARNed
             stillFails.failuresSinceWarn++;
             if (now - stillFails.lastWarnAt >= SUMMARY_INTERVAL.toNanos()) {
                 log.warn("[{}-{}] Resume point still not stored - it failed {} time(s) since the last WARN, as the gaps kept in memory could not be recorded. Latest: {}",
@@ -100,9 +107,29 @@ final class GapsNotRecordedWarnings {
                 summarised++;
             }
         }
-        if (summarised < notRecorded.size()) {
+        if (!anyNewlyFails && summarised < notRecorded.size()) {
             log.debug("Not all ResumePoint's were stored - the next periodic save tries again: {}", e.toString());
         }
+    }
+
+    /**
+     * @return whether a subscriber and aggregate type is tracked as failing - while not, {@link #forgetAllBut(Set)} has
+     * nothing to do
+     */
+    boolean isTrackingAny() {
+        return !failing.isEmpty();
+    }
+
+    /**
+     * Forgets every subscriber and aggregate type not in {@code active}: a subscription that stopped, was unsubscribed or
+     * lost its lock is in no later save, so no save would forget it - and should it subscribe again and fail, that
+     * failure is a WARN with the stack trace again, not counted towards an earlier episode
+     *
+     * @param active the subscribers and aggregate types whose subscriptions are active
+     */
+    void forgetAllBut(Set<Pair<SubscriberId, AggregateType>> active) {
+        requireNonNull(active, "No active provided");
+        failing.keySet().retainAll(active);
     }
 
     private static final class Failing {

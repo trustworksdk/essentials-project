@@ -450,12 +450,25 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * read afterwards has moved past
      *
      * @throws IllegalStateException the wait for the gates' recordings ran out, or the calling thread was interrupted while
-     *                               waiting - the caller must not save the resume point, and should not call this for
-     *                               the other resume points of the same save either: with its unit of work still current,
-     *                               their recordings may be blocked the same way
+     *                               waiting - the caller must not save the resume point, and should give the other resume
+     *                               points of the same save no wait
+     *                               ({@link #beforeResumePointSave(SubscriberId, AggregateType, long)} with a deadline that
+     *                               has passed): with its unit of work still current, their recordings may be blocked the
+     *                               same way
      */
     @Override
     public ResumePointSave beforeResumePointSave(SubscriberId subscriberId, AggregateType aggregateType) {
+        return beforeResumePointSave(subscriberId, aggregateType, System.nanoTime() + deferredGapsRecordingWait.toNanos());
+    }
+
+    /**
+     * {@link #beforeResumePointSave(SubscriberId, AggregateType)}, with the gates' recordings waited for until
+     * {@code waitEndsAt} (a {@link System#nanoTime()} value) instead of {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT}
+     * from now. When it has passed, a gate with nothing to record, or with no unit of work current on the calling thread
+     * (which records on the calling thread, not bounded by {@code waitEndsAt}), is unaffected, and a gate whose recording would be waited for throws at once
+     */
+    @Override
+    public ResumePointSave beforeResumePointSave(SubscriberId subscriberId, AggregateType aggregateType, long waitEndsAt) {
         requireNonNull(subscriberId, "No subscriberId provided");
         requireNonNull(aggregateType, "No aggregateType provided");
         var key   = new SubscriberAndAggregateType(subscriberId, aggregateType);
@@ -466,7 +479,6 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             var gates = runningDeliveryGates.get(key);
             if (gates != null) {
                 // One wait for the whole save, shared by its gates - not one wait per gate
-                var waitEndsAt = System.nanoTime() + deferredGapsRecordingWait.toNanos();
                 for (var gate : List.copyOf(gates)) {
                     gate.recordDeferredGapsCommitted(waitEndsAt);
                 }
@@ -478,8 +490,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             throw new IllegalStateException("Interrupted while recording the gaps of " + subscriberId + " for " + aggregateType + " kept in memory, before a resume point save", e);
         } catch (TimeoutException e) {
             save.close();
-            throw new IllegalStateException("Recording the gaps of " + subscriberId + " for " + aggregateType + " kept in memory did not finish within " +
-                                                    deferredGapsRecordingWait + ", before a resume point save", e);
+            throw new IllegalStateException("Recording the gaps of " + subscriberId + " for " + aggregateType + " kept in memory did not finish within the wait " +
+                                                    "left for this resume point save (at most " + deferredGapsRecordingWait + ")", e);
         } catch (RuntimeException e) {
             save.close();
             throw e;

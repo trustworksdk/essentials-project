@@ -130,30 +130,62 @@ class GapRecordingBeforeSaveDurableSubscriptionRepositoryTest {
 
     /**
      * A wait for the recording that ran out - blocked, say, by a lock the caller's unit of work holds - would run out for
-     * every later resume point blocked by the same lock: those are not tried, so one save waits once, not once per resume point
+     * every later resume point blocked by the same lock: those are tried with no wait left, so one save waits once, not
+     * once per resume point - and a later resume point with nothing to wait for is still saved, and not reported as failing
      */
     @Test
-    void after_a_recording_wait_runs_out_the_later_resume_points_of_the_save_are_not_tried_and_not_saved() {
-        var timedOut = persistedResumePoint("timed-out");
-        var later    = persistedResumePoint("later");
+    void after_a_recording_wait_runs_out_the_later_resume_points_are_tried_with_no_wait_left_and_only_those_that_would_wait_are_not_saved() {
+        var timedOut  = persistedResumePoint("timed-out");
+        var blocked   = persistedResumePoint("blocked");
+        var unrelated = persistedResumePoint("unrelated");
         timedOut.advanceResumeFromAndIncluding(GlobalEventOrder.of(20));
-        later.advanceResumeFromAndIncluding(GlobalEventOrder.of(20));
-        var gapRecording = mock(DeferredGapRecording.class);
-        when(gapRecording.beforeResumePointSave(timedOut.getSubscriberId(), ORDERS))
-                .thenThrow(new IllegalStateException("did not finish", new TimeoutException("recording blocked")));
-        var delegate = mock(DurableSubscriptionRepository.class);
+        blocked.advanceResumeFromAndIncluding(GlobalEventOrder.of(20));
+        unrelated.advanceResumeFromAndIncluding(GlobalEventOrder.of(20));
+        var waitEndsAt = new HashMap<SubscriberId, Long>();
+        var gapRecording = new DeferredGapRecording() {
+            @Override
+            public void deferGapRecordingUntilResumePointSave(SubscriberId subscriberId, AggregateType aggregateType) {
+            }
+
+            @Override
+            public ResumePointSave beforeResumePointSave(SubscriberId subscriberId, AggregateType aggregateType) {
+                return beforeResumePointSave(subscriberId, aggregateType, System.nanoTime() + Duration.ofSeconds(10).toNanos());
+            }
+
+            @Override
+            public ResumePointSave beforeResumePointSave(SubscriberId subscriberId, AggregateType aggregateType, long waitEnds) {
+                waitEndsAt.put(subscriberId, waitEnds);
+                if (subscriberId.equals(timedOut.getSubscriberId())) {
+                    throw new IllegalStateException("did not finish", new TimeoutException("recording blocked"));
+                }
+                if (subscriberId.equals(blocked.getSubscriberId()) && waitEnds - System.nanoTime() <= 0) {
+                    throw new IllegalStateException("no wait left", new TimeoutException("no time left"));
+                }
+                return () -> {
+                };
+            }
+        };
+        var handedToDelegate = new ArrayList<SubscriberId>();
+        var delegate         = mock(DurableSubscriptionRepository.class);
+        doAnswer(invocation -> {
+            Collection<SubscriptionResumePoint> resumePoints = invocation.getArgument(0);
+            resumePoints.forEach(resumePoint -> handedToDelegate.add(resumePoint.getSubscriberId()));
+            return null;
+        }).when(delegate).saveResumePoints(any());
 
         var repository = new GapRecordingBeforeSaveDurableSubscriptionRepository(delegate, gapRecording);
-        var thrown = catchThrowable(() -> repository.saveResumePoints(List.of(timedOut, later)));
+        var thrown = catchThrowable(() -> repository.saveResumePoints(List.of(timedOut, blocked, unrelated)));
 
-        verify(gapRecording, never()).beforeResumePointSave(later.getSubscriberId(), ORDERS);
-        verifyNoInteractions(delegate);
+        assertThat(waitEndsAt.get(blocked.getSubscriberId())).as("no wait left").isLessThanOrEqualTo(System.nanoTime());
+        assertThat(waitEndsAt.get(unrelated.getSubscriberId())).as("no wait left").isLessThanOrEqualTo(System.nanoTime());
+        assertThat(handedToDelegate).containsExactly(unrelated.getSubscriberId());
         assertThat(thrown).isInstanceOf(GapRecordingBeforeSaveDurableSubscriptionRepository.GapsNotRecordedException.class)
                           .hasMessageContaining("timed-out")
                           .hasRootCauseInstanceOf(TimeoutException.class);
-        assertThat(thrown.getSuppressed()).singleElement()
-                                          .satisfies(skipped -> assertThat(skipped).hasMessageContaining("later").hasMessageContaining("not tried"));
-        assertThat(later.isChanged()).as("left to the next save").isTrue();
+        var notRecorded = ((GapRecordingBeforeSaveDurableSubscriptionRepository.GapsNotRecordedException) thrown).notRecorded();
+        assertThat(notRecorded.keySet()).extracting(key -> key._1)
+                                        .containsExactly(timedOut.getSubscriberId(), blocked.getSubscriberId());
+        assertThat(blocked.isChanged()).as("left to the next save").isTrue();
     }
 
     @Test
