@@ -1,0 +1,1878 @@
+<meta charset="utf-8">
+<title>The Event Is The Record</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+:root {
+  /* Deliberately single visual world: an exchange terminal, painted explicitly so the
+     deck looks identical on any host theme. A projected deck must not change appearance
+     because the presenting machine's OS is set to light. The [data-mode="handout"]
+     block below is an author-provided light palette for printing and bright rooms. */
+  --ground:    #0B0F17;
+  --surface:   #131A26;
+  --surface-2: #0E141F;
+  --rule:      #232D3D;
+  --rule-soft: #1A222F;
+  --ink:       #E6EBF2;
+  --ink-dim:   #8A97AB;
+  --ink-faint: #5C6879;
+  --accent:    #F2A33C;
+  --accent-dim:#8A6427;
+  --gain:      #4FA870;
+  --cost:      #C9565A;
+  --code-str:  #9FC6A6;
+  --code-kw:   #C9A2E0;
+  --code-type: #7FB6D6;
+  --code-ann:  #F2A33C;
+  --code-com:  #5C6879;
+
+  --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-body:    "Newsreader", Georgia, "Times New Roman", serif;
+  --f-mono:    "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+:root[data-mode="handout"] {
+  --ground:    #F7F6F3;
+  --surface:   #FFFFFF;
+  --surface-2: #EFEDE8;
+  --rule:      #D2CEC4;
+  --rule-soft: #E3E0D8;
+  --ink:       #16202E;
+  --ink-dim:   #5A6675;
+  --ink-faint: #8D97A4;
+  --accent:    #B06A11;
+  --accent-dim:#D9B57E;
+  --gain:      #2F6F48;
+  --cost:      #9A2F34;
+  --code-str:  #2F6F48;
+  --code-kw:   #6D3C93;
+  --code-type: #1C5D85;
+  --code-ann:  #B06A11;
+  --code-com:  #8D97A4;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--ground);
+  color: var(--ink);
+}
+
+body {
+  font-family: var(--f-body);
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ---- language switching --------------------------------------------------
+   Danish is hidden by the base rule so the deck never flashes both languages
+   before the script sets data-lang on the root element. */
+[lang="da"] { display: none; }
+html[data-lang="da"] [lang="da"] { display: revert; }
+html[data-lang="da"] [lang="en"] { display: none; }
+
+/* ---- stage --------------------------------------------------------------- */
+#stage {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+#canvas {
+  position: relative;
+  width: min(100%, 1600px);
+  aspect-ratio: 16 / 9;
+  max-height: calc(100vh - 48px);
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  container-type: size;
+  overflow: hidden;
+}
+
+.slide {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  gap: 2.2cqh;
+  padding: 6cqh 5cqw 9cqh;
+  animation: rise 140ms ease-out;
+  /* A slide that grows past the canvas scrolls rather than clipping silently. */
+  overflow-y: auto;
+}
+.slide.on { display: flex; }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(0.8cqh); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .slide { animation: none; }
+}
+
+/* ---- type ---------------------------------------------------------------- */
+.eyebrow {
+  font-family: var(--f-mono);
+  font-size: 1.55cqh;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.eyebrow .sep { color: var(--ink-faint); margin: 0 0.6em; }
+.eyebrow .plain { color: var(--ink-faint); }
+
+h1 {
+  font-family: var(--f-display);
+  font-weight: 800;
+  font-size: 8.4cqh;
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+  margin: 0;
+}
+h2 {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: 4.6cqh;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+  margin: 0;
+}
+h3 {
+  font-family: var(--f-mono);
+  font-weight: 600;
+  font-size: 1.75cqh;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin: 0;
+}
+
+p, li {
+  font-size: 2.5cqh;
+  line-height: 1.45;
+  font-weight: 300;
+  margin: 0;
+  max-width: 62ch;
+}
+p.lede { font-size: 3.1cqh; }
+p.small, li.small { font-size: 2.1cqh; }
+em { color: var(--accent); font-style: italic; }
+strong { font-weight: 400; color: var(--ink); border-bottom: 1px solid var(--accent-dim); }
+
+ul { margin: 0; padding-left: 1.4em; display: flex; flex-direction: column; gap: 1.1cqh; }
+ul.tight { gap: 0.6cqh; }
+li::marker { color: var(--accent-dim); }
+
+code, .mono { font-family: var(--f-mono); font-size: 0.9em; }
+p code, li code, td code { color: var(--accent); }
+
+/* ---- layout helpers ------------------------------------------------------ */
+.row { display: flex; gap: 3cqw; align-items: flex-start; }
+.row > .half { flex: 1 1 0; min-width: 0; }
+.row.grow { flex: 1 1 auto; min-height: 0; }
+.col { display: flex; flex-direction: column; gap: 2cqh; min-width: 0; }
+.spread { flex: 1 1 auto; }
+.center { justify-content: center; }
+
+/* ---- code panel ---------------------------------------------------------- */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.panel > figcaption {
+  font-family: var(--f-mono);
+  font-size: 1.5cqh;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  padding: 1.1cqh 1.4cqw;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface-2);
+  display: flex;
+  justify-content: space-between;
+  gap: 1em;
+}
+.panel > figcaption .path { color: var(--ink-faint); }
+.panel pre {
+  margin: 0;
+  padding: 1.6cqh 1.4cqw;
+  overflow: auto;
+  flex: 1 1 auto;
+}
+.panel code {
+  font-family: var(--f-mono);
+  font-size: 1.72cqh;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre;
+  tab-size: 4;
+}
+.panel.sm code { font-size: 1.5cqh; }
+.panel.lg code { font-size: 1.95cqh; }
+
+.tok-com { color: var(--code-com); font-style: italic; }
+.tok-str { color: var(--code-str); }
+.tok-kw  { color: var(--code-kw); }
+.tok-typ { color: var(--code-type); }
+.tok-ann { color: var(--code-ann); }
+.tok-num { color: var(--code-str); }
+
+/* ---- newcomer gloss ------------------------------------------------------
+   Plain-language restatement for the half of the room that has never worked
+   on an event-sourced system. Used only where the concept is genuinely new,
+   not as decoration on every slide. */
+.gloss {
+  border-left: 2px solid var(--accent-dim);
+  padding-left: 1.2cqw;
+  font-size: 2.05cqh;
+  line-height: 1.4;
+  font-weight: 300;
+  color: var(--ink-dim);
+  max-width: 62ch;
+}
+.gloss b {
+  display: block;
+  font-family: var(--f-mono);
+  font-size: 0.72em;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 0;
+  margin-bottom: 0.45em;
+}
+
+/* ---- trade-off block ----------------------------------------------------- */
+.tradeoff {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+.tradeoff > div { padding: 1.8cqh 1.6cqw; display: flex; flex-direction: column; gap: 0.9cqh; }
+.tradeoff > div + div { border-left: 1px solid var(--rule); }
+.tradeoff h3 { font-size: 1.55cqh; }
+.tradeoff .gain h3 { color: var(--gain); }
+.tradeoff .cost h3 { color: var(--cost); }
+.tradeoff p { font-size: 2.1cqh; max-width: none; }
+
+/* ---- data table ---------------------------------------------------------- */
+.tbl-wrap { overflow-x: auto; border: 1px solid var(--rule); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 1.95cqh; }
+th, td { text-align: left; padding: 1.1cqh 1.2cqw; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+th {
+  font-family: var(--f-mono);
+  font-size: 1.45cqh;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+td { font-weight: 300; }
+tr:last-child td { border-bottom: 0; }
+td.num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; color: var(--accent); white-space: nowrap; }
+
+/* ---- ticker / big statement --------------------------------------------- */
+.statement {
+  font-family: var(--f-display);
+  font-weight: 500;
+  font-size: 3.4cqh;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+  max-width: 46ch;
+}
+.kicker {
+  font-family: var(--f-mono);
+  font-size: 1.6cqh;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.chain { display: flex; align-items: center; gap: 1cqw; flex-wrap: wrap; font-family: var(--f-mono); font-size: 1.9cqh; }
+.chain .node { border: 1px solid var(--rule); background: var(--surface); padding: 1cqh 1.1cqw; color: var(--ink); }
+.chain .node b { display: block; font-weight: 400; font-size: 0.78em; color: var(--ink-faint); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.35em; }
+.chain .arrow { color: var(--accent); }
+
+/* ---- rail ---------------------------------------------------------------- */
+#rail {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 5.6cqh;
+  border-top: 1px solid var(--rule);
+  background: var(--ground);
+  display: flex;
+  align-items: center;
+  gap: 1.6cqw;
+  padding: 0 1.6cqw;
+  font-family: var(--f-mono);
+  font-size: 1.5cqh;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+#rail .act { color: var(--accent); text-transform: uppercase; }
+#rail .fill { flex: 1 1 auto; }
+#rail .bar { position: absolute; left: 0; top: -1px; height: 1px; background: var(--accent); }
+#rail b { font-weight: 500; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+
+/* ---- controls ------------------------------------------------------------ */
+#ctrl {
+  position: absolute;
+  top: 1.6cqh; right: 1.4cqw;
+  display: flex;
+  gap: 0.6cqw;
+  z-index: 5;
+}
+#ctrl button {
+  font-family: var(--f-mono);
+  font-size: 1.45cqh;
+  letter-spacing: 0.1em;
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid var(--rule);
+  padding: 0.7cqh 0.8cqw;
+  cursor: pointer;
+}
+#ctrl button:hover { color: var(--accent); border-color: var(--accent-dim); }
+#ctrl button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#ctrl button[aria-pressed="true"] { color: var(--ground); background: var(--accent); border-color: var(--accent); }
+
+#note {
+  position: absolute;
+  left: 0; right: 0; bottom: 5.6cqh;
+  background: var(--surface);
+  border-top: 1px solid var(--accent-dim);
+  padding: 1.6cqh 1.6cqw;
+  font-size: 2cqh;
+  font-weight: 300;
+  color: var(--ink-dim);
+  display: none;
+  z-index: 4;
+}
+#note.on { display: block; }
+#note b { color: var(--accent); border: 0; font-family: var(--f-mono); font-size: 0.8em; letter-spacing: 0.1em; text-transform: uppercase; display: block; margin-bottom: 0.5em; }
+
+#help {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--ground) 94%, transparent);
+  display: none;
+  place-items: center;
+  z-index: 10;
+}
+#help.on { display: grid; }
+#help dl {
+  font-family: var(--f-mono);
+  font-size: 2cqh;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 1.2cqh 2cqw;
+  margin: 0;
+}
+#help dt { color: var(--accent); }
+#help dd { margin: 0; color: var(--ink-dim); }
+
+svg .lane { fill: var(--surface); stroke: var(--rule); }
+svg .lbl { font-family: var(--f-mono); font-size: 15px; fill: var(--ink); }
+svg .lbl-dim { font-family: var(--f-mono); font-size: 11px; fill: var(--ink-faint); letter-spacing: 1.2px; }
+svg .flow { stroke: var(--accent); fill: none; }
+svg .flow-head { fill: var(--accent); }
+</style>
+
+<div id="stage">
+<div id="canvas">
+
+<div id="ctrl">
+  <button id="langBtn" type="button" title="Language">EN / DA</button>
+  <button id="modeBtn" type="button" aria-pressed="false" title="Handout (light) mode">HANDOUT</button>
+  <button id="noteBtn" type="button" aria-pressed="false" title="Speaker note (N)">NOTE</button>
+  <button id="apxBtn" type="button" title="Appendix &mdash; the four wrong answers (A)">APPX</button>
+  <button id="helpBtn" type="button" title="Keys (?)">?</button>
+</div>
+
+<!-- =================================================================== 00 -->
+<section class="slide" data-act="Title" data-min="0"
+  data-note-en="Start the clock here. Say the slot length out loud so the room knows there is a Q and A at the end and does not interrupt. Do not read the subtitle."
+  data-note-da="Start uret her. Sig slottets laengde hoejt, saa rummet ved at der er Q og A til sidst og ikke afbryder. Laes ikke undertitlen op.">
+  <div class="spread"></div>
+  <div class="eyebrow"><span lang="en">Trustworks Essentials</span><span lang="da">Trustworks Essentials</span><span class="sep">/</span><span class="plain">DDD &middot; Event Modeling &middot; Slicing</span></div>
+  <h1><span lang="en">The Event Is<br>The Record</span><span lang="da">Eventet Er<br>Kilden</span></h1>
+  <p class="lede" lang="en">Java building blocks for event-sourced systems &mdash; shown through one instrument, one slice, and the trade-offs nobody puts on the box.</p>
+  <p class="lede" lang="da">Java-byggeklodser til event-sourcede systemer &mdash; vist gennem ét instrument, én slice, og de trade-offs ingen skriver på æsken.</p>
+  <div class="spread"></div>
+  <div class="kicker"><span lang="en">36 minutes, then questions</span><span lang="da">36 minutter, derefter spørgsmål</span></div>
+</section>
+
+<!-- =================================================================== 01 -->
+<section class="slide" data-act="0 &mdash; Hook" data-min="1"
+  data-note-en="Ask for a show of hands: who has been asked why a row looks the way it does, and could not answer? That question is the whole talk. Do not defend event sourcing yet."
+  data-note-da="Bed om haandsoprakning: hvem er blevet spurgt hvorfor en raekke ser ud som den goer, og kunne ikke svare? Det spoergsmaal er hele oplaegget. Forsvar ikke event sourcing endnu.">
+  <div class="eyebrow"><span lang="en">The problem</span><span lang="da">Problemet</span></div>
+  <h2><span lang="en">A requirement arrives. State survives. The reasoning does not.</span><span lang="da">Et krav ankommer. Tilstanden overlever. Begrundelsen gør ikke.</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="half col center">
+      <p lang="en">The instrument row says <code>suspended = true</code>.</p>
+      <p lang="da">Instrument-rækken siger <code>suspended = true</code>.</p>
+      <ul class="tight">
+        <li lang="en">Since when?</li><li lang="da">Siden hvornår?</li>
+        <li lang="en">On whose decision?</li><li lang="da">På hvis beslutning?</li>
+        <li lang="en">With what reason?</li><li lang="da">Med hvilken begrundelse?</li>
+        <li lang="en">What did it look like at quarter close?</li><li lang="da">Hvordan så det ud ved kvartalsafslutning?</li>
+      </ul>
+      <p lang="en"><strong>An <code>UPDATE</code> answered none of these, and it never will.</strong></p>
+      <p lang="da"><strong>Et <code>UPDATE</code> besvarede ingen af dem, og gør det aldrig.</strong></p>
+    </div>
+    <figure class="panel half">
+      <figcaption><span>the audit trail you actually have</span><span class="path">instruments</span></figcaption>
+      <pre><code class="plain">instrument_id  symbol  display_name  suspended
+-------------  ------  ------------  ---------
+INS-7f3a       AAPL    Apple Inc.    true
+
+-- and that is the entire history</code></pre>
+    </figure>
+  </div>
+</section>
+
+<!-- =================================================================== 02 -->
+<section class="slide" data-act="0 &mdash; Hook" data-min="0.5"
+  data-note-en="One breath on each line. This is the map, not content. If you are behind schedule already, cut Act 3 slides six and nine, not this slide."
+  data-note-da="Et aandedrag pr. linje. Dette er kortet, ikke indhold. Er du allerede bagud, skaer Act 3 slide seks og ni, ikke denne slide.">
+  <div class="eyebrow"><span lang="en">Where we are going</span><span lang="da">Hvor vi skal hen</span></div>
+  <h2><span lang="en">Six acts</span><span lang="da">Seks akter</span></h2>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr>
+        <th><span lang="en">Act</span><span lang="da">Akt</span></th>
+        <th><span lang="en">Subject</span><span lang="da">Emne</span></th>
+        <th><span lang="en">Min</span><span lang="da">Min</span></th>
+      </tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td><span lang="en">DDD, event modeling, slicing &mdash; three requirements, three places they land</span><span lang="da">DDD, event modeling, slicing &mdash; tre krav, tre steder de lander</span></td><td class="num">11</td></tr>
+        <tr><td class="num">2</td><td><span lang="en">One aggregate, up close</span><span lang="da">Ét aggregate, tæt på</span></td><td class="num">4.5</td></tr>
+        <tr><td class="num">3</td><td><span lang="en">The components, each with its trade-off</span><span lang="da">Komponenterne, hver med sit trade-off</span></td><td class="num">10.5</td></tr>
+        <tr><td class="num">4</td><td><span lang="en">Live demo &mdash; the running trading app</span><span lang="da">Live demo &mdash; den kørende trading-app</span></td><td class="num">4.5</td></tr>
+        <tr><td class="num">5</td><td><span lang="en">Where it does <em>not</em> fit</span><span lang="da">Hvor det <em>ikke</em> passer</span></td><td class="num">2.5</td></tr>
+        <tr><td class="num">6</td><td><span lang="en">How to start on Monday</span><span lang="da">Hvordan man starter på mandag</span></td><td class="num">1.5</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small" lang="en">Everything shown is real code from <code>examples/essentials-trading-demo</code>, running against PostgreSQL.</p>
+  <p class="small" lang="da">Alt vist er rigtig kode fra <code>examples/essentials-trading-demo</code>, kørende mod PostgreSQL.</p>
+</section>
+
+<!-- =================================================================== 03 -->
+<section class="slide" data-act="1 &mdash; Modeling" data-min="2"
+  data-note-en="Read the requirement aloud in business words, then point at each box. The order is the point: the command is a request, the aggregate is the decision, the event is the fact, the view is the answer. Nobody has opened an IDE yet."
+  data-note-da="Laes kravet hoejt i forretningsord, peg derefter paa hver kasse. Raekkefoelgen er pointen: kommandoen er en anmodning, aggregatet er beslutningen, eventet er faktum, viewet er svaret. Ingen har aabnet en IDE endnu.">
+  <div class="eyebrow"><span lang="en">Event modeling</span><span lang="da">Event modeling</span></div>
+  <h2><span lang="en">&ldquo;The market data team registers instruments.&rdquo;</span><span lang="da">&ldquo;Market data-teamet registrerer instrumenter.&rdquo;</span></h2>
+  <div class="row grow center" style="align-items:center">
+    <svg viewBox="0 0 1180 300" width="100%" role="img" aria-label="Event model: command, aggregate, event, view">
+      <rect class="lane" x="4"    y="70" width="230" height="90"/>
+      <rect class="lane" x="320"  y="70" width="230" height="90"/>
+      <rect class="lane" x="636"  y="70" width="230" height="90"/>
+      <rect class="lane" x="944"  y="70" width="232" height="90"/>
+
+      <text class="lbl-dim" x="18"   y="58">COMMAND</text>
+      <text class="lbl-dim" x="334"  y="58">AGGREGATE</text>
+      <text class="lbl-dim" x="650"  y="58">EVENT</text>
+      <text class="lbl-dim" x="958"  y="58">VIEW</text>
+
+      <text class="lbl" x="18"   y="112">RegisterInstrument</text>
+      <text class="lbl" x="334"  y="112">Instrument</text>
+      <text class="lbl" x="650"  y="112">InstrumentRegistered</text>
+      <text class="lbl" x="958"  y="112">instrument_details</text>
+
+      <text class="lbl-dim" x="18"   y="140">A REQUEST</text>
+      <text class="lbl-dim" x="334"  y="140">THE DECISION</text>
+      <text class="lbl-dim" x="650"  y="140">THE FACT, KEPT FOREVER</text>
+      <text class="lbl-dim" x="958"  y="140">THE ANSWER</text>
+
+      <path class="flow" d="M238 115 H312"/><path class="flow-head" d="M312 110 l12 5 -12 5 z"/>
+      <path class="flow" d="M554 115 H628"/><path class="flow-head" d="M628 110 l12 5 -12 5 z"/>
+      <path class="flow" d="M870 115 H936"/><path class="flow-head" d="M936 110 l12 5 -12 5 z"/>
+
+      <path class="flow" d="M752 168 V218 H119 V164" stroke-dasharray="4 5"/>
+      <path class="flow-head" d="M114 164 l5 -12 5 12 z"/>
+      <text class="lbl-dim" x="330" y="238">REPLAY: THE SAME EVENTS REBUILD THE AGGREGATE</text>
+    </svg>
+  </div>
+  <div class="row" style="align-items:flex-start">
+    <div class="gloss" style="flex:1 1 0">
+      <b><span lang="en">The two words to know</span><span lang="da">De to ord man skal kende</span></b>
+      <span lang="en">An <strong>aggregate</strong> is the smallest thing that has to be consistent on its own &mdash; one instrument, one account. It is the unit a decision is made inside, and the unit a transaction covers. <strong>Event-sourced</strong> means we store the decisions instead of the result: the row is not the truth, the list of events is, and current state is what you get by replaying them.</span>
+      <span lang="da">Et <strong>aggregate</strong> er den mindste ting der skal være konsistent i sig selv &mdash; ét instrument, én konto. Det er enheden en beslutning tages inde i, og enheden en transaktion dækker. <strong>Event-sourced</strong> betyder at vi gemmer beslutningerne i stedet for resultatet: rækken er ikke sandheden, listen af events er, og nuværende tilstand er hvad man får ved at replaye dem.</span>
+    </div>
+    <div class="col" style="flex:0.8 1 0">
+      <p lang="en">Four boxes, drawn on a whiteboard with the business. <em>Then</em> we open the IDE.</p>
+      <p lang="da">Fire kasser, tegnet på et whiteboard sammen med forretningen. <em>Derefter</em> åbner vi IDE'en.</p>
+      <p class="small" lang="en">This is event modeling: agree the commands, events and views before arguing about tables.</p>
+      <p class="small" lang="da">Det er event modeling: bliv enige om commands, events og views før I diskuterer tabeller.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 04 -->
+<section class="slide" data-act="1 &mdash; Modeling" data-min="2"
+  data-note-en="This file is the bridge from whiteboard to repository. Point at handles, publishes, writes: that is the whiteboard, typed. Then the two invariants: INV-RI-2 is a genuine design decision, the client supplies the id so a retry is not a second instrument. The forbidden line is a real constraint an agent and a reviewer can both check."
+  data-note-da="Denne fil er broen fra whiteboard til repository. Peg paa handles, publishes, writes: det er whiteboardet, sat paa skrift. Derefter de to invarianter: INV-RI-2 er en aegte designbeslutning, klienten leverer id'et saa et retry ikke bliver et andet instrument. Forbidden-linjen er en reel constraint som baade en agent og en reviewer kan tjekke.">
+  <div class="eyebrow"><span lang="en">The slice contract</span><span lang="da">Slice-kontrakten</span></div>
+  <h2><span lang="en">The requirement, in a file next to the code</span><span lang="da">Kravet, i en fil ved siden af koden</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel" style="flex:1.35 1 0">
+      <figcaption><span>slice.yaml</span><span class="path">market_data/use_cases/register_instrument/</span></figcaption>
+      <pre><code class="yaml">slice: market_data.register_instrument
+kind: command
+bc: market_data
+owner: market-data-team
+status: live
+summary: Register a new instrument's reference data (symbol and display name).
+
+handles:   [RegisterInstrument]
+publishes: [InstrumentRegistered]
+writes:    [Instrument]
+reads:     []
+endpoints:
+  - { method: POST, path: /api/admin/instruments, auth: anonymous }
+invariants:
+  - id: INV-RI-1
+    text: "An instrument always starts un-suspended with the supplied symbol and display name"
+    enforcedBy: Instrument
+  - id: INV-RI-2
+    text: "The caller supplies the InstrumentId, so a retried registration addresses the
+           same instrument rather than minting a second one"
+    enforcedBy: RegisterInstrument
+forbidden:
+  - cross-slice-internal:market_data</code></pre>
+    </figure>
+    <div class="col" style="flex:1 1 0">
+      <p lang="en">The whiteboard boxes, now machine-readable and version-controlled beside the code that satisfies them.</p>
+      <p lang="da">Whiteboard-kasserne, nu maskinlæsbare og versionsstyrede ved siden af koden der opfylder dem.</p>
+      <p lang="en"><strong>Invariants get ids.</strong> A reviewer, a test, and a coding agent can all name the same rule.</p>
+      <p lang="da"><strong>Invarianter får id'er.</strong> En reviewer, en test og en coding agent kan alle navngive den samme regel.</p>
+      <p lang="en"><code>forbidden</code> is not documentation. It is the boundary this slice may not cross.</p>
+      <p lang="da"><code>forbidden</code> er ikke dokumentation. Det er grænsen denne slice ikke må krydse.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 05 -->
+<section class="slide" data-act="1 &mdash; Modeling" data-min="2"
+  data-note-en="Four files, one folder. Say the number: nineteen command slices and six view slices in brokerage, five and two in market_data, and none of them is a service layer. The command record is the request body, so there is no DTO and no mapper to keep in step."
+  data-note-da="Fire filer, én mappe. Sig tallet: nitten command-slices og seks view-slices i brokerage, fem og to i market_data, og ingen af dem er et service-lag. Command-recorden er request body, saa der er ingen DTO og ingen mapper at holde i trit.">
+  <div class="eyebrow"><span lang="en">The slice on disk</span><span lang="da">Slicen på disken</span></div>
+  <h2><span lang="en">Packaged by slice, not by layer</span><span lang="da">Pakket efter slice, ikke efter lag</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1 1 0">
+      <figcaption><span>the command &mdash; and the request body</span><span class="path">RegisterInstrument.java</span></figcaption>
+      <pre><code class="java">public record RegisterInstrument(InstrumentId instrumentId,
+                                 Symbol symbol,
+                                 String displayName) {
+    public RegisterInstrument {
+        requireNonNull(instrumentId, "No instrumentId provided");
+        requireNonNull(symbol, "No symbol provided");
+        requireNonNull(displayName, "No displayName provided");
+    }
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:1 1 0">
+      <figure class="panel sm">
+        <figcaption><span>the decision</span><span class="path">RegisterInstrumentHandler.java</span></figcaption>
+        <pre><code class="java">@Service
+public class RegisterInstrumentHandler extends AnnotatedCommandHandler {
+
+    // Automatically runs in a transaction as it's
+    // forwarded by the DurableLocalCommandBus
+    @CmdHandler
+    public void handle(RegisterInstrument cmd) {
+        instruments.registerNewInstrument(
+            new Instrument(cmd.instrumentId(),
+                           cmd.symbol(),
+                           cmd.displayName()));
+    }
+}</code></pre>
+      </figure>
+      <figure class="panel sm">
+        <figcaption><span>the one API file</span><span class="path">RegisterInstrumentAPI.java</span></figcaption>
+        <pre><code class="java">@PostMapping
+public void registerInstrument(@RequestBody RegisterInstrument cmd) {
+    commandBus.send(cmd);
+}</code></pre>
+      </figure>
+    </div>
+  </div>
+  <p class="small" lang="en">Plus <code>slice.yaml</code>. That is the whole slice &mdash; no service layer, no DTO, no mapper.</p>
+  <p class="small" lang="da">Plus <code>slice.yaml</code>. Det er hele slicen &mdash; intet service-lag, ingen DTO, ingen mapper.</p>
+</section>
+
+<!-- ================================================================ 06 NEW -->
+<section class="slide" data-act="1 &mdash; Modeling" data-min="1.5"
+  data-note-en="Say up front that this one is not in the repository yet, it is the next requirement, so nobody goes looking for it afterwards. Then the lesson, which is the one they will actually ask about: an aggregate is a consistency boundary, so it can see its own stream and nothing else. A rule about the whole set therefore cannot live inside one aggregate. It moves up into the handler, and the handler asks a read model. Point at the filter line: a retry of the same registration is still idempotent, only a different instrument claiming the symbol is rejected."
+  data-note-da="Sig fra starten at denne ikke er i repositoriet endnu, det er det naeste krav, saa ingen leder efter den bagefter. Derefter laeringen, som er den de faktisk vil spoerge om: et aggregate er en consistency boundary, saa det kan se sin egen stream og intet andet. En regel om hele maengden kan derfor ikke bo inde i ét aggregate. Den flytter op i handleren, og handleren spoerger en read model. Peg paa filter-linjen: et retry af samme registrering er stadig idempotent, kun et andet instrument der goer krav paa symbolet afvises.">
+  <div class="eyebrow"><span lang="en">1 &mdash; Modeling</span><span lang="da">1 &mdash; Modellering</span><span class="sep">/</span><span class="plain">a new requirement</span></div>
+  <h2><span lang="en">&ldquo;Two instruments must not trade under the same symbol.&rdquo;</span><span lang="da">&ldquo;To instrumenter må ikke handle under samme symbol.&rdquo;</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1.3 1 0">
+      <figure class="panel sm">
+        <figcaption><span>the contract grows first</span><span class="path">register_instrument/slice.yaml</span></figcaption>
+        <pre><code class="yaml">reads: [market_data.instrument_details]
+invariants:
+  - id: INV-RI-3
+    text: "A symbol identifies exactly one instrument: registering a symbol that
+           another instrument already trades under is rejected"
+    enforcedBy: RegisterInstrumentHandler</code></pre>
+      </figure>
+      <figure class="panel sm">
+        <figcaption><span>proposed &mdash; not in the repository yet</span><span class="path">RegisterInstrumentHandler.java</span></figcaption>
+        <pre><code class="java">@CmdHandler
+public void handle(RegisterInstrument cmd) {
+    // INV-RI-3 -- checked against the read model, because no single
+    //             aggregate can see the other instruments.
+    instrumentDetails.findBySymbol(cmd.symbol())
+                     .filter(other -&gt; !other.instrumentId().equals(cmd.instrumentId()))
+                     .ifPresent(other -&gt; {
+                         throw new SymbolAlreadyRegistered(cmd.symbol(), other.instrumentId());
+                     });
+
+    instruments.registerNewInstrument(new Instrument(cmd.instrumentId(),
+                                                    cmd.symbol(),
+                                                    cmd.displayName()));
+}</code></pre>
+      </figure>
+    </div>
+    <div class="col" style="flex:1 1 0">
+      <p lang="en"><strong>This rule is not about one instrument. It is about all of them.</strong></p>
+      <p lang="da"><strong>Denne regel handler ikke om ét instrument. Den handler om dem alle.</strong></p>
+      <div class="gloss">
+        <b><span lang="en">Why the aggregate cannot enforce it</span><span lang="da">Hvorfor aggregatet ikke kan håndhæve den</span></b>
+        <span lang="en">An aggregate is the consistency boundary: it sees its own stream and nothing else. To check a symbol against every other instrument it would have to load every instrument in one transaction &mdash; which is not what a boundary is for, and does not scale. So the decision moves up one level, into the handler, and the handler asks the <code>instrument_details</code> view from its own context.</span>
+        <span lang="da">Et aggregate er consistency boundary'en: det ser sin egen stream og intet andet. For at tjekke et symbol mod alle andre instrumenter skulle det loade hvert instrument i én transaktion &mdash; hvilket ikke er hvad en boundary er til, og ikke skalerer. Så beslutningen flytter et niveau op, ind i handleren, og handleren spørger <code>instrument_details</code>-viewet fra sit eget kontekst.</span>
+      </div>
+      <p class="small" lang="en">The <code>filter</code> keeps INV-RI-2 intact: the <em>same</em> registration retried still succeeds silently. Only a <em>different</em> instrument claiming the symbol is rejected.</p>
+      <p class="small" lang="da"><code>filter</code> holder INV-RI-2 intakt: <em>samme</em> registrering gentaget lykkes stadig lydløst. Kun et <em>andet</em> instrument der gør krav på symbolet afvises.</p>
+      <p class="small" lang="en">The textbook name for this shape is <strong>set-based validation</strong> &mdash; worth knowing, because every event-sourced system meets it.</p>
+      <p class="small" lang="da">Fagudtrykket for denne form er <strong>set-based validation</strong> &mdash; værd at kende, for hvert event-sourced system møder den.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ 07 NEW -->
+<section class="slide" data-act="1 &mdash; Modeling" data-min="1"
+  data-note-en="Do not skip this slide. If you show the check without the race you have taught them something false, and the first senior in the room will find the hole in ten seconds. Walk the four timestamps slowly, then give the three ways out and say which one you would pick: for a symbol, detect and repair, because a duplicate ticker is embarrassing rather than dangerous. If it were money, option two."
+  data-note-da="Spring ikke denne slide over. Viser du checket uden race'et, har du laert dem noget forkert, og den foerste senior i rummet finder hullet paa ti sekunder. Gaa de fire tidspunkter roligt igennem, giv derefter de tre udveje og sig hvilken du selv ville vaelge: for et symbol, detect og repair, fordi et dobbelt ticker er pinligt snarere end farligt. Var det penge, mulighed to.">
+  <div class="eyebrow"><span lang="en">1 &mdash; Modeling</span><span lang="da">1 &mdash; Modellering</span><span class="sep">/</span><span class="plain">the honest part</span></div>
+  <h2><span lang="en">That check is a guard, not a guarantee</span><span lang="da">Det check er et værn, ikke en garanti</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1.1 1 0">
+      <figure class="panel sm">
+        <figcaption><span>two instances, two transactions, one symbol</span><span class="path">the race</span></figcaption>
+        <pre><code class="plain">t1   instance A   findBySymbol("AAPL")  -&gt;  empty
+t2   instance B   findBySymbol("AAPL")  -&gt;  empty     the projection has not
+                                                      caught up with A yet
+t3   instance A   InstrumentRegistered(INS-1, AAPL)
+t4   instance B   InstrumentRegistered(INS-2, AAPL)   both passed the check</code></pre>
+      </figure>
+      <div class="gloss">
+        <b><span lang="en">Why it cannot be closed by trying harder</span><span lang="da">Hvorfor det ikke kan lukkes ved at prøve hårdere</span></b>
+        <span lang="en">The read model is eventually consistent, and the two handlers run in separate transactions on separate instances. Nothing in either write path can see the other's decision. Re-reading, reading twice, or reading inside the transaction does not help &mdash; the row it would need does not exist yet.</span>
+        <span lang="da">Read model'en er eventually consistent, og de to handlere kører i separate transaktioner på separate instanser. Intet i nogen af write-stierne kan se den andens beslutning. At læse igen, læse to gange, eller læse inde i transaktionen hjælper ikke &mdash; den række den skulle have findes ikke endnu.</span>
+      </div>
+    </div>
+    <div class="col" style="flex:1 1 0">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Way out</span><span lang="da">Udvej</span></th>
+            <th><span lang="en">What it costs</span><span lang="da">Hvad det koster</span></th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td><span lang="en"><strong>Detect and repair</strong> &mdash; a projection that flags collisions, plus a compensating command</span><span lang="da"><strong>Detect og repair</strong> &mdash; en projektion der flagger kollisioner, plus en kompenserende kommando</span></td>
+              <td class="small"><span lang="en">admits the window exists; needs somebody to act on the flag</span><span lang="da">indrømmer at vinduet findes; kræver at nogen handler på flaget</span></td>
+            </tr>
+            <tr>
+              <td><span lang="en"><strong>Make the symbol an aggregate id</strong> &mdash; a <code>SymbolClaim</code> stream keyed <em>by the symbol</em>, so uniqueness is a single-aggregate invariant again</span><span lang="da"><strong>Gør symbolet til et aggregate-id</strong> &mdash; en <code>SymbolClaim</code>-stream nøglet <em>på symbolet</em>, så unikhed igen er en single-aggregate-invariant</span></td>
+              <td class="small"><span lang="en">strongest guarantee; costs a second stream and a two-step registration</span><span lang="da">stærkeste garanti; koster en ekstra stream og en to-trins registrering</span></td>
+            </tr>
+            <tr>
+              <td><span lang="en"><strong>Serialize it</strong> &mdash; a <code>FencedLock</code> around registration</span><span lang="da"><strong>Serialisér det</strong> &mdash; en <code>FencedLock</code> omkring registrering</span></td>
+              <td class="small"><span lang="en">cheap, because registration is rare; works within one service only</span><span lang="da">billigt, fordi registrering er sjælden; virker kun inden for én service</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="statement" lang="en">Choose per rule, not per system. A duplicate ticker is embarrassing; a duplicate payment is not.</p>
+      <p class="statement" lang="da">Vælg pr. regel, ikke pr. system. Et dobbelt ticker er pinligt; en dobbelt betaling er ikke.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================= 08 NEW R3 -->
+<section class="slide" data-act="1 &mdash; Modeling" data-min="1.5"
+  data-note-en="Requirement three, and the third place a rule can land. Say up front this is proposed, like the last two slides. Validate the instinct first -- a blocking HTTP call does not belong in a transaction -- then give the reason that actually matters, because most people give the weak one: not resource holding, but that a rollback cannot un-call an external service, and a retried transaction calls it twice. Then walk the four blocks. The domain sentence: if a decision takes time, the waiting is part of the domain. Press A for the four wrong answers if anyone pushes."
+  data-note-da="Krav nummer tre, og det tredje sted en regel kan lande. Sig fra starten at dette er proposed, som de sidste to slides. Bekraeft instinktet foerst -- et blokerende HTTP-kald hoerer ikke i en transaktion -- giv derefter den grund der faktisk betyder noget, for de fleste giver den svage: ikke ressourcebinding, men at et rollback ikke kan af-kalde en ekstern service, og at en genkoert transaktion kalder den to gange. Gaa derefter de fire blokke igennem. Domaenesaetningen: tager en beslutning tid, er ventetiden en del af domaenet. Tryk A for de fire forkerte svar hvis nogen presser.">
+  <div class="eyebrow"><span lang="en">1 &mdash; Modeling</span><span lang="da">1 &mdash; Modellering</span><span class="sep">/</span><span class="plain">requirement three</span></div>
+  <h2><span lang="en">&ldquo;An external risk service must approve it first.&rdquo;</span><span lang="da">&ldquo;En ekstern risk-service skal godkende først.&rdquo;</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1.3 1 0">
+      <figure class="panel sm">
+        <figcaption><span>one command becomes four steps</span><span class="path">the shape</span></figcaption>
+        <pre><code class="plain">tx 1    RegisterInstrument
+        -&gt; InstrumentRegistrationRequested      status: PENDING_RISK_APPROVAL
+        -&gt; RiskCheckDeadlineReached             queued, delivery delayed 15 min
+        HTTP 202 Accepted -- not 201: the instrument is not tradeable yet
+        COMMIT
+
+        ...... no transaction open, no connection held ......
+
+queue   InstrumentRiskCheck          an EventProcessor, Inbox-backed
+        POST risk-service/checks     Idempotency-Key: &lt;EventId&gt;
+        at-least-once, so the call MUST be idempotent
+
+tx 2    RecordRiskDecision
+        -&gt; InstrumentRiskApproved               status: ACTIVE
+        or InstrumentRiskRejected               status: REJECTED
+
+tx 2'   no answer within 15 min: the delayed command lands
+        -&gt; RiskCheckTimedOut                    status: REJECTED, or escalated</code></pre>
+      </figure>
+      <figure class="panel sm">
+        <figcaption><span>proposed &mdash; the whole automation is one class</span><span class="path">market_data/automations/instrument_risk_check/</span></figcaption>
+        <pre><code class="java">@Service
+public class InstrumentRiskCheck extends EventProcessor {
+
+    // Runs with NO UnitOfWork open, after tx 1 committed.
+    @MessageHandler
+    void on(InstrumentRegistrationRequested e) {
+        var decision = riskService.check(e.instrumentId(), e.symbol());   // plain HTTP
+        getCommandBus().sendAndDontWait(new RecordRiskDecision(e.instrumentId(), decision));
+    }
+
+    @CmdHandler
+    void handle(RiskCheckDeadlineReached cmd) {          // the delayed command
+        instrumentDetails.findById(cmd.instrumentId())
+                         .filter(i -&gt; i.status() == PENDING_RISK_APPROVAL)
+                         .ifPresent(i -&gt; getCommandBus()
+                             .sendAndDontWait(new TimeOutRiskCheck(cmd.instrumentId())));
+    }
+
+    @Override
+    protected RedeliveryPolicy getInboxRedeliveryPolicy() {
+        return RedeliveryPolicy.exponentialBackoff()
+                               .setInitialRedeliveryDelay(Duration.ofMillis(200))
+                               .setMaximumNumberOfRedeliveries(20)
+                               .build();
+    }
+}</code></pre>
+      </figure>
+    </div>
+    <div class="col" style="flex:0.9 1 0">
+      <div class="gloss">
+        <b><span lang="en">Why the transaction must end first</span><span lang="da">Hvorfor transaktionen skal slutte først</span></b>
+        <span lang="en">Holding a connection and the aggregate's locks for a network round trip is the obvious cost. But the real reason is that <strong>a rollback cannot un-call an external service</strong>, and a retried transaction calls it a second time. Commit first, then call.</span>
+        <span lang="da">At holde en connection og aggregatets låse under en netværks-rundtur er den åbenlyse omkostning. Men den egentlige grund er at <strong>et rollback ikke kan af-kalde en ekstern service</strong>, og en genkørt transaktion kalder den en anden gang. Commit først, kald derefter.</span>
+      </div>
+      <p class="small" lang="en"><strong><code>EventProcessor</code> is built for exactly this</strong> &mdash; the docs list its role as external integrations and long operations. Inbox-backed, so the obligation is durable; exclusive via a <code>FencedLock</code>; retried on a policy you set; dead-letters when the service stays down.</p>
+      <p class="small" lang="da"><strong><code>EventProcessor</code> er bygget til præcis dette</strong> &mdash; docs angiver dens rolle som eksterne integrationer og langvarige operationer. Inbox-baseret, så forpligtelsen er durable; eksklusiv via en <code>FencedLock</code>; gentages efter en policy du sætter; dead-letter'er når servicen bliver nede.</p>
+      <div class="tradeoff">
+        <div class="gain"><h3><span lang="en">Gain</span><span lang="da">Gevinst</span></h3>
+          <p lang="en">No network call inside a transaction. The obligation survives a restart and is visible in the admin console. The deadline is a delayed command, not a cron job.</p>
+          <p lang="da">Intet netværkskald inde i en transaktion. Forpligtelsen overlever en genstart og er synlig i admin-konsollen. Deadline er en delayed command, ikke et cron-job.</p></div>
+        <div class="cost"><h3><span lang="en">Cost</span><span lang="da">Omkostning</span></h3>
+          <p lang="en">One command became a process. The API answers <code>202</code>, so callers must handle pending, and at-least-once means the risk service needs an idempotency key.</p>
+          <p lang="da">Én kommando blev en proces. API'et svarer <code>202</code>, så kaldere skal håndtere pending, og at-least-once betyder at risk-servicen skal have en idempotency key.</p></div>
+      </div>
+      <p class="statement" lang="en">If a decision takes time, the waiting is part of the domain.</p>
+      <p class="statement" lang="da">Tager en beslutning tid, er ventetiden en del af domænet.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 09 -->
+<section class="slide" data-act="1 &mdash; Modeling" data-min="1"
+  data-note-en="This is the DDD payoff and the slide seniors will push on. brokerage needs a price to value a trade. It does not call market_data. It subscribes to two events and builds its own read model. Say the alternative out loud: injecting the other context's service, which is exactly what this replaced."
+  data-note-da="Dette er DDD-udbyttet og den slide seniorerne vil presse paa. brokerage skal have en pris for at vaerdisaette en trade. Den kalder ikke market_data. Den subscriber paa to events og bygger sin egen read model. Sig alternativet hoejt: at injecte det andet kontekst' service, som er praecis det dette erstattede.">
+  <div class="eyebrow"><span lang="en">Bounded contexts</span><span lang="da">Bounded contexts</span></div>
+  <h2><span lang="en">Two contexts. Two imports between them.</span><span lang="da">To kontekster. To imports imellem dem.</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Package</span><span lang="da">Pakke</span></th>
+            <th><span lang="en">Importable by another context?</span><span lang="da">Kan importeres af anden kontekst?</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td><code>market_data/events/</code></td><td style="color:var(--gain)"><span lang="en">yes &mdash; the public contract</span><span lang="da">ja &mdash; den offentlige kontrakt</span></td></tr>
+            <tr><td><code>market_data/types/</code></td><td style="color:var(--gain)"><span lang="en">yes &mdash; ids and stream names</span><span lang="da">ja &mdash; id'er og stream-navne</span></td></tr>
+            <tr><td><code>market_data/aggregates/</code></td><td style="color:var(--cost)"><span lang="en">no &mdash; context-private</span><span lang="da">nej &mdash; kontekst-privat</span></td></tr>
+            <tr><td><code>market_data/use_cases/</code></td><td style="color:var(--cost)"><span lang="en">no &mdash; slice-private</span><span lang="da">nej &mdash; slice-privat</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en"><code>brokerage</code> imports exactly two things: <code>InstrumentId</code>, and the two price events it <em>projects</em> into a read model it owns.</p>
+      <p lang="da"><code>brokerage</code> importerer præcis to ting: <code>InstrumentId</code>, og de to pris-events den <em>projicerer</em> ind i en read model den selv ejer.</p>
+    </div>
+    <figure class="panel" style="flex:0.9 1 0">
+      <figcaption><span>the stream names are part of the contract</span><span class="path">market_data/types/MarketDataAggregateTypes.java</span></figcaption>
+      <pre><code class="java">public final class MarketDataAggregateTypes {
+    public static final AggregateType INSTRUMENTS
+        = AggregateType.of("Instruments");
+    public static final AggregateType INSTRUMENT_PRICES
+        = AggregateType.of("InstrumentPrices");
+}</code></pre>
+    </figure>
+  </div>
+  <p class="small" lang="en"><strong>A cross-context read projects the other side's events. It never calls the other side's write model.</strong></p>
+  <p class="small" lang="da"><strong>En læsning på tværs af kontekster projicerer den anden sides events. Den kalder aldrig den anden sides write model.</strong></p>
+</section>
+
+<!-- =================================================================== 07 -->
+<section class="slide" data-act="2 &mdash; Aggregate" data-min="3.5"
+  data-note-en="Slow down here. Four beats, in order: one, methods call apply, they never assign. Two, the EventHandler methods are the only place a field is written. Three, the same handlers run on rehydration, so replaying history and handling a new command are one code path. Four, the two early returns are idempotency, so a retried command leaves no trace instead of growing the stream."
+  data-note-da="Saet tempoet ned her. Fire slag, i raekkefoelge: ét, metoder kalder apply, de assigner aldrig. To, EventHandler-metoderne er det eneste sted et felt skrives. Tre, de samme handlers koerer ved rehydrering, saa replay af historik og haandtering af en ny kommando er én kodesti. Fire, de to tidlige returns er idempotens, saa et gentaget kald efterlader intet spor i stedet for at forlaenge streamen.">
+  <div class="eyebrow"><span lang="en">One aggregate, in full</span><span lang="da">Ét aggregate, i sin helhed</span></div>
+  <h2><span lang="en"><code>Instrument</code> &mdash; the whole class</span><span lang="da"><code>Instrument</code> &mdash; hele klassen</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel" style="flex:1.5 1 0">
+      <figcaption><span>60 lines of body, no framework ceremony</span><span class="path">market_data/aggregates/Instrument.java</span></figcaption>
+      <pre><code class="java">public class Instrument extends AggregateRoot&lt;InstrumentId, InstrumentEvent, Instrument&gt; {
+    private Symbol  symbol;
+    private String  displayName;
+    private boolean suspended;
+    private String  suspensionReason;
+
+    /** Used for rehydration */
+    public Instrument(InstrumentId aggregateId) { super(aggregateId); }
+
+    public Instrument(InstrumentId instrumentId, Symbol symbol, String displayName) {
+        super(instrumentId);
+        requireNonNull(symbol, "No symbol provided");
+        requireNonNull(displayName, "No displayName provided");
+        apply(new InstrumentRegistered(instrumentId, symbol, displayName));
+    }
+
+    public void rename(String displayName) {
+        requireNonNull(displayName, "No displayName provided");
+        if (displayName.equals(this.displayName)) {
+            return;                                  // idempotent no-op
+        }
+        apply(new InstrumentRenamed(aggregateId(), displayName));
+    }
+
+    public void suspend(String reason) {
+        requireNonNull(reason, "No reason provided");
+        if (suspended) {
+            return;                                  // idempotent no-op
+        }
+        apply(new InstrumentSuspended(aggregateId(), reason));
+    }
+
+    @EventHandler
+    private void on(InstrumentRegistered e) {
+        symbol = e.symbol();
+        displayName = e.displayName();
+        suspended = false;
+        suspensionReason = null;
+    }
+
+    @EventHandler
+    private void on(InstrumentRenamed e) { displayName = e.displayName(); }
+
+    @EventHandler
+    private void on(InstrumentSuspended e) {
+        suspended = true;
+        suspensionReason = e.reason();
+    }
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:0.85 1 0">
+      <p lang="en"><strong>Methods never assign state.</strong> They <code>apply</code> an event.</p>
+      <p lang="da"><strong>Metoder assigner aldrig tilstand.</strong> De <code>apply</code>'er et event.</p>
+      <p lang="en"><strong>The <code>@EventHandler</code> methods are the only writers</strong> of those four fields. Nowhere else.</p>
+      <p lang="da"><strong><code>@EventHandler</code>-metoderne er de eneste der skriver</strong> de fire felter. Intet andet sted.</p>
+      <p lang="en"><strong>The same handlers run on replay.</strong> Rebuilding from history and handling a new command are one path &mdash; so history cannot drift from behaviour.</p>
+      <p lang="da"><strong>De samme handlers kører ved replay.</strong> Genopbygning fra historik og håndtering af en ny kommando er én sti &mdash; så historik kan ikke afvige fra adfærd.</p>
+      <p lang="en"><strong>Both early returns are idempotency.</strong> A repeated command leaves no trace instead of lengthening the stream.</p>
+      <p lang="da"><strong>Begge tidlige returns er idempotens.</strong> En gentaget kommando efterlader intet spor i stedet for at forlænge streamen.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 08 -->
+<section class="slide" data-act="2 &mdash; Aggregate" data-min="1"
+  data-note-en="Put the two side by side and let the room draw the conclusion. Do not sneer at the entity: it is faster to write and most of our code looks like it. The honest claim is narrow, that the entity cannot answer the four questions from the opening slide, and no amount of added logging fixes that because logging is not the source of truth."
+  data-note-da="Saet de to side om side og lad rummet drage konklusionen. Haan ikke entiteten: den er hurtigere at skrive og det meste af vores kode ser saadan ud. Den aerlige paastand er snaever, at entiteten ikke kan besvare de fire spoergsmaal fra aabningssliden, og ingen maengde ekstra logging retter det, fordi logging ikke er kilden til sandhed.">
+  <div class="eyebrow"><span lang="en">The contrast</span><span lang="da">Kontrasten</span></div>
+  <h2><span lang="en">The same domain, the ordinary way</span><span lang="da">Samme domæne, på den sædvanlige måde</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1 1 0">
+      <figcaption><span>what most of our code looks like</span><span class="path">Instrument.java (JPA)</span></figcaption>
+      <pre><code class="java">@Entity
+public class Instrument {
+    @Id private String  instrumentId;
+    private String  symbol;
+    private String  displayName;
+    private boolean suspended;
+    private String  suspensionReason;
+
+    public void setDisplayName(String n) { this.displayName = n; }
+
+    public void suspend(String reason) {
+        this.suspended = true;
+        this.suspensionReason = reason;
+    }
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:1 1 0">
+      <p lang="en">Shorter. Faster to write. Perfectly good for plenty of problems.</p>
+      <p lang="da">Kortere. Hurtigere at skrive. Helt fin til mange problemer.</p>
+      <p lang="en"><strong>What it can no longer answer:</strong></p>
+      <p lang="da"><strong>Hvad den ikke længere kan svare på:</strong></p>
+      <ul class="tight">
+        <li lang="en">When was it suspended, and why?</li><li lang="da">Hvornår blev det suspenderet, og hvorfor?</li>
+        <li lang="en">Was it renamed before or after that?</li><li lang="da">Blev det omdøbt før eller efter?</li>
+        <li lang="en">How did the book look at quarter close?</li><li lang="da">Hvordan så bogen ud ved kvartalsafslutning?</li>
+        <li lang="en">Did that retry create a second instrument?</li><li lang="da">Skabte det retry et andet instrument?</li>
+      </ul>
+      <p class="small" lang="en">Log lines are not an answer. Logs are not the source of truth &mdash; and nobody replays them.</p>
+      <p class="small" lang="da">Log-linjer er ikke et svar. Logs er ikke kilden til sandhed &mdash; og ingen replayer dem.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 09 -->
+<section class="slide" data-act="3 &mdash; Components" data-min="0"
+  data-note-en="Ten seconds. Say only that every one of the next eleven slides ends in a trade-off, because a framework talk without costs is a sales pitch."
+  data-note-da="Ti sekunder. Sig kun at hver af de naeste elleve slides ender i et trade-off, fordi et framework-oplaeg uden omkostninger er et salgspitch.">
+  <div class="spread"></div>
+  <div class="eyebrow"><span lang="en">Act 3</span><span lang="da">Akt 3</span></div>
+  <h1 style="font-size:6.4cqh"><span lang="en">Eleven components.<br>Eleven trade-offs.</span><span lang="da">Elleve komponenter.<br>Elleve trade-offs.</span></h1>
+  <p class="lede" lang="en">One slide each. Real code on the left, what it costs you on the right.</p>
+  <p class="lede" lang="da">Én slide hver. Rigtig kode til venstre, hvad det koster dig til højre.</p>
+  <div class="spread"></div>
+</section>
+
+<!-- =================================================================== 10 -->
+<section class="slide" data-act="3 &mdash; Components" data-min="1"
+  data-note-en="Two three-line classes. The point is what they make impossible: passing a symbol where a display name is expected. Note that Symbol serializes as the same bare JSON string it replaced, so adopting it did not change a single persisted payload."
+  data-note-da="To tre-linjers klasser. Pointen er hvad de goer umuligt: at sende et symbol hvor et display name forventes. Bemaerk at Symbol serialiseres som den samme raa JSON-streng den erstattede, saa indfoerelsen aendrede ikke et enkelt persisteret payload.">
+  <div class="eyebrow"><span lang="en">01 &mdash; <code>types</code></span><span lang="da">01 &mdash; <code>types</code></span><span class="sep">/</span><span class="plain">SingleValueType</span></div>
+  <h2><span lang="en">No domain concept is a <code>String</code></span><span lang="da">Intet domænebegreb er en <code>String</code></span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel" style="flex:1 1 0">
+      <figcaption><span>two ideas, three lines each</span><span class="path">market_data/types/</span></figcaption>
+      <pre><code class="java">public class InstrumentId extends CharSequenceType&lt;InstrumentId&gt; {
+    public InstrumentId(CharSequence value) { super(value); }
+    public static InstrumentId of(CharSequence value) { return new InstrumentId(value); }
+    public static InstrumentId random() { return new InstrumentId(UUID.randomUUID().toString()); }
+}
+
+public class Symbol extends CharSequenceType&lt;Symbol&gt; {
+    public Symbol(CharSequence value) { super(value); }
+    public static Symbol of(CharSequence value) { return new Symbol(value); }
+}
+
+// this no longer compiles:
+new Instrument(instrumentId, displayName, symbol);</code></pre>
+    </figure>
+    <div class="col" style="flex:0.85 1 0">
+      <p lang="en"><code>Symbol</code> serializes as the same bare JSON string it replaced. Adopting it changed <em>no</em> persisted payload.</p>
+      <p lang="da"><code>Symbol</code> serialiseres som den samme rå JSON-streng den erstattede. Indførelsen ændrede <em>intet</em> persisteret payload.</p>
+      <div class="tradeoff">
+        <div class="gain"><h3><span lang="en">Gain</span><span lang="da">Gevinst</span></h3>
+          <p lang="en">Whole classes of argument-order bug become compile errors. IDs stop being interchangeable.</p>
+          <p lang="da">Hele klasser af argument-rækkefølge-fejl bliver compile-fejl. ID'er er ikke længere ombyttelige.</p></div>
+        <div class="cost"><h3><span lang="en">Cost</span><span lang="da">Omkostning</span></h3>
+          <p lang="en">A file per concept, and one integration module per framework &mdash; Jackson, JDBI, Spring Web, Mongo, JPA.</p>
+          <p lang="da">En fil pr. begreb, og et integrationsmodul pr. framework &mdash; Jackson, JDBI, Spring Web, Mongo, JPA.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 11 -->
+<section class="slide" data-act="3 &mdash; Components" data-min="1"
+  data-note-en="Three different kinds of write, one commit. Then the demo fact: not one command handler in the codebase carries Transactional, because the command bus opens the UnitOfWork. That is the comment in the real handler, not something added for the slide."
+  data-note-da="Tre forskellige slags skrivninger, én commit. Derefter demo-faktum: ikke én command handler i kodebasen baerer Transactional, fordi command-bussen aabner UnitOfWork'en. Det er kommentaren i den rigtige handler, ikke noget tilfoejet til sliden.">
+  <div class="eyebrow"><span lang="en">02 &mdash; <code>UnitOfWork</code></span><span lang="da">02 &mdash; <code>UnitOfWork</code></span></div>
+  <h2><span lang="en">One commit across event store, repository and queue</span><span lang="da">Én commit på tværs af event store, repository og kø</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <figure class="panel">
+        <figcaption><span>technology-agnostic transactions</span><span class="path">foundation</span></figcaption>
+        <pre><code class="java">unitOfWorkFactory.usingUnitOfWork(uow -&gt; {
+    repository.save(order);
+    eventStore.appendToStream(type, id, events);
+    durableQueues.queueMessage(queueName, msg, uow);
+    // Auto-commit on success, rollback on exception
+});</code></pre>
+      </figure>
+      <figure class="panel sm">
+        <figcaption><span>so the handler stays clean</span><span class="path">RegisterInstrumentHandler.java</span></figcaption>
+        <pre><code class="java">// Automatically runs in a transaction as it's
+// forwarded by the DurableLocalCommandBus
+@CmdHandler
+public void handle(RegisterInstrument cmd) { ... }</code></pre>
+      </figure>
+    </div>
+    <div class="col" style="flex:0.85 1 0">
+      <p lang="en">Not one <code>@CmdHandler</code> in the demo carries <code>@Transactional</code>. The command bus owns the boundary.</p>
+      <p lang="da">Ikke én <code>@CmdHandler</code> i demoen bærer <code>@Transactional</code>. Command-bussen ejer grænsen.</p>
+      <div class="tradeoff">
+        <div class="gain"><h3><span lang="en">Gain</span><span lang="da">Gevinst</span></h3>
+          <p lang="en">A queued message and the data it describes commit together, or not at all. No dual write.</p>
+          <p lang="da">En køet besked og de data den beskriver committer sammen, eller slet ikke. Ingen dual write.</p></div>
+        <div class="cost"><h3><span lang="en">Cost</span><span lang="da">Omkostning</span></h3>
+          <p lang="en">The boundary is implicit. A newcomer must be told who opens it &mdash; the absence of an annotation teaches nobody.</p>
+          <p lang="da">Grænsen er implicit. En ny udvikler skal fortælles hvem der åbner den &mdash; fraværet af en annotation lærer ingen noget.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 12 -->
+<section class="slide" data-act="3 &mdash; Components" data-min="1"
+  data-note-en="The one thing they must leave with: two orderings, and neither is a timestamp. EventOrder is position within one stream, GlobalEventOrder is position across every stream of an AggregateType, and that second one is what a subscription resumes from. Say plainly that clocks are never used for ordering, because that is the mistake everyone brings from a CRUD background."
+  data-note-da="Den ene ting de skal gaa derfra med: to ordninger, og ingen af dem er et timestamp. EventOrder er position i én stream, GlobalEventOrder er position paa tvaers af alle streams for en AggregateType, og den anden er hvad en subscription genoptager fra. Sig rent ud at ure aldrig bruges til ordning, for det er fejlen alle tager med fra en CRUD-baggrund.">
+  <div class="eyebrow"><span lang="en">03 &mdash; <code>postgresql-event-store</code></span><span lang="da">03 &mdash; <code>postgresql-event-store</code></span></div>
+  <h2><span lang="en">Two orderings. Neither is a clock.</span><span lang="da">To ordninger. Ingen af dem er et ur.</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Ordering</span><span lang="da">Ordning</span></th>
+            <th><span lang="en">Scope</span><span lang="da">Omfang</span></th>
+            <th><span lang="en">Used for</span><span lang="da">Bruges til</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td><code>EventOrder</code></td><td><span lang="en">one aggregate's stream</span><span lang="da">én aggregates stream</span></td><td><span lang="en">optimistic concurrency, replay</span><span lang="da">optimistisk concurrency, replay</span></td></tr>
+            <tr><td><code>GlobalEventOrder</code></td><td><span lang="en">every stream of one <code>AggregateType</code></span><span lang="da">alle streams for én <code>AggregateType</code></span></td><td><span lang="en">durable subscriptions, projections</span><span lang="da">durable subscriptions, projektioner</span></td></tr>
+            <tr><td style="color:var(--cost)"><code>timestamp</code></td><td><span lang="en">nothing</span><span lang="da">intet</span></td><td style="color:var(--cost)"><span lang="en">never ordering &mdash; clocks skew</span><span lang="da">aldrig ordning &mdash; ure skævvrider</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">One table per <code>AggregateType</code>. Subscriptions are durable and handle gaps, so a restart resumes where it stopped.</p>
+      <p lang="da">Én tabel pr. <code>AggregateType</code>. Subscriptions er durable og håndterer huller, så en genstart fortsætter hvor den stoppede.</p>
+    </div>
+    <div class="col" style="flex:0.8 1 0">
+      <div class="gloss">
+        <b><span lang="en">Why not just use the timestamp?</span><span lang="da">Hvorfor ikke bare bruge timestampet?</span></b>
+        <span lang="en">Because two events written a microsecond apart, on two instances with clocks that disagree, can come back in the wrong order &mdash; and in an event-sourced system the wrong order is the wrong answer, permanently. So order is an assigned number, and the timestamp is only ever information for a human.</span>
+        <span lang="da">Fordi to events skrevet et mikrosekund fra hinanden, på to instanser med ure der er uenige, kan komme tilbage i forkert rækkefølge &mdash; og i et event-sourced system er forkert rækkefølge det forkerte svar, permanent. Så rækkefølge er et tildelt nummer, og timestampet er kun information til et menneske.</span>
+      </div>
+      <div class="tradeoff">
+        <div class="gain"><h3><span lang="en">Gain</span><span lang="da">Gevinst</span></h3>
+          <p lang="en">Deterministic replay and a resumable read side, on a database you already run and back up.</p>
+          <p lang="da">Deterministisk replay og en genoptagelig læseside, på en database du allerede driver og backupper.</p></div>
+        <div class="cost"><h3><span lang="en">Cost</span><span lang="da">Omkostning</span></h3>
+          <p lang="en">No ad-hoc <code>SELECT</code> over current state. Every question the business asks needs a read model &mdash; that is design work, up front.</p>
+          <p lang="da">Ingen ad-hoc <code>SELECT</code> over nuværende tilstand. Hvert spørgsmål forretningen stiller kræver en read model &mdash; det er designarbejde, på forkant.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 13 -->
+<section class="slide" data-act="3 &mdash; Components" data-min="1"
+  data-note-en="Two lanes, both supported. Left is what the demo uses, right is the functional one. The Given-When-Then test needs no database and no Spring context. Then be explicit: the demo is entirely on the aggregate lane on purpose and we are not converting it, because a codebase with both lanes for the same kind of problem is worse than either."
+  data-note-da="To baner, begge supporterede. Venstre er hvad demoen bruger, hoejre er den funktionelle. Given-When-Then-testen kraever ingen database og ingen Spring-kontekst. Vaer derefter eksplicit: demoen er helt paa aggregate-banen med vilje og vi konverterer den ikke, fordi en kodebase med begge baner til samme slags problem er vaerre end begge.">
+  <div class="eyebrow"><span lang="en">04 &mdash; <code>eventsourced-aggregates</code></span><span lang="da">04 &mdash; <code>eventsourced-aggregates</code></span></div>
+  <h2><span lang="en">Mutable aggregate, or pure function</span><span lang="da">Mutabelt aggregate, eller ren funktion</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1 1 0">
+      <figcaption><span>what the demo uses</span><span class="path">AggregateRoot</span></figcaption>
+      <pre><code class="java">public void suspend(String reason) {
+    if (suspended) {
+        return;
+    }
+    apply(new InstrumentSuspended(aggregateId(), reason));
+}
+
+@EventHandler
+private void on(InstrumentSuspended e) {
+    suspended = true;
+    suspensionReason = e.reason();
+}</code></pre>
+    </figure>
+    <figure class="panel sm" style="flex:1 1 0">
+      <figcaption><span>the functional lane</span><span class="path">EventStreamDecider</span></figcaption>
+      <pre><code class="java">interface EventStreamDecider&lt;COMMAND, EVENT&gt; {
+    Optional&lt;EVENT&gt; handle(COMMAND command, List&lt;EVENT&gt; events);
+    boolean canHandle(Class&lt;?&gt; command);
+}
+
+@Test
+void shouldBeIdempotent() {
+    new GivenWhenThenScenario&lt;&gt;(new CreateOrderDecider())
+        .given(new OrderCreated(orderId, customerId))
+        .when(new CreateOrder(orderId, customerId))
+        .thenExpectNoEvent();      // no DB, no Spring
+}</code></pre>
+    </figure>
+  </div>
+  <div class="tradeoff">
+    <div class="gain"><h3><span lang="en">Aggregate lane</span><span lang="da">Aggregate-banen</span></h3>
+      <p lang="en">Reads like ordinary Java, one class per consistency boundary. The demo commits to it and does not mix.</p>
+      <p lang="da">Læses som almindelig Java, én klasse pr. consistency boundary. Demoen forpligter sig til den og blander ikke.</p></div>
+    <div class="cost"><h3><span lang="en">Decider lane</span><span lang="da">Decider-banen</span></h3>
+      <p lang="en">Testable with no infrastructure and a natural fit for slicing &mdash; at the cost of threading history through every call.</p>
+      <p lang="da">Testbar uden infrastruktur og passer naturligt til slicing &mdash; på bekostning af at føre historikken gennem hvert kald.</p></div>
+  </div>
+</section>
+
+<!-- =================================================================== 14 -->
+<section class="slide" data-act="3 &mdash; Components" data-min="1"
+  data-note-en="The most practically useful slide in the act. Default is left: project the events, serve reads from your own table, accept lag. Right is the documented exception, and read the reason from the code: the bootstrap probe asks whether a price exists, and an eventually-consistent absent would let it seed twice on top of live data. One exception, written down, with a named reason."
+  data-note-da="Den mest praktisk nyttige slide i akten. Standard er venstre: projicér eventene, servér laesninger fra din egen tabel, acceptér forsinkelse. Hoejre er den dokumenterede undtagelse, og laes begrundelsen fra koden: bootstrap-proben spoerger om en pris findes, og et eventually-consistent fravaer ville lade den seede to gange oven i levende data. Én undtagelse, skrevet ned, med en navngiven grund.">
+  <div class="eyebrow"><span lang="en">05 &mdash; <code>EventProcessor</code></span><span lang="da">05 &mdash; <code>EventProcessor</code></span><span class="sep">/</span><span class="plain">read models</span></div>
+  <h2><span lang="en">Project by default. Read the aggregate only with a reason.</span><span lang="da">Projicér som standard. Læs aggregatet kun med en grund.</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1.15 1 0">
+      <figcaption><span>eventually consistent &mdash; the default</span><span class="path">views/instrument_details/InstrumentDetailsProjection.java</span></figcaption>
+      <pre><code class="java">@Service
+public class InstrumentDetailsProjection extends ViewEventProcessor {
+
+    @Override
+    protected List&lt;AggregateType&gt; reactsToEventsRelatedToAggregateTypes() {
+        return List.of(Instruments.AGGREGATE_TYPE);
+    }
+
+    @MessageHandler
+    void handle(InstrumentRegistered event) { /* INSERT ... ON CONFLICT */ }
+
+    @MessageHandler
+    void handle(InstrumentRenamed event) { /* UPDATE display_name */ }
+
+    @MessageHandler
+    void handle(InstrumentSuspended event) { /* UPDATE suspended */ }
+
+    @Override
+    protected void onSubscriptionsReset(AggregateType aggregateType,
+                                        GlobalEventOrder resubscribeFromAndIncluding) {
+        jdbcTemplate.execute("TRUNCATE TABLE projection_instrument_details");
+    }
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:0.9 1 0">
+      <figure class="panel sm">
+        <figcaption><span>strongly consistent &mdash; the one exception</span><span class="path">views/latest_price/LatestPriceQuery.java</span></figcaption>
+        <pre><code class="java">@Transactional(readOnly = true)
+public Optional&lt;LatestPrice&gt; findLatestPrice(InstrumentId id) {
+    return instrumentPrices.findPrice(id)
+        .map(p -&gt; new LatestPrice(id, p.latestPrice()));
+}</code></pre>
+      </figure>
+      <div class="gloss">
+        <b><span lang="en">What a projection is</span><span lang="da">Hvad en projektion er</span></b>
+        <span lang="en">A subscriber that reads the event stream and writes an ordinary table shaped for one question. You can have as many as you have questions, they are rebuilt by replaying &mdash; that is what <code>onSubscriptionsReset</code> is for &mdash; and a rebuild is a button, not a migration. The catch is lag: a read taken immediately after the write that feeds it can still show the previous value.</span>
+        <span lang="da">En subscriber der læser event-streamen og skriver en almindelig tabel formet til ét spørgsmål. Man kan have lige så mange som man har spørgsmål, de genopbygges ved replay &mdash; det er hvad <code>onSubscriptionsReset</code> er til &mdash; og en genopbygning er en knap, ikke en migrering. Prisen er forsinkelse: en læsning lige efter den skrivning der fodrer den kan stadig vise den forrige værdi.</span>
+      </div>
+      <p class="small" lang="en"><strong>Why the exception is allowed:</strong> the bootstrap probe asks whether a price already exists, and an eventually-consistent &ldquo;absent&rdquo; would let it seed a second time on top of live data. <code>latestPrice()</code> is the only public accessor on any aggregate in the demo.</p>
+      <p class="small" lang="da"><strong>Hvorfor undtagelsen er tilladt:</strong> bootstrap-proben spørger om en pris allerede findes, og et eventually-consistent &ldquo;fraværende&rdquo; ville lade den seede en anden gang oven i levende data. <code>latestPrice()</code> er den eneste offentlige accessor på noget aggregate i demoen.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 15 -->
+<section class="slide" data-act="3 &mdash; Components" data-min="1"
+  data-note-en="Keep this to one minute. The concept is the whole point: loading an aggregate replays its events, so a long stream costs more to load, and a snapshot is a cached fold of the stream so far. One annotation turns it on. Do not go into threshold tuning."
+  data-note-da="Hold denne paa ét minut. Konceptet er hele pointen: at loade et aggregate replayer dets events, saa en lang stream koster mere at loade, og et snapshot er en cachet sammenlaegning af streamen indtil nu. Én annotation taender det. Gaa ikke i detaljer om taerskel-tuning.">
+  <div class="eyebrow"><span lang="en">06 &mdash; <span class="mono">snapshots</span></span><span lang="da">06 &mdash; <span class="mono">snapshots</span></span></div>
+  <h2><span lang="en">Long streams cost more to load. One annotation fixes it.</span><span lang="da">Lange streams koster mere at loade. Én annotation løser det.</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <figure class="panel sm">
+        <figcaption><span>declared on the aggregate that needs it</span><span class="path">market_data/aggregates/InstrumentPrice.java</span></figcaption>
+        <pre><code class="java">@AggregateSnapshotPolicy(aggregateType = "InstrumentPrices",
+                         mode = SnapshotExecutionMode.ASYNC_DURABLE,
+                         everyNEvents = 100)
+public class InstrumentPrice extends AggregateRoot&lt;InstrumentId, InstrumentPriceEvent, InstrumentPrice&gt; { }</code></pre>
+      </figure>
+      <div class="gloss">
+        <b><span lang="en">In plain terms</span><span lang="da">Kort sagt</span></b>
+        <span lang="en">Loading an aggregate means replaying its events, so a stream with 50 000 events costs 50 000 events' worth of work. A snapshot is a saved copy of the aggregate at event <em>n</em>, so loading becomes &ldquo;read the snapshot, then replay only what came after it&rdquo;.</span>
+        <span lang="da">At loade et aggregate betyder at replaye dets events, så en stream med 50.000 events koster 50.000 events' arbejde. Et snapshot er en gemt kopi af aggregatet ved event <em>n</em>, så load bliver &ldquo;læs snapshottet, replay derefter kun hvad der kom efter&rdquo;.</span>
+      </div>
+    </div>
+    <div class="col" style="flex:0.85 1 0">
+      <p lang="en"><code>Instrument</code> declares <em>no</em> policy &mdash; registered once, rarely renamed. A short stream is cheaper to replay than a snapshot is to maintain.</p>
+      <p lang="da"><code>Instrument</code> deklarerer <em>ingen</em> policy &mdash; registreres én gang, omdøbes sjældent. En kort stream er billigere at replaye end et snapshot er at vedligeholde.</p>
+      <div class="tradeoff">
+        <div class="gain"><h3><span lang="en">Gain</span><span lang="da">Gevinst</span></h3>
+          <p lang="en">Load cost stops growing with history. <code>ASYNC_DURABLE</code> keeps the snapshot off the write path.</p>
+          <p lang="da">Load-omkostningen holder op med at vokse med historikken. <code>ASYNC_DURABLE</code> holder snapshottet ude af write-stien.</p></div>
+        <div class="cost"><h3><span lang="en">Cost</span><span lang="da">Omkostning</span></h3>
+          <p lang="en">The snapshot lands slightly behind, and its serialized shape becomes a second format you must keep readable.</p>
+          <p lang="da">Snapshottet lander lidt bagefter, og dets serialiserede form bliver et andet format du skal holde læsbart.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 16 -->
+<section class="slide" data-act="3 &mdash; Components" data-min="1"
+  data-note-en="One minute. This answers the objection you will get, that streams grow forever. Closing books does not rewrite or delete a stream, it ends one and opens the next, the way an accounting period closes. Then the honest cost: the account now has two ids. Do not go further than that."
+  data-note-da="Ét minut. Dette besvarer den indvending du vil faa, at streams vokser i det uendelige. Closing books omskriver eller sletter ikke en stream, den afslutter én og aabner den naeste, som en regnskabsperiode lukker. Derefter den aerlige omkostning: kontoen har nu to id'er. Gaa ikke laengere end det.">
+  <div class="eyebrow"><span lang="en">07 &mdash; <span class="mono">closing the books</span></span><span lang="da">07 &mdash; <span class="mono">closing the books</span></span></div>
+  <h2><span lang="en">Streams do not grow forever. One ends, the next opens.</span><span lang="da">Streams vokser ikke i det uendelige. Én slutter, den næste åbner.</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <div class="chain">
+        <div class="node"><b>generation 1, closed</b>acct-1#1</div>
+        <span class="arrow">&rarr;</span>
+        <div class="node"><b>generation 2, open</b>acct-1#2</div>
+      </div>
+      <div class="chain">
+        <div class="node"><b>logical id, unchanged across both</b>acct-1</div>
+      </div>
+      <div class="gloss">
+        <b><span lang="en">In plain terms</span><span lang="da">Kort sagt</span></b>
+        <span lang="en">The same idea as closing an accounting period. Nothing is rewritten and nothing is deleted &mdash; the old stream is sealed with a closing balance, and a new stream opens carrying that balance forward. The business keeps one account; the event store gets a fresh, short stream to replay.</span>
+        <span lang="da">Samme idé som at lukke en regnskabsperiode. Intet omskrives og intet slettes &mdash; den gamle stream lukkes med en slutsaldo, og en ny stream åbner med den saldo som udgangspunkt. Forretningen har stadig én konto; event store'en får en ny, kort stream at replaye.</span>
+      </div>
+      <p class="small" lang="en">Triggered by event count, by a clock boundary such as end-of-month, by an explicit command, or by any combination &mdash; all four are configurable in the demo.</p>
+      <p class="small" lang="da">Udløses af event-antal, af en ur-grænse som end-of-month, af en eksplicit kommando, eller en kombination &mdash; alle fire er konfigurerbare i demoen.</p>
+    </div>
+    <div class="col" style="flex:0.85 1 0">
+      <figure class="panel sm">
+        <figcaption><span>the stream-id convention, in exactly one place</span><span class="path">brokerage/types/TradingAccountGenerationId.java</span></figcaption>
+        <pre><code class="java">public static TradingAccountGenerationId of(TradingAccountId logicalId,
+                                            long generation) {
+    return new TradingAccountGenerationId(
+        logicalId.toString() + GENERATION_SEPARATOR + generation);
+}
+
+public long generation() { /* parse back, defaulting to 1 */ }</code></pre>
+      </figure>
+      <div class="tradeoff">
+        <div class="gain"><h3><span lang="en">Gain</span><span lang="da">Gevinst</span></h3>
+          <p lang="en">Stream length and load cost stay bounded forever. Closed generations can be archived out of the hot table.</p>
+          <p lang="da">Stream-længde og load-omkostning holdes permanent begrænset. Lukkede generationer kan arkiveres ud af den varme tabel.</p></div>
+        <div class="cost"><h3><span lang="en">Cost</span><span lang="da">Omkostning</span></h3>
+          <p lang="en">Two ids per account, and every reader must know which one it holds. Real added complexity &mdash; only take it when streams actually grow without bound.</p>
+          <p lang="da">To id'er pr. konto, og hver læser skal vide hvilket den holder. Reel ekstra kompleksitet &mdash; tag den kun når streams faktisk vokser uden grænse.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 17 -->
+<section class="slide" data-act="3 &mdash; Components" data-min="1"
+  data-note-en="Point at getCurrentToken and dwell on it, because that is the difference from a plain mutex. The token is monotonic, so a holder that stalled, lost the lock, and woke up still carrying the old token can be rejected by the thing it writes to. A mutex cannot express that. Then the hard constraint, twice if needed: this coordinates instances of one service against one database. It is not cross-service infrastructure."
+  data-note-da="Peg paa getCurrentToken og dvael ved det, for det er forskellen fra en almindelig mutex. Tokenet er monotont, saa en holder der gik i staa, mistede laasen og vaagnede med det gamle token kan afvises af det den skriver til. En mutex kan ikke udtrykke det. Derefter den haarde begraensning, to gange hvis noedvendigt: dette koordinerer instanser af én service mod én database. Det er ikke infrastruktur paa tvaers af services.">
+  <div class="eyebrow"><span lang="en">08 &mdash; <code>DurableQueues</code> + <code>FencedLock</code></span><span lang="da">08 &mdash; <code>DurableQueues</code> + <code>FencedLock</code></span></div>
+  <h2><span lang="en">Queues and locks in the database you already run</span><span lang="da">Køer og låse i den database du allerede driver</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1.1 1 0">
+    <figure class="panel sm">
+      <figcaption><span>competing consumers, redelivery, DLQ</span><span class="path">foundation</span></figcaption>
+      <pre><code class="java">durableQueues.consumeFromQueue(
+    ConsumeFromQueue.builder()
+        .setQueueName(QueueName.of("OrderProcessing"))
+        .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff()
+            .setRedeliveryDelay(Duration.ofMillis(200))
+            .setMaximumNumberOfRedeliveries(5)
+            .build())
+        .setParallelConsumers(3)
+        .setQueueMessageHandler(new PatternMatchingQueuedMessageHandler() {
+            @MessageHandler
+            void handle(ProcessOrderCommand cmd) { }
+        })
+        .build());</code></pre>
+    </figure>
+    <div class="gloss">
+      <b><span lang="en">Why a fence token, not just a lock</span><span lang="da">Hvorfor et fence token, ikke bare en lås</span></b>
+      <span lang="en">A holder can stall &mdash; a long GC pause, a paused VM &mdash; lose the lock to someone else, then wake up still believing it holds it. A plain lock cannot tell the difference. The token is a number that only ever increases, so whatever the holder writes to can check it and reject the stale one.</span>
+      <span lang="da">En holder kan gå i stå &mdash; en lang GC-pause, en pauset VM &mdash; miste låsen til en anden og så vågne i troen om at den stadig holder den. En almindelig lås kan ikke se forskellen. Tokenet er et tal der kun stiger, så det den skriver til kan tjekke det og afvise det forældede.</span>
+    </div>
+    </div>
+    <div class="col" style="flex:1 1 0">
+      <figure class="panel sm">
+        <figcaption><span>fencing, not just mutual exclusion</span><span class="path">foundation</span></figcaption>
+        <pre><code class="java">lockManager.acquireLockAsync(LockName.of("ScheduledTask"),
+    new LockCallback() {
+        @Override
+        public void lockAcquired(FencedLock lock) {
+            long fenceToken = lock.getCurrentToken();   // monotonic
+            startPeriodicProcessing(fenceToken);
+        }
+    });</code></pre>
+      </figure>
+      <div class="tradeoff">
+        <div class="gain"><h3><span lang="en">Gain</span><span lang="da">Gevinst</span></h3>
+          <p lang="en">No broker, no ZooKeeper, no Redis. The queue commits in the same transaction as your data, and a stale token gets rejected.</p>
+          <p lang="da">Ingen broker, ingen ZooKeeper, ingen Redis. Køen committer i samme transaktion som dine data, og et forældet token afvises.</p></div>
+        <div class="cost"><h3><span lang="en">Cost</span><span lang="da">Omkostning</span></h3>
+          <p lang="en">A throughput ceiling, and load on the database. <strong>Intra-service only</strong> &mdash; instances of one service, one database. Not cross-service.</p>
+          <p lang="da">Et throughput-loft, og belastning på databasen. <strong>Kun intra-service</strong> &mdash; instanser af én service, én database. Ikke på tværs af services.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 18 -->
+<section class="slide" data-act="3 &mdash; Components" data-min="1"
+  data-note-en="Name the dual-write problem in one sentence: save to the database, publish to Kafka, and the process dies between the two. The outbox puts the message in the same commit. Then be blunt that this buys at-least-once, not exactly-once, so every downstream consumer needs to be idempotent and that is now their problem too."
+  data-note-da="Naevn dual-write-problemet i én saetning: gem i databasen, publicér til Kafka, og processen doer mellem de to. Outboxen laegger beskeden i samme commit. Vaer derefter ligeud om at dette giver at-least-once, ikke exactly-once, saa hver downstream-consumer skal vaere idempotent og det er nu ogsaa deres problem.">
+  <div class="eyebrow"><span lang="en">09 &mdash; <span class="mono">Inbox / Outbox</span></span><span lang="da">09 &mdash; <span class="mono">Inbox / Outbox</span></span></div>
+  <h2><span lang="en">Save to the database, publish to Kafka &mdash; and crash in between</span><span lang="da">Gem i databasen, publicér til Kafka &mdash; og gå ned imellem</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <figure class="panel">
+        <figcaption><span>the message is part of the commit</span><span class="path">foundation</span></figcaption>
+        <pre><code class="java">// Atomic with the database update
+unitOfWorkFactory.usingUnitOfWork(() -&gt; {
+    Order order = orderRepository.save(new Order(...));
+    kafkaOutbox.sendMessage(new OrderCreatedEvent(order.getId()));
+});</code></pre>
+      </figure>
+      <div class="chain">
+        <div class="node"><b>commit</b>DB + outbox row</div>
+        <span class="arrow">&rarr;</span>
+        <div class="node"><b>then</b>DurableQueues relay</div>
+        <span class="arrow">&rarr;</span>
+        <div class="node"><b>finally</b>Kafka</div>
+      </div>
+      <div class="gloss">
+        <b><span lang="en">The dual write</span><span lang="da">Dual write</span></b>
+        <span lang="en">Two systems, two writes, no shared transaction. Commit the order and the process dies before the Kafka send: the order exists and nobody downstream knows. Send first and it dies before the commit: everyone downstream believes in an order that does not exist. The outbox makes it one write &mdash; the message goes into <em>your</em> database, in the same transaction, and a relay ships it afterwards.</span>
+        <span lang="da">To systemer, to skrivninger, ingen fælles transaktion. Commit ordren og processen dør før Kafka-afsendelsen: ordren findes, og ingen downstream ved det. Send først, og den dør før commit: alle downstream tror på en ordre der ikke findes. Outboxen gør det til én skrivning &mdash; beskeden lander i <em>din</em> database, i samme transaktion, og et relay sender den bagefter.</span>
+      </div>
+    </div>
+    <div class="col" style="flex:0.85 1 0">
+      <p lang="en"><strong>Inbox</strong> is the mirror image: an incoming message is stored and de-duplicated before it is handled.</p>
+      <p lang="da"><strong>Inbox</strong> er spejlbilledet: en indkommende besked gemmes og de-duplikeres før den håndteres.</p>
+      <div class="tradeoff">
+        <div class="gain"><h3><span lang="en">Gain</span><span lang="da">Gevinst</span></h3>
+          <p lang="en">A message is never published for a transaction that rolled back, and never lost for one that committed.</p>
+          <p lang="da">En besked publiceres aldrig for en transaktion der rullede tilbage, og mistes aldrig for en der committede.</p></div>
+        <div class="cost"><h3><span lang="en">Cost</span><span lang="da">Omkostning</span></h3>
+          <p lang="en">At-least-once, not exactly-once. Every downstream consumer must be idempotent &mdash; that is now their design constraint too.</p>
+          <p lang="da">At-least-once, ikke exactly-once. Hver downstream-consumer skal være idempotent &mdash; det er nu også deres designbegrænsning.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 19 -->
+<section class="slide" data-act="3 &mdash; Components" data-min="1"
+  data-note-en="Show the starter, then spend the slide on the gotcha, because it is the one that costs an afternoon. An aggregate root is not a Spring bean, so the registrar cannot find the annotation by scanning. Without the declaration the policy is inert, the admin console shows no policy, and nothing errors. Say that last part twice: nothing errors."
+  data-note-da="Vis starteren, brug derefter sliden paa faelden, for det er den der koster en eftermiddag. Et aggregate root er ikke en Spring bean, saa registraren kan ikke finde annotationen ved scanning. Uden deklarationen er policyen inaktiv, admin-konsollen viser ingen policy, og intet fejler. Sig det sidste to gange: intet fejler.">
+  <div class="eyebrow"><span lang="en">10 &mdash; <span class="mono">Spring Boot starters</span></span><span lang="da">10 &mdash; <span class="mono">Spring Boot starters</span></span></div>
+  <h2><span lang="en">One dependency, and the infrastructure is wired</span><span lang="da">Én dependency, og infrastrukturen er wiret</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1.1 1 0">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>starter</th><th><span lang="en">what you stop writing yourself</span><span lang="da">hvad du holder op med selv at skrive</span></th></tr></thead>
+          <tbody>
+            <tr><td><code>spring-boot-starter-postgresql</code></td><td class="small"><span lang="en">Jdbi, FencedLock, DurableQueues, Inbox/Outbox, CommandBus</span><span lang="da">Jdbi, FencedLock, DurableQueues, Inbox/Outbox, CommandBus</span></td></tr>
+            <tr><td><code>spring-boot-starter-postgresql-event-store</code></td><td class="small"><span lang="en">all of the above, plus the EventStore, durable subscriptions and EventProcessors</span><span lang="da">alt ovenstående, plus EventStore, durable subscriptions og EventProcessors</span></td></tr>
+            <tr><td><code>spring-boot-starter-mongodb</code></td><td class="small"><span lang="en">the same coordination primitives, on MongoDB instead</span><span lang="da">de samme koordinationsprimitiver, på MongoDB i stedet</span></td></tr>
+            <tr><td><code>spring-boot-starter-admin-api</code></td><td class="small"><span lang="en">HTTP admin over locks, queues, scheduler, event store, CDC</span><span lang="da">HTTP-admin over låse, køer, scheduler, event store, CDC</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="gloss">
+        <b><span lang="en">In plain terms</span><span lang="da">Kort sagt</span></b>
+        <span lang="en">These are ordinary Spring Boot starters. You add one to the POM, set a handful of properties, and the beans exist &mdash; there is no Essentials bootstrap class to write and no XML anywhere. The demo declares <code>@Service extends AnnotatedCommandHandler</code> and that is the <em>entire</em> registration of a command handler.</span>
+        <span lang="da">Det er almindelige Spring Boot-startere. Du tilføjer én til POM'en, sætter en håndfuld properties, og bean'ene findes &mdash; der er ingen Essentials-bootstrapklasse at skrive og ingen XML nogen steder. Demoen deklarerer <code>@Service extends AnnotatedCommandHandler</code>, og det er den <em>komplette</em> registrering af en command handler.</span>
+      </div>
+    </div>
+    <div class="col" style="flex:0.95 1 0">
+      <figure class="panel sm">
+        <figcaption><span>each context declares its own aggregates</span><span class="path">market_data/config/MarketDataConfiguration.java</span></figcaption>
+        <pre><code class="java">@Bean
+public EssentialsAggregateDeclarations marketDataAggregates() {
+    return EssentialsAggregateDeclarations.builder()
+        .declare(InstrumentPrices.AGGREGATE_TYPE, InstrumentPrice.class)
+        .declare(Instruments.AGGREGATE_TYPE, Instrument.class)
+        .build();
+}</code></pre>
+      </figure>
+      <p lang="en">One bean per bounded context, and the declarations from every context are merged. This is what pairs an <code>AggregateType</code> &mdash; the stream name &mdash; with the class whose events go into it.</p>
+      <p lang="da">Én bean pr. bounded context, og deklarationerne fra hvert kontekst flettes sammen. Det er dette der parrer en <code>AggregateType</code> &mdash; stream-navnet &mdash; med den klasse hvis events havner i den.</p>
+      <p class="small" lang="en">It also replaced two hand-written <code>InitializingBean</code>s, which is the shape this kind of wiring used to take.</p>
+      <p class="small" lang="da">Den erstattede også to håndskrevne <code>InitializingBean</code>s, som er den form denne slags wiring før havde.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 20 -->
+<section class="slide" data-act="3 &mdash; Components" data-min="0.5"
+  data-note-en="Keep this short, it is a bridge into the demo. The console is not a product we maintain, it comes with the starter. Say what it answers at three in the morning: which lock is held by which instance, what is stuck in the dead letter queue, how far behind is that subscription."
+  data-note-da="Hold denne kort, den er en bro til demoen. Konsollen er ikke et produkt vi vedligeholder, den kommer med starteren. Sig hvad den svarer paa klokken tre om natten: hvilken laas holdes af hvilken instans, hvad sidder fast i dead letter queue, hvor langt bagefter er den subscription.">
+  <div class="eyebrow"><span lang="en">11 &mdash; <span class="mono">admin API + console</span></span><span lang="da">11 &mdash; <span class="mono">admin API + console</span></span></div>
+  <h2><span lang="en">The 3 a.m. questions, already answered</span><span lang="da">Spørgsmålene klokken tre om natten, allerede besvaret</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <ul>
+        <li lang="en">Which instance holds <code>ProcessOrders</code>, and since when?</li><li lang="da">Hvilken instans holder <code>ProcessOrders</code>, og siden hvornår?</li>
+        <li lang="en">What is sitting in the dead letter queue, and why did it fail?</li><li lang="da">Hvad ligger i dead letter queue, og hvorfor fejlede det?</li>
+        <li lang="en">How far behind is that projection?</li><li lang="da">Hvor langt bagefter er den projektion?</li>
+        <li lang="en">Which snapshot policy is actually active on <code>InstrumentPrices</code>?</li><li lang="da">Hvilken snapshot-policy er faktisk aktiv på <code>InstrumentPrices</code>?</li>
+        <li lang="en">What generation is <code>ACC-DEMO-001</code> on?</li><li lang="da">Hvilken generation er <code>ACC-DEMO-001</code> på?</li>
+      </ul>
+      <p lang="en"><strong>None of this was built for the demo.</strong> It arrives with <code>spring-boot-starter-admin-api</code>.</p>
+      <p lang="da"><strong>Intet af dette blev bygget til demoen.</strong> Det kommer med <code>spring-boot-starter-admin-api</code>.</p>
+    </div>
+    <div class="col" style="flex:0.9 1 0">
+      <div class="tradeoff">
+        <div class="gain"><h3><span lang="en">Gain</span><span lang="da">Gevinst</span></h3>
+          <p lang="en">Operational answers on day one, with no dashboard project of your own.</p>
+          <p lang="da">Driftsvar fra dag ét, uden et dashboard-projekt af egen avl.</p></div>
+        <div class="cost"><h3><span lang="en">Cost</span><span lang="da">Omkostning</span></h3>
+          <p lang="en">It is an admin surface on your service. It needs authentication and authorization like any other.</p>
+          <p lang="da">Det er en admin-flade på din service. Den skal have authentication og authorization som enhver anden.</p></div>
+      </div>
+      <p class="small" lang="en">Next: all of it, running.</p>
+      <p class="small" lang="da">Nu: det hele, kørende.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 21 -->
+<section class="slide" data-act="4 &mdash; Demo" data-min="0.5"
+  data-note-en="Switch windows now. The app is already warm; do not build anything on stage. If any segment misbehaves, open the recording and keep talking. Three segments, five minutes, and segment B is the one that earns trust."
+  data-note-da="Skift vindue nu. Appen er allerede varm; byg ingenting paa scenen. Hvis et segment driller, aabn optagelsen og fortsaet med at tale. Tre segmenter, fem minutter, og segment B er det der skaber tillid.">
+  <div class="spread"></div>
+  <div class="eyebrow"><span lang="en">Act 4</span><span lang="da">Akt 4</span></div>
+  <h1 style="font-size:6.4cqh"><span lang="en">Now the<br>running app</span><span lang="da">Nu den<br>kørende app</span></h1>
+  <div class="tbl-wrap" style="max-width:70%">
+    <table>
+      <tbody>
+        <tr><td class="num">A</td><td><span lang="en">A slice, round trip &mdash; ending in the raw event stream</span><span lang="da">En slice, tur-retur &mdash; ender i den rå event stream</span></td><td class="num">2 min</td></tr>
+        <tr><td class="num">B</td><td><span lang="en">What event sourcing costs, measured</span><span lang="da">Hvad event sourcing koster, målt</span></td><td class="num">2 min</td></tr>
+        <tr><td class="num">C</td><td><span lang="en">The admin console</span><span lang="da">Admin-konsollen</span></td><td class="num">1 min</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p lang="en">Real PostgreSQL, real event store, seeded on startup. Everything on the previous eleven slides is running in this one process.</p>
+  <p lang="da">Rigtig PostgreSQL, rigtig event store, seedet ved opstart. Alt fra de foregående elleve slides kører i denne ene proces.</p>
+  <div class="spread"></div>
+</section>
+
+<!-- =================================================================== 22 -->
+<section class="slide" data-act="4 &mdash; Demo" data-min="2"
+  data-note-en="Run the first four calls quickly, they are setup. Then stop on the last one and let the room read it. Point out that the rename is a separate event, not an overwrite, and that the two GETs are projection-backed so a fast eye may catch the lag. That lag is not a bug, it is the trade-off from component five, now visible."
+  data-note-da="Koer de foerste fire kald hurtigt, de er opsaetning. Stop derefter paa det sidste og lad rummet laese det. Peg paa at omdoebningen er et separat event, ikke en overskrivning, og at de to GETs er projektions-baserede saa et hurtigt oeje kan fange forsinkelsen. Den forsinkelse er ikke en fejl, det er trade-offet fra komponent fem, nu synligt.">
+  <div class="eyebrow"><span lang="en">Demo A</span><span lang="da">Demo A</span><span class="sep">/</span><span class="plain">one slice, round trip</span></div>
+  <h2><span lang="en">From HTTP call to permanent record</span><span lang="da">Fra HTTP-kald til permanent optegnelse</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel" style="flex:1.25 1 0">
+      <figcaption><span>run these in order</span><span class="path">localhost:8080</span></figcaption>
+      <pre><code class="plain">POST /api/admin/instruments
+     { "instrumentId": "INS-DEMO", "symbol": "NOVO-B", "displayName": "Novo Nordisk B" }
+
+GET  /api/admin/instruments/INS-DEMO          # projection-backed, eventually consistent
+
+POST /api/admin/instruments/INS-DEMO/name?displayName=Novo%20Nordisk%20B%20A/S
+
+GET  /api/admin/instruments/INS-DEMO          # renamed
+
+GET  /api/admin/trading-accounts/ACC-DEMO-001/generations/1/events
+     # the raw stream, straight off the event store</code></pre>
+    </figure>
+    <div class="col" style="flex:0.8 1 0">
+      <p class="statement" lang="en">The last call is the argument. Every decision, in order, still there.</p>
+      <p class="statement" lang="da">Det sidste kald er argumentet. Hver beslutning, i rækkefølge, stadig der.</p>
+      <p class="small" lang="en">The rename is a second event, not an overwrite. Nothing was lost to make room for it.</p>
+      <p class="small" lang="da">Omdøbningen er et andet event, ikke en overskrivning. Intet gik tabt for at gøre plads til det.</p>
+      <p class="small" lang="en">If the first <code>GET</code> lags a beat, that is component 05 in the room &mdash; not a bug.</p>
+      <p class="small" lang="da">Hvis det første <code>GET</code> halter et øjeblik, er det komponent 05 i rummet &mdash; ikke en fejl.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 23 -->
+<section class="slide" data-act="4 &mdash; Demo" data-min="2"
+  data-note-en="This is where you earn the room. Run the comparison, then say the caveat before anyone else can: the aggregate path is measured slightly heavier than it needs to be, because sending on the command bus puts dispatch, handler lookup and the UnitOfWork interceptor inside the timed window, while the direct-write path is unchanged. The comparison is biased against event sourcing and we are showing it anyway."
+  data-note-da="Her fortjener du rummet. Koer sammenligningen, sig derefter forbeholdet foer nogen anden kan: aggregate-stien maales lidt tungere end noedvendigt, fordi afsendelse paa command-bussen laegger dispatch, handler-opslag og UnitOfWork-interceptoren inden for det maalte vindue, mens direct-write-stien er uaendret. Sammenligningen er skaev imod event sourcing og vi viser den alligevel.">
+  <div class="eyebrow"><span lang="en">Demo B</span><span lang="da">Demo B</span><span class="sep">/</span><span class="plain">the cost, measured</span></div>
+  <h2><span lang="en">Event sourcing is slower here. Here is how much.</span><span lang="da">Event sourcing er langsommere her. Her er hvor meget.</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <figure class="panel">
+        <figcaption><span>same workload, both paths, back to back</span><span class="path">/admin &rarr; Price Path Comparison</span></figcaption>
+        <pre><code class="plain">POST /api/admin/load-generator/comparisons/price-path?count=100
+
+  aggregate-event-sourced   InstrumentPrice aggregate, via the command bus
+  direct-write              a latest-price upsert table</code></pre>
+      </figure>
+      <p lang="en">A market-data feed at tick rate is the honest worst case for an aggregate. The demo ships the benchmark so you can see it rather than trust a slide.</p>
+      <p lang="da">Et market-data-feed i tick-hastighed er det ærlige worst case for et aggregate. Demoen leverer benchmarket, så du kan se det i stedet for at tro på en slide.</p>
+    </div>
+    <div class="col" style="flex:0.85 1 0">
+      <div class="tradeoff">
+        <div class="cost"><h3><span lang="en">Say this out loud</span><span lang="da">Sig dette højt</span></h3>
+          <p lang="en">The comparison is <strong>biased against event sourcing</strong>. The aggregate path now sends on the command bus, so dispatch, handler lookup and the <code>UnitOfWork</code> interceptor all sit inside the timed window. The direct-write path is unchanged.</p>
+          <p lang="da">Sammenligningen er <strong>skæv imod event sourcing</strong>. Aggregate-stien sender nu på command-bussen, så dispatch, handler-opslag og <code>UnitOfWork</code>-interceptoren ligger alle inden for det målte vindue. Direct-write-stien er uændret.</p></div>
+        <div class="gain"><h3><span lang="en">So the rule is</span><span lang="da">Så reglen er</span></h3>
+          <p lang="en">Event-source what you must be able to explain. Do not event-source a tick feed just because you can.</p>
+          <p lang="da">Event-source det du skal kunne forklare. Event-source ikke et tick-feed bare fordi du kan.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 25 -->
+<section class="slide" data-act="5 &mdash; Limits" data-min="2.5"
+  data-note-en="Do not rush this and do not apologise through it. A framework talk with no costs is a sales pitch, and this slide is why the rest of the talk should be believed. If you only have time for two, take the intra-service line and the event-rename line, because those two are the ones that actually bite in production."
+  data-note-da="Hast ikke gennem denne og undskyld dig ikke igennem den. Et framework-oplaeg uden omkostninger er et salgspitch, og denne slide er hvorfor resten af oplaegget boer tros. Har du kun tid til to, tag intra-service-linjen og event-omdoebnings-linjen, for de to er dem der faktisk bider i produktion.">
+  <div class="eyebrow"><span lang="en">Act 5</span><span lang="da">Akt 5</span><span class="sep">/</span><span class="plain">the honest slide</span></div>
+  <h2><span lang="en">Where it does <em>not</em> fit</span><span lang="da">Hvor det <em>ikke</em> passer</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <ul class="tight">
+        <li lang="en"><strong>Intra-service only.</strong> Locks, queues, inbox and outbox coordinate instances of <em>one</em> service against a shared database. They are not cross-service infrastructure.</li>
+        <li lang="da"><strong>Kun intra-service.</strong> Låse, køer, inbox og outbox koordinerer instanser af <em>én</em> service mod en delt database. De er ikke infrastruktur på tværs af services.</li>
+        <li lang="en"><strong>An event's persisted type is its class name.</strong> This demo's own README tells you to wipe the database, because the slice refactor renamed every event class. Renames cost an upcaster or a migration.</li>
+        <li lang="da"><strong>Et events persisterede type er dets klassenavn.</strong> Denne demos egen README beder dig slette databasen, fordi slice-refaktoreringen omdøbte hver event-klasse. Omdøbninger koster en upcaster eller en migrering.</li>
+        <li lang="en"><strong>Integrations are <code>provided</code> scope.</strong> Consumers declare their own third-party versions. Deliberate, and occasionally annoying.</li>
+        <li lang="da"><strong>Integrationer er <code>provided</code> scope.</strong> Consumers deklarerer selv deres third-party-versioner. Bevidst, og indimellem irriterende.</li>
+      </ul>
+    </div>
+    <div class="col" style="flex:1 1 0">
+      <ul class="tight">
+        <li lang="en"><strong>Table and collection names are concatenated into queries.</strong> Validate them or hard-code them &mdash; there is a checker for exactly this.</li>
+        <li lang="da"><strong>Tabel- og collection-navne konkateneres ind i queries.</strong> Validér dem eller hardcode dem &mdash; der findes en checker til præcis dette.</li>
+        <li lang="en"><strong>Two Jackson majors, one wire format.</strong> Byte-identical JSON across both, which is what keeps old data readable &mdash; and means a serialization change must be run on both build profiles.</li>
+        <li lang="da"><strong>To Jackson-majorversioner, ét wire-format.</strong> Byte-identisk JSON på tværs af begge, hvilket holder gamle data læsbare &mdash; og betyder at en serialiseringsændring skal køres på begge build-profiler.</li>
+        <li lang="en"><strong>Aggregates are not a write-rate solution.</strong> You just watched the benchmark.</li>
+        <li lang="da"><strong>Aggregates er ikke en løsning på skrivehastighed.</strong> Du har lige set benchmarket.</li>
+      </ul>
+      <p class="small" lang="en">None of these are surprises in production. They are surprises in week two, which is cheaper.</p>
+      <p class="small" lang="da">Ingen af disse er overraskelser i produktion. De er overraskelser i uge to, hvilket er billigere.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 26 -->
+<section class="slide" data-act="6 &mdash; Start" data-min="0.5"
+  data-note-en="Show the diff, play the recording, and make the narrow claim only: the structure is what let the agent land the change in the right place, because the slice folder, its CLAUDE.md and its slice.yaml say what belongs there. Do not claim the agent understood the domain."
+  data-note-da="Vis diffen, afspil optagelsen, og fremsaet kun den snaevre paastand: strukturen er hvad der lod agenten laegge aendringen paa rette sted, fordi slice-mappen, dens CLAUDE.md og dens slice.yaml siger hvad der hoerer til der. Paastaa ikke at agenten forstod domaenet.">
+  <div class="eyebrow"><span lang="en">Act 6</span><span lang="da">Akt 6</span><span class="sep">/</span><span class="plain">recorded</span></div>
+  <h2><span lang="en">Why the structure pays off twice</span><span lang="da">Hvorfor strukturen betaler sig to gange</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <p lang="en">Adding a <code>delist_instrument</code> slice: a new event, an aggregate method, a handler, an API file, a <code>slice.yaml</code>.</p>
+      <p lang="da">At tilføje en <code>delist_instrument</code>-slice: et nyt event, en aggregate-metode, en handler, en API-fil, en <code>slice.yaml</code>.</p>
+      <p class="statement" lang="en">A coding agent put every file in the right place on the first attempt &mdash; because the folder, its <code>CLAUDE.md</code> and its <code>slice.yaml</code> say what belongs there.</p>
+      <p class="statement" lang="da">En coding agent lagde hver fil på rette sted i første forsøg &mdash; fordi mappen, dens <code>CLAUDE.md</code> og dens <code>slice.yaml</code> siger hvad der hører til der.</p>
+      <p class="small" lang="en">The same property that makes a slice reviewable by a colleague makes it navigable by a tool. That is not a coincidence.</p>
+      <p class="small" lang="da">Den samme egenskab der gør en slice reviewbar for en kollega, gør den navigerbar for et værktøj. Det er ikke et tilfælde.</p>
+    </div>
+    <figure class="panel sm" style="flex:0.9 1 0">
+      <figcaption><span>what a slice folder tells a reader &mdash; human or not</span><span class="path">use_cases/&lt;slice&gt;/</span></figcaption>
+      <pre><code class="plain">DelistInstrument.java          the command, and the request body
+DelistInstrumentHandler.java   the one decision component
+DelistInstrumentAPI.java       the one endpoint
+slice.yaml                     handles / publishes / writes / invariants
+CLAUDE.md                      why it exists, and what it must not import</code></pre>
+    </figure>
+  </div>
+</section>
+
+<!-- =================================================================== 27 -->
+<section class="slide" data-act="6 &mdash; Start" data-min="1"
+  data-note-en="Land on one sentence, then stop talking and take questions. If the room is quiet, ask the question yourself: what in our systems has an audit conversation attached to it? That is the candidate, not the whole platform."
+  data-note-da="Land paa én saetning, hold saa op med at tale og tag spoergsmaal. Er rummet stille, stil selv spoergsmaalet: hvad i vores systemer har en audit-samtale haengende ved sig? Det er kandidaten, ikke hele platformen.">
+  <div class="eyebrow"><span lang="en">Where to start</span><span lang="da">Hvor man starter</span></div>
+  <h2><span lang="en">Pick the thing you keep having to explain</span><span lang="da">Vælg det du hele tiden skal forklare</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <p lang="en">Not the whole platform. One aggregate whose history somebody keeps asking about &mdash; a balance, a settlement, an approval.</p>
+      <p lang="da">Ikke hele platformen. Ét aggregate hvis historik nogen bliver ved at spørge om &mdash; en saldo, en settlement, en godkendelse.</p>
+      <div class="tbl-wrap">
+        <table>
+          <tbody>
+            <tr><td><code>/essentials:init</code></td><td><span lang="en">scaffolds a project on the starters</span><span lang="da">stilladserer et projekt på starterne</span></td></tr>
+            <tr><td><code>LLM/LLM.md</code></td><td><span lang="en">the documentation entry point, per module</span><span lang="da">dokumentationens indgang, pr. modul</span></td></tr>
+            <tr><td><code>examples/essentials-trading-demo</code></td><td><span lang="en">everything you just saw, runnable</span><span lang="da">alt du netop har set, kørbart</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="col center" style="flex:1 1 0">
+      <p class="statement" lang="en">Event-source what you must be able to explain. Project everything you must be able to query. Keep the rest boring.</p>
+      <p class="statement" lang="da">Event-source det du skal kunne forklare. Projicér alt du skal kunne query'e. Hold resten kedeligt.</p>
+      <div class="eyebrow" style="margin-top:2cqh"><span lang="en">Questions</span><span lang="da">Spørgsmål</span></div>
+      <p class="small" lang="en"><code>A</code> &mdash; appendix: the four wrong answers to requirement three</p>
+      <p class="small" lang="da"><code>A</code> &mdash; appendiks: de fire forkerte svar på krav nummer tre</p>
+    </div>
+  </div>
+</section>
+
+<!-- =============================================================== APPENDIX -->
+<section class="slide" data-act="Appendix &mdash; on demand" data-min="0"
+  data-note-en="Backup slide for requirement three. Only show it if somebody pushes, or asks why not just do X. Go through the four wrong answers, because at least one person in the room has shipped each of them. The afterCommit one is the subtle one and worth dwelling on: it is on the right side of the commit and still loses the call, which is exactly why an outbox or an inbox exists. Then the question to put back to the business, because that is the DDD move: ask what before actually means. It is almost always before tradeable, not before the HTTP response, and that is what makes the whole shape acceptable rather than a workaround."
+  data-note-da="Backup-slide til krav nummer tre. Vis den kun hvis nogen presser, eller spoerger hvorfor man ikke bare goer X. Gaa de fire forkerte svar igennem, for mindst én i rummet har sendt hvert af dem i produktion. afterCommit er det subtile og vaerd at dvaele ved: det er paa den rigtige side af commit og mister stadig kaldet, hvilket er praecis derfor en outbox eller en inbox findes. Derefter spoergsmaalet der skal tilbage til forretningen, for det er DDD-traekket: spoerg hvad foer egentlig betyder. Det er naesten altid foer handelbar, ikke foer HTTP-svaret, og det er hvad der goer hele formen til en loesning frem for en omgaaelse.">
+  <div class="eyebrow"><span lang="en">Appendix</span><span lang="da">Appendiks</span><span class="sep">/</span><span class="plain">follows requirement three &mdash; press A</span></div>
+  <h2><span lang="en">Four tempting wrong answers</span><span lang="da">Fire fristende forkerte svar</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1.2 1 0">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Tempting</span><span lang="da">Fristende</span></th>
+            <th><span lang="en">Why it fails</span><span lang="da">Hvorfor det fejler</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td><span lang="en">HTTP call inside the <code>@CmdHandler</code></span><span lang="da">HTTP-kald inde i <code>@CmdHandler</code></span></td>
+                <td class="small"><span lang="en">it is inside the <code>UnitOfWork</code>: connection and aggregate locks held for the round trip, and a rollback cannot un-call it &mdash; a retry calls twice</span><span lang="da">det er inde i <code>UnitOfWork</code>'en: connection og aggregate-låse holdes under rundturen, og et rollback kan ikke af-kalde det &mdash; et retry kalder to gange</span></td></tr>
+            <tr><td><span lang="en"><code>afterCommit</code> / <code>TransactionSynchronization</code></span><span lang="da"><code>afterCommit</code> / <code>TransactionSynchronization</code></span></td>
+                <td class="small"><span lang="en">right side of the commit, but <strong>not durable</strong>: the process dies after commit and the call is simply lost, with nothing recording that it was owed. This is the exact hole an inbox fills</span><span lang="da">rigtig side af commit, men <strong>ikke durable</strong>: processen dør efter commit og kaldet er væk, uden at noget har registreret at det skyldtes. Præcis det hul en inbox lukker</span></td></tr>
+            <tr><td><span lang="en">In-memory <code>EventBus</code> listener</span><span lang="da">In-memory <code>EventBus</code>-listener</span></td>
+                <td class="small"><span lang="en">same loss, and it dies with the JVM. Fine for cache invalidation, not for an obligation</span><span lang="da">samme tab, og den dør med JVM'en. Fin til cache-invalidering, ikke til en forpligtelse</span></td></tr>
+            <tr><td><span lang="en">&ldquo;Make it <code>@Async</code>&rdquo;</span><span lang="da">&ldquo;Gør den <code>@Async</code>&rdquo;</span></td>
+                <td class="small"><span lang="en">the obligation now lives in a thread pool in RAM: a restart forgets it, and there is no redelivery, no DLQ and nothing to look at</span><span lang="da">forpligtelsen bor nu i en thread pool i RAM: en genstart glemmer den, og der er ingen redelivery, ingen DLQ og intet at se på</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small" lang="en">If the risk service answers by webhook rather than in the response, the endpoint writes to an <strong>Inbox</strong> instead &mdash; stored and de-duplicated first, handled in its own transaction after. Same principle, mirrored.</p>
+      <p class="small" lang="da">Svarer risk-servicen via webhook i stedet for i responsen, skriver endpointet til en <strong>Inbox</strong> &mdash; gemt og de-dupliceret først, håndteret i sin egen transaktion bagefter. Samme princip, spejlet.</p>
+    </div>
+    <div class="col" style="flex:1 1 0">
+      <p lang="en"><strong>The same shape covers every outbound call</strong> &mdash; a payment authorisation, a KYC lookup, a credit decision, an email, a PDF to generate. Anything where the answer is not yours to compute and the work must not be lost.</p>
+      <p lang="da"><strong>Samme form dækker hvert udgående kald</strong> &mdash; en betalingsautorisation, et KYC-opslag, en kreditbeslutning, en e-mail, en PDF der skal genereres. Alt hvor svaret ikke er dit at beregne, og arbejdet ikke må gå tabt.</p>
+      <p class="small" lang="en">Somebody does have to watch the dead letter queue. That is a standing operational commitment, not a one-off.</p>
+      <p class="small" lang="da">Nogen skal holde øje med dead letter queue. Det er en løbende driftsforpligtelse, ikke en engangsopgave.</p>
+      <div class="gloss">
+        <b><span lang="en">The question to put back to the business</span><span lang="da">Spørgsmålet der skal tilbage til forretningen</span></b>
+        <span lang="en">Does &ldquo;approved before&rdquo; mean before the instrument is <em>tradeable</em>, or before the HTTP response returns? It is almost always the former &mdash; and that is what makes this whole shape acceptable rather than a workaround.</span>
+        <span lang="da">Betyder &ldquo;godkendt først&rdquo; før instrumentet er <em>handelbart</em>, eller før HTTP-svaret returnerer? Det er næsten altid det første &mdash; og det er hvad der gør hele denne form til en løsning frem for en omgåelse.</span>
+      </div>
+      <p class="small" lang="en">If you object to <code>Instrument</code> carrying a state that exists only because of an external dependency, give the process its own aggregate &mdash; a <code>RiskCheck</code> stream &mdash; and keep the instrument clean. That is the process-manager variant.</p>
+      <p class="small" lang="da">Har du indvendinger mod at <code>Instrument</code> bærer en tilstand der kun findes på grund af en ekstern afhængighed, så giv processen sit eget aggregate &mdash; en <code>RiskCheck</code>-stream &mdash; og hold instrumentet rent. Det er process-manager-varianten.</p>
+    </div>
+  </div>
+</section>
+
+<div id="note"></div>
+
+<div id="help">
+  <dl>
+    <dt>&rarr; &darr; Space</dt><dd><span lang="en">next slide</span><span lang="da">næste slide</span></dd>
+    <dt>&larr; &uarr;</dt><dd><span lang="en">previous slide</span><span lang="da">forrige slide</span></dd>
+    <dt>Home / End</dt><dd><span lang="en">first / last</span><span lang="da">første / sidste</span></dd>
+    <dt>N</dt><dd><span lang="en">speaker note</span><span lang="da">talernote</span></dd>
+    <dt>L</dt><dd><span lang="en">English / Dansk</span><span lang="da">English / Dansk</span></dd>
+    <dt>H</dt><dd><span lang="en">handout (light) mode</span><span lang="da">handout (lys) tilstand</span></dd>
+    <dt>T</dt><dd><span lang="en">start / reset the talk timer</span><span lang="da">start / nulstil taler-uret</span></dd>
+    <dt>A</dt><dd><span lang="en">jump to the appendix (external approval)</span><span lang="da">spring til appendiks (ekstern godkendelse)</span></dd>
+    <dt>?</dt><dd><span lang="en">this list</span><span lang="da">denne liste</span></dd>
+  </dl>
+</div>
+
+<div id="rail">
+  <span class="bar" id="bar"></span>
+  <span class="act" id="railAct"></span>
+  <span class="fill"></span>
+  <span id="railTimer"></span>
+  <span id="railBudget"></span>
+  <span><b id="railNum">1</b> / <b id="railTot">1</b></span>
+</div>
+
+</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var root   = document.documentElement;
+  var slides = Array.prototype.slice.call(document.querySelectorAll(".slide"));
+  var note   = document.getElementById("note");
+  var help   = document.getElementById("help");
+  var bar    = document.getElementById("bar");
+  var idx    = 0;
+  var notesOn = false;
+  var timerStart = null;
+
+  /* ---- syntax highlighting -------------------------------------------- */
+  var TOKENS = new RegExp([
+    "(\\/\\*[\\s\\S]*?\\*\\/|\\/\\/[^\\n]*|#[^\\n]*)",                     // 1 comment
+    "(\"(?:[^\"\\\\\\n]|\\\\.)*\"|'(?:[^'\\\\\\n]|\\\\.)*')",              // 2 string
+    "(@[A-Za-z_][A-Za-z0-9_]*)",                                            // 3 annotation
+    "\\b(public|private|protected|class|record|interface|implements|extends|" +
+      "return|new|void|static|final|if|else|import|package|var|this|null|" +
+      "true|false|boolean|long|int|throws|try|catch|for|super|enum|" +
+      "abstract|instanceof)\\b",                                            // 4 keyword
+    "\\b([A-Z][A-Za-z0-9_]*)\\b",                                           // 5 type
+    "\\b(\\d+)\\b"                                                          // 6 number
+  ].join("|"), "g");
+
+  var CLASSES = { 1: "tok-com", 2: "tok-str", 3: "tok-ann", 4: "tok-kw", 5: "tok-typ", 6: "tok-num" };
+
+  function highlight(el) {
+    var src = el.textContent;
+    var out = "";
+    var last = 0;
+    var m;
+    TOKENS.lastIndex = 0;
+    while ((m = TOKENS.exec(src)) !== null) {
+      var group = 0;
+      for (var g = 1; g <= 6; g++) { if (m[g] !== undefined) { group = g; break; } }
+      if (!group) { continue; }
+      out += escapeHtml(src.slice(last, m.index));
+      out += '<span class="' + CLASSES[group] + '">' + escapeHtml(m[0]) + "</span>";
+      last = m.index + m[0].length;
+    }
+    out += escapeHtml(src.slice(last));
+    el.innerHTML = out;
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  Array.prototype.forEach.call(
+    document.querySelectorAll("code.java, code.yaml"),
+    highlight
+  );
+
+  /* ---- navigation ------------------------------------------------------ */
+  /* Appendix slides sit after the close and are shown only on demand, so they must
+     not skew the presenter's sense of position. They are counted separately and the
+     progress bar treats the closing slide as the end. */
+  function isAppendix(s) { return (s.dataset.act || "").indexOf("Appendix") === 0; }
+
+  var flow     = slides.filter(function (s) { return !isAppendix(s); });
+  var appendix = slides.filter(isAppendix);
+
+  function show(n) {
+    idx = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach(function (s, i) { s.classList.toggle("on", i === idx); });
+    var s = slides[idx];
+    document.getElementById("railAct").innerHTML = s.dataset.act || "";
+
+    if (isAppendix(s)) {
+      document.getElementById("railNum").textContent = "A" + (appendix.indexOf(s) + 1);
+      document.getElementById("railTot").textContent = "A" + appendix.length;
+      bar.style.width = "100%";
+    } else {
+      document.getElementById("railNum").textContent = String(flow.indexOf(s) + 1);
+      document.getElementById("railTot").textContent = String(flow.length);
+      bar.style.width = ((flow.indexOf(s) + 1) / flow.length * 100) + "%";
+    }
+
+    var min = s.dataset.min;
+    document.getElementById("railBudget").textContent =
+      (min && min !== "0") ? "budget " + min + " min" : "";
+    renderNote();
+    try { location.hash = "s" + (idx + 1); } catch (e) { /* ignore */ }
+  }
+
+  function renderNote() {
+    var s = slides[idx];
+    var lang = root.getAttribute("data-lang") === "da" ? "da" : "en";
+    var text = s.dataset["note" + (lang === "da" ? "Da" : "En")] || "";
+    note.innerHTML = "<b>" + (lang === "da" ? "Talernote" : "Speaker note") + "</b>" + escapeHtml(text);
+    note.classList.toggle("on", notesOn && !!text);
+  }
+
+  /* ---- toggles --------------------------------------------------------- */
+  function setLang(lang) {
+    root.setAttribute("data-lang", lang);
+    try { localStorage.setItem("deck-lang", lang); } catch (e) { /* ignore */ }
+    renderNote();
+  }
+
+  function toggleLang() {
+    setLang(root.getAttribute("data-lang") === "da" ? "en" : "da");
+  }
+
+  function setMode(mode) {
+    if (mode === "handout") { root.setAttribute("data-mode", "handout"); }
+    else { root.removeAttribute("data-mode"); }
+    document.getElementById("modeBtn").setAttribute("aria-pressed", mode === "handout" ? "true" : "false");
+    try { localStorage.setItem("deck-mode", mode); } catch (e) { /* ignore */ }
+  }
+
+  function toggleMode() {
+    setMode(root.getAttribute("data-mode") === "handout" ? "dark" : "handout");
+  }
+
+  function toggleNotes() {
+    notesOn = !notesOn;
+    document.getElementById("noteBtn").setAttribute("aria-pressed", notesOn ? "true" : "false");
+    renderNote();
+  }
+
+  function tickTimer() {
+    var el = document.getElementById("railTimer");
+    if (timerStart === null) { el.textContent = ""; return; }
+    var secs = Math.floor((performance.now() - timerStart) / 1000);
+    var mm = String(Math.floor(secs / 60)).padStart(2, "0");
+    var ss = String(secs % 60).padStart(2, "0");
+    el.textContent = mm + ":" + ss + " / 36:00";
+  }
+  setInterval(tickTimer, 1000);
+
+  /* ---- wiring ---------------------------------------------------------- */
+  document.getElementById("langBtn").addEventListener("click", toggleLang);
+  document.getElementById("modeBtn").addEventListener("click", toggleMode);
+  document.getElementById("noteBtn").addEventListener("click", toggleNotes);
+  document.getElementById("apxBtn").addEventListener("click", function () {
+    if (appendix.length) { show(slides.indexOf(appendix[0])); }
+  });
+  document.getElementById("helpBtn").addEventListener("click", function () {
+    help.classList.toggle("on");
+  });
+  help.addEventListener("click", function () { help.classList.remove("on"); });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) { return; }
+    switch (e.key) {
+      case "ArrowRight": case "ArrowDown": case " ": case "PageDown":
+        show(idx + 1); e.preventDefault(); break;
+      case "ArrowLeft": case "ArrowUp": case "PageUp":
+        show(idx - 1); e.preventDefault(); break;
+      case "Home": show(0); e.preventDefault(); break;
+      /* End goes to the closing slide, not past it into the appendix. */
+      case "End":  show(slides.indexOf(flow[flow.length - 1])); e.preventDefault(); break;
+      case "n": case "N": toggleNotes(); break;
+      case "l": case "L": toggleLang(); break;
+      case "h": case "H": toggleMode(); break;
+      case "t": case "T":
+        timerStart = (timerStart === null) ? performance.now() : null;
+        tickTimer(); break;
+      case "a": case "A":
+        if (appendix.length) { show(slides.indexOf(appendix[0])); }
+        break;
+      case "?": help.classList.toggle("on"); break;
+      case "Escape": help.classList.remove("on"); break;
+    }
+  });
+
+  /* ---- restore state --------------------------------------------------- */
+  try {
+    setLang(localStorage.getItem("deck-lang") === "da" ? "da" : "en");
+    setMode(localStorage.getItem("deck-mode") === "handout" ? "handout" : "dark");
+  } catch (e) {
+    setLang("en");
+    setMode("dark");
+  }
+
+  var start = /^#s(\d+)$/.exec(location.hash || "");
+  show(start ? parseInt(start[1], 10) - 1 : 0);
+})();
+</script>

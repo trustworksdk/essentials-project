@@ -1,0 +1,17 @@
+# Opt-in companion to the `compose` profile: throw the data away when the application stops.
+#
+#   mvn spring-boot:run -pl :essentials-webshop-demo -Dspring-boot.run.profiles=compose,compose-fresh
+#
+# `down` removes the containers rather than stopping them, and `-v` removes their volumes with them - so the
+# next run starts with an empty event store, empty read models, and no subscription resume points.
+#
+# It is deliberately NOT the default. The demo's whole subject is a durable event store, the order-history panel
+# is meant to show orders from earlier runs, and "reset a projection and watch it rebuild from the events" is a
+# beat in the talk - none of which survives a database that erases itself. Reach for this before a talk, or when
+# a previous run left state that confuses the current one, and not otherwise.
+spring:
+  docker:
+    compose:
+      stop:
+        command: down
+        arguments: -v

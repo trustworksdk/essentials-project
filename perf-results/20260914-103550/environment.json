@@ -1,0 +1,15 @@
+{
+  "timestamp": "20260914-103550",
+  "os": "Darwin",
+  "hostCores": "14",
+  "hostMemoryGb": "36",
+  "dockerCpus": "8",
+  "dockerMemoryGb": "15",
+  "java": "openjdk version \'25.0.2\' 2026-01-20 LTS",
+  "sharedBuffers": "1GB",
+  "cpuPartitioning": "no",
+  "soakMinutes": 10,
+  "soakRate": 600,
+  "gitCommit": "8344471e",
+  "gitDirty": true
+}

@@ -1,0 +1,10 @@
+===== ENQUEUE-TO-HANDLER LATENCY, 2000 messages at 500/s =====
+configuration                 p50        p90        p99        max
+Tier 2 on  response         0,91ms      1,14ms     17,38ms     33,02ms
+Tier 2 on  service          0,67ms      0,88ms      1,56ms     21,09ms
+Tier 2 off response         2,72ms      3,11ms      6,69ms      9,94ms
+Tier 2 off service          2,53ms      2,91ms      4,71ms      9,71ms
+response = from the intended schedule slot; service = from when the producer actually sent.
+A gap between them is the producer stalling, not the engine delivering slowly.
+Baseline engine at its 20ms poll, measured in Phase 0: p50 20.7ms, p99 27.1ms
+===========================================================
