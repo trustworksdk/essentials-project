@@ -114,6 +114,17 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     private final AtomicBoolean warnedEventStoreIsNoAwaitedGapInspector = new AtomicBoolean();
 
     /**
+     * Default of {@link #getFailedBatchReplayTimeBudget()}: three times HikariCP's default {@code connectionTimeout} (30 s)
+     */
+    static final long DEFAULT_FAILED_BATCH_REPLAY_TIME_BUDGET_SECONDS = 90;
+
+    /**
+     * The clock {@link #forwardFailedBatchOneEventPerUnitOfWork} measures its time budget with - replaced by
+     * {@code ForwardFailedBatchOneEventPerUnitOfWorkTest}, so no test has to wait for the budget to run out
+     */
+    LongSupplier nanoTime = System::nanoTime;
+
+    /**
      * Resolves a unique {@link SubscriberId} by combining the processor name and aggregate type.
      *
      * @param aggregateType the type of aggregate associated with the subscriber
@@ -786,6 +797,45 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     }
 
     /**
+     * How long {@link #forwardFailedBatchOneEventPerUnitOfWork} - the replay, one event per {@link UnitOfWork}, of a
+     * batch a skipping {@link SubscriptionErrorPolicy} gave up on - may go on starting new events, counted from the start
+     * of the replay. Once it is spent, the events not tried yet are not forwarded and the skip takes them with the batch.
+     * The replay checks it only between events, so the delivery thread is blocked for at most this budget plus one event's
+     * forward and its immediate retry after an I/O failure - with a database that does not answer, each of those two can
+     * wait out the connection pool's connection timeout.
+     * <p>
+     * Default: 90 seconds - three times HikariCP's default
+     * {@code connectionTimeout} of 30 seconds, so one event that waits out a connection timeout on both of its forwards
+     * still leaves time for the events after it, while a database that is gone ends the replay after a few timeouts
+     * instead of one per event of the batch. Override it to match your own pool's connection timeout.
+     * <p>
+     * A budget too large to count in nanoseconds (for example {@code Duration.ofSeconds(Long.MAX_VALUE)}) means no
+     * limit: every event of the batch is tried. A zero or negative budget forwards only the first event; the rest are
+     * not tried and the skip takes them with the batch.
+     *
+     * @return the time budget of a failed batch's replay; read once at the start of each replay
+     */
+    protected Duration getFailedBatchReplayTimeBudget() {
+        return Duration.ofSeconds(DEFAULT_FAILED_BATCH_REPLAY_TIME_BUDGET_SECONDS);
+    }
+
+    /**
+     * {@link Duration#toNanos()} throws {@link ArithmeticException} for a budget above {@link Long#MAX_VALUE}
+     * nanoseconds (about 292 years); such a budget is taken as no limit, not as a failure of the replay. A negative
+     * budget is taken as zero, so the deadline lies at the start of the replay and {@code now - deadline} cannot wrap.
+     */
+    private static long budgetInNanos(Duration budget) {
+        if (budget.isNegative()) {
+            return 0;
+        }
+        try {
+            return budget.toNanos();
+        } catch (ArithmeticException tooLargeToCount) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    /**
      * What the batched forwards ({@link EventProcessor#getForwardBatchSize()}, {@link PartitionedViewEventProcessor}) do
      * with a batch the {@link SubscriptionErrorPolicy} gave up on, as their
      * {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable, SubscriptionErrorPolicy)}. Whether the policy
@@ -794,16 +844,25 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * <p>
      * When the policy <b>skips</b> ({@link SubscriptionErrorPolicy#stopsOnError()} {@code false}), the batch's events are
      * forwarded again one per {@link UnitOfWork}, so an event that still cannot be forwarded no longer takes the batch's
-     * other events with it: the skip loses the events that fail again. Each event is tried once more, without the policy's
-     * retries, except after a failure {@link IOExceptionUtil#isIOException(Throwable)} classifies as an I/O, connection or
-     * transaction failure: such an event is tried once more at once, in a new {@link UnitOfWork}, so a one-off (a stale
-     * pooled connection) does not cost it. When that second attempt fails with such a failure too, the database is
-     * probed ({@link #databaseReachable()}, a {@code SELECT 1} in a {@link UnitOfWork} of its own): if the probe fails,
-     * the database is taken as gone and the events after this one are not tried - the skip loses them too, instead of
-     * each waiting for the same failure; if it succeeds, the failure is taken as specific to the event (an
-     * {@code IOException} from an override of the forward, say) and the next event is tried. Each event is therefore
-     * forwarded at most twice and the database probed at most once per event. Only the first failure is logged with its
-     * stack trace; the later ones are logged without it and reach the subscriber as suppressed exceptions of the first.
+     * other events with it: the skip loses the events that fail again. Each event is forwarded again once, without the
+     * policy's retries. After a failure {@link IOExceptionUtil#isIOException(Throwable)} classifies as an I/O, connection
+     * or transaction failure, the event is forwarded a second time at once, in a new {@link UnitOfWork}, so a one-off (a
+     * stale pooled connection, replaced on the next borrow) does not cost it; should that second forward fail as well, the
+     * first one's failure is attached to it as a suppressed exception. The retry is kept because a pool can hold several
+     * stale connections after a database restart, and the time budget bounds what it costs.
+     * <p>
+     * What stops the replay is time, never the kind or the number of failures: before each event after the first, the
+     * replay checks whether {@link #getFailedBatchReplayTimeBudget()}, counted from the start of the replay, is spent. If
+     * it is, the events not tried yet are not forwarded - one WARN names how many and the global-event-order the replay
+     * stopped at - and the skip takes them with the batch, so they are lost like the events that failed. They cannot be
+     * left to redelivery: the subscriber advances its resume point past the whole batch once the policy has skipped it.
+     * The delivery thread is therefore blocked for at most the budget plus one event's forward and its retry. A spent
+     * budget is reported to the subscriber as a {@link FailedBatchReplayTimeBudgetSpentException} - thrown when no event
+     * failed, else attached to the first failure as a suppressed exception - so a skip never passes for a batch that was
+     * forwarded whole.
+     * <p>
+     * Only the first failure is logged with its stack trace; the later ones are logged without it and reach the subscriber
+     * as suppressed exceptions of the first.
      * <p>
      * When the policy <b>stops</b>, nothing is forwarded and the batch is left to the policy: the subscription stops at the
      * batch's first event and forwards the whole batch again once it is resumed. A stop that turns into a skip after
@@ -815,9 +874,9 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * @param forwardEvent            forwards one event; called inside a {@link UnitOfWork} of its own
      * @return true if every event of the batch was forwarded; false if the policy stops
      * @throws RuntimeException the failure of the first event that could not be forwarded (those of the others added as
-     *                          suppressed), after every other event was forwarded, or after an event that failed twice
-     *                          with an I/O or connection failure while the database did not answer the probe: the
-     *                          policy then skips the batch
+     *                          suppressed), once every other event was tried or the time budget was spent; a
+     *                          {@link FailedBatchReplayTimeBudgetSpentException} when the budget was spent before any event
+     *                          failed. The policy then skips the batch
      */
     boolean forwardFailedBatchOneEventPerUnitOfWork(List<PersistedEvent> events,
                                                     Throwable batchFailure,
@@ -828,26 +887,42 @@ public abstract class AbstractEventProcessor implements Lifecycle {
         }
         log.warn(msg("[{}] Forwarding the batch [#{} - #{}] failed and its SubscriptionErrorPolicy skips it - forwarding its {} events again one per UnitOfWork",
                      getProcessorName(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), events.size()), batchFailure);
+        var              budget       = getFailedBatchReplayTimeBudget();
+        var              deadline     = nanoTime.getAsLong() + budgetInNanos(budget);
         RuntimeException firstFailure = null;
         for (var index = 0; index < events.size(); index++) {
-            var event   = events.get(index);
+            var event = events.get(index);
+            if (index > 0 && nanoTime.getAsLong() - deadline >= 0) {
+                // The budget is spent: the untried rest is not forwarded, and the skip takes it with the batch
+                var notTried = events.size() - index;
+                log.warn(msg("[{}] Stopped forwarding the batch [#{} - #{}] again at global-event-order {}: its time budget of {} is spent - its {} remaining event(s) are not tried and are skipped with it",
+                             getProcessorName(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), event.globalEventOrder(), budget, notTried));
+                var budgetSpent = new FailedBatchReplayTimeBudgetSpentException(msg("[{}] The time budget of {} for forwarding the failed batch [#{} - #{}] again was spent at global-event-order {} - its {} remaining event(s) were not tried",
+                                                                                    getProcessorName(), budget, events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), event.globalEventOrder(), notTried));
+                if (firstFailure == null) {
+                    throw budgetSpent;
+                }
+                firstFailure.addSuppressed(budgetSpent);
+                break;
+            }
             var failure = forwardInUnitOfWorkOfItsOwn(event, forwardEvent);
             if (failure == null) {
                 continue;
             }
-            var databaseGone = false;
             if (IOExceptionUtil.isIOException(failure)) {
-                // Possibly a one-off (a stale pooled connection, replaced on the next borrow): the same event is tried
-                // once more, in a new UnitOfWork, before it counts as failed
-                log.warn(msg("[{}] Forwarding the event with global-event-order {} ({} '{}', event-order {}) on its own failed with an I/O or connection failure - trying it once more in a new UnitOfWork: {}",
+                // Possibly a one-off (a stale pooled connection, replaced on the next borrow): the same event is forwarded
+                // a second time, in a new UnitOfWork, before it counts as failed
+                log.warn(msg("[{}] Forwarding the event with global-event-order {} ({} '{}', event-order {}) on its own failed with an I/O or connection failure - forwarding it a second time in a new UnitOfWork: {}",
                              getProcessorName(), event.globalEventOrder(), event.aggregateType(), event.aggregateId(), event.eventOrder(), failure));
+                var firstAttemptFailure = failure;
                 failure = forwardInUnitOfWorkOfItsOwn(event, forwardEvent);
                 if (failure == null) {
                     continue;
                 }
-                // The same event failed twice with an I/O failure: the database is gone only if it does not answer a
-                // probe either - otherwise the failure is specific to the event (an IOException from an override of the forward)
-                databaseGone = IOExceptionUtil.isIOException(failure) && !databaseReachable();
+                if (failure != firstAttemptFailure) { // NOPMD CompareObjectsWithEquals - identity is meant: Throwable.addSuppressed refuses the same instance
+                    // The first attempt's stack trace stays diagnosable when the two attempts failed differently
+                    failure.addSuppressed(firstAttemptFailure);
+                }
             }
             if (firstFailure == null) {
                 log.error(msg("[{}] Could not forward the event with global-event-order {} ({} '{}', event-order {}) on its own either - it is skipped",
@@ -858,15 +933,6 @@ public abstract class AbstractEventProcessor implements Lifecycle {
                 log.warn(msg("[{}] Could not forward the event with global-event-order {} ({} '{}', event-order {}) on its own either - it is skipped: {}",
                              getProcessorName(), event.globalEventOrder(), event.aggregateType(), event.aggregateId(), event.eventOrder(), failure));
                 firstFailure.addSuppressed(failure);
-            }
-            if (databaseGone) {
-                // The events after it would each wait for the same connection failure
-                var notTried = events.size() - index - 1;
-                if (notTried > 0) {
-                    log.warn(msg("[{}] Stopped forwarding the batch [#{} - #{}] again at global-event-order {}: it failed twice with an I/O or connection failure and the database did not answer a probe - its {} later event(s) are not tried and are skipped with it",
-                                 getProcessorName(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), event.globalEventOrder(), notTried));
-                }
-                break;
             }
         }
         if (firstFailure != null) {
@@ -890,19 +956,14 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     }
 
     /**
-     * Whether the event store's database answers a {@code SELECT 1} in a {@link UnitOfWork} of its own - asked by
-     * {@link #forwardFailedBatchOneEventPerUnitOfWork} after the same event failed twice with an I/O or connection failure,
-     * to tell the database gone from a failure specific to the event
-     *
-     * @return true if the probe succeeded; false if it failed
+     * Thrown by, or attached as a suppressed exception to the failure thrown by,
+     * {@link #forwardFailedBatchOneEventPerUnitOfWork} when {@link #getFailedBatchReplayTimeBudget()} was spent before
+     * every event of the failed batch was tried: its message names how many events were not tried and where the replay
+     * stopped
      */
-    boolean databaseReachable() {
-        try {
-            eventStore.getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("SELECT 1"));
-            return true;
-        } catch (RuntimeException probeFailure) {
-            log.warn(msg("[{}] The event store's database did not answer a probe: {}", getProcessorName(), probeFailure));
-            return false;
+    public static final class FailedBatchReplayTimeBudgetSpentException extends RuntimeException {
+        FailedBatchReplayTimeBudgetSpentException(String message) {
+            super(message);
         }
     }
 

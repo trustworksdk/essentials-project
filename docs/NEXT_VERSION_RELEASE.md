@@ -334,15 +334,19 @@ the first one started. `PartitionedEventProcessor` is the alternative, chosen by
   `EventProcessor` with `getForwardBatchSize()` above 1, and to `PartitionedViewEventProcessor` (§2.10). Up to a batch
   is still skipped when the replay cannot run at all (the database unreachable), and when a stopping policy turns into
   a skip after `AutoResume.maxAttempts` resumes. An event that fails with an I/O or connection failure, as
-  `IOExceptionUtil.isIOException` classifies it, is tried once more at once in a new unit of work, so a one-off (a
-  stale pooled connection, say) does not cost it. When it fails that way again, the replay probes the database with a
-  `SELECT 1` in a unit of work of its own: if the probe fails too, the replay stops and skips the batch's later events
-  untried, instead of each of them waiting for its own connection timeout on the subscription's thread; if the probe
-  succeeds, the failure is specific to the event and the next event is tried. Of the events that fail again, only the first is logged with
+  `IOExceptionUtil.isIOException` classifies it, is forwarded a second time at once in a new unit of work, so a one-off
+  (a stale pooled connection, say) does not cost it; when that fails too, the first attempt's failure is attached to it
+  as a suppressed exception. Only time stops the replay: before each event after the first, it checks the new
+  `AbstractEventProcessor.getFailedBatchReplayTimeBudget()` (default 90 s, three times HikariCP's default
+  `connectionTimeout`; override it to match your pool). Once the budget is spent, the batch's untried events are
+  skipped with it, not redelivered - one WARN names how many - and the subscription's thread is blocked for at most the
+  budget plus one event's two forwards, instead of each event waiting for its own connection timeout. A spent budget
+  reaches the subscriber as `AbstractEventProcessor.FailedBatchReplayTimeBudgetSpentException`, thrown when no event
+  failed, else attached to the first failure. Of the events that fail again, only the first is logged with
   its stack trace. Whether the policy skips is read from the policy the batched subscription was built with, handed to the
   new `BatchedPersistedEventHandler.handOffFailedBatch(events, failure, subscriptionErrorPolicy)` overload (by default it
   delegates to the two-argument one), so a skipping policy now also replays a batch under an `EventStoreSubscriptionManager`
-  other than `DefaultEventStoreSubscriptionManager`, where it used to skip the whole batch. (`c5e495008`, `b05d29a79`, `cf71a917f`, `be5c1190a`, `304fc2a47`)
+  other than `DefaultEventStoreSubscriptionManager`, where it used to skip the whole batch. (`c5e495008`, `b05d29a79`, `cf71a917f`, `be5c1190a`, `304fc2a47`, `<!-- fix:U-001 -->`)
 
 Whether a queue keeps key order across instances is the new `DurableQueues.keepsKeyOrderAcrossInstances()` /
 `Inboxes.keepsKeyOrderAcrossInstances()`: `false` by default, `true` for the shard-owned adapter.

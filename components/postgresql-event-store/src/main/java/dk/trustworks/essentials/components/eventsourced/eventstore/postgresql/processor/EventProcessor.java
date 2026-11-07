@@ -455,8 +455,8 @@ public abstract class EventProcessor extends AbstractEventProcessor {
      * applies - inside the one unit of work the batch is handled in, which also advances the resume point. A batch that
      * fails rolls back whole, forwards included, and is retried as the {@link SubscriptionErrorPolicy} says. When the
      * policy gives up on it and skips, its events are forwarded again one per unit of work first, so the skip loses only
-     * the events that fail again, or, once an event fails twice with an I/O or connection failure and the database does
-     * not answer a probe either, also the events after it - see {@link #forwardFailedBatchOneEventPerUnitOfWork}.
+     * the events that fail again, or, once the replay's time budget ({@link #getFailedBatchReplayTimeBudget()}) is spent,
+     * also the events not tried yet - see {@link #forwardFailedBatchOneEventPerUnitOfWork}.
      */
     private EventStoreSubscription subscribeForwardingInBatches(SubscriberId subscriberId,
                                                                 AggregateType aggregateType,
@@ -509,8 +509,9 @@ public abstract class EventProcessor extends AbstractEventProcessor {
      * only once its batch is full or {@link #getForwardMaxLatency()} has passed. A policy that skips first forwards the
      * failed batch's events again one per unit of work, each tried once more on its own, without the policy's retries, so
      * the skip loses only the events that fail on their own as well. An event that fails there with an I/O or connection
-     * failure is tried once more at once in a new unit of work; the replay stops only when that retry fails the same way
-     * and the database does not answer a probe either (see {@link AbstractEventProcessor}'s failed-batch replay). A stop that turns into a skip after
+     * failure is forwarded a second time at once in a new unit of work; the replay stops only once its time budget
+     * ({@link #getFailedBatchReplayTimeBudget()}) is spent, and the skip then also loses the events not tried yet (see
+     * {@link AbstractEventProcessor}'s failed-batch replay). A stop that turns into a skip after
      * {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()} resumes, and a skip whose replay itself cannot run (the
      * database unreachable), still lose up to a batch of events.
      *

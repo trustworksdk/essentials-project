@@ -550,11 +550,15 @@ holds a pooled connection while it handles a message - size the pool for it.
 
 Switching either way keeps the processor's resume point and fenced lock (same subscriber id). With a batch, the
 `SubscriptionErrorPolicy` retries and stops at the batch as a whole. A policy that skips first forwards the failed
-batch's events again one per unit of work, each tried once more on its own without the policy's retries, so the skip
+batch's events again one per unit of work, each forwarded again once without the policy's retries, so the skip
 loses only the events that cannot be forwarded on their own either. An event that fails there with an I/O or
-connection failure (as `IOExceptionUtil.isIOException` classifies it) is tried once more at once in a new unit of work;
-if that retry fails the same way and a `SELECT 1` probe of the database fails too, the replay stops and the skip takes
-the batch's untried rest. Up to a batch is still skipped when that replay
+connection failure (as `IOExceptionUtil.isIOException` classifies it) is forwarded a second time at once in a new unit
+of work, so a stale pooled connection does not cost it. The replay stops only on time: before each event after the
+first it checks the time budget `getFailedBatchReplayTimeBudget()` (protected, default 90 s = three times HikariCP's
+default `connectionTimeout`; override it to match your pool), and once that is spent the skip also takes the batch's
+untried rest, which is not redelivered. The delivery thread is blocked for at most the budget plus one event's two
+forwards. A spent budget reaches the subscriber as `AbstractEventProcessor.FailedBatchReplayTimeBudgetSpentException`,
+thrown or attached to the first failure as a suppressed exception. Up to a batch is still skipped when that replay
 cannot run at all (the database unreachable), and when a stopping policy turns into a skip after `AutoResume.maxAttempts()`
 resumes. Whether the policy skips is read from the policy the subscription was built with, whichever
 `EventStoreSubscriptionManager` built it. An override of
