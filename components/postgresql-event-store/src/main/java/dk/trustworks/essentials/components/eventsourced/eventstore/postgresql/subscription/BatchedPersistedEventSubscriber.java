@@ -749,7 +749,11 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
         stoppedByErrorPolicy = true;
         var resumeFrom = holdResumePointAt(firstEventOfFailedBatch);
         cancelScheduledProcessing();
-        log.error(msg("[{}-{}] Stopping the subscription because handling the batch starting at #{} failed and the SubscriptionErrorPolicy is {}. " +
+        var reason = stoppingPolicy == subscriptionErrorPolicy
+                     ? "the SubscriptionErrorPolicy is " + subscriptionErrorPolicy.mode()
+                     : "handing the failed batch off failed with an I/O failure, so the batch is redelivered instead of skipped (the SubscriptionErrorPolicy is " +
+                       subscriptionErrorPolicy.mode() + ")";
+        log.error(msg("[{}-{}] Stopping the subscription because handling the batch starting at #{} failed and {}. " +
                               "The resume point stays at #{}, so no event is skipped: no further events are handled until the subscription is resumed " +
                               "(automatically, unless the policy's auto-resume is disabled, or by EventStoreSubscription#resumeIfStoppedByErrorPolicy or the admin API) " +
                               "or started again (restart, resetFrom or unsubscribe/subscribe), " +
@@ -757,7 +761,7 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                       eventStoreSubscription.subscriberId(),
                       eventStoreSubscription.aggregateType(),
                       firstEventOfFailedBatch.globalEventOrder(),
-                      subscriptionErrorPolicy.mode(),
+                      reason,
                       resumeFrom), cause);
         try {
             eventStore.getEventStoreSubscriptionObserver().subscriptionStoppedByErrorPolicy(firstEventOfFailedBatch.globalEventOrder(), cause, eventStoreSubscription);
