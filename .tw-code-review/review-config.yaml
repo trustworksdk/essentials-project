@@ -73,7 +73,7 @@ reviews:
   # catches cross-module unit breaks; ITs come from the fixer's own commands.
   fix:
     enabled: true
-    test_command: "mvn test -q -T 1C"
+    test_command: "bash .tw-code-review/changed-modules-test.sh"
     max_rounds: 3 # fixer rounds per unit before it is parked and asked about
     max_review_rounds: 3 # fix → /incremental rounds per /fix run
     reviewers: auto # auto | all | one — the fix-reviewer lenses per unit
