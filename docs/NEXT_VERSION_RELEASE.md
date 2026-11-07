@@ -338,8 +338,10 @@ the first one started. `PartitionedEventProcessor` is the alternative, chosen by
 - **A forward that fails:** the `SubscriptionErrorPolicy` retries and stops at a batch as a whole. A policy that skips
   first forwards the failed batch's events again one per unit of work, each tried once more on its own, without the
   policy's retries, so the skip loses only the events that cannot be forwarded on their own either - not the whole batch. This applies to every
-  `EventProcessor` with `getForwardBatchSize()` above 1, and to `PartitionedViewEventProcessor` (§2.10). Up to a batch
-  is still skipped when the replay cannot run at all (the database unreachable), and when a stopping policy turns into
+  `EventProcessor` with `getForwardBatchSize()` above 1, and to `PartitionedViewEventProcessor` (§2.10). An I/O or
+  connection failure during that replay (the database unreachable) ends it at once and skips nothing: the subscription
+  stops at the batch and forwards all of it again once auto-resumed, so events the replay already forwarded arrive
+  twice. Up to a batch is still skipped when a stopping policy turns into
   a skip after `AutoResume.maxAttempts` resumes. Whether the policy skips is read from the policy the batched
   subscription was built with, handed to the new `BatchedPersistedEventHandler.handOffFailedBatch(events, failure,
   subscriptionErrorPolicy)` overload (by default it delegates to the two-argument one), so a skipping policy now also

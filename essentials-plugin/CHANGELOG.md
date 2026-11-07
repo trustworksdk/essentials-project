@@ -5,6 +5,9 @@ targets, with a `-N` suffix for plugin-only releases.
 
 ## 0.60.1-9 — targets Essentials 0.60.1
 
+- **Failed-batch replay on an I/O failure** — the postgresql-event-store reference says that when the one-event-per-unit-of-work
+  replay of a skipped batch fails with an I/O or connection error, the subscription stops at the batch and forwards
+  all of it again once resumed, instead of skipping it. No skill, rule or script changed.
 - **Closing-books refusal** — the eventsourced-aggregates reference warns that a `ClosingBooksGenerationMovedException`
   from a guarded closing-books method leaves the unit of work rollback-only: catch it outside the unit of work, reload
   and retry in a new one. No skill, rule or script changed.

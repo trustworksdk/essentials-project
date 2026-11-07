@@ -551,9 +551,11 @@ holds a pooled connection while it handles a message - size the pool for it.
 Switching either way keeps the processor's resume point and fenced lock (same subscriber id). With a batch, the
 `SubscriptionErrorPolicy` retries and stops at the batch as a whole. A policy that skips first forwards the failed
 batch's events again one per unit of work, each tried once more on its own without the policy's retries, so the skip
-loses only the events that cannot be forwarded on their own either. Up to a batch is still skipped when that replay
-cannot run at all (the database unreachable), and when a stopping policy turns into a skip after `AutoResume.maxAttempts()`
-resumes. Whether the policy skips is read from the policy the subscription was built with, whichever
+loses only the events that cannot be forwarded on their own either. A replay that fails with an I/O or connection error
+(`IOExceptionUtil.isIOException`, e.g. the database unreachable) ends at once and skips nothing: the subscription stops
+at the batch's first event, is auto-resumed like a stopping policy, and forwards the whole batch again - events the
+replay already forwarded are delivered twice, so their handling must be idempotent. Up to a batch is still skipped
+when a stopping policy turns into a skip after `AutoResume.maxAttempts()` resumes. Whether the policy skips is read from the policy the subscription was built with, whichever
 `EventStoreSubscriptionManager` built it. An override of
 `forwardEventToInbox` still applies to each event, in a batch and in the replay.
 
@@ -612,7 +614,8 @@ public class AccountActivityProjection extends PartitionedViewEventProcessor {
 - **Queue key** is `<aggregateType>|<aggregateId>`; handlers see the plain id as `OrderedMessage.getKey()`.
 - **A forward that fails:** as for a batched `EventProcessor` - the `SubscriptionErrorPolicy` retries and stops at a
   batch as a whole; a policy that skips first queues the failed batch's events again one per unit of work, so the skip
-  loses only the events that cannot be queued on their own either (the same cases as there still skip up to a batch).
+  loses only the events that cannot be queued on their own either; an I/O failure in that replay stops at the batch
+  and queues all of it again once resumed, as there.
 - **Lag** = reader lag + queue depth of `<processorName>:queue`; the resume point means *forwarded*.
 - **`forwardsEventPayloads()`** (default `false`): `true` queues each event itself instead of a reference, saving the
   event-store load per event on the handling side, for larger queue rows (measured: ~8 % less CPU, ~11 % more WAL).

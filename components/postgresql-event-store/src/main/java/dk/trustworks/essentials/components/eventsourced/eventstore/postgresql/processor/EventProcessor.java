@@ -508,8 +508,9 @@ public abstract class EventProcessor extends AbstractEventProcessor {
      * only once its batch is full or {@link #getForwardMaxLatency()} has passed. A policy that skips first forwards the
      * failed batch's events again one per unit of work, each tried once more on its own, without the policy's retries, so
      * the skip loses only the events that fail on their own as well. A stop that turns into a skip after
-     * {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()} resumes, and a skip whose replay itself cannot run (the
-     * database unreachable), still lose up to a batch of events.
+     * {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()} resumes still loses up to a batch of events. A replay that
+     * fails with an I/O or connection error (the database unreachable) ends at once and skips nothing: the subscription
+     * stops at the batch and forwards all of it again once resumed, events the replay already forwarded included.
      *
      * @return the most events forwarded in one unit of work; values below {@code 2} forward event by event
      */

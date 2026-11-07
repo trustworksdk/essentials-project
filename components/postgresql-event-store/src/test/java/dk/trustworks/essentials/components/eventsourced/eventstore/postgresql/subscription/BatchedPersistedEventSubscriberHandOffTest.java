@@ -28,6 +28,7 @@ import java.util.*;
 import java.util.concurrent.atomic.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
 /**
@@ -85,6 +86,32 @@ class BatchedPersistedEventSubscriberHandOffTest {
         try {
             assertThat(subscriber.handedOffToEventHandler(List.of(event()), new RuntimeException("batch failed"))).isTrue();
             assertThat(called.get()).isTrue();
+        } finally {
+            subscriber.dispose();
+        }
+    }
+
+    /**
+     * An I/O failure of the hand-off is not left to the policy to skip: it is rethrown, and the subscriber stops at the
+     * batch instead
+     */
+    @Test
+    void an_io_failure_of_the_hand_off_is_rethrown_instead_of_left_to_a_skipping_policy() {
+        var ioFailure = new java.io.UncheckedIOException(new java.io.IOException("An I/O error occurred while sending to the backend"));
+        var handler = new BatchedPersistedEventHandler() {
+            @Override
+            public int handleBatch(List<PersistedEvent> events) {
+                return 1;
+            }
+
+            @Override
+            public boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure, SubscriptionErrorPolicy subscriptionErrorPolicy) {
+                throw ioFailure;
+            }
+        };
+        var subscriber = subscriber(handler, SubscriptionErrorPolicy.skip());
+        try {
+            assertThatThrownBy(() -> subscriber.handedOffToEventHandler(List.of(event()), new RuntimeException("batch failed"))).isSameAs(ioFailure);
         } finally {
             subscriber.dispose();
         }

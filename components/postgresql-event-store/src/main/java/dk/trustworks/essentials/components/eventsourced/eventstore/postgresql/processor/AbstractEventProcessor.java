@@ -27,6 +27,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionResumePoint;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
+import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.json.JSONDeserializationException;
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
@@ -796,6 +797,13 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * other events with it: the skip loses the events that fail again. Each event is tried once more, without the policy's
      * retries.
      * <p>
+     * An I/O or connection failure ({@link IOExceptionUtil#isIOException(Throwable)}) while forwarding an event again ends
+     * the replay at once: the events after it are not tried, and the failure is thrown, which makes the
+     * {@link BatchedPersistedEventSubscriber} stop at the batch's first event instead of skipping the batch (see
+     * {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable, SubscriptionErrorPolicy)}). The whole batch is
+     * forwarded again once the subscription is resumed - also the events this replay already forwarded, so they are
+     * delivered at least twice and their handling must be idempotent.
+     * <p>
      * When the policy <b>stops</b>, nothing is forwarded and the batch is left to the policy: the subscription stops at the
      * batch's first event and forwards the whole batch again once it is resumed. A stop that turns into a skip after
      * {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()} resumes skips the whole batch.
@@ -805,8 +813,10 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * @param subscriptionErrorPolicy the policy the subscriber handles the batch's failures with
      * @param forwardEvent            forwards one event; called inside a {@link UnitOfWork} of its own
      * @return true if every event of the batch was forwarded; false if the policy stops
-     * @throws RuntimeException the failure of the first event that could not be forwarded (those of the others added as
-     *                          suppressed), after every other event was forwarded: the policy then skips the batch
+     * @throws RuntimeException the I/O failure that ended the replay, as soon as it happened (the subscription then stops
+     *                          at the batch); otherwise the failure of the first event that could not be forwarded (those of
+     *                          the others added as suppressed), after every other event was forwarded: the policy then
+     *                          skips the batch
      */
     boolean forwardFailedBatchOneEventPerUnitOfWork(List<PersistedEvent> events,
                                                     Throwable batchFailure,
@@ -822,6 +832,14 @@ public abstract class AbstractEventProcessor implements Lifecycle {
             try {
                 eventStore.getUnitOfWorkFactory().usingUnitOfWork(() -> forwardEvent.accept(event));
             } catch (RuntimeException failure) {
+                if (IOExceptionUtil.isIOException(failure)) {
+                    log.warn(msg("[{}] Forwarding the event with global-event-order {} again failed with an I/O error - ending the replay of the batch [#{} - #{}]; the subscription stops at the batch and forwards all of it again once resumed",
+                                 getProcessorName(), event.globalEventOrder(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder()), failure);
+                    if (firstFailure != null) {
+                        failure.addSuppressed(firstFailure);
+                    }
+                    throw failure;
+                }
                 log.error(msg("[{}] Could not forward the event with global-event-order {} ({} '{}', event-order {}) on its own either - it is skipped",
                               getProcessorName(), event.globalEventOrder(), event.aggregateType(), event.aggregateId(), event.eventOrder()), failure);
                 if (firstFailure == null) {
