@@ -159,6 +159,61 @@ final class SubscriptionAutoResumer {
     }
 
     /**
+     * Asked by a batched subscriber before it stops so a failed batch is delivered again from <code>at</code> (see
+     * {@link FailedBatchToBeRedeliveredException})
+     *
+     * @param at     the {@link GlobalEventOrder} the batch is to be delivered again from
+     * @param policy the subscriber's policy
+     * @return true if the subscription has already been resumed {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()}
+     * times at <code>at</code> (only when that is limited), so the policy is to skip the batch instead
+     */
+    boolean redeliveriesUsedUpAt(GlobalEventOrder at, SubscriptionErrorPolicy policy) {
+        requireNonNull(at, "No at provided");
+        requireNonNull(policy, "No policy provided");
+        if (!policy.autoResume().skipsAfterMaxAttempts()) {
+            return false;
+        }
+        synchronized (lock) {
+            return at.equals(stoppedAt) && resumesAtStoppedAt >= policy.autoResume().maxAttempts();
+        }
+    }
+
+    /**
+     * Reported by a batched subscriber once it has stopped so a failed batch is delivered again from <code>at</code> (see
+     * {@link FailedBatchToBeRedeliveredException}): schedule the resume after the delays of the policy's
+     * {@link SubscriptionErrorPolicy#autoResume()}, whatever the policy's mode - the policy skips, so it would never be
+     * resumed otherwise. A disabled auto-resume is honoured: no resume is scheduled, and the subscription stays stopped at
+     * <code>at</code> until it is resumed by hand, as {@link #stoppedAt(GlobalEventOrder, SubscriptionErrorPolicy)} does
+     *
+     * @param at     the {@link GlobalEventOrder} the subscriber stopped at
+     * @param policy the subscriber's policy
+     */
+    void stoppedForRedeliveryAt(GlobalEventOrder at, SubscriptionErrorPolicy policy) {
+        requireNonNull(at, "No at provided");
+        requireNonNull(policy, "No policy provided");
+        if (!policy.autoResume().enabled()) {
+            synchronized (lock) {
+                awaitingRecoveryAt = at;
+            }
+            log.info("[{}-{}] The subscription stays stopped at #{} for its failed batch to be delivered again - auto-resume is disabled in its SubscriptionErrorPolicy. " +
+                             "Resume it with EventStoreSubscription#resumeIfStoppedByErrorPolicy or the admin API",
+                     subscription.subscriberId(),
+                     subscription.aggregateType(),
+                     at);
+            return;
+        }
+        synchronized (lock) {
+            awaitingRecoveryAt = at;
+            if (!at.equals(stoppedAt)) {
+                stoppedAt = at;
+                resumesAtStoppedAt = 0;
+                failedResumesInARow = 0;
+            }
+            schedule(at, policy);
+        }
+    }
+
+    /**
      * Reported by the subscriber for every event it is done with - handled, handed off to its event handler, or skipped.
      * An event at or after the one the subscription stopped at means it has recovered
      *

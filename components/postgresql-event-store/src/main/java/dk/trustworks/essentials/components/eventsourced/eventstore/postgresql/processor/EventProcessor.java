@@ -35,8 +35,8 @@ import org.slf4j.*;
 
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
+import java.util.concurrent.atomic.*;
+import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -360,9 +360,13 @@ public abstract class EventProcessor extends AbstractEventProcessor {
 
     private EventStoreSubscription subscribe(String processorName, AggregateType aggregateType) {
         var subscriberId = resolveSubscriberId(aggregateType, processorName);
+        // This instance's current tenure of the subscription's fenced lock - ended first thing on a lock release, before the
+        // subscription disposes its subscriber and saves its resume point. Read by a failed batch's replay (in memory, no lookup)
+        var readerTenure = new AtomicReference<>(new AtomicBoolean(false));
         var lockAwareSubscriber = new FencedLockAwareSubscriber() {
             @Override
             public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint resumeFromAndIncluding) {
+                readerTenure.set(new AtomicBoolean(true));
                 log.info("⚙️ [{}] Subscriber '{}' acquired lock. Will resumeFromAndIncluding: {}",
                          processorName,
                          subscriberId,
@@ -371,6 +375,7 @@ public abstract class EventProcessor extends AbstractEventProcessor {
 
             @Override
             public void onLockReleased(FencedLock fencedLock) {
+                readerTenure.get().set(false);
                 log.info("⚙️ [{}] Subscriber '{}''s lock was released",
                          processorName,
                          subscriberId);
@@ -379,7 +384,7 @@ public abstract class EventProcessor extends AbstractEventProcessor {
         };
         var forwardBatchSize = getForwardBatchSize();
         var subscription = forwardBatchSize > 1
-                           ? subscribeForwardingInBatches(subscriberId, aggregateType, forwardBatchSize, lockAwareSubscriber, processorName)
+                           ? subscribeForwardingInBatches(subscriberId, aggregateType, forwardBatchSize, lockAwareSubscriber, readerTenure, processorName)
                            : eventStoreSubscriptionManager.exclusivelySubscribeToAggregateEventsAsynchronously(
                 subscriberId,
                 aggregateType,
@@ -455,15 +460,24 @@ public abstract class EventProcessor extends AbstractEventProcessor {
      * applies - inside the one unit of work the batch is handled in, which also advances the resume point. A batch that
      * fails rolls back whole, forwards included, and is retried as the {@link SubscriptionErrorPolicy} says. When the
      * policy gives up on it and skips, its events are forwarded again one per unit of work first, so the skip loses only
-     * the events that fail again, or, once the replay's time budget ({@link #getFailedBatchReplayTimeBudget()}) is spent,
-     * also the events not tried yet - see {@link #forwardFailedBatchOneEventPerUnitOfWork}.
+     * the events that fail again. Once the replay's time budget ({@link #getFailedBatchReplayTimeBudget()}) is spent, or
+     * the processor stops or the subscription loses its lock, the events not tried yet are delivered again instead of
+     * being skipped (at least once) - see {@link #forwardFailedBatchOneEventPerUnitOfWork}.
      */
     private EventStoreSubscription subscribeForwardingInBatches(SubscriberId subscriberId,
                                                                 AggregateType aggregateType,
                                                                 int forwardBatchSize,
                                                                 FencedLockAwareSubscriber lockAwareSubscriber,
+                                                                AtomicReference<AtomicBoolean> readerTenure,
                                                                 String processorName) {
-        return eventStoreSubscriptionManager.exclusivelyBatchSubscribeToAggregateEventsAsynchronously(
+        // Set once subscribed; read by the failed batch's replay, with the lock tenure it started in, to stop once the
+        // processor stopped or the subscription lost its lock (in memory, no lookup)
+        var subscription = new AtomicReference<EventStoreSubscription>();
+        BooleanSupplier stillOwnsSubscription = () -> {
+            var subscribed = subscription.get();
+            return started && (subscribed == null || subscribed.isActive());
+        };
+        var batchSubscription = eventStoreSubscriptionManager.exclusivelyBatchSubscribeToAggregateEventsAsynchronously(
                 subscriberId,
                 aggregateType,
                 resolveStartSubscriptionFromGlobalEventOrder(),
@@ -482,7 +496,12 @@ public abstract class EventProcessor extends AbstractEventProcessor {
 
                     @Override
                     public boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure, SubscriptionErrorPolicy subscriptionErrorPolicy) {
-                        return forwardFailedBatchOneEventPerUnitOfWork(events, failure, subscriptionErrorPolicy, event -> forwardEventToInbox(event, inbox));
+                        var tenure = readerTenure.get();
+                        return forwardFailedBatchOneEventPerUnitOfWork(events,
+                                                                       failure,
+                                                                       subscriptionErrorPolicy,
+                                                                       () -> tenure.get() && stillOwnsSubscription.getAsBoolean(),
+                                                                       event -> forwardEventToInbox(event, inbox));
                     }
 
                     @Override
@@ -495,6 +514,8 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                         return processorName;
                     }
                 });
+        subscription.set(batchSubscription);
+        return batchSubscription;
     }
 
     /**
@@ -509,9 +530,10 @@ public abstract class EventProcessor extends AbstractEventProcessor {
      * only once its batch is full or {@link #getForwardMaxLatency()} has passed. A policy that skips first forwards the
      * failed batch's events again one per unit of work, each tried once more on its own, without the policy's retries, so
      * the skip loses only the events that fail on their own as well. An event that fails there with an I/O or connection
-     * failure is forwarded a second time at once in a new unit of work; the replay stops only once its time budget
-     * ({@link #getFailedBatchReplayTimeBudget()}) is spent, and the skip then also loses the events not tried yet (see
-     * {@link AbstractEventProcessor}'s failed-batch replay). A stop that turns into a skip after
+     * failure is forwarded a second time at once in a new unit of work; only time, or the processor stopping or losing
+     * the subscription, stops the replay - never the kind or number of failures. Once its time budget
+     * ({@link #getFailedBatchReplayTimeBudget()}) is spent, the events not tried yet are delivered again once the
+     * subscription is resumed, not skipped (see {@link AbstractEventProcessor}'s failed-batch replay). A stop that turns into a skip after
      * {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()} resumes, and a skip whose replay itself cannot run (the
      * database unreachable), still lose up to a batch of events.
      *

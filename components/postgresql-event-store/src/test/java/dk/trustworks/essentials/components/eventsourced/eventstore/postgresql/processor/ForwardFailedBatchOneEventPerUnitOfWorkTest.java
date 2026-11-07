@@ -16,7 +16,8 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.foundation.fencedlock.FencedLock;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.AbstractEventProcessor.FailedBatchReplayTimeBudgetSpentException;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
@@ -31,15 +32,16 @@ import java.net.ConnectException;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Consumer;
+import java.util.concurrent.atomic.*;
+import java.util.function.*;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.*;
 
 /**
- * {@link AbstractEventProcessor#forwardFailedBatchOneEventPerUnitOfWork(List, Throwable, SubscriptionErrorPolicy, Consumer)}
+ * {@link AbstractEventProcessor#forwardFailedBatchOneEventPerUnitOfWork(List, Throwable, SubscriptionErrorPolicy, BooleanSupplier, Consumer)}
  * forwards every event of a failed batch again on its own when the policy handed over skips. An event that fails with
  * an I/O or connection failure is forwarded a second time at once (a stale pooled connection must not cost it). What
  * stops the replay is its time budget ({@link AbstractEventProcessor#getFailedBatchReplayTimeBudget()}), never the kind
@@ -53,42 +55,142 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
 
     private final AtomicLong clock = new AtomicLong(1_000);
 
+    private static final BooleanSupplier OWNED = () -> true;
+
     @Test
-    void stops_at_the_first_event_after_the_time_budget_is_spent_and_leaves_the_rest_untried() {
+    void stops_at_the_first_event_after_the_time_budget_is_spent_and_has_the_rest_delivered_again() {
         var connectionFailure = new RuntimeException("Could not forward", new ConnectionException(new SQLException("Connection is gone", "08006")));
         var forwarded         = new ArrayList<PersistedEvent>();
         var events            = events(5);
 
-        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
+        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), OWNED, event -> {
             forwarded.add(event);
             // Each forward waits out a third of the budget for its connection: the second event's two forwards spend it
             clock.addAndGet(BUDGET_NANOS / 3);
             if (!event.equals(events.get(0))) {
                 throw connectionFailure;
             }
-        })).isSameAs(connectionFailure)
-           .satisfies(thrown -> assertThat(thrown.getSuppressed())
-                   .singleElement()
-                   .isInstanceOf(FailedBatchReplayTimeBudgetSpentException.class)
-                   .satisfies(budgetSpent -> assertThat(budgetSpent.getMessage()).contains("global-event-order 3", "3 remaining event(s)")));
+        })).isInstanceOf(FailedBatchReplayTimeBudgetSpentException.class)
+           .hasMessageContaining("global-event-order 3")
+           .hasMessageContaining("3 remaining event(s)")
+           .hasCause(connectionFailure)
+           .satisfies(thrown -> assertThat(((FailedBatchToBeRedeliveredException) thrown).redeliverFromAndIncluding()).isEqualTo(events.get(2).globalEventOrder()));
 
         // The retry of the event that was running when the budget ran out still happened; nothing after it was tried
         assertThat(forwarded).containsExactly(events.get(0), events.get(1), events.get(1));
     }
 
     @Test
-    void reports_a_spent_budget_as_a_failure_when_no_event_failed_so_the_skip_does_not_pass_for_a_whole_forward() {
+    void has_the_untried_events_delivered_again_when_the_budget_is_spent_and_no_event_failed() {
         var forwarded = new ArrayList<PersistedEvent>();
         var events    = events(4);
 
-        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
+        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), OWNED, event -> {
             forwarded.add(event);
             clock.addAndGet(BUDGET_NANOS / 2);
         })).isInstanceOf(FailedBatchReplayTimeBudgetSpentException.class)
            .hasMessageContaining("global-event-order 3")
-           .hasMessageContaining("2 remaining event(s)");
+           .hasMessageContaining("2 remaining event(s)")
+           .hasNoCause()
+           .satisfies(thrown -> assertThat(((FailedBatchToBeRedeliveredException) thrown).redeliverFromAndIncluding()).isEqualTo(events.get(2).globalEventOrder()));
 
         assertThat(forwarded).containsExactly(events.get(0), events.get(1));
+    }
+
+    @Test
+    void stops_forwarding_once_the_subscription_is_no_longer_owned_and_has_the_rest_delivered_again() {
+        var forwarded = new ArrayList<PersistedEvent>();
+        var events    = events(4);
+        // Owned for the first event only - e.g. the fenced lock was lost while it was forwarded
+        var owned     = new AtomicBoolean(true);
+
+        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), owned::get, event -> {
+            forwarded.add(event);
+            owned.set(false);
+        })).isExactlyInstanceOf(FailedBatchToBeRedeliveredException.class)
+           .hasMessageContaining("global-event-order 2")
+           .hasMessageContaining("3 remaining event(s)")
+           .satisfies(thrown -> assertThat(((FailedBatchToBeRedeliveredException) thrown).redeliverFromAndIncluding()).isEqualTo(events.get(1).globalEventOrder()));
+
+        assertThat(forwarded).containsExactly(events.get(0));
+    }
+
+    @Test
+    void forwards_nothing_when_the_subscription_is_no_longer_owned_when_the_replay_starts() {
+        var forwarded = new ArrayList<PersistedEvent>();
+        var events    = events(3);
+
+        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), () -> false, forwarded::add))
+                .isExactlyInstanceOf(FailedBatchToBeRedeliveredException.class)
+                .satisfies(thrown -> assertThat(((FailedBatchToBeRedeliveredException) thrown).redeliverFromAndIncluding()).isEqualTo(events.get(0).globalEventOrder()));
+
+        assertThat(forwarded).isEmpty();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void an_EventProcessor_replay_stops_once_the_lock_release_callback_fires_while_the_subscription_still_reports_active() {
+        var subscriptionManager = inlineUnitOfWorkSubscriptionManager();
+        // The subscription reports active throughout: it turns inactive only at the end of its lock-release handling
+        var subscription = mock(EventStoreSubscription.class);
+        when(subscription.isActive()).thenReturn(true);
+        when(subscriptionManager.exclusivelyBatchSubscribeToAggregateEventsAsynchronously(any(), any(), any(), any(), anyInt(), any(), any(), any())).thenReturn(subscription);
+        var lockAware = new AtomicReference<FencedLockAwareSubscriber>();
+        var forwarded = new ArrayList<PersistedEvent>();
+        var processor = new ProcessorSubscriptionErrorPolicyTest.PolicyEventProcessor(subscriptionManager, inboxes(), Optional.of(SubscriptionErrorPolicy.skip())) {
+            @Override
+            protected int getForwardBatchSize() {
+                return 10;
+            }
+
+            @Override
+            protected void forwardEventToInbox(PersistedEvent event, Inbox forwardToInbox) {
+                forwarded.add(event);
+                // The fenced lock is lost while the first event is forwarded
+                lockAware.get().onLockReleased(mock(FencedLock.class));
+            }
+        };
+        processor.start();
+        var lockAwareCaptor = org.mockito.ArgumentCaptor.forClass(FencedLockAwareSubscriber.class);
+        var handlerCaptor   = org.mockito.ArgumentCaptor.forClass(BatchedPersistedEventHandler.class);
+        verify(subscriptionManager).exclusivelyBatchSubscribeToAggregateEventsAsynchronously(any(), any(), any(), any(), anyInt(), any(), lockAwareCaptor.capture(), handlerCaptor.capture());
+        lockAware.set(lockAwareCaptor.getValue());
+        lockAware.get().onLockAcquired(mock(FencedLock.class), mock(SubscriptionResumePoint.class));
+        var events = events(3);
+
+        assertThatThrownBy(() -> handlerCaptor.getValue().handOffFailedBatch(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip()))
+                .isExactlyInstanceOf(FailedBatchToBeRedeliveredException.class)
+                .satisfies(thrown -> assertThat(((FailedBatchToBeRedeliveredException) thrown).redeliverFromAndIncluding()).isEqualTo(events.get(1).globalEventOrder()));
+
+        assertThat(forwarded).containsExactly(events.get(0));
+        assertThat(subscription.isActive()).isTrue();
+    }
+
+    @Test
+    void uses_the_default_budget_when_an_override_returns_null() {
+        var forwarded = new ArrayList<PersistedEvent>();
+        var events    = events(4);
+        var processor = processorWhoseBudgetOverrideReturnsNull();
+        var logger    = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(processor.getClass());
+        var logs      = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            // Each forward takes a quarter of the default budget: every event is tried under it, none under a zero budget
+            var allForwarded = processor.forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), OWNED, event -> {
+                forwarded.add(event);
+                clock.addAndGet(BUDGET_NANOS / 4);
+            });
+
+            assertThat(allForwarded).isTrue();
+            assertThat(forwarded).containsExactlyElementsOf(events);
+            assertThat(logs.list).anySatisfy(logged -> {
+                assertThat(logged.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+                assertThat(logged.getFormattedMessage()).contains("getFailedBatchReplayTimeBudget() returned null", "PT1M30S");
+            });
+        } finally {
+            logger.detachAppender(logs);
+        }
     }
 
     @Test
@@ -96,7 +198,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var forwarded = new ArrayList<PersistedEvent>();
         var events    = events(3);
 
-        assertThatThrownBy(() -> processor(Duration.ZERO).forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), forwarded::add))
+        assertThatThrownBy(() -> processor(Duration.ZERO).forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), OWNED, forwarded::add))
                 .isInstanceOf(FailedBatchReplayTimeBudgetSpentException.class)
                 .hasMessageContaining("global-event-order 2")
                 .hasMessageContaining("2 remaining event(s)");
@@ -109,7 +211,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var forwarded = new ArrayList<PersistedEvent>();
         var events    = events(3);
 
-        assertThatThrownBy(() -> processor(Duration.ofSeconds(Long.MIN_VALUE)).forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
+        assertThatThrownBy(() -> processor(Duration.ofSeconds(Long.MIN_VALUE)).forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), OWNED, event -> {
             forwarded.add(event);
             clock.addAndGet(1);
         })).isInstanceOf(FailedBatchReplayTimeBudgetSpentException.class);
@@ -122,7 +224,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var forwarded = new ArrayList<PersistedEvent>();
         var events    = events(4);
 
-        var allForwarded = processor(Duration.ofSeconds(Long.MAX_VALUE)).forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
+        var allForwarded = processor(Duration.ofSeconds(Long.MAX_VALUE)).forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), OWNED, event -> {
             forwarded.add(event);
             // Far past the default budget on every forward: an unbounded budget never runs out
             clock.addAndGet(BUDGET_NANOS * 1_000);
@@ -138,7 +240,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var events    = events(4);
         var failures  = new ArrayList<RuntimeException>();
 
-        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
+        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), OWNED, event -> {
             forwarded.add(event);
             clock.addAndGet(BUDGET_NANOS / 100);
             var failure = new RuntimeException("Could not forward", new ConnectException("Connection refused"));
@@ -156,7 +258,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var forwarded         = new ArrayList<PersistedEvent>();
         var events            = events(4);
 
-        var allForwarded = processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
+        var allForwarded = processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), OWNED, event -> {
             forwarded.add(event);
             if (forwarded.size() == 1) {
                 throw connectionFailure;
@@ -172,7 +274,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var forwarded = new ArrayList<PersistedEvent>();
         var events    = events(4);
 
-        var allForwarded = processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
+        var allForwarded = processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), OWNED, event -> {
             var firstAttempt = !forwarded.contains(event);
             forwarded.add(event);
             if (firstAttempt) {
@@ -192,7 +294,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var forwarded           = new ArrayList<PersistedEvent>();
         var events              = events(3);
 
-        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
+        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), OWNED, event -> {
             forwarded.add(event);
             if (forwarded.size() == 1) {
                 throw firstAttemptFailure;
@@ -211,7 +313,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var connectionFailure = new RuntimeException("Could not forward", new ConnectException("Connection refused"));
         var events            = events(2);
 
-        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
+        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), OWNED, event -> {
             if (event.equals(events.get(0))) {
                 throw connectionFailure;
             }
@@ -226,7 +328,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var forwarded     = new ArrayList<PersistedEvent>();
         var events        = events(4);
 
-        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), event -> {
+        assertThatThrownBy(() -> processor().forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), OWNED, event -> {
             forwarded.add(event);
             if (event.equals(events.get(1))) {
                 throw event2Failure;
@@ -244,7 +346,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
     void forwards_nothing_when_the_policy_handed_over_stops() {
         var forwarded = new ArrayList<PersistedEvent>();
 
-        var allForwarded = processor().forwardFailedBatchOneEventPerUnitOfWork(events(3), new RuntimeException("batch failed"), SubscriptionErrorPolicy.stop(), forwarded::add);
+        var allForwarded = processor().forwardFailedBatchOneEventPerUnitOfWork(events(3), new RuntimeException("batch failed"), SubscriptionErrorPolicy.stop(), OWNED, forwarded::add);
 
         assertThat(allForwarded).isFalse();
         assertThat(forwarded).isEmpty();
@@ -256,7 +358,7 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
         var forwarded = new ArrayList<PersistedEvent>();
         var events    = events(3);
 
-        var allForwarded = processor(Optional.empty()).forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), forwarded::add);
+        var allForwarded = processor(Optional.empty()).forwardFailedBatchOneEventPerUnitOfWork(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip(), OWNED, forwarded::add);
 
         assertThat(allForwarded).isTrue();
         assertThat(forwarded).containsExactlyElementsOf(events);
@@ -317,6 +419,55 @@ class ForwardFailedBatchOneEventPerUnitOfWorkTest {
                                 return budgetOverride;
                             }
                         };
+        processor.nanoTime = clock::get;
+        return processor;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static EventStoreSubscriptionManager inlineUnitOfWorkSubscriptionManager() {
+        var unitOfWorkFactory = mock(EventStoreUnitOfWorkFactory.class);
+        doAnswer(invocation -> {
+            invocation.<CheckedRunnable>getArgument(0).run();
+            return null;
+        }).when(unitOfWorkFactory).usingUnitOfWork(any(CheckedRunnable.class));
+        var eventStore = mock(EventStore.class);
+        doReturn(unitOfWorkFactory).when(eventStore).getUnitOfWorkFactory();
+        var subscriptionManager = mock(EventStoreSubscriptionManager.class);
+        when(subscriptionManager.getEventStore()).thenReturn(eventStore);
+        return subscriptionManager;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Inboxes inboxes() {
+        var inbox = mock(Inbox.class);
+        when(inbox.name()).thenReturn(InboxName.of("PolicyEventProcessor"));
+        var inboxes = mock(Inboxes.class);
+        when(inboxes.getOrCreateInbox(any(InboxConfig.class), any(Consumer.class))).thenReturn(inbox);
+        return inboxes;
+    }
+
+    @SuppressWarnings("unchecked")
+    private AbstractEventProcessor processorWhoseBudgetOverrideReturnsNull() {
+        var unitOfWorkFactory = mock(EventStoreUnitOfWorkFactory.class);
+        doAnswer(invocation -> {
+            invocation.<CheckedRunnable>getArgument(0).run();
+            return null;
+        }).when(unitOfWorkFactory).usingUnitOfWork(any(CheckedRunnable.class));
+        var eventStore = mock(EventStore.class);
+        doReturn(unitOfWorkFactory).when(eventStore).getUnitOfWorkFactory();
+        var subscriptionManager = mock(EventStoreSubscriptionManager.class);
+        when(subscriptionManager.getEventStore()).thenReturn(eventStore);
+        var inbox = mock(Inbox.class);
+        when(inbox.name()).thenReturn(InboxName.of("PolicyEventProcessor"));
+        var inboxes = mock(Inboxes.class);
+        when(inboxes.getOrCreateInbox(any(InboxConfig.class), any(Consumer.class))).thenReturn(inbox);
+
+        var processor = new ProcessorSubscriptionErrorPolicyTest.PolicyEventProcessor(subscriptionManager, inboxes, Optional.of(SubscriptionErrorPolicy.skip())) {
+            @Override
+            protected Duration getFailedBatchReplayTimeBudget() {
+                return null;
+            }
+        };
         processor.nanoTime = clock::get;
         return processor;
     }

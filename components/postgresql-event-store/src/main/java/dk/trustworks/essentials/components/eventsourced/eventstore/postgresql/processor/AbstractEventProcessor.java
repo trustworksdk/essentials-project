@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.BatchedPersistedEventHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.BatchedPersistedEventSubscriber;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.FailedBatchToBeRedeliveredException;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.PersistedEventHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionResumePoint;
@@ -799,7 +800,11 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     /**
      * How long {@link #forwardFailedBatchOneEventPerUnitOfWork} - the replay, one event per {@link UnitOfWork}, of a
      * batch a skipping {@link SubscriptionErrorPolicy} gave up on - may go on starting new events, counted from the start
-     * of the replay. Once it is spent, the events not tried yet are not forwarded and the skip takes them with the batch.
+     * of the replay. Once it is spent, the events not tried yet are not forwarded here: the subscription stops at the first
+     * of them and is resumed there after the delay of the {@link SubscriptionErrorPolicy}'s auto-resume, which delivers
+     * them again - see {@link #forwardFailedBatchOneEventPerUnitOfWork}. Alert on a
+     * {@link FailedBatchReplayTimeBudgetSpentException} in the log, or on the subscription reporting
+     * {@link EventStoreSubscription#isStoppedByErrorPolicy()} meanwhile.
      * The replay checks it only between events, so the delivery thread is blocked for at most this budget plus one event's
      * forward and its immediate retry after an I/O failure - with a database that does not answer, each of those two can
      * wait out the connection pool's connection timeout.
@@ -811,9 +816,10 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * <p>
      * A budget too large to count in nanoseconds (for example {@code Duration.ofSeconds(Long.MAX_VALUE)}) means no
      * limit: every event of the batch is tried. A zero or negative budget forwards only the first event; the rest are
-     * not tried and the skip takes them with the batch.
+     * not tried here and are delivered again once the subscription is resumed.
      *
-     * @return the time budget of a failed batch's replay; read once at the start of each replay
+     * @return the time budget of a failed batch's replay; read once at the start of each replay. Must not return
+     * {@code null} - a replay that reads {@code null} logs a WARN and uses the default
      */
     protected Duration getFailedBatchReplayTimeBudget() {
         return Duration.ofSeconds(DEFAULT_FAILED_BATCH_REPLAY_TIME_BUDGET_SECONDS);
@@ -851,15 +857,33 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * first one's failure is attached to it as a suppressed exception. The retry is kept because a pool can hold several
      * stale connections after a database restart, and the time budget bounds what it costs.
      * <p>
-     * What stops the replay is time, never the kind or the number of failures: before each event after the first, the
+     * Only time, or the processor stopping or losing the subscription, stops the replay - never the kind or the number
+     * of failures. Before each event after the first, the
      * replay checks whether {@link #getFailedBatchReplayTimeBudget()}, counted from the start of the replay, is spent. If
-     * it is, the events not tried yet are not forwarded - one WARN names how many and the global-event-order the replay
-     * stopped at - and the skip takes them with the batch, so they are lost like the events that failed. They cannot be
-     * left to redelivery: the subscriber advances its resume point past the whole batch once the policy has skipped it.
-     * The delivery thread is therefore blocked for at most the budget plus one event's forward and its retry. A spent
-     * budget is reported to the subscriber as a {@link FailedBatchReplayTimeBudgetSpentException} - thrown when no event
-     * failed, else attached to the first failure as a suppressed exception - so a skip never passes for a batch that was
-     * forwarded whole.
+     * it is, the events not tried yet are not forwarded here - one WARN names how many and the global-event-order the
+     * replay stopped at - and the replay throws a {@link FailedBatchReplayTimeBudgetSpentException} (a
+     * {@link FailedBatchToBeRedeliveredException}) naming that global-event-order, with the first failure, if any, as its
+     * cause. The subscriber then does not skip the batch: it moves its resume point up to that event, holds it there and
+     * stops, and the subscription is resumed there after the delay of the policy's
+     * {@link SubscriptionErrorPolicy#autoResume()}, so the untried events are delivered again. Only the events that failed
+     * twice are lost. When the exception has a cause, the events before it - the ones given up for good and also the
+     * ones the replay forwarded - are reported to the subscription's observer and error handler, as a skipped batch's
+     * events are. Each redelivery tries at least its first event again (the budget is checked only before the events
+     * after the first), so the replay advances at least one event per resume and does not loop at one place; the
+     * {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()} cap on redeliveries applies only when a hand-off asks for
+     * redelivery at the same event again - for example when the subscription was no longer owned before the first event.
+     * With the policy's auto-resume disabled, the subscription stays stopped at that event until it is resumed by hand.
+     * The delivery thread is blocked for at most the budget plus one event's forward and its retry.
+     * <p>
+     * Before each event the replay also checks <code>stillOwnsSubscription</code> - false once the processor was stopped,
+     * or once the lock callback reported the subscription's fenced lock lost (the processors flip an in-memory flag first
+     * thing in that callback), or the subscription is no longer active. Then the replay forwards nothing more and throws a
+     * {@link FailedBatchToBeRedeliveredException} naming that event, so the instance that reads the events next forwards
+     * them, and this one does not forward them alongside it.
+     * <p>
+     * Redelivery is at-least-once: an event forwarded again may be forwarded a second time (the resume point saved before
+     * a lock hand-over can still lie at the batch's first event). The shard-owned engine absorbs such a duplicate through
+     * {@code IdentifiedByKeyAndOrder}; other {@code Inboxes} / {@code DurableQueues} deliver it twice.
      * <p>
      * Only the first failure is logged with its stack trace; the later ones are logged without it and reach the subscriber
      * as suppressed exceptions of the first.
@@ -871,39 +895,51 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * @param events                  the batch the policy gave up on, in order
      * @param batchFailure            the failure the policy gave up on
      * @param subscriptionErrorPolicy the policy the subscriber handles the batch's failures with
+     * @param stillOwnsSubscription   true while this instance still reads the subscription the batch came from - read
+     *                                before each event, from in-memory state only (never a database lookup)
      * @param forwardEvent            forwards one event; called inside a {@link UnitOfWork} of its own
      * @return true if every event of the batch was forwarded; false if the policy stops
-     * @throws RuntimeException the failure of the first event that could not be forwarded (those of the others added as
-     *                          suppressed), once every other event was tried or the time budget was spent; a
-     *                          {@link FailedBatchReplayTimeBudgetSpentException} when the budget was spent before any event
-     *                          failed. The policy then skips the batch
+     * @throws FailedBatchToBeRedeliveredException when the time budget was spent ({@link FailedBatchReplayTimeBudgetSpentException})
+     *                                             or <code>stillOwnsSubscription</code> turned false before every event was
+     *                                             tried: names the first event not tried, with the first failure, if any,
+     *                                             as its cause. The subscriber delivers the events from it on again
+     * @throws RuntimeException                    the failure of the first event that could not be forwarded (those of the
+     *                                             others added as suppressed), once every other event was tried. The
+     *                                             policy then skips the batch
      */
     boolean forwardFailedBatchOneEventPerUnitOfWork(List<PersistedEvent> events,
                                                     Throwable batchFailure,
                                                     SubscriptionErrorPolicy subscriptionErrorPolicy,
+                                                    BooleanSupplier stillOwnsSubscription,
                                                     Consumer<PersistedEvent> forwardEvent) {
         if (subscriptionErrorPolicy.stopsOnError()) {
             return false;
         }
         log.warn(msg("[{}] Forwarding the batch [#{} - #{}] failed and its SubscriptionErrorPolicy skips it - forwarding its {} events again one per UnitOfWork",
                      getProcessorName(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), events.size()), batchFailure);
-        var              budget       = getFailedBatchReplayTimeBudget();
+        var              budget       = failedBatchReplayTimeBudget();
         var              deadline     = nanoTime.getAsLong() + budgetInNanos(budget);
         RuntimeException firstFailure = null;
         for (var index = 0; index < events.size(); index++) {
-            var event = events.get(index);
+            var event    = events.get(index);
+            var notTried = events.size() - index;
+            if (!stillOwnsSubscription.getAsBoolean()) {
+                // Stopped, or the subscription lost its lock or was unsubscribed: whoever reads the events next forwards the rest
+                log.warn(msg("[{}] Stopped forwarding the batch [#{} - #{}] again at global-event-order {}: the processor was stopped or no longer reads the subscription - its {} remaining event(s) are not tried here and are delivered again",
+                             getProcessorName(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), event.globalEventOrder(), notTried));
+                throw new FailedBatchToBeRedeliveredException(msg("[{}] Forwarding the failed batch [#{} - #{}] again stopped at global-event-order {}: the processor was stopped or no longer reads the subscription - its {} remaining event(s) were not tried",
+                                                                  getProcessorName(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), event.globalEventOrder(), notTried),
+                                                              event.globalEventOrder(),
+                                                              firstFailure);
+            }
             if (index > 0 && nanoTime.getAsLong() - deadline >= 0) {
-                // The budget is spent: the untried rest is not forwarded, and the skip takes it with the batch
-                var notTried = events.size() - index;
-                log.warn(msg("[{}] Stopped forwarding the batch [#{} - #{}] again at global-event-order {}: its time budget of {} is spent - its {} remaining event(s) are not tried and are skipped with it",
+                // The budget is spent: the untried rest is not forwarded here - the subscriber delivers it again
+                log.warn(msg("[{}] Stopped forwarding the batch [#{} - #{}] again at global-event-order {}: its time budget of {} is spent - its {} remaining event(s) are not tried here and are delivered again",
                              getProcessorName(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), event.globalEventOrder(), budget, notTried));
-                var budgetSpent = new FailedBatchReplayTimeBudgetSpentException(msg("[{}] The time budget of {} for forwarding the failed batch [#{} - #{}] again was spent at global-event-order {} - its {} remaining event(s) were not tried",
-                                                                                    getProcessorName(), budget, events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), event.globalEventOrder(), notTried));
-                if (firstFailure == null) {
-                    throw budgetSpent;
-                }
-                firstFailure.addSuppressed(budgetSpent);
-                break;
+                throw new FailedBatchReplayTimeBudgetSpentException(msg("[{}] The time budget of {} for forwarding the failed batch [#{} - #{}] again was spent at global-event-order {} - its {} remaining event(s) were not tried",
+                                                                        getProcessorName(), budget, events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), event.globalEventOrder(), notTried),
+                                                                    event.globalEventOrder(),
+                                                                    firstFailure);
             }
             var failure = forwardInUnitOfWorkOfItsOwn(event, forwardEvent);
             if (failure == null) {
@@ -956,14 +992,31 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     }
 
     /**
-     * Thrown by, or attached as a suppressed exception to the failure thrown by,
-     * {@link #forwardFailedBatchOneEventPerUnitOfWork} when {@link #getFailedBatchReplayTimeBudget()} was spent before
-     * every event of the failed batch was tried: its message names how many events were not tried and where the replay
-     * stopped
+     * {@link #getFailedBatchReplayTimeBudget()}, or its default when an override returns {@code null} - read on the
+     * failure path only
      */
-    public static final class FailedBatchReplayTimeBudgetSpentException extends RuntimeException {
-        FailedBatchReplayTimeBudgetSpentException(String message) {
-            super(message);
+    private Duration failedBatchReplayTimeBudget() {
+        var budget = getFailedBatchReplayTimeBudget();
+        if (budget != null) {
+            return budget;
+        }
+        var defaultBudget = Duration.ofSeconds(DEFAULT_FAILED_BATCH_REPLAY_TIME_BUDGET_SECONDS);
+        log.warn("[{}] getFailedBatchReplayTimeBudget() returned null - forwarding the failed batch again with the default time budget of {}",
+                 getProcessorName(), defaultBudget);
+        return defaultBudget;
+    }
+
+    /**
+     * Thrown by {@link #forwardFailedBatchOneEventPerUnitOfWork} when {@link #getFailedBatchReplayTimeBudget()} was spent
+     * before every event of the failed batch was tried: its message names how many events were not tried and where the
+     * replay stopped, {@link #redeliverFromAndIncluding()} the first event not tried, and its cause the first failure of
+     * the replay, if any. As a {@link FailedBatchToBeRedeliveredException} it makes the subscriber deliver the events from
+     * there on again instead of skipping them with the batch. The signal to alert on: the replay ran out of time, as during
+     * a database outage
+     */
+    public static final class FailedBatchReplayTimeBudgetSpentException extends FailedBatchToBeRedeliveredException {
+        FailedBatchReplayTimeBudgetSpentException(String message, GlobalEventOrder redeliverFromAndIncluding, Throwable cause) {
+            super(message, redeliverFromAndIncluding, cause);
         }
     }
 

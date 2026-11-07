@@ -14,9 +14,16 @@ targets, with a `-N` suffix for plugin-only releases.
   the two-argument `handOffFailedBatch`. No skill, rule or script changed.
 - **Failed-batch replay after an I/O failure** — the postgresql-event-store reference says that an event of a replayed
   batch that fails with an I/O or connection failure is forwarded a second time at once in a new unit of work, and that
-  only the replay's time budget stops it: once `AbstractEventProcessor.getFailedBatchReplayTimeBudget()` (default 90 s)
-  is spent, the batch's untried rest is left to the skip, and the spent budget reaches the subscriber as
-  `FailedBatchReplayTimeBudgetSpentException`. The reference no longer describes a `SELECT 1` probe of the database.
+  only time, or the processor stopping or losing the subscription, stops the replay: once `AbstractEventProcessor.getFailedBatchReplayTimeBudget()` (default 90 s)
+  is spent, the batch's untried events are delivered again once the subscription is resumed after the policy's
+  auto-resume delay, not skipped, and the spent budget reaches the subscriber as
+  `FailedBatchReplayTimeBudgetSpentException`, a `FailedBatchToBeRedeliveredException` - the signal to alert on. It
+  says the replay also stops once the processor is stopped or the subscription lost its fenced lock, that an override
+  of the budget returning `null` gets the default, that a disabled auto-resume leaves the subscription stopped for a
+  resume by hand, that when the signal has a cause the events before the redelivery point - given up for good and
+  forwarded alike - are reported as a skipped batch's events are, and that redelivery
+  is at least once. The reference no longer
+  describes a `SELECT 1` probe of the database.
 - **Guarded closing-books refusals that roll back the unit of work** — the eventsourced-aggregates reference says the
   coordinator's guarded `evaluatePolicy(loadedFrom, aggregate, …)` now marks the caller's unit of work rollback-only
   on a refusal when the aggregate is a `StatefulAggregate` holding uncommitted changes, as

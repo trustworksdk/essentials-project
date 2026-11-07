@@ -59,6 +59,48 @@ class SubscriptionAutoResumerTest {
     }
 
     @Test
+    void redeliveries_at_one_event_are_used_up_after_max_attempts_resumes_there_and_a_different_event_starts_the_count_over() {
+        var skipping = SubscriptionErrorPolicy.skip().withAutoResume(SubscriptionErrorPolicy.AutoResume.skippingAfter(2, Duration.ofSeconds(1), Duration.ofSeconds(1)));
+        for (var resume = 1; resume <= 2; resume++) {
+            assertThat(autoResumer.redeliveriesUsedUpAt(AT, skipping)).isFalse();
+            autoResumer.stoppedForRedeliveryAt(AT, skipping);
+            scheduler.advanceTimeBy(Duration.ofSeconds(1));
+        }
+        verify(subscription, times(2)).resumeIfStoppedByErrorPolicy();
+        assertThat(autoResumer.redeliveriesUsedUpAt(AT, skipping)).isTrue();
+
+        var later = GlobalEventOrder.of(AT.longValue() + 1);
+        autoResumer.stoppedForRedeliveryAt(later, skipping);
+        assertThat(autoResumer.redeliveriesUsedUpAt(later, skipping)).isFalse();
+        assertThat(autoResumer.redeliveriesUsedUpAt(AT, skipping)).isFalse();
+    }
+
+    @Test
+    void redeliveries_are_never_used_up_with_unlimited_auto_resumes() {
+        var unlimited = SubscriptionErrorPolicy.skip().withAutoResume(SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofSeconds(1), Duration.ofSeconds(1)));
+        for (var resume = 1; resume <= 5; resume++) {
+            autoResumer.stoppedForRedeliveryAt(AT, unlimited);
+            scheduler.advanceTimeBy(Duration.ofSeconds(1));
+        }
+        verify(subscription, times(5)).resumeIfStoppedByErrorPolicy();
+        assertThat(autoResumer.redeliveriesUsedUpAt(AT, unlimited)).isFalse();
+    }
+
+    @Test
+    void a_stop_for_redelivery_is_not_resumed_when_auto_resume_is_disabled() {
+        var disabled = SubscriptionErrorPolicy.skip().withoutAutoResume();
+
+        autoResumer.stoppedForRedeliveryAt(AT, disabled);
+        scheduler.advanceTimeBy(SubscriptionErrorPolicy.AutoResume.DEFAULT_MAX_DELAY.multipliedBy(2));
+
+        verify(subscription, never()).resumeIfStoppedByErrorPolicy();
+        assertThat(autoResumer.isResumePending()).isFalse();
+        // Still awaiting recovery: the stopped gauge shows the stall until it is resumed by hand
+        assertThat(autoResumer.isAwaitingRecovery()).isTrue();
+        assertThat(autoResumer.redeliveriesUsedUpAt(AT, disabled)).isFalse();
+    }
+
+    @Test
     void a_stop_is_resumed_after_the_initial_delay() {
         autoResumer.stoppedAt(AT, policy(SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofSeconds(10), Duration.ofSeconds(60))));
         assertThat(autoResumer.isResumePending()).isTrue();

@@ -553,12 +553,28 @@ Switching either way keeps the processor's resume point and fenced lock (same su
 batch's events again one per unit of work, each forwarded again once without the policy's retries, so the skip
 loses only the events that cannot be forwarded on their own either. An event that fails there with an I/O or
 connection failure (as `IOExceptionUtil.isIOException` classifies it) is forwarded a second time at once in a new unit
-of work, so a stale pooled connection does not cost it. The replay stops only on time: before each event after the
+of work, so a stale pooled connection does not cost it. Only time, or the processor stopping or losing the
+subscription, stops the replay - never the kind or number of failures: before each event after the
 first it checks the time budget `getFailedBatchReplayTimeBudget()` (protected, default 90 s = three times HikariCP's
-default `connectionTimeout`; override it to match your pool), and once that is spent the skip also takes the batch's
-untried rest, which is not redelivered. The delivery thread is blocked for at most the budget plus one event's two
-forwards. A spent budget reaches the subscriber as `AbstractEventProcessor.FailedBatchReplayTimeBudgetSpentException`,
-thrown or attached to the first failure as a suppressed exception. Up to a batch is still skipped when that replay
+default `connectionTimeout`; override it to match your pool; an override that returns `null` gets the default and a
+WARN). Once the budget is spent, the batch's untried events are not skipped: the replay throws
+`AbstractEventProcessor.FailedBatchReplayTimeBudgetSpentException` (a `FailedBatchToBeRedeliveredException`, with the
+first failure, if any, as its cause), the subscription holds its resume point at the first untried event, reports
+`isStoppedByErrorPolicy()` and is resumed there after the delay of the policy's `autoResume()`, which delivers those
+events again; only the events that failed twice are lost. When the exception has a cause, the events before the
+redelivery point - the ones given up for good and also the ones the replay forwarded - are reported to the observer's
+`handleEventBatchFailed` and the subscription's error handler, as a skipped batch's events are. Alert on that exception
+in the log.
+Each redelivery tries at least its first event again, so the replay advances at least one event per resume and does
+not loop at one place; a limited `AutoResume.maxAttempts()` caps only redeliveries asked for at the same event again
+(for example, the subscription no longer owned before the first event), and then the policy skips the batch. With the
+policy's auto-resume disabled (`withoutAutoResume()`), the subscription stays stopped at the first untried event until
+it is resumed by hand; nothing is skipped. The replay also stops before an event once the processor is stopped, its
+lock-release callback reported the subscription's fenced lock lost, or the subscription is no longer active, leaving
+the rest to whoever reads the events next. Redelivery is at least once: an event the replay already forwarded
+can be forwarded again (after a lock hand-over the saved resume point can still lie at the batch's first event) - the
+shard-owned engine absorbs it through `IdentifiedByKeyAndOrder`, other `Inboxes` deliver it twice. The delivery thread
+is blocked for at most the budget plus one event's two forwards. Up to a batch is still skipped when that replay
 cannot run at all (the database unreachable), and when a stopping policy turns into a skip after `AutoResume.maxAttempts()`
 resumes. Whether the policy skips is read from the policy the subscription was built with, whichever
 `EventStoreSubscriptionManager` built it. An override of

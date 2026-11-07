@@ -59,7 +59,8 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * so the restarted subscription handles it again (see {@link SubscriptionStoppedDuringRetryException}).
  * <p>
  * Before the {@link SubscriptionErrorPolicy} skips or stops a batch, the event handler may take the failed batch over
- * instead - see {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable)}.
+ * instead - see {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable)} - or take over part of it and
+ * have the rest delivered again - see {@link FailedBatchToBeRedeliveredException}.
  * <p>
  * Acknowledgement: the subscriber acknowledges a batch through its {@link SubscriberAcknowledgement} (see
  * {@link BatchedPersistedEventSubscriberBuilder#setSubscriberAcknowledgement(SubscriberAcknowledgement)}) inside the unit of
@@ -620,11 +621,16 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                                stoppedWhileHandling(firstEvent, lastEvent, failure);
                                return;
                            }
-                           if (handedOffToEventHandler(immutableBatch, failure)) {
+                           var handOff = handedOffToEventHandler(immutableBatch, failure);
+                           if (handOff == HandOff.TAKEN_OVER) {
                                // Taken over by the event handler - done with here
                                acknowledgeGivenUp(immutableBatch);
                                movedPast(lastEvent);
                                eventStoreSubscription.request(immutableBatch.size());
+                               return;
+                           }
+                           if (handOff == HandOff.TO_BE_REDELIVERED) {
+                               // Stopped at the first event to deliver again - resumed there, see FailedBatchToBeRedeliveredException
                                return;
                            }
                            eventStore.getEventStoreSubscriptionObserver().handleEventBatchFailed(immutableBatch,
@@ -650,10 +656,17 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
      * {@link SubscriptionErrorPolicy} gives up on it. Runs before the {@code doFinally} that advances the resume point, so
      * the resume point only moves past the batch once the handler has taken it over
      *
-     * @return true if the handler took the batch over
+     * <p>
+     * A hand-off that throws a {@link FailedBatchToBeRedeliveredException} (anywhere in its cause chain) gave up part-way:
+     * the subscriber stops at the first event to deliver again and is resumed there, instead of letting the policy skip
+     * the batch - see {@link #stopForRedelivery(List, FailedBatchToBeRedeliveredException)}.
+     *
+     * @return {@link HandOff#TAKEN_OVER} if the handler took the batch over, {@link HandOff#TO_BE_REDELIVERED} if the
+     * subscriber stopped for the rest of the batch to be delivered again, else {@link HandOff#NOT_TAKEN_OVER}: the
+     * {@link SubscriptionErrorPolicy} applies
      */
     // Package-private for BatchedPersistedEventSubscriberHandOffTest
-    boolean handedOffToEventHandler(List<PersistedEvent> batch, Throwable failure) {
+    HandOff handedOffToEventHandler(List<PersistedEvent> batch, Throwable failure) {
         try {
             if (eventHandler.handOffFailedBatch(batch, failure, subscriptionErrorPolicy)) {
                 log.debug("[{}-{}] The {} event handler took over the failed batch [#{} - #{}] - the {} SubscriptionErrorPolicy does not give up on it",
@@ -663,9 +676,13 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                           batch.getFirst().globalEventOrder(),
                           batch.getLast().globalEventOrder(),
                           subscriptionErrorPolicy.mode());
-                return true;
+                return HandOff.TAKEN_OVER;
             }
         } catch (RuntimeException handOffFailure) {
+            var redelivery = FailedBatchToBeRedeliveredException.findIn(handOffFailure);
+            if (redelivery != null && stopForRedelivery(batch, redelivery)) {
+                return HandOff.TO_BE_REDELIVERED;
+            }
             failure.addSuppressed(handOffFailure);
             log.warn(msg("[{}-{}] The event handler failed to take over the failed batch [#{} - #{}] - the {} SubscriptionErrorPolicy applies",
                          eventStoreSubscription.subscriberId(),
@@ -674,7 +691,159 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                          batch.getLast().globalEventOrder(),
                          subscriptionErrorPolicy.mode()), handOffFailure);
         }
-        return false;
+        return HandOff.NOT_TAKEN_OVER;
+    }
+
+    /**
+     * What became of a failed batch offered to {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable, SubscriptionErrorPolicy)}
+     */
+    enum HandOff {
+        /**
+         * The handler took the batch over - done with here
+         */
+        TAKEN_OVER,
+        /**
+         * The handler did not take it over, or failed to: the {@link SubscriptionErrorPolicy} applies
+         */
+        NOT_TAKEN_OVER,
+        /**
+         * The handler gave up part-way and the subscriber stopped at the first event to deliver again - see
+         * {@link FailedBatchToBeRedeliveredException}
+         */
+        TO_BE_REDELIVERED
+    }
+
+    /**
+     * The hand-off gave up on the failed batch part-way ({@link FailedBatchToBeRedeliveredException}): acknowledge the
+     * events before the first one to deliver again, move the resume point up to that one and hold it there, and - unless
+     * the subscriber was stopped meanwhile, when the restarted subscription delivers them - stop, so the subscription is
+     * resumed there by the {@link SubscriptionAutoResumer} (by hand when the policy's auto-resume is disabled). When the
+     * signal has a cause, the events before that point - the ones the hand-off could not forward and also the ones it
+     * forwarded - are reported as a skipped batch's events are. Runs
+     * only on this failure path, never per batch.
+     *
+     * @return true if the subscriber stopped (or, already stopped, holds its resume point) for the rest of the batch to be
+     * delivered again; false if the {@link SubscriptionErrorPolicy} is to skip the batch after all: the signal names no
+     * event of the batch, the subscriber has no {@link SubscriptionAutoResumer} to resume it, or the redeliveries at the
+     * event are used up
+     */
+    private boolean stopForRedelivery(List<PersistedEvent> batch, FailedBatchToBeRedeliveredException redelivery) {
+        var firstToRedeliver = redelivery.firstEventToRedeliverIn(batch);
+        if (firstToRedeliver == null) {
+            log.warn(msg("[{}-{}] The event handler asked for the failed batch [#{} - #{}] to be delivered again from #{}, which is past the batch - the {} SubscriptionErrorPolicy applies",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType(),
+                         batch.getFirst().globalEventOrder(),
+                         batch.getLast().globalEventOrder(),
+                         redelivery.redeliverFromAndIncluding(),
+                         subscriptionErrorPolicy.mode()), redelivery);
+            return false;
+        }
+        var redeliverFrom = firstToRedeliver.globalEventOrder();
+        var doneWith      = batch.subList(0, batch.indexOf(firstToRedeliver));
+        if (isStopped()) {
+            // Stopped under the hand-off (stop, unsubscribe, fenced-lock release): the restarted subscription delivers the rest
+            acknowledgeGivenUp(doneWith);
+            reportLostBeforeRedelivery(doneWith, redelivery);
+            var resumeFrom = holdResumePointAtAfterDoneWith(firstToRedeliver);
+            log.info(msg("[{}-{}] The subscriber was stopped while the event handler took over the failed batch [#{} - #{}] - the batch is not skipped: " +
+                                 "the resume point stays at #{} and the events from it on are delivered again when the subscription is started again",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType(),
+                         batch.getFirst().globalEventOrder(),
+                         batch.getLast().globalEventOrder(),
+                         resumeFrom));
+            return true;
+        }
+        if (autoResumer == null) {
+            log.warn(msg("[{}-{}] The event handler asked for the failed batch [#{} - #{}] to be delivered again from #{}, but this subscriber has no auto-resumer to resume it " +
+                                 "(it was not created by an EventStoreSubscriptionManager) - the {} SubscriptionErrorPolicy applies",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType(),
+                         batch.getFirst().globalEventOrder(),
+                         batch.getLast().globalEventOrder(),
+                         redeliverFrom,
+                         subscriptionErrorPolicy.mode()), redelivery);
+            return false;
+        }
+        if (autoResumer.redeliveriesUsedUpAt(redeliverFrom, subscriptionErrorPolicy)) {
+            log.error(msg("[{}-{}] The event handler asked for the failed batch [#{} - #{}] to be delivered again from #{}, but the subscription has already been resumed there " +
+                                  "{} time(s), the maximum of its SubscriptionErrorPolicy's auto-resume - the {} SubscriptionErrorPolicy applies",
+                          eventStoreSubscription.subscriberId(),
+                          eventStoreSubscription.aggregateType(),
+                          batch.getFirst().globalEventOrder(),
+                          batch.getLast().globalEventOrder(),
+                          redeliverFrom,
+                          autoResumer.resumesAt(redeliverFrom),
+                          subscriptionErrorPolicy.mode()), redelivery);
+            return false;
+        }
+        acknowledgeGivenUp(doneWith);
+        reportLostBeforeRedelivery(doneWith, redelivery);
+        // Set before the resume point is held, so the observer below already sees isStoppedByErrorPolicy() == true
+        stoppedByErrorPolicy = true;
+        var resumeFrom = holdResumePointAtAfterDoneWith(firstToRedeliver);
+        cancelScheduledProcessing();
+        log.warn(msg("[{}-{}] Stopping the subscription so the failed batch [#{} - #{}] is delivered again from #{}: its event handler gave up on it part-way. " +
+                             "The resume point stays at #{}, and the subscription is resumed there after the delay of its SubscriptionErrorPolicy's auto-resume " +
+                             "(or by hand, when that auto-resume is disabled). " +
+                             "Events the event handler already completed from there on are delivered again",
+                     eventStoreSubscription.subscriberId(),
+                     eventStoreSubscription.aggregateType(),
+                     batch.getFirst().globalEventOrder(),
+                     batch.getLast().globalEventOrder(),
+                     redeliverFrom,
+                     resumeFrom), redelivery);
+        try {
+            eventStore.getEventStoreSubscriptionObserver().subscriptionStoppedByErrorPolicy(redeliverFrom, redelivery, eventStoreSubscription);
+        } catch (RuntimeException observerFailure) {
+            log.warn(msg("[{}-{}] EventStoreSubscriptionObserver#subscriptionStoppedByErrorPolicy failed",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType()), observerFailure);
+        }
+        Schedulers.boundedElastic().schedule(this::dispose);
+        autoResumer.stoppedForRedeliveryAt(redeliverFrom, subscriptionErrorPolicy);
+        return true;
+    }
+
+    /**
+     * The events before the redelivery point include events the hand-off could not forward when the signal carries a
+     * cause (the first such failure). Those are lost, but the signal does not say which they are, so every event before
+     * the redelivery point - the forwarded ones too - is reported as a skipped batch's events are, to the observer's
+     * {@code handleEventBatchFailed} and the <code>onErrorHandler</code>. Neither may stop the redelivery
+     */
+    private void reportLostBeforeRedelivery(List<PersistedEvent> doneWith, FailedBatchToBeRedeliveredException redelivery) {
+        var cause = redelivery.getCause();
+        if (cause == null || doneWith.isEmpty()) {
+            return;
+        }
+        try {
+            eventStore.getEventStoreSubscriptionObserver().handleEventBatchFailed(doneWith, eventHandler, cause, eventStoreSubscription);
+        } catch (RuntimeException observerFailure) {
+            log.warn(msg("[{}-{}] EventStoreSubscriptionObserver#handleEventBatchFailed failed",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType()), observerFailure);
+        }
+        try {
+            onErrorHandler.accept(doneWith.getLast(), cause);
+        } catch (RuntimeException errorHandlerFailure) {
+            log.warn(msg("[{}-{}] The onErrorHandler failed",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType()), errorHandlerFailure);
+        }
+    }
+
+    /**
+     * The events of a batch before <code>firstEventToRedeliver</code> are done with: move the resume point up to it
+     * (advance, never rewind) and hold it there
+     *
+     * @return the resume point after holding it
+     */
+    private GlobalEventOrder holdResumePointAtAfterDoneWith(PersistedEvent firstEventToRedeliver) {
+        synchronized (resumePointLock) {
+            resumePoint.advanceResumeFromAndIncluding(firstEventToRedeliver.globalEventOrder());
+            return holdResumePointAt(firstEventToRedeliver);
+        }
     }
 
     /**
