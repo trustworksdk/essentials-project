@@ -58,6 +58,14 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * missing - an application-supplied registry must register them itself, with the same two methods, to be safe for
  * early readers.
  * <p>
+ * <b>Precedence: the declaration wins.</b> When a declared aggregate class carrying a policy annotation is also
+ * registered another way - an explicit {@code register(...)}, or the policy {@code BeanPostProcessor} when the class is
+ * also a Spring bean - the starter's default registries answer with the declared descriptor (its {@code aggregateType}
+ * taken from the declaration unless the annotation sets one), whichever registration came first. An
+ * application-supplied registry decides precedence itself: this registrar registers the declared descriptor when it
+ * runs, and in a registry that replaces by implementation class (the {@code InMemory*PolicyRegistry} classes do) a later
+ * {@code register(...)} for that class replaces it again.
+ * <p>
  * The registrar is additionally passed to the validator's {@code @Bean} method as an unused parameter. That is belt and
  * braces rather than the mechanism - it keeps the dependency visible in the wiring, and preserves correctness if the
  * validator ever moves its checks out of {@code afterSingletonsInstantiated()} and into its constructor.

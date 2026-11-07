@@ -18,8 +18,10 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.events
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.EssentialsAggregateDeclarations;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.*;
+import org.slf4j.*;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -36,10 +38,24 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * take this registry, so it is created while the {@code BeanPostProcessor}s are registered, and reading the declarations
  * then would create the application's declaration beans too early for the other {@code BeanPostProcessor}s to process
  * them. {@link #register} does not trigger the read.
+ * <p>
+ * <b>The declaration wins.</b> For a declared aggregate class that carries {@link AggregateClosingBooksPolicy}, the
+ * registry always answers with the descriptor built from the declaration, whatever else calls {@link #register} for
+ * that class and in whichever order - an application's explicit {@code register(...)}, or the policy
+ * {@code BeanPostProcessor} when the class is also a Spring bean (whose descriptor lacks the declared
+ * {@code aggregateType}). A descriptor registered before the first read is replaced by the declared one on that read;
+ * one registered after it, and not equal to the declared one, is ignored and logged. A class that is not declared, or
+ * is declared without {@link AggregateClosingBooksPolicy}, is registered as {@link #register} is called.
  */
 final class DeclaredPoliciesAggregateClosingBooksPolicyRegistry extends InMemoryAggregateClosingBooksPolicyRegistry {
-    private final Supplier<List<EssentialsAggregateDeclarations>> declarations;
-    private volatile boolean                                     declaredPoliciesRegistered;
+    private static final Logger log = LoggerFactory.getLogger(DeclaredPoliciesAggregateClosingBooksPolicyRegistry.class);
+
+    private final Supplier<List<EssentialsAggregateDeclarations>>        declarations;
+    /**
+     * The descriptor built from the declaration, per declared aggregate implementation class; filled on the first read
+     */
+    private final Map<Class<?>, AggregateClosingBooksPolicyDescriptor>   declaredDescriptors = new ConcurrentHashMap<>();
+    private volatile boolean                                             declaredPoliciesRegistered;
     /**
      * Read and written only while holding this registry's monitor
      */
@@ -51,6 +67,30 @@ final class DeclaredPoliciesAggregateClosingBooksPolicyRegistry extends InMemory
      */
     DeclaredPoliciesAggregateClosingBooksPolicyRegistry(Supplier<List<EssentialsAggregateDeclarations>> declarations) {
         this.declarations = requireNonNull(declarations, "No declarations provided");
+    }
+
+    /**
+     * Registers {@code descriptor}, unless its aggregate implementation class is declared with an
+     * {@link AggregateClosingBooksPolicy}: then the declared descriptor stays (see the class javadoc). Does not read
+     * the declarations.
+     */
+    @Override
+    public void register(AggregateClosingBooksPolicyDescriptor descriptor) {
+        requireNonNull(descriptor, "No descriptor provided");
+        var declared = declaredDescriptors.get(descriptor.aggregateImplementationType());
+        if (declared != null) {
+            if (!declared.equals(descriptor)) {
+                log.info("Ignored registering {} - '{}' is declared, and its declared closing-books policy {} wins",
+                         descriptor, descriptor.aggregateImplementationType().getName(), declared);
+            }
+            return;
+        }
+        super.register(descriptor);
+        // The declared descriptors may have been registered between the check above and this registration
+        declared = declaredDescriptors.get(descriptor.aggregateImplementationType());
+        if (declared != null) {
+            super.register(declared);
+        }
     }
 
     @Override
@@ -78,7 +118,17 @@ final class DeclaredPoliciesAggregateClosingBooksPolicyRegistry extends InMemory
             }
             registering = true;
             try {
-                AggregateDeclarationPolicyRegistrar.registerDeclaredClosingBooksPolicies(declarations.get(), this);
+                var declared = new InMemoryAggregateClosingBooksPolicyRegistry();
+                AggregateDeclarationPolicyRegistrar.registerDeclaredClosingBooksPolicies(declarations.get(), declared);
+                for (var descriptor : declared.getRegisteredPolicies()) {
+                    // Recorded before it is registered: a concurrent register(...) checks it again after its own
+                    declaredDescriptors.put(descriptor.aggregateImplementationType(), descriptor);
+                    super.findByAggregateImplementationType(descriptor.aggregateImplementationType())
+                         .filter(registered -> !registered.equals(descriptor))
+                         .ifPresent(registered -> log.info("Replaced {} with the declared closing-books policy {} - '{}' is declared, and its declaration wins",
+                                                           registered, descriptor, descriptor.aggregateImplementationType().getName()));
+                    super.register(descriptor);
+                }
                 declaredPoliciesRegistered = true;
             } finally {
                 registering = false;

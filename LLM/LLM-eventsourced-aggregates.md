@@ -763,6 +763,11 @@ The Spring Boot starter's `AggregateDeclarationPolicyRegistrar` reads the annota
 registers the descriptors before configuration validation runs. The aggregate type is taken from the annotation's own
 `aggregateType()` attribute when set, otherwise from the declaration.
 
+The declaration wins: with the starter's default policy registries, a declared class's annotation is what the registry
+answers with, even when the same class is also registered with an explicit `register(...)` or, being a Spring bean
+too, by the policy `BeanPostProcessor` - whichever came first. A policy registry bean you supply yourself decides this
+itself.
+
 **Test refs**: `EssentialsAggregateDeclarationsTest`, `AggregateDeclarationPolicyRegistrarTest`
 
 ---

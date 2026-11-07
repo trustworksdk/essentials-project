@@ -32,7 +32,8 @@ import static org.assertj.core.api.Assertions.*;
 /**
  * Plain unit tests (no Spring context) of the starter's default policy registries' own contract: the declarations are
  * not read when the registry is created or on {@code register(...)} - which is what keeps the declaration beans out of
- * {@code BeanPostProcessor} registration - and they are read exactly once, before the first read is answered.
+ * {@code BeanPostProcessor} registration - and they are read exactly once, before the first read is answered. A
+ * declared policy wins over any other registration for the same class, in either order.
  */
 class DeclaredPoliciesAggregatePolicyRegistryTest {
     private static final AggregateType LEDGERS = AggregateType.of("Ledgers");
@@ -78,6 +79,89 @@ class DeclaredPoliciesAggregatePolicyRegistryTest {
                     assertThat(descriptor.policy().defaultPolicy()).isEqualTo(ClosingBooksDefaultPolicyType.MANUAL_ONLY);
                 });
         assertThat(calls).hasValue(1);
+    }
+
+    /**
+     * The declaration wins over an explicit register(...) made before the first read: the first read replaces it.
+     */
+    @Test
+    void snapshot_registry_answers_with_the_declared_policy_when_register_came_before_the_first_read() {
+        var registry = new DeclaredPoliciesAggregateSnapshotPolicyRegistry(DeclaredPoliciesAggregatePolicyRegistryTest::declarations);
+
+        registry.register(explicitSnapshotDescriptorForDeclaredLedger());
+
+        assertThat(registry.findByAggregateImplementationType(DeclaredLedger.class))
+                .hasValueSatisfying(descriptor -> {
+                    assertThat(descriptor.aggregateType()).contains("Ledgers");
+                    assertThat(descriptor.policy().everyNEvents()).isEqualTo(50);
+                });
+        assertThat(registry.getRegisteredPolicies()).hasSize(1);
+    }
+
+    /**
+     * The declaration wins over an explicit register(...) made after the first read: the registration is ignored.
+     */
+    @Test
+    void snapshot_registry_answers_with_the_declared_policy_when_register_came_after_the_first_read() {
+        var registry = new DeclaredPoliciesAggregateSnapshotPolicyRegistry(DeclaredPoliciesAggregatePolicyRegistryTest::declarations);
+        assertThat(registry.findByAggregateImplementationType(DeclaredLedger.class)).isPresent();
+
+        registry.register(explicitSnapshotDescriptorForDeclaredLedger());
+
+        assertThat(registry.findByAggregateImplementationType(DeclaredLedger.class))
+                .hasValueSatisfying(descriptor -> {
+                    assertThat(descriptor.aggregateType()).contains("Ledgers");
+                    assertThat(descriptor.policy().everyNEvents()).isEqualTo(50);
+                });
+        assertThat(registry.getRegisteredPolicies()).hasSize(1);
+    }
+
+    /**
+     * What the policy BeanPostProcessor registers for a declared class that is also a Spring bean - the same annotation
+     * without the declared aggregateType - does not replace the declared descriptor, in either order.
+     */
+    @Test
+    void closing_books_registry_keeps_the_declared_aggregate_type_whichever_order_a_bean_registration_comes_in() {
+        var beanDescriptor = new AggregateClosingBooksPolicyDescriptor(DeclaredLedger.class,
+                                                                       Optional.empty(),
+                                                                       DeclaredLedger.class.getAnnotation(AggregateClosingBooksPolicy.class));
+
+        var registeredFirst = new DeclaredPoliciesAggregateClosingBooksPolicyRegistry(DeclaredPoliciesAggregatePolicyRegistryTest::declarations);
+        registeredFirst.register(beanDescriptor);
+        assertThat(registeredFirst.findByAggregateImplementationType(DeclaredLedger.class))
+                .hasValueSatisfying(descriptor -> assertThat(descriptor.aggregateType()).contains("Ledgers"));
+
+        var registeredAfter = new DeclaredPoliciesAggregateClosingBooksPolicyRegistry(DeclaredPoliciesAggregatePolicyRegistryTest::declarations);
+        assertThat(registeredAfter.getRegisteredPolicies()).hasSize(1);
+        registeredAfter.register(beanDescriptor);
+        assertThat(registeredAfter.findByAggregateImplementationType(DeclaredLedger.class))
+                .hasValueSatisfying(descriptor -> assertThat(descriptor.aggregateType()).contains("Ledgers"));
+    }
+
+    /**
+     * The registrar's own re-registration of the declared descriptor, and register(...) of an undeclared class, still
+     * register as before.
+     */
+    @Test
+    void snapshot_registry_registers_the_declared_descriptor_again_and_an_undeclared_class_after_the_first_read() {
+        var registry = new DeclaredPoliciesAggregateSnapshotPolicyRegistry(DeclaredPoliciesAggregatePolicyRegistryTest::declarations);
+        var declared = registry.findByAggregateImplementationType(DeclaredLedger.class).orElseThrow();
+
+        AggregateDeclarationPolicyRegistrar.registerDeclaredSnapshotPolicies(declarations(), registry);
+        registry.register(new AggregateSnapshotPolicyDescriptor(OtherLedger.class,
+                                                                Optional.empty(),
+                                                                OtherLedger.class.getAnnotation(AggregateSnapshotPolicy.class)));
+
+        assertThat(registry.findByAggregateImplementationType(DeclaredLedger.class)).contains(declared);
+        assertThat(registry.findByAggregateImplementationType(OtherLedger.class))
+                .hasValueSatisfying(descriptor -> assertThat(descriptor.policy().everyNEvents()).isEqualTo(20));
+    }
+
+    private static AggregateSnapshotPolicyDescriptor explicitSnapshotDescriptorForDeclaredLedger() {
+        // OtherLedger's annotation (everyNEvents = 20) registered for DeclaredLedger (declared with everyNEvents = 50)
+        return new AggregateSnapshotPolicyDescriptor(DeclaredLedger.class,
+                                                     Optional.of("Ledgers"),
+                                                     OtherLedger.class.getAnnotation(AggregateSnapshotPolicy.class));
     }
 
     @Test

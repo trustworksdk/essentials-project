@@ -27,6 +27,10 @@ targets, with a `-N` suffix for plugin-only releases.
   held no uncommitted changes - and otherwise to roll back and retry in a new unit of work, and points to the
   exception's Javadoc for the cases and its two flags, `aggregateHeldUncommittedChanges()` and
   `unitOfWorkMarkedRollbackOnly()`. No skill, rule or script changed.
+- **Declared aggregate policies take precedence** — the eventsourced-aggregates reference says that with the Spring
+  Boot starter's default policy registries the annotation on a declared aggregate class wins over an explicit
+  `register(...)` or a policy `BeanPostProcessor` registration of the same class, whichever came first, and that an
+  application-supplied policy registry decides this itself. No skill, rule or script changed.
 
 ## 0.60.1-8 — targets Essentials 0.60.1
 
