@@ -17,22 +17,18 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
-import dk.trustworks.essentials.shared.functional.CheckedRunnable;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -42,8 +38,7 @@ import static org.mockito.Mockito.*;
  * {@link PartitionedViewEventProcessor#start()} refuses a queue implementation that does not keep an ordered message key
  * in order across instances, and {@code @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)} methods. Both refusals happen
  * before the processor counts as started and before it registers a queue consumer, so a refused processor reports
- * {@code isStarted() == false} and a second {@code start()} refuses again. A failed batch's replay stops before its next
- * event once the reader lock's release callback has fired, even while the subscription still reports active.
+ * {@code isStarted() == false} and a second {@code start()} refuses again.
  * <p>
  * Mocks throughout, so no database is involved. The shard-owned engine's side is pinned by
  * {@code PartitionedProcessorsOnShardOwnedIT}.
@@ -96,76 +91,7 @@ class PartitionedViewEventProcessorTest {
         assertNeverConsumed(durableQueues);
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    void a_failed_batch_replay_stops_once_the_reader_lock_release_callback_fires_while_the_subscription_still_reports_active() {
-        var unitOfWorkFactory = mock(EventStoreUnitOfWorkFactory.class);
-        // Runs each replayed event's forward inline, as its own unit of work would
-        doAnswer(invocation -> {
-            invocation.<CheckedRunnable>getArgument(0).run();
-            return null;
-        }).when(unitOfWorkFactory).usingUnitOfWork(any(CheckedRunnable.class));
-        var eventStore = mock(EventStore.class, withSettings().extraInterfaces(AwaitedGapInspector.class));
-        doReturn(unitOfWorkFactory).when(eventStore).getUnitOfWorkFactory();
-        var subscriptionManager = mock(EventStoreSubscriptionManager.class);
-        when(subscriptionManager.getEventStore()).thenReturn(eventStore);
-        // The subscription reports active throughout: only the reader-lock tenure the processor flips tells the replay to stop
-        var subscription = mock(EventStoreSubscription.class);
-        when(subscription.isActive()).thenReturn(true);
-        when(subscriptionManager.batchSubscribeToAggregateEventsAsynchronously(any(), any(), any(), any(), anyInt(), any(), any())).thenReturn(subscription);
-        var lockManager = fencedLockManager();
-        var lockCallback = new AtomicReference<LockCallback>();
-        var forwarded    = new ArrayList<PersistedEvent>();
-        var processor = new PartitionedViewEventProcessor(subscriptionManager, lockManager, durableQueues(true), mock(DurableLocalCommandBus.class), List.of()) {
-            @Override
-            public String getProcessorName() {
-                return "ThingsPartitionedViewProcessor";
-            }
-
-            @Override
-            protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-                return List.of(THINGS);
-            }
-
-            @Override
-            void forwardBatch(List<PersistedEvent> events) {
-                forwarded.addAll(events);
-                // The reader lock is lost while the first event is forwarded
-                lockCallback.get().lockReleased(mock(FencedLock.class));
-            }
-
-            @MessageHandler
-            void on(SomethingHappened e) {
-            }
-        };
-        processor.start();
-        var lockCallbackCaptor = ArgumentCaptor.forClass(LockCallback.class);
-        verify(lockManager).acquireLockAsync(any(LockName.class), lockCallbackCaptor.capture());
-        lockCallback.set(lockCallbackCaptor.getValue());
-        lockCallback.get().lockAcquired(mock(FencedLock.class));
-        var handlerCaptor = ArgumentCaptor.forClass(BatchedPersistedEventHandler.class);
-        verify(subscriptionManager).batchSubscribeToAggregateEventsAsynchronously(any(), any(), any(), any(), anyInt(), any(), handlerCaptor.capture());
-        var events = events(3);
-
-        assertThatThrownBy(() -> handlerCaptor.getValue().handOffFailedBatch(events, new RuntimeException("batch failed"), SubscriptionErrorPolicy.skip()))
-                .isExactlyInstanceOf(FailedBatchToBeRedeliveredException.class)
-                .satisfies(thrown -> assertThat(((FailedBatchToBeRedeliveredException) thrown).redeliverFromAndIncluding()).isEqualTo(events.get(1).globalEventOrder()));
-
-        assertThat(forwarded).containsExactly(events.get(0));
-        verify(subscription, atLeastOnce()).isActive();
-    }
-
     // -------------------------------------------------------------------------------------------------------------------
-
-    private static List<PersistedEvent> events(int count) {
-        var events = new ArrayList<PersistedEvent>();
-        for (var order = 1; order <= count; order++) {
-            var event = mock(PersistedEvent.class);
-            when(event.globalEventOrder()).thenReturn(GlobalEventOrder.of(order));
-            events.add(event);
-        }
-        return events;
-    }
 
     private static void assertNeverConsumed(DurableQueues durableQueues) {
         verify(durableQueues, never()).consumeFromQueue(any(QueueName.class), any(RedeliveryPolicy.class), anyInt(), any(QueuedMessageHandler.class));

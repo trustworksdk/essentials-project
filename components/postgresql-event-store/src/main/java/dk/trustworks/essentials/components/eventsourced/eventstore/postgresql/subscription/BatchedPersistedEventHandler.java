@@ -86,9 +86,7 @@ public interface BatchedPersistedEventHandler {
      * @return true if the handler took the batch over: the subscriber then carries on as if the batch had been handled -
      * the policy does not skip or stop, the failure is not reported to the observer, and the resume point moves past the
      * batch. false (the default) to let the {@link SubscriptionErrorPolicy} give up as usual, which it also does if this
-     * method throws - unless what it throws carries a {@link FailedBatchToBeRedeliveredException} anywhere in its cause
-     * chain: the subscriber then stops at that exception's {@link FailedBatchToBeRedeliveredException#redeliverFromAndIncluding()}
-     * and is resumed there, see that class
+     * method throws
      */
     default boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure) {
         return false;

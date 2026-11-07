@@ -108,9 +108,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                       retries (see {@link Mode#retries()})
  * @param maxBackoff     the longest wait between two retries. Must be {@code >= initialBackoff}
  * @param autoResume     whether, and when, a subscription this policy stopped resumes by itself. Ignored unless the mode stops (see
- *                       {@link Mode#stops()}) - except for a batch whose hand-off asks for redelivery: its delays and
- *                       {@code maxAttempts} also apply to a skipping mode then, and a disabled one leaves the subscription
- *                       stopped at the redelivery point until it is resumed by hand, see {@link FailedBatchToBeRedeliveredException}
+ *                       {@link Mode#stops()})
  */
 public record SubscriptionErrorPolicy(Mode mode,
                                       int maxRetries,

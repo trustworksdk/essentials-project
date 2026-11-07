@@ -340,32 +340,11 @@ the first one started. `PartitionedEventProcessor` is the alternative, chosen by
   policy's retries, so the skip loses only the events that cannot be forwarded on their own either - not the whole batch. This applies to every
   `EventProcessor` with `getForwardBatchSize()` above 1, and to `PartitionedViewEventProcessor` (§2.10). Up to a batch
   is still skipped when the replay cannot run at all (the database unreachable), and when a stopping policy turns into
-  a skip after `AutoResume.maxAttempts` resumes. An event that fails with an I/O or connection failure, as
-  `IOExceptionUtil.isIOException` classifies it, is forwarded a second time at once in a new unit of work, so a one-off
-  (a stale pooled connection, say) does not cost it; when that fails too, the first attempt's failure is attached to it
-  as a suppressed exception. Only time, or the processor stopping or losing the subscription, stops the replay - never
-  the kind or number of failures: before each event after the first, it checks the new
-  `AbstractEventProcessor.getFailedBatchReplayTimeBudget()` (default 90 s, three times HikariCP's default
-  `connectionTimeout`; override it to match your pool; an override that returns `null` gets the default and a WARN).
-  Once the budget is spent, the batch's untried events are delivered again, not skipped - one WARN names how many - and
-  the subscription's thread is blocked for at most the budget plus one event's two forwards, instead of each event
-  waiting for its own connection timeout. A spent budget reaches the subscriber as
-  `AbstractEventProcessor.FailedBatchReplayTimeBudgetSpentException` (the signal to alert on), a new
-  `FailedBatchToBeRedeliveredException` naming the first untried event, with the first failure, if any, as its cause:
-  the subscription holds its resume point there, reports `isStoppedByErrorPolicy()` and is resumed there after the
-  delay of the policy's `autoResume()`, or stays stopped there until resumed by hand when that auto-resume is disabled.
-  Each redelivery tries at least its first event again, so the replay advances at least one event per resume; a limited
-  `AutoResume.maxAttempts` caps only redeliveries asked for at the same event again. When the exception has a cause,
-  the events before the redelivery point - the ones given up for good and also the ones the replay forwarded - are
-  reported to the observer's `handleEventBatchFailed` and the error handler, as a skipped batch's events are. The
-  replay also stops before an event once the processor is stopped or its lock-release callback reported the
-  subscription's fenced lock lost, leaving the rest to whoever reads the events next. Redelivery is at least
-  once: an event the replay already forwarded can be forwarded again - the shard-owned engine absorbs it through
-  `IdentifiedByKeyAndOrder`, other `Inboxes` deliver it twice. Of the events that fail again, only the first is logged with
-  its stack trace. Whether the policy skips is read from the policy the batched subscription was built with, handed to the
-  new `BatchedPersistedEventHandler.handOffFailedBatch(events, failure, subscriptionErrorPolicy)` overload (by default it
-  delegates to the two-argument one), so a skipping policy now also replays a batch under an `EventStoreSubscriptionManager`
-  other than `DefaultEventStoreSubscriptionManager`, where it used to skip the whole batch. (`c5e495008`, `b05d29a79`, `cf71a917f`, `be5c1190a`, `304fc2a47`, `7602a79e8`, `3893f6665`)
+  a skip after `AutoResume.maxAttempts` resumes. Whether the policy skips is read from the policy the batched
+  subscription was built with, handed to the new `BatchedPersistedEventHandler.handOffFailedBatch(events, failure,
+  subscriptionErrorPolicy)` overload (by default it delegates to the two-argument one), so a skipping policy now also
+  replays a batch under an `EventStoreSubscriptionManager` other than `DefaultEventStoreSubscriptionManager`, where it
+  used to skip the whole batch. (`c5e495008`, `cf71a917f`)
 
 Whether a queue keeps key order across instances is the new `DurableQueues.keepsKeyOrderAcrossInstances()` /
 `Inboxes.keepsKeyOrderAcrossInstances()`: `false` by default, `true` for the shard-owned adapter.

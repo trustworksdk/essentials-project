@@ -32,8 +32,7 @@ import org.slf4j.*;
 
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.atomic.*;
-import java.util.function.*;
+import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -139,12 +138,6 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
      * delivered while the acquired callback still subscribes must find every subscription it created.
      */
     private final Object                        lockCallbackMonitor = new Object();
-    /**
-     * This instance's current tenure of the reader lock: a new one on each lock acquired, ended first thing on its release,
-     * before the subscriptions are unsubscribed. A failed batch's replay reads the tenure its subscription was created in
-     * (in memory, no lookup)
-     */
-    private volatile AtomicBoolean              readerTenure        = new AtomicBoolean(false);
     private       DurableQueueConsumer          durableQueueConsumer;
     private       LockName                      lockName;
     private       UnhandledEventTypes           unhandledEventTypes;
@@ -251,7 +244,6 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
 
     private void onLockAcquired(String processorName, List<AggregateType> subscribeToEventsRelatedTo) {
         synchronized (lockCallbackMonitor) {
-            readerTenure = new AtomicBoolean(true);
             logger.info("FencedLock '{}' for PartitionedViewEventProcessor '{}' was ACQUIRED - will read the events and forward them to '{}'", lockName, processorName, durableQueueName);
             // A failing subscribe unsubscribes the ones before it and throws: the lock manager releases the lock and it is acquired again later
             var forwardBatchSize = Math.max(1, getForwardBatchSize());
@@ -266,8 +258,6 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
 
     private void onLockReleased(String processorName) {
         synchronized (lockCallbackMonitor) {
-            // First: a failed batch's replay stops before its next event, before the unsubscribe below unwinds the subscriptions
-            readerTenure.set(false);
             var subscriptions = eventStoreSubscriptions;
             if (subscriptions == null) {
                 return;
@@ -291,17 +281,9 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
                                                                 int forwardBatchSize,
                                                                 Duration forwardMaxLatency,
                                                                 String processorName) {
-        // Set once subscribed; read by the failed batch's replay, with the reader-lock tenure the subscription was created in,
-        // to stop once the processor stopped or the lock was released (in memory, no lookup)
-        var subscription = new AtomicReference<EventStoreSubscription>();
-        var tenure       = readerTenure;
-        BooleanSupplier stillOwnsSubscription = () -> {
-            var subscribed = subscription.get();
-            return started && tenure.get() && (subscribed == null || subscribed.isActive());
-        };
         // Non-exclusive: the processor's own lock makes it exclusive, as for ViewEventProcessor - same subscriber id and
         // lock name, so a view switched to this class keeps its resume point
-        var batchSubscription = eventStoreSubscriptionManager.batchSubscribeToAggregateEventsAsynchronously(
+        return eventStoreSubscriptionManager.batchSubscribeToAggregateEventsAsynchronously(
                 subscriberId,
                 aggregateType,
                 resolveStartSubscriptionFromGlobalEventOrder().apply(aggregateType),
@@ -317,7 +299,7 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
 
                     @Override
                     public boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure, SubscriptionErrorPolicy subscriptionErrorPolicy) {
-                        return forwardFailedBatchOneEventPerUnitOfWork(events, failure, subscriptionErrorPolicy, stillOwnsSubscription, event -> forwardBatch(List.of(event)));
+                        return forwardFailedBatchOneEventPerUnitOfWork(events, failure, subscriptionErrorPolicy, event -> forwardBatch(List.of(event)));
                     }
 
                     @Override
@@ -330,8 +312,6 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
                         return processorName;
                     }
                 });
-        subscription.set(batchSubscription);
-        return batchSubscription;
     }
 
     /**
@@ -470,11 +450,8 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
      * forwarded once it is full or {@link #getForwardMaxLatency()} has passed. The {@code SubscriptionErrorPolicy} retries
      * and stops at a batch as a whole; a policy that skips first forwards the failed batch's events again one per unit of
      * work, each tried once more on its own, without the policy's retries, so the skip loses only the events that fail on
-     * their own as well. An event that fails there with an I/O or connection failure is forwarded a second time at once in
-     * a new unit of work; only time, or the processor stopping or losing the subscription, stops the replay - never the
-     * kind or number of failures. Once its time budget ({@link #getFailedBatchReplayTimeBudget()}) is spent, the events
-     * not tried yet are delivered again once the subscription is resumed, not skipped (see
-     * {@link EventProcessor#getForwardBatchSize()} for when a skip still loses up to a batch).
+     * their own as well (see {@link EventProcessor#getForwardBatchSize()}
+     * for when a skip still loses up to a batch).
      *
      * @return the most events forwarded in one unit of work; values below {@code 1} count as {@code 1}
      */
