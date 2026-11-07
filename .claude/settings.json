@@ -88,5 +88,8 @@
   },
   "worktree": {
     "baseRef": "head"
+  },
+  "attribution": {
+    "sessionUrl": false
   }
 }
