@@ -146,23 +146,23 @@ All beans use `@ConditionalOnMissingBean` for easy overriding.
 
 ```properties
 essentials.fenced-lock-manager.fenced-locks-collection-name=fenced_locks
-essentials.fenced-lock-manager.lock-time-out=12s
-essentials.fenced-lock-manager.lock-confirmation-interval=5s
+essentials.fenced-lock-manager.lock-time-out=15s
+essentials.fenced-lock-manager.lock-confirmation-interval=4s
 essentials.fenced-lock-manager.release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation=false
 ```
 
 | Property | Default | Description |
 |----------|---------|-------------|
 | `fenced-locks-collection-name` | `fenced_locks` | MongoDB collection for locks. **See [Security](#security)** |
-| `lock-time-out` | `12s` | Duration before unconfirmed lock expires |
-| `lock-confirmation-interval` | `5s` | Heartbeat interval (must be < timeout) |
+| `lock-time-out` | `15s` | Duration before unconfirmed lock expires |
+| `lock-confirmation-interval` | `4s` | Heartbeat interval (must be < timeout) |
 | `release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation` | `false` | Release locks locally on IO exceptions during confirmation |
 
 ### DurableQueues Configuration
 
 ```properties
 essentials.durable-queues.shared-queue-collection-name=durable_queues
-essentials.durable-queues.message-handling-timeout=5s
+essentials.durable-queues.message-handling-timeout=30s
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
 essentials.durable-queues.max-polling-interval=2s
 essentials.durable-queues.verbose-tracing=false

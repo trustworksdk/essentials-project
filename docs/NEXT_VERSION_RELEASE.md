@@ -836,6 +836,10 @@ Not published; listed because they are the reference for how to use the framewor
   methods take no `set` prefix (`inboxName`, `redeliveryPolicy`, ...), unlike `OutboxConfigBuilder`'s.
 - The LLM docs and the `types-jackson3` README show `Money` as `{"amount":99.99,"currency":"USD"}`, with the amount a
   JSON number as it is written; they showed it quoted (§3).
+- The LLM docs and the `spring-boot-starter-mongodb` README give the MongoDB starter's fenced-lock defaults as they are
+  in its `EssentialsComponentsProperties`: `lock-time-out` `15s` and `lock-confirmation-interval` `4s` (they said `12s`
+  and `5s`). The README's DurableQueues properties example now shows `message-handling-timeout=30s`, the default its
+  table gives, instead of `5s`. The defaults themselves are unchanged.
 
 ---
 

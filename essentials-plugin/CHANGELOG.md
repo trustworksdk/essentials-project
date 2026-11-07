@@ -31,6 +31,9 @@ targets, with a `-N` suffix for plugin-only releases.
   Boot starter's default policy registries the annotation on a declared aggregate class wins over an explicit
   `register(...)` or a policy `BeanPostProcessor` registration of the same class, whichever came first, and that an
   application-supplied policy registry decides this itself. No skill, rule or script changed.
+- **MongoDB starter fenced-lock defaults** — the spring-boot-starter-modules reference gives the MongoDB starter's
+  `essentials.fenced-lock-manager.lock-time-out` default as `15s` and `lock-confirmation-interval` as `4s`, the values
+  in that starter's `EssentialsComponentsProperties`; it said `12s` and `5s`. No skill, rule or script changed.
 
 ## 0.60.1-8 — targets Essentials 0.60.1
 
