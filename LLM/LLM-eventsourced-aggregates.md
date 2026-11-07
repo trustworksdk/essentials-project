@@ -1051,19 +1051,6 @@ unitOfWorkFactory.usingUnitOfWork(uow -> repository.load(new LogicalAggregateId<
 `evaluatePolicy(AggregateGeneration loadedFrom, aggregate, triggerMode, policy, rollover)`. The unguarded
 `evaluatePolicy(id, aggregate, …)` decides on whatever generation is open once the lock is held.
 
-A guarded refusal is thrown only after the generation lock and its unit-of-work scopes have returned, so by itself it
-does not mark the caller's `UnitOfWork` rollback-only (unless the aggregate holds uncommitted changes, below): reload from the open generation and decide again in the same unit of
-work. ⚠️ The stale aggregate stays registered with that unit of work, so a change already recorded on it (a closing
-event recorded before the guarded call) would be appended to the moved generation's stream at commit.
-`closeAndOpenNextGenerationGuarded` and the guarded `evaluatePolicy(loadedFrom, aggregate, …)` check for that: when
-the aggregate is a `StatefulAggregate` holding uncommitted changes, the refusal marks the `UnitOfWork` rollback-only
-(cause = the refusal) — retry in a new unit of work. ⚠️ After that, nothing more written in that unit of work commits,
-and with the JDBI `UnitOfWork` no exception says so (`commit()` rolls back and returns normally): a catch-and-retry in
-the same unit of work is silently lost. ⚠️ Retry in the same unit of work only when
-`exception.sameUnitOfWorkRetrySafe()` is `true` (a `StatefulAggregate` was inspected and held no uncommitted changes);
-otherwise let the unit of work roll back and retry in a new one. The cases, and the two flags that report them, are in
-the `ClosingBooksGenerationMovedException` Javadoc.
-
 `ClosingBooksStatefulAggregateRepository` is the thinner variant (3 type params) that only maps logical id → open generation's stream id.
 
 ### Scheduled Scans

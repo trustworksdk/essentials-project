@@ -1745,23 +1745,6 @@ unitOfWorkFactory.usingUnitOfWork(uow -> {
 two rolls the close back, leaving the previous generation `OPEN` for a safe retry rather than stranding the
 aggregate with no open generation.
 
-A `ClosingBooksGenerationMovedException` from a guarded method is thrown only after the generation lock and its
-unit-of-work scopes have returned, so by itself it does not mark the caller's `UnitOfWork` rollback-only (unless the
-aggregate holds uncommitted changes, below): reload the aggregate from the generation that is open now and decide
-again in the same unit of work. The aggregate from the moved
-generation stays registered with that unit of work, though, so a change already recorded on it (a closing event
-recorded before the guarded call) would be appended to the moved generation's stream at commit.
-`closeAndOpenNextGenerationGuarded` and the coordinator's guarded `evaluatePolicy(loadedFrom, aggregate, …)` check
-for that: when the aggregate is a `StatefulAggregate` holding uncommitted changes, the refusal marks the `UnitOfWork`
-rollback-only, with the refusal as cause, so retry in a new unit of work. After that, nothing more written in that
-unit of work commits, and with the JDBI `UnitOfWork` no exception says so: its `commit()` rolls back and returns
-normally, so a caller that catches the refusal and retries in the same unit of work silently loses the retry.
-
-Retry in the same unit of work only when `exception.sameUnitOfWorkRetrySafe()` is `true`: the guarded method inspected
-a `StatefulAggregate` and found no uncommitted changes. Otherwise let the unit of work roll back and retry in a new one.
-The cases behind it, and the two flags that report them, are listed in the `ClosingBooksGenerationMovedException`
-Javadoc.
-
 > **Carrying state forward is your job.** Closing a generation does not copy balances into the new stream. Emit an
 > opening/carry-forward event on the new generation — that is what `ClosingBooksNextGenerationFactory` /
 > `TypedClosingBooksNextGenerationFactory` are for.

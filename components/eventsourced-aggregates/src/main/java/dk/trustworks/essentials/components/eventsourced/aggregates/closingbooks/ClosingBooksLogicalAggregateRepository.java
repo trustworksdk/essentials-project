@@ -243,17 +243,8 @@ public class ClosingBooksLogicalAggregateRepository<LOGICAL_ID,
      * generation it was loaded from - so the caller passes nothing extra. Under the generation lock, and before anything
      * is closed, the open generation's stream id is compared with it; when another caller rolled or closed that
      * generation in between, nothing is closed or opened, the factory is not called and
-     * {@link ClosingBooksGenerationMovedException} is thrown. Reload and decide again: the refusal is thrown only after
-     * the generation lock and the unit-of-work scopes it enters have returned, so when {@code currentAggregate} holds no
-     * uncommitted changes it does not mark the caller's unit of work rollback-only, and the reload and the new decision
-     * can run in that same unit of work. When {@code currentAggregate} holds uncommitted changes (e.g. a closing event
-     * recorded before this call), they would be appended to the moved generation's stream on commit, so the refusal
-     * marks the unit of work rollback-only, with the refusal as cause: retry in a new unit of work. Nothing more written
-     * in that unit of work commits then, and with the JDBI unit of work no exception says so. Retry in the same unit of
-     * work only when the refusal's {@link ClosingBooksGenerationMovedException#sameUnitOfWorkRetrySafe()} is
-     * {@code true}; the cases are listed on {@link ClosingBooksGenerationMovedException}. The comparison uses the open
-     * generation the unguarded form resolves anyway, and the check for uncommitted changes is in memory, so it costs no
-     * extra database round trip.
+     * {@link ClosingBooksGenerationMovedException} is thrown. Reload and decide again. The comparison uses the open
+     * generation the unguarded form resolves anyway, so it costs no extra database round trip.
      *
      * @param logicalAggregateId    the identifier of the logical aggregate to be transitioned to the next generation
      * @param currentAggregate      the aggregate loaded from the generation to close; its {@code aggregateId()} must be set
@@ -271,12 +262,9 @@ public class ClosingBooksLogicalAggregateRepository<LOGICAL_ID,
         requireNonNull(currentAggregate, "No currentAggregate provided");
         requireNonNull(nextGenerationFactory, "No nextGenerationFactory provided");
         var loadedFromStreamId = streamIdSerializer.serialize(requireNonNull(currentAggregate.aggregateId(), "currentAggregate has no aggregateId"));
-        // A change already recorded on currentAggregate (e.g. its closing event) would be appended to the moved
-        // generation's stream when the unit of work commits, so a refusal must then roll that unit of work back
-        var uncommittedChanges = ClosingBooksCoordinator.UncommittedChanges.of(currentAggregate);
 
         return openNextGeneration(logicalAggregateId,
-                                  coordinator.closeAndOpenNext(logicalAggregateId, loadedFromStreamId, uncommittedChanges),
+                                  coordinator.closeAndOpenNext(logicalAggregateId, loadedFromStreamId),
                                   currentAggregate,
                                   hint,
                                   nextGenerationFactory);

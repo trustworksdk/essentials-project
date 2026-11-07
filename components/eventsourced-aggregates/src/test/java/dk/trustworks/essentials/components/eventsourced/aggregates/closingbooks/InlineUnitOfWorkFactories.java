@@ -17,19 +17,13 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
-import dk.trustworks.essentials.components.foundation.transaction.NoActiveUnitOfWorkException;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
-import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkLifecycleCallback;
-import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkLifecycleCallback.BeforeCommitProcessingStatus;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkStatus;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.shared.functional.CheckedConsumer;
 import dk.trustworks.essentials.shared.functional.CheckedFunction;
 
-import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -68,38 +62,23 @@ final class InlineUnitOfWorkFactories {
 
     /**
      * Like {@link #inline()}, but each outermost {@code withUnitOfWork}/{@code usingUnitOfWork} gets its own mock
-     * {@link EventStoreUnitOfWork}, a nested call joins it, and {@code getCurrentUnitOfWork()}/{@code getRequiredUnitOfWork()}
-     * answer the one in progress on the calling thread - as the real factories do. Lets a test tell which unit of work a
-     * call ran in.
+     * {@link HandleAwareUnitOfWork}, a nested call joins it, and {@code getCurrentUnitOfWork()} answers the one in
+     * progress on the calling thread - as the real factories do. Lets a test tell which unit of work a call ran in.
      * <p>
      * As in {@code UnitOfWorkFactory.withUnitOfWork}, a nested {@code withUnitOfWork} that throws marks the joined unit
      * of work rollback-only - its {@code status()} turns {@link UnitOfWorkStatus#MarkedForRollbackOnly} and
      * {@code getCauseOfRollback()} answers the exception - and rethrows it wrapped in a {@link UnitOfWorkException}.
-     * <p>
-     * Resources registered with {@code registerLifecycleCallbackForResource} are completed when the outermost call
-     * returns, as {@code GenericHandleAwareUnitOfWork.commit()} does: a unit of work still
-     * {@link UnitOfWorkStatus#Started} runs every callback's {@code beforeCommit} until none answers
-     * {@link BeforeCommitProcessingStatus#REQUIRED}, then {@code afterCommit}; one marked rollback-only, or whose action
-     * threw, runs {@code beforeRollback}/{@code afterRollback} instead and never {@code beforeCommit}. So a real
-     * {@code StatefulAggregateRepository} over {@link #asEventStoreUnitOfWorkFactory(HandleAwareUnitOfWorkFactory)}
-     * appends what its aggregates recorded only when the unit of work commits.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     static HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> joining() {
-        HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> factory = mock(EventStoreUnitOfWorkFactory.class);
-        var current = new ThreadLocal<TrackedUnitOfWork>();
+        HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> factory = mock(HandleAwareUnitOfWorkFactory.class);
+        var current = new ThreadLocal<HandleAwareUnitOfWork>();
         try {
-            when(factory.getCurrentUnitOfWork()).thenAnswer(invocation -> Optional.ofNullable(current.get()).map(TrackedUnitOfWork::unitOfWork));
-            when(factory.getRequiredUnitOfWork()).thenAnswer(invocation -> {
-                if (current.get() == null) {
-                    throw new NoActiveUnitOfWorkException();
-                }
-                return current.get().unitOfWork();
-            });
+            when(factory.getCurrentUnitOfWork()).thenAnswer(invocation -> java.util.Optional.ofNullable(current.get()));
             when(factory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(invocation -> {
                 CheckedFunction<HandleAwareUnitOfWork, ?> function = invocation.getArgument(0);
                 if (current.get() != null) {
-                    var joined = current.get().unitOfWork();
+                    var joined = current.get();
                     try {
                         return function.apply(joined);
                     } catch (Exception e) {
@@ -107,18 +86,9 @@ final class InlineUnitOfWorkFactories {
                         throw new UnitOfWorkException(e);
                     }
                 }
-                var started = trackingRollbackOnly(mock(EventStoreUnitOfWork.class));
-                current.set(started);
+                current.set(trackingRollbackOnly(mock(HandleAwareUnitOfWork.class)));
                 try {
-                    Object result;
-                    try {
-                        result = function.apply(started.unitOfWork());
-                    } catch (Exception e) {
-                        started.rollback(e);
-                        throw e;
-                    }
-                    started.commitOrRollback();
-                    return result;
+                    return function.apply(current.get());
                 } finally {
                     current.remove();
                 }
@@ -126,7 +96,7 @@ final class InlineUnitOfWorkFactories {
             doAnswer(invocation -> {
                 CheckedConsumer<HandleAwareUnitOfWork> consumer = invocation.getArgument(0);
                 if (current.get() != null) {
-                    var joined = current.get().unitOfWork();
+                    var joined = current.get();
                     try {
                         consumer.accept(joined);
                     } catch (Exception e) {
@@ -135,16 +105,9 @@ final class InlineUnitOfWorkFactories {
                     }
                     return null;
                 }
-                var started = trackingRollbackOnly(mock(EventStoreUnitOfWork.class));
-                current.set(started);
+                current.set(trackingRollbackOnly(mock(HandleAwareUnitOfWork.class)));
                 try {
-                    try {
-                        consumer.accept(started.unitOfWork());
-                    } catch (Exception e) {
-                        started.rollback(e);
-                        throw e;
-                    }
-                    started.commitOrRollback();
+                    consumer.accept(current.get());
                 } finally {
                     current.remove();
                 }
@@ -157,100 +120,20 @@ final class InlineUnitOfWorkFactories {
     }
 
     /**
-     * The {@link #joining()} factory as the {@link EventStoreUnitOfWorkFactory} an {@code EventStore} answers, so a real
-     * {@code StatefulAggregateRepository} over a mock {@code EventStore} registers its aggregates with it
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    static EventStoreUnitOfWorkFactory<EventStoreUnitOfWork> asEventStoreUnitOfWorkFactory(HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> joiningFactory) {
-        return (EventStoreUnitOfWorkFactory) joiningFactory;
-    }
-
-    /**
      * Make the mock {@code unitOfWork} answer {@link UnitOfWorkStatus#Started} until {@code markAsRollbackOnly} is
-     * called, then {@link UnitOfWorkStatus#MarkedForRollbackOnly} with that call's cause, and keep the resources
-     * registered with it for {@link TrackedUnitOfWork#commitOrRollback()}.
+     * called, then {@link UnitOfWorkStatus#MarkedForRollbackOnly} with that call's cause.
      */
-    @SuppressWarnings("unchecked")
-    private static TrackedUnitOfWork trackingRollbackOnly(EventStoreUnitOfWork unitOfWork) {
-        var tracked = new TrackedUnitOfWork(unitOfWork, new AtomicReference<>(UnitOfWorkStatus.Started), new AtomicReference<>(), new LinkedHashMap<>());
-        when(unitOfWork.status()).thenAnswer(invocation -> tracked.status().get());
-        when(unitOfWork.getCauseOfRollback()).thenAnswer(invocation -> tracked.cause().get());
+    private static HandleAwareUnitOfWork trackingRollbackOnly(HandleAwareUnitOfWork unitOfWork) {
+        var status = new AtomicReference<>(UnitOfWorkStatus.Started);
+        var cause  = new AtomicReference<Throwable>();
+        when(unitOfWork.status()).thenAnswer(invocation -> status.get());
+        when(unitOfWork.getCauseOfRollback()).thenAnswer(invocation -> cause.get());
         doAnswer(invocation -> {
-            tracked.cause().set(invocation.getArgument(0));
-            tracked.status().set(UnitOfWorkStatus.MarkedForRollbackOnly);
+            cause.set(invocation.getArgument(0));
+            status.set(UnitOfWorkStatus.MarkedForRollbackOnly);
             return null;
         }).when(unitOfWork).markAsRollbackOnly(any());
-        when(unitOfWork.registerLifecycleCallbackForResource(any(), any())).thenAnswer(invocation -> {
-            Object                              resource = invocation.getArgument(0);
-            UnitOfWorkLifecycleCallback<Object> callback = invocation.getArgument(1);
-            tracked.registrations().computeIfAbsent(callback, ignored -> new ArrayList<>()).add(resource);
-            return resource;
-        });
-        when(unitOfWork.getUnitOfWorkLifecycleCallbackResources(any())).thenAnswer(invocation -> List.copyOf(tracked.registrations().getOrDefault(invocation.getArgument(0), List.of())));
-        return tracked;
-    }
-
-    /**
-     * A mock unit of work from {@link #joining()} with the status and lifecycle-callback resources it tracks
-     */
-    private record TrackedUnitOfWork(EventStoreUnitOfWork unitOfWork,
-                                     AtomicReference<UnitOfWorkStatus> status,
-                                     AtomicReference<Throwable> cause,
-                                     Map<UnitOfWorkLifecycleCallback<Object>, List<Object>> registrations) {
-        /**
-         * Commit when still {@link UnitOfWorkStatus#Started}, roll back when marked rollback-only - as
-         * {@code GenericHandleAwareUnitOfWork.commit()} does
-         */
-        void commitOrRollback() {
-            if (status.get() != UnitOfWorkStatus.Started) {
-                rollback(cause.get());
-                return;
-            }
-            var processingStatus = BeforeCommitProcessingStatus.REQUIRED;
-            var passes           = 0;
-            while (processingStatus == BeforeCommitProcessingStatus.REQUIRED) {
-                passes++;
-                if (passes > 10) {
-                    throw new IllegalStateException("beforeCommit still answers REQUIRED after 10 passes");
-                }
-                processingStatus = BeforeCommitProcessingStatus.COMPLETED;
-                for (var registration : new LinkedHashMap<>(registrations).entrySet()) {
-                    if (registration.getKey().beforeCommit(unitOfWork, List.copyOf(registration.getValue())) == BeforeCommitProcessingStatus.REQUIRED) {
-                        processingStatus = BeforeCommitProcessingStatus.REQUIRED;
-                    }
-                }
-            }
-            status.set(UnitOfWorkStatus.Committed);
-            registrations.forEach((callback, resources) -> callback.afterCommit(unitOfWork, List.copyOf(resources)));
-        }
-
-        void rollback(Throwable causeOfRollback) {
-            registrations.forEach((callback, resources) -> callback.beforeRollback(unitOfWork, List.copyOf(resources), causeOfRollback));
-            status.set(UnitOfWorkStatus.RolledBack);
-            registrations.forEach((callback, resources) -> callback.afterRollback(unitOfWork, List.copyOf(resources), causeOfRollback));
-        }
-    }
-
-    /**
-     * Like {@link #inline()}, but its one mock unit of work is also the current one ({@code getCurrentUnitOfWork()}), it
-     * always answers {@link UnitOfWorkStatus#Started} and {@code markAsRollbackOnly} does nothing - as
-     * {@code SpringTransactionAwareUnitOfWork} does when it joined a Spring-managed transaction it did not start.
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    static HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> ignoringRollbackOnly() {
-        HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> factory = mock(HandleAwareUnitOfWorkFactory.class);
-        var uow = mock(HandleAwareUnitOfWork.class);
-        when(uow.status()).thenReturn(UnitOfWorkStatus.Started);
-        when(factory.getCurrentUnitOfWork()).thenReturn(Optional.of(uow));
-        try {
-            when(factory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(invocation -> {
-                CheckedFunction<HandleAwareUnitOfWork, ?> function = invocation.getArgument(0);
-                return function.apply(uow);
-            });
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-        return factory;
+        return unitOfWork;
     }
 
     /**

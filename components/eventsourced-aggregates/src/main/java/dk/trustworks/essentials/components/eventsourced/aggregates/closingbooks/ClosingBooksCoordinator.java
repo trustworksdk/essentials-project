@@ -16,9 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
-import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregate;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkStatus;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
@@ -162,13 +160,6 @@ public class ClosingBooksCoordinator<ID> {
      * {@link ClosingBooksGenerationMovedException} is thrown; the rollover is then counted with outcome
      * {@code generation_moved}, not {@code failed}. The comparison uses the open generation that the unguarded form
      * resolves anyway, so it costs no extra database round trip.
-     * <p>
-     * The refusal is thrown only after the generation lock and the unit-of-work scopes this enters have returned, so it
-     * does not mark a unit of work the caller holds rollback-only: the caller can reload from the open generation and
-     * decide again in that same unit of work - when nothing was recorded on the aggregate loaded from
-     * {@code expectedCurrentGeneration}, as this cannot see it, so the refusal's
-     * {@link ClosingBooksGenerationMovedException#sameUnitOfWorkRetrySafe()} answers {@code false} (see
-     * {@link ClosingBooksGenerationMovedException}).
      *
      * @param expectedCurrentGeneration the generation the caller loaded its aggregate from
      * @return the newly opened generation
@@ -181,48 +172,31 @@ public class ClosingBooksCoordinator<ID> {
 
     /**
      * Close the open generation and open the next one. When {@code expectedStreamAggregateId} is not {@code null}, refuse
-     * with {@link ClosingBooksGenerationMovedException} unless the open generation has that stream id. A refusal leaves
-     * the unit of work this joins usable.
+     * with {@link ClosingBooksGenerationMovedException} unless the open generation has that stream id.
      */
     AggregateGeneration<ID> closeAndOpenNext(LogicalAggregateId<ID> logicalAggregateId, String expectedStreamAggregateId) {
-        return closeAndOpenNext(logicalAggregateId, expectedStreamAggregateId, UncommittedChanges.NOT_INSPECTED);
-    }
-
-    /**
-     * As {@link #closeAndOpenNext(LogicalAggregateId, String)}, with what the caller found on the aggregate it loaded from
-     * the expected generation, which a refusal records (see {@link UncommittedChanges#recordOn}): with
-     * {@link UncommittedChanges#HELD} a refusal also marks the unit of work this joins rollback-only, with the refusal as
-     * cause, as those changes must not be appended to that generation's stream once it has moved. The refusal is still
-     * thrown only after the lock and the unit of work have returned, and is counted with outcome
-     * {@code generation_moved}.
-     */
-    AggregateGeneration<ID> closeAndOpenNext(LogicalAggregateId<ID> logicalAggregateId, String expectedStreamAggregateId, UncommittedChanges uncommittedChanges) {
         // The counters are incremented after the UnitOfWork returns, never inside it: a rollback must not leave a
         // count claiming a generation was closed that the database then rolled back.
-        Guarded<AggregateGeneration<ID>> rolled;
         try {
-            rolled = measurementSupport.recordRollover(aggregateType,
-                                                       () -> generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> unitOfWorkFactory.withUnitOfWork(uow -> {
-                                                           var openGeneration = generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId);
-                                                           if (expectedStreamAggregateId != null) {
-                                                               var refusal = refusalUnlessStillOpen(logicalAggregateId, expectedStreamAggregateId, openGeneration);
-                                                               if (refusal != null) {
-                                                                   // Returned, not thrown: an exception thrown through a joined withUnitOfWork marks the
-                                                                   // caller's unit of work rollback-only, and nothing has been written yet.
-                                                                   // Unless the caller's aggregate recorded changes on the moved generation:
-                                                                   // then the unit of work must not commit them.
-                                                                   uncommittedChanges.recordOn(refusal, uow);
-                                                                   return Guarded.refused(refusal);
-                                                               }
-                                                           }
-                                                           openGeneration.orElseThrow(() -> new IllegalStateException("No open generation exists for logicalAggregateId '" + logicalAggregateId + "'"));
-                                                           generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
-                                                           // The repository decides the next generation number and feeds it to the generator, so the stream id it
-                                                           // persists always names the generation on the row it is stored with.
-                                                           return Guarded.done(generationRepository.openNextGeneration(aggregateType,
+            var nextGeneration = measurementSupport.recordRollover(aggregateType,
+                                                                    () -> generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> unitOfWorkFactory.withUnitOfWork(uow -> {
+                                                                        var openGeneration = generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId);
+                                                                        if (expectedStreamAggregateId != null) {
+                                                                            requireStillOpen(logicalAggregateId, expectedStreamAggregateId, openGeneration);
+                                                                        }
+                                                                        openGeneration.orElseThrow(() -> new IllegalStateException("No open generation exists for logicalAggregateId '" + logicalAggregateId + "'"));
+                                                                        generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
+                                                                        // The repository decides the next generation number and feeds it to the generator, so the stream id it
+                                                                        // persists always names the generation on the row it is stored with.
+                                                                        return generationRepository.openNextGeneration(aggregateType,
                                                                                                                        logicalAggregateId,
-                                                                                                                       streamIdGenerator));
-                                                       })));
+                                                                                                                       streamIdGenerator);
+                                                                    })));
+            measurementSupport.incrementGenerationsClosed(aggregateType);
+            measurementSupport.incrementGenerationsOpened(aggregateType);
+            measurementSupport.incrementRolloverOutcome(aggregateType, "succeeded");
+            measurementSupport.recordRolloverTimestamp(aggregateType, clock.millis());
+            return nextGeneration;
         } catch (RuntimeException e) {
             var generationMoved = generationMovedWrappedIn(e);
             if (generationMoved != null) {
@@ -231,30 +205,6 @@ public class ClosingBooksCoordinator<ID> {
             }
             measurementSupport.incrementRolloverOutcome(aggregateType, "failed");
             throw e;
-        }
-        if (rolled.refusal() != null) {
-            measurementSupport.incrementRolloverOutcome(aggregateType, "generation_moved");
-            throw rolled.refusal();
-        }
-        measurementSupport.incrementGenerationsClosed(aggregateType);
-        measurementSupport.incrementGenerationsOpened(aggregateType);
-        measurementSupport.incrementRolloverOutcome(aggregateType, "succeeded");
-        measurementSupport.recordRolloverTimestamp(aggregateType, clock.millis());
-        return rolled.result();
-    }
-
-    /**
-     * What a guarded operation did under the generation lock: its {@code result}, or the {@code refusal} to throw once
-     * the lock and every unit-of-work scope it entered have returned. Throwing the refusal inside them would mark a
-     * unit of work the caller joined rollback-only.
-     */
-    private record Guarded<R>(R result, ClosingBooksGenerationMovedException refusal) {
-        static <R> Guarded<R> done(R result) {
-            return new Guarded<>(result, null);
-        }
-
-        static <R> Guarded<R> refused(ClosingBooksGenerationMovedException refusal) {
-            return new Guarded<>(null, refusal);
         }
     }
 
@@ -275,74 +225,14 @@ public class ClosingBooksCoordinator<ID> {
     }
 
     /**
-     * The {@link ClosingBooksGenerationMovedException} to throw unless {@code openGeneration} is the generation with
-     * {@code expectedStreamAggregateId}, or {@code null} when it is. The caller holds the generation lock, and throws the
-     * refusal only after the lock has returned.
+     * Throw {@link ClosingBooksGenerationMovedException} unless {@code openGeneration} is the generation with
+     * {@code expectedStreamAggregateId}. The caller holds the generation lock.
      */
-    private ClosingBooksGenerationMovedException refusalUnlessStillOpen(LogicalAggregateId<ID> logicalAggregateId,
-                                                                        String expectedStreamAggregateId,
-                                                                        Optional<AggregateGeneration<ID>> openGeneration) {
+    private void requireStillOpen(LogicalAggregateId<ID> logicalAggregateId,
+                                  String expectedStreamAggregateId,
+                                  Optional<AggregateGeneration<ID>> openGeneration) {
         if (openGeneration.isEmpty() || !openGeneration.get().streamAggregateId().equals(expectedStreamAggregateId)) {
-            return new ClosingBooksGenerationMovedException(logicalAggregateId, expectedStreamAggregateId, openGeneration.orElse(null));
-        }
-        return null;
-    }
-
-    /**
-     * What a guarded operation found on the caller's aggregate, which its refusal records so that
-     * {@link ClosingBooksGenerationMovedException#sameUnitOfWorkRetrySafe()} can tell "inspected, no changes" from "not
-     * inspected".
-     */
-    enum UncommittedChanges {
-        /** The aggregate is not a {@link StatefulAggregate}, or the guarded operation was not given it. */
-        NOT_INSPECTED,
-        /** A {@link StatefulAggregate} with no uncommitted changes. */
-        NONE,
-        /**
-         * A {@link StatefulAggregate} holding uncommitted changes: changes that its repository appends to the stream it
-         * was loaded from when the unit of work it joined commits.
-         */
-        HELD;
-
-        /**
-         * What {@code aggregate} holds. In memory, no database access.
-         */
-        static UncommittedChanges of(Object aggregate) {
-            if (aggregate instanceof StatefulAggregate<?, ?, ?> stateful) {
-                return stateful.getUncommittedChanges().isEmpty() ? NONE : HELD;
-            }
-            return NOT_INSPECTED;
-        }
-
-        /**
-         * Record this on {@code refusal}; with {@link #HELD} also mark {@code uow}, unless it is {@code null} (no unit of
-         * work is current), rollback-only with {@code refusal} as cause.
-         */
-        void recordOn(ClosingBooksGenerationMovedException refusal, UnitOfWork uow) {
-            switch (this) {
-                case NONE -> refusal.recordAggregateInspectedClean();
-                case HELD -> {
-                    refusal.recordAggregateHeldUncommittedChanges();
-                    if (uow != null) {
-                        markRollbackOnly(uow, refusal);
-                    }
-                }
-                case NOT_INSPECTED -> {
-                    // Nothing to record: sameUnitOfWorkRetrySafe() stays false
-                }
-            }
-        }
-    }
-
-    /**
-     * Mark {@code uow} rollback-only with {@code refusal} as cause, and record on the refusal when {@code uow} then
-     * reports {@link UnitOfWorkStatus#MarkedForRollbackOnly} - a unit of work that joined a Spring-managed transaction
-     * it did not start ignores the mark.
-     */
-    private static void markRollbackOnly(UnitOfWork uow, ClosingBooksGenerationMovedException refusal) {
-        uow.markAsRollbackOnly(refusal);
-        if (uow.status() == UnitOfWorkStatus.MarkedForRollbackOnly) {
-            refusal.recordUnitOfWorkMarkedRollbackOnly();
+            throw new ClosingBooksGenerationMovedException(logicalAggregateId, expectedStreamAggregateId, openGeneration.orElse(null));
         }
     }
 
@@ -411,19 +301,7 @@ public class ClosingBooksCoordinator<ID> {
      * rolled or closed it in between, the policy and the rollover are not called, nothing is closed or opened, and
      * {@link ClosingBooksGenerationMovedException} is thrown. Otherwise the policy and the rollover receive
      * {@code aggregate} with {@code loadedFrom}'s generation, exactly as the unguarded form would. The comparison uses the
-     * open generation that the unguarded form resolves anyway, so it costs no extra database round trip. The refusal is
-     * thrown only after the generation lock has returned, so when {@code aggregate} holds no uncommitted changes it does
-     * not mark a unit of work the caller holds rollback-only: the caller can reload from the open generation and evaluate
-     * again in that same unit of work. When {@code aggregate} is a
-     * {@link dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregate} holding uncommitted
-     * changes (e.g. a closing event recorded before this call), they would be appended to the moved generation's stream
-     * on commit, so the refusal marks the caller's unit of work rollback-only, with the refusal as cause - as
-     * {@link ClosingBooksLogicalAggregateRepository#closeAndOpenNextGenerationGuarded(LogicalAggregateId, dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregate, Object, ClosingBooksNextGenerationFactory)}
-     * does. Nothing more written in that unit of work commits then, and with the JDBI unit of work no exception says so.
-     * Retry in the same unit of work only when the refusal's
-     * {@link ClosingBooksGenerationMovedException#sameUnitOfWorkRetrySafe()} is {@code true}; the cases are listed on
-     * {@link ClosingBooksGenerationMovedException}. The check for uncommitted changes is in memory and made only on a
-     * refusal.
+     * open generation that the unguarded form resolves anyway, so it costs no extra database round trip.
      * <p>
      * Unlike the unguarded form this never opens a first generation: {@code loadedFrom} was open when the aggregate was
      * loaded, so an empty logical aggregate means it was closed since. As there, load the aggregate in the unit of work
@@ -449,30 +327,17 @@ public class ClosingBooksCoordinator<ID> {
         requireNonNull(policy, "No policy provided");
 
         var logicalAggregateId = loadedFrom.logicalAggregateId();
-        Guarded<AggregateGeneration<ID>> evaluated;
         try {
-            evaluated = generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> {
+            return generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> {
                 var openGeneration = generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId);
-                var refusal        = refusalUnlessStillOpen(logicalAggregateId, loadedFrom.streamAggregateId(), openGeneration);
-                if (refusal != null) {
-                    // Returned, not thrown: the PostgreSQL generation lock runs in a unit of work, and an exception thrown
-                    // through it marks the caller's unit of work rollback-only. Nothing has been written yet.
-                    // Unless the aggregate recorded changes on the moved generation: then the unit of work it joined must
-                    // not commit them. Checked only here, on the refusal, so a decision pays nothing for it.
-                    UncommittedChanges.of(aggregate).recordOn(refusal, unitOfWorkFactory.getCurrentUnitOfWork().orElse(null));
-                    return Guarded.refused(refusal);
-                }
-                return Guarded.done(decide(openGeneration.get(), aggregate, triggerMode, policy, rollover));
+                requireStillOpen(logicalAggregateId, loadedFrom.streamAggregateId(), openGeneration);
+                return decide(openGeneration.get(), aggregate, triggerMode, policy, rollover);
             });
         } catch (RuntimeException e) {
-            // A unit of work wraps what is thrown inside it, e.g. a refusal from a guarded call the rollover makes.
+            // The PostgreSQL generation lock runs in a unit of work, which wraps the refusal.
             var generationMoved = generationMovedWrappedIn(e);
             throw generationMoved != null ? generationMoved : e;
         }
-        if (evaluated.refusal() != null) {
-            throw evaluated.refusal();
-        }
-        return evaluated.result();
     }
 
     /**

@@ -627,31 +627,9 @@ older generation's state. Guarded variants refuse instead:
 Under the generation lock, before anything is closed or the policy is asked, each compares the open generation's
 stream id with the expected one, and throws **`ClosingBooksGenerationMovedException`** (an `IllegalStateException`)
 when they differ: nothing is closed or opened, and the policy, the rollover and the next-generation factory are not
-called. Reload and decide again. The refusal is thrown only after the generation lock and the unit-of-work scopes the
-guarded method enters have returned, so by itself it does not mark the caller's unit of work rollback-only (unless the
-aggregate holds uncommitted changes, below): the reload and the
-new decision can run, and commit, in the unit of work the aggregate was loaded in. The aggregate from the moved
-generation stays registered with that unit of work, though, so a change already recorded on it (a closing event
-recorded before the guarded call) would be appended to the moved generation's stream at commit.
-`closeAndOpenNextGenerationGuarded` and the guarded `evaluatePolicy(loadedFrom, aggregate, …)` check for that: when
-the aggregate is a `StatefulAggregate` holding uncommitted changes, the refusal marks the unit of work rollback-only,
-with the refusal as cause, so that unit of work rolls back instead of committing the stale change, and the retry runs
-in a new unit of work. After such a refusal nothing more written in that unit of work commits, and with the JDBI unit
-of work no exception says so (its `commit()` rolls back and returns normally), so a retry caught and made in the same
-unit of work would be lost silently. Check
-**`ClosingBooksGenerationMovedException.sameUnitOfWorkRetrySafe()`**: retry in the same unit of work only when it is
-`true`, which it is only when the guarded method inspected a `StatefulAggregate` and found no uncommitted changes.
-It is `false` when the aggregate held uncommitted changes, when it is not a `StatefulAggregate` (a `FlexAggregate`'s
-or a decider's pending `EventsToPersist` are not inspected), and for the coordinator's
-`closeAndOpenNextGeneration(expectedCurrentGeneration)`, which is not given the aggregate; then let the unit of work
-roll back and retry in a new one. Two flags say what the refusal saw and did:
-**`aggregateHeldUncommittedChanges()`** (a `StatefulAggregate` holding uncommitted changes was found) and
-**`unitOfWorkMarkedRollbackOnly()`** (the unit of work then took the rollback-only mark). Held but not marked means a
-unit of work that joined a Spring-managed transaction it did not start (e.g. inside a `@Transactional` method) ignored
-the mark, or none was current: let the exception propagate out of the transaction (do not catch it) so it rolls back;
-the message says that too. The full decision table is in the exception's Javadoc.
-The comparison uses the open generation the unguarded methods already resolve, so it costs no extra
-database round trip. A refusal by either guarded `closeAndOpenNextGeneration` is counted in
+called. The refusal is thrown inside the unit of work, which it leaves rollback-only: reload and decide again in a
+new unit of work. The comparison uses the open generation the unguarded methods already resolve, so it
+costs no extra database round trip. A refusal by either guarded `closeAndOpenNextGeneration` is counted in
 `essentials.aggregate_closing_books.rollover.outcome` with `outcome=generation_moved`, not `failed`; a refusal by the
 guarded `evaluatePolicy` counts no policy decision.
 

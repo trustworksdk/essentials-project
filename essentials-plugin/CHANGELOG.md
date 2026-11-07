@@ -12,16 +12,6 @@ targets, with a `-N` suffix for plugin-only releases.
   subscription, so the reference no longer lists a manager other than `DefaultEventStoreSubscriptionManager` as a case
   where a failed batch is skipped whole. It also names the methods `ViewEventProcessor` uses: `handOffFailedEvent` and
   the two-argument `handOffFailedBatch`. No skill, rule or script changed.
-- **Guarded closing-books refusals that roll back the unit of work** — the eventsourced-aggregates reference says the
-  coordinator's guarded `evaluatePolicy(loadedFrom, aggregate, …)` now marks the caller's unit of work rollback-only
-  on a refusal when the aggregate is a `StatefulAggregate` holding uncommitted changes, as
-  `closeAndOpenNextGenerationGuarded` does; only the coordinator's `closeAndOpenNextGeneration(expected)` does not
-  check the aggregate. It warns that after such a refusal nothing more written in that unit of work commits, with no
-  exception from the JDBI unit of work. It says to retry in the same unit of work only when
-  `ClosingBooksGenerationMovedException.sameUnitOfWorkRetrySafe()` is `true` - a `StatefulAggregate` was inspected and
-  held no uncommitted changes - and otherwise to roll back and retry in a new unit of work, and points to the
-  exception's Javadoc for the cases and its two flags, `aggregateHeldUncommittedChanges()` and
-  `unitOfWorkMarkedRollbackOnly()`. No skill, rule or script changed.
 - **Declared aggregate policies take precedence** — the eventsourced-aggregates reference says that with the Spring
   Boot starter's default policy registries the annotation on a declared aggregate class wins over an explicit
   `register(...)` or a policy `BeanPostProcessor` registration of the same class, whichever came first, and that an
@@ -44,12 +34,8 @@ targets, with a `-N` suffix for plugin-only releases.
   the coordinator's guarded `closeAndOpenNextGeneration(AggregateGeneration)` and
   `evaluatePolicy(AggregateGeneration loadedFrom, …)`, which throw `ClosingBooksGenerationMovedException`, closing
   nothing, when the aggregate's generation is no longer the open one, and says the unguarded
-  `closeAndOpenNextGeneration` closes whichever generation is open under the generation lock. It also says a refusal
-  leaves the caller's unit of work usable rather than rollback-only, except that
-  `closeAndOpenNextGenerationGuarded` marks it rollback-only when `currentAggregate` holds uncommitted changes (a
-  unit of work that joined a Spring-managed transaction it did not start ignores that mark, so there the exception
-  must propagate to roll back), and that with the coordinator's guarded methods a change already recorded on the stale aggregate is still appended at
-  commit. No skill, rule or script changed.
+  `closeAndOpenNextGeneration` closes whichever generation is open under the generation lock. No skill, rule or script
+  changed.
 
 ## 0.60.1-7 — targets Essentials 0.60.1
 

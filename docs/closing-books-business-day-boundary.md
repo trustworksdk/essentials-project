@@ -120,9 +120,7 @@ skipped periods are not materialised as empty generations; the gap is only logge
   command rolled the account in between, it would close the newer generation and build the next one from the older
   account's state. The `accounts` context that replaced `TradingAccounts` (`Accounts.closeAndOpenNextGeneration`)
   now calls `closeAndOpenNextGenerationGuarded(id, account, hint, factory)`, which throws
-  `ClosingBooksGenerationMovedException`, closing nothing, in that case. The demo records `closeBooks` on the account
-  before the call, so the account holds an uncommitted change, and the refusal therefore marks the command's unit of
-  work rollback-only: the stale `AccountBooksClosed` is never appended. The demo does not catch the exception.
+  `ClosingBooksGenerationMovedException`, closing nothing, in that case.
 - **`SCHEDULED_SCAN`** runs `ClosingBooksManager` under a fenced lock (`ClosingBooksManager.java:130`);
   `DefaultClosingBooksScheduledScanProcessor.processNextBatch` loads the oldest open generations and, for each, calls
   `ClosingBooksCoordinator.evaluateScannedGeneration(generation, aggregateLoader, policy, scanRollover)`. The
@@ -348,8 +346,7 @@ write and the event append sharing one unit of work. That is not verified here; 
 must prove it. Since the demo rolls through `closeAndOpenNextGenerationGuarded`, the generation row has a guard of its
 own: the second instance's rollover finds, under the generation lock (a PostgreSQL advisory lock, so shared by the
 instances), that the generation its account was loaded from is no longer open, and throws
-`ClosingBooksGenerationMovedException` before closing anything. As the command recorded `AccountBooksClosed` on the
-stale account first, the refusal marks that instance's unit of work rollback-only, so the event is never appended.
+`ClosingBooksGenerationMovedException` before closing anything.
 
 That window is **not unique to multiple instances**, and it is not the biggest one. Even with one instance,
 the exchange emits `BusinessDayClosed` at the cutoff and we receive it after webhook latency, and because

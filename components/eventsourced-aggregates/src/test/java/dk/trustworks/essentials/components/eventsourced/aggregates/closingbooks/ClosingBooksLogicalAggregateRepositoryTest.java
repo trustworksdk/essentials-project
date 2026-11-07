@@ -18,25 +18,18 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventsToPersist;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregate;
-import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateEventStream;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
-import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkStatus;
-import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
-import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import org.junit.jupiter.api.Test;
 
-import java.util.*;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
 
 class ClosingBooksLogicalAggregateRepositoryTest {
@@ -196,57 +189,6 @@ class ClosingBooksLogicalAggregateRepositoryTest {
         assertThat(generationRepository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
     }
 
-    /**
-     * The caller of the guarded rollover holds a unit of work - the one it loaded the aggregate in. A refusal must leave
-     * it usable, so the documented recovery (reload and decide again) commits in that same unit of work.
-     */
-    @Test
-    void a_guarded_close_and_open_next_generation_refusal_leaves_the_callers_unit_of_work_usable_for_a_retry() {
-        var aggregateType        = AggregateType.of("Accounts");
-        var unitOfWorkFactory    = InlineUnitOfWorkFactories.joining();
-        var generationRepository = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
-        @SuppressWarnings("unchecked")
-        var delegate = mock(StatefulAggregateRepository.class);
-        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
-                                                        generationRepository,
-                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation,
-                                                        unitOfWorkFactory);
-        var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
-                                                                                                               delegate,
-                                                                                                               coordinator,
-                                                                                                               ClosingBooksIdSerializer.stringBased());
-        var logicalAggregateId = new LogicalAggregateId<>("account-1");
-        when(delegate.save(any(TestAggregate.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        var generation1Aggregate = repository.open(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId()));
-        var generation2Aggregate = repository.closeAndOpenNextGeneration(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId()));
-
-        var generation3Aggregate = unitOfWorkFactory.withUnitOfWork(uow -> {
-            assertThatThrownBy(() -> repository.closeAndOpenNextGenerationGuarded(logicalAggregateId,
-                                                                                  generation1Aggregate,
-                                                                                  "next-period",
-                                                                                  (aggregate, context, hint) -> new TestAggregate(context.streamAggregateId())))
-                    .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
-                        assertThat(refusal.aggregateHeldUncommittedChanges()).isFalse();
-                        assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isFalse();
-                        assertThat(refusal.sameUnitOfWorkRetrySafe()).isTrue();
-                        assertThat(refusal.getMessage()).doesNotContain("rollback-only");
-                    });
-            assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
-
-            // Reloaded from the generation that is open now, and decided again in the same unit of work
-            var rolled = repository.closeAndOpenNextGenerationGuarded(logicalAggregateId,
-                                                                      generation2Aggregate,
-                                                                      "next-period",
-                                                                      (aggregate, context, hint) -> new TestAggregate(context.streamAggregateId()));
-            assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
-            return rolled;
-        });
-
-        assertThat(generation3Aggregate.aggregateId()).isEqualTo("account-1#3");
-        assertThat(generationRepository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(3);
-    }
-
     @Test
     void guarded_close_and_open_next_generation_rolls_the_generation_the_aggregate_was_loaded_from() {
         var aggregateType = AggregateType.of("Accounts");
@@ -274,189 +216,18 @@ class ClosingBooksLogicalAggregateRepositoryTest {
         assertThat(nextAggregate.aggregateId()).isEqualTo("account-1#2-next-period");
     }
 
-    /**
-     * A change recorded on the aggregate before the guarded call - e.g. its closing event - would be appended to the
-     * stream of the generation it was loaded from when the caller's unit of work commits. When that generation has moved,
-     * the refusal must leave the unit of work rollback-only, so the stale change can never commit.
-     * <p>
-     * The delegate is a real {@code StatefulAggregateRepository}, so the aggregate joins the unit of work the way a load
-     * registers it, and its {@code beforeCommit} - the one that calls {@code appendToStream} - runs when that unit of work
-     * commits. The control is
-     * {@link #a_guarded_close_and_open_next_generation_appends_the_closing_event_to_the_generation_it_closes_when_that_generation_is_still_open()}.
-     */
-    @Test
-    void a_guarded_close_and_open_next_generation_refusal_rolls_back_the_callers_unit_of_work_when_the_aggregate_recorded_changes() {
-        var aggregateType        = AggregateType.of("Accounts");
-        var unitOfWorkFactory    = InlineUnitOfWorkFactories.joining();
-        var generationRepository = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
-        var appendedStreams      = new LinkedHashMap<Object, List<Object>>();
-        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
-                                                        generationRepository,
-                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation,
-                                                        unitOfWorkFactory);
-        var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
-                                                                                                               appendingStatefulAggregateRepository(aggregateType, unitOfWorkFactory, appendedStreams),
-                                                                                                               coordinator,
-                                                                                                               ClosingBooksIdSerializer.stringBased());
-        var logicalAggregateId = new LogicalAggregateId<>("account-1");
-
-        var generation1Aggregate = unitOfWorkFactory.withUnitOfWork(uow -> repository.open(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId())));
-        // Another caller rolls to generation 2 after generation 1's aggregate was loaded.
-        unitOfWorkFactory.usingUnitOfWork(uow -> repository.closeAndOpenNextGeneration(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId())));
-        var factoryCalls = new AtomicInteger();
-
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            // Joins this unit of work as loading it here would, then records its closing event
-            repository.save(generation1Aggregate);
-            generation1Aggregate.record(new TestBooksClosed("account-1#1"));
-
-            assertThatThrownBy(() -> repository.closeAndOpenNextGenerationGuarded(logicalAggregateId,
-                                                                                  generation1Aggregate,
-                                                                                  "next-period",
-                                                                                  (aggregate, context, hint) -> {
-                                                                                      factoryCalls.incrementAndGet();
-                                                                                      return new TestAggregate(context.streamAggregateId());
-                                                                                  }))
-                    .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
-                        assertThat(uow.getCauseOfRollback()).isSameAs(refusal);
-                        assertThat(refusal.aggregateHeldUncommittedChanges()).isTrue();
-                        assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isTrue();
-                        assertThat(refusal.sameUnitOfWorkRetrySafe()).isFalse();
-                        assertThat(refusal.getMessage()).contains("the unit of work was marked rollback-only")
-                                                        .contains("nothing more written in it will commit");
-                    });
-            assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.MarkedForRollbackOnly);
-        });
-
-        assertThat(factoryCalls).hasValue(0);
-        assertThat(appendedStreams.getOrDefault("account-1#1", List.of())).noneMatch(TestBooksClosed.class::isInstance);
-        assertThat(generationRepository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
-    }
-
-    /**
-     * A unit of work that joined a Spring-managed transaction it did not start ignores the rollback-only mark. The
-     * refusal must then answer held = {@code true}, marked = {@code false}, so the caller lets it propagate instead of
-     * retrying in the same unit of work, where the stale closing event is still registered.
-     */
-    @Test
-    void a_guarded_close_and_open_next_generation_refusal_reports_held_changes_when_the_unit_of_work_ignores_the_rollback_only_mark() {
-        var aggregateType        = AggregateType.of("Accounts");
-        var generationRepository = new InMemoryClosingBooksGenerationResolver<String>();
-        @SuppressWarnings("unchecked")
-        var delegate = mock(StatefulAggregateRepository.class);
-        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
-                                                        generationRepository,
-                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation,
-                                                        InlineUnitOfWorkFactories.ignoringRollbackOnly());
-        var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
-                                                                                                               delegate,
-                                                                                                               coordinator,
-                                                                                                               ClosingBooksIdSerializer.stringBased());
-        var logicalAggregateId = new LogicalAggregateId<>("account-1");
-        when(delegate.save(any(TestAggregate.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        var generation1Aggregate = repository.open(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId()));
-        repository.closeAndOpenNextGeneration(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId()));
-        generation1Aggregate.record(new TestBooksClosed("account-1#1"));
-
-        assertThatThrownBy(() -> repository.closeAndOpenNextGenerationGuarded(logicalAggregateId,
-                                                                              generation1Aggregate,
-                                                                              "next-period",
-                                                                              (aggregate, context, hint) -> new TestAggregate(context.streamAggregateId())))
-                .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
-                    assertThat(refusal.aggregateHeldUncommittedChanges()).isTrue();
-                    assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isFalse();
-                    assertThat(refusal.sameUnitOfWorkRetrySafe()).isFalse();
-                    assertThat(refusal.getMessage()).contains("no unit of work took the rollback-only mark");
-                });
-    }
-
-    /**
-     * Control for the refusal in
-     * {@link #a_guarded_close_and_open_next_generation_refusal_rolls_back_the_callers_unit_of_work_when_the_aggregate_recorded_changes()}:
-     * the same unit of work, with the generation still open, appends the closing event to
-     * that generation's stream - so the refusal's empty stream is the rollback's doing, not a flush that never runs.
-     */
-    @Test
-    void a_guarded_close_and_open_next_generation_appends_the_closing_event_to_the_generation_it_closes_when_that_generation_is_still_open() {
-        var aggregateType        = AggregateType.of("Accounts");
-        var unitOfWorkFactory    = InlineUnitOfWorkFactories.joining();
-        var generationRepository = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
-        var appendedStreams      = new LinkedHashMap<Object, List<Object>>();
-        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
-                                                        generationRepository,
-                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation,
-                                                        unitOfWorkFactory);
-        var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
-                                                                                                               appendingStatefulAggregateRepository(aggregateType, unitOfWorkFactory, appendedStreams),
-                                                                                                               coordinator,
-                                                                                                               ClosingBooksIdSerializer.stringBased());
-        var logicalAggregateId = new LogicalAggregateId<>("account-1");
-
-        var generation1Aggregate = unitOfWorkFactory.withUnitOfWork(uow -> repository.open(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId())));
-
-        var generation2Aggregate = unitOfWorkFactory.withUnitOfWork(uow -> {
-            repository.save(generation1Aggregate);
-            generation1Aggregate.record(new TestBooksClosed("account-1#1"));
-
-            var rolled = repository.closeAndOpenNextGenerationGuarded(logicalAggregateId,
-                                                                      generation1Aggregate,
-                                                                      "next-period",
-                                                                      (aggregate, context, hint) -> new TestAggregate(context.streamAggregateId()));
-            assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
-            return rolled;
-        });
-
-        assertThat(generation2Aggregate.aggregateId()).isEqualTo("account-1#2");
-        assertThat(appendedStreams.get("account-1#1")).containsExactly(new TestBooksClosed("account-1#1"));
-    }
-
-    /**
-     * A real {@code StatefulAggregateRepository} over a mock {@link ConfigurableEventStore} whose unit of work factory is
-     * {@code unitOfWorkFactory} (from {@link InlineUnitOfWorkFactories#joining()}); every {@code appendToStream} its
-     * {@code beforeCommit} makes is recorded in {@code appendedStreams}, keyed by the stream's aggregate id.
-     */
-    @SuppressWarnings("unchecked")
-    private static StatefulAggregateRepository<String, TestEvent, TestAggregate> appendingStatefulAggregateRepository(AggregateType aggregateType,
-                                                                                                                       HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> unitOfWorkFactory,
-                                                                                                                       Map<Object, List<Object>> appendedStreams) {
-        ConfigurableEventStore<AggregateEventStreamConfiguration> eventStore = mock(ConfigurableEventStore.class);
-        when(eventStore.getUnitOfWorkFactory()).thenReturn(InlineUnitOfWorkFactories.asEventStoreUnitOfWorkFactory(unitOfWorkFactory));
-        doAnswer(invocation -> {
-            appendedStreams.computeIfAbsent(invocation.getArgument(1), ignored -> new ArrayList<>())
-                           .addAll(invocation.getArgument(3));
-            return null;
-        }).when(eventStore).appendToStream(any(AggregateType.class), any(), any(EventOrder.class), anyList());
-        return StatefulAggregateRepository.from(eventStore,
-                                                aggregateType,
-                                                StatefulAggregateInstanceFactory.objenesisAggregateRootFactory(),
-                                                String.class,
-                                                TestAggregate.class);
-    }
-
-    private sealed interface TestEvent permits TestAggregateOpened, TestBooksClosed {
+    private sealed interface TestEvent permits TestAggregateOpened {
     }
 
     private record TestAggregateOpened(String streamAggregateId) implements TestEvent {
     }
 
-    private record TestBooksClosed(String streamAggregateId) implements TestEvent {
-    }
-
     private static final class TestAggregate implements StatefulAggregate<String, TestEvent, TestAggregate> {
-        private final String          aggregateId;
-        private final List<TestEvent> uncommittedChanges = new ArrayList<>();
-        private       boolean         hasBeenRehydrated;
+        private final String  aggregateId;
+        private       boolean hasBeenRehydrated;
 
         private TestAggregate(String aggregateId) {
             this.aggregateId = aggregateId;
-        }
-
-        /**
-         * Record a change that is not yet committed, as a command method on a real aggregate does
-         */
-        private void record(TestEvent event) {
-            uncommittedChanges.add(event);
         }
 
         @Override
@@ -466,12 +237,11 @@ class ClosingBooksLogicalAggregateRepositoryTest {
 
         @Override
         public EventsToPersist<String, TestEvent> getUncommittedChanges() {
-            return new EventsToPersist<>(aggregateId, EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED, List.copyOf(uncommittedChanges));
+            return EventsToPersist.noEvents(aggregateId);
         }
 
         @Override
         public void markChangesAsCommitted() {
-            uncommittedChanges.clear();
         }
 
         @Override
