@@ -74,8 +74,8 @@ reviews:
   fix:
     enabled: true
     test_command: "bash .tw-code-review/changed-modules-test.sh"
-    max_rounds: 3 # fixer rounds per unit before it is parked and asked about
-    max_review_rounds: 3 # fix → /incremental rounds per /fix run
+    max_rounds: 2 # fixer rounds per unit before it is parked and asked about
+    max_review_rounds: 1 # fix → /incremental rounds per /fix run
     reviewers: auto # auto | all | one — the fix-reviewer lenses per unit
     commit_subject: "fix: {title} ({ids})" # placeholders {title} {ids} {review}
     full_suite: per-round # per-unit | per-round — per-round runs test_command once per round (slow suites)
