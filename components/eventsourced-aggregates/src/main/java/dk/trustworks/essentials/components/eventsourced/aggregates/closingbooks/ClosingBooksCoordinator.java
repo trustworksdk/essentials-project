@@ -166,7 +166,9 @@ public class ClosingBooksCoordinator<ID> {
      * The refusal is thrown only after the generation lock and the unit-of-work scopes this enters have returned, so it
      * does not mark a unit of work the caller holds rollback-only: the caller can reload from the open generation and
      * decide again in that same unit of work - when nothing was recorded on the aggregate loaded from
-     * {@code expectedCurrentGeneration}, as this cannot see it (see {@link ClosingBooksGenerationMovedException}).
+     * {@code expectedCurrentGeneration}, as this cannot see it, so the refusal's
+     * {@link ClosingBooksGenerationMovedException#sameUnitOfWorkRetrySafe()} answers {@code false} (see
+     * {@link ClosingBooksGenerationMovedException}).
      *
      * @param expectedCurrentGeneration the generation the caller loaded its aggregate from
      * @return the newly opened generation
@@ -183,20 +185,18 @@ public class ClosingBooksCoordinator<ID> {
      * the unit of work this joins usable.
      */
     AggregateGeneration<ID> closeAndOpenNext(LogicalAggregateId<ID> logicalAggregateId, String expectedStreamAggregateId) {
-        return closeAndOpenNext(logicalAggregateId, expectedStreamAggregateId, false);
+        return closeAndOpenNext(logicalAggregateId, expectedStreamAggregateId, UncommittedChanges.NOT_INSPECTED);
     }
 
     /**
-     * As {@link #closeAndOpenNext(LogicalAggregateId, String)}, but when {@code rollbackOnRefusal} is {@code true} a
-     * refusal also marks the unit of work this joins rollback-only, with the refusal as cause - for a caller whose
-     * aggregate, loaded from the expected generation, holds changes that must not be appended to that generation's stream
-     * once it has moved; the refusal then answers {@code true} from
-     * {@link ClosingBooksGenerationMovedException#aggregateHeldUncommittedChanges()}, and
-     * {@link ClosingBooksGenerationMovedException#unitOfWorkMarkedRollbackOnly()} says whether the unit of work took the
-     * mark. The refusal is still thrown only after the lock and the unit of work have returned,
-     * and is counted with outcome {@code generation_moved}.
+     * As {@link #closeAndOpenNext(LogicalAggregateId, String)}, with what the caller found on the aggregate it loaded from
+     * the expected generation, which a refusal records (see {@link UncommittedChanges#recordOn}): with
+     * {@link UncommittedChanges#HELD} a refusal also marks the unit of work this joins rollback-only, with the refusal as
+     * cause, as those changes must not be appended to that generation's stream once it has moved. The refusal is still
+     * thrown only after the lock and the unit of work have returned, and is counted with outcome
+     * {@code generation_moved}.
      */
-    AggregateGeneration<ID> closeAndOpenNext(LogicalAggregateId<ID> logicalAggregateId, String expectedStreamAggregateId, boolean rollbackOnRefusal) {
+    AggregateGeneration<ID> closeAndOpenNext(LogicalAggregateId<ID> logicalAggregateId, String expectedStreamAggregateId, UncommittedChanges uncommittedChanges) {
         // The counters are incremented after the UnitOfWork returns, never inside it: a rollback must not leave a
         // count claiming a generation was closed that the database then rolled back.
         Guarded<AggregateGeneration<ID>> rolled;
@@ -211,10 +211,7 @@ public class ClosingBooksCoordinator<ID> {
                                                                    // caller's unit of work rollback-only, and nothing has been written yet.
                                                                    // Unless the caller's aggregate recorded changes on the moved generation:
                                                                    // then the unit of work must not commit them.
-                                                                   if (rollbackOnRefusal) {
-                                                                       refusal.recordAggregateHeldUncommittedChanges();
-                                                                       markRollbackOnly(uow, refusal);
-                                                                   }
+                                                                   uncommittedChanges.recordOn(refusal, uow);
                                                                    return Guarded.refused(refusal);
                                                                }
                                                            }
@@ -292,11 +289,49 @@ public class ClosingBooksCoordinator<ID> {
     }
 
     /**
-     * Whether {@code aggregate} is a {@link StatefulAggregate} holding uncommitted changes: changes that its repository
-     * appends to the stream it was loaded from when the unit of work it joined commits. In memory, no database access.
+     * What a guarded operation found on the caller's aggregate, which its refusal records so that
+     * {@link ClosingBooksGenerationMovedException#sameUnitOfWorkRetrySafe()} can tell "inspected, no changes" from "not
+     * inspected".
      */
-    static boolean holdsUncommittedChanges(Object aggregate) {
-        return aggregate instanceof StatefulAggregate<?, ?, ?> stateful && !stateful.getUncommittedChanges().isEmpty();
+    enum UncommittedChanges {
+        /** The aggregate is not a {@link StatefulAggregate}, or the guarded operation was not given it. */
+        NOT_INSPECTED,
+        /** A {@link StatefulAggregate} with no uncommitted changes. */
+        NONE,
+        /**
+         * A {@link StatefulAggregate} holding uncommitted changes: changes that its repository appends to the stream it
+         * was loaded from when the unit of work it joined commits.
+         */
+        HELD;
+
+        /**
+         * What {@code aggregate} holds. In memory, no database access.
+         */
+        static UncommittedChanges of(Object aggregate) {
+            if (aggregate instanceof StatefulAggregate<?, ?, ?> stateful) {
+                return stateful.getUncommittedChanges().isEmpty() ? NONE : HELD;
+            }
+            return NOT_INSPECTED;
+        }
+
+        /**
+         * Record this on {@code refusal}; with {@link #HELD} also mark {@code uow}, unless it is {@code null} (no unit of
+         * work is current), rollback-only with {@code refusal} as cause.
+         */
+        void recordOn(ClosingBooksGenerationMovedException refusal, UnitOfWork uow) {
+            switch (this) {
+                case NONE -> refusal.recordAggregateInspectedClean();
+                case HELD -> {
+                    refusal.recordAggregateHeldUncommittedChanges();
+                    if (uow != null) {
+                        markRollbackOnly(uow, refusal);
+                    }
+                }
+                case NOT_INSPECTED -> {
+                    // Nothing to record: sameUnitOfWorkRetrySafe() stays false
+                }
+            }
+        }
     }
 
     /**
@@ -385,16 +420,10 @@ public class ClosingBooksCoordinator<ID> {
      * on commit, so the refusal marks the caller's unit of work rollback-only, with the refusal as cause - as
      * {@link ClosingBooksLogicalAggregateRepository#closeAndOpenNextGenerationGuarded(LogicalAggregateId, dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregate, Object, ClosingBooksNextGenerationFactory)}
      * does. Nothing more written in that unit of work commits then, and with the JDBI unit of work no exception says so.
-     * Decide from both of the refusal's flags: retry in the same unit of work only when {@code aggregate} is a
-     * {@code StatefulAggregate} and {@link ClosingBooksGenerationMovedException#aggregateHeldUncommittedChanges()} is
-     * {@code false}; when both it and {@link ClosingBooksGenerationMovedException#unitOfWorkMarkedRollbackOnly()} are
-     * {@code true}, retry in a new unit of work; when only the first is {@code true}, no unit of work took the mark -
-     * none was current, or one ignored it, e.g. one that joined a Spring-managed transaction it did not start (inside a
-     * {@code @Transactional} method) - so let the refusal propagate and retry in a new unit of work (see
-     * {@link ClosingBooksGenerationMovedException}). Only a {@code StatefulAggregate}'s uncommitted changes are
-     * inspected: a {@code FlexAggregate}'s or a decider's pending {@code EventsToPersist} are not, so with those always
-     * let the unit of work roll back and retry in a new one. The check for uncommitted changes is in memory and made
-     * only on a refusal.
+     * Retry in the same unit of work only when the refusal's
+     * {@link ClosingBooksGenerationMovedException#sameUnitOfWorkRetrySafe()} is {@code true}; the cases are listed on
+     * {@link ClosingBooksGenerationMovedException}. The check for uncommitted changes is in memory and made only on a
+     * refusal.
      * <p>
      * Unlike the unguarded form this never opens a first generation: {@code loadedFrom} was open when the aggregate was
      * loaded, so an empty logical aggregate means it was closed since. As there, load the aggregate in the unit of work
@@ -430,10 +459,7 @@ public class ClosingBooksCoordinator<ID> {
                     // through it marks the caller's unit of work rollback-only. Nothing has been written yet.
                     // Unless the aggregate recorded changes on the moved generation: then the unit of work it joined must
                     // not commit them. Checked only here, on the refusal, so a decision pays nothing for it.
-                    if (holdsUncommittedChanges(aggregate)) {
-                        refusal.recordAggregateHeldUncommittedChanges();
-                        unitOfWorkFactory.getCurrentUnitOfWork().ifPresent(uow -> markRollbackOnly(uow, refusal));
-                    }
+                    UncommittedChanges.of(aggregate).recordOn(refusal, unitOfWorkFactory.getCurrentUnitOfWork().orElse(null));
                     return Guarded.refused(refusal);
                 }
                 return Guarded.done(decide(openGeneration.get(), aggregate, triggerMode, policy, rollover));

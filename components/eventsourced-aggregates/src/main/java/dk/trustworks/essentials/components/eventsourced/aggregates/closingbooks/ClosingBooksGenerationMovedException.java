@@ -52,30 +52,35 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * nothing more written in that unit of work commits, and with the JDBI unit of work no exception says so: its
  * {@code commit()} rolls back and returns normally.
  * <p>
- * Two flags tell the caller what the refusal saw and did. {@link #aggregateHeldUncommittedChanges()} answers whether
- * the guarded operation found the aggregate to be a {@code StatefulAggregate} holding uncommitted changes;
- * {@link #unitOfWorkMarkedRollbackOnly()} answers whether the unit of work then took the rollback-only mark. Decide
- * from both, never from the mark alone:
+ * <b>Deciding where to retry.</b> {@link #sameUnitOfWorkRetrySafe()} answers it: {@code true} only when the guarded
+ * operation inspected the caller's aggregate - a {@code StatefulAggregate} - and found no uncommitted changes, so the
+ * reload and the new decision can run, and commit, in the same unit of work. Otherwise let the unit of work roll back
+ * and retry in a new one. Two flags say what the refusal saw and did: {@link #aggregateHeldUncommittedChanges()}
+ * answers whether the guarded operation found the aggregate to be a {@code StatefulAggregate} holding uncommitted
+ * changes, and {@link #unitOfWorkMarkedRollbackOnly()} whether the unit of work then took the rollback-only mark.
  * <ul>
- *     <li>retry in the same unit of work only when the aggregate is a {@code StatefulAggregate} and
- *     {@link #aggregateHeldUncommittedChanges()} is {@code false};</li>
- *     <li>when both are {@code true}, nothing more written in that unit of work commits (the exception's message says
+ *     <li>{@link #sameUnitOfWorkRetrySafe()} is {@code true} (a {@code StatefulAggregate} inspected and found clean;
+ *     both flags {@code false}): retry or drop the operation in the same unit of work;</li>
+ *     <li>both flags {@code true}: nothing more written in that unit of work commits (the exception's message says
  *     so too): retry in a new unit of work;</li>
- *     <li>when {@link #aggregateHeldUncommittedChanges()} is {@code true} and {@link #unitOfWorkMarkedRollbackOnly()}
- *     is {@code false}, no unit of work took the mark: one ignored it - e.g. a unit of work that joined a
+ *     <li>{@link #aggregateHeldUncommittedChanges()} {@code true} and {@link #unitOfWorkMarkedRollbackOnly()}
+ *     {@code false}: no unit of work took the mark: one ignored it - e.g. a unit of work that joined a
  *     Spring-managed transaction it did not start (inside a {@code @Transactional} method) - or none was current.
  *     When a unit of work is current, the stale changes are still registered with its transaction: let this exception
  *     propagate out of the transaction so it rolls back, rather than catching it, and retry in a new unit of work (the
- *     exception's message says so too).</li>
+ *     exception's message says so too);</li>
+ *     <li>the aggregate was not inspected (both flags {@code false}, {@link #sameUnitOfWorkRetrySafe()} {@code false}):
+ *     the refusal cannot tell whether a stale change is registered with the unit of work - let it roll back (rethrow)
+ *     and retry in a new one, unless the caller knows no change was recorded on the aggregate.</li>
  * </ul>
- * Only a {@code StatefulAggregate}'s {@code getUncommittedChanges()} is inspected. A {@code FlexAggregate}'s or a
- * decider's pending {@code EventsToPersist}, which their repositories register with the unit of work, are not, so for
- * such an aggregate {@link #aggregateHeldUncommittedChanges()} is {@code false} even when a stale event is pending:
- * with those, always let the unit of work roll back and retry in a new one.
- * {@link ClosingBooksCoordinator#closeAndOpenNextGeneration(AggregateGeneration)} is not given the caller's aggregate,
- * so it does not check it for changes, leaves both flags {@code false} and never marks the unit of work rollback-only
- * on a refusal: with it, retry or drop the operation in the same unit of work only when no change was recorded on the
- * aggregate; otherwise let the unit of work roll back - rethrow - and retry in a new one.
+ * The aggregate is not inspected when it is not a {@code StatefulAggregate}: only a {@code StatefulAggregate}'s
+ * {@code getUncommittedChanges()} is read, and a {@code FlexAggregate}'s or a decider's pending
+ * {@code EventsToPersist}, which their repositories register with the unit of work, are not. Nor is it by
+ * {@link ClosingBooksCoordinator#closeAndOpenNextGeneration(AggregateGeneration)}, which is not given the caller's
+ * aggregate and never marks the unit of work rollback-only on a refusal.
+ * <p>
+ * The verdict is a derived {@code boolean} rather than a public enum of the inspection's outcome, so this stays a plain
+ * {@link IllegalStateException} with no new public type to keep stable.
  */
 public class ClosingBooksGenerationMovedException extends IllegalStateException {
     private final transient LogicalAggregateId<?>  logicalAggregateId;
@@ -83,6 +88,7 @@ public class ClosingBooksGenerationMovedException extends IllegalStateException 
     private final transient AggregateGeneration<?> openGeneration;
     private volatile        boolean                aggregateHeldUncommittedChanges;
     private volatile        boolean                unitOfWorkMarkedRollbackOnly;
+    private volatile        boolean                aggregateInspectedClean;
 
     /**
      * @param logicalAggregateId        the logical aggregate whose generation moved
@@ -138,11 +144,8 @@ public class ClosingBooksGenerationMovedException extends IllegalStateException 
      * start), or none was current. When a unit of work is current, the stale changes are still registered with it. In
      * either case let this exception propagate and retry in a new unit of work.
      * <p>
-     * {@code false} does not by itself mean a retry in the same unit of work is safe: only a {@code StatefulAggregate}'s
-     * {@code getUncommittedChanges()} is inspected, so a {@code FlexAggregate}'s or a decider's pending
-     * {@code EventsToPersist} leave this {@code false}, and
-     * {@link ClosingBooksCoordinator#closeAndOpenNextGeneration(AggregateGeneration)}, which is not given the aggregate,
-     * never sets it.
+     * {@code false} does not by itself mean a retry in the same unit of work is safe - it is also {@code false} when the
+     * aggregate was not inspected. Use {@link #sameUnitOfWorkRetrySafe()} for that.
      *
      * @return {@code true} when the guarded operation saw uncommitted changes on a {@code StatefulAggregate}
      */
@@ -158,8 +161,8 @@ public class ClosingBooksGenerationMovedException extends IllegalStateException 
      * exception - so retry in a new unit of work. A unit of work that joined a Spring-managed transaction it did not
      * start (e.g. inside a {@code @Transactional} method) ignores the mark, so this answers {@code false} there.
      * <p>
-     * {@code false} does not mean a retry in the same unit of work is safe: check
-     * {@link #aggregateHeldUncommittedChanges()} as well (see the class documentation).
+     * {@code false} does not mean a retry in the same unit of work is safe: use {@link #sameUnitOfWorkRetrySafe()} for
+     * that (see the class documentation).
      *
      * @return {@code true} when the unit of work the refusal was raised in is marked rollback-only
      */
@@ -168,11 +171,35 @@ public class ClosingBooksGenerationMovedException extends IllegalStateException 
     }
 
     /**
+     * Whether the reload and the new decision can run, and commit, in the unit of work the caller loaded its aggregate
+     * in. {@code true} only when the guarded operation inspected the caller's aggregate - a {@code StatefulAggregate} -
+     * and found no uncommitted changes, so nothing stale is registered with that unit of work and the refusal did not
+     * mark it rollback-only. {@code false} when the aggregate held uncommitted changes, and when it was not inspected:
+     * it is not a {@code StatefulAggregate} (a {@code FlexAggregate}'s or a decider's pending {@code EventsToPersist}),
+     * or the refusal came from {@link ClosingBooksCoordinator#closeAndOpenNextGeneration(AggregateGeneration)}, which is
+     * not given the aggregate. When {@code false}, let the unit of work roll back and retry in a new one (see the class
+     * documentation for the cases).
+     *
+     * @return {@code true} when a retry in the same unit of work is safe
+     */
+    public boolean sameUnitOfWorkRetrySafe() {
+        return aggregateInspectedClean && !aggregateHeldUncommittedChanges;
+    }
+
+    /**
      * Set by the guarded operation when it found the caller's {@code StatefulAggregate} holding uncommitted changes,
      * whether or not a unit of work then took the rollback-only mark.
      */
     void recordAggregateHeldUncommittedChanges() {
         this.aggregateHeldUncommittedChanges = true;
+    }
+
+    /**
+     * Set by the guarded operation when it inspected the caller's {@code StatefulAggregate} and found no uncommitted
+     * changes.
+     */
+    void recordAggregateInspectedClean() {
+        this.aggregateInspectedClean = true;
     }
 
     /**

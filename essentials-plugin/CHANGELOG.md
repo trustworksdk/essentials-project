@@ -22,12 +22,11 @@ targets, with a `-N` suffix for plugin-only releases.
   on a refusal when the aggregate is a `StatefulAggregate` holding uncommitted changes, as
   `closeAndOpenNextGenerationGuarded` does; only the coordinator's `closeAndOpenNextGeneration(expected)` does not
   check the aggregate. It warns that after such a refusal nothing more written in that unit of work commits, with no
-  exception from the JDBI unit of work. It names two flags on `ClosingBooksGenerationMovedException`,
-  `aggregateHeldUncommittedChanges()` and `unitOfWorkMarkedRollbackOnly()`, and says to decide a retry from both,
-  never from the mark alone: held without the mark means a unit of work that ignored it (one that joined a
-  Spring-managed transaction it did not start), where the exception must propagate; and a `FlexAggregate`'s or a
-  decider's pending `EventsToPersist` are not inspected, so with those the caller always rolls back and retries in a
-  new unit of work. No skill, rule or script changed.
+  exception from the JDBI unit of work. It says to retry in the same unit of work only when
+  `ClosingBooksGenerationMovedException.sameUnitOfWorkRetrySafe()` is `true` - a `StatefulAggregate` was inspected and
+  held no uncommitted changes - and otherwise to roll back and retry in a new unit of work, and points to the
+  exception's Javadoc for the cases and its two flags, `aggregateHeldUncommittedChanges()` and
+  `unitOfWorkMarkedRollbackOnly()`. No skill, rule or script changed.
 
 ## 0.60.1-8 — targets Essentials 0.60.1
 

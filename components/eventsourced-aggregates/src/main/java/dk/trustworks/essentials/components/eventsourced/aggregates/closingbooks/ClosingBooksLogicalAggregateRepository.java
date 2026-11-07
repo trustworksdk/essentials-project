@@ -249,16 +249,11 @@ public class ClosingBooksLogicalAggregateRepository<LOGICAL_ID,
      * can run in that same unit of work. When {@code currentAggregate} holds uncommitted changes (e.g. a closing event
      * recorded before this call), they would be appended to the moved generation's stream on commit, so the refusal
      * marks the unit of work rollback-only, with the refusal as cause: retry in a new unit of work. Nothing more written
-     * in that unit of work commits then, and with the JDBI unit of work no exception says so. Decide from both of the
-     * refusal's flags: retry in the same unit of work only when
-     * {@link ClosingBooksGenerationMovedException#aggregateHeldUncommittedChanges()} is {@code false}; when both it and
-     * {@link ClosingBooksGenerationMovedException#unitOfWorkMarkedRollbackOnly()} are {@code true}, retry in a new unit
-     * of work; when only the first is {@code true}, the unit of work did not take the mark - e.g. one that joined a
-     * Spring-managed transaction it did not start (inside a {@code @Transactional} method) ignores it - so let the
-     * refusal propagate out of the transaction to roll it back (see {@link ClosingBooksGenerationMovedException}).
-     * The comparison uses
-     * the open generation the unguarded form resolves anyway, and the check for uncommitted changes is in memory, so it
-     * costs no extra database round trip.
+     * in that unit of work commits then, and with the JDBI unit of work no exception says so. Retry in the same unit of
+     * work only when the refusal's {@link ClosingBooksGenerationMovedException#sameUnitOfWorkRetrySafe()} is
+     * {@code true}; the cases are listed on {@link ClosingBooksGenerationMovedException}. The comparison uses the open
+     * generation the unguarded form resolves anyway, and the check for uncommitted changes is in memory, so it costs no
+     * extra database round trip.
      *
      * @param logicalAggregateId    the identifier of the logical aggregate to be transitioned to the next generation
      * @param currentAggregate      the aggregate loaded from the generation to close; its {@code aggregateId()} must be set
@@ -278,10 +273,10 @@ public class ClosingBooksLogicalAggregateRepository<LOGICAL_ID,
         var loadedFromStreamId = streamIdSerializer.serialize(requireNonNull(currentAggregate.aggregateId(), "currentAggregate has no aggregateId"));
         // A change already recorded on currentAggregate (e.g. its closing event) would be appended to the moved
         // generation's stream when the unit of work commits, so a refusal must then roll that unit of work back
-        var hasUncommittedChanges = ClosingBooksCoordinator.holdsUncommittedChanges(currentAggregate);
+        var uncommittedChanges = ClosingBooksCoordinator.UncommittedChanges.of(currentAggregate);
 
         return openNextGeneration(logicalAggregateId,
-                                  coordinator.closeAndOpenNext(logicalAggregateId, loadedFromStreamId, hasUncommittedChanges),
+                                  coordinator.closeAndOpenNext(logicalAggregateId, loadedFromStreamId, uncommittedChanges),
                                   currentAggregate,
                                   hint,
                                   nextGenerationFactory);

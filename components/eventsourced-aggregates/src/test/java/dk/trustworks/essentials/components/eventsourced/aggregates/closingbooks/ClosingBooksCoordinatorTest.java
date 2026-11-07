@@ -243,6 +243,8 @@ class ClosingBooksCoordinatorTest {
                 .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, e -> {
                     assertThat(e.expectedStreamAggregateId()).isEqualTo("Account-123#1");
                     assertThat(e.openGeneration()).hasValueSatisfying(open -> assertThat(open.generation()).isEqualTo(2));
+                    // Not given the caller's aggregate, so it cannot say a same-unit-of-work retry is safe
+                    assertThat(e.sameUnitOfWorkRetrySafe()).isFalse();
                 });
 
         assertThat(repository.resolveCurrentGeneration(aggregateType, logicalAggregateId))
@@ -408,6 +410,7 @@ class ClosingBooksCoordinatorTest {
                         assertThat(uow.getCauseOfRollback()).isSameAs(refusal);
                         assertThat(refusal.aggregateHeldUncommittedChanges()).isTrue();
                         assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isTrue();
+                        assertThat(refusal.sameUnitOfWorkRetrySafe()).isFalse();
                         assertThat(refusal.getMessage()).contains("the unit of work was marked rollback-only");
                     });
             assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.MarkedForRollbackOnly);
@@ -442,6 +445,7 @@ class ClosingBooksCoordinatorTest {
                 .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
                     assertThat(refusal.aggregateHeldUncommittedChanges()).isTrue();
                     assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isFalse();
+                    assertThat(refusal.sameUnitOfWorkRetrySafe()).isFalse();
                     assertThat(refusal.getMessage()).contains("no unit of work took the rollback-only mark")
                                                     .contains("let this exception propagate");
                 });
@@ -472,6 +476,39 @@ class ClosingBooksCoordinatorTest {
                     .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
                         assertThat(refusal.aggregateHeldUncommittedChanges()).isFalse();
                         assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isFalse();
+                        // Not inspected is not clean: a same-unit-of-work retry could commit the pending events
+                        assertThat(refusal.sameUnitOfWorkRetrySafe()).isFalse();
+                    });
+            assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
+        });
+    }
+
+    /**
+     * Only an inspected {@link StatefulAggregate} with no uncommitted changes makes a same-unit-of-work retry safe.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void a_guarded_evaluate_policy_refusal_says_a_same_unit_of_work_retry_is_safe_when_the_stateful_aggregate_holds_no_changes() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var unitOfWorkFactory  = InlineUnitOfWorkFactories.joining();
+        var repository         = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        unitOfWorkFactory);
+        var generation1 = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        coordinator.closeAndOpenNextGeneration(logicalAggregateId);
+        StatefulAggregate<String, Object, ?> generation1Aggregate = mock(StatefulAggregate.class);
+        when(generation1Aggregate.getUncommittedChanges()).thenReturn(EventsToPersist.noEvents("Account-123#1"));
+        ClosingBooksDecisionPolicy<String, StatefulAggregate<String, Object, ?>> rollPolicy = context -> ClosingBooksDecision.CLOSE_AND_OPEN_NEXT;
+
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            assertThatThrownBy(() -> coordinator.evaluatePolicy(generation1, generation1Aggregate, ClosingBooksTriggerMode.ON_ACCESS, rollPolicy, null))
+                    .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
+                        assertThat(refusal.aggregateHeldUncommittedChanges()).isFalse();
+                        assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isFalse();
+                        assertThat(refusal.sameUnitOfWorkRetrySafe()).isTrue();
                     });
             assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
         });

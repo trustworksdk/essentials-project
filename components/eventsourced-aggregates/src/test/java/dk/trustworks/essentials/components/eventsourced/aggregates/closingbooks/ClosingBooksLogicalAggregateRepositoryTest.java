@@ -229,6 +229,7 @@ class ClosingBooksLogicalAggregateRepositoryTest {
                     .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
                         assertThat(refusal.aggregateHeldUncommittedChanges()).isFalse();
                         assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isFalse();
+                        assertThat(refusal.sameUnitOfWorkRetrySafe()).isTrue();
                         assertThat(refusal.getMessage()).doesNotContain("rollback-only");
                     });
             assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
@@ -320,6 +321,7 @@ class ClosingBooksLogicalAggregateRepositoryTest {
                         assertThat(uow.getCauseOfRollback()).isSameAs(refusal);
                         assertThat(refusal.aggregateHeldUncommittedChanges()).isTrue();
                         assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isTrue();
+                        assertThat(refusal.sameUnitOfWorkRetrySafe()).isFalse();
                         assertThat(refusal.getMessage()).contains("the unit of work was marked rollback-only")
                                                         .contains("nothing more written in it will commit");
                     });
@@ -364,6 +366,7 @@ class ClosingBooksLogicalAggregateRepositoryTest {
                 .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
                     assertThat(refusal.aggregateHeldUncommittedChanges()).isTrue();
                     assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isFalse();
+                    assertThat(refusal.sameUnitOfWorkRetrySafe()).isFalse();
                     assertThat(refusal.getMessage()).contains("no unit of work took the rollback-only mark");
                 });
     }
