@@ -651,12 +651,19 @@ aggregate holds uncommitted changes, below): the reload and the
 new decision can run, and commit, in the unit of work the aggregate was loaded in. The aggregate from the moved
 generation stays registered with that unit of work, though, so a change already recorded on it (a closing event
 recorded before the guarded call) would be appended to the moved generation's stream at commit.
-`closeAndOpenNextGenerationGuarded` checks for that: when `currentAggregate` holds uncommitted changes, its refusal
-marks the unit of work rollback-only, with the refusal as cause, so that unit of work rolls back instead of committing
-the stale change, and the retry runs in a new unit of work. A unit of work that joined a Spring-managed transaction it
-did not start (e.g. inside a `@Transactional` method) ignores that mark: there, let the exception propagate out of the
-transaction (do not catch it) so it rolls back. The coordinator's guarded methods do not check the aggregate; a caller that recorded a change
-on it rethrows and retries in a new unit of work. The comparison uses the open generation the unguarded methods already resolve, so it costs no extra
+`closeAndOpenNextGenerationGuarded` and the guarded `evaluatePolicy(loadedFrom, aggregate, …)` check for that: when
+the aggregate is a `StatefulAggregate` holding uncommitted changes, the refusal marks the unit of work rollback-only,
+with the refusal as cause, so that unit of work rolls back instead of committing the stale change, and the retry runs
+in a new unit of work. After such a refusal nothing more written in that unit of work commits, and with the JDBI unit
+of work no exception says so (its `commit()` rolls back and returns normally), so a retry caught and made in the same
+unit of work would be lost silently. **`ClosingBooksGenerationMovedException.unitOfWorkMarkedRollbackOnly()`** answers
+`true` when the refusal left the unit of work marked rollback-only, and the exception's message then says so; check it
+(or `uow.status() == UnitOfWorkStatus.MarkedForRollbackOnly`) before retrying in the same unit of work. A unit of work
+that joined a Spring-managed transaction it did not start (e.g. inside a `@Transactional` method) ignores that mark,
+and `unitOfWorkMarkedRollbackOnly()` answers `false`: there, let the exception propagate out of the transaction (do not
+catch it) so it rolls back. The coordinator's `closeAndOpenNextGeneration(expectedCurrentGeneration)` is not given the
+aggregate, so it does not check it; a caller that recorded a change on it rethrows and retries in a new unit of work.
+The comparison uses the open generation the unguarded methods already resolve, so it costs no extra
 database round trip. A refusal by either guarded `closeAndOpenNextGeneration` is counted in
 `essentials.aggregate_closing_books.rollover.outcome` with `outcome=generation_moved`, not `failed`; a refusal by the
 guarded `evaluatePolicy` counts no policy decision.

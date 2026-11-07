@@ -16,7 +16,9 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
+import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregate;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkStatus;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
@@ -188,8 +190,9 @@ public class ClosingBooksCoordinator<ID> {
      * As {@link #closeAndOpenNext(LogicalAggregateId, String)}, but when {@code rollbackOnRefusal} is {@code true} a
      * refusal also marks the unit of work this joins rollback-only, with the refusal as cause - for a caller whose
      * aggregate, loaded from the expected generation, holds changes that must not be appended to that generation's stream
-     * once it has moved. The refusal is still thrown only after the lock and the unit of work have returned, and is
-     * counted with outcome {@code generation_moved}.
+     * once it has moved; {@link ClosingBooksGenerationMovedException#unitOfWorkMarkedRollbackOnly()} then says whether
+     * the unit of work took the mark. The refusal is still thrown only after the lock and the unit of work have returned,
+     * and is counted with outcome {@code generation_moved}.
      */
     AggregateGeneration<ID> closeAndOpenNext(LogicalAggregateId<ID> logicalAggregateId, String expectedStreamAggregateId, boolean rollbackOnRefusal) {
         // The counters are incremented after the UnitOfWork returns, never inside it: a rollback must not leave a
@@ -207,7 +210,7 @@ public class ClosingBooksCoordinator<ID> {
                                                                    // Unless the caller's aggregate recorded changes on the moved generation:
                                                                    // then the unit of work must not commit them.
                                                                    if (rollbackOnRefusal) {
-                                                                       uow.markAsRollbackOnly(refusal);
+                                                                       markRollbackOnly(uow, refusal);
                                                                    }
                                                                    return Guarded.refused(refusal);
                                                                }
@@ -286,6 +289,26 @@ public class ClosingBooksCoordinator<ID> {
     }
 
     /**
+     * Whether {@code aggregate} is a {@link StatefulAggregate} holding uncommitted changes: changes that its repository
+     * appends to the stream it was loaded from when the unit of work it joined commits. In memory, no database access.
+     */
+    static boolean holdsUncommittedChanges(Object aggregate) {
+        return aggregate instanceof StatefulAggregate<?, ?, ?> stateful && !stateful.getUncommittedChanges().isEmpty();
+    }
+
+    /**
+     * Mark {@code uow} rollback-only with {@code refusal} as cause, and record on the refusal when {@code uow} then
+     * reports {@link UnitOfWorkStatus#MarkedForRollbackOnly} - a unit of work that joined a Spring-managed transaction
+     * it did not start ignores the mark.
+     */
+    private static void markRollbackOnly(UnitOfWork uow, ClosingBooksGenerationMovedException refusal) {
+        uow.markAsRollbackOnly(refusal);
+        if (uow.status() == UnitOfWorkStatus.MarkedForRollbackOnly) {
+            refusal.recordUnitOfWorkMarkedRollbackOnly();
+        }
+    }
+
+    /**
      * Evaluate a closing-books policy against the current generation and aggregate instance.
      * <p>
      * As with the overload taking a rollover, nothing checks that {@code aggregate} belongs to the generation that is open
@@ -351,10 +374,19 @@ public class ClosingBooksCoordinator<ID> {
      * {@link ClosingBooksGenerationMovedException} is thrown. Otherwise the policy and the rollover receive
      * {@code aggregate} with {@code loadedFrom}'s generation, exactly as the unguarded form would. The comparison uses the
      * open generation that the unguarded form resolves anyway, so it costs no extra database round trip. The refusal is
-     * thrown only after the generation lock has returned, so it does not mark a unit of work the caller holds
-     * rollback-only: the caller can reload from the open generation and evaluate again in that same unit of work - when
-     * nothing was recorded on {@code aggregate} first, which this does not check (see
-     * {@link ClosingBooksGenerationMovedException}).
+     * thrown only after the generation lock has returned, so when {@code aggregate} holds no uncommitted changes it does
+     * not mark a unit of work the caller holds rollback-only: the caller can reload from the open generation and evaluate
+     * again in that same unit of work. When {@code aggregate} is a
+     * {@link dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregate} holding uncommitted
+     * changes (e.g. a closing event recorded before this call), they would be appended to the moved generation's stream
+     * on commit, so the refusal marks the caller's unit of work rollback-only, with the refusal as cause - as
+     * {@link ClosingBooksLogicalAggregateRepository#closeAndOpenNextGenerationGuarded(LogicalAggregateId, dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregate, Object, ClosingBooksNextGenerationFactory)}
+     * does. Nothing more written in that unit of work commits then, and with the JDBI unit of work no exception says so:
+     * check {@link ClosingBooksGenerationMovedException#unitOfWorkMarkedRollbackOnly()} (or the unit of work's
+     * {@code status()}) and retry in a new unit of work. A unit of work that joined a Spring-managed transaction it did
+     * not start (e.g. inside a {@code @Transactional} method) ignores the mark, so there let the refusal propagate out of
+     * the transaction to roll it back (see {@link ClosingBooksGenerationMovedException}). The check for uncommitted
+     * changes is in memory and made only on a refusal.
      * <p>
      * Unlike the unguarded form this never opens a first generation: {@code loadedFrom} was open when the aggregate was
      * loaded, so an empty logical aggregate means it was closed since. As there, load the aggregate in the unit of work
@@ -388,6 +420,11 @@ public class ClosingBooksCoordinator<ID> {
                 if (refusal != null) {
                     // Returned, not thrown: the PostgreSQL generation lock runs in a unit of work, and an exception thrown
                     // through it marks the caller's unit of work rollback-only. Nothing has been written yet.
+                    // Unless the aggregate recorded changes on the moved generation: then the unit of work it joined must
+                    // not commit them. Checked only here, on the refusal, so a decision pays nothing for it.
+                    if (holdsUncommittedChanges(aggregate)) {
+                        unitOfWorkFactory.getCurrentUnitOfWork().ifPresent(uow -> markRollbackOnly(uow, refusal));
+                    }
                     return Guarded.refused(refusal);
                 }
                 return Guarded.done(decide(openGeneration.get(), aggregate, triggerMode, policy, rollover));

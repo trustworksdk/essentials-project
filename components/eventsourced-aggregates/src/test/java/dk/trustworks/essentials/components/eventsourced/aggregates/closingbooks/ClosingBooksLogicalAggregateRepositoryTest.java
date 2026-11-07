@@ -226,7 +226,10 @@ class ClosingBooksLogicalAggregateRepositoryTest {
                                                                                   generation1Aggregate,
                                                                                   "next-period",
                                                                                   (aggregate, context, hint) -> new TestAggregate(context.streamAggregateId())))
-                    .isInstanceOf(ClosingBooksGenerationMovedException.class);
+                    .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
+                        assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isFalse();
+                        assertThat(refusal.getMessage()).doesNotContain("rollback-only");
+                    });
             assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
 
             // Reloaded from the generation that is open now, and decided again in the same unit of work
@@ -312,8 +315,12 @@ class ClosingBooksLogicalAggregateRepositoryTest {
                                                                                       factoryCalls.incrementAndGet();
                                                                                       return new TestAggregate(context.streamAggregateId());
                                                                                   }))
-                    .isInstanceOf(ClosingBooksGenerationMovedException.class)
-                    .satisfies(refusal -> assertThat(uow.getCauseOfRollback()).isSameAs(refusal));
+                    .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
+                        assertThat(uow.getCauseOfRollback()).isSameAs(refusal);
+                        assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isTrue();
+                        assertThat(refusal.getMessage()).contains("the unit of work was marked rollback-only")
+                                                        .contains("nothing more written in it will commit");
+                    });
             assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.MarkedForRollbackOnly);
         });
 

@@ -248,7 +248,10 @@ public class ClosingBooksLogicalAggregateRepository<LOGICAL_ID,
      * uncommitted changes it does not mark the caller's unit of work rollback-only, and the reload and the new decision
      * can run in that same unit of work. When {@code currentAggregate} holds uncommitted changes (e.g. a closing event
      * recorded before this call), they would be appended to the moved generation's stream on commit, so the refusal
-     * marks the unit of work rollback-only, with the refusal as cause: retry in a new unit of work. A unit of work that
+     * marks the unit of work rollback-only, with the refusal as cause: retry in a new unit of work. Nothing more written
+     * in that unit of work commits then, and with the JDBI unit of work no exception says so; check
+     * {@link ClosingBooksGenerationMovedException#unitOfWorkMarkedRollbackOnly()} (or the unit of work's {@code status()})
+     * before retrying in the same one. A unit of work that
      * joined a Spring-managed transaction it did not start (e.g. inside a {@code @Transactional} method) ignores that
      * mark, so there let the refusal propagate out of the transaction to roll it back (see
      * {@link ClosingBooksGenerationMovedException}). The comparison uses
@@ -273,7 +276,7 @@ public class ClosingBooksLogicalAggregateRepository<LOGICAL_ID,
         var loadedFromStreamId = streamIdSerializer.serialize(requireNonNull(currentAggregate.aggregateId(), "currentAggregate has no aggregateId"));
         // A change already recorded on currentAggregate (e.g. its closing event) would be appended to the moved
         // generation's stream when the unit of work commits, so a refusal must then roll that unit of work back
-        var hasUncommittedChanges = !currentAggregate.getUncommittedChanges().isEmpty();
+        var hasUncommittedChanges = ClosingBooksCoordinator.holdsUncommittedChanges(currentAggregate);
 
         return openNextGeneration(logicalAggregateId,
                                   coordinator.closeAndOpenNext(logicalAggregateId, loadedFromStreamId, hasUncommittedChanges),

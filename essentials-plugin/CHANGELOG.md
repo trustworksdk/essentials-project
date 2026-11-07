@@ -17,6 +17,13 @@ targets, with a `-N` suffix for plugin-only releases.
   only the replay's time budget stops it: once `AbstractEventProcessor.getFailedBatchReplayTimeBudget()` (default 90 s)
   is spent, the batch's untried rest is left to the skip, and the spent budget reaches the subscriber as
   `FailedBatchReplayTimeBudgetSpentException`. The reference no longer describes a `SELECT 1` probe of the database.
+- **Guarded closing-books refusals that roll back the unit of work** — the eventsourced-aggregates reference says the
+  coordinator's guarded `evaluatePolicy(loadedFrom, aggregate, …)` now marks the caller's unit of work rollback-only
+  on a refusal when the aggregate is a `StatefulAggregate` holding uncommitted changes, as
+  `closeAndOpenNextGenerationGuarded` does; only the coordinator's `closeAndOpenNextGeneration(expected)` does not
+  check the aggregate. It warns that after such a refusal nothing more written in that unit of work commits, with no
+  exception from the JDBI unit of work, and names `ClosingBooksGenerationMovedException.unitOfWorkMarkedRollbackOnly()`
+  to check before retrying in the same unit of work. No skill, rule or script changed.
 
 ## 0.60.1-8 — targets Essentials 0.60.1
 

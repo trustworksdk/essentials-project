@@ -1751,11 +1751,17 @@ aggregate holds uncommitted changes, below): reload the aggregate from the gener
 again in the same unit of work. The aggregate from the moved
 generation stays registered with that unit of work, though, so a change already recorded on it (a closing event
 recorded before the guarded call) would be appended to the moved generation's stream at commit.
-`closeAndOpenNextGenerationGuarded` checks for that: when `currentAggregate` holds uncommitted changes, its refusal
-marks the `UnitOfWork` rollback-only, with the refusal as cause, so retry in a new unit of work. A `UnitOfWork` that
-joined a Spring-managed transaction it did not start (e.g. inside a `@Transactional` method) ignores that mark: there,
-let the exception propagate out of the transaction (do not catch it) so it rolls back. The coordinator's
-guarded methods do not check the aggregate; after recording a change on it, rethrow and retry in a new unit of work.
+`closeAndOpenNextGenerationGuarded` and the coordinator's guarded `evaluatePolicy(loadedFrom, aggregate, …)` check
+for that: when the aggregate is a `StatefulAggregate` holding uncommitted changes, the refusal marks the `UnitOfWork`
+rollback-only, with the refusal as cause, so retry in a new unit of work. After that, nothing more written in that
+unit of work commits, and with the JDBI `UnitOfWork` no exception says so: its `commit()` rolls back and returns
+normally, so a caller that catches the refusal and retries in the same unit of work silently loses the retry. Check
+`exception.unitOfWorkMarkedRollbackOnly()` (or `uow.status() == UnitOfWorkStatus.MarkedForRollbackOnly`) before
+retrying in the same unit of work; the exception's message also says so when it is `true`. A `UnitOfWork` that
+joined a Spring-managed transaction it did not start (e.g. inside a `@Transactional` method) ignores that mark, and
+`unitOfWorkMarkedRollbackOnly()` answers `false`: there, let the exception propagate out of the transaction (do not
+catch it) so it rolls back. The coordinator's `closeAndOpenNextGeneration(expectedCurrentGeneration)` is not given the
+aggregate, so it does not check it; after recording a change on it, rethrow and retry in a new unit of work.
 
 > **Carrying state forward is your job.** Closing a generation does not copy balances into the new stream. Emit an
 > opening/carry-forward event on the new generation — that is what `ClosingBooksNextGenerationFactory` /

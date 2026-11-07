@@ -35,7 +35,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <p>
  * The guarded operations throw this only after the generation lock and the unit-of-work scopes they enter have
  * returned, so the refusal by itself does not mark the caller's unit of work rollback-only - except as the next
- * paragraph describes, when the repository's guarded method sees uncommitted changes on the aggregate: the reload and
+ * paragraph describes, when a guarded operation sees uncommitted changes on the aggregate: the reload and
  * the new decision can run, and commit, in the unit of work the caller loaded its aggregate in. This holds for the
  * guard's own refusal only; any other exception thrown inside a unit of work the caller joined still marks it
  * rollback-only.
@@ -44,19 +44,28 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * it (a closing event recorded before the guarded call) would be appended to the moved generation's stream when the
  * unit of work commits.
  * {@link ClosingBooksLogicalAggregateRepository#closeAndOpenNextGenerationGuarded(LogicalAggregateId, dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregate, Object, ClosingBooksNextGenerationFactory)}
- * sees that aggregate: when it holds uncommitted changes, the refusal marks the unit of work rollback-only, with this
- * exception as cause, so that unit of work rolls back instead of committing those changes - retry in a new unit of work.
+ * and the guarded
+ * {@link ClosingBooksCoordinator#evaluatePolicy(AggregateGeneration, Object, ClosingBooksTriggerMode, ClosingBooksDecisionPolicy, ClosingBooksScanRollover)}
+ * see that aggregate: when it is a {@link dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregate}
+ * holding uncommitted changes, the refusal marks the unit of work rollback-only, with this exception as cause, so that
+ * unit of work rolls back instead of committing those changes - retry in a new unit of work. After such a refusal
+ * nothing more written in that unit of work commits, and with the JDBI unit of work no exception says so: its
+ * {@code commit()} rolls back and returns normally. So check {@link #unitOfWorkMarkedRollbackOnly()} - or
+ * {@code uow.status() == UnitOfWorkStatus.MarkedForRollbackOnly} - before retrying in the same unit of work; the
+ * exception's message says so too when it is {@code true}.
  * A unit of work that joined a Spring-managed transaction it did not start (e.g. inside a {@code @Transactional}
- * method) ignores that mark: there, let this exception propagate out of the transaction so it rolls back, rather than
- * catching it. The coordinator's guarded operations
- * do not check the caller's aggregate for changes and never mark the unit of work rollback-only on a refusal: with them, retry or drop
- * the operation in the same unit of work only when no change was recorded on the aggregate; otherwise let the unit of
- * work roll back - rethrow - and retry in a new one.
+ * method) ignores that mark, and {@link #unitOfWorkMarkedRollbackOnly()} then answers {@code false}: there, let this
+ * exception propagate out of the transaction so it rolls back, rather than catching it.
+ * {@link ClosingBooksCoordinator#closeAndOpenNextGeneration(AggregateGeneration)} is not given the caller's aggregate,
+ * so it does not check it for changes and never marks the unit of work rollback-only on a refusal: with it, retry or
+ * drop the operation in the same unit of work only when no change was recorded on the aggregate; otherwise let the
+ * unit of work roll back - rethrow - and retry in a new one.
  */
 public class ClosingBooksGenerationMovedException extends IllegalStateException {
     private final transient LogicalAggregateId<?>  logicalAggregateId;
     private final           String                 expectedStreamAggregateId;
     private final transient AggregateGeneration<?> openGeneration;
+    private volatile        boolean                unitOfWorkMarkedRollbackOnly;
 
     /**
      * @param logicalAggregateId        the logical aggregate whose generation moved
@@ -83,6 +92,40 @@ public class ClosingBooksGenerationMovedException extends IllegalStateException 
                  ? "no generation is open"
                  : "generation " + openGeneration.generation() + " with stream id '" + openGeneration.streamAggregateId() + "' is open") +
                 ". Nothing was closed or opened";
+    }
+
+    /**
+     * The refusal's message; when {@link #unitOfWorkMarkedRollbackOnly()} is {@code true} it also says that nothing more
+     * written in that unit of work will commit.
+     */
+    @Override
+    public String getMessage() {
+        var message = super.getMessage();
+        return unitOfWorkMarkedRollbackOnly
+               ? message + "; the unit of work was marked rollback-only, as the aggregate held uncommitted changes: nothing more written in it will commit - retry in a new unit of work"
+               : message;
+    }
+
+    /**
+     * Whether this refusal left the caller's unit of work marked rollback-only: the guarded operation saw uncommitted
+     * changes on the caller's aggregate, marked the unit of work it ran in rollback-only with this exception as cause,
+     * and that unit of work then reported {@code UnitOfWorkStatus.MarkedForRollbackOnly}. When {@code true}, nothing
+     * more written in that unit of work commits - with the JDBI unit of work its {@code commit()} rolls back without an
+     * exception - so retry in a new unit of work. A unit of work that joined a Spring-managed transaction it did not
+     * start (e.g. inside a {@code @Transactional} method) ignores the mark, so this answers {@code false} there.
+     *
+     * @return {@code true} when the unit of work the refusal was raised in is marked rollback-only
+     */
+    public boolean unitOfWorkMarkedRollbackOnly() {
+        return unitOfWorkMarkedRollbackOnly;
+    }
+
+    /**
+     * Set by the guarded operation once it marked the unit of work rollback-only and that unit of work reports
+     * {@code UnitOfWorkStatus.MarkedForRollbackOnly}.
+     */
+    void recordUnitOfWorkMarkedRollbackOnly() {
+        this.unitOfWorkMarkedRollbackOnly = true;
     }
 
     /**

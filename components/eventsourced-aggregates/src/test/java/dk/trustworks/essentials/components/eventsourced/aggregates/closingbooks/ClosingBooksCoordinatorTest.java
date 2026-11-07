@@ -16,7 +16,11 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
+import dk.trustworks.essentials.components.eventsourced.aggregates.EventsToPersist;
+import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregate;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkStatus;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
@@ -35,6 +39,8 @@ import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class ClosingBooksCoordinatorTest {
     @Test
@@ -371,6 +377,93 @@ class ClosingBooksCoordinatorTest {
         });
 
         assertThat(generation3.generation()).isEqualTo(3);
+    }
+
+    /**
+     * A change recorded on a {@link StatefulAggregate} before the guarded evaluation - e.g. its closing event - would be
+     * appended to the moved generation's stream when the caller's unit of work commits, so the refusal must mark that
+     * unit of work rollback-only, as the repository's guarded rollover does.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void a_guarded_evaluate_policy_refusal_rolls_back_the_callers_unit_of_work_when_the_aggregate_recorded_changes() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var unitOfWorkFactory  = InlineUnitOfWorkFactories.joining();
+        var repository         = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        unitOfWorkFactory);
+        var generation1 = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        coordinator.closeAndOpenNextGeneration(logicalAggregateId);
+        StatefulAggregate<String, Object, ?> generation1Aggregate = mock(StatefulAggregate.class);
+        when(generation1Aggregate.getUncommittedChanges())
+                .thenReturn(new EventsToPersist<>("Account-123#1", EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED, List.of("books closed")));
+        ClosingBooksDecisionPolicy<String, StatefulAggregate<String, Object, ?>> rollPolicy = context -> ClosingBooksDecision.CLOSE_AND_OPEN_NEXT;
+
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            assertThatThrownBy(() -> coordinator.evaluatePolicy(generation1, generation1Aggregate, ClosingBooksTriggerMode.ON_ACCESS, rollPolicy, null))
+                    .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
+                        assertThat(uow.getCauseOfRollback()).isSameAs(refusal);
+                        assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isTrue();
+                        assertThat(refusal.getMessage()).contains("the unit of work was marked rollback-only");
+                    });
+            assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.MarkedForRollbackOnly);
+        });
+
+        assertThat(repository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
+    }
+
+    /**
+     * A refusal from a guarded call the rollover makes is thrown under the generation lock, so a real unit of work wraps
+     * it; the caller must still get the {@link ClosingBooksGenerationMovedException} itself.
+     */
+    @Test
+    void guarded_evaluate_policy_unwraps_a_refusal_the_rollover_throws_when_the_unit_of_work_wraps_exceptions() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var unitOfWorkFactory  = InlineUnitOfWorkFactories.wrapping();
+        var repository         = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        unitOfWorkFactory);
+        var generation1 = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        var rolloverRefusal = new ClosingBooksGenerationMovedException(logicalAggregateId, "Account-123#0", generation1);
+
+        assertThatThrownBy(() -> coordinator.evaluatePolicy(generation1,
+                                                            "generation-1-aggregate",
+                                                            ClosingBooksTriggerMode.ON_ACCESS,
+                                                            ClosingBooksDecisionPolicies.closeAndOpenNext(),
+                                                            context -> {
+                                                                throw rolloverRefusal;
+                                                            }))
+                .isSameAs(rolloverRefusal);
+    }
+
+    @Test
+    void guarded_evaluate_policy_keeps_another_rollover_failure_wrapped_when_the_unit_of_work_wraps_exceptions() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var unitOfWorkFactory  = InlineUnitOfWorkFactories.wrapping();
+        var repository         = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        unitOfWorkFactory);
+        var generation1     = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        var rolloverFailure = new IllegalStateException("rollover failed");
+
+        assertThatThrownBy(() -> coordinator.evaluatePolicy(generation1,
+                                                            "generation-1-aggregate",
+                                                            ClosingBooksTriggerMode.ON_ACCESS,
+                                                            ClosingBooksDecisionPolicies.closeAndOpenNext(),
+                                                            context -> {
+                                                                throw rolloverFailure;
+                                                            }))
+                .isInstanceOf(UnitOfWorkException.class)
+                .hasRootCause(rolloverFailure);
     }
 
     @Test
