@@ -225,11 +225,17 @@ The existing pins still apply: `CdcEventStoreCommitOrderIT`, `CdcEventStoreGapFi
   ends. A held fill among them is then done with if the flush failed, and otherwise the gap the flush recorded for it is
   resolved in the flush's own unit of work. `isAwaitedAsGap`'s check of a held fill (asked by `awaitProcessed`) waits
   for the lock at most 10 s per call, however many subscriptions the subscriber runs, then answers that the event is
-  still awaited. The delivering thread waits for it at most 10 s per check. A gap an event opens is then kept without
+  still awaited. The delivering thread's checks of an opened gap, a fill and a dropped event wait for it at most 10 s
+  once per stall, not once per event: after one wait runs out, these checks only try the lock until the flush lets go
+  of it or one of them takes it (`DeliveryGate.lockedOnDeliveringThread`). An acknowledgement made on the delivering
+  thread (a subscriber without a `SubscriberAcknowledgement`) keeps its own wait per call. A gap an event opens is then kept without
   the lock and taken in by the lock's next holder; recording it at once would wait for the gap handler's monitor, which
-  the blocked flush holds too. A fill is treated as the fill of a recorded gap. A dropped event is treated as a held
-  fill, so it is not acknowledged to the delegate's poll. Gaps the tracker gave up on only try the lock, and otherwise
-  go back to the tracker for the next event. A gap recorded at once (a wide gap, or one that is not kept during a save,
+  the blocked flush holds too. A fill is treated as the fill of a recorded gap. A dropped event is left to the lock's
+  next holder with no unit of work current, which acknowledges it to the delegate's poll unless it is a fill the subscriber is not done with
+  (`DeliveryGate.settleDroppedWhileLockBusy`). Gaps the tracker gave up on only try the lock on the delivering thread,
+  and otherwise go back to the tracker for the next event; at the subscription's end, which has no next event, they
+  wait for the lock at most 10 s (only try it while the delivering thread's wait has run out), and otherwise go back to
+  the tracker for a later subscription to wait for again. A gap recorded at once (a wide gap, or one that is not kept during a save,
   after the end or over the limit), and the recording of given-up gaps, still wait for the gap handler's monitor without
   a limit (`DeliveryGate.recordOpenedGap`, `DeliveryGate.recordGivenUpGaps`), and the blocked flush holds that monitor.
 - **Non-exclusive subscriptions on several instances** share one resume-point row. Another instance's save can move it

@@ -499,7 +499,10 @@ most 10 s per check and then treats the event as not processed yet (`8b99e122e`)
 many subscriptions the subscriber runs, not one per subscription, and while such a recording runs every event of that
 subscriber and aggregate type counts as not processed yet (`a01c8e746`). Delivering an event no longer waits
 without a limit for the gate's lock while such a recording holds it, but an event that opens a gap that must be
-recorded at once still waits for that recording (`fc5127f70`). A save whose gaps could not be written (that
+recorded at once still waits for that recording (`fc5127f70`). While such a recording holds the lock, delivering waits
+for it once rather than once per event that opens a gap, fills one or is a duplicate; a duplicate dropped meanwhile is
+acknowledged to the delegate's poll once the recording ends, unless the subscriber still holds it; and a subscription
+that ends while the lock is briefly taken still records the gaps it gave up on (`<!-- fix:U-001 -->`). A save whose gaps could not be written (that
 timeout, or an unreachable database) saves the other resume points and then fails, so a stop or lock release stops
 retrying it at once and a shutdown treats an unreachable database as one, instead of retrying it every 100 ms for up
 to 5 s. A reset (`EventStoreSubscription#resetFrom`, `DefaultEventStoreSubscriptionManager#resetStoredResumePoint`)

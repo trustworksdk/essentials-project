@@ -471,6 +471,203 @@ class CdcEventStoreDeliveryGateTest {
     }
 
     /**
+     * While a recording that outlasted the wait holds the gate lock, the delivering thread waits for it once, not once
+     * per event: five events that each open a gap cost about one wait, not five. Once that recording lets go of the lock,
+     * the next stall costs one wait again
+     */
+    @Test
+    void delivering_waits_for_a_blocked_recording_once_per_stall_not_once_per_event() throws Exception {
+        setupDeferringGapRecording();
+        var wait = Duration.ofMillis(200);
+        cdcEventStore.deferredGapsRecordingWait(wait);
+        // An acknowledging subscriber, as the manager's are: one that does not acknowledges each event on the delivering
+        // thread, and that acknowledgement has a wait of its own
+        var received = subscribe(Optional.of(SubscriberAcknowledgement.create()));
+        poll(1, 3);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L)));
+        var recordingMayEnd = new CountDownLatch(1);
+        try {
+            blockARecording(recordingMayEnd);
+
+            // Each opens a gap below it: 4, 6, 8, 10, 12
+            var started = System.nanoTime();
+            poll(5, 7, 9, 11, 13);
+            await().atMost(Duration.ofSeconds(5)).pollInterval(Duration.ofMillis(5)).until(() -> received.contains(13L));
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).as("one wait, not five").isLessThan(wait.multipliedBy(4));
+        } finally {
+            recordingMayEnd.countDown();
+        }
+        await().atMost(Duration.ofSeconds(5)).until(() -> gapHandler.transientGapsAdded.size() == 1);
+
+        // A new stall: the first event waits again
+        var nextRecordingMayEnd = new CountDownLatch(1);
+        try {
+            blockARecording(nextRecordingMayEnd);
+            var started = System.nanoTime();
+            poll(15);
+            await().atMost(Duration.ofSeconds(5)).pollInterval(Duration.ofMillis(5)).until(() -> received.contains(15L));
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).as("waited again").isGreaterThanOrEqualTo(wait.dividedBy(2));
+        } finally {
+            nextRecordingMayEnd.countDown();
+        }
+    }
+
+    /**
+     * A duplicate dropped while a blocked recording holds the gate lock, and which is no fill the subscriber holds, is
+     * acknowledged to the delegate's poll once the recording lets go of the lock - not left unacknowledged, which would
+     * keep a gap fill the poll handed on waiting for as long as the poll lives. A held fill dropped meanwhile still is
+     * not
+     */
+    @Test
+    void a_duplicate_dropped_while_a_recording_holds_the_gate_lock_is_acknowledged_to_the_delegate_once_it_lets_go() throws Exception {
+        setupDeferringGapRecording();
+        cdcEventStore.deferredGapsRecordingWait(Duration.ofMillis(200));
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var received        = subscribe(Optional.of(acknowledgement));
+        // 2 fills a gap kept in memory and is not acknowledged yet; 5 opens a gap kept in memory
+        poll(1, 3, 2, 5);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 2L, 5L)));
+        var recordingMayEnd = new CountDownLatch(1);
+        try {
+            blockARecording(recordingMayEnd);
+
+            // 1 is a duplicate the subscriber holds nothing for, 2 a duplicate of the held fill
+            poll(1, 2, 6);
+            await().atMost(Duration.ofSeconds(5)).until(() -> received.contains(6L));
+            assertThat(delegateAcknowledged).as("left to the lock's next holder").doesNotContain(1L, 2L);
+        } finally {
+            recordingMayEnd.countDown();
+        }
+
+        await().atMost(Duration.ofSeconds(5)).until(() -> delegateAcknowledged.contains(1L));
+        assertThat(delegateAcknowledged).as("the held fill").doesNotContain(2L);
+        acknowledgement.acknowledge(event(2));
+        assertThat(delegateAcknowledged).contains(2L);
+    }
+
+    /**
+     * A duplicate dropped while the gate lock was busy is not acknowledged to the delegate's poll by an acknowledgement
+     * made inside the subscriber's unit of work - that unit of work's rollback would lose it - but by the next holder of
+     * the lock with no unit of work current, here a resume point save
+     */
+    @Test
+    void a_duplicate_dropped_while_the_gate_lock_was_busy_is_not_acknowledged_to_the_delegate_inside_the_subscriber_s_unit_of_work() throws Exception {
+        setupDeferringGapRecording();
+        cdcEventStore.deferredGapsRecordingWait(Duration.ofMillis(100));
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var received        = subscribe(Optional.of(acknowledgement));
+        poll(1, 3);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L)));
+        var gateLock   = gateLock();
+        var held       = new CountDownLatch(1);
+        var mayLetGo   = new CountDownLatch(1);
+        var lockHolder = Thread.ofPlatform().daemon().start(() -> {
+            gateLock.lock();
+            try {
+                held.countDown();
+                mayLetGo.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                gateLock.unlock();
+            }
+        });
+        try {
+            held.await(5, TimeUnit.SECONDS);
+            // 1 is a duplicate the subscriber holds nothing for
+            poll(1, 5);
+            await().atMost(Duration.ofSeconds(5)).until(() -> received.contains(5L));
+            assertThat(delegateAcknowledged).as("left to the lock's next holder").doesNotContain(1L);
+        } finally {
+            mayLetGo.countDown();
+        }
+        lockHolder.join(Duration.ofSeconds(5));
+
+        var subscriberWithUnitOfWork = Thread.ofPlatform().daemon().unstarted(() -> acknowledgement.acknowledge(event(3)));
+        doAnswer(inv -> Thread.currentThread().equals(subscriberWithUnitOfWork) ? Optional.of(mock(EventStoreUnitOfWork.class)) : Optional.empty())
+                .when(uowFactory).getCurrentUnitOfWork();
+        subscriberWithUnitOfWork.start();
+        subscriberWithUnitOfWork.join(Duration.ofSeconds(5));
+        assertThat(subscriberWithUnitOfWork.isAlive()).isFalse();
+        assertThat(delegateAcknowledged).as("not inside the subscriber's unit of work").doesNotContain(1L);
+
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+        assertThat(delegateAcknowledged).as("by a save with no unit of work current").contains(1L);
+    }
+
+    /**
+     * The subscription ends while something holds the gate lock briefly: the gaps given up on are still given up with
+     * the gap handler - the end waits for the lock, as there is no next event to try again with
+     */
+    @Test
+    void a_gap_given_up_on_is_given_up_when_the_subscription_ends_while_the_gate_lock_is_held_briefly() throws Exception {
+        setupDeferringGapRecording(Duration.ofMillis(300), List.of());
+        var received = subscribe();
+        poll(1, 3);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L)));
+        // A save records the gap kept in memory, so giving it up is a statement
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+        assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).containsExactly(LongRange.only(2));
+        await().pollDelay(Duration.ofMillis(400)).atMost(Duration.ofSeconds(5)).until(() -> true);
+        var gateLock = gateLock();
+
+        // Right before the end gives the gaps up - when it asks for a unit of work - another thread takes the gate lock for 50 ms
+        var ending = Thread.currentThread();
+        var taken  = new AtomicInteger();
+        doAnswer(inv -> {
+            if (Thread.currentThread().equals(ending) && taken.getAndIncrement() == 0) {
+                var held = new CountDownLatch(1);
+                Thread.ofPlatform().daemon().start(() -> {
+                    gateLock.lock();
+                    try {
+                        held.countDown();
+                        new CountDownLatch(1).await(50, TimeUnit.MILLISECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } finally {
+                        gateLock.unlock();
+                    }
+                });
+                held.await(5, TimeUnit.SECONDS);
+            }
+            return Optional.empty();
+        }).when(uowFactory).getCurrentUnitOfWork();
+
+        subscriptions.forEach(Disposable::dispose);
+
+        assertThat(taken.get()).as("the lock was held as the end gave the gaps up").isPositive();
+        assertThat(gapHandler.givenUp).containsExactly(List.of(2L));
+    }
+
+    /**
+     * Starts a resume point save on a thread with a unit of work current, whose recording blocks on {@code mayEnd} -
+     * holding the gate lock - and returns once the save's wait ran out
+     */
+    private void blockARecording(CountDownLatch mayEnd) throws InterruptedException {
+        gapHandler.addingTransientGapsMayEnd = mayEnd;
+        var outcome              = new CopyOnWriteArrayList<String>();
+        var callerWithUnitOfWork = Thread.ofPlatform().daemon().unstarted(() -> outcome.add(outcomeOf(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close())));
+        doAnswer(inv -> Thread.currentThread().equals(callerWithUnitOfWork) ? Optional.of(mock(EventStoreUnitOfWork.class)) : Optional.empty())
+                .when(uowFactory).getCurrentUnitOfWork();
+        callerWithUnitOfWork.start();
+        callerWithUnitOfWork.join(Duration.ofSeconds(5));
+        assertThat(outcome).as("the recording outlasted the save's wait").containsExactly("IllegalStateException");
+    }
+
+    /**
+     * @return the gate lock of the one running subscription of {@link #SUBSCRIBER}
+     */
+    private java.util.concurrent.locks.ReentrantLock gateLock() throws ReflectiveOperationException {
+        var gatesField = CdcEventStore.class.getDeclaredField("runningDeliveryGates");
+        gatesField.setAccessible(true);
+        var gates    = (Map<?, ? extends Set<?>>) gatesField.get(cdcEventStore);
+        var gate     = gates.values().iterator().next().iterator().next();
+        var lockField = gate.getClass().getDeclaredField("deferredGapsLock");
+        lockField.setAccessible(true);
+        return (java.util.concurrent.locks.ReentrantLock) lockField.get(gate);
+    }
+
+    /**
      * A save waits for its gates' recordings within one wait, not one wait per gate: a gate's recording gets only what
      * the gates before it left of the wait, so a save with a unit of work current never stalls once per gate
      */
@@ -742,9 +939,16 @@ class CdcEventStoreDeliveryGateTest {
      * As {@link #setupDeferringGapRecording()}, the first subscription given {@link #gapHandler} and each later one the
      * next of {@code laterSubscriptionsGapHandlers}, so their recordings do not share a gap handler's monitor
      */
-    @SuppressWarnings("unchecked")
     private void setupDeferringGapRecording(List<RecordingGapHandler> laterSubscriptionsGapHandlers) {
-        setup(Duration.ofSeconds(10));
+        setupDeferringGapRecording(Duration.ofSeconds(10), laterSubscriptionsGapHandlers);
+    }
+
+    /**
+     * As {@link #setupDeferringGapRecording(List)}, the gap handler giving a gap up after {@code giveUpThreshold}
+     */
+    @SuppressWarnings("unchecked")
+    private void setupDeferringGapRecording(Duration giveUpThreshold, List<RecordingGapHandler> laterSubscriptionsGapHandlers) {
+        setup(giveUpThreshold);
         PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> gapHandlers = mock(PostgresqlEventStreamGapHandler.class);
         when(gapHandlers.gapHandlerFor(any())).thenReturn(gapHandler, laterSubscriptionsGapHandlers.toArray(RecordingGapHandler[]::new));
         cdcEventStore = new CdcEventStore<>(delegate,
