@@ -20,9 +20,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
-import dk.trustworks.essentials.shared.functional.tuple.Pair;
 import java.util.*;
-import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -106,17 +104,9 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
      * and, until it has, records every gap opened at once. Only those resume points are handed to the delegate: one found
      * unchanged here is left out, as it would not be written anyway, so that one its subscription advances after this
      * check is never written without its gaps recorded - a later save takes it.
-     * <p>
-     * Once waiting for one resume point's gaps to be recorded has run out or been interrupted (a {@link TimeoutException}
-     * or {@link InterruptedException} in the failure's cause chain), the changed resume points after it are tried with no
-     * wait left ({@link DeferredGapRecording#beforeResumePointSave(SubscriberId, AggregateType, long)} with a deadline that
-     * has passed): with the caller's unit of work still current, their recordings may be blocked by the same lock, and
-     * each would wait in turn. So one call waits for that at most once. One whose recording does not need to be waited for
-     * - nothing to record, say - is still saved; one whose recording would be waited for fails at once and is not saved.
      *
      * @throws GapsNotRecordedException after the delegate saved the other resume points, when the gaps of one or more
-     *                                  resume points could not be recorded, or not without a wait after a wait that ran
-     *                                  out - those were not saved and stay changed
+     *                                  resume points could not be recorded - those were not saved and stay changed
      */
     @Override
     public void saveResumePoints(Collection<SubscriptionResumePoint> resumePoints) {
@@ -124,7 +114,6 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
         var                     saves       = new ArrayList<DeferredGapRecording.ResumePointSave>(resumePoints.size());
         var                     savable     = new ArrayList<SubscriptionResumePoint>(resumePoints.size());
         GapsNotRecordedException notRecorded = null;
-        var                      waitRanOut  = false;
         try {
             for (var resumePoint : resumePoints) {
                 // Whether a resume point is changed is not stable - its subscription may advance it any moment. The
@@ -134,15 +123,10 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
                     continue;
                 }
                 try {
-                    saves.add(waitRanOut
-                              ? deferredGapRecording.beforeResumePointSave(resumePoint.getSubscriberId(), resumePoint.getAggregateType(), System.nanoTime())
-                              : deferredGapRecording.beforeResumePointSave(resumePoint.getSubscriberId(), resumePoint.getAggregateType()));
+                    saves.add(deferredGapRecording.beforeResumePointSave(resumePoint.getSubscriberId(), resumePoint.getAggregateType()));
                     savable.add(resumePoint);
                 } catch (RuntimeException e) {
                     notRecorded = GapsNotRecordedException.adding(notRecorded, resumePoint, e);
-                    if (isWaitThatRanOutOrWasInterrupted(e)) {
-                        waitRanOut = true;
-                    }
                 }
             }
             if (!savable.isEmpty()) {
@@ -161,15 +145,6 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
         }
     }
 
-    private static boolean isWaitThatRanOutOrWasInterrupted(Throwable failure) {
-        for (var cause = failure; cause != null; cause = cause.getCause()) {
-            if (cause instanceof TimeoutException || cause instanceof InterruptedException) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     /**
      * The gaps kept in memory for one or more resume points could not be recorded, so those resume points were not saved
      * (they stay {@link SubscriptionResumePoint#isChanged() changed}); the other resume points of the same call were. The
@@ -177,11 +152,6 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
      * ({@code IOExceptionUtil.isIOException} reads the root cause) - and each further failure is suppressed
      */
     static final class GapsNotRecordedException extends RuntimeException {
-        /**
-         * The message of each resume point's failure, by its subscriber and aggregate type, in the order they failed
-         */
-        private final Map<Pair<SubscriberId, AggregateType>, String> notRecorded = new LinkedHashMap<>();
-
         private GapsNotRecordedException(String message, Throwable cause) {
             super(message, cause);
         }
@@ -189,22 +159,11 @@ final class GapRecordingBeforeSaveDurableSubscriptionRepository implements Durab
         static GapsNotRecordedException adding(GapsNotRecordedException earlier, SubscriptionResumePoint resumePoint, RuntimeException failure) {
             var message = "Could not record the gaps kept in memory of [" + resumePoint.getSubscriberId() + "-" + resumePoint.getAggregateType() +
                     "] - its resume point " + resumePoint.getResumeFromAndIncluding() + " was not saved: " + failure.getMessage();
-            GapsNotRecordedException result;
             if (earlier == null) {
-                result = new GapsNotRecordedException(message, failure);
-            } else {
-                earlier.addSuppressed(new GapsNotRecordedException(message, failure));
-                result = earlier;
+                return new GapsNotRecordedException(message, failure);
             }
-            result.notRecorded.putIfAbsent(Pair.of(resumePoint.getSubscriberId(), resumePoint.getAggregateType()), message);
-            return result;
-        }
-
-        /**
-         * @return the message of each resume point that was not saved, by its subscriber and aggregate type
-         */
-        Map<Pair<SubscriberId, AggregateType>, String> notRecorded() {
-            return Collections.unmodifiableMap(notRecorded);
+            earlier.addSuppressed(new GapsNotRecordedException(message, failure));
+            return earlier;
         }
     }
 

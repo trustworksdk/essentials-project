@@ -505,41 +505,17 @@ is still open when the subscriber's resume point is next saved (periodically, on
 always written before that save. A gap that fills before then costs no database write at all. The crash guarantee is
 unchanged: no resume point is saved past a gap that is not recorded. The gap is written in a transaction of its own,
 committed before the save goes on, also when the save runs inside a unit of work of the caller's, or inside a Spring
-transaction with no unit of work bound yet - a rollback of that unit of work or transaction cannot take it back. There, the write runs on a virtual thread and is waited for at most 10 s per resume point, however many
-subscriptions the subscriber runs; if that runs out, that resume point is not saved, and the changed resume points after
-it in the same save get no wait of their own: one with no gaps to write is still saved, one whose write would have to be
-waited for is not, and the next save tries those again (`9fa05c32c`, `e3e204865`). Should that
-write fail after the wait ran out, the failure is logged at WARN, naming the write's thread, and its gaps stay kept for
-the next save (`6a32ac597`). While such a write still runs, a later save or the
+transaction with no unit of work bound yet - a rollback of that unit of work or transaction cannot take it back. There, the write runs on a virtual thread and is waited for at most 10 s; if that
+runs out, the resume point is not saved and the next save tries again. While such a write still runs, a later save or the
 subscription's end on that thread waits for it at most 10 s too, instead of hanging. Any acknowledgement, on any
-thread, waits for a running gap recording at most 10 s and then returns as usual, so it never fails the subscriber's
-handler or stops the subscription through its error policy; the gap recording resolves the gap of a gap fill it
-acknowledged once that recording commits (`fc5127f70`) - and only once the unit of work that acknowledged it has
-committed: should that unit of work roll back, the gap stays open, so the fill is still owed after a restart and the
-subscriber's retry acknowledges it again; the same holds for a gap fill whose gap was only kept in memory, which is
-forgotten only once the acknowledging unit of work has committed, also under a Spring transaction with no unit of work
-bound yet (`e6e0cb12f`). `awaitProcessed` does not wait for it: its check of a held
-gap fill only tries the gate's lock, and when the lock is busy treats the event as not processed yet and asks again at
-its next check (`8b99e122e`, `10cc0c7cc`); while such a recording runs every event of that subscriber and
-aggregate type counts as not processed yet (`a01c8e746`). Delivering an event no longer waits
-without a limit for the gate's lock while such a recording holds it, but an event that opens a gap that must be
-recorded at once still waits for that recording (`fc5127f70`). While such a recording holds the lock, delivering waits
-for it once rather than once per event that opens a gap, fills one or is a duplicate; a duplicate dropped meanwhile is
-acknowledged to the delegate's poll once the recording ends, unless the subscriber still holds it; and a subscription
-that ends while the lock is briefly taken still records the gaps it gave up on (`3ca677809`). A save whose gaps could not be written (that
+thread, waits for a running gap recording at most 10 s and then fails, and the gap of a gap fill it acknowledged is
+recorded and stays open, so a later subscription delivers that event again. `awaitProcessed` likewise waits for it at
+most 10 s per check and then treats the event as not processed yet (`8b99e122e`). A save whose gaps could not be written (that
 timeout, or an unreachable database) saves the other resume points and then fails, so a stop or lock release stops
 retrying it at once and a shutdown treats an unreachable database as one, instead of retrying it every 100 ms for up
 to 5 s. A reset (`EventStoreSubscription#resetFrom`, `DefaultEventStoreSubscriptionManager#resetStoredResumePoint`)
 whose gaps could not be written now fails with an exception instead of reporting a reset whose resume point was not
-saved (`85ad4303e`). When the manager's periodic or threshold save keeps failing that way for a subscriber and
-aggregate type, the first failure is logged at WARN with its stack trace, the repeats at DEBUG, and one WARN a minute
-counts them, instead of a WARN with a stack trace on every check (`5476460cc`). Another subscriber's first failure no
-longer restarts that count, and a subscription that is no longer active is forgotten, so a failure after it subscribes
-again is a WARN with its stack trace again (`e3e204865`). A save inside a unit of work no longer fails for a
-subscription that keeps no gap while a delivering thread or an acknowledgement holds its gate lock for a moment, and
-starts no recording to find that out; with less than 100 ms (or a tenth of the wait, when that is less) left of the
-save's wait, a subscription that does keep gaps fails it at once rather than start a recording that would outlast the
-wait (`10cc0c7cc`).
+saved (`85ad4303e`).
 
 There is nothing to configure. A few cases still write the gap at once, as before:
 

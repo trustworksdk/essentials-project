@@ -442,37 +442,16 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * See {@link DeferredGapRecording#beforeResumePointSave}: from now on until the save is closed, the subscriber's gates
      * record a gap the moment it opens; then the gaps they kept in memory are recorded, each gate's in a unit of work of
      * its own, committed before this returns - never in a unit of work current on the calling thread, which could roll
-     * back after the gates forgot the gaps. With such a unit of work, or a Spring transaction it would join, each gate
-     * records on a virtual thread of its own, and the calling thread waits for the gates' recordings at most
-     * {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT} in total for this call, not per gate: a gate with gaps still to
-     * record, reached once less than {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT_FLOOR} (or a tenth of the wait, when
-     * that is less) is left of that wait, throws at once without starting its recording; a gate with nothing to record
-     * returns at once, also while another thread holds its lock. In that order, so a gap
-     * is either kept by a gate when this records its gaps, or recorded when it opens - whichever event the resume point
-     * read afterwards has moved past
+     * back after the gates forgot the gaps. With such a unit of work, or a Spring transaction it would join, each gate records on a virtual thread of its own,
+     * waited for at most {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT}. In that order, so a gap is either kept by a
+     * gate when this records its gaps, or recorded when it opens - whichever event the resume point read afterwards has
+     * moved past
      *
-     * @throws IllegalStateException the wait for the gates' recordings ran out, or the calling thread was interrupted while
-     *                               waiting - the caller must not save the resume point, and should give the other resume
-     *                               points of the same save no wait
-     *                               ({@link #beforeResumePointSave(SubscriberId, AggregateType, long)} with a deadline that
-     *                               has passed): with its unit of work still current, their recordings may be blocked the
-     *                               same way
+     * @throws IllegalStateException the wait for a gate's recording ran out, or the calling thread was interrupted while
+     *                               waiting - the caller must not save the resume point
      */
     @Override
     public ResumePointSave beforeResumePointSave(SubscriberId subscriberId, AggregateType aggregateType) {
-        return beforeResumePointSave(subscriberId, aggregateType, System.nanoTime() + deferredGapsRecordingWait.toNanos());
-    }
-
-    /**
-     * {@link #beforeResumePointSave(SubscriberId, AggregateType)}, with the gates' recordings waited for until
-     * {@code waitEndsAt} (a {@link System#nanoTime()} value) instead of {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT}
-     * from now. When it has passed, or less than {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT_FLOOR} (or a tenth of
-     * the wait, when that is less) is left of it, a gate with nothing to record, or with no unit of work current on the
-     * calling thread (which records on the calling thread, not bounded by {@code waitEndsAt}), is unaffected, and a gate
-     * whose recording would be waited for throws at once
-     */
-    @Override
-    public ResumePointSave beforeResumePointSave(SubscriberId subscriberId, AggregateType aggregateType, long waitEndsAt) {
         requireNonNull(subscriberId, "No subscriberId provided");
         requireNonNull(aggregateType, "No aggregateType provided");
         var key   = new SubscriberAndAggregateType(subscriberId, aggregateType);
@@ -482,9 +461,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         try {
             var gates = runningDeliveryGates.get(key);
             if (gates != null) {
-                // One wait for the whole save, shared by its gates - not one wait per gate
                 for (var gate : List.copyOf(gates)) {
-                    gate.recordDeferredGapsCommitted(waitEndsAt);
+                    gate.recordDeferredGapsCommitted();
                 }
             }
             return save;
@@ -494,8 +472,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             throw new IllegalStateException("Interrupted while recording the gaps of " + subscriberId + " for " + aggregateType + " kept in memory, before a resume point save", e);
         } catch (TimeoutException e) {
             save.close();
-            throw new IllegalStateException("Recording the gaps of " + subscriberId + " for " + aggregateType + " kept in memory did not finish within the wait " +
-                                                    "left for this resume point save (at most " + deferredGapsRecordingWait + ")", e);
+            throw new IllegalStateException("Recording the gaps of " + subscriberId + " for " + aggregateType + " kept in memory did not finish within " +
+                                                    deferredGapsRecordingWait + ", before a resume point save", e);
         } catch (RuntimeException e) {
             save.close();
             throw e;
@@ -511,52 +489,22 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
     }
 
     /**
-     * @return the least wait left for which a resume point save with a unit of work current starts a gate's recording on a
-     * virtual thread: {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT_FLOOR}, or a tenth of
-     * {@code deferredGapsRecordingWait} when that is less - so a test that shortens the wait keeps a floor below it
-     */
-    Duration deferredGapsRecordingWaitFloor() {
-        var tenth = deferredGapsRecordingWait.dividedBy(10);
-        return tenth.compareTo(DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT_FLOOR) < 0 ? tenth : DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT_FLOOR;
-    }
-
-    /**
      * Runs {@code action} on a virtual thread named {@code threadName} and waits for it at most {@code wait}. On time, what
-     * it threw is thrown here; past the wait or an interrupt it goes on, unwaited for, and should it then fail, that
-     * failure is logged at WARN (once, by whichever of the two threads sees both the failure and the waiter gone), as no
-     * caller sees it
+     * it threw is thrown here; past the wait it goes on, unwaited for
      *
-     * @throws InterruptedException the calling thread was interrupted while waiting; {@code action} goes on
+     * @throws InterruptedException the calling thread was interrupted while waiting
      * @throws TimeoutException     {@code action} did not end within {@code wait}
      */
     static void runOnAVirtualThreadWaitingAtMost(String threadName, Duration wait, Runnable action) throws InterruptedException, TimeoutException {
         var failure = new AtomicReference<Throwable>();
-        // RUNNING, then FAILED (set by the virtual thread) and/or WAITER_GAVE_UP (set by the waiter): the side that
-        // finds the other's mark already set logs the failure no caller sees, so it is logged exactly once
-        var outcome = new AtomicInteger(RUNNING);
         var thread = Thread.ofVirtual().name(threadName).start(() -> {
             try {
                 action.run();
             } catch (Throwable e) {
                 failure.set(e);
-                if (outcome.getAndSet(FAILED) == WAITER_GAVE_UP) {
-                    logFailureNoCallerSees(threadName, wait, e);
-                }
             }
         });
-        boolean ended;
-        try {
-            ended = thread.join(wait);
-        } catch (InterruptedException e) {
-            if (outcome.getAndSet(WAITER_GAVE_UP) == FAILED) {
-                logFailureNoCallerSees(threadName, wait, failure.get());
-            }
-            throw e;
-        }
-        if (!ended) {
-            if (outcome.getAndSet(WAITER_GAVE_UP) == FAILED) {
-                logFailureNoCallerSees(threadName, wait, failure.get());
-            }
+        if (!thread.join(wait)) {
             throw new TimeoutException(threadName + " did not end within " + wait);
         }
         switch (failure.get()) {
@@ -566,14 +514,6 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             case Error e -> throw e;
             default -> throw new IllegalStateException(failure.get());
         }
-    }
-
-    private static final int RUNNING        = 0;
-    private static final int FAILED         = 1;
-    private static final int WAITER_GAVE_UP = 2;
-
-    private static void logFailureNoCallerSees(String threadName, Duration wait, Throwable failure) {
-        log.warn("'{}' failed after its caller stopped waiting for it (the wait of {} ran out or the caller was interrupted), so no caller sees this failure", threadName, wait, failure);
     }
 
     /**
@@ -1166,7 +1106,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * awaiting acknowledgement, so the gap handler never promotes their gaps.
      * <p>
      * A gap the tracker gives up on after waiting the gap handler's give-up threshold for it is recorded with the gap
-     * handler too ({@link #recordGivenUpGaps(boolean)}), so the transient gaps a later subscription waits for agree with what
+     * handler too ({@link #recordGivenUpGaps()}), so the transient gaps a later subscription waits for agree with what
      * this one stopped waiting for: an event that fills a given-up gap late is dropped by both. Recorded with the next
      * event delivered, and when the subscription ends; a gap the tracker gives up on because it waits for too many at
      * once is not, as its transaction may still be in flight - a later subscription waits for it again.
@@ -1200,21 +1140,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * How long a thread with a unit of work current waits for the gaps kept in memory to be recorded on a virtual thread
          * of their own (see {@link #recordDeferredGapsCommitted()}): one short unit of work, unless a lock the waiting
          * thread's unit of work holds blocks it - then the wait ends instead of hanging the save or the subscription's end.
-         * Also the longest an acknowledgement ({@link #withoutFillsOfUnrecordedGaps}), the delivering thread's checks of an
-         * opened gap, a fill and a dropped event - once per stall, not once per event ({@link #lockedOnDeliveringThread})
-         * - and the subscription's end recording the gaps given up on wait for {@link #deferredGapsLock} - see there for
-         * what each does when the wait runs out. {@link #isAwaitedAsGap}'s check of a held fill
-         * ({@link #isAwaitedAsFillOfAnUnrecordedGap}) does not wait for it at all
+         * Also the longest an acknowledgement waits for {@link #deferredGapsLock} (see {@link #withoutFillsOfUnrecordedGaps}),
+         * and {@link #isAwaitedAsGap}'s check of a held fill (see {@link #isAwaitedAsFillOfAnUnrecordedGap})
          */
         static final Duration DEFERRED_GAPS_RECORDING_WAIT = Duration.ofSeconds(10);
-        /**
-         * The least wait left for which a resume point save with a unit of work current starts a gate's recording on a
-         * virtual thread - or a tenth of {@code deferredGapsRecordingWait}, when that is less (see
-         * {@link CdcEventStore#deferredGapsRecordingWaitFloor()}). With less left, the save would almost certainly stop waiting before
-         * that recording's unit of work commits, and the recording would go on holding {@link #deferredGapsLock}, making
-         * the gate's acknowledgements and checks fall back for nothing: the gate throws at once instead
-         */
-        static final Duration DEFERRED_GAPS_RECORDING_WAIT_FLOOR = Duration.ofMillis(100);
 
         /**
          * @return {@code orders} as runs of consecutive orders, ascending
@@ -1258,35 +1187,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         /**
          * Guards the two collections below; held across {@link #recordDeferredGaps()}'s commit, so an acknowledgement
          * never resolves a fill whose gap that is still recording. Taken before the gap handler's monitor, never after.
-         * A recording that outlasted {@link #DEFERRED_GAPS_RECORDING_WAIT} may hold it - and the gap handler's monitor -
-         * while it waits for a database lock a unit of work on another thread holds, a wait PostgreSQL cannot see as a
-         * deadlock; and that thread may wait for this subscription. So only {@link #recordDeferredGaps()}, which runs on a
-         * thread with no unit of work, waits for it without a limit. Every other path either does not wait for it, or waits
-         * at most {@code deferredGapsRecordingWait} and then falls back:
-         * <ul>
-         *     <li>a save's emptiness check only tries it, and else reads {@link #keepsUnrecorded} and the three queues
-         *     below without it: nothing kept, it returns; else it leaves the check to a recording;</li>
-         *     <li>the subscription's end sets {@link #ended} without it;</li>
-         *     <li>an acknowledgement ({@link #withoutFillsOfUnrecordedGaps}) leaves its events to the recording to settle,
-         *     once its unit of work commits, and returns;</li>
-         *     <li>{@link #isAwaitedAsGap}'s check of a held fill ({@link #isAwaitedAsFillOfAnUnrecordedGap}) only tries
-         *     it, and else answers "awaited";</li>
-         *     <li>on the delivering thread, which waits once per stall rather than once per event
-         *     ({@link #lockedOnDeliveringThread}: after one wait ran out, its later checks only try the lock until a
-         *     recording lets go of it or a check takes it): an opened gap ({@link #keptUnrecorded}) is kept without the
-         *     lock, in {@link #gapsKeptWhileLockBusy}; a fill ({@link #filledAnUnrecordedGap}) is taken for the fill of a
-         *     recorded gap; a dropped event ({@link #dropped}) goes to {@link #droppedWhileLockBusy}, and the lock's next
-         *     holder with no unit of work current acknowledges it to the delegate's poll unless it is a fill the subscriber
-         *     is not done with; and gaps
-         *     given up on ({@link #withoutUnrecordedGaps}) only try it, and else go back to the tracker for the next
-         *     event;</li>
-         *     <li>the subscription's end, recording the gaps given up on ({@link #withoutUnrecordedGaps}), waits for it at
-         *     most {@code deferredGapsRecordingWait} - only tries it while the delivering thread's wait is known to have
-         *     run out - and else hands them back to the tracker, for a later subscription to wait for again.</li>
-         * </ul>
-         * The fallbacks do not wait for the gap handler's monitor either - except an opened gap that a save in progress,
-         * the subscription's end or the per-subscription limit makes {@link #keptWhileLockBusy} refuse: that one is
-         * recorded at once, as without the fallback.
+         * A save's emptiness check, the subscription's end, an acknowledgement and {@link #isAwaitedAsGap}'s check of a
+         * held fill ({@link #isAwaitedAsFillOfAnUnrecordedGap}) never wait for it without a limit: each may run inside a
+         * unit of work, and a recording that outlasted {@link #DEFERRED_GAPS_RECORDING_WAIT} may hold it while it waits for
+         * a lock that very unit of work holds, a wait PostgreSQL cannot see as a deadlock
          */
         private final ReentrantLock                             deferredGapsLock        = new ReentrantLock();
         /**
@@ -1299,57 +1203,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          */
         private final TreeMap<Long, PersistedEvent>             unrecordedFillsNotDoneWith = new TreeMap<>();
         /**
-         * Whether {@link #unrecordedGaps} or {@link #unrecordedFillsNotDoneWith} may hold anything - false only when both
-         * are empty. Written under {@link #deferredGapsLock}, and only where they gain or lose entries, never per event;
-         * read without it by a save whose {@code tryLock} failed ({@link #recordDeferredGapsCommitted(long)}), so a lock
-         * held for a moment by a delivering thread or an acknowledgement does not make an empty gate's save wait or fail.
-         * Set before the entries are added ({@link #keptUnrecorded}, {@link #takeInGapsKeptWhileLockBusy()}), so a save
-         * that read false either finds the gap in {@link #gapsKeptWhileLockBusy} or was seen by the keeper's check of
-         * {@link #isResumePointSaveInProgress} - see {@link #recordDeferredGapsCommitted(long)}
-         */
-        private volatile boolean                                keepsUnrecorded;
-        /**
          * Once the subscription ended, every gap is recorded at once. Read under {@link #deferredGapsLock}, written without
          * it (see {@link #recordDeferredGapsAtEnd()})
          */
         private volatile boolean                                ended;
-        /**
-         * The gaps {@link #keptUnrecorded} kept while {@link #deferredGapsLock} was not free within
-         * {@code deferredGapsRecordingWait} - written without the lock, moved into {@link #unrecordedGaps} by the next
-         * holder ({@link #takeInGapsKeptWhileLockBusy()}). Empty but for that rare case
-         */
-        private final Queue<LongRange>                          gapsKeptWhileLockBusy   = new ConcurrentLinkedQueue<>();
-        /**
-         * How many orders {@link #gapsKeptWhileLockBusy} holds - bounded by {@link #MAX_DEFERRED_ORDERS_PER_SUBSCRIPTION}
-         */
-        private final AtomicLong                                ordersKeptWhileLockBusy = new AtomicLong();
-        /**
-         * The events acknowledged while {@link #deferredGapsLock} was not free within {@code deferredGapsRecordingWait}
-         * (see {@link #withoutFillsOfUnrecordedGaps}) - written without the lock, and only once the acknowledging unit of work
-         * committed ({@link #acknowledgedWhileLockBusyOnceCommitted}): a rollback leaves the gaps of its fills open. Also the
-         * events of a committed acknowledgement whose commit callback found the lock busy, or whose held fill a recording
-         * recorded before the commit ({@link #doneWithOnceCommitted}). Settled by the next acknowledgement or recording
-         * that holds the lock ({@link #settleAcknowledgedWhileLockBusy()}). Empty but for those rare cases
-         */
-        private final Queue<PersistedEvent>                     acknowledgedWhileLockBusy = new ConcurrentLinkedQueue<>();
-        /**
-         * Adds an acknowledgement's events to {@link #acknowledgedWhileLockBusy} once its unit of work committed (see
-         * {@link #acknowledgedWhileLockBusyOnceCommitted})
-         */
-        private final AcknowledgedWhileLockBusyOnceCommitted    queuedOnceCommitted     = new AcknowledgedWhileLockBusyOnceCommitted();
-        /**
-         * The events {@link #dropped} while {@link #deferredGapsLock} was not free - written without the lock, settled by
-         * the lock's next holder with no unit of work current ({@link #settleDroppedWhileLockBusy()}): acknowledged to the delegate's poll unless a fill
-         * the subscriber is not done with. Empty but for that rare case
-         */
-        private final Queue<PersistedEvent>                     droppedWhileLockBusy    = new ConcurrentLinkedQueue<>();
-        /**
-         * Set once a wait of the delivering thread for {@link #deferredGapsLock} ran out (or was interrupted): its later
-         * checks then only try the lock, rather than each waiting {@code deferredGapsRecordingWait} again behind the same
-         * blocked recording. Cleared by a recording as it lets go of the lock, and by a delivering-thread check that takes
-         * it. See {@link #lockedOnDeliveringThread()}
-         */
-        private volatile boolean                                deliveringThreadStalled;
 
         private DeliveryGate(CdcDeliveryTracker tracker, AggregateType aggregateType, Optional<SubscriberId> subscriberId, Optional<SubscriptionGapHandler> gapHandler) {
             this.tracker = tracker;
@@ -1372,7 +1229,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         public boolean deliver(PersistedEvent event) {
             long globalOrder = event.globalEventOrder().longValue();
             var  delivery    = tracker.markDelivered(globalOrder);
-            recordGivenUpGaps(false);
+            recordGivenUpGaps();
             switch (delivery.kind()) {
                 case OPENED_GAP -> {
                     var awaitedGaps = delivery.durablyAwaitedGapsBelow(globalOrder);
@@ -1397,16 +1254,14 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * would otherwise keep a gap fill they handed on waiting for an acknowledgement that never comes - its gap neither
          * resolved nor promoted for as long as the poll lives, as an awaiting fill's gap is never promoted. Not a gap fill
          * the gate let through earlier that the subscriber is not done with: its gap is the record that it is still owed,
-         * and the subscriber's acknowledgement reaches the delegate too. Should the gate lock not be free on the delivering
-         * thread, the event is acknowledged by the lock's next holder instead (see
-         * {@link #isFillOfAnUnrecordedGapNotDoneWith}).
+         * and the subscriber's acknowledgement reaches the delegate too.
          */
         @Override
         public void dropped(PersistedEvent event) {
             if (gapFillsBeingHandedOn.isPresent() && gapFillsBeingHandedOn.get().isAwaiting(event)) {
                 return;
             }
-            if (isFillOfAnUnrecordedGapNotDoneWith(event)) {
+            if (isFillOfAnUnrecordedGapNotDoneWith(event.globalEventOrder().longValue())) {
                 return;
             }
             delegateAcknowledgement.acknowledge(event);
@@ -1434,12 +1289,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * handed. Resolves the gaps of the gap fills among them (see {@link GapFillsAwaitingAcknowledgement#acknowledged}),
          * and acknowledges them to the delegate's polls - also when resolving them failed, so the delegate is never left
          * waiting for a fill it handed on. Never waits for {@link #deferredGapsLock} longer than
-         * {@code deferredGapsRecordingWait}: the subscriber's unit of work may hold a lock a recording that holds it waits
-         * for. Past that wait it returns as usual, having acknowledged {@code events} to the delegate's polls, and leaves
-         * the gaps of the fills among them to that recording to settle - once the caller's unit of work commits, so a
-         * rollback leaves them open (see {@link #withoutFillsOfUnrecordedGaps}).
+         * {@code deferredGapsRecordingWait} (see {@link #withoutFillsOfUnrecordedGaps}): the subscriber's unit of work may
+         * hold a lock a recording that holds it waits for.
          *
-         * @throws RuntimeException a failure to resolve them inside the caller's unit of work - the gaps stay open
+         * @throws RuntimeException a failure to resolve them inside the caller's unit of work, or a recording of the gaps
+         *                          kept in memory that held {@link #deferredGapsLock} past that wait - the gaps stay open
          */
         void acknowledged(List<PersistedEvent> events) {
             try {
@@ -1510,12 +1364,6 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * gap recording, the gap is narrow (no middle awaited in memory only, at most {@link #MAX_DEFERRED_ORDERS_PER_GAP}
          * orders), no more than {@link #MAX_DEFERRED_ORDERS_PER_SUBSCRIPTION} orders are kept, and no resume point save of
          * the subscriber is in progress: the resume point that save reads may already be past this gap's event.
-         * <p>
-         * Runs on the delivering thread: waits for {@link #deferredGapsLock} at most {@code deferredGapsRecordingWait}, once
-         * per stall ({@link #lockedOnDeliveringThread()}). When the lock is not taken, the gap is kept without it, in
-         * {@link #gapsKeptWhileLockBusy}, which the lock's next holder takes in - not recorded at once: that would wait for
-         * the gap handler's monitor, which a recording blocked inside {@code addTransientGaps} holds as well. Kept that
-         * way, the gaps of one subscription may add up to twice {@link #MAX_DEFERRED_ORDERS_PER_SUBSCRIPTION}.
          *
          * @return true if kept, false if the gap is to be recorded now
          */
@@ -1523,19 +1371,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             if (!defersGapRecording || awaitedGaps.size() != 1) return false;
             var  gap   = awaitedGaps.getFirst();
             long width = gap.toInclusive - gap.fromInclusive + 1;
-            if (width > MAX_DEFERRED_ORDERS_PER_GAP) return false;
-            if (!lockedOnDeliveringThread()) {
-                return keptWhileLockBusy(gap, width);
-            }
+            deferredGapsLock.lock();
             try {
-                takeInGapsKeptWhileLockBusy();
-                // Before the checks of a save or the end below: a save that reads it unset without the lock raised its
-                // counter (or the end set ended) before that read, so the checks below see it and refuse
-                if (!keepsUnrecorded) keepsUnrecorded = true;
-                if (ended ||
+                if (ended || width > MAX_DEFERRED_ORDERS_PER_GAP ||
                         unrecordedGaps.size() + unrecordedFillsNotDoneWith.size() + width > MAX_DEFERRED_ORDERS_PER_SUBSCRIPTION ||
                         isResumePointSaveInProgress(key())) {
-                    noteWhatIsKept();
                     return false;
                 }
                 gap.stream().forEach(unrecordedGaps::add);
@@ -1546,88 +1386,14 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         }
 
         /**
-         * {@link #keptUnrecorded} without {@link #deferredGapsLock}: the same checks, read without it, and checked again
-         * once the gap is in {@link #gapsKeptWhileLockBusy} - a save or the subscription's end that began meanwhile either
-         * takes the gap in under the lock (its recording does, before it records), or the gap is taken back out here and
-         * recorded now
-         *
-         * @return true if kept, false if the gap is to be recorded now
-         */
-        private boolean keptWhileLockBusy(LongRange gap, long width) {
-            if (ended || isResumePointSaveInProgress(key())) return false;
-            if (ordersKeptWhileLockBusy.addAndGet(width) > MAX_DEFERRED_ORDERS_PER_SUBSCRIPTION) {
-                ordersKeptWhileLockBusy.addAndGet(-width);
-                return false;
-            }
-            gapsKeptWhileLockBusy.add(gap);
-            if ((ended || isResumePointSaveInProgress(key())) && gapsKeptWhileLockBusy.remove(gap)) {
-                ordersKeptWhileLockBusy.addAndGet(-width);
-                return false;
-            }
-            log.debug("[{}-{}] Kept the gap {} in memory without the gate lock, which was not free within {}",
-                      subscriberId.orElseThrow(), aggregateType, gap, deferredGapsRecordingWait);
-            return true;
-        }
-
-        /**
-         * Moves the gaps kept without {@link #deferredGapsLock} into {@link #unrecordedGaps}. Called holding the lock
-         */
-        private void takeInGapsKeptWhileLockBusy() {
-            if (gapsKeptWhileLockBusy.isEmpty()) return;
-            // Before a gap leaves the queue: a save reading both without the lock never finds it in neither
-            if (!keepsUnrecorded) keepsUnrecorded = true;
-            for (var gap = gapsKeptWhileLockBusy.poll(); gap != null; gap = gapsKeptWhileLockBusy.poll()) {
-                ordersKeptWhileLockBusy.addAndGet(-(gap.toInclusive - gap.fromInclusive + 1));
-                gap.stream().forEach(unrecordedGaps::add);
-            }
-        }
-
-        /**
-         * Sets {@link #keepsUnrecorded} to what {@link #unrecordedGaps} and {@link #unrecordedFillsNotDoneWith} hold - written
-         * only when that changes. Called holding {@link #deferredGapsLock}, after they lost entries
-         */
-        private void noteWhatIsKept() {
-            var keeps = !unrecordedGaps.isEmpty() || !unrecordedFillsNotDoneWith.isEmpty();
-            if (keeps != keepsUnrecorded) keepsUnrecorded = keeps;
-        }
-
-        /**
-         * Settles the events acknowledged without {@link #deferredGapsLock}: a fill of a gap kept in memory among them is
-         * done with from now on, as {@link #withoutFillsOfUnrecordedGaps} does with the lock. Called holding the lock
-         *
-         * @return the others - their gaps, if any, are recorded and to be resolved
-         * ({@link GapFillsAwaitingAcknowledgement#acknowledged})
-         */
-        private List<PersistedEvent> settleAcknowledgedWhileLockBusy() {
-            if (acknowledgedWhileLockBusy.isEmpty()) return List.of();
-            var others = new ArrayList<PersistedEvent>();
-            for (var event = acknowledgedWhileLockBusy.poll(); event != null; event = acknowledgedWhileLockBusy.poll()) {
-                if (unrecordedFillsNotDoneWith.remove(event.globalEventOrder().longValue()) == null) {
-                    others.add(event);
-                }
-            }
-            noteWhatIsKept();
-            return others;
-        }
-
-        /**
-         * Runs on the delivering thread: waits for {@link #deferredGapsLock} at most {@code deferredGapsRecordingWait}, once
-         * per stall ({@link #lockedOnDeliveringThread()}). When the lock is not taken, {@code fill} is taken for the fill
-         * of a recorded gap - and handed to {@link #gapFillsBeingHandedOn} by the caller. Only a recording holds the lock
-         * that long, and it records the gap of an order still in {@link #unrecordedGaps}, so the subscriber's
-         * acknowledgement resolves that gap. Should the recording fail, or the gap be one kept without the lock
-         * ({@link #gapsKeptWhileLockBusy}), the order stays kept, and a later recording records a gap whose event was
-         * delivered, so a later subscription delivers it again.
-         *
          * @return true if {@code fill} filled a gap kept in memory - then nothing is to be resolved when the subscriber is
          * done with it, unless a save records its gap meanwhile
          */
         private boolean filledAnUnrecordedGap(PersistedEvent fill) {
             if (!defersGapRecording) return false;
             long order = fill.globalEventOrder().longValue();
-            if (!lockedOnDeliveringThread()) return false;
+            deferredGapsLock.lock();
             try {
-                takeInGapsKeptWhileLockBusy();
                 if (!unrecordedGaps.remove(order)) return false;
                 unrecordedFillsNotDoneWith.put(order, fill);
                 return true;
@@ -1637,121 +1403,34 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         }
 
         /**
-         * For {@link #dropped}, on the delivering thread: waits for {@link #deferredGapsLock} as
-         * {@link #lockedOnDeliveringThread()} does. When the lock is not taken, {@code event} goes to
-         * {@link #droppedWhileLockBusy} - neither acknowledged to the delegate's poll now nor forgotten: the lock's next
-         * holder with no unit of work current acknowledges it unless it is a fill the subscriber is not done with ({@link #settleDroppedWhileLockBusy()}).
-         * The lock is tried once more right after, for a recording that let go of it meanwhile, having settled the earlier
-         * ones only.
-         *
-         * @return true if {@code event} is the fill of a gap kept in memory that was handed on and is not done with, or
-         * was left to the lock's next holder - either way not to be acknowledged to the delegate's poll by the caller
+         * @return true if {@code order} is the fill of a gap kept in memory that was handed on and is not done with
          */
-        private boolean isFillOfAnUnrecordedGapNotDoneWith(PersistedEvent event) {
+        boolean isFillOfAnUnrecordedGapNotDoneWith(long order) {
             if (!defersGapRecording) return false;
-            boolean held;
-            if (lockedOnDeliveringThread()) {
-                held = unrecordedFillsNotDoneWith.containsKey(event.globalEventOrder().longValue());
-            } else {
-                droppedWhileLockBusy.add(event);
-                if (!deferredGapsLock.tryLock()) return true;
-                held = true;
-            }
-            List<PersistedEvent> notHeld;
+            deferredGapsLock.lock();
             try {
-                notHeld = settleDroppedWhileLockBusy();
+                return unrecordedFillsNotDoneWith.containsKey(order);
             } finally {
                 deferredGapsLock.unlock();
             }
-            acknowledgeDroppedToDelegate(notHeld);
-            return held;
-        }
-
-        /**
-         * Takes the events {@link #dropped} without {@link #deferredGapsLock}, and leaves out those the subscriber is not
-         * done with: a fill of a gap kept in memory ({@link #unrecordedFillsNotDoneWith}), or one of a recorded gap
-         * ({@link #gapFillsBeingHandedOn}) - the subscriber's own acknowledgement reaches the delegate's poll for those.
-         * Called holding the lock; the caller acknowledges the result after letting go of it
-         * ({@link #acknowledgeDroppedToDelegate})
-         *
-         * @return the dropped events to acknowledge to the delegate's poll
-         */
-        private List<PersistedEvent> settleDroppedWhileLockBusy() {
-            if (droppedWhileLockBusy.isEmpty()) return List.of();
-            var notHeld = new ArrayList<PersistedEvent>();
-            for (var event = droppedWhileLockBusy.poll(); event != null; event = droppedWhileLockBusy.poll()) {
-                if (unrecordedFillsNotDoneWith.containsKey(event.globalEventOrder().longValue())) continue;
-                if (gapFillsBeingHandedOn.isPresent() && gapFillsBeingHandedOn.get().isAwaiting(event)) continue;
-                notHeld.add(event);
-            }
-            return notHeld;
-        }
-
-        /**
-         * {@link #settleDroppedWhileLockBusy()}, but only on a thread with no unit of work or Spring transaction current
-         * ({@link TransactionProbe#isUnitOfWorkActive}): the delegate's acknowledgement resolves the gaps the dropped events
-         * fill in the current unit of work, which belongs to the caller - its rollback would lose them, already taken off
-         * {@link #droppedWhileLockBusy}, and a failure to resolve them could fail the caller's commit. With one current,
-         * they are left for a holder of the lock with none (a dropped check on the delivering thread, or a recording).
-         * Called holding the lock; costs one {@code isEmpty()} check when nothing was dropped without it
-         *
-         * @return the dropped events to acknowledge to the delegate's poll; empty when a unit of work is current
-         */
-        private List<PersistedEvent> settleDroppedWhileLockBusyWithNoUnitOfWorkCurrent() {
-            if (droppedWhileLockBusy.isEmpty() || TransactionProbe.isUnitOfWorkActive(unitOfWorkFactory)) return List.of();
-            return settleDroppedWhileLockBusy();
-        }
-
-        /**
-         * Acknowledges the events {@link #settleDroppedWhileLockBusy()} returned to the delegate's poll, not holding
-         * {@link #deferredGapsLock}. A failure is logged rather than thrown: the caller is settling events another call
-         * dropped, and the delegate's poll is left waiting for them - as it was before they were settled
-         */
-        private void acknowledgeDroppedToDelegate(List<PersistedEvent> notHeld) {
-            if (notHeld.isEmpty()) return;
-            try {
-                delegateAcknowledgement.acknowledge(notHeld);
-            } catch (RuntimeException e) {
-                log.warn("[{}-{}] Could not acknowledge the events {} dropped while the gate lock was busy to the delegate's poll",
-                         subscriberId.orElseThrow(), aggregateType, notHeld.stream().map(event -> event.globalEventOrder().longValue()).toList(), e);
-            }
-        }
-
-        /**
-         * Takes {@link #deferredGapsLock} for a check on the delivering thread: waits for it at most
-         * {@code deferredGapsRecordingWait} - once per stall, not once per event. When that wait runs out, or the thread
-         * is interrupted waiting, {@link #deliveringThreadStalled} is set, and the delivering thread's later checks only
-         * try the lock, falling back at once, until a recording lets go of it ({@link #recordDeferredGaps()} clears the
-         * mark) or one of these checks takes it. Only a recording blocked by a database lock holds the gate lock that
-         * long, so every event that opens a gap, fills one or is dropped would otherwise wait the whole
-         * {@code deferredGapsRecordingWait} again behind the same recording. Costs one volatile read when the lock is
-         * free.
-         *
-         * @return true if taken
-         */
-        private boolean lockedOnDeliveringThread() {
-            if (deliveringThreadStalled) {
-                if (!deferredGapsLock.tryLock()) return false;
-                deliveringThreadStalled = false;
-                return true;
-            }
-            if (tryLockOrRestoreInterrupt(deferredGapsRecordingWait)) return true;
-            deliveringThreadStalled = true;
-            return false;
         }
 
         /**
          * {@link #isFillOfAnUnrecordedGapNotDoneWith} for {@link #isAwaitedAsGap}, which {@code awaitProcessed} may ask
-         * inside a unit of work: only tries {@link #deferredGapsLock}, and never waits for it - when it is busy, the order
-         * is answered as awaited, and {@code awaitProcessed} asks again after its poll interval, which a wait here would
-         * only hold past the timeout its caller asked for
+         * inside a unit of work: waits for {@link #deferredGapsLock} at most {@code deferredGapsRecordingWait}
          *
          * @return true if {@code order} is the fill of a gap kept in memory that was handed on and is not done with - and
-         * also when the lock was not free: still awaited, as far as the gate can tell, so the caller asks again later
+         * also when the lock was not free within the wait or the thread was interrupted waiting for it: still awaited,
+         * as far as the gate can tell, so the caller asks again later
          */
         boolean isAwaitedAsFillOfAnUnrecordedGap(long order) {
             if (!defersGapRecording) return false;
-            if (!deferredGapsLock.tryLock()) return true;
+            try {
+                if (!tryLockWithin(deferredGapsRecordingWait)) return true;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return true;
+            }
             try {
                 return unrecordedFillsNotDoneWith.containsKey(order);
             } finally {
@@ -1771,197 +1450,34 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         }
 
         /**
-         * {@link #tryLockWithin}, for a caller that falls back when the lock is not taken: an interrupt while waiting
-         * counts as not taken, and the thread's interrupt flag is set again
-         *
-         * @return true if taken
-         */
-        private boolean tryLockOrRestoreInterrupt(Duration wait) {
-            try {
-                return tryLockWithin(wait);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-        }
-
-        /**
          * Runs on the subscriber's thread, possibly inside its unit of work: waits for {@link #deferredGapsLock} at most
-         * {@code deferredGapsRecordingWait}. Never throws into the subscriber's handler: when the lock is not free within
-         * the wait, or the thread is interrupted waiting for it, and a last try of it fails too, none of {@code events} is
-         * resolved now - resolving waits for the gap handler's monitor, which a recording blocked inside
-         * {@code addTransientGaps} holds as well. They go to {@link #acknowledgedWhileLockBusy} once the subscriber's unit
-         * of work commits, or at once with none current ({@link #acknowledgedWhileLockBusyOnceCommitted}): its rollback
-         * leaves the gaps of the fills among them open, so the fills are still owed after a restart. Only a recording holds
-         * the lock that long, and it has already taken in every fill it records, so the recording settles them once it
-         * ends: a fill of a gap kept in memory is then done with if the recording failed, and else its recorded gap is
-         * resolved, in the recording's own unit of work. Events queued as the recording let go of the lock - a commit
-         * after it did, say - are settled by the next acknowledgement or recording that takes it. Holding the lock inside
-         * a unit of work or a Spring transaction, it leaves the fills of gaps kept in memory held until that unit of work
-         * commits ({@link #doneWithOnceCommitted}), so a rollback leaves them owed, as for a recorded gap. Holding the
-         * lock with no unit of work current, it also settles the events dropped
-         * without it ({@link #settleDroppedWhileLockBusyWithNoUnitOfWorkCurrent()}); inside the subscriber's unit of
-         * work it leaves them to a dropped check on the delivering thread or a recording.
+         * {@code deferredGapsRecordingWait}
          *
-         * @return {@code events} without the fills of gaps kept in memory, which are done with from now on - or, inside a
-         * unit of work, once it commits - plus the events acknowledged earlier without the lock that fill no gap kept in
-         * memory; empty when the lock was not taken
+         * @return {@code events} without the fills of gaps kept in memory, which are done with from now on
+         * @throws IllegalStateException the lock was not free within the wait, or the thread was interrupted waiting for
+         *                               it - nothing is done with: a fill of a gap kept in memory among them keeps its gap,
+         *                               recorded by the recording under way or by a later one, so a later subscription
+         *                               delivers it again
          */
         private List<PersistedEvent> withoutFillsOfUnrecordedGaps(List<PersistedEvent> events) {
             if (!defersGapRecording) return events;
-            // The recording may have let go of the lock as the wait ran out: tried once more, then settled as below
-            if (!tryLockOrRestoreInterrupt(deferredGapsRecordingWait) && !deferredGapsLock.tryLock()) {
-                acknowledgedWhileLockBusyOnceCommitted(events);
-                return List.of();
-            }
-            List<PersistedEvent> fillsOfRecordedGaps;
-            List<PersistedEvent> droppedNotHeld;
-            List<PersistedEvent> heldFillsDoneWithOnceCommitted = List.of();
+            var wait = deferredGapsRecordingWait;
             try {
-                var acknowledgedEarlier = settleAcknowledgedWhileLockBusy();
-                List<PersistedEvent> notFillsOfUnrecordedGaps;
-                if (unrecordedFillsNotDoneWith.isEmpty()) {
-                    notFillsOfUnrecordedGaps = events;
-                } else {
-                    var notHeld = new ArrayList<PersistedEvent>(events.size());
-                    var held    = new ArrayList<PersistedEvent>();
-                    for (var event : events) {
-                        (unrecordedFillsNotDoneWith.containsKey(event.globalEventOrder().longValue()) ? held : notHeld).add(event);
-                    }
-                    notFillsOfUnrecordedGaps = notHeld;
-                    if (!held.isEmpty()) {
-                        if (TransactionProbe.isUnitOfWorkActive(unitOfWorkFactory)) {
-                            // Held until the acknowledging unit of work commits: its rollback must leave the fill owed
-                            heldFillsDoneWithOnceCommitted = held;
-                        } else {
-                            held.forEach(event -> unrecordedFillsNotDoneWith.remove(event.globalEventOrder().longValue()));
-                            noteWhatIsKept();
-                        }
-                    }
+                if (!tryLockWithin(wait)) {
+                    throw new IllegalStateException("[" + subscriberId.orElseThrow() + "-" + aggregateType + "] The gaps kept in memory were still being recorded after " + wait +
+                                                            " - could not tell which of the acknowledged events fill them");
                 }
-                // After the fills just done with are forgotten: a dropped duplicate of one is no longer held
-                droppedNotHeld = settleDroppedWhileLockBusyWithNoUnitOfWorkCurrent();
-                if (acknowledgedEarlier.isEmpty()) {
-                    fillsOfRecordedGaps = notFillsOfUnrecordedGaps;
-                } else {
-                    acknowledgedEarlier.addAll(notFillsOfUnrecordedGaps);
-                    fillsOfRecordedGaps = acknowledgedEarlier;
-                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("[" + subscriberId.orElseThrow() + "-" + aggregateType + "] Interrupted while waiting for the gaps kept in memory to be recorded", e);
+            }
+            try {
+                if (unrecordedFillsNotDoneWith.isEmpty()) return events;
+                return events.stream()
+                             .filter(event -> unrecordedFillsNotDoneWith.remove(event.globalEventOrder().longValue()) == null)
+                             .toList();
             } finally {
                 deferredGapsLock.unlock();
-            }
-            if (!heldFillsDoneWithOnceCommitted.isEmpty()) {
-                doneWithOnceCommitted(heldFillsDoneWithOnceCommitted);
-            }
-            acknowledgeDroppedToDelegate(droppedNotHeld);
-            return fillsOfRecordedGaps;
-        }
-
-        /**
-         * {@link #withoutFillsOfUnrecordedGaps} could not take {@link #deferredGapsLock}: {@code events} go to
-         * {@link #acknowledgedWhileLockBusy} once the unit of work current on the acknowledging thread commits, and are
-         * left out of it should that unit of work roll back - their recorded gaps then stay open, the transient gap being
-         * the only durable record that a fill is still owed, and the subscriber's retry acknowledges them again. A Spring
-         * transaction with no unit of work bound yet counts as one: a unit of work that joins it is bound for the callback
-         * ({@link #unitOfWorkTheAcknowledgementCommitsWith()}). With neither current, they go there at once. Only on this
-         * fallback, never per event: one lifecycle callback registration per acknowledgement that falls back, and no wait -
-         * after the commit, the events are settled as {@link AcknowledgedWhileLockBusyOnceCommitted#settleCommitted} says.
-         */
-        private void acknowledgedWhileLockBusyOnceCommitted(List<PersistedEvent> events) {
-            var unitOfWork = unitOfWorkTheAcknowledgementCommitsWith();
-            if (unitOfWork.isPresent()) {
-                unitOfWork.get().registerLifecycleCallbackForResource(List.copyOf(events), queuedOnceCommitted);
-            } else {
-                acknowledgedWhileLockBusy.addAll(events);
-            }
-            log.debug("[{}-{}] The gate lock was not free within {} - the acknowledged events {} are settled by the next acknowledgement or recording that holds it{}",
-                      subscriberId.orElseThrow(), aggregateType, deferredGapsRecordingWait, events.stream().map(event -> event.globalEventOrder().longValue()).toList(),
-                      unitOfWork.isPresent() ? ", once the acknowledging unit of work commits" : "");
-        }
-
-        /**
-         * {@link #withoutFillsOfUnrecordedGaps} held the lock, inside a unit of work or a Spring transaction: the fills of
-         * gaps kept in memory among the acknowledged events stay in {@link #unrecordedFillsNotDoneWith} until that unit of
-         * work commits, so its rollback leaves them held - a save then records their gaps, and a restart delivers them
-         * again. Only for an acknowledgement that holds such a fill: one lifecycle callback registration, no wait
-         */
-        private void doneWithOnceCommitted(List<PersistedEvent> heldFills) {
-            var unitOfWork = unitOfWorkTheAcknowledgementCommitsWith();
-            if (unitOfWork.isPresent()) {
-                unitOfWork.get().registerLifecycleCallbackForResource(heldFills, queuedOnceCommitted);
-            } else {
-                queuedOnceCommitted.settleCommitted(heldFills);
-            }
-        }
-
-        /**
-         * @return the unit of work current on the acknowledging thread; under a Spring transaction with none bound yet, the
-         * one {@code getOrCreateNewUnitOfWork()} binds to join it; empty with neither
-         */
-        private Optional<? extends UnitOfWork> unitOfWorkTheAcknowledgementCommitsWith() {
-            var current = unitOfWorkFactory.getCurrentUnitOfWork();
-            if (current.isPresent() || !TransactionProbe.isUnitOfWorkActive(unitOfWorkFactory)) return current;
-            return Optional.of(unitOfWorkFactory.getOrCreateNewUnitOfWork());
-        }
-
-        /**
-         * Settles the events an acknowledgement left to its unit of work's commit (see
-         * {@link #acknowledgedWhileLockBusyOnceCommitted} and {@link #doneWithOnceCommitted}); a rollback leaves them out,
-         * their gaps open and their fills held
-         */
-        private final class AcknowledgedWhileLockBusyOnceCommitted implements UnitOfWorkLifecycleCallback<List<PersistedEvent>> {
-            @Override
-            public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<List<PersistedEvent>> associatedResources) {
-                return BeforeCommitProcessingStatus.COMPLETED;
-            }
-
-            @Override
-            public void afterCommit(UnitOfWork unitOfWork, List<List<PersistedEvent>> associatedResources) {
-                associatedResources.forEach(this::settleCommitted);
-            }
-
-            /**
-             * Only tries {@link #deferredGapsLock}, never waits for it: when taken, a fill among {@code events} still held
-             * in {@link #unrecordedFillsNotDoneWith} is done with from now on; every other event - and all of them when the
-             * lock is busy - goes to {@link #acknowledgedWhileLockBusy}, for the next acknowledgement or recording that
-             * holds the lock, which a resume point save counts as work. No unit of work is used here: one that resolves a
-             * recorded gap is that holder's
-             */
-            void settleCommitted(List<PersistedEvent> events) {
-                if (!deferredGapsLock.tryLock()) {
-                    acknowledgedWhileLockBusy.addAll(events);
-                    return;
-                }
-                try {
-                    for (var event : events) {
-                        if (unrecordedFillsNotDoneWith.remove(event.globalEventOrder().longValue()) == null) {
-                            acknowledgedWhileLockBusy.add(event);
-                        }
-                    }
-                    noteWhatIsKept();
-                } finally {
-                    deferredGapsLock.unlock();
-                }
-            }
-
-            @Override
-            public void beforeRollback(UnitOfWork unitOfWork, List<List<PersistedEvent>> associatedResources, Throwable causeOfTheRollback) {
-            }
-
-            @Override
-            public void afterRollback(UnitOfWork unitOfWork, List<List<PersistedEvent>> associatedResources, Throwable causeOfTheRollback) {
-                log.debug("[{}-{}] The unit of work that acknowledged the events {} rolled back - their gaps stay open, and their fills owed",
-                          subscriberId.orElseThrow(), aggregateType,
-                          associatedResources.stream().flatMap(List::stream).map(event -> event.globalEventOrder().longValue()).toList());
-            }
-
-            /**
-             * No pending change, as {@link GapFillsAwaitingAcknowledgement} reports for its resolutions: nothing is queued
-             * before the unit of work commits
-             */
-            @Override
-            public boolean hasPendingChanges(List<PersistedEvent> resource) {
-                return false;
             }
         }
 
@@ -1970,82 +1486,32 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * returns - never in a unit of work current on the calling thread, which the gate does not own: it could roll back
          * after the gate forgot the gaps, and a resume point saved past them later would then have nothing that makes a
          * restart wait for their events. With such a unit of work, or a Spring transaction it would join
-         * ({@link TransactionProbe#isUnitOfWorkActive}), the gaps are recorded on a virtual thread of their own, waited
-         * for at most {@link #DEFERRED_GAPS_RECORDING_WAIT}. Recording them in that unit of work and forgetting them only
-         * once it commits, as {@link GapFillsAwaitingAcknowledgement} forgets its fills, was not taken: the save window
-         * closes before the caller commits, so gaps kept from then on and a fill acknowledged meanwhile would have to be
-         * told apart from the recorded gaps - and the manager's saves are not expected to run inside a unit of work.
+         * ({@link TransactionProbe#isUnitOfWorkActive}), the gaps are recorded on a virtual thread of their own,
+         * waited for at most {@link #DEFERRED_GAPS_RECORDING_WAIT}.
          * <p>
          * With a unit of work current, the calling thread never waits for {@link #deferredGapsLock} itself: a recording
          * that outlasted an earlier wait may still hold it, blocked by a lock that unit of work holds. If another thread
-         * holds the lock, the calling thread tells an empty gate from its lock-free state
-         * ({@link #recordDeferredGapsCommitted(long)}); otherwise the virtual thread finds out what there is to record, and
-         * the calling thread waits for it no longer than for any recording.
+         * holds the lock, the virtual thread finds out whether there is anything to record, and the calling thread waits for
+         * it no longer than for any recording.
          *
          * @throws InterruptedException the calling thread was interrupted while waiting - the recording goes on
          * @throws TimeoutException     the recording did not end within {@link #DEFERRED_GAPS_RECORDING_WAIT}, for example
          *                              blocked by a lock the calling thread's unit of work holds, or behind a recording
-         *                              that is - it goes on, and the gaps stay kept until it commits; should it fail
-         *                              instead, that is logged at WARN and the gaps stay kept for the next call
+         *                              that is - it goes on, and the gaps stay kept until it commits
          * @throws RuntimeException     the gaps could not be recorded - they stay kept, for the next call
          */
         void recordDeferredGapsCommitted() throws InterruptedException, TimeoutException {
-            recordDeferredGapsCommitted(System.nanoTime() + deferredGapsRecordingWait.toNanos());
-        }
-
-        /**
-         * {@link #recordDeferredGapsCommitted()}, with the wait on a virtual thread ending at {@code waitEndsAt} (a
-         * {@link System#nanoTime()} value) rather than {@link #DEFERRED_GAPS_RECORDING_WAIT} from now - so a resume point
-         * save waits for all of its gates within one wait. Should less than {@link CdcEventStore#deferredGapsRecordingWaitFloor()} be
-         * left of it, no recording is started: it would almost certainly outlast the wait, and go on holding
-         * {@link #deferredGapsLock}.
-         * <p>
-         * Whether there is anything to record is checked under {@link #deferredGapsLock} when it is free. When it is not -
-         * held for a moment by a delivering thread or an acknowledgement, or by a recording - the check reads
-         * {@link #keepsUnrecorded} and the queues of what was kept, acknowledged or dropped without the lock, all without
-         * it: all empty, this returns at once, starting no recording and throwing nothing, however little is left of the
-         * wait. That read is as safe as the locked check: a resume point save raises the subscriber's save counter before
-         * it calls the gates, and {@link #keptUnrecorded} sets {@link #keepsUnrecorded} before it checks that counter, so
-         * a gap kept after this read is refused and recorded at once by its keeper; one kept without the lock is in
-         * {@link #gapsKeptWhileLockBusy} until the lock's holder has set {@link #keepsUnrecorded}. The other holders only
-         * take entries away, and settle what they take from the queues themselves. The subscription's end sets
-         * {@link #ended} before it calls this, with the same effect.
-         *
-         * @throws TimeoutException the recording did not end before {@code waitEndsAt}, or less than
-         *                          {@link CdcEventStore#deferredGapsRecordingWaitFloor()} was left of it - the gaps stay kept until a
-         *                          recording commits
-         */
-        void recordDeferredGapsCommitted(long waitEndsAt) throws InterruptedException, TimeoutException {
             if (!defersGapRecording) return;
-            if (!deferredGapsLock.tryLock()) {
-                // The queue first: a holder sets keepsUnrecorded before it takes a gap out of it
-                if (gapsKeptWhileLockBusy.isEmpty() && !keepsUnrecorded && acknowledgedWhileLockBusy.isEmpty() && droppedWhileLockBusy.isEmpty()) {
-                    return;
-                }
-            } else {
-                List<PersistedEvent> droppedNotHeld;
-                boolean              nothingToRecord;
+            if (deferredGapsLock.tryLock()) {
                 try {
-                    takeInGapsKeptWhileLockBusy();
-                    droppedNotHeld = settleDroppedWhileLockBusyWithNoUnitOfWorkCurrent();
-                    // An acknowledgement made without the lock is settled by the recording, which may resolve gaps; so is
-                    // an event dropped without it that was left in the queue because a unit of work is current here
-                    nothingToRecord = unrecordedGaps.isEmpty() && unrecordedFillsNotDoneWith.isEmpty() && acknowledgedWhileLockBusy.isEmpty()
-                                      && droppedWhileLockBusy.isEmpty();
+                    if (unrecordedGaps.isEmpty() && unrecordedFillsNotDoneWith.isEmpty()) return;
                 } finally {
                     deferredGapsLock.unlock();
                 }
-                acknowledgeDroppedToDelegate(droppedNotHeld);
-                if (nothingToRecord) return;
             }
             // The probe also sees a Spring transaction with no unit of work bound yet, which withUnitOfWork would join
             if (TransactionProbe.isUnitOfWorkActive(unitOfWorkFactory)) {
-                var waitLeft = waitEndsAt - System.nanoTime();
-                var floor    = deferredGapsRecordingWaitFloor();
-                if (waitLeft < floor.toNanos()) {
-                    throw new TimeoutException("Less than " + floor + " was left to record the gaps of " + aggregateType + " kept in memory");
-                }
-                runOnAVirtualThreadWaitingAtMost("Cdc-RecordDeferredGaps-" + aggregateType, Duration.ofNanos(waitLeft), this::recordDeferredGaps);
+                runOnAVirtualThreadWaitingAtMost("Cdc-RecordDeferredGaps-" + aggregateType, deferredGapsRecordingWait, this::recordDeferredGaps);
             } else {
                 recordDeferredGaps();
             }
@@ -2056,25 +1522,14 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * run of consecutive orders), in a unit of work of its own, and hands the fills of them that are not done with to
          * {@link #gapFillsBeingHandedOn}, so the subscriber's acknowledgement resolves them as any other. Holds
          * {@link #deferredGapsLock} until committed. Only called on a thread with no unit of work or transaction to join (see
-         * {@link #recordDeferredGapsCommitted()}), so the unit of work is committed before the gaps are forgotten - and the
-         * one path that waits for the lock without a limit: such a thread holds no database lock a recording that holds the
-         * gate lock could be waiting for.
-         * <p>
-         * Takes in the gaps kept and settles the events acknowledged without the lock first, so a fill done with is not
-         * recorded; and again once done, recorded or not, as an acknowledgement that waited for the lock past
-         * {@code deferredGapsRecordingWait} meanwhile left its events to this recording, once its unit of work committed: a fill whose gap this recorded is
-         * resolved here, in a unit of work of its own. Then it settles the events dropped without the lock
-         * ({@link #settleDroppedWhileLockBusy()}), clears {@link #deliveringThreadStalled} and lets go of the lock.
+         * {@link #recordDeferredGapsCommitted()}), so the unit of work is committed before the gaps are forgotten.
          *
          * @throws RuntimeException the gaps could not be recorded - they stay kept, for the next call
          */
         private void recordDeferredGaps() {
             if (!defersGapRecording) return;
             deferredGapsLock.lock();
-            List<PersistedEvent> acknowledgedBefore = List.of();
             try {
-                takeInGapsKeptWhileLockBusy();
-                acknowledgedBefore = settleAcknowledgedWhileLockBusy();
                 if (unrecordedGaps.isEmpty() && unrecordedFillsNotDoneWith.isEmpty()) return;
                 var orders = new TreeSet<>(unrecordedGaps);
                 orders.addAll(unrecordedFillsNotDoneWith.keySet());
@@ -2092,7 +1547,6 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 var fills = List.copyOf(unrecordedFillsNotDoneWith.values());
                 unrecordedGaps.clear();
                 unrecordedFillsNotDoneWith.clear();
-                keepsUnrecorded = false;
                 if (!fills.isEmpty()) {
                     gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.awaitAcknowledgement(fills));
                 }
@@ -2101,38 +1555,20 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                     eventStore.getEventStoreSubscriptionObserver().gapReconciliationOutcome(handler.subscriberId(), aggregateType, reconciliation);
                 }
             } finally {
-                List<PersistedEvent> droppedNotHeld;
-                try {
-                    takeInGapsKeptWhileLockBusy();
-                    var acknowledged = new ArrayList<>(acknowledgedBefore);
-                    acknowledged.addAll(settleAcknowledgedWhileLockBusy());
-                    if (!acknowledged.isEmpty()) {
-                        // No unit of work on this thread: resolved in one of its own, a failure logged and the gaps left open
-                        gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.acknowledged(acknowledged));
-                    }
-                    // After the acknowledgements: a held fill acknowledged meanwhile is no longer held when its dropped
-                    // duplicate is settled
-                    droppedNotHeld = settleDroppedWhileLockBusy();
-                } finally {
-                    // The delivering thread's stall, if any, ends with this recording
-                    deliveringThreadStalled = false;
-                    deferredGapsLock.unlock();
-                }
-                acknowledgeDroppedToDelegate(droppedNotHeld);
+                deferredGapsLock.unlock();
             }
         }
 
         /**
          * The subscription ended: the gaps kept in memory are recorded now - a later save of the resume point, which may be
          * past them, finds this gate gone. In a unit of work of its own ({@link #recordDeferredGapsCommitted()}): with a unit
-         * of work, or a Spring transaction it would join, current on the ending thread, on a virtual thread of its own,
-         * waited for at most {@link #DEFERRED_GAPS_RECORDING_WAIT} - the ending thread's unit of work may hold a lock that
-         * recording needs, a wait PostgreSQL cannot see as a deadlock. A failure, or a wait that runs out, is logged and
-         * the subscription ends: a restart from a resume point saved past those gaps before they are recorded then does
-         * not wait for them - as when recording an opened gap fails. A recording that outlasts the wait goes on, and
-         * records them when it commits. {@link #ended} is set without {@link #deferredGapsLock}, which a recording that
-         * outlasted an earlier wait may hold: a gap kept before is recorded here, as this takes that lock afterwards, and
-         * one about to be kept is refused
+         * of work, or a Spring transaction it would join, current on the ending thread, on a virtual thread of its own, waited for at most
+         * {@link #DEFERRED_GAPS_RECORDING_WAIT} - the ending thread's unit of work may hold a lock that recording needs,
+         * a wait PostgreSQL cannot see as a deadlock. A failure, or a wait that runs out, is logged and the subscription
+         * ends: a restart from a resume point saved past those gaps before they are recorded then does not wait for them -
+         * as when recording an opened gap fails. A recording that outlasts the wait goes on, and records them when it commits.
+         * {@link #ended} is set without {@link #deferredGapsLock}, which a recording that outlasted an earlier wait may
+         * hold: a gap kept before is recorded here, as this takes that lock afterwards, and one about to be kept is refused
          */
         private void recordDeferredGapsAtEnd() {
             ended = true;
@@ -2154,7 +1590,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
 
         /**
          * The subscription ends - cancelled, completed or failed: the gaps the tracker gave up on since the last event
-         * delivered are recorded now ({@link #recordGivenUpGaps(boolean)}), or a subscription stopped while idle left them to a
+         * delivered are recorded now ({@link #recordGivenUpGaps()}), or a subscription stopped while idle left them to a
          * later one to wait for again. Runs on the thread that ends it - for a cancel, the one that stops the
          * subscription. Should a unit of work be current there, they are left unrecorded rather than written in a unit
          * of work the gate does not own: a later subscription then waits for those gaps once more, which is safe.
@@ -2189,9 +1625,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                           gapHandler.get().subscriberId(), aggregateType);
                 return;
             }
-            // No unit of work current here, so no database lock of this thread's can block a recording that holds the gate
-            // lock: this may wait for it, at most deferredGapsRecordingWait, as there is no next event to try again
-            recordGivenUpGaps(true);
+            recordGivenUpGaps();
         }
 
         /**
@@ -2209,11 +1643,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * <p>
          * The middles of wide gaps, awaited in memory only, are drained too, and nothing is written for them: they were
          * never recorded as transient gaps (see {@link CdcDeliveryTracker#MAX_AWAITED_ORDERS_PER_GAP_END}).
-         *
-         * @param mayWait whether {@link #withoutUnrecordedGaps} may wait for {@link #deferredGapsLock}: false on the
-         *                delivering thread, true at the subscription's end
          */
-        private void recordGivenUpGaps(boolean mayWait) {
+        private void recordGivenUpGaps() {
             if (gapHandler.isEmpty()) return;
             var givenUpInMemoryOnly = tracker.drainTimedOutGapsAwaitedInMemoryOnly();
             if (!givenUpInMemoryOnly.isEmpty()) {
@@ -2221,7 +1652,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                           gapHandler.get().subscriberId(), aggregateType, givenUpInMemoryOnly);
             }
             // Ranges, one per gap end: the gap handler promotes each range in one go, not order by order
-            var givenUp = withoutUnrecordedGaps(tracker.drainTimedOutGaps(), mayWait);
+            var givenUp = withoutUnrecordedGaps(tracker.drainTimedOutGaps());
             if (givenUp.isEmpty()) return;
             var handler = gapHandler.get();
             try {
@@ -2243,27 +1674,12 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         /**
          * Forgets the given-up orders kept in memory: never recorded, there is nothing to give up - a resume point is never
          * saved past a gap that is not recorded, so a restart reads its orders again. Leaves out a range kept in memory
-         * whole, so giving it up costs no statement. On the delivering thread ({@code mayWait} false) it never waits for
-         * {@link #deferredGapsLock}: when it is taken, {@code givenUp} goes back to the tracker
-         * ({@link CdcDeliveryTracker#requeueTimedOutGaps}) and nothing is given up now - the next event delivered, or the
-         * subscription's end, tries again. At the subscription's end ({@code mayWait} true) there is no next event, so it
-         * waits for the lock at most {@code deferredGapsRecordingWait} - an acknowledgement or a check holds it only
-         * briefly - and only tries it while {@link #deliveringThreadStalled} says a blocked recording holds it. Not taken,
-         * {@code givenUp} goes back to the tracker, and a later subscription waits for those gaps again.
-         *
-         * @param mayWait false on the delivering thread, true at the subscription's end, with no unit of work current
+         * whole, so giving it up costs no statement
          */
-        private List<LongRange> withoutUnrecordedGaps(List<LongRange> givenUp, boolean mayWait) {
+        private List<LongRange> withoutUnrecordedGaps(List<LongRange> givenUp) {
             if (!defersGapRecording || givenUp.isEmpty()) return givenUp;
-            var taken = mayWait && !deliveringThreadStalled
-                        ? tryLockOrRestoreInterrupt(deferredGapsRecordingWait)
-                        : deferredGapsLock.tryLock();
-            if (!taken) {
-                tracker.requeueTimedOutGaps(givenUp);
-                return List.of();
-            }
+            deferredGapsLock.lock();
             try {
-                takeInGapsKeptWhileLockBusy();
                 if (unrecordedGaps.isEmpty()) return givenUp;
                 var toRecord = new ArrayList<LongRange>(givenUp.size());
                 for (var range : givenUp) {
@@ -2273,7 +1689,6 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                     kept.clear();
                     if (!allKept) toRecord.add(range);
                 }
-                noteWhatIsKept();
                 return toRecord;
             } finally {
                 deferredGapsLock.unlock();
@@ -2284,7 +1699,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * No query asked for any transient gap - the event came from the bus or a poll, not from a query of this gap
          * handler's - so none is passed as included in one: the gap handler promotes a gap only when a query that asked
          * for it did not get it, and asked for nothing, it changes no other gap either (it resolves the gaps a query asked
-         * for and got). The gaps the tracker gives up on after its timeout are given up through {@link #recordGivenUpGaps(boolean)}
+         * for and got). The gaps the tracker gives up on after its timeout are given up through {@link #recordGivenUpGaps()}
          * instead.
          * <p>
          * Only the orders the tracker awaits durably are recorded ({@code awaitedGaps}, see
@@ -2860,12 +2275,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * <p>
      * Asks a running subscription's tracker under the tracker's monitor, which its delivering threads take for every event
      * - briefly, and never the bus thread's. A running subscription's held fills are checked under its delivery gate's lock,
-     * which is only tried, never waited for: {@code awaitProcessed} checks its timeout only between calls, so a wait here
-     * would hold its caller past that timeout. When a gate's lock is not free (a deferred-gap recording may hold it, or a
-     * delivering thread or an acknowledgement for a moment), the order is answered as still awaited, so
-     * {@code awaitProcessed} reports it as not yet processed and asks again after its poll interval. That answer is
-     * conservative: while a recording holds the lock, every order of the subscriber and aggregate type is answered as
-     * awaited - also one no gap or held fill is about - until that recording ends.
+     * waited for at most {@code DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT}: when that lock is not free within the wait
+     * (a deferred-gap recording that outlasted its own wait may still hold it) or the thread is interrupted waiting for it,
+     * the order is answered as still awaited, so {@code awaitProcessed} reports it as not yet processed and asks again.
      */
     @Override
     public boolean isAwaitedAsGap(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder globalEventOrder) {
@@ -2906,11 +2318,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         if (trackers != null && trackers.stream().anyMatch(tracker -> tracker.isAwaited(globalEventOrder))) {
             return true;
         }
-        // A fill of a gap kept in memory, handed on and not done with - no transient gap records it. Each gate's lock is
-        // only tried, never waited for
+        // A fill of a gap kept in memory, handed on and not done with - no transient gap records it
         var gates = runningDeliveryGates.get(key);
-        if (gates == null) return false;
-        return gates.stream().anyMatch(gate -> gate.isAwaitedAsFillOfAnUnrecordedGap(globalEventOrder));
+        return gates != null && gates.stream().anyMatch(gate -> gate.isAwaitedAsFillOfAnUnrecordedGap(globalEventOrder));
     }
 
     @Override

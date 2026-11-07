@@ -67,28 +67,9 @@ public interface DeferredGapRecording {
      * @throws RuntimeException the gaps could not be recorded, or not in time - the caller must then not save the resume
      *                          point, and should report that save as failed to whoever asked for it, as the
      *                          {@code DefaultEventStoreSubscriptionManager}'s repository does: it throws once it has saved
-     *                          the resume points whose gaps were recorded
+     *                          the other resume points
      */
     ResumePointSave beforeResumePointSave(SubscriberId subscriberId, AggregateType aggregateType);
-
-    /**
-     * {@link #beforeResumePointSave(SubscriberId, AggregateType)}, waiting for the recording no longer than until
-     * {@code waitEndsAt} (a {@link System#nanoTime()} value) where the implementation waits at all - so a saver can give the
-     * resume points after one whose wait ran out no wait at all: one with nothing to record still succeeds, one that would
-     * have to wait fails at once. The {@code DefaultEventStoreSubscriptionManager}'s repository does so within one save.
-     * <p>
-     * The default ignores {@code waitEndsAt} and calls {@link #beforeResumePointSave(SubscriberId, AggregateType)}.
-     *
-     * @param subscriberId  the subscriber
-     * @param aggregateType the aggregate type it subscribes to
-     * @param waitEndsAt    the {@link System#nanoTime()} at which waiting for the recording ends - may have passed already
-     * @return to close once the resume point was saved, or the save failed
-     * @throws RuntimeException as {@link #beforeResumePointSave(SubscriberId, AggregateType)}, also when the recording would
-     *                          have to wait past {@code waitEndsAt}
-     */
-    default ResumePointSave beforeResumePointSave(SubscriberId subscriberId, AggregateType aggregateType, long waitEndsAt) {
-        return beforeResumePointSave(subscriberId, aggregateType);
-    }
 
     /**
      * The window of one resume point save - see {@link #beforeResumePointSave(SubscriberId, AggregateType)}

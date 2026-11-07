@@ -49,18 +49,12 @@ import java.util.Optional;
  */
 public interface AwaitedGapInspector {
     /**
-     * The answer may be conservative: an inspector that cannot tell within a bounded wait - as
-     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore} cannot while a
-     * recording of the gaps its subscriptions keep in memory outlasts its wait - answers true, so
-     * {@code awaitProcessed} reports the event as not processed yet and asks again later. Until it can tell again, that may hold for every order of the
-     * subscriber and aggregate type, also one it does not await.
-     *
      * @param subscriberId     the subscriber
      * @param aggregateType    the aggregate type it subscribes to
      * @param globalEventOrder the global event order of an event of that aggregate type
      * @return true if the subscriber still awaits {@code globalEventOrder} as a gap - its subscription moved past it and
-     * will still hand its event to the subscriber, or handed it on and the subscriber is not done with it yet - or when
-     * the inspector cannot tell within its wait; false if it does not await it
+     * will still hand its event to the subscriber, or handed it on and the subscriber is not done with it yet - false if
+     * it does not await it
      */
     boolean isAwaitedAsGap(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder globalEventOrder);
 

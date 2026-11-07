@@ -44,8 +44,7 @@ Until a resume point past a gap has been saved, a crash resumes **below** the ga
    way as `AwaitedGapInspector`: a decorator that does not forward it turns the deferral off, and nothing else changes.
    - `deferGapRecordingUntilResumePointSave(subscriber, aggregateType)` opts a subscriber in.
    - `beforeResumePointSave(subscriber, aggregateType)` records the gaps held in memory and returns a `ResumePointSave`.
-     The caller closes it once the save is done. An overload with a `waitEndsAt` deadline bounds the wait for that
-     recording; its default ignores the deadline.
+     The caller closes it once the save is done.
 2. **The manager wraps its `DurableSubscriptionRepository`** in `GapRecordingBeforeSaveDurableSubscriptionRepository`
    when its event store is a `DeferredGapRecording`.
    - Reading or creating a resume point through the wrapper opts that subscriber in.
@@ -74,9 +73,8 @@ Until a resume point past a gap has been saved, a crash resumes **below** the ga
    If any condition fails, the gate writes the gap at once, as before.
 4. **What happens to a gap held in memory:**
    - **It fills.** The fill goes to `unrecordedFillsNotDoneWith`, not to `GapFillsAwaitingAcknowledgement`. When the
-     subscriber is done with it (ack, or hand-on for a subscriber that does not acknowledge), it is simply forgotten -
-     for an ack made inside a unit of work or a Spring transaction, only once that unit of work commits, so a rollback
-     leaves it held and a save records its gap (`DeliveryGate.doneWithOnceCommitted`). It costs no insert and no delete.
+     subscriber is done with it (ack, or hand-on for a subscriber that does not acknowledge), it is simply forgotten. It
+     costs no insert and no delete.
    - **A save happens first.** The save records every order still held, including fills the subscriber is not done
      with, as transient gaps: one `addTransientGaps` per run of consecutive orders, in one unit of work per gate. It then
      hands the fills to `GapFillsAwaitingAcknowledgement`, so they resolve as before.
@@ -105,11 +103,11 @@ the same as before. An opt-out property would only control a cost; it would not 
 | Processors (`advanceResumeFromAndIncluding`, `awaitProcessed`) | Advance the in-memory resume point only. Persisting it always goes through the repository. `InTransaction*` subscriptions use the event bus, not `pollEvents` |
 | Direct `pollEvents` without a manager | Never opted in, so gaps are written at once (unchanged) |
 | Give-up (`recordGivenUpGaps`) | Orders still held are dropped from memory. A range held whole is not passed to `giveUpTransientGapRanges`, so it costs no statement. Nothing was saved past such a gap, so a restart reads its orders again |
-| `isAwaitedAsGap` | An undelivered held gap is answered by the running tracker (`isAwaited`). A held fill the subscriber is not done with is answered by the running gate (`isAwaitedAsFillOfAnUnrecordedGap`), which only tries the gate lock and never waits for it - `awaitProcessed` checks its timeout only between calls, so a wait here held its caller past that timeout - and answers that the event is still awaited when the lock is not free; `awaitProcessed` then asks again after its poll interval. That answer is conservative: while a recording holds a gate lock, every order of the subscriber and aggregate type is answered as awaited, also one no gap is about, until that recording ends. Both are written when the subscription ends, so the transient rows answer after that |
+| `isAwaitedAsGap` | An undelivered held gap is answered by the running tracker (`isAwaited`). A held fill the subscriber is not done with is answered by the running gate (`isAwaitedAsFillOfAnUnrecordedGap`), which waits for the gate lock at most 10 s (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`) and answers that the event is still awaited when the lock is not free within that wait or the thread is interrupted. Both are written when the subscription ends, so the transient rows answer after that |
 | Seeding from `getTransientGapsFor` at subscribe | A re-subscribe on a new manager reads the rows written by the last save or by the end of the previous subscription. A `retry()`/`repeat()` re-subscribe starts from the original start order, below everything |
 | Wide gaps / lower end (`addTransientGaps`) | Never deferred; written at once |
-| Subscription end inside a unit of work or a Spring transaction | The held gaps are written on a virtual thread of their own, rather than in a unit of work the gate does not own. The ending thread waits for it at most 10 s (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`); if the wait runs out it logs a WARN and the subscription ends, and the write goes on and commits when it can; should it fail instead, that failure is logged at WARN too |
-| Save inside a unit of work or a Spring transaction | Same as the subscription end: written on a virtual thread of their own. All the subscriber's running subscriptions share one wait of at most 10 s per resume point. If the wait runs out, that resume point is not saved, and the changed resume points after it in the same save are tried with no wait left: one with nothing to record is saved, one whose recording would be waited for is not. The save throws after saving the others |
+| Subscription end inside a unit of work or a Spring transaction | The held gaps are written on a virtual thread of their own, rather than in a unit of work the gate does not own. The ending thread waits for it at most 10 s (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`); if the wait runs out it logs a WARN and the subscription ends, and the write goes on and commits when it can |
+| Save inside a unit of work or a Spring transaction | Same as the subscription end: written on a virtual thread of their own, waited for at most 10 s. If the wait runs out, that resume point is not saved, and the save throws after saving the others |
 | Bus overflow catch-up, or any other move back onto the bus | The catch-up loads every event within every range the tracker awaits (`CdcDeliveryTracker.awaitedRanges`, see the section below), so a held gap is covered like any other. The first fix only added the held orders (`withUnrecordedGaps`, now removed). It was needed because, without it, a burst with more than 1 000 older awaited orders hid the fill until give-up: trading-demo views applied `OrderAccepted` before `OrderPlaced`, and existing events ended up as permanent gaps. Pinned by `a_gap_kept_in_memory_whose_fill_arrives_while_the_subscription_is_off_the_bus_is_filled_by_the_catch_up` |
 | Polling fallback / switches | One gate per subscription whatever the source. The delegate's polls record their own gaps as before |
 | Acknowledgement of fills | A fill of a held gap is never registered with `GapFillsAwaitingAcknowledgement`, so nothing is resolved for it. `dropped` does not acknowledge it to the delegate |
@@ -198,56 +196,20 @@ The existing pins still apply: `CdcEventStoreCommitOrderIT`, `CdcEventStoreGapFi
   a connection. This only matters with a pool smaller than the number of subscriber threads blocked behind one save. The
   window is one short unit of work per save.
 - **A save inside a caller's unit of work.** The flush never joins it. Joining would let the gate forget the gaps before
-  the caller commits, and a rollback would then lose them: the next save, past them, would record nothing. Joining and
-  forgetting the gaps only once the caller commits, as `GapFillsAwaitingAcknowledgement` forgets its fills, was
-  considered and not taken. The save window closes when the repository is done with the save (`ResumePointSave.close()`
-  in the `finally` of `GapRecordingBeforeSaveDurableSubscriptionRepository.saveResumePoints`), before the caller
-  commits. From then on the gates keep the gaps that open in memory again, beside the recorded ones whose rows are
-  not committed yet, so the commit callback would have to tell the two apart; and a fill of a recorded gap, forgotten
-  on its acknowledgement in that window as a gap kept in memory is, would leave the gap's row behind once the caller
-  commits. As the manager's save paths are not expected to run inside a unit of work, the bounded waits below are a
-  safety net, and were kept rather than that protocol. With a unit of work, or a Spring transaction the unit of work
-  factory would join, current on the saving thread (`TransactionProbe.isUnitOfWorkActive`), each gate flushes on a
-  virtual thread of its own, in its own unit of work, and the saving thread waits for the flushes at most 10 s
-  (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`) per resume point: one wait shared by all of the subscriber's gates
-  (`CdcEventStore.beforeResumePointSave`). The flush then needs a second connection while the caller holds one. If the
-  caller's unit of work holds a lock the flush needs, the wait runs out instead of hanging, since PostgreSQL cannot see
-  that wait as a deadlock. That resume point is then not saved. The changed resume points after it in the same save get
-  no wait, as their flushes could be blocked by the same lock and would each wait again: the repository calls
-  `beforeResumePointSave(subscriber, aggregateType, waitEndsAt)` with a deadline that has passed
-  (`GapRecordingBeforeSaveDurableSubscriptionRepository.saveResumePoints`), so a gate with nothing to flush lets its
-  resume point be saved, and one whose flush would be waited for fails at once and its resume point is not saved. A
-  flush is started only while at least 100 ms (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT_FLOOR`, or a tenth of the
-  wait when that is less) is left of the save's wait; with less left the gate fails at once too, rather than start a
-  flush that would outlast the wait and keep the gate lock. A gate tells that it has nothing to flush also while another
-  thread holds its lock for a moment: it then reads a volatile flag, `keepsUnrecorded`, and the queues of what was kept,
-  acknowledged or dropped without the lock, so an empty gate never fails the save because of that lock. It
-  throws after saving the others, and the caller logs it. The flush goes on, keeping the gate lock, until the caller's transaction ends; should
-  it fail after the wait ran out, the failure is logged at WARN (`CdcEventStore.runOnAVirtualThreadWaitingAtMost`), as
-  no caller is waiting for it any more, and the gaps stay kept for the next flush. Until the caller's transaction ends,
-  only the flush itself, which runs on a thread with no unit of work, waits for the gate lock without a limit. Every
-  other path either does not wait for it or waits at most 10 s, since a thread that waits for this subscription may be
-  the one whose unit of work blocks the flush. A second save finds the lock taken and, unless the gate keeps nothing,
-  hands its check to a new virtual thread, waited for at most 10 s again. The subscription's end marks the gate ended without the lock. An
-  acknowledgement waits for the lock at most 10 s and then returns as usual, so it never fails the subscriber's handler
-  or reaches its error policy: its events are acknowledged to the delegate's poll, and the flush settles them once it
-  ends - but only once the acknowledging unit of work has committed (`DeliveryGate.acknowledgedWhileLockBusyOnceCommitted`).
-  Should that unit of work roll back, the gaps of the fills among them stay open, so the fills are still owed after a
-  restart, and the subscriber's retry acknowledges them again. A held fill among them is then done with if the flush failed, and otherwise the gap the flush recorded for it is
-  resolved in the flush's own unit of work. `isAwaitedAsGap`'s check of a held fill (asked by `awaitProcessed`) only
-  tries the lock, and when the lock is not free answers that the event is still awaited. The delivering thread's checks of an opened gap, a fill and a dropped event wait for it at most 10 s
-  once per stall, not once per event: after one wait runs out, these checks only try the lock until the flush lets go
-  of it or one of them takes it (`DeliveryGate.lockedOnDeliveringThread`). An acknowledgement made on the delivering
-  thread (a subscriber without a `SubscriberAcknowledgement`) keeps its own wait per call. A gap an event opens is then kept without
-  the lock and taken in by the lock's next holder; recording it at once would wait for the gap handler's monitor, which
-  the blocked flush holds too. A fill is treated as the fill of a recorded gap. A dropped event is left to the lock's
-  next holder with no unit of work current, which acknowledges it to the delegate's poll unless it is a fill the subscriber is not done with
-  (`DeliveryGate.settleDroppedWhileLockBusy`). Gaps the tracker gave up on only try the lock on the delivering thread,
-  and otherwise go back to the tracker for the next event; at the subscription's end, which has no next event, they
-  wait for the lock at most 10 s (only try it while the delivering thread's wait has run out), and otherwise go back to
-  the tracker for a later subscription to wait for again. A gap recorded at once (a wide gap, or one that is not kept during a save,
-  after the end or over the limit), and the recording of given-up gaps, still wait for the gap handler's monitor without
-  a limit (`DeliveryGate.recordOpenedGap`, `DeliveryGate.recordGivenUpGaps`), and the blocked flush holds that monitor.
+  the caller commits, and a rollback would then lose them: the next save, past them, would record nothing. With a unit
+  of work, or a Spring transaction the unit of work factory would join, current on the saving thread
+  (`TransactionProbe.isUnitOfWorkActive`), each gate flushes on a virtual thread of its own, in its own unit of work, and
+  the saving thread waits for it at most 10 s (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`). The flush then needs a
+  second connection while the caller holds one. If the caller's unit of work holds a lock the flush needs, the wait runs
+  out instead of hanging, since PostgreSQL cannot see that wait as a deadlock. That resume point is then not saved (the
+  repository throws after saving the others, and the caller logs it). The flush goes on, keeping the gate lock, until the caller's
+  transaction ends. Meanwhile the four paths that may run inside that unit of work do not wait for the gate lock
+  without a limit, as the flush may be waiting for it: a second save finds the lock taken and hands its check to a new
+  virtual thread, waited for at most 10 s again; the subscription's end marks the gate ended without the lock; an
+  acknowledgement waits for the lock at most 10 s, then throws, leaving a held fill's gap to be recorded, so a later
+  subscription delivers the event again; and `isAwaitedAsGap`'s check of a held fill (asked by `awaitProcessed`) waits
+  for it at most 10 s, then answers that the event is still awaited. The manager's save paths are not expected to run
+  inside a unit of work.
 - **Non-exclusive subscriptions on several instances** share one resume-point row. Another instance's save can move it
   past a gap this instance holds. That is no weaker than before: the shared row could already move past events this
   instance had not handled.
