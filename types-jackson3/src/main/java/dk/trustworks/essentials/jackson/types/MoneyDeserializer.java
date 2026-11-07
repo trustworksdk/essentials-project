@@ -24,6 +24,8 @@ import dk.trustworks.essentials.types.*;
 import java.math.BigDecimal;
 
 public final class MoneyDeserializer extends StdDeserializer<Money> {
+    private static final QuotedNumbers.Parser QUOTED_AMOUNT_PARSER = (p, text) -> new BigDecimal(text);
+
     public MoneyDeserializer() {
         super(Money.class);
     }
@@ -32,8 +34,8 @@ public final class MoneyDeserializer extends StdDeserializer<Money> {
     public Money deserialize(JsonParser p, DeserializationContext ctxt) throws JacksonException {
         // Read as a stream: building a JsonNode tree per Money to read two properties out of it was 1.2 % of the
         // trading demo's CPU under load. Accepts a numeric amount, kept at the scale it was written with, or a quoted
-        // number ("99.99", as NumberTypeJsonDeserializer reads one), the properties in any order, and any other
-        // property ignored
+        // number ("99.99", read by QuotedNumbers.readQuotedNumber, the rule NumberTypeJsonDeserializer also reads one by),
+        // the properties in any order, and any other property ignored
         var        token        = p.currentToken() == JsonToken.START_OBJECT ? p.nextToken() : p.currentToken();
         BigDecimal amount       = null;
         String     currencyCode = null;
@@ -45,15 +47,9 @@ public final class MoneyDeserializer extends StdDeserializer<Money> {
                     if (value.isNumeric()) {
                         amount = p.getDecimalValue();
                     } else if (value == JsonToken.VALUE_STRING) {
-                        var text = p.getString().trim();
-                        try {
-                            // Held to the same number-length limit as a JSON number; over-long number-shaped text is refused
-                            // with a StreamConstraintsException, over-long text that is not a number with a NumberFormatException
-                            QuotedNumbers.checkLength(p, text);
-                            amount = new BigDecimal(text);
-                        } catch (NumberFormatException e) {
-                            amount = (BigDecimal) ctxt.handleWeirdStringValue(BigDecimal.class, text, "not a valid Money 'amount'");
-                        }
+                        // The quoted-number rule NumberTypeJsonDeserializer applies, from the same helper; a problem is
+                        // reported against BigDecimal, the type the amount is read as here
+                        amount = (BigDecimal) QuotedNumbers.readQuotedNumber(p, ctxt, BigDecimal.class, QUOTED_AMOUNT_PARSER, "not a valid Money 'amount'");
                     } else {
                         return (Money) ctxt.reportInputMismatch(this, "Money 'amount' must be a JSON number or a quoted number, but was %s", value);
                     }

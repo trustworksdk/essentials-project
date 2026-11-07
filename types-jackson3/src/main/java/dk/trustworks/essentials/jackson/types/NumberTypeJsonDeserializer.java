@@ -57,10 +57,18 @@ public class NumberTypeJsonDeserializer<T extends NumberType<?, ?>> extends Valu
 
     private final Class<T>                concreteType;
     private final Class<? extends Number> numberClass;
+    /**
+     * Held in fields so a quoted number allocates no parser lambda and no message per read.
+     */
+    private final QuotedNumbers.Parser    quotedNumberParser;
+    private final String                  quotedNumberFailureMsg;
 
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public NumberTypeJsonDeserializer(Class<T> concreteType) {
         this.concreteType = requireNonNull(concreteType, "No concreteType provided");
         this.numberClass = NumberType.resolveNumberClass(concreteType);
+        this.quotedNumberParser = (p, text) -> SingleValueType.from(parseText(p, text), (Class) this.concreteType);
+        this.quotedNumberFailureMsg = "not a valid " + numberClass.getSimpleName();
     }
 
     @Override
@@ -70,19 +78,10 @@ public class NumberTypeJsonDeserializer<T extends NumberType<?, ?>> extends Valu
 
         // A quoted number ("2") is readable today through Jackson's string coercion. Keep that path working, or data
         // persisted with WRITE_NUMBERS_AS_STRINGS - or written by a producer that quotes large numbers - stops loading.
+        // The rule is shared with MoneyDeserializer's quoted amount: held to the same number-length limit as a JSON number,
+        // and text that is not a number, or does not fit without loss, goes to handleWeirdStringValue
         if (token == JsonToken.VALUE_STRING) {
-            var text = p.getString().trim();
-            try {
-                // Held to the same number-length limit as a JSON number; over-long number-shaped text is refused with a
-                // StreamConstraintsException, over-long text that is not a number with a NumberFormatException
-                QuotedNumbers.checkLength(p, text);
-                return (T) SingleValueType.from(parseText(p, text), (Class) concreteType);
-            } catch (NumberFormatException | ArithmeticException e) {
-                return (T) ctxt.handleWeirdStringValue(concreteType,
-                                                       text,
-                                                       "not a valid %s",
-                                                       numberClass.getSimpleName());
-            }
+            return (T) QuotedNumbers.readQuotedNumber(p, ctxt, concreteType, quotedNumberParser, quotedNumberFailureMsg);
         }
 
         // Refuse to narrow a fraction into an integral type. Jackson would truncate 2.5 to 2 silently, turning what is

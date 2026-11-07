@@ -16,9 +16,9 @@
 
 package dk.trustworks.essentials.jackson.types;
 
-import tools.jackson.core.JsonParser;
-import tools.jackson.core.StreamReadConstraints;
+import tools.jackson.core.*;
 import tools.jackson.core.exc.StreamConstraintsException;
+import tools.jackson.databind.DeserializationContext;
 
 /**
  * Holds a quoted number ({@code "99.99"}) to the same length limit Jackson applies to a JSON number token.
@@ -30,9 +30,61 @@ import tools.jackson.core.exc.StreamConstraintsException;
  * <p>
  * Only text shaped like a number is held to that limit. Longer text with any other character is not a number at all,
  * and is reported as one that does not parse, without parsing it.
+ * <p>
+ * {@link #readQuotedNumber(JsonParser, DeserializationContext, Class, Parser, String)} is the one quoted-number rule for
+ * a value: {@link NumberTypeJsonDeserializer} and {@link MoneyDeserializer} both read a quoted number through it, so they
+ * trim, bound and report such text the same way.
  */
 final class QuotedNumbers {
     private QuotedNumbers() {
+    }
+
+    /**
+     * Turns the trimmed text of a quoted number into the value a deserializer returns.
+     */
+    @FunctionalInterface
+    interface Parser {
+        /**
+         * @param p    the parser the text was read from, for its read constraints
+         * @param text the trimmed text of the quoted number, already held to the number-length limit
+         * @return the value read from the text
+         * @throws NumberFormatException when the text is not a number
+         * @throws ArithmeticException   when the number does not fit the target without loss
+         */
+        Object parse(JsonParser p, String text);
+    }
+
+    /**
+     * Reads the current {@link tools.jackson.core.JsonToken#VALUE_STRING} token as a quoted number: trims the text,
+     * holds it to the number-length limit ({@link #checkLength(JsonParser, String)}) and parses it with {@code parser}.
+     * Text that is not a number, or does not fit the target without loss ({@link NumberFormatException} or
+     * {@link ArithmeticException}, from the length check, the parse or the construction {@code parser} does), is reported
+     * through {@link DeserializationContext#handleWeirdStringValue}: a registered
+     * {@link tools.jackson.databind.deser.DeserializationProblemHandler} may supply a replacement, and without one the
+     * caller gets an {@link tools.jackson.databind.exc.InvalidFormatException}. A {@link StreamConstraintsException}
+     * propagates.
+     *
+     * @param p          the parser, positioned on the string token
+     * @param ctxt       the deserialization context the problem is reported to
+     * @param targetType the type the problem is reported against, and the type a problem handler's replacement must have
+     * @param parser     turns the trimmed text into the value
+     * @param failureMsg the problem description, without format arguments
+     * @return the parsed value, or a problem handler's replacement for text that does not parse
+     */
+    static Object readQuotedNumber(JsonParser p,
+                                   DeserializationContext ctxt,
+                                   Class<?> targetType,
+                                   Parser parser,
+                                   String failureMsg) throws JacksonException {
+        var text = p.getString().trim();
+        try {
+            // Over-long number-shaped text is refused with a StreamConstraintsException, over-long text that is not a
+            // number with a NumberFormatException
+            checkLength(p, text);
+            return parser.parse(p, text);
+        } catch (NumberFormatException | ArithmeticException e) {
+            return ctxt.handleWeirdStringValue(targetType, text, failureMsg);
+        }
     }
 
     /**
