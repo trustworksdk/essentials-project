@@ -52,12 +52,24 @@ final class SingleValueTypeKeyDeserializers implements KeyDeserializers {
             @Override
             @SuppressWarnings({"unchecked", "rawtypes"})
             public Object deserializeKey(String key, DeserializationContext context) {
-                if (NumberType.class.isAssignableFrom(rawType)) {
-                    // A key is bounded only by the name-length limit: hold a numeric key to the number-length limit
-                    // before parsing it, as a quoted number value is
-                    QuotedNumbers.checkLength(context.streamReadConstraints(), key);
+                Object value;
+                try {
+                    if (NumberType.class.isAssignableFrom(rawType)) {
+                        // A key is bounded only by the name-length limit: hold a numeric key to the number-length limit
+                        // before parsing it, as a quoted number value is. Over-long number-shaped text is refused with a
+                        // StreamConstraintsException, which propagates; over-long text that is not a number with a
+                        // NumberFormatException
+                        QuotedNumbers.checkLength(context.streamReadConstraints(), key);
+                    }
+                    value = rawValueOf(key, rawType);
+                } catch (NumberFormatException e) {
+                    // A key that is not a number: report it as Jackson reports any weird key, so a registered
+                    // DeserializationProblemHandler sees it, and without one the caller gets an InvalidFormatException
+                    return context.handleWeirdKey(rawType,
+                                                  key,
+                                                  "not a valid %s",
+                                                  NumberType.resolveNumberClass(rawType).getSimpleName());
                 }
-                var value = rawValueOf(key, rawType);
                 if (value == null) {
                     // An unsupported value-type family: report it the way Jackson would have, rather than guessing.
                     return context.handleWeirdKey(rawType,
