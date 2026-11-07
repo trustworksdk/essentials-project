@@ -518,7 +518,7 @@ acknowledged once that recording commits (`fc5127f70`) - and only once the unit 
 committed: should that unit of work roll back, the gap stays open, so the fill is still owed after a restart and the
 subscriber's retry acknowledges it again; the same holds for a gap fill whose gap was only kept in memory, which is
 forgotten only once the acknowledging unit of work has committed, also under a Spring transaction with no unit of work
-bound yet (`<!-- fix:U-003 -->`). `awaitProcessed` does not wait for it: its check of a held
+bound yet (`e6e0cb12f`). `awaitProcessed` does not wait for it: its check of a held
 gap fill only tries the gate's lock, and when the lock is busy treats the event as not processed yet and asks again at
 its next check (`8b99e122e`, `10cc0c7cc`); while such a recording runs every event of that subscriber and
 aggregate type counts as not processed yet (`a01c8e746`). Delivering an event no longer waits
