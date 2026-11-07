@@ -34,6 +34,13 @@ targets, with a `-N` suffix for plugin-only releases.
 - **MongoDB starter fenced-lock defaults** — the spring-boot-starter-modules reference gives the MongoDB starter's
   `essentials.fenced-lock-manager.lock-time-out` default as `15s` and `lock-confirmation-interval` as `4s`, the values
   in that starter's `EssentialsComponentsProperties`; it said `12s` and `5s`. No skill, rule or script changed.
+- **What `awaitProcessed` waits for** — the postgresql-event-store reference states the bounded wait as the processors
+  implement it: checks every 25 ms, the deadline compared between checks (so a call can overrun its timeout by the
+  check in progress), `awaitProcessedAsync`'s timeout counted from subscription, `AwaitProcessedTimeoutException` on
+  timeout, `IllegalArgumentException` for a negative timeout or a `null` argument. It no longer says an exclusive
+  `EventProcessor` subscription held by another instance is read from its last saved resume point: one that never held
+  the lock in this JVM has no resume point and times out; only one that held it and lost it reads the saved one. No
+  skill, rule or script changed.
 
 ## 0.60.1-8 — targets Essentials 0.60.1
 

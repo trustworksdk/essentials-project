@@ -840,6 +840,13 @@ Not published; listed because they are the reference for how to use the framewor
   in its `EssentialsComponentsProperties`: `lock-time-out` `15s` and `lock-confirmation-interval` `4s` (they said `12s`
   and `5s`). The README's DurableQueues properties example now shows `message-handling-timeout=30s`, the default its
   table gives, instead of `5s`. The defaults themselves are unchanged.
+- The LLM docs describe `awaitProcessed`'s bounded wait as the processors implement it: it checks every 25 ms and
+  compares the deadline between checks, so a call can return or throw later than its timeout by the check in
+  progress; `awaitProcessedAsync`'s timeout counts from subscription; on timeout both end in
+  `AwaitProcessedTimeoutException`, and a negative timeout or a `null` argument is an `IllegalArgumentException`. They
+  said an exclusive `EventProcessor` subscription held by another instance is read from its last saved resume point;
+  that holds only for an instance that held the lock and lost it - one that never held it in this JVM has no resume
+  point, and the call times out. The behaviour itself is unchanged.
 
 ---
 

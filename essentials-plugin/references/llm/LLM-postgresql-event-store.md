@@ -995,12 +995,33 @@ What "processed" means per processor type:
   handled.
 - Dead letters count as queued, so a dead-lettered event is **never** reported processed — the call times out.
 - Conservative: a later event of the same aggregate still queued holds the barrier too.
-- On timeout it throws `AwaitProcessedTimeoutException` naming the processor, aggregate type, global event order, the
-  current resume point, why the event does not count yet and the queue's queued/dead-letter counts (also as accessors).
-- It reads this JVM's processor. An exclusive subscription held by another instance is read from its last saved resume
-  point (lags by the snapshot interval); a `ViewEventProcessor` whose lock another instance holds times out.
-- Call it **after** the appending `UnitOfWork` committed; inside it the subscription cannot see the event.
-- `IllegalArgumentException` for an aggregate type the processor does not react to.
+- **What the timeout bounds.** `awaitProcessed` checks immediately, then every 25 ms, and returns as soon as a check
+  finds the event processed. It compares the deadline only between checks, so it can return or throw later than
+  `timeout` by the check in progress: a few database reads (resume point, the event, the queue), and under a
+  `CdcEventStore` up to 10 s more while a deferred gap recording holds one of the subscription's delivery gates.
+  `Duration.ZERO` means one check.
+- `awaitProcessedAsync` runs each check on `Schedulers.boundedElastic()` and holds no thread between checks. Its
+  timeout starts when the `Mono` is subscribed, not when the method is called, and fires on time even while a check
+  is running.
+- **On timeout** `awaitProcessed` throws, and `awaitProcessedAsync` signals, `AwaitProcessedTimeoutException` naming the
+  processor, aggregate type, global event order, timeout, the resume point seen by the last check (or "unknown"), why
+  the event does not count yet and the queue's queued/dead-letter counts (also as accessors). Nothing is cancelled: the
+  processor may still handle the event afterwards.
+- **It reads this JVM's processor, and times out where the processor does not run here.** When the processor has no
+  subscription for the aggregate type in this JVM - not started, or a `ViewEventProcessor` or
+  `PartitionedViewEventProcessor` whose lock this instance never acquired - every check answers "not yet" and the call
+  times out. An `EventProcessor` whose exclusive subscription has not held its lock in this JVM has no resume point and
+  times out too; one that held it and lost it reads the resume point last saved to the database on every check, which
+  trails the lock holder's by up to the subscription manager's `snapshotResumePointsEvery`. A `ViewEventProcessor`
+  that lost its lock keeps the resume point it had then: an event it handled before still counts, a later one times out.
+- Call it **after** the appending `UnitOfWork` committed; inside it the subscription cannot see the event, and a global
+  event order with no committed event behind it times out; once the subscription has moved past that order, the
+  exception's reason says no committed event with it exists.
+- `IllegalArgumentException`, thrown by the call (also by `awaitProcessedAsync`, never signalled), for an aggregate
+  type the processor does not react to, a `null` argument or a negative timeout. An interrupted `awaitProcessed` throws
+  `IllegalStateException` and keeps the thread's interrupt flag set.
+- `InTransactionEventProcessor` checks the aggregate type and the `null` arguments the same way, then returns at once
+  (`awaitProcessedAsync`: an empty `Mono`); it does not use the timeout.
 
 Where N comes from: `eventStore.appendToStream(...)` returns the `PersistedEvent`s. When the append happens further
 down - a `commandBus.send(...)`, a repository - wrap the call in `AppendedEvents.recordDuring(...)`
@@ -1057,9 +1078,12 @@ appends and then reads its read model at once races it. Rules:
 - **An existence check that must not lag asks the write side.** An idempotency probe ("does this order already
   exist?") reads the aggregate - a repository's `findX`, `tryLoad(id)` or `eventStore.fetchStream(...)` - never an
   eventually consistent view.
-- **`awaitProcessed` sees only the processor in this JVM.** When another instance holds the processor's lock (a
-  second application on the same test database, a reused container), a `ViewEventProcessor` times out and an
-  `EventProcessor` reads a resume point that lags by the snapshot interval.
+- **`awaitProcessed` sees only the processor in this JVM.** When the processor is not started here, or another
+  instance holds its lock (a second application on the same test database, a reused container), the call throws
+  `AwaitProcessedTimeoutException` once the timeout has passed: a `ViewEventProcessor` or `EventProcessor` that never
+  held the lock here has no resume point to read. One that held it and lost it reads a stale resume point instead - a
+  `ViewEventProcessor` the one it had when it lost the lock, an `EventProcessor` the last one saved to the database,
+  which lags by up to `snapshotResumePointsEvery`.
 
 For the seams `awaitProcessed` cannot cover - an aggregate fold or a cache downstream of a processor, or a processor
 whose lock another instance holds - poll with an assertion and a deadline (e.g. Awaitility's
