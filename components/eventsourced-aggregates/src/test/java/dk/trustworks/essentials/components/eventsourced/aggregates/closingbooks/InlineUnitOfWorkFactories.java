@@ -232,6 +232,28 @@ final class InlineUnitOfWorkFactories {
     }
 
     /**
+     * Like {@link #inline()}, but its one mock unit of work is also the current one ({@code getCurrentUnitOfWork()}), it
+     * always answers {@link UnitOfWorkStatus#Started} and {@code markAsRollbackOnly} does nothing - as
+     * {@code SpringTransactionAwareUnitOfWork} does when it joined a Spring-managed transaction it did not start.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    static HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> ignoringRollbackOnly() {
+        HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> factory = mock(HandleAwareUnitOfWorkFactory.class);
+        var uow = mock(HandleAwareUnitOfWork.class);
+        when(uow.status()).thenReturn(UnitOfWorkStatus.Started);
+        when(factory.getCurrentUnitOfWork()).thenReturn(Optional.of(uow));
+        try {
+            when(factory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(invocation -> {
+                CheckedFunction<HandleAwareUnitOfWork, ?> function = invocation.getArgument(0);
+                return function.apply(uow);
+            });
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return factory;
+    }
+
+    /**
      * Like {@link #inline()}, but every exception thrown inside {@code withUnitOfWork}/{@code usingUnitOfWork} reaches
      * the caller wrapped in a {@link UnitOfWorkException}, whether the call is outermost or nested - as
      * {@code UnitOfWorkFactory.withUnitOfWork} does. {@link #inline()} passes exceptions through unwrapped, so a test

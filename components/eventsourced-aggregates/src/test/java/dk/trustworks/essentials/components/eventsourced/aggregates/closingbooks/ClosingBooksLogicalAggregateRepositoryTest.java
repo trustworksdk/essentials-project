@@ -227,6 +227,7 @@ class ClosingBooksLogicalAggregateRepositoryTest {
                                                                                   "next-period",
                                                                                   (aggregate, context, hint) -> new TestAggregate(context.streamAggregateId())))
                     .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
+                        assertThat(refusal.aggregateHeldUncommittedChanges()).isFalse();
                         assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isFalse();
                         assertThat(refusal.getMessage()).doesNotContain("rollback-only");
                     });
@@ -317,6 +318,7 @@ class ClosingBooksLogicalAggregateRepositoryTest {
                                                                                   }))
                     .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
                         assertThat(uow.getCauseOfRollback()).isSameAs(refusal);
+                        assertThat(refusal.aggregateHeldUncommittedChanges()).isTrue();
                         assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isTrue();
                         assertThat(refusal.getMessage()).contains("the unit of work was marked rollback-only")
                                                         .contains("nothing more written in it will commit");
@@ -330,7 +332,46 @@ class ClosingBooksLogicalAggregateRepositoryTest {
     }
 
     /**
-     * Control for the refusal above: the same unit of work, with the generation still open, appends the closing event to
+     * A unit of work that joined a Spring-managed transaction it did not start ignores the rollback-only mark. The
+     * refusal must then answer held = {@code true}, marked = {@code false}, so the caller lets it propagate instead of
+     * retrying in the same unit of work, where the stale closing event is still registered.
+     */
+    @Test
+    void a_guarded_close_and_open_next_generation_refusal_reports_held_changes_when_the_unit_of_work_ignores_the_rollback_only_mark() {
+        var aggregateType        = AggregateType.of("Accounts");
+        var generationRepository = new InMemoryClosingBooksGenerationResolver<String>();
+        @SuppressWarnings("unchecked")
+        var delegate = mock(StatefulAggregateRepository.class);
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        generationRepository,
+                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation,
+                                                        InlineUnitOfWorkFactories.ignoringRollbackOnly());
+        var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
+                                                                                                               delegate,
+                                                                                                               coordinator,
+                                                                                                               ClosingBooksIdSerializer.stringBased());
+        var logicalAggregateId = new LogicalAggregateId<>("account-1");
+        when(delegate.save(any(TestAggregate.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        var generation1Aggregate = repository.open(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId()));
+        repository.closeAndOpenNextGeneration(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId()));
+        generation1Aggregate.record(new TestBooksClosed("account-1#1"));
+
+        assertThatThrownBy(() -> repository.closeAndOpenNextGenerationGuarded(logicalAggregateId,
+                                                                              generation1Aggregate,
+                                                                              "next-period",
+                                                                              (aggregate, context, hint) -> new TestAggregate(context.streamAggregateId())))
+                .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
+                    assertThat(refusal.aggregateHeldUncommittedChanges()).isTrue();
+                    assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isFalse();
+                    assertThat(refusal.getMessage()).contains("no unit of work took the rollback-only mark");
+                });
+    }
+
+    /**
+     * Control for the refusal in
+     * {@link #a_guarded_close_and_open_next_generation_refusal_rolls_back_the_callers_unit_of_work_when_the_aggregate_recorded_changes()}:
+     * the same unit of work, with the generation still open, appends the closing event to
      * that generation's stream - so the refusal's empty stream is the rollback's doing, not a flush that never runs.
      */
     @Test

@@ -249,12 +249,14 @@ public class ClosingBooksLogicalAggregateRepository<LOGICAL_ID,
      * can run in that same unit of work. When {@code currentAggregate} holds uncommitted changes (e.g. a closing event
      * recorded before this call), they would be appended to the moved generation's stream on commit, so the refusal
      * marks the unit of work rollback-only, with the refusal as cause: retry in a new unit of work. Nothing more written
-     * in that unit of work commits then, and with the JDBI unit of work no exception says so; check
-     * {@link ClosingBooksGenerationMovedException#unitOfWorkMarkedRollbackOnly()} (or the unit of work's {@code status()})
-     * before retrying in the same one. A unit of work that
-     * joined a Spring-managed transaction it did not start (e.g. inside a {@code @Transactional} method) ignores that
-     * mark, so there let the refusal propagate out of the transaction to roll it back (see
-     * {@link ClosingBooksGenerationMovedException}). The comparison uses
+     * in that unit of work commits then, and with the JDBI unit of work no exception says so. Decide from both of the
+     * refusal's flags: retry in the same unit of work only when
+     * {@link ClosingBooksGenerationMovedException#aggregateHeldUncommittedChanges()} is {@code false}; when both it and
+     * {@link ClosingBooksGenerationMovedException#unitOfWorkMarkedRollbackOnly()} are {@code true}, retry in a new unit
+     * of work; when only the first is {@code true}, the unit of work did not take the mark - e.g. one that joined a
+     * Spring-managed transaction it did not start (inside a {@code @Transactional} method) ignores it - so let the
+     * refusal propagate out of the transaction to roll it back (see {@link ClosingBooksGenerationMovedException}).
+     * The comparison uses
      * the open generation the unguarded form resolves anyway, and the check for uncommitted changes is in memory, so it
      * costs no extra database round trip.
      *

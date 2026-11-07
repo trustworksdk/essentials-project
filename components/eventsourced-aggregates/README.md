@@ -1755,13 +1755,26 @@ recorded before the guarded call) would be appended to the moved generation's st
 for that: when the aggregate is a `StatefulAggregate` holding uncommitted changes, the refusal marks the `UnitOfWork`
 rollback-only, with the refusal as cause, so retry in a new unit of work. After that, nothing more written in that
 unit of work commits, and with the JDBI `UnitOfWork` no exception says so: its `commit()` rolls back and returns
-normally, so a caller that catches the refusal and retries in the same unit of work silently loses the retry. Check
-`exception.unitOfWorkMarkedRollbackOnly()` (or `uow.status() == UnitOfWorkStatus.MarkedForRollbackOnly`) before
-retrying in the same unit of work; the exception's message also says so when it is `true`. A `UnitOfWork` that
-joined a Spring-managed transaction it did not start (e.g. inside a `@Transactional` method) ignores that mark, and
-`unitOfWorkMarkedRollbackOnly()` answers `false`: there, let the exception propagate out of the transaction (do not
-catch it) so it rolls back. The coordinator's `closeAndOpenNextGeneration(expectedCurrentGeneration)` is not given the
-aggregate, so it does not check it; after recording a change on it, rethrow and retry in a new unit of work.
+normally, so a caller that catches the refusal and retries in the same unit of work silently loses the retry.
+
+Decide from two flags on the exception, never from the mark alone. `exception.aggregateHeldUncommittedChanges()`
+answers whether the guarded method found a `StatefulAggregate` holding uncommitted changes;
+`exception.unitOfWorkMarkedRollbackOnly()` answers whether the unit of work then took the rollback-only mark:
+
+- retry in the same unit of work only when the aggregate is a `StatefulAggregate` and
+  `aggregateHeldUncommittedChanges()` is `false`;
+- when both are `true`, nothing more written in that unit of work commits (the message says so too): retry in a new
+  unit of work;
+- when `aggregateHeldUncommittedChanges()` is `true` and `unitOfWorkMarkedRollbackOnly()` is `false`, the mark was not
+  taken — a `UnitOfWork` that joined a Spring-managed transaction it did not start (e.g. inside a `@Transactional`
+  method) ignores it — and the stale change is still registered with the transaction: let the exception propagate out
+  of the transaction (do not catch it) so it rolls back. The message says so too.
+
+Only a `StatefulAggregate`'s uncommitted changes are inspected. A `FlexAggregate`'s or a decider's pending
+`EventsToPersist` are not, so with those `aggregateHeldUncommittedChanges()` is `false` even when a stale event is
+pending: always let the unit of work roll back and retry in a new one. The coordinator's
+`closeAndOpenNextGeneration(expectedCurrentGeneration)` is not given the aggregate, so it does not check it and leaves
+both flags `false`; after recording a change on it, rethrow and retry in a new unit of work.
 
 > **Carrying state forward is your job.** Closing a generation does not copy balances into the new stream. Emit an
 > opening/carry-forward event on the new generation — that is what `ClosingBooksNextGenerationFactory` /

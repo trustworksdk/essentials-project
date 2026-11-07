@@ -1054,12 +1054,21 @@ event recorded before the guarded call) would be appended to the moved generatio
 the aggregate is a `StatefulAggregate` holding uncommitted changes, the refusal marks the `UnitOfWork` rollback-only
 (cause = the refusal) — retry in a new unit of work. ⚠️ After that, nothing more written in that unit of work commits,
 and with the JDBI `UnitOfWork` no exception says so (`commit()` rolls back and returns normally): a catch-and-retry in
-the same unit of work is silently lost. Check `exception.unitOfWorkMarkedRollbackOnly()` (or
-`uow.status() == UnitOfWorkStatus.MarkedForRollbackOnly`) before retrying in it; the message says so too when `true`.
-A `UnitOfWork` that joined a Spring-managed transaction it did not start (e.g. inside `@Transactional`) ignores that
-mark, and `unitOfWorkMarkedRollbackOnly()` answers `false` — there, let the exception propagate out of the
-transaction (do not catch it) so it rolls back. The coordinator's `closeAndOpenNextGeneration(expected)` is not given
-the aggregate, so it does not check it — after recording a change on it, rethrow and retry in a new unit of work.
+the same unit of work is silently lost. ⚠️ Decide from two flags, never from the mark alone:
+`exception.aggregateHeldUncommittedChanges()` (a `StatefulAggregate` with uncommitted changes was seen) and
+`exception.unitOfWorkMarkedRollbackOnly()` (the unit of work took the mark).
+
+| held | marked | What to do |
+|---|---|---|
+| `false` | `false` | Retry in the same unit of work — only when the aggregate is a `StatefulAggregate` |
+| `true` | `true` | Nothing more in that unit of work commits (message says so) — retry in a new unit of work |
+| `true` | `false` | Mark not taken — e.g. a `UnitOfWork` that joined a Spring-managed transaction it did not start (`@Transactional`) ignores it; the stale change is still registered — let the exception propagate out of the transaction (do not catch it) so it rolls back (message says so) |
+
+Only a `StatefulAggregate`'s uncommitted changes are inspected: a `FlexAggregate`'s or a decider's pending
+`EventsToPersist` leave `aggregateHeldUncommittedChanges()` `false` even when a stale event is pending — with those,
+always let the unit of work roll back and retry in a new one. The coordinator's `closeAndOpenNextGeneration(expected)`
+is not given the aggregate, so it does not check it and leaves both flags `false` — after recording a change on it,
+rethrow and retry in a new unit of work.
 
 `ClosingBooksStatefulAggregateRepository` is the thinner variant (3 type params) that only maps logical id → open generation's stream id.
 

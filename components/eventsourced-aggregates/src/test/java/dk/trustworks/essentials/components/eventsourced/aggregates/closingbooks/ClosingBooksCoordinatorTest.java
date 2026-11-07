@@ -406,6 +406,7 @@ class ClosingBooksCoordinatorTest {
             assertThatThrownBy(() -> coordinator.evaluatePolicy(generation1, generation1Aggregate, ClosingBooksTriggerMode.ON_ACCESS, rollPolicy, null))
                     .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
                         assertThat(uow.getCauseOfRollback()).isSameAs(refusal);
+                        assertThat(refusal.aggregateHeldUncommittedChanges()).isTrue();
                         assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isTrue();
                         assertThat(refusal.getMessage()).contains("the unit of work was marked rollback-only");
                     });
@@ -413,6 +414,67 @@ class ClosingBooksCoordinatorTest {
         });
 
         assertThat(repository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
+    }
+
+    /**
+     * A unit of work that joined a Spring-managed transaction it did not start ignores the rollback-only mark, so the
+     * stale changes stay registered with that transaction: the refusal must say the aggregate held changes while the
+     * mark was not taken, so the caller lets it propagate instead of retrying in the same unit of work.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void a_guarded_evaluate_policy_refusal_reports_held_changes_when_the_unit_of_work_ignores_the_rollback_only_mark() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var repository         = new InMemoryClosingBooksGenerationResolver<String>();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.ignoringRollbackOnly());
+        var generation1 = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        coordinator.closeAndOpenNextGeneration(logicalAggregateId);
+        StatefulAggregate<String, Object, ?> generation1Aggregate = mock(StatefulAggregate.class);
+        when(generation1Aggregate.getUncommittedChanges())
+                .thenReturn(new EventsToPersist<>("Account-123#1", EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED, List.of("books closed")));
+        ClosingBooksDecisionPolicy<String, StatefulAggregate<String, Object, ?>> rollPolicy = context -> ClosingBooksDecision.CLOSE_AND_OPEN_NEXT;
+
+        assertThatThrownBy(() -> coordinator.evaluatePolicy(generation1, generation1Aggregate, ClosingBooksTriggerMode.ON_ACCESS, rollPolicy, null))
+                .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
+                    assertThat(refusal.aggregateHeldUncommittedChanges()).isTrue();
+                    assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isFalse();
+                    assertThat(refusal.getMessage()).contains("no unit of work took the rollback-only mark")
+                                                    .contains("let this exception propagate");
+                });
+    }
+
+    /**
+     * Only a {@link StatefulAggregate}'s uncommitted changes are inspected. Any other aggregate - a {@code FlexAggregate}
+     * or a decider, whose pending {@code EventsToPersist} its repository registers with the unit of work - answers
+     * {@code false}, which does not mean a retry in the same unit of work is safe.
+     */
+    @Test
+    void a_guarded_evaluate_policy_refusal_does_not_inspect_an_aggregate_that_is_not_a_stateful_aggregate() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var unitOfWorkFactory  = InlineUnitOfWorkFactories.joining();
+        var repository         = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        unitOfWorkFactory);
+        var generation1 = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        coordinator.closeAndOpenNextGeneration(logicalAggregateId);
+        var pendingEvents = new EventsToPersist<>("Account-123#1", EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED, List.<Object>of("books closed"));
+        ClosingBooksDecisionPolicy<String, EventsToPersist<String, Object>> rollPolicy = context -> ClosingBooksDecision.CLOSE_AND_OPEN_NEXT;
+
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            assertThatThrownBy(() -> coordinator.evaluatePolicy(generation1, pendingEvents, ClosingBooksTriggerMode.ON_ACCESS, rollPolicy, null))
+                    .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, refusal -> {
+                        assertThat(refusal.aggregateHeldUncommittedChanges()).isFalse();
+                        assertThat(refusal.unitOfWorkMarkedRollbackOnly()).isFalse();
+                    });
+            assertThat(uow.status()).isEqualTo(UnitOfWorkStatus.Started);
+        });
     }
 
     /**
