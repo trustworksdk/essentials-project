@@ -489,7 +489,7 @@ committed before the save goes on, also when the save runs inside a unit of work
 transaction with no unit of work bound yet - a rollback of that unit of work or transaction cannot take it back. There, the write runs on a virtual thread and is waited for at most 10 s per resume point, however many
 subscriptions the subscriber runs; if that runs out, that resume point is not saved, and the changed resume points after
 it in the same save get no wait of their own: one with no gaps to write is still saved, one whose write would have to be
-waited for is not, and the next save tries those again (`9fa05c32c`, `<!-- fix:U-002 -->`). Should that
+waited for is not, and the next save tries those again (`9fa05c32c`, `e3e204865`). Should that
 write fail after the wait ran out, the failure is logged at WARN, naming the write's thread, and its gaps stay kept for
 the next save (`6a32ac597`). While such a write still runs, a later save or the
 subscription's end on that thread waits for it at most 10 s too, instead of hanging. Any acknowledgement, on any
@@ -503,7 +503,7 @@ without a limit for the gate's lock while such a recording holds it, but an even
 recorded at once still waits for that recording (`fc5127f70`). While such a recording holds the lock, delivering waits
 for it once rather than once per event that opens a gap, fills one or is a duplicate; a duplicate dropped meanwhile is
 acknowledged to the delegate's poll once the recording ends, unless the subscriber still holds it; and a subscription
-that ends while the lock is briefly taken still records the gaps it gave up on (`<!-- fix:U-001 -->`). A save whose gaps could not be written (that
+that ends while the lock is briefly taken still records the gaps it gave up on (`3ca677809`). A save whose gaps could not be written (that
 timeout, or an unreachable database) saves the other resume points and then fails, so a stop or lock release stops
 retrying it at once and a shutdown treats an unreachable database as one, instead of retrying it every 100 ms for up
 to 5 s. A reset (`EventStoreSubscription#resetFrom`, `DefaultEventStoreSubscriptionManager#resetStoredResumePoint`)
@@ -512,7 +512,7 @@ saved (`85ad4303e`). When the manager's periodic or threshold save keeps failing
 aggregate type, the first failure is logged at WARN with its stack trace, the repeats at DEBUG, and one WARN a minute
 counts them, instead of a WARN with a stack trace on every check (`5476460cc`). Another subscriber's first failure no
 longer restarts that count, and a subscription that is no longer active is forgotten, so a failure after it subscribes
-again is a WARN with its stack trace again (`<!-- fix:U-002 -->`).
+again is a WARN with its stack trace again (`e3e204865`).
 
 There is nothing to configure. A few cases still write the gap at once, as before:
 
