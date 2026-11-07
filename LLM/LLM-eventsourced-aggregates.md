@@ -1051,6 +1051,10 @@ unitOfWorkFactory.usingUnitOfWork(uow -> repository.load(new LogicalAggregateId<
 `evaluatePolicy(AggregateGeneration loadedFrom, aggregate, triggerMode, policy, rollover)`. The unguarded
 `evaluatePolicy(id, aggregate, …)` decides on whatever generation is open once the lock is held.
 
+⚠️ `ClosingBooksGenerationMovedException`: a refusal leaves the unit of work rollback-only. Catch it outside the unit of
+work, reload and retry in a new unit of work. Do not catch it and carry on inside the same unit of work or
+`@Transactional` method: nothing written there afterwards commits.
+
 `ClosingBooksStatefulAggregateRepository` is the thinner variant (3 type params) that only maps logical id → open generation's stream id.
 
 ### Scheduled Scans

@@ -32,6 +32,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * {@link ClosingBooksLogicalAggregateRepository#closeAndOpenNextGenerationGuarded(LogicalAggregateId, dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregate, Object, ClosingBooksNextGenerationFactory)}.
  * Reload the aggregate from the generation that is open now and decide again, or drop the operation when the roll that
  * got there first already did what it wanted.
+ * <p>
+ * A refusal leaves the unit of work rollback-only. Catch it outside the unit of work, reload and retry in a new unit of
+ * work. Do not catch it and carry on inside the same unit of work or {@code @Transactional} method: nothing written
+ * there afterwards commits.
  */
 public class ClosingBooksGenerationMovedException extends IllegalStateException {
     private final transient LogicalAggregateId<?>  logicalAggregateId;

@@ -243,8 +243,12 @@ public class ClosingBooksLogicalAggregateRepository<LOGICAL_ID,
      * generation it was loaded from - so the caller passes nothing extra. Under the generation lock, and before anything
      * is closed, the open generation's stream id is compared with it; when another caller rolled or closed that
      * generation in between, nothing is closed or opened, the factory is not called and
-     * {@link ClosingBooksGenerationMovedException} is thrown. Reload and decide again. The comparison uses the open
-     * generation the unguarded form resolves anyway, so it costs no extra database round trip.
+     * {@link ClosingBooksGenerationMovedException} is thrown. The comparison uses the open generation the unguarded
+     * form resolves anyway, so it costs no extra database round trip.
+     * <p>
+     * A refusal leaves the unit of work rollback-only. Catch it outside the unit of work, reload and retry in a new unit
+     * of work. Do not catch it and carry on inside the same unit of work or {@code @Transactional} method: nothing
+     * written there afterwards commits.
      *
      * @param logicalAggregateId    the identifier of the logical aggregate to be transitioned to the next generation
      * @param currentAggregate      the aggregate loaded from the generation to close; its {@code aggregateId()} must be set

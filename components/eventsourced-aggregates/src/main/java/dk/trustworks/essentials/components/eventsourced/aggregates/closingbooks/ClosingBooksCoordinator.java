@@ -160,6 +160,10 @@ public class ClosingBooksCoordinator<ID> {
      * {@link ClosingBooksGenerationMovedException} is thrown; the rollover is then counted with outcome
      * {@code generation_moved}, not {@code failed}. The comparison uses the open generation that the unguarded form
      * resolves anyway, so it costs no extra database round trip.
+     * <p>
+     * A refusal leaves the unit of work rollback-only. Catch it outside the unit of work, reload and retry in a new unit
+     * of work. Do not catch it and carry on inside the same unit of work or {@code @Transactional} method: nothing
+     * written there afterwards commits.
      *
      * @param expectedCurrentGeneration the generation the caller loaded its aggregate from
      * @return the newly opened generation
@@ -306,6 +310,10 @@ public class ClosingBooksCoordinator<ID> {
      * Unlike the unguarded form this never opens a first generation: {@code loadedFrom} was open when the aggregate was
      * loaded, so an empty logical aggregate means it was closed since. As there, load the aggregate in the unit of work
      * this is called in, or a closing event the rollover records on it is not persisted.
+     * <p>
+     * A refusal leaves the unit of work rollback-only. Catch it outside the unit of work, reload and retry in a new unit
+     * of work. Do not catch it and carry on inside the same unit of work or {@code @Transactional} method: nothing
+     * written there afterwards commits.
      *
      * @param loadedFrom  the generation {@code aggregate} was loaded from
      * @param aggregate   the aggregate loaded from {@code loadedFrom}'s stream

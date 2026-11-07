@@ -120,7 +120,9 @@ skipped periods are not materialised as empty generations; the gap is only logge
   command rolled the account in between, it would close the newer generation and build the next one from the older
   account's state. The `accounts` context that replaced `TradingAccounts` (`Accounts.closeAndOpenNextGeneration`)
   now calls `closeAndOpenNextGenerationGuarded(id, account, hint, factory)`, which throws
-  `ClosingBooksGenerationMovedException`, closing nothing, in that case.
+  `ClosingBooksGenerationMovedException`, closing nothing, in that case. A refusal leaves the unit of work
+  rollback-only. Catch it outside the unit of work, reload and retry in a new unit of work. Do not catch it and carry
+  on inside the same unit of work or `@Transactional` method: nothing written there afterwards commits.
 - **`SCHEDULED_SCAN`** runs `ClosingBooksManager` under a fenced lock (`ClosingBooksManager.java:130`);
   `DefaultClosingBooksScheduledScanProcessor.processNextBatch` loads the oldest open generations and, for each, calls
   `ClosingBooksCoordinator.evaluateScannedGeneration(generation, aggregateLoader, policy, scanRollover)`. The

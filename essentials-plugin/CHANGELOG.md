@@ -5,6 +5,9 @@ targets, with a `-N` suffix for plugin-only releases.
 
 ## 0.60.1-9 — targets Essentials 0.60.1
 
+- **Closing-books refusal** — the eventsourced-aggregates reference warns that a `ClosingBooksGenerationMovedException`
+  from a guarded closing-books method leaves the unit of work rollback-only: catch it outside the unit of work, reload
+  and retry in a new one. No skill, rule or script changed.
 - **Failed-batch hand-off policy** — the postgresql-event-store reference describes the overload
   `BatchedPersistedEventHandler#handOffFailedBatch(events, failure, subscriptionErrorPolicy)`, which the batched
   subscriber calls with the policy that gave up on the batch and which by default delegates to the two-argument one.
