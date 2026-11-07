@@ -30,6 +30,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderId;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkLifecycleCallback;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.functional.CheckedFunction;
 import dk.trustworks.essentials.types.LongRange;
@@ -390,42 +391,183 @@ class CdcEventStoreDeliveryGateTest {
 
     /**
      * An acknowledgement that could not take the gate lock within the wait leaves its fill to the recording that holds
-     * the lock: once that recording committed, the fill's recorded gap is resolved, and the event is no longer awaited
+     * the lock, once the acknowledging unit of work committed: once that recording committed, the fill's recorded gap is
+     * resolved, and the event is no longer awaited
      */
     @Test
     void an_acknowledgement_that_timed_out_behind_a_recording_has_its_fill_s_gap_resolved_once_the_recording_commits() throws Exception {
-        setupDeferringGapRecording();
-        cdcEventStore.deferredGapsRecordingWait(Duration.ofMillis(200));
-        var acknowledgement = SubscriberAcknowledgement.create();
-        var received        = subscribe(Optional.of(acknowledgement));
-        // 2 fills a gap kept in memory and is not acknowledged yet; 5 opens a gap kept in memory
-        poll(1, 3, 2, 5);
-        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 2L, 5L)));
-        gapHandler.reportsRecordedTransientGaps = true;
-        var recordingMayEnd = new CountDownLatch(1);
-        gapHandler.addingTransientGapsMayEnd = recordingMayEnd;
+        var acknowledgingUnitOfWork = new UnitOfWorkTheTestEnds();
+        acknowledgeBehindABlockedRecording(acknowledgingUnitOfWork);
         try {
-            var outcomes = new CopyOnWriteArrayList<String>();
-            var callerWithUnitOfWork = Thread.ofPlatform().daemon().unstarted(() -> {
-                outcomes.add(outcomeOf(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close()));
-                outcomes.add(outcomeOf(() -> acknowledgement.acknowledge(event(2))));
-            });
-            doAnswer(inv -> Thread.currentThread().equals(callerWithUnitOfWork) ? Optional.of(mock(EventStoreUnitOfWork.class)) : Optional.empty())
-                    .when(uowFactory).getCurrentUnitOfWork();
-            callerWithUnitOfWork.start();
-            callerWithUnitOfWork.join(Duration.ofSeconds(5));
-
-            assertThat(callerWithUnitOfWork.isAlive()).isFalse();
-            assertThat(outcomes).containsExactly("IllegalStateException", "returned");
             assertThat(gapHandler.resolved).as("left to the recording").isEmpty();
+            acknowledgingUnitOfWork.commit();
         } finally {
-            recordingMayEnd.countDown();
+            gapHandler.addingTransientGapsMayEnd.countDown();
         }
 
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(gapHandler.resolved).containsExactly(List.of(2L)));
         assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).containsExactly(LongRange.only(2), LongRange.only(4));
         assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(2))).as("the acknowledged fill").isFalse();
         assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(4))).as("the gap still open").isTrue();
+    }
+
+    /**
+     * The acknowledging unit of work commits only after the recording it timed out behind let go of the gate lock: the
+     * fill waits for the next holder of the lock - here a save's recording - and its gap is resolved then
+     */
+    @Test
+    void an_acknowledgement_whose_unit_of_work_commits_after_the_recording_ended_has_its_fill_s_gap_resolved_by_the_next_recording() throws Exception {
+        var acknowledgingUnitOfWork = new UnitOfWorkTheTestEnds();
+        acknowledgeBehindABlockedRecording(acknowledgingUnitOfWork);
+        gapHandler.addingTransientGapsMayEnd.countDown();
+        await().atMost(Duration.ofSeconds(5))
+               .untilAsserted(() -> assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).containsExactly(LongRange.only(2), LongRange.only(4)));
+        // The recording settles, and lets go of the gate lock, only after it added the gaps
+        var gateLock = gateLock();
+        await().atMost(Duration.ofSeconds(5)).until(() -> !gateLock.isLocked());
+        assertThat(gapHandler.resolved).as("not committed yet").isEmpty();
+
+        acknowledgingUnitOfWork.commit();
+        // A later save with no unit of work current
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+
+        assertThat(gapHandler.resolved).containsExactly(List.of(2L));
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(2))).as("the acknowledged fill").isFalse();
+    }
+
+    /**
+     * The transient gap is the only durable record that a fill is still owed: an acknowledgement that timed out behind a
+     * recording, made in a unit of work that then rolls back - a commit failure, or a handler failure after the
+     * acknowledgement - must leave the fill's gap open, so a restart delivers the fill again
+     */
+    @Test
+    void an_acknowledgement_that_timed_out_behind_a_recording_leaves_its_fill_s_gap_open_when_its_unit_of_work_rolls_back() throws Exception {
+        var acknowledgingUnitOfWork = new UnitOfWorkTheTestEnds();
+        acknowledgeBehindABlockedRecording(acknowledgingUnitOfWork);
+        try {
+            acknowledgingUnitOfWork.rollback();
+        } finally {
+            gapHandler.addingTransientGapsMayEnd.countDown();
+        }
+        await().atMost(Duration.ofSeconds(5))
+               .untilAsserted(() -> assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).containsExactly(LongRange.only(2), LongRange.only(4)));
+        // The recording settles, and lets go of the gate lock, only after it added the gaps
+        var gateLock = gateLock();
+        await().atMost(Duration.ofSeconds(5)).until(() -> !gateLock.isLocked());
+        // Whoever holds the lock next settles nothing for it either
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+
+        assertThat(gapHandler.resolved).as("the handling of the fill never committed").isEmpty();
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(2))).as("the fill is still owed").isTrue();
+    }
+
+    /**
+     * Delivers 1, 3, 2, 5 - 2 fills a gap kept in memory and is not acknowledged yet; 5 opens a gap kept in memory -
+     * then, on a thread with {@code acknowledgingUnitOfWork} current, starts a save whose recording blocks in the gap
+     * handler ({@link RecordingGapHandler#addingTransientGapsMayEnd}, left for the caller to count down) and
+     * acknowledges 2, which times out behind that recording
+     *
+     * @return the subscriber's acknowledgement
+     */
+    private SubscriberAcknowledgement acknowledgeBehindABlockedRecording(UnitOfWorkTheTestEnds acknowledgingUnitOfWork) throws InterruptedException {
+        setupDeferringGapRecording();
+        cdcEventStore.deferredGapsRecordingWait(Duration.ofMillis(200));
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var received        = subscribe(Optional.of(acknowledgement));
+        poll(1, 3, 2, 5);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 2L, 5L)));
+        gapHandler.reportsRecordedTransientGaps = true;
+        gapHandler.addingTransientGapsMayEnd = new CountDownLatch(1);
+        var outcomes = new CopyOnWriteArrayList<String>();
+        var callerWithUnitOfWork = Thread.ofPlatform().daemon().unstarted(() -> {
+            outcomes.add(outcomeOf(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close()));
+            outcomes.add(outcomeOf(() -> acknowledgement.acknowledge(event(2))));
+        });
+        doAnswer(inv -> Thread.currentThread().equals(callerWithUnitOfWork) ? Optional.of(acknowledgingUnitOfWork.unitOfWork) : Optional.empty())
+                .when(uowFactory).getCurrentUnitOfWork();
+        callerWithUnitOfWork.start();
+        callerWithUnitOfWork.join(Duration.ofSeconds(5));
+
+        assertThat(callerWithUnitOfWork.isAlive()).isFalse();
+        assertThat(outcomes).containsExactly("IllegalStateException", "returned");
+        return acknowledgement;
+    }
+
+    /**
+     * A mocked unit of work whose lifecycle callbacks the test runs, as a real one does when it ends
+     */
+    private static final class UnitOfWorkTheTestEnds {
+        final EventStoreUnitOfWork                                         unitOfWork = mock(EventStoreUnitOfWork.class);
+        private final List<Map.Entry<Object, UnitOfWorkLifecycleCallback<Object>>> registered = new CopyOnWriteArrayList<>();
+
+        UnitOfWorkTheTestEnds() {
+            doAnswer(inv -> {
+                registered.add(Map.entry(inv.getArgument(0), inv.getArgument(1)));
+                return inv.getArgument(0);
+            }).when(unitOfWork).registerLifecycleCallbackForResource(any(), any());
+        }
+
+        void commit() {
+            registered.forEach(entry -> entry.getValue().beforeCommit(unitOfWork, List.of(entry.getKey())));
+            registered.forEach(entry -> entry.getValue().afterCommit(unitOfWork, List.of(entry.getKey())));
+        }
+
+        void rollback() {
+            var cause = new IllegalStateException("the acknowledging unit of work rolled back");
+            registered.forEach(entry -> entry.getValue().beforeRollback(unitOfWork, List.of(entry.getKey()), cause));
+            registered.forEach(entry -> entry.getValue().afterRollback(unitOfWork, List.of(entry.getKey()), cause));
+        }
+    }
+
+    /**
+     * A fill of a gap kept in memory, acknowledged with the gate lock free inside a unit of work that then rolls back,
+     * stays held: no gap was recorded for it, so forgotten at acknowledgement time it would be owed by nothing - the next
+     * save records its gap instead
+     */
+    @Test
+    void a_fill_of_a_gap_kept_in_memory_acknowledged_in_a_unit_of_work_that_rolls_back_stays_held() {
+        var acknowledgingUnitOfWork = new UnitOfWorkTheTestEnds();
+        acknowledgeAHeldFillIn(acknowledgingUnitOfWork);
+
+        acknowledgingUnitOfWork.rollback();
+
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(2))).as("the fill is still owed").isTrue();
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+        assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).containsExactly(LongRange.only(2));
+    }
+
+    /**
+     * The same acknowledgement whose unit of work commits: the fill is done with, and no gap is ever recorded for it
+     */
+    @Test
+    void a_fill_of_a_gap_kept_in_memory_acknowledged_in_a_unit_of_work_is_done_with_once_it_commits() {
+        var acknowledgingUnitOfWork = new UnitOfWorkTheTestEnds();
+        acknowledgeAHeldFillIn(acknowledgingUnitOfWork);
+
+        acknowledgingUnitOfWork.commit();
+
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(2))).as("the acknowledged fill").isFalse();
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+        assertThat(gapHandler.transientGapsAdded).as("nothing left to record").isEmpty();
+        assertThat(gapHandler.resolved).isEmpty();
+    }
+
+    /**
+     * Delivers 1, 3, 2 - 2 fills a gap kept in memory - and acknowledges 2 with {@code acknowledgingUnitOfWork} current
+     * and the gate lock free; the fill is still held before that unit of work ends
+     */
+    private void acknowledgeAHeldFillIn(UnitOfWorkTheTestEnds acknowledgingUnitOfWork) {
+        setupDeferringGapRecording();
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var received        = subscribe(Optional.of(acknowledgement));
+        poll(1, 3, 2);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 2L)));
+
+        doReturn(Optional.of(acknowledgingUnitOfWork.unitOfWork)).when(uowFactory).getCurrentUnitOfWork();
+        acknowledgement.acknowledge(event(2));
+        doReturn(Optional.empty()).when(uowFactory).getCurrentUnitOfWork();
+
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(2))).as("not committed yet").isTrue();
     }
 
     /**

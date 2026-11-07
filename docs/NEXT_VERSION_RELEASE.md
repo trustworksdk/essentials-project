@@ -514,7 +514,11 @@ the next save (`6a32ac597`). While such a write still runs, a later save or the
 subscription's end on that thread waits for it at most 10 s too, instead of hanging. Any acknowledgement, on any
 thread, waits for a running gap recording at most 10 s and then returns as usual, so it never fails the subscriber's
 handler or stops the subscription through its error policy; the gap recording resolves the gap of a gap fill it
-acknowledged once that recording commits (`fc5127f70`). `awaitProcessed` does not wait for it: its check of a held
+acknowledged once that recording commits (`fc5127f70`) - and only once the unit of work that acknowledged it has
+committed: should that unit of work roll back, the gap stays open, so the fill is still owed after a restart and the
+subscriber's retry acknowledges it again; the same holds for a gap fill whose gap was only kept in memory, which is
+forgotten only once the acknowledging unit of work has committed, also under a Spring transaction with no unit of work
+bound yet (`<!-- fix:U-003 -->`). `awaitProcessed` does not wait for it: its check of a held
 gap fill only tries the gate's lock, and when the lock is busy treats the event as not processed yet and asks again at
 its next check (`8b99e122e`, `10cc0c7cc`); while such a recording runs every event of that subscriber and
 aggregate type counts as not processed yet (`a01c8e746`). Delivering an event no longer waits

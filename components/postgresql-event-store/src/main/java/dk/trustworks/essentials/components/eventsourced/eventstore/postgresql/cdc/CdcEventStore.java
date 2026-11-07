@@ -1268,7 +1268,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          *     below without it: nothing kept, it returns; else it leaves the check to a recording;</li>
          *     <li>the subscription's end sets {@link #ended} without it;</li>
          *     <li>an acknowledgement ({@link #withoutFillsOfUnrecordedGaps}) leaves its events to the recording to settle,
-         *     and returns;</li>
+         *     once its unit of work commits, and returns;</li>
          *     <li>{@link #isAwaitedAsGap}'s check of a held fill ({@link #isAwaitedAsFillOfAnUnrecordedGap}) only tries
          *     it, and else answers "awaited";</li>
          *     <li>on the delivering thread, which waits once per stall rather than once per event
@@ -1325,10 +1325,18 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         private final AtomicLong                                ordersKeptWhileLockBusy = new AtomicLong();
         /**
          * The events acknowledged while {@link #deferredGapsLock} was not free within {@code deferredGapsRecordingWait}
-         * (see {@link #withoutFillsOfUnrecordedGaps}) - written without the lock, settled by the next acknowledgement or
-         * recording that holds it ({@link #settleAcknowledgedWhileLockBusy()}). Empty but for that rare case
+         * (see {@link #withoutFillsOfUnrecordedGaps}) - written without the lock, and only once the acknowledging unit of work
+         * committed ({@link #acknowledgedWhileLockBusyOnceCommitted}): a rollback leaves the gaps of its fills open. Also the
+         * events of a committed acknowledgement whose commit callback found the lock busy, or whose held fill a recording
+         * recorded before the commit ({@link #doneWithOnceCommitted}). Settled by the next acknowledgement or recording
+         * that holds the lock ({@link #settleAcknowledgedWhileLockBusy()}). Empty but for those rare cases
          */
         private final Queue<PersistedEvent>                     acknowledgedWhileLockBusy = new ConcurrentLinkedQueue<>();
+        /**
+         * Adds an acknowledgement's events to {@link #acknowledgedWhileLockBusy} once its unit of work committed (see
+         * {@link #acknowledgedWhileLockBusyOnceCommitted})
+         */
+        private final AcknowledgedWhileLockBusyOnceCommitted    queuedOnceCommitted     = new AcknowledgedWhileLockBusyOnceCommitted();
         /**
          * The events {@link #dropped} while {@link #deferredGapsLock} was not free - written without the lock, settled by
          * the lock's next holder with no unit of work current ({@link #settleDroppedWhileLockBusy()}): acknowledged to the delegate's poll unless a fill
@@ -1428,7 +1436,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * waiting for a fill it handed on. Never waits for {@link #deferredGapsLock} longer than
          * {@code deferredGapsRecordingWait}: the subscriber's unit of work may hold a lock a recording that holds it waits
          * for. Past that wait it returns as usual, having acknowledged {@code events} to the delegate's polls, and leaves
-         * the gaps of the fills among them to that recording to settle (see {@link #withoutFillsOfUnrecordedGaps}).
+         * the gaps of the fills among them to that recording to settle - once the caller's unit of work commits, so a
+         * rollback leaves them open (see {@link #withoutFillsOfUnrecordedGaps}).
          *
          * @throws RuntimeException a failure to resolve them inside the caller's unit of work - the gaps stay open
          */
@@ -1779,50 +1788,56 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         /**
          * Runs on the subscriber's thread, possibly inside its unit of work: waits for {@link #deferredGapsLock} at most
          * {@code deferredGapsRecordingWait}. Never throws into the subscriber's handler: when the lock is not free within
-         * the wait, or the thread is interrupted waiting for it, {@code events} go to {@link #acknowledgedWhileLockBusy}
-         * and none of them is resolved now - resolving waits for the gap handler's monitor, which a recording blocked
-         * inside {@code addTransientGaps} holds as well. Only a recording holds the lock that long, and it has already
-         * taken in every fill it records, so the recording settles them once it ends: a fill of a gap kept in memory is
-         * then done with if the recording failed, and else its recorded gap is resolved, in the recording's own unit of
-         * work. An acknowledgement made just as the recording let go of the lock is settled by the next acknowledgement
-         * or recording that takes it. Holding the lock with no unit of work current, it also settles the events dropped
+         * the wait, or the thread is interrupted waiting for it, and a last try of it fails too, none of {@code events} is
+         * resolved now - resolving waits for the gap handler's monitor, which a recording blocked inside
+         * {@code addTransientGaps} holds as well. They go to {@link #acknowledgedWhileLockBusy} once the subscriber's unit
+         * of work commits, or at once with none current ({@link #acknowledgedWhileLockBusyOnceCommitted}): its rollback
+         * leaves the gaps of the fills among them open, so the fills are still owed after a restart. Only a recording holds
+         * the lock that long, and it has already taken in every fill it records, so the recording settles them once it
+         * ends: a fill of a gap kept in memory is then done with if the recording failed, and else its recorded gap is
+         * resolved, in the recording's own unit of work. Events queued as the recording let go of the lock - a commit
+         * after it did, say - are settled by the next acknowledgement or recording that takes it. Holding the lock inside
+         * a unit of work or a Spring transaction, it leaves the fills of gaps kept in memory held until that unit of work
+         * commits ({@link #doneWithOnceCommitted}), so a rollback leaves them owed, as for a recorded gap. Holding the
+         * lock with no unit of work current, it also settles the events dropped
          * without it ({@link #settleDroppedWhileLockBusyWithNoUnitOfWorkCurrent()}); inside the subscriber's unit of
          * work it leaves them to a dropped check on the delivering thread or a recording.
          *
-         * @return {@code events} without the fills of gaps kept in memory, which are done with from now on - plus the
-         * events acknowledged earlier without the lock that fill no gap kept in memory; empty when the lock was not taken
+         * @return {@code events} without the fills of gaps kept in memory, which are done with from now on - or, inside a
+         * unit of work, once it commits - plus the events acknowledged earlier without the lock that fill no gap kept in
+         * memory; empty when the lock was not taken
          */
         private List<PersistedEvent> withoutFillsOfUnrecordedGaps(List<PersistedEvent> events) {
             if (!defersGapRecording) return events;
-            if (!tryLockOrRestoreInterrupt(deferredGapsRecordingWait)) {
-                acknowledgedWhileLockBusy.addAll(events);
-                log.debug("[{}-{}] The gate lock was not free within {} - the acknowledged events {} are settled once a recording of the gaps kept in memory lets go of it",
-                          subscriberId.orElseThrow(), aggregateType, deferredGapsRecordingWait, events.stream().map(event -> event.globalEventOrder().longValue()).toList());
-                // The recording may have let go of the lock meanwhile, having settled the earlier ones only
-                if (!deferredGapsLock.tryLock()) return List.of();
-                List<PersistedEvent> acknowledgedEarlier;
-                List<PersistedEvent> droppedNotHeld;
-                try {
-                    acknowledgedEarlier = settleAcknowledgedWhileLockBusy();
-                    droppedNotHeld = settleDroppedWhileLockBusyWithNoUnitOfWorkCurrent();
-                } finally {
-                    deferredGapsLock.unlock();
-                }
-                acknowledgeDroppedToDelegate(droppedNotHeld);
-                return acknowledgedEarlier;
+            // The recording may have let go of the lock as the wait ran out: tried once more, then settled as below
+            if (!tryLockOrRestoreInterrupt(deferredGapsRecordingWait) && !deferredGapsLock.tryLock()) {
+                acknowledgedWhileLockBusyOnceCommitted(events);
+                return List.of();
             }
             List<PersistedEvent> fillsOfRecordedGaps;
             List<PersistedEvent> droppedNotHeld;
+            List<PersistedEvent> heldFillsDoneWithOnceCommitted = List.of();
             try {
                 var acknowledgedEarlier = settleAcknowledgedWhileLockBusy();
                 List<PersistedEvent> notFillsOfUnrecordedGaps;
                 if (unrecordedFillsNotDoneWith.isEmpty()) {
                     notFillsOfUnrecordedGaps = events;
                 } else {
-                    notFillsOfUnrecordedGaps = events.stream()
-                                                     .filter(event -> unrecordedFillsNotDoneWith.remove(event.globalEventOrder().longValue()) == null)
-                                                     .toList();
-                    noteWhatIsKept();
+                    var notHeld = new ArrayList<PersistedEvent>(events.size());
+                    var held    = new ArrayList<PersistedEvent>();
+                    for (var event : events) {
+                        (unrecordedFillsNotDoneWith.containsKey(event.globalEventOrder().longValue()) ? held : notHeld).add(event);
+                    }
+                    notFillsOfUnrecordedGaps = notHeld;
+                    if (!held.isEmpty()) {
+                        if (TransactionProbe.isUnitOfWorkActive(unitOfWorkFactory)) {
+                            // Held until the acknowledging unit of work commits: its rollback must leave the fill owed
+                            heldFillsDoneWithOnceCommitted = held;
+                        } else {
+                            held.forEach(event -> unrecordedFillsNotDoneWith.remove(event.globalEventOrder().longValue()));
+                            noteWhatIsKept();
+                        }
+                    }
                 }
                 // After the fills just done with are forgotten: a dropped duplicate of one is no longer held
                 droppedNotHeld = settleDroppedWhileLockBusyWithNoUnitOfWorkCurrent();
@@ -1835,8 +1850,119 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             } finally {
                 deferredGapsLock.unlock();
             }
+            if (!heldFillsDoneWithOnceCommitted.isEmpty()) {
+                doneWithOnceCommitted(heldFillsDoneWithOnceCommitted);
+            }
             acknowledgeDroppedToDelegate(droppedNotHeld);
             return fillsOfRecordedGaps;
+        }
+
+        /**
+         * {@link #withoutFillsOfUnrecordedGaps} could not take {@link #deferredGapsLock}: {@code events} go to
+         * {@link #acknowledgedWhileLockBusy} once the unit of work current on the acknowledging thread commits, and are
+         * left out of it should that unit of work roll back - their recorded gaps then stay open, the transient gap being
+         * the only durable record that a fill is still owed, and the subscriber's retry acknowledges them again. A Spring
+         * transaction with no unit of work bound yet counts as one: a unit of work that joins it is bound for the callback
+         * ({@link #unitOfWorkTheAcknowledgementCommitsWith()}). With neither current, they go there at once. Only on this
+         * fallback, never per event: one lifecycle callback registration per acknowledgement that falls back, and no wait -
+         * after the commit, the events are settled as {@link AcknowledgedWhileLockBusyOnceCommitted#settleCommitted} says.
+         */
+        private void acknowledgedWhileLockBusyOnceCommitted(List<PersistedEvent> events) {
+            var unitOfWork = unitOfWorkTheAcknowledgementCommitsWith();
+            if (unitOfWork.isPresent()) {
+                unitOfWork.get().registerLifecycleCallbackForResource(List.copyOf(events), queuedOnceCommitted);
+            } else {
+                acknowledgedWhileLockBusy.addAll(events);
+            }
+            log.debug("[{}-{}] The gate lock was not free within {} - the acknowledged events {} are settled by the next acknowledgement or recording that holds it{}",
+                      subscriberId.orElseThrow(), aggregateType, deferredGapsRecordingWait, events.stream().map(event -> event.globalEventOrder().longValue()).toList(),
+                      unitOfWork.isPresent() ? ", once the acknowledging unit of work commits" : "");
+        }
+
+        /**
+         * {@link #withoutFillsOfUnrecordedGaps} held the lock, inside a unit of work or a Spring transaction: the fills of
+         * gaps kept in memory among the acknowledged events stay in {@link #unrecordedFillsNotDoneWith} until that unit of
+         * work commits, so its rollback leaves them held - a save then records their gaps, and a restart delivers them
+         * again. Only for an acknowledgement that holds such a fill: one lifecycle callback registration, no wait
+         */
+        private void doneWithOnceCommitted(List<PersistedEvent> heldFills) {
+            var unitOfWork = unitOfWorkTheAcknowledgementCommitsWith();
+            if (unitOfWork.isPresent()) {
+                unitOfWork.get().registerLifecycleCallbackForResource(heldFills, queuedOnceCommitted);
+            } else {
+                queuedOnceCommitted.settleCommitted(heldFills);
+            }
+        }
+
+        /**
+         * @return the unit of work current on the acknowledging thread; under a Spring transaction with none bound yet, the
+         * one {@code getOrCreateNewUnitOfWork()} binds to join it; empty with neither
+         */
+        private Optional<? extends UnitOfWork> unitOfWorkTheAcknowledgementCommitsWith() {
+            var current = unitOfWorkFactory.getCurrentUnitOfWork();
+            if (current.isPresent() || !TransactionProbe.isUnitOfWorkActive(unitOfWorkFactory)) return current;
+            return Optional.of(unitOfWorkFactory.getOrCreateNewUnitOfWork());
+        }
+
+        /**
+         * Settles the events an acknowledgement left to its unit of work's commit (see
+         * {@link #acknowledgedWhileLockBusyOnceCommitted} and {@link #doneWithOnceCommitted}); a rollback leaves them out,
+         * their gaps open and their fills held
+         */
+        private final class AcknowledgedWhileLockBusyOnceCommitted implements UnitOfWorkLifecycleCallback<List<PersistedEvent>> {
+            @Override
+            public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<List<PersistedEvent>> associatedResources) {
+                return BeforeCommitProcessingStatus.COMPLETED;
+            }
+
+            @Override
+            public void afterCommit(UnitOfWork unitOfWork, List<List<PersistedEvent>> associatedResources) {
+                associatedResources.forEach(this::settleCommitted);
+            }
+
+            /**
+             * Only tries {@link #deferredGapsLock}, never waits for it: when taken, a fill among {@code events} still held
+             * in {@link #unrecordedFillsNotDoneWith} is done with from now on; every other event - and all of them when the
+             * lock is busy - goes to {@link #acknowledgedWhileLockBusy}, for the next acknowledgement or recording that
+             * holds the lock, which a resume point save counts as work. No unit of work is used here: one that resolves a
+             * recorded gap is that holder's
+             */
+            void settleCommitted(List<PersistedEvent> events) {
+                if (!deferredGapsLock.tryLock()) {
+                    acknowledgedWhileLockBusy.addAll(events);
+                    return;
+                }
+                try {
+                    for (var event : events) {
+                        if (unrecordedFillsNotDoneWith.remove(event.globalEventOrder().longValue()) == null) {
+                            acknowledgedWhileLockBusy.add(event);
+                        }
+                    }
+                    noteWhatIsKept();
+                } finally {
+                    deferredGapsLock.unlock();
+                }
+            }
+
+            @Override
+            public void beforeRollback(UnitOfWork unitOfWork, List<List<PersistedEvent>> associatedResources, Throwable causeOfTheRollback) {
+            }
+
+            @Override
+            public void afterRollback(UnitOfWork unitOfWork, List<List<PersistedEvent>> associatedResources, Throwable causeOfTheRollback) {
+                log.debug("[{}-{}] The unit of work that acknowledged the events {} rolled back - their gaps stay open, and their fills owed",
+                          subscriberId.orElseThrow(), aggregateType,
+                          associatedResources.stream().flatMap(List::stream).map(event -> event.globalEventOrder().longValue()).toList());
+            }
+
+            /**
+             * No pending change, as {@link GapFillsAwaitingAcknowledgement} reports for its resolutions: nothing is queued
+             * before the unit of work commits
+             */
+            @Override
+            public boolean hasPendingChanges(List<PersistedEvent> resource) {
+                return false;
+            }
         }
 
         /**
@@ -1936,7 +2062,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * <p>
          * Takes in the gaps kept and settles the events acknowledged without the lock first, so a fill done with is not
          * recorded; and again once done, recorded or not, as an acknowledgement that waited for the lock past
-         * {@code deferredGapsRecordingWait} meanwhile left its events to this recording: a fill whose gap this recorded is
+         * {@code deferredGapsRecordingWait} meanwhile left its events to this recording, once its unit of work committed: a fill whose gap this recorded is
          * resolved here, in a unit of work of its own. Then it settles the events dropped without the lock
          * ({@link #settleDroppedWhileLockBusy()}), clears {@link #deliveringThreadStalled} and lets go of the lock.
          *

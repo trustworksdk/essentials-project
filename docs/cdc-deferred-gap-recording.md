@@ -74,8 +74,9 @@ Until a resume point past a gap has been saved, a crash resumes **below** the ga
    If any condition fails, the gate writes the gap at once, as before.
 4. **What happens to a gap held in memory:**
    - **It fills.** The fill goes to `unrecordedFillsNotDoneWith`, not to `GapFillsAwaitingAcknowledgement`. When the
-     subscriber is done with it (ack, or hand-on for a subscriber that does not acknowledge), it is simply forgotten. It
-     costs no insert and no delete.
+     subscriber is done with it (ack, or hand-on for a subscriber that does not acknowledge), it is simply forgotten -
+     for an ack made inside a unit of work or a Spring transaction, only once that unit of work commits, so a rollback
+     leaves it held and a save records its gap (`DeliveryGate.doneWithOnceCommitted`). It costs no insert and no delete.
    - **A save happens first.** The save records every order still held, including fills the subscriber is not done
      with, as transient gaps: one `addTransientGaps` per run of consecutive orders, in one unit of work per gate. It then
      hands the fills to `GapFillsAwaitingAcknowledgement`, so they resolve as before.
@@ -230,7 +231,9 @@ The existing pins still apply: `CdcEventStoreCommitOrderIT`, `CdcEventStoreGapFi
   hands its check to a new virtual thread, waited for at most 10 s again. The subscription's end marks the gate ended without the lock. An
   acknowledgement waits for the lock at most 10 s and then returns as usual, so it never fails the subscriber's handler
   or reaches its error policy: its events are acknowledged to the delegate's poll, and the flush settles them once it
-  ends. A held fill among them is then done with if the flush failed, and otherwise the gap the flush recorded for it is
+  ends - but only once the acknowledging unit of work has committed (`DeliveryGate.acknowledgedWhileLockBusyOnceCommitted`).
+  Should that unit of work roll back, the gaps of the fills among them stay open, so the fills are still owed after a
+  restart, and the subscriber's retry acknowledges them again. A held fill among them is then done with if the flush failed, and otherwise the gap the flush recorded for it is
   resolved in the flush's own unit of work. `isAwaitedAsGap`'s check of a held fill (asked by `awaitProcessed`) only
   tries the lock, and when the lock is not free answers that the event is still awaited. The delivering thread's checks of an opened gap, a fill and a dropped event wait for it at most 10 s
   once per stall, not once per event: after one wait runs out, these checks only try the lock until the flush lets go
