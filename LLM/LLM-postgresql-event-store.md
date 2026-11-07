@@ -1013,9 +1013,9 @@ What "processed" means per processor type:
 - Conservative: a later event of the same aggregate still queued holds the barrier too.
 - **What the timeout bounds.** `awaitProcessed` checks immediately, then every 25 ms, and returns as soon as a check
   finds the event processed. It compares the deadline only between checks, so it can return or throw later than
-  `timeout` by the check in progress: a few database reads (resume point, the event, the queue), and under a
-  `CdcEventStore` up to 10 s more while a deferred gap recording holds one of the subscription's delivery gates.
-  `Duration.ZERO` means one check.
+  `timeout` by the check in progress: a few database reads (resume point, the event, the queue). Under a
+  `CdcEventStore`, a delivery gate whose lock is busy (a deferred gap recording holds it) makes the check answer "not
+  processed yet" without waiting for it. `Duration.ZERO` means one check.
 - `awaitProcessedAsync` runs each check on `Schedulers.boundedElastic()` and holds no thread between checks. Its
   timeout starts when the `Mono` is subscribed, not when the method is called, and fires on time even while a check
   is running.

@@ -514,10 +514,10 @@ the next save (`6a32ac597`). While such a write still runs, a later save or the
 subscription's end on that thread waits for it at most 10 s too, instead of hanging. Any acknowledgement, on any
 thread, waits for a running gap recording at most 10 s and then returns as usual, so it never fails the subscriber's
 handler or stops the subscription through its error policy; the gap recording resolves the gap of a gap fill it
-acknowledged once that recording commits (`fc5127f70`). `awaitProcessed` likewise waits for it at
-most 10 s per check and then treats the event as not processed yet (`8b99e122e`); that is one wait per check however
-many subscriptions the subscriber runs, not one per subscription, and while such a recording runs every event of that
-subscriber and aggregate type counts as not processed yet (`a01c8e746`). Delivering an event no longer waits
+acknowledged once that recording commits (`fc5127f70`). `awaitProcessed` does not wait for it: its check of a held
+gap fill only tries the gate's lock, and when the lock is busy treats the event as not processed yet and asks again at
+its next check (`8b99e122e`, `<!-- fix:U-001 -->`); while such a recording runs every event of that subscriber and
+aggregate type counts as not processed yet (`a01c8e746`). Delivering an event no longer waits
 without a limit for the gate's lock while such a recording holds it, but an event that opens a gap that must be
 recorded at once still waits for that recording (`fc5127f70`). While such a recording holds the lock, delivering waits
 for it once rather than once per event that opens a gap, fills one or is a duplicate; a duplicate dropped meanwhile is
@@ -531,7 +531,11 @@ saved (`85ad4303e`). When the manager's periodic or threshold save keeps failing
 aggregate type, the first failure is logged at WARN with its stack trace, the repeats at DEBUG, and one WARN a minute
 counts them, instead of a WARN with a stack trace on every check (`5476460cc`). Another subscriber's first failure no
 longer restarts that count, and a subscription that is no longer active is forgotten, so a failure after it subscribes
-again is a WARN with its stack trace again (`e3e204865`).
+again is a WARN with its stack trace again (`e3e204865`). A save inside a unit of work no longer fails for a
+subscription that keeps no gap while a delivering thread or an acknowledgement holds its gate lock for a moment, and
+starts no recording to find that out; with less than 100 ms (or a tenth of the wait, when that is less) left of the
+save's wait, a subscription that does keep gaps fails it at once rather than start a recording that would outlast the
+wait (`<!-- fix:U-001 -->`).
 
 There is nothing to configure. A few cases still write the gap at once, as before:
 

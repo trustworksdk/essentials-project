@@ -46,8 +46,10 @@ targets, with a `-N` suffix for plugin-only releases.
   check in progress), `awaitProcessedAsync`'s timeout counted from subscription, `AwaitProcessedTimeoutException` on
   timeout, `IllegalArgumentException` for a negative timeout or a `null` argument. It no longer says an exclusive
   `EventProcessor` subscription held by another instance is read from its last saved resume point: one that never held
-  the lock in this JVM has no resume point and times out; only one that held it and lost it reads the saved one. No
-  skill, rule or script changed.
+  the lock in this JVM has no resume point and times out; only one that held it and lost it reads the saved one. It no
+  longer says a call under a `CdcEventStore` can overrun its timeout by a further wait for a delivery gate a deferred
+  gap recording holds: a busy gate lock makes the check answer "not processed yet" without waiting. No skill, rule or
+  script changed.
 
 ## 0.60.1-8 — targets Essentials 0.60.1
 

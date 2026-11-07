@@ -104,7 +104,7 @@ the same as before. An opt-out property would only control a cost; it would not 
 | Processors (`advanceResumeFromAndIncluding`, `awaitProcessed`) | Advance the in-memory resume point only. Persisting it always goes through the repository. `InTransaction*` subscriptions use the event bus, not `pollEvents` |
 | Direct `pollEvents` without a manager | Never opted in, so gaps are written at once (unchanged) |
 | Give-up (`recordGivenUpGaps`) | Orders still held are dropped from memory. A range held whole is not passed to `giveUpTransientGapRanges`, so it costs no statement. Nothing was saved past such a gap, so a restart reads its orders again |
-| `isAwaitedAsGap` | An undelivered held gap is answered by the running tracker (`isAwaited`). A held fill the subscriber is not done with is answered by the running gate (`isAwaitedAsFillOfAnUnrecordedGap`), which waits for the gate lock at most 10 s (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`) per call - one wait shared by all of the subscriber's running gates of the aggregate type, not one per gate - and answers that the event is still awaited when the lock is not free within that wait or the thread is interrupted. That answer is conservative: while a recording that outlasted its wait holds a gate lock, every order of the subscriber and aggregate type is answered as awaited, also one no gap is about, until that recording ends. Both are written when the subscription ends, so the transient rows answer after that |
+| `isAwaitedAsGap` | An undelivered held gap is answered by the running tracker (`isAwaited`). A held fill the subscriber is not done with is answered by the running gate (`isAwaitedAsFillOfAnUnrecordedGap`), which only tries the gate lock and never waits for it - `awaitProcessed` checks its timeout only between calls, so a wait here held its caller past that timeout - and answers that the event is still awaited when the lock is not free; `awaitProcessed` then asks again after its poll interval. That answer is conservative: while a recording holds a gate lock, every order of the subscriber and aggregate type is answered as awaited, also one no gap is about, until that recording ends. Both are written when the subscription ends, so the transient rows answer after that |
 | Seeding from `getTransientGapsFor` at subscribe | A re-subscribe on a new manager reads the rows written by the last save or by the end of the previous subscription. A `retry()`/`repeat()` re-subscribe starts from the original start order, below everything |
 | Wide gaps / lower end (`addTransientGaps`) | Never deferred; written at once |
 | Subscription end inside a unit of work or a Spring transaction | The held gaps are written on a virtual thread of their own, rather than in a unit of work the gate does not own. The ending thread waits for it at most 10 s (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT`); if the wait runs out it logs a WARN and the subscription ends, and the write goes on and commits when it can; should it fail instead, that failure is logged at WARN too |
@@ -215,20 +215,24 @@ The existing pins still apply: `CdcEventStoreCommitOrderIT`, `CdcEventStoreGapFi
   no wait, as their flushes could be blocked by the same lock and would each wait again: the repository calls
   `beforeResumePointSave(subscriber, aggregateType, waitEndsAt)` with a deadline that has passed
   (`GapRecordingBeforeSaveDurableSubscriptionRepository.saveResumePoints`), so a gate with nothing to flush lets its
-  resume point be saved, and one whose flush would be waited for fails at once and its resume point is not saved. It
+  resume point be saved, and one whose flush would be waited for fails at once and its resume point is not saved. A
+  flush is started only while at least 100 ms (`DeliveryGate.DEFERRED_GAPS_RECORDING_WAIT_FLOOR`, or a tenth of the
+  wait when that is less) is left of the save's wait; with less left the gate fails at once too, rather than start a
+  flush that would outlast the wait and keep the gate lock. A gate tells that it has nothing to flush also while another
+  thread holds its lock for a moment: it then reads a volatile flag, `keepsUnrecorded`, and the queues of what was kept,
+  acknowledged or dropped without the lock, so an empty gate never fails the save because of that lock. It
   throws after saving the others, and the caller logs it. The flush goes on, keeping the gate lock, until the caller's transaction ends; should
   it fail after the wait ran out, the failure is logged at WARN (`CdcEventStore.runOnAVirtualThreadWaitingAtMost`), as
   no caller is waiting for it any more, and the gaps stay kept for the next flush. Until the caller's transaction ends,
   only the flush itself, which runs on a thread with no unit of work, waits for the gate lock without a limit. Every
   other path either does not wait for it or waits at most 10 s, since a thread that waits for this subscription may be
-  the one whose unit of work blocks the flush. A second save finds the lock taken and hands its check to a new virtual
-  thread, waited for at most 10 s again. The subscription's end marks the gate ended without the lock. An
+  the one whose unit of work blocks the flush. A second save finds the lock taken and, unless the gate keeps nothing,
+  hands its check to a new virtual thread, waited for at most 10 s again. The subscription's end marks the gate ended without the lock. An
   acknowledgement waits for the lock at most 10 s and then returns as usual, so it never fails the subscriber's handler
   or reaches its error policy: its events are acknowledged to the delegate's poll, and the flush settles them once it
   ends. A held fill among them is then done with if the flush failed, and otherwise the gap the flush recorded for it is
-  resolved in the flush's own unit of work. `isAwaitedAsGap`'s check of a held fill (asked by `awaitProcessed`) waits
-  for the lock at most 10 s per call, however many subscriptions the subscriber runs, then answers that the event is
-  still awaited. The delivering thread's checks of an opened gap, a fill and a dropped event wait for it at most 10 s
+  resolved in the flush's own unit of work. `isAwaitedAsGap`'s check of a held fill (asked by `awaitProcessed`) only
+  tries the lock, and when the lock is not free answers that the event is still awaited. The delivering thread's checks of an opened gap, a fill and a dropped event wait for it at most 10 s
   once per stall, not once per event: after one wait runs out, these checks only try the lock until the flush lets go
   of it or one of them takes it (`DeliveryGate.lockedOnDeliveringThread`). An acknowledgement made on the delivering
   thread (a subscriber without a `SubscriberAcknowledgement`) keeps its own wait per call. A gap an event opens is then kept without
