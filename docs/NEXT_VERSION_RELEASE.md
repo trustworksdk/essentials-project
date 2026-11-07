@@ -516,7 +516,7 @@ thread, waits for a running gap recording at most 10 s and then returns as usual
 handler or stops the subscription through its error policy; the gap recording resolves the gap of a gap fill it
 acknowledged once that recording commits (`fc5127f70`). `awaitProcessed` does not wait for it: its check of a held
 gap fill only tries the gate's lock, and when the lock is busy treats the event as not processed yet and asks again at
-its next check (`8b99e122e`, `<!-- fix:U-001 -->`); while such a recording runs every event of that subscriber and
+its next check (`8b99e122e`, `10cc0c7cc`); while such a recording runs every event of that subscriber and
 aggregate type counts as not processed yet (`a01c8e746`). Delivering an event no longer waits
 without a limit for the gate's lock while such a recording holds it, but an event that opens a gap that must be
 recorded at once still waits for that recording (`fc5127f70`). While such a recording holds the lock, delivering waits
@@ -535,7 +535,7 @@ again is a WARN with its stack trace again (`e3e204865`). A save inside a unit o
 subscription that keeps no gap while a delivering thread or an acknowledgement holds its gate lock for a moment, and
 starts no recording to find that out; with less than 100 ms (or a tenth of the wait, when that is less) left of the
 save's wait, a subscription that does keep gaps fails it at once rather than start a recording that would outlast the
-wait (`<!-- fix:U-001 -->`).
+wait (`10cc0c7cc`).
 
 There is nothing to configure. A few cases still write the gap at once, as before:
 
