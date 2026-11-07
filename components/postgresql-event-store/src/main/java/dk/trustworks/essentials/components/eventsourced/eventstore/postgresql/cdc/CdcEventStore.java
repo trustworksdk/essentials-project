@@ -1144,6 +1144,16 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * and {@link #isAwaitedAsGap}'s check of a held fill (see {@link #isAwaitedAsFillOfAnUnrecordedGap})
          */
         static final Duration DEFERRED_GAPS_RECORDING_WAIT = Duration.ofSeconds(10);
+        /**
+         * The PostgreSQL {@code lock_timeout} {@link #recordDeferredGaps()} sets ({@code SET LOCAL}) on its own unit of
+         * work before writing the gaps: a gap write blocked by a row lock then fails instead of holding
+         * {@link #deferredGapsLock} - and every acknowledgement, save and {@code awaitProcessed} check queued behind it -
+         * for as long as the lock is held. Half of {@link #DEFERRED_GAPS_RECORDING_WAIT}, so a blocked recording gives up
+         * and releases the lock well within the time a thread waiting for it is prepared to wait; long enough that a
+         * recording only gives up behind a lock that is plainly stuck, not one held by an ordinary short transaction.
+         * The gaps stay kept in memory and the next resume point save records them
+         */
+        static final Duration DEFERRED_GAPS_RECORDING_LOCK_TIMEOUT = Duration.ofSeconds(5);
 
         /**
          * @return {@code orders} as runs of consecutive orders, ascending
@@ -1190,7 +1200,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * A save's emptiness check, the subscription's end, an acknowledgement and {@link #isAwaitedAsGap}'s check of a
          * held fill ({@link #isAwaitedAsFillOfAnUnrecordedGap}) never wait for it without a limit: each may run inside a
          * unit of work, and a recording that outlasted {@link #DEFERRED_GAPS_RECORDING_WAIT} may hold it while it waits for
-         * a lock that very unit of work holds, a wait PostgreSQL cannot see as a deadlock
+         * a lock that very unit of work holds, a wait PostgreSQL cannot see as a deadlock. That wait is bounded: the
+         * recording's unit of work sets {@link #DEFERRED_GAPS_RECORDING_LOCK_TIMEOUT} as its {@code lock_timeout}, so a
+         * gap write blocked by a row lock fails and the recording releases this lock; the gaps stay kept for the next save
          */
         private final ReentrantLock                             deferredGapsLock        = new ReentrantLock();
         /**
@@ -1523,6 +1535,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * {@link #gapFillsBeingHandedOn}, so the subscriber's acknowledgement resolves them as any other. Holds
          * {@link #deferredGapsLock} until committed. Only called on a thread with no unit of work or transaction to join (see
          * {@link #recordDeferredGapsCommitted()}), so the unit of work is committed before the gaps are forgotten.
+         * <p>
+         * That unit of work is the recording's own, so it first sets {@code SET LOCAL lock_timeout} to
+         * {@link #DEFERRED_GAPS_RECORDING_LOCK_TIMEOUT}, scoped to its transaction: a gap write blocked by a row lock fails
+         * after that long, the unit of work rolls back, {@link #deferredGapsLock} is released and the gaps stay kept.
          *
          * @throws RuntimeException the gaps could not be recorded - they stay kept, for the next call
          */
@@ -1536,6 +1552,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 var runs    = runsOf(orders);
                 var handler = gapHandler.get();
                 var reconciliation = unitOfWorkFactory.withUnitOfWork(uow -> {
+                    // Scoped to this unit of work's transaction, which is the recording's own (see above)
+                    uow.handle().execute("SET LOCAL lock_timeout = '" + DEFERRED_GAPS_RECORDING_LOCK_TIMEOUT.toMillis() + "ms'");
                     synchronized (handler) {
                         var recorded = GapReconciliation.NONE;
                         for (var run : runs) {

@@ -210,6 +210,12 @@ The existing pins still apply: `CdcEventStoreCommitOrderIT`, `CdcEventStoreGapFi
   subscription delivers the event again; and `isAwaitedAsGap`'s check of a held fill (asked by `awaitProcessed`) waits
   for it at most 10 s, then answers that the event is still awaited. The manager's save paths are not expected to run
   inside a unit of work.
+- **A flush blocked by a row lock.** The flush's own unit of work starts with `SET LOCAL lock_timeout = '5000ms'`
+  (`DeliveryGate.DEFERRED_GAPS_RECORDING_LOCK_TIMEOUT`, scoped to that transaction only), so a gap write blocked by a
+  row lock - the caller's unit of work above, or any other transaction - fails after 5 s instead of keeping the gate
+  lock, and every acknowledgement, save and `awaitProcessed` check queued behind it, for as long as the lock is held.
+  The unit of work rolls back, the gate lock is released, the gaps stay in memory and the next save records them. Cost:
+  one extra statement per flush, at save time only, never per event.
 - **Non-exclusive subscriptions on several instances** share one resume-point row. Another instance's save can move it
   past a gap this instance holds. That is no weaker than before: the shared row could already move past events this
   instance had not handled.

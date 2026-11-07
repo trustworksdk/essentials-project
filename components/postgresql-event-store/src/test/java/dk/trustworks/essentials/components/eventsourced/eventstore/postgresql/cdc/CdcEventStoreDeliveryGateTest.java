@@ -30,6 +30,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.functional.CheckedFunction;
 import dk.trustworks.essentials.types.LongRange;
+import org.jdbi.v3.core.Handle;
 import org.junit.jupiter.api.*;
 import reactor.core.Disposable;
 import reactor.core.publisher.Sinks;
@@ -45,6 +46,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
@@ -64,6 +66,8 @@ class CdcEventStoreDeliveryGateTest {
 
     private RecordingGapHandler                                              gapHandler;
     private EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork>      uowFactory;
+    /** The handle of every unit of work {@code uowFactory.withUnitOfWork} runs */
+    private Handle                                                           uowHandle;
     private ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate;
     private CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration> cdcEventStore;
 
@@ -302,6 +306,29 @@ class CdcEventStoreDeliveryGateTest {
     }
 
     /**
+     * The recording of the gaps kept in memory bounds how long a row lock can block it - and so how long it holds the
+     * gate lock: its own unit of work sets a lock_timeout before any gap is written
+     */
+    @Test
+    void recording_the_gaps_kept_in_memory_sets_a_lock_timeout_before_writing_them() {
+        setupDeferringGapRecording();
+        var gapsAddedWhenLockTimeoutWasSet = new CopyOnWriteArrayList<Integer>();
+        doAnswer(inv -> {
+            gapsAddedWhenLockTimeoutWasSet.add(gapHandler.transientGapsAdded.size());
+            return 0;
+        }).when(uowHandle).execute(anyString());
+        var received = subscribe();
+        poll(1, 3);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L)));
+
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+
+        verify(uowHandle).execute("SET LOCAL lock_timeout = '5000ms'");
+        assertThat(gapsAddedWhenLockTimeoutWasSet).as("set before any gap was written").containsExactly(0);
+        assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).containsExactly(LongRange.only(2));
+    }
+
+    /**
      * A resume point save whose caller has a unit of work current must not record the gaps kept in memory in it: the gate
      * forgets them once recorded, so a rollback of the caller's unit of work would lose them, and the next save - past
      * the gap - would record nothing that makes a restart wait for the gap's event
@@ -497,7 +524,10 @@ class CdcEventStoreDeliveryGateTest {
         delegate = mock(ConfigurableEventStore.class);
         uowFactory = mock(EventStoreUnitOfWorkFactory.class);
         EventStreamGapHandler<?>                                                  gapHandlers = mock(EventStreamGapHandler.class);
-        when(uowFactory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(inv -> ((CheckedFunction<Object, ?>) inv.getArgument(0)).apply(null));
+        uowHandle = mock(Handle.class);
+        var unitOfWork = mock(EventStoreUnitOfWork.class);
+        when(unitOfWork.handle()).thenReturn(uowHandle);
+        when(uowFactory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(inv -> ((CheckedFunction<Object, ?>) inv.getArgument(0)).apply(unitOfWork));
         when(gapHandlers.gapHandlerFor(any())).thenReturn(gapHandler);
         when(delegate.findAggregateEventStreamConfiguration(ORDERS)).thenReturn(configuration);
         when(delegate.getEventStoreSubscriptionObserver()).thenReturn(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver());

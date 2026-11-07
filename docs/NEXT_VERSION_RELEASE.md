@@ -496,6 +496,11 @@ to 5 s. A reset (`EventStoreSubscription#resetFrom`, `DefaultEventStoreSubscript
 whose gaps could not be written now fails with an exception instead of reporting a reset whose resume point was not
 saved (`85ad4303e`).
 
+The gap write's own transaction sets `lock_timeout` to 5 s (`SET LOCAL`, scoped to that transaction), so a write blocked
+by a row lock gives up after 5 s instead of holding up acknowledgements, saves and `awaitProcessed` behind it for as
+long as the lock is held; the gaps stay in memory and the next save writes them. One extra statement per write, at save
+time only.
+
 There is nothing to configure. A few cases still write the gap at once, as before:
 
 - direct `pollEvents` subscribers;
