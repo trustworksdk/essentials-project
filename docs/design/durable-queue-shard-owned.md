@@ -10,10 +10,10 @@ Related documents:
 
 | Document | Contents |
 |---|---|
-| [`LLM/LLM-postgresql-queue-shard-owned.md`](../LLM/LLM-postgresql-queue-shard-owned.md) | Consumer-facing configuration reference, sizing formulas, worked examples |
-| [`docs/durable-queue-measurements.md`](./durable-queue-measurements.md) | Every measured number, and the environment that produced it |
-| [`components/postgresql-queue-shard-owned/CLAUDE.md`](../components/postgresql-queue-shard-owned/CLAUDE.md) | Contributor gotchas and invariants |
-| [`docs/archive/durable-queue-design-history.md`](./archive/durable-queue-design-history.md) | The original design proposal and its chronological defect log. Section references of the form `§4.3` in source comments point here |
+| [`LLM/LLM-postgresql-queue-shard-owned.md`](../../LLM/LLM-postgresql-queue-shard-owned.md) | Consumer-facing configuration reference, sizing formulas, worked examples |
+| [`docs/design/durable-queue-measurements.md`](./durable-queue-measurements.md) | Every measured number, and the environment that produced it |
+| [`components/postgresql-queue-shard-owned/CLAUDE.md`](../../components/postgresql-queue-shard-owned/CLAUDE.md) | Contributor gotchas and invariants |
+| [`docs/archive/durable-queue-design-history.md`](../archive/durable-queue-design-history.md) | The original design proposal and its chronological defect log. Section references of the form `§4.3` in source comments point here |
 
 ---
 
@@ -403,7 +403,7 @@ while (running) {
 
 `needsAttention()` is true when a wake-up has been signalled, when a local hand-off is waiting, when the sweep is due, when a retry has fallen due, when a hole is ready to chase, or when acknowledgements are due to flush. Everything that is not time-based signals the owner's wake-up: a notification, a local hand-off, a finished handler, a shed or drain starting, a lease ending. The park duration is the soonest scheduled time, capped by `max(pollBackstop, maxSweepInterval)`.
 
-A pass that asked every owner - the design until 2026-10 - cost CPU in proportion to the units a pump serves, whatever the traffic: at 2 048 ordered units on two pumps it doubled the pumps' CPU per message against 512 (`docs/durable-queue-measurements.md` §3.13). The full scan survives as a safety net, every `pollBackstop` and after every reconnect; an owner it finds needing attention without having signalled or come due counts as `attentionFoundOnlyByFullScan`, which should stay at zero.
+A pass that asked every owner - the design until 2026-10 - cost CPU in proportion to the units a pump serves, whatever the traffic: at 2 048 ordered units on two pumps it doubled the pumps' CPU per message against 512 (`docs/design/durable-queue-measurements.md` §3.13). The full scan survives as a safety net, every `pollBackstop` and after every reconnect; an owner it finds needing attention without having signalled or come due counts as `attentionFoundOnlyByFullScan`, which should stay at zero.
 
 Two rules the pump enforces that are easy to get wrong:
 
@@ -811,7 +811,7 @@ For the same reason a lifted block must not discard what it had already queued f
 
 **What it does not address.** The delayed-message overtake — `Message.delayedOrdered` lets an undelayed later `key_order` pass a delayed earlier one, because only visible rows are dispatched. That is a separate difference from `PostgresqlDurableQueues`, which blocks the key behind a delayed message, and it is untouched by this.
 
-**Measured** (`ShardOwnedStalledKeyCostIT`, benchmark-gated; `docs/durable-queue-measurements.md` §3.11). A stalled key costs **1.70x the WAL per message** — 801 B against 471 B for the same workload delivered — and runs at 75% of the delivering arm's throughput, both smaller than the shape suggests because the second write is the same narrow row and the delete is the one an acknowledgement would have issued anyway. What is *not* small is the shared table: 241 B per row including its index, so a key stalled for an hour at 100 msg/s adds roughly **87 MB** to a `shard_queue_dead_letter` that every queue on the database reads past. Alert on a stall in minutes, not days. The suite also asserts the ordered lane drains to zero — if the owner could not keep up with the producer the lane would grow behind the stall and dispatch-side poisoning would have bought nothing.
+**Measured** (`ShardOwnedStalledKeyCostIT`, benchmark-gated; `docs/design/durable-queue-measurements.md` §3.11). A stalled key costs **1.70x the WAL per message** — 801 B against 471 B for the same workload delivered — and runs at 75% of the delivering arm's throughput, both smaller than the shape suggests because the second write is the same narrow row and the delete is the one an acknowledgement would have issued anyway. What is *not* small is the shared table: 241 B per row including its index, so a key stalled for an hour at 100 msg/s adds roughly **87 MB** to a `shard_queue_dead_letter` that every queue on the database reads past. Alert on a stall in minutes, not days. The suite also asserts the ordered lane drains to zero — if the owner could not keep up with the producer the lane would grow behind the stall and dispatch-side poisoning would have bought nothing.
 
 **What it costs when nothing is blocked**, which is the normal case: one lookup in an empty map per row accepted and per key dispatched, and no query at all — `orderedDeadLetterBlocks` is issued on takeover, and thereafter only on a shard that actually holds an ordered dead letter. `keysBlockedByDeadLetter` and `messagesPoisonedBehindDeadLetter` are on `QueueStatistics`, so they reach the administrative API and the console rather than only the debug map (`deadLetterBlockReads` stays internal). A key becoming blocked is logged once, at WARN, since the messages behind it are moved out of the lane and depth therefore *falls* rather than rises — the dead-letter count is what is left to notice.
 
@@ -1068,7 +1068,7 @@ which the admin API's exception handler already maps. A database failure surface
 
 ## 14. Configuration
 
-Full reference with sizing formulas and worked examples: [`LLM/LLM-postgresql-queue-shard-owned.md`](../LLM/LLM-postgresql-queue-shard-owned.md). Summarised here only to show which knob governs which mechanism.
+Full reference with sizing formulas and worked examples: [`LLM/LLM-postgresql-queue-shard-owned.md`](../../LLM/LLM-postgresql-queue-shard-owned.md). Summarised here only to show which knob governs which mechanism.
 
 The **Lane** column matters: the two lanes resolve "has everything before this arrived yet" by
 different mechanisms, so several settings govern one lane and are inert for the other.

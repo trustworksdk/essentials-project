@@ -245,7 +245,7 @@ SIGNATURES = [
     Signature("ess-094-jackson-flavor-property", "ESS-094", "confirmed", "Advisory",
               "essentials.jackson.flavor / essentials.types-jackson.artifactId / essentials.immutable-jackson.artifactId "
               "in a pom.xml (Should-fix where an Essentials <artifactId> is taken from one)",
-              ("docs/MIGRATION-0.60.md:38-39 (the -Pjackson2/-Pjackson3 profiles and the three properties are gone)",
+              ("docs/releases/MIGRATION-0.60.md:38-39 (the -Pjackson2/-Pjackson3 profiles and the three properties are gone)",
                "0.50.0 tag pom.xml:98-100 (where they were defined); no 0.60 pom.xml names them (grep of every pom.xml)")),
     Signature("ess-095-jackson-module-bean", "ESS-095", "candidate", "Should-fix",
               "a @Bean method returning a Jackson module (JacksonModule, SimpleModule, Module, KotlinModule, …) in main code",
@@ -256,7 +256,7 @@ SIGNATURES = [
     Signature("ess-119-queued-message-counts", "ESS-119", "candidate", "Should-fix",
               "QueuedMessageCounts constructed in .java/.kt (tests included)",
               ("components/foundation/src/main/java/dk/trustworks/essentials/components/foundation/messaging/queue/"
-               "QueuedMessageCounts.java:43-47 (five components; docs/MIGRATION-0.60.md:380-397)",)),
+               "QueuedMessageCounts.java:43-47 (five components; docs/releases/MIGRATION-0.60.md:380-397)",)),
     Signature("ess-120-cdc-live-drain-stall-threshold", "ESS-120", "confirmed", "Advisory",
               "essentials.eventstore.cdc.event-bus.live-drain-stall-threshold in config",
               ("components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/"
@@ -264,11 +264,11 @@ SIGNATURES = [
                "has no effect)",
                "cdc/CdcEventStore.java:259-269 (only checked to be non-negative)",
                "components/spring-boot-starter-postgresql-event-store/.../eventstore/EssentialsEventStoreProperties.java:60,77 "
-               "(prefix essentials.eventstore, field cdc)", "docs/MIGRATION-0.60.md:934")),
+               "(prefix essentials.eventstore, field cdc)", "docs/releases/MIGRATION-0.60.md:934")),
     Signature("ess-121-jackson-api-removed", "ESS-121", "confirmed", "Blocking",
               "an import or a qualified call of the 0.50 Jackson-flavour API in .java/.kt (mechanical where the guide's "
               "replacement is a pure token swap)",
-              ("docs/MIGRATION-0.60.md:45-55 (the rename table)",
+              ("docs/releases/MIGRATION-0.60.md:45-55 (the rename table)",
                "0.50.0 tag: JacksonJSONSerializer (foundation/json), JacksonJSONEventSerializer (serializer/json), "
                "WalMessageFilters.java:43 (createForActiveJacksonFlavor(Supplier) only), Jackson3WalMessageFilter.java:49-61, "
                "EssentialsJacksonModules.java:57,69,77, EssentialsObjectMappers.java:55, EssentialsJSONEventSerializers.java:39",
@@ -283,7 +283,7 @@ SIGNATURES = [
                "NotificationDuplicationFilter.java:40 (extractDuplicationKey(tools.jackson JsonNode))",
                "components/postgresql-queue/.../DurableQueuesSerialization.java:106, "
                "components/springdata-mongo-queue/.../MongoDurableQueues.java:1330 (return tools.jackson ObjectMapper)",
-               "docs/MIGRATION-0.60.md:57-62 (asText() -> asString())")),
+               "docs/releases/MIGRATION-0.60.md:57-62 (asText() -> asString())")),
     Signature("ess-122-ordered-unordered-query", "ESS-122", "confirmed", "Blocking",
               ".setUseOrderedUnorderedQuery(…) / .isUseOrderedUnorderedQuery in .java/.kt; "
               "essentials.durable-queues.use-ordered-unordered-query in config (Advisory)",
@@ -291,7 +291,7 @@ SIGNATURES = [
                "spring-boot-starter-postgresql EssentialsComponentsProperties.java:709-720",
                "0.60: no useOrderedUnorderedQuery in any components/*/src/main (grep); "
                "postgresql/EssentialsComponentsProperties.java:293-590 (DurableQueuesProperties)",
-               "docs/MIGRATION-0.60.md:94-105")),
+               "docs/releases/MIGRATION-0.60.md:94-105")),
     Signature("ess-123-removed-constructor", "ESS-123", "candidate", "Blocking",
               "DefaultWalMessageFilter(…) with two arguments, PostgresqlEventStreamGapHandler(…) whose first argument "
               "names an event store (confirmed and mechanical where the second argument is a lambda)",
@@ -299,7 +299,7 @@ SIGNATURES = [
                "eventstore/postgresql/cdc/filter/DefaultWalMessageFilter.java:55,69,79 (Supplier; the "
                "(JSONEventSerializer, Map|Collection) forms survive, (JSONEventSerializer, Supplier) does not)",
                "eventstore/postgresql/gap/PostgresqlEventStreamGapHandler.java:126,138,161,174 (no PostgresqlEventStore "
-               "parameter)", "docs/MIGRATION-0.60.md:579-583")),
+               "parameter)", "docs/releases/MIGRATION-0.60.md:579-583")),
 ]
 BY_CHECK = {s.check: s for s in SIGNATURES}
 

@@ -29,7 +29,7 @@ import java.util.List;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * EF-2 measurement M1 (design note {@code docs/key-partitioned-event-processing.md} §5): a {@code ViewEventProcessor}
+ * EF-2 measurement M1 (design note {@code docs/design/key-partitioned-event-processing.md} §5): a {@code ViewEventProcessor}
  * on the {@code Accounts} stream whose handler does nothing but count. With the handler's cost removed, its rate is the
  * reader's ceiling: subscription, dispatch and the unit of work per event. Started fresh it reads the stream from the
  * beginning, so the existing backlog is the workload. Off unless {@code trading-demo.ef2.noop-view-processor=true}.

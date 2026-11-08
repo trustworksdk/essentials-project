@@ -26,7 +26,7 @@ import java.util.Set;
  * The pump runs a pass in three steps for these owners: every cursor read of the pass first (the batched ones, then
  * {@link #readAhead} for the rest), then ONE probe for every owner that asks for it, then each owner's
  * {@link #pumpOnce}. The probe is therefore after every one of those reads - what the watermark's rule requires of the
- * probe a candidate is recorded with (docs/durable-queue-ordered-routing-design.md §3) - and about as close behind
+ * probe a candidate is recorded with (docs/design/durable-queue-ordered-routing-design.md §3) - and about as close behind
  * them as an owner's own probe used to be, so the candidates it records retire as soon as they did.
  * {@code pg_stat_activity} is database-wide, so one probe serves the owners of every queue the pump serves; each owner
  * used to take its own, and under load that was the most frequent statement the pumps issued.

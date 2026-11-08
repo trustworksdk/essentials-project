@@ -348,7 +348,7 @@ semantics (`require` fails startup, `auto` degrades); `PgSlotMode` controls slot
 Metrics: `essentials.cdc.active`, `…fallback_total`, `…warmup_poll_total`, `…start_failures_total`, plus
 per-slot gauges from `CdcSlotMetrics`.
 
-Full design and operations guide: [`docs/cdc.md`](cdc.md).
+Full design and operations guide: [`docs/design/cdc.md`](../design/cdc.md).
 
 ### 2.2 A contract-first admin API
 
@@ -425,7 +425,7 @@ Versioning is path-major: breaking changes ship as `/api/essentials/admin/v2` se
 consumers and their generated clients keep working. `5xx` bodies carry no detail — causes are logged instead,
 so internal failures cannot leak schema names, SQL or hostnames.
 
-See [`LLM/LLM-admin-api.md`](../LLM/LLM-admin-api.md) and [`docs/openapi/README.md`](openapi/README.md).
+See [`LLM/LLM-admin-api.md`](../../LLM/LLM-admin-api.md) and [`docs/openapi/README.md`](../openapi/README.md).
 
 ### 2.3 Aggregate snapshots and Closing the Books
 
@@ -663,7 +663,7 @@ Absence in a constructor is expressed as a neutral default, a sealed variant, or
 An ArchUnit guard (`EssentialsConstructionRules`) enforces it, with a committed freeze store so existing
 violations cannot grow.
 
-Design rationale: [`docs/constructor-ergonomics-and-optional-policy.md`](constructor-ergonomics-and-optional-policy.md).
+Design rationale: [`docs/design/constructor-ergonomics-and-optional-policy.md`](../design/constructor-ergonomics-and-optional-policy.md).
 
 ### 3.2 The three shapes you will meet
 
@@ -827,7 +827,7 @@ and `MeasurementTaker.Builder.withOptionalMicrometerMeasurementRecorder(Optional
 ### 3.6 Everything else
 
 The remaining modules follow the same pattern; the full per-class tables are in
-[`docs/MIGRATION-NEXT_MAJOR.md`](MIGRATION-NEXT_MAJOR.md).
+[`docs/releases/MIGRATION-NEXT_MAJOR.md`](MIGRATION-NEXT_MAJOR.md).
 
 - **`components/eventsourced-aggregates`** — all of these gain a `builder()`, with their `Optional`-taking and
   wide constructors deprecated: `AsyncAggregateSnapshotRepository`, `DurableAsyncAggregateSnapshotRepository`,
@@ -988,15 +988,15 @@ consumer API; the `examples/` modules are excluded from the release.
 
 | Document | What it covers |
 |---|---|
-| [`docs/MIGRATION-NEXT_MAJOR.md`](MIGRATION-NEXT_MAJOR.md) | The complete per-module deprecated → replacement tables |
-| [`docs/constructor-ergonomics-and-optional-policy.md`](constructor-ergonomics-and-optional-policy.md) | Why the sweep was done and what the ArchUnit guard enforces |
-| [`docs/cdc.md`](cdc.md) | CDC design and operations — prerequisites, plugins, slots, poison handling |
-| [`docs/archive/cdc-improvements.md`](archive/cdc-improvements.md) | CDC hardening work in detail |
-| [`docs/plans/subscription-improvements.md`](plans/subscription-improvements.md) | Subscription statistics and observer work |
-| [`docs/openapi/README.md`](openapi/README.md) | The admin API contract, its gates and its changelog |
-| [`docs/ai-tooling.md`](ai-tooling.md) | AI tooling conventions used in this repository |
-| [`LLM/LLM.md`](../LLM/LLM.md) | Entry point for the per-module consumer references |
-| [`README.md`](../README.md) | Version compatibility table and the Jackson flavour selection guide |
+| [`docs/releases/MIGRATION-NEXT_MAJOR.md`](MIGRATION-NEXT_MAJOR.md) | The complete per-module deprecated → replacement tables |
+| [`docs/design/constructor-ergonomics-and-optional-policy.md`](../design/constructor-ergonomics-and-optional-policy.md) | Why the sweep was done and what the ArchUnit guard enforces |
+| [`docs/design/cdc.md`](../design/cdc.md) | CDC design and operations — prerequisites, plugins, slots, poison handling |
+| [`docs/archive/cdc-improvements.md`](../archive/cdc-improvements.md) | CDC hardening work in detail |
+| [`docs/plans/subscription-improvements.md`](../plans/subscription-improvements.md) | Subscription statistics and observer work |
+| [`docs/openapi/README.md`](../openapi/README.md) | The admin API contract, its gates and its changelog |
+| [`docs/ai-tooling.md`](../ai-tooling.md) | AI tooling conventions used in this repository |
+| [`LLM/LLM.md`](../../LLM/LLM.md) | Entry point for the per-module consumer references |
+| [`README.md`](../../README.md) | Version compatibility table and the Jackson flavour selection guide |
 
 **Standing constraints, unchanged in 0.50.0** — worth restating because they are the ones people forget:
 

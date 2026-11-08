@@ -123,7 +123,7 @@ for; one instance exercises none of its ownership, rebalancing or fencing.
   engine) and `SingleGlobalConsumer` otherwise (the tests, and the A/B on `PostgresqlDurableQueues`) - measured 6 194 /
   6 124 router and 10 679 / 10 509 ledger deliveries, 0 order violations (`_demo_harness/CLAUDE.md`, F-3 on two
   instances). **A test aid, not a pattern:** an application picks `PartitionedEventProcessor` (every instance, refuses to
-  start without the capability) or `EventProcessor` in its code (`docs/event-processor-specializations.md`).
+  start without the capability) or `EventProcessor` in its code (`docs/design/event-processor-specializations.md`).
   `ViewEventProcessor`s (the projections) remain one instance cluster-wide, by design.
 - **The status endpoint is cluster-wide; the statistics endpoint is per-instance.** Both instances
   report `ordered 64/64` because all 64 units have an owner *somewhere*, not because each holds 64.

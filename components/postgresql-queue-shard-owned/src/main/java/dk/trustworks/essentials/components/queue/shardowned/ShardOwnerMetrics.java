@@ -251,7 +251,7 @@ public final class ShardOwnerMetrics {
      * {@code QueueObserver.takeoverStalled}), so for a queue used through {@code MessageQueue} (the Spring starter, the
      * {@code DurableQueues} adapter) the pump's ERROR log is the only signal of the death; the hand-back that follows
      * reaches the observer as ownership changes ({@code QueueObserver.shardOwnershipChanged}). Whether to add one is open:
-     * {@code docs/durable-queue-shard-owned.md} §18.3.
+     * {@code docs/design/durable-queue-shard-owned.md} §18.3.
      */
     public final AtomicInteger shardsOnDeadPumps                = new AtomicInteger();
     /**

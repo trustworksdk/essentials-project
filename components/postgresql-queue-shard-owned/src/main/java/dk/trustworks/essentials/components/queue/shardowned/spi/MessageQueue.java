@@ -461,7 +461,7 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * whose stop kept it runs no heartbeat while it stays stopped - and an ended subscription's lanes never run again -
      * so nothing would pick up a recorded request, and the answer is what the caller's
      * follow-up is decided from, so it is given at once. A caller behind a load balancer therefore sends the request to
-     * that process directly. Design notes: {@code docs/durable-queue-shard-owned.md} §13.7 and §18.3.
+     * that process directly. Design notes: {@code docs/design/durable-queue-shard-owned.md} §13.7 and §18.3.
      *
      * @param instanceId the instance id the stop's WARN names - the subscription's, which may carry a suffix
      * @param unit       the ordered unit, as the stop's WARN names it; from {@code 0} to the queue's ordered unit count,

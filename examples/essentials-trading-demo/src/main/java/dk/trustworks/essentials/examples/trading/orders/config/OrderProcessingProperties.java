@@ -22,7 +22,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * inbox keeps one order's messages in order whatever the count ({@code SingleGlobalConsumer}); more threads handle
  * different orders at once. Registered by {@code OrdersConfiguration}.
  * <p>
- * The defaults are the processors' own. The order-flow measurement (EF-2 M5, {@code docs/key-partitioned-event-processing.md}
+ * The defaults are the processors' own. The order-flow measurement (EF-2 M5, {@code docs/design/key-partitioned-event-processing.md}
  * §5) varies them.
  */
 @ConfigurationProperties(prefix = "trading-demo.orders.consumers")

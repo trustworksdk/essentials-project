@@ -1042,7 +1042,7 @@ not during them, as on the ordered lane.
   answers from that process's memory: call the instance whose WARN named the unit. Nothing passes the request on to
   another process, so behind a load balancer send it to that instance's own address - a pod address, or a tunnel such
   as `kubectl port-forward` - not the balancer's (why the request is not passed on through the database:
-  `docs/durable-queue-shard-owned.md` §18.3). The answer is
+  `docs/design/durable-queue-shard-owned.md` §18.3). The answer is
   `{answeredBy, releases}` (`KeptUnitReleases`, `ApiShardOwnedKeptUnitReleases`): `answeredBy` names the instance ids
   the answering process has for the queue, so an empty `releases` from another process, or for another instance id,
   still says which process answered. Each entry of `releases` says `RELEASED` (with the keys in a handler when the release's flush took its batch
@@ -1250,7 +1250,7 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 `essentials.version` to it in every project `/essentials:init` generates and every move `/essentials:upgrade` plans.
 It also carries the plugin work developed on the way as `0.60.0-6` and `0.60.0-7`; neither reached the plugin
 marketplace, so both are folded into `0.60.1`. The full entry is in
-[`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md).
+[`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md).
 
 - **`/essentials:upgrade` moves a project from 0.60.0 to 0.60.1.** It plans the move from the plugin's new
   migration notes: the compile breaks of §1, a checklist of the behaviour changes that compile clean (new traps
@@ -1482,7 +1482,7 @@ Not published; listed because they are the reference for how to use the framewor
   began) does not deregister. Its membership row ages out `leaseTtl` after its last heartbeat, and survivors keep
   counting it in their fair share until then, so before that a survivor already at its share takes none of the
   units it released. The docs said it always deregistered at once. (`54fe3981a`)
-- **Design documents:** `docs/slice-atlas-design.md` and `docs/slice-enrich-design.md` (`764af560`, `73d1993f`);
+- **Design documents:** `docs/design/slice-atlas-design.md` and `docs/design/slice-enrich-design.md` (`764af560`, `73d1993f`);
   `docs/plans/durable-queues-improvement-plan.md`, the measurements and open items behind the durable-queue changes, and
   `docs/archive/durable-queues-port-report.md`, the Rust port experiment they came from (`0925b7ca`).
 

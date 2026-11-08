@@ -541,7 +541,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
      * forwards an event. Such an event would be deserialized, looked for in the queue and run under a savepoint - three
      * database round trips - only for the handler call to match nothing ({@link PatternMatchingMessageHandler#allowUnmatchedMessages()}).
      * A projection that handles few of its aggregate type's events paid that for every other event (EF-2,
-     * {@code docs/key-partitioned-event-processing.md} §5). The answer comes from the same method matching the dispatch
+     * {@code docs/design/key-partitioned-event-processing.md} §5). The answer comes from the same method matching the dispatch
      * uses, so it never passes over an event a handler would have taken.
      * <p>
      * An event whose Java type is not known (a named event, or a class that cannot be loaded) takes the full path, as

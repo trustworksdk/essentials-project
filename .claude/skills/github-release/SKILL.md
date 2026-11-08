@@ -1,12 +1,12 @@
 ---
 name: github-release
-description: Write the GitHub release body for an Essentials release (GITHUB-RELEASE-<version>.md at the repository root) from that release's docs/RELEASE-NOTES-<version>.md and migration guides, in the house style of the previous GITHUB-RELEASE-*.md — a one-screen summary that leads with the changes that are silent at compile time and links into the full notes. Use when asked for a GitHub release, release body, release announcement or release summary for a version, or to turn release notes into one. Argument - the version, e.g. 0.60.0.
+description: Write the GitHub release body for an Essentials release (GITHUB-RELEASE-<version>.md at the repository root) from that release's docs/releases/RELEASE-NOTES-<version>.md and migration guides, in the house style of the previous GITHUB-RELEASE-*.md — a one-screen summary that leads with the changes that are silent at compile time and links into the full notes. Use when asked for a GitHub release, release body, release announcement or release summary for a version, or to turn release notes into one. Argument - the version, e.g. 0.60.0.
 argument-hint: "<version, e.g. 0.60.0>"
 ---
 
 # github-release
 
-The full release notes (`docs/RELEASE-NOTES-<version>.md`) are the record. The GitHub release body is the page a
+The full release notes (`docs/releases/RELEASE-NOTES-<version>.md`) are the record. The GitHub release body is the page a
 consumer reads first, on the releases page or in a notification, and decides from it what to read next. Its job is
 triage: what can hurt me without failing, what must I change, what do I get, where are the details. It never
 replaces the release notes and never says anything they do not.
@@ -20,14 +20,14 @@ Its links are pinned to the tag, so they resolve against the docs *as tagged*. A
 
 ## 1. Resolve the inputs
 
-- **Version.** The argument. Without one, take the newest `docs/RELEASE-NOTES-*.md` and confirm it with the user.
+- **Version.** The argument. Without one, take the newest `docs/releases/RELEASE-NOTES-*.md` and confirm it with the user.
 - **Previous release.** The newest tag below the version (`git tag --sort=-v:refname`), used for the comparison
   table's left column. The release notes' own comparison table usually names it already.
 - **Sources**, all read in full before writing:
-  - `docs/RELEASE-NOTES-<version>.md` — the primary source; every claim comes from here.
-  - `docs/MIGRATION-<major.minor>.md` — the per-change instructions; use it to check the *what to do* half of
+  - `docs/releases/RELEASE-NOTES-<version>.md` — the primary source; every claim comes from here.
+  - `docs/releases/MIGRATION-<major.minor>.md` — the per-change instructions; use it to check the *what to do* half of
     each item and to find link targets.
-  - `docs/MIGRATION-NEXT_MAJOR.md`, when the release carries out the removals it lists, or deprecates members for
+  - `docs/releases/MIGRATION-NEXT_MAJOR.md`, when the release carries out the removals it lists, or deprecates members for
     the next major — link to it rather than reproducing its tables.
   - The previous release's `GITHUB-RELEASE-*.md` (the newest one at the root), as the style exemplar. Read it
     before writing; match its voice, density and section order.
@@ -84,7 +84,7 @@ Sections in this order, separated by `---`. Emoji appear on section headings onl
 - **No claim without a source.** If the release notes do not say it, the release body does not either — including
   "no action needed".
 - **Links are absolute and pinned to the tag**:
-  `<repo URL>/blob/<version>/docs/RELEASE-NOTES-<version>.md#<anchor>`. Relative links are not resolved against
+  `<repo URL>/blob/<version>/docs/releases/RELEASE-NOTES-<version>.md#<anchor>`. Relative links are not resolved against
   the repository tree in a release body, and a link to `main` drifts after the release. Prefer linking a
   section of the release notes; link the migration guide or a module README where the release notes do.
 - **Anchors** are GitHub slugs of the target heading, taken from the source's own table of contents or links
@@ -100,7 +100,7 @@ Run from the repository root:
 
 ```bash
 python3 -I .claude/skills/github-release/check.py GITHUB-RELEASE-<version>.md <version> \
-    docs/RELEASE-NOTES-<version>.md docs/MIGRATION-<major.minor>.md docs/MIGRATION-NEXT_MAJOR.md
+    docs/releases/RELEASE-NOTES-<version>.md docs/releases/MIGRATION-<major.minor>.md docs/releases/MIGRATION-NEXT_MAJOR.md
 ```
 
 - **`FAIL`** lines (a relative link, a link not pinned to the tag, a missing file or anchor) must reach zero.

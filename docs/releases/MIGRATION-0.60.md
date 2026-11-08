@@ -104,7 +104,7 @@ that selected it are now gone, and the ordered/unordered pair is the only per-qu
 **What to do:** delete the builder call, the constructor argument or the property. There is no replacement,
 because there is no longer a choice to express. If you were setting it to `true` — the default — behaviour is
 unchanged. If you were setting it to `false`, you now get the ordered/unordered pair; it was measured 5.4×
-faster on the unified query's own workload (`docs/RELEASE-NOTES-0.50.0.md` §1.1.3).
+faster on the unified query's own workload (`docs/releases/RELEASE-NOTES-0.50.0.md` §1.1.3).
 
 The two wide constructors that took the flag are no longer public API at all: they were
 `@Deprecated(forRemoval = true)` since 0.40.x and are removed in this release (see
@@ -709,7 +709,7 @@ mangled Kotlin property gets its real name. Code written against the old generat
 the client as part of opting in.
 
 The full per-type table is in
-[`LLM-types-spring-web.md` § OpenAPI with springdoc](../LLM/LLM-types-spring-web.md#openapi-with-springdoc).
+[`LLM-types-spring-web.md` § OpenAPI with springdoc](../../LLM/LLM-types-spring-web.md#openapi-with-springdoc).
 
 ---
 
@@ -717,7 +717,7 @@ The full per-type table is in
 
 Every Essentials component that owns tables now *describes* its schema instead of executing DDL itself, and a
 schema harness decides what happens to it. The design, and the reasons behind each decision, are in
-[database-schema-harness.md](./database-schema-harness.md).
+[database-schema-harness.md](../design/database-schema-harness.md).
 
 **If you change nothing, nothing changes.** The default mode is `create`. Every component still creates its own
 tables, indexes, functions and triggers while it is constructed, exactly as in 0.50. The only visible difference
@@ -812,7 +812,7 @@ on the builders (`PostgresqlDurableQueuesBuilder`, `PostgresqlFencedLockManagerB
 constructor overload (`PostgresqlDurableSubscriptionRepository`, `PostgresqlEventStreamGapHandler`,
 `DefaultEssentialsScheduler`, `PostgresqlTTLManager`, `ExecutorScheduledJobRepository`,
 `PostgresqlFencedLockStorage`). The default, `SchemaOwnership.COMPONENT`, is the 0.50 behaviour. Pass `HARNESS` and
-register the component with an `EssentialsSchemaHarness` - see [LLM-foundation.md](../LLM/LLM-foundation.md#database-schema-harness).
+register the component with an `EssentialsSchemaHarness` - see [LLM-foundation.md](../../LLM/LLM-foundation.md#database-schema-harness).
 
 ---
 
@@ -863,7 +863,7 @@ dead-letter queue and its monitoring never see it.
 
 A subscriber you build directly with `PersistedEventSubscriberBuilder` / `BatchedPersistedEventSubscriberBuilder` still
 defaults to `skip()`: it has no subscription to resume it. Details:
-[README § Subscription Error Policy](../components/postgresql-event-store/README.md#subscription-error-policy).
+[README § Subscription Error Policy](../../components/postgresql-event-store/README.md#subscription-error-policy).
 
 ### Batched and CDC handlers run on a thread of their own
 
@@ -913,7 +913,7 @@ and under a stopping mode (`retry-n-then-stop`, `stop`) the subscription does no
   `getNumberOfEventsPersisted()`. Their defaults throw `UnsupportedOperationException`, which the `ViewEventProcessor`
   treats as "state present", so a failed handler always rolls the whole `UnitOfWork` back before it is queued.
 
-Details: [README § ViewEventProcessor](../components/postgresql-event-store/README.md#vieweventprocessor).
+Details: [README § ViewEventProcessor](../../components/postgresql-event-store/README.md#vieweventprocessor).
 
 ### Under CDC, an event that commits late is delivered instead of dropped
 
@@ -925,7 +925,7 @@ therefore arrives after events with a higher `GlobalEventOrder`, as a gap filled
 **What to do:** nothing, if your handlers follow the documented contract that `GlobalEventOrder` is not delivered in
 strict sequence. A handler that ignores every event at or below the highest `GlobalEventOrder` it has seen drops these
 events; deduplicate by event id instead. Details:
-[README § Out-of-Order Delivery Is Expected](../components/postgresql-event-store/README.md#out-of-order-delivery-is-expected).
+[README § Out-of-Order Delivery Is Expected](../../components/postgresql-event-store/README.md#out-of-order-delivery-is-expected).
 
 The same applies to a subscription started while CDC is active, which 0.50 held to strict global order: a rolled-back
 append stalled it for up to three minutes (`live-drain-stall-threshold`). It now receives live events as the CDC bus
@@ -1096,19 +1096,19 @@ compile clean, and so are easy to miss:
   `org.springframework.boot.jdbc.autoconfigure.*`. `management.endpoint.<id>.enabled` is
   `management.endpoint.<id>.access`. `spring-boot-starter-aop` is `spring-boot-starter-aspectj`. Mongo connection
   properties are `spring.mongodb.*` and the old names are silently unbound — see
-  [LLM-spring-boot-starter-modules.md § Gotchas](../LLM/LLM-spring-boot-starter-modules.md#gotchas).
+  [LLM-spring-boot-starter-modules.md § Gotchas](../../LLM/LLM-spring-boot-starter-modules.md#gotchas).
 - **The Vaadin admin UI is gone.** `components/vaadin-ui` was removed; `spring-boot-starter-admin-ui` keeps its
   artifactId but is a Thymeleaf + vanilla-JS console at `/essentials/admin`, backed by the HTTP API in
   `spring-boot-starter-admin-api`. Don't carry a Vaadin dependency across, and expect both to serve nothing until
   you implement `EssentialsAuthenticatedUser` and `EssentialsSecurityProvider` — see
-  [LLM-admin-api.md § Security](../LLM/LLM-admin-api.md#security).
+  [LLM-admin-api.md § Security](../../LLM/LLM-admin-api.md#security).
 
 ---
 
 ## Event causation
 
 Events now record which event caused them - see the [release notes](./RELEASE-NOTES-0.60.0.md#214-event-causation)
-and [event-causation.md](./event-causation.md).
+and [event-causation.md](../design/event-causation.md).
 
 ### On by default with the starter
 

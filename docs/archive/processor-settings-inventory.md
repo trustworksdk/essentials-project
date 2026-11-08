@@ -15,7 +15,7 @@ start), **warn** (log at start or at runtime), or **document**.
 
 | Setting | Was | Now |
 |---|---|---|
-| Where an event processor's handlers run (inbox consumption mode) | An override, plus an unreleased global property | A class: `PartitionedEventProcessor` or `EventProcessor` (`docs/event-processor-specializations.md`) |
+| Where an event processor's handlers run (inbox consumption mode) | An override, plus an unreleased global property | A class: `PartitionedEventProcessor` or `EventProcessor` (`docs/design/event-processor-specializations.md`) |
 | `GlobalCompetingConsumers` on a queue that keeps key order per node only | Ran, could reorder an aggregate across nodes | Refuses to start |
 
 ## 1. Retry budgets shorter than a failover

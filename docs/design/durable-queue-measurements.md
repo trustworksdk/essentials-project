@@ -6,7 +6,7 @@ Consolidated results. How the engine works: [durable-queue-shard-owned.md](./dur
 
 Tables carrying a **Re-measured** date were re-run against the engine as it now stands. Tables without one predate that run — where it matters, the section says what it predates.
 
-The history of how these numbers got here — the reworks, the retractions, and the measurement bugs found along the way — is in [`archive/durable-queue-measurement-history.md`](./archive/durable-queue-measurement-history.md). This document is the current state.
+The history of how these numbers got here — the reworks, the retractions, and the measurement bugs found along the way — is in [`archive/durable-queue-measurement-history.md`](../archive/durable-queue-measurement-history.md). This document is the current state.
 
 ---
 
@@ -544,7 +544,7 @@ is sixteen times worse with none — which is the state a queue spends almost al
 ### 3.11 What a key stalled behind a dead letter costs
 
 A key never advances past a dead letter, and the messages behind it are moved to the dead-letter table
-rather than left queued (`docs/durable-queue-shard-owned.md` §9.1). That keeps undeliverable rows out
+rather than left queued (`docs/design/durable-queue-shard-owned.md` §9.1). That keeps undeliverable rows out
 of the cursor's way, and the price is that every message arriving for a stalled key is written twice
 and deleted once instead of written once. 2 000 ordered messages on one key, same workload both arms
 (`ShardOwnedStalledKeyCostIT`, benchmark-gated):

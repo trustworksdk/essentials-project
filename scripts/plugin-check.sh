@@ -738,7 +738,7 @@ classify() {
             printf 'quick\tdefines or runs a plugin-docs step\n' ;;
         .claude-plugin/*)
             printf 'quick\tthe marketplace manifest (claude plugin validate . before a release)\n' ;;
-        docs/MIGRATION-*.md | docs/RELEASE-NOTES-*.md)
+        docs/releases/MIGRATION-*.md | docs/releases/RELEASE-NOTES-*.md)
             printf 'quick\tcited at path:line by essentials-plugin/references/stack/migrations/*.json (migration-plan)\n' ;;
         essentials-plugin/*)
             rel=${p#essentials-plugin/}

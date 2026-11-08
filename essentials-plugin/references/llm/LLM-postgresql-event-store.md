@@ -191,7 +191,7 @@ Enabling also requires, on the database side:
 - a role with `REPLICATION` — the tailer opens its own replication connection
 - for `pgoutput`, a publication covering the event-stream tables; let the framework own it with `cdc.pg-output.publication.auto-manage=true` (`mode: FOR_TABLE_LIST` needs table ownership, `FOR_ALL_TABLES` needs superuser)
 
-If a prerequisite is missing, `cdc.mode=auto` (the default once enabled) keeps the application up and subscribers on polling — so a broken CDC setup costs latency, not correctness, and is easy to miss. Verify via `/actuator/health/cdc` or the admin API's `event-store/cdc/status`. Full checklist: [docs/cdc.md §1.1](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/cdc.md).
+If a prerequisite is missing, `cdc.mode=auto` (the default once enabled) keeps the application up and subscribers on polling — so a broken CDC setup costs latency, not correctness, and is easy to miss. Verify via `/actuator/health/cdc` or the admin API's `event-store/cdc/status`. Full checklist: [docs/design/cdc.md §1.1](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/cdc.md).
 
 Key classes:
 
@@ -1442,7 +1442,7 @@ eventBus.addAsyncSubscriber(events ->
 ## Event Causation
 
 Every persisted event can record the id of the event that caused it: `PersistedEvent.causedByEventId()`, column
-`caused_by_event_id`. Design: [`docs/event-causation.md`](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/event-causation.md).
+`caused_by_event_id`. Design: [`docs/design/event-causation.md`](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/event-causation.md).
 
 **On by default with the Spring Boot starter.** `essentials.eventstore.causation.enabled=false` turns off everything
 that writes it. Correlation ids are not populated - use trace context (OpenTelemetry) for "what did this request do".

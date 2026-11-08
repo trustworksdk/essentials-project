@@ -461,7 +461,7 @@ because the lease already says who owns the message. Per-key ordering follows fr
 across processes.
 
 Measured against `postgresql-queue` (200-byte payloads; full conditions and caveats in
-[`durable-queue-measurements.md`](durable-queue-measurements.md)):
+[`durable-queue-measurements.md`](../design/durable-queue-measurements.md)):
 
 | Metric | `postgresql-queue` | shard-owned |
 |---|---|---|
@@ -539,9 +539,9 @@ turns red, and the two lanes are reported separately.
 - Outside schema mode `create`, the engine still creates each queue's per-shard sequences at runtime, so it
   needs `CREATE` on the schema (see [§2.2](#22-database-schema-harness)).
 
-→ [`components/postgresql-queue-shard-owned/README.md`](../components/postgresql-queue-shard-owned/README.md),
-[`LLM/LLM-postgresql-queue-shard-owned.md`](../LLM/LLM-postgresql-queue-shard-owned.md),
-[`durable-queue-shard-owned.md`](durable-queue-shard-owned.md)
+→ [`components/postgresql-queue-shard-owned/README.md`](../../components/postgresql-queue-shard-owned/README.md),
+[`LLM/LLM-postgresql-queue-shard-owned.md`](../../LLM/LLM-postgresql-queue-shard-owned.md),
+[`durable-queue-shard-owned.md`](../design/durable-queue-shard-owned.md)
 
 ### 2.2 Database schema harness
 
@@ -582,7 +582,7 @@ essentials.schema.mode = external    # execute nothing, verify nothing
   `SchemaOwnership` option. The default, `COMPONENT`, is the 0.50 behaviour.
 
 → [MIGRATION-0.60 § Database schema harness](MIGRATION-0.60.md#database-schema-harness),
-[`database-schema-harness.md`](database-schema-harness.md)
+[`database-schema-harness.md`](../design/database-schema-harness.md)
 
 ### 2.3 `UnitOfWorkMode.NONE` for handlers that make blocking calls
 
@@ -608,7 +608,7 @@ practice means an `EventProcessor`. Everywhere else the mode is rejected rather 
 - **Its blocking call must time out well inside `messageHandlingTimeout`** (30s by default). Past that timeout
   the message can be delivered again while the first attempt is still running.
 
-→ [`LLM/LLM-foundation.md` § Blocking I/O in a Message Handler](../LLM/LLM-foundation.md#blocking-io-in-a-message-handler-unitofworkmode)
+→ [`LLM/LLM-foundation.md` § Blocking I/O in a Message Handler](../../LLM/LLM-foundation.md#blocking-io-in-a-message-handler-unitofworkmode)
 
 ### 2.4 Durable queue observability
 
@@ -722,7 +722,7 @@ SingleValueTypeModelConverter singleValueTypeModelConverter() {
 }
 ```
 
-→ [`LLM/LLM-types-spring-web.md` § OpenAPI with springdoc](../LLM/LLM-types-spring-web.md#openapi-with-springdoc)
+→ [`LLM/LLM-types-spring-web.md` § OpenAPI with springdoc](../../LLM/LLM-types-spring-web.md#openapi-with-springdoc)
 
 ### 2.10 Choose what an async subscription does with a failing event
 
@@ -836,8 +836,8 @@ retries carry on. See
 instance that answers), so its constructor takes one more argument — see [§1.7](#17-subscription-statistics-records-have-a-new-component). The admin
 API response only gains an optional field.
 
-→ [`postgresql-event-store` README § Subscription Error Policy](../components/postgresql-event-store/README.md#subscription-error-policy),
-[`LLM/LLM-postgresql-event-store.md` § Direct async subscribers retry, stop and resume at a failing event](../LLM/LLM-postgresql-event-store.md#direct-async-subscribers-retry-stop-and-resume-at-a-failing-event)
+→ [`postgresql-event-store` README § Subscription Error Policy](../../components/postgresql-event-store/README.md#subscription-error-policy),
+[`LLM/LLM-postgresql-event-store.md` § Direct async subscribers retry, stop and resume at a failing event](../../LLM/LLM-postgresql-event-store.md#direct-async-subscribers-retry-stop-and-resume-at-a-failing-event)
 
 ### 2.11 The `essentials` Claude Code plugin
 
@@ -877,10 +877,10 @@ the rest of the requirements.
 The framework docs the plugin bundles, in `essentials-plugin/references/llm/`, are a generated copy of `LLM/`, made
 by `scripts/sync-plugin-llm.sh`. Links that leave `LLM/` are rewritten to GitHub URLs that point at this release's
 tag, `0.60.0`, not at `main`, so an installed plugin's links match the release it targets. `LLM/` remains the only
-place the docs are edited; see the root README's [Editing the LLM docs](../README.md#editing-the-llm-docs).
+place the docs are edited; see the root README's [Editing the LLM docs](../../README.md#editing-the-llm-docs).
 
-→ [`essentials-plugin/README.md`](../essentials-plugin/README.md),
-[`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md)
+→ [`essentials-plugin/README.md`](../../essentials-plugin/README.md),
+[`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md)
 
 ### 2.12 Subscribers acknowledge the gap fills they handled
 
@@ -907,8 +907,8 @@ subscription is not handed it again, however often a poll reads it.
 A direct caller of `pollEvents` or `unboundedPollForEvents` that passes no acknowledgement keeps the behaviour
 described in [§3](#3-bug-fixes): the gap is resolved once the event is handed on.
 
-→ [`postgresql-event-store` README § Gap Types](../components/postgresql-event-store/README.md#gap-types),
-[`docs/MIGRATION-0.60.md` § A gap is resolved only once its event was handled](MIGRATION-0.60.md#a-gap-is-resolved-only-once-its-event-was-handled)
+→ [`postgresql-event-store` README § Gap Types](../../components/postgresql-event-store/README.md#gap-types),
+[`docs/releases/MIGRATION-0.60.md` § A gap is resolved only once its event was handled](MIGRATION-0.60.md#a-gap-is-resolved-only-once-its-event-was-handled)
 
 ### 2.13 Gap handling extension points
 
@@ -923,9 +923,9 @@ Six additions let a custom gap setup and polling optimizer keep what the default
 | `SubscriptionGapHandler#giveUpTransientGaps(AggregateType, List<GlobalEventOrder>)` | Default method the CDC event store calls when it gives up waiting for a gap's event, so the give-up is recorded durably. `PostgresqlEventStreamGapHandler` promotes the given-up gaps that are still transient to permanent gaps of the aggregate type, which every subscriber of it then skips. A caller must have waited at least `transientGapGiveUpThreshold()` for each gap it passes |
 | `EventStorePollingOptimizer#mayRepollImmediatelyAfterAnEmptyPoll()` | Default method, `false`. An optimizer that returns a zero delay on purpose overrides it to return `true`; only `NotifyAwareEventStorePollingOptimizer` does |
 
-→ [`docs/MIGRATION-0.60.md` § The default gap handler looks for more gaps per poll](MIGRATION-0.60.md#the-default-gap-handler-looks-for-more-gaps-per-poll),
+→ [`docs/releases/MIGRATION-0.60.md` § The default gap handler looks for more gaps per poll](MIGRATION-0.60.md#the-default-gap-handler-looks-for-more-gaps-per-poll),
 [§ CDC gives up waiting for a gap at the gap handler's threshold](MIGRATION-0.60.md#cdc-gives-up-waiting-for-a-gap-at-the-gap-handlers-threshold),
-[`spring-boot-starter-postgresql-event-store` README § Gap Handling](../components/spring-boot-starter-postgresql-event-store/README.md#gap-handling)
+[`spring-boot-starter-postgresql-event-store` README § Gap Handling](../../components/spring-boot-starter-postgresql-event-store/README.md#gap-handling)
 
 ### 2.14 Event causation
 
@@ -952,7 +952,7 @@ always had the `caused_by_event_id` column, and the starter's default mapper cla
   WAL grows by the stored id. Across a durable queue, about 116 bytes of WAL per message and 0.5% throughput.
 
 Correlation ids are still not populated; trace context covers "what did this request do". Design and measurements:
-[event-causation.md](./event-causation.md). How to configure it: [LLM-postgresql-event-store.md](../LLM/LLM-postgresql-event-store.md#event-causation).
+[event-causation.md](../design/event-causation.md). How to configure it: [LLM-postgresql-event-store.md](../../LLM/LLM-postgresql-event-store.md#event-causation).
 
 ### 2.15 Save a busy subscriber's resume point early (opt-in)
 
@@ -1092,17 +1092,17 @@ test utility, and the `examples/` modules are not released. 0.50.0 published the
 
 | Document | What it covers |
 |---|---|
-| [`docs/MIGRATION-0.60.md`](MIGRATION-0.60.md) | Every consumer-facing change, with what to do |
-| [`docs/MIGRATION-NEXT_MAJOR.md`](MIGRATION-NEXT_MAJOR.md) | Per-module tables of removed `forRemoval` members and replacements |
-| [`docs/archive/platform-upgrade-0.60.md`](archive/platform-upgrade-0.60.md) | The platform upgrade plan and its decisions |
-| [`docs/archive/durable-queues-breaking-refactor.md`](archive/durable-queues-breaking-refactor.md) | The durable queue refactor: classification, statistics, `TransactionalMode` |
-| [`docs/database-schema-harness.md`](database-schema-harness.md) | Schema harness design and decisions |
-| [`docs/durable-queue-shard-owned.md`](durable-queue-shard-owned.md) | How the shard-owned engine works |
-| [`docs/durable-queue-ordered-routing-design.md`](durable-queue-ordered-routing-design.md) | The ordered lane's routing, as built |
-| [`docs/durable-queue-measurements.md`](durable-queue-measurements.md) | Every measured figure, with its conditions |
-| [`docs/RELEASE-NOTES-0.50.0.md`](RELEASE-NOTES-0.50.0.md) | The previous release |
-| [`LLM/LLM.md`](../LLM/LLM.md) | Entry point for the per-module consumer references |
-| [`essentials-plugin/README.md`](../essentials-plugin/README.md) | The `essentials` Claude Code plugin: install, commands, skills and requirements |
+| [`docs/releases/MIGRATION-0.60.md`](MIGRATION-0.60.md) | Every consumer-facing change, with what to do |
+| [`docs/releases/MIGRATION-NEXT_MAJOR.md`](MIGRATION-NEXT_MAJOR.md) | Per-module tables of removed `forRemoval` members and replacements |
+| [`docs/archive/platform-upgrade-0.60.md`](../archive/platform-upgrade-0.60.md) | The platform upgrade plan and its decisions |
+| [`docs/archive/durable-queues-breaking-refactor.md`](../archive/durable-queues-breaking-refactor.md) | The durable queue refactor: classification, statistics, `TransactionalMode` |
+| [`docs/design/database-schema-harness.md`](../design/database-schema-harness.md) | Schema harness design and decisions |
+| [`docs/design/durable-queue-shard-owned.md`](../design/durable-queue-shard-owned.md) | How the shard-owned engine works |
+| [`docs/design/durable-queue-ordered-routing-design.md`](../design/durable-queue-ordered-routing-design.md) | The ordered lane's routing, as built |
+| [`docs/design/durable-queue-measurements.md`](../design/durable-queue-measurements.md) | Every measured figure, with its conditions |
+| [`docs/releases/RELEASE-NOTES-0.50.0.md`](RELEASE-NOTES-0.50.0.md) | The previous release |
+| [`LLM/LLM.md`](../../LLM/LLM.md) | Entry point for the per-module consumer references |
+| [`essentials-plugin/README.md`](../../essentials-plugin/README.md) | The `essentials` Claude Code plugin: install, commands, skills and requirements |
 
 **Standing constraints, unchanged in 0.60.0:**
 

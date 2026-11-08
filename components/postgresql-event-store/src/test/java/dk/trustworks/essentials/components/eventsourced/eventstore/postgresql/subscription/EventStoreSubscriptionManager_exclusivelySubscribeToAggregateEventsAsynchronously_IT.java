@@ -488,7 +488,7 @@ class EventStoreSubscriptionManager_exclusivelySubscribeToAggregateEventsAsynchr
     /**
      * The subscriber asks for more events after every event it handles. Whether this instance still holds the lock is
      * answered by the lock it acquired, in memory - it used to be a lock lookup in the database, in a transaction of its
-     * own, for every event (EF-2, {@code docs/key-partitioned-event-processing.md} §5).
+     * own, for every event (EF-2, {@code docs/design/key-partitioned-event-processing.md} §5).
      */
     @Test
     void delivering_events_does_not_look_the_lock_up_in_the_database_per_event() {

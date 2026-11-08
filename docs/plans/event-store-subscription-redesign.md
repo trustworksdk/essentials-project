@@ -11,11 +11,11 @@ Related documents:
 | Document | Relevance |
 |---|---|
 | [`subscription-improvements.md`](./subscription-improvements.md) | S1 (NOTIFY-reset backoff, shipped), S2 (interruptible wake-up, never built), S5/S6 (resume-point saves and the reposition epoch) |
-| [`durable-queue-shard-owned.md`](../durable-queue-shard-owned.md) | The engine whose lessons this borrows: cursor, holes, wake-up tiers, leases, fencing |
-| [`durable-queue-ordered-routing-design.md`](../durable-queue-ordered-routing-design.md) §3 | The safe watermark, which is the core mechanism proposed here |
+| [`durable-queue-shard-owned.md`](../design/durable-queue-shard-owned.md) | The engine whose lessons this borrows: cursor, holes, wake-up tiers, leases, fencing |
+| [`durable-queue-ordered-routing-design.md`](../design/durable-queue-ordered-routing-design.md) §3 | The safe watermark, which is the core mechanism proposed here |
 | [`archive/durable-queue-design-history.md`](../archive/durable-queue-design-history.md) §9 | The defect log. Most of its entries have an equivalent hazard in this design |
-| [`key-partitioned-event-processing.md`](../key-partitioned-event-processing.md) | EF-2. A shared reader with owned units is option (b) of that document, made cheaper |
-| [`cdc.md`](../cdc.md) | The alternative live path, and what this proposal would make optional |
+| [`key-partitioned-event-processing.md`](../design/key-partitioned-event-processing.md) | EF-2. A shared reader with owned units is option (b) of that document, made cheaper |
+| [`cdc.md`](../design/cdc.md) | The alternative live path, and what this proposal would make optional |
 | `components/postgresql-event-store/CLAUDE.md` | The gotcha list, most of which is about the mechanism this proposal replaces |
 
 ---

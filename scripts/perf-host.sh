@@ -18,7 +18,7 @@
 # and collects the results somewhere durable.
 #
 # WHY THIS EXISTS
-#   Every throughput figure in docs/durable-queue-measurements.md is marked comparative-only,
+#   Every throughput figure in docs/design/durable-queue-measurements.md is marked comparative-only,
 #   because the devcontainer runs dockerd inside itself: the load generator and PostgreSQL share
 #   one cgroup budget of eight CPUs, and throughput at saturation varied 861% between repetitions.
 #   That is §18.1's "throughput on hardware that can hold a number still", and it cannot be closed
@@ -231,7 +231,7 @@ FAILED=0
 run_suite cost        -Dit.test='ShardOwnedVsBaselineCostIT' -DfailIfNoSpecifiedTests=false || FAILED=1
 run_suite latency     -Dit.test='ShardOwnedLatencyIT'        -DfailIfNoSpecifiedTests=false || FAILED=1
 run_suite concurrency -Dit.test='ShardOwnedConcurrencySweepIT' -DfailIfNoSpecifiedTests=false || FAILED=1
-# The suite this script exists for. Its throughput column is the one docs/durable-queue-measurements.md
+# The suite this script exists for. Its throughput column is the one docs/design/durable-queue-measurements.md
 # §3.6 marks unquotable — three identical repetitions produced 3 745 and 9 634 msg/s in the devcontainer,
 # a 78% interquartile range. It is the arm that decides whether §4's "not reliable: throughput at
 # saturation" still stands, so a host run that omits it leaves the gap open.

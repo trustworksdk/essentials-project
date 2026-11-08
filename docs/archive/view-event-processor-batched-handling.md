@@ -118,7 +118,7 @@ throughput suffers. Watch for it while measuring.
 4. **Demo:** set the view processors' batch size in the compose profile, keeping the code default at 1 as with
    forwarding.
 5. **Docs:** `ViewEventProcessor` class javadoc, the module `CLAUDE.md` escalation entry, `LLM/LLM-postgresql-event-store.md`
-   (bumping the plugin version), and a section in `docs/key-partitioned-event-processing.md` §5.
+   (bumping the plugin version), and a section in `docs/design/key-partitioned-event-processing.md` §5.
 
 ## Tests
 

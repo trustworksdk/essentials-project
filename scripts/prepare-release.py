@@ -19,7 +19,7 @@
 Why this exists
 ---------------
 A release touches a dozen files that must agree: the release notes converted from
-docs/NEXT_VERSION_RELEASE.md, that file reset, the plugin version and its CHANGELOG heading, the
+docs/releases/NEXT_VERSION_RELEASE.md, that file reset, the plugin version and its CHANGELOG heading, the
 `essentials.version` pin, the migration notes the plugin's /essentials:upgrade reads, every golden that holds
 the pin, the generated references/llm copy, and the "since <next patch>" markers the docs wrote before the
 version was decided. Each is mechanical; forgetting one is silent. This script makes the edits and
@@ -32,7 +32,7 @@ version from the GitHub release tag. It never commits, tags or pushes.
 What `prepare-release.py VERSION` does, in order
 ------------------------------------------------
  1. Finds the previous release: the highest X.Y.Z tag reachable from HEAD. VERSION must be above it.
- 2. Converts docs/NEXT_VERSION_RELEASE.md to docs/RELEASE-NOTES-VERSION.md: release title, a "Covers
+ 2. Converts docs/releases/NEXT_VERSION_RELEASE.md to docs/releases/RELEASE-NOTES-VERSION.md: release title, a "Covers
     everything since" blurb from git, the "So far" summary as a draft intro under a marker `--check`
     rejects, a regenerated table of contents, and the sections without their empty ones. Then resets
     NEXT_VERSION_RELEASE.md to an empty skeleton derived from its own headings. Skipped when the release
@@ -76,7 +76,7 @@ import unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-NEXT = Path("docs/NEXT_VERSION_RELEASE.md")
+NEXT = Path("docs/releases/NEXT_VERSION_RELEASE.md")
 PLUGIN_JSON = Path("essentials-plugin/.claude-plugin/plugin.json")
 CHANGELOG = Path("essentials-plugin/CHANGELOG.md")
 PINS = Path("essentials-plugin/references/stack/stack-pins.md")
@@ -402,7 +402,7 @@ def marker_hits(marker: str) -> list[Path]:
 
 
 def migrations_skeleton(prev: str, v: str, notes: str) -> dict:
-    notes_path = f"docs/RELEASE-NOTES-{v}.md"
+    notes_path = f"docs/releases/RELEASE-NOTES-{v}.md"
     lines = notes.splitlines()
     guide_line, guide_token = 1, f"Essentials {v}"
     for i, line in enumerate(lines, 1):
@@ -449,7 +449,7 @@ def prepare(v: str, plugin_section: str | None) -> int:
         print(f"CHANGELOG: top section {top.group(1)}, origin/main ({origin}) ships plugin {released}: {plugin_section}")
 
     changed: list[str] = []
-    notes_path = Path(f"docs/RELEASE-NOTES-{v}.md")
+    notes_path = Path(f"docs/releases/RELEASE-NOTES-{v}.md")
     print(f"Release {v}; previous tag {prev}; unreleased-behaviour marker {marker}")
 
     # 2. release notes and the reset working draft
@@ -551,7 +551,7 @@ def check(v: str) -> int:
     if revision() != "DEV-SNAPSHOT":
         problems.append(f"pom.xml <revision> is {revision()!r}; it stays DEV-SNAPSHOT (the workflow sets the version)")
 
-    notes_path = Path(f"docs/RELEASE-NOTES-{v}.md")
+    notes_path = Path(f"docs/releases/RELEASE-NOTES-{v}.md")
     if not (ROOT / notes_path).is_file():
         problems.append(f"{notes_path} does not exist")
     else:
@@ -651,7 +651,7 @@ def check(v: str) -> int:
 # ---- --self-test ------------------------------------------------------------------------------------------------
 # convert() runs once per release and rewrites the release's source of truth, so its rules are pinned here rather than
 # discovered on release day: a fixture whose expected notes and reset file are spelled out in full, the version
-# matcher behind the marker rewrite, the CHANGELOG decision, and the real docs/NEXT_VERSION_RELEASE.md converted in
+# matcher behind the marker rewrite, the CHANGELOG decision, and the real docs/releases/NEXT_VERSION_RELEASE.md converted in
 # memory (nothing is written, nothing is fetched). The fixtures use 9.8.x, a version no release will have, so
 # --check's sweep for a stray unreleased-behaviour marker never finds this file.
 

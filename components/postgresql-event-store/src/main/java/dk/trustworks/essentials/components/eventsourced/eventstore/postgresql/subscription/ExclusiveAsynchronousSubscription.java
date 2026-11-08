@@ -296,7 +296,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
      * Asking the lock manager instead ({@link FencedLockManager#isLockedByThisLockManagerInstance(LockName)}) looked
      * the lock up in the database, in a unit of work of its own - and the subscriber requests after every event it
      * handles, so every exclusive subscription paid a transaction per event for it (EF-2,
-     * {@code docs/key-partitioned-event-processing.md} §5). The database answer was no safer: the lock can be lost the
+     * {@code docs/design/key-partitioned-event-processing.md} §5). The database answer was no safer: the lock can be lost the
      * moment after either check, and fencing is the lock token's job, not this guard's.
      */
     @Override

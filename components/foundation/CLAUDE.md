@@ -7,7 +7,7 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | Package | Contents |
 |---|---|
 | `foundation` (root) | `Lifecycle` interface, `IOExceptionUtil` |
-| `causation` | `CausationContext` — `ScopedValue`-bound "event that caused the current work". Design: `docs/event-causation.md` |
+| `causation` | `CausationContext` — `ScopedValue`-bound "event that caused the current work". Design: `docs/design/event-causation.md` |
 | `transaction` | `UnitOfWork`, `UnitOfWorkFactory`, `UnitOfWorkLifecycleCallback` SPIs; JDBI/Mongo/Spring adapters in sub-packages |
 | `fencedlock` | `FencedLockManager` SPI, `DBFencedLockManager` base, `FencedLockStorage` SPI, `DBFencedLock` |
 | `messaging.queue` | `DurableQueues` SPI, `DefaultDurableQueueConsumer`, `CentralizedMessageFetcher`, `DurableQueuesInterceptor` chain |
@@ -17,7 +17,7 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | `postgresql` | `ListenNotify`, `MultiTableChangeListener`, `PostgresqlUtil`, `NotificationDuplicationFilter`, `PostgresqlCreateSchemaApplier` |
 | `postgresql.ttl` | Postgres-specific TTL job plumbing |
 | `ttl` | `TTLManager` SPI, `TTLJob`, `TTLJobDefinition`, `TTLJobBeanPostProcessor` |
-| `schema` | Schema harness SPI (0.60, in progress): `EssentialsSchemaContributor`, `SchemaChange`, `SchemaApplier`, `EssentialsSchemaHarness`, `SchemaOrder`. Plan: `docs/database-schema-harness.md` |
+| `schema` | Schema harness SPI (0.60, in progress): `EssentialsSchemaContributor`, `SchemaChange`, `SchemaApplier`, `EssentialsSchemaHarness`, `SchemaOrder`. Plan: `docs/design/database-schema-harness.md` |
 | `scheduler` | `EssentialsScheduler` SPI, `DefaultEssentialsScheduler`; `pgcron` and `executor` sub-packages |
 | `lifecycle` | `DefaultLifecycleManager` (Spring `SmartLifecycle` adapter), `ShutdownAware` + `ShutdownContext` (shutdown signal, bounded DB cleanup) |
 | `json` | `JSONSerializer` SPI, `Jackson3JSONSerializer`, `EssentialsObjectMappers`, `EssentialsJacksonModules` |

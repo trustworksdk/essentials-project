@@ -28,7 +28,7 @@ import static dk.trustworks.essentials.components.foundation.postgresql.Postgres
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * Schema for the shard-owned queue engine. See {@code docs/durable-queue-shard-owned.md} §2.
+ * Schema for the shard-owned queue engine. See {@code docs/design/durable-queue-shard-owned.md} §2.
  * <p>
  * Five tables — the two live lanes, the dead letter lane, the shard lease table and the membership
  * table — plus one sequence per {@code (queue, shard)} per lane and one global session-fence
@@ -65,7 +65,7 @@ public final class ShardOwnedSchema {
      * what sixteen does, so sixty-four is already far past the point of return. Larger is not free —
      * idle poll cost is linear in units held and does not amortise — and smaller would cap horizontal
      * scale at a number someone could actually reach. See
-     * {@code docs/durable-queue-ordered-routing-design.md} §1.
+     * {@code docs/design/durable-queue-ordered-routing-design.md} §1.
      * <p>
      * The UNORDERED lane keeps a configurable shard count. It has no routing problem — placement is
      * round-robin, so nothing depends on the count — and it can therefore still grow with a single

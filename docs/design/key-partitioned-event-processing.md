@@ -3,7 +3,7 @@
 **Status (2026-11-08):** built, opt-in and measured. The §8 decisions were taken on 2026-10-30 and are built
 (`PartitionedViewEventProcessor`, payload forwarding, `enqueueIfAbsent`, lock spreading). What is still open is §9 —
 batched handling of queued messages and a rebuild path for `InTransactionEventProcessor` — tracked in
-[`plans/README.md`](plans/README.md).
+[`plans/README.md`](../plans/README.md).
 **Modules:** `components/postgresql-event-store` (package `…postgresql.processor`), `components/foundation`
 (`DurableQueues`, `Inboxes`), `components/postgresql-queue-shard-owned(-adapter)`, `spring-boot-starter-postgresql-event-store`.
 **Driven by:** EF-2 in `examples/essentials-trading-demo/docs/EXPANSION_PLAN.md`, and the trading demo's load and fault
@@ -17,7 +17,7 @@ where the time goes. EF-2 is about running the handling on every instance while 
 
 | | Status | Where |
 |---|---|---|
-| `EventProcessor`: handlers on every instance (option (a0) below) | **Built** as the class `PartitionedEventProcessor`, measured with two instances | Release notes 0.61 §2.7, `docs/event-processor-specializations.md` |
+| `EventProcessor`: handlers on every instance (option (a0) below) | **Built** as the class `PartitionedEventProcessor`, measured with two instances | Release notes 0.61 §2.7, `docs/design/event-processor-specializations.md` |
 | Capability flag: does the queue keep one key in order across instances? | **Built**: `DurableQueues.keepsKeyOrderAcrossInstances()` / `Inboxes.keepsKeyOrderAcrossInstances()`, `true` only for the shard-owned adapter | foundation, adapter |
 | `EventProcessor`: batched forward from the reader to the inbox | **Built** (`getForwardBatchSize()`), measured | §5 "Batched forward, built and measured" |
 | `ViewEventProcessor`: batched handling (one unit of work per batch) | **Built** (`getDirectHandlingBatchSize()`), measured | `docs/archive/view-event-processor-batched-handling.md` |
@@ -108,7 +108,7 @@ holds:
 | Handling on the reader thread (`ViewEventProcessor`) | Incidental | Chosen for latency. The queue path already exists for failures |
 | One transaction per event | Incidental | `batchSubscribeToAggregateEventsAsynchronously` (`EventStoreSubscriptionManager.java:117-123`) gives one unit of work per batch, but only non-exclusively. `ViewEventProcessor` already pairs a non-exclusive subscription with its own lock, so the same pairing works here |
 | Event re-read by reference in `EventProcessor` | Incidental | Keeps queue rows small. A payload-carrying message would avoid the read |
-| Inbox consumer = one instance (`SingleGlobalConsumer`) | Incidental **on the shard-owned engine** | Required on `PostgresqlDurableQueues` for cluster-wide key order (`Inboxes.java:48-62`). The shard-owned engine gives that order by ownership (`docs/durable-queue-shard-owned.md` §1, §7) |
+| Inbox consumer = one instance (`SingleGlobalConsumer`) | Incidental **on the shard-owned engine** | Required on `PostgresqlDurableQueues` for cluster-wide key order (`Inboxes.java:48-62`). The shard-owned engine gives that order by ownership (`docs/design/durable-queue-shard-owned.md` §1, §7) |
 | Inbox consumer parallelism 1 | Incidental | A default (`EventProcessor.java:439-441`). The adapter passes it straight into `ConsumerOptions.parallelConsumers` (`ShardOwnedDurableQueueConsumer.java:181-187`) |
 | View update and ack commit together | **Already not true** on the shard-owned engine | `ViewEventProcessor.java:138-140` relies on it. On this engine acks never enlist in the caller's transaction (adapter `CLAUDE.md:30`), so queued view handling is already at-least-once |
 
@@ -143,7 +143,7 @@ does not have to be. The EF-2 question is how to separate the two without giving
 3. **A reset leaves the view equal to a fresh replay.**
 
 **Cross-aggregate order is lost in every partitioned option, and this note does not try to keep it.** Today a
-`ViewEventProcessor` sees one aggregate type's events in subscription order (commit order under CDC, `docs/cdc.md` §1).
+`ViewEventProcessor` sees one aggregate type's events in subscription order (commit order under CDC, `docs/design/cdc.md` §1).
 That is close to global order. Under partitioning, account A's event 7 may be handled after account B's event 3 even
 though B's event committed later. Three kinds of handler break under that (§6). An `EventProcessor` whose inbox runs
 more than one consumer thread has already lost cross-aggregate order today. A `ViewEventProcessor` has not, and that
@@ -159,7 +159,7 @@ The reader keeps its lock, subscriber id and resume point and forwards each even
 ordered message (key = aggregate id, order = `EventOrder`). With `GlobalCompetingConsumers` every instance consumes
 that inbox, and the shard-owned engine gives each key's unit to one instance at a time, so per-key order comes from
 the engine instead of the inbox lock. Built as the class `PartitionedEventProcessor` (release notes §2.7,
-`docs/event-processor-specializations.md`): mode fixed, forwarding batched by default, and it refuses to start where
+`docs/design/event-processor-specializations.md`): mode fixed, forwarding batched by default, and it refuses to start where
 `Inboxes.keepsKeyOrderAcrossInstances()` is `false`. A global opt-in property was built first and removed before
 release: the contract belongs in the class a processor extends, not in configuration.
 
@@ -190,7 +190,7 @@ view's handlers. Details in §4.
 
 Per-key order holds end to end: events of one aggregate cannot commit out of `EventOrder` (optimistic concurrency), one
 reader enqueues them in subscription order in sequential transactions, so a key's `key_order` values commit ascending -
-the producer rule the engine requires (`docs/durable-queue-shard-owned.md:580`). Gaps in `key_order` (events the view
+the producer rule the engine requires (`docs/design/durable-queue-shard-owned.md:580`). Gaps in `key_order` (events the view
 has no handler for) are allowed.
 
 Pros:
@@ -238,7 +238,7 @@ Only worth it if a batched single reader cannot keep up (§5).
 
 ### 3.4 Option (c) — CDC-driven fan-out
 
-Every node's CDC dispatcher publishes events to its local `CdcEventBus` (`docs/cdc.md` §10.3-10.4); each node would
+Every node's CDC dispatcher publishes events to its local `CdcEventBus` (`docs/design/cdc.md` §10.3-10.4); each node would
 handle only the keys it "owns".
 
 Pros:
@@ -248,7 +248,7 @@ Pros:
 Cons:
 
 - Ownership still has to come from somewhere, and correctness still needs a durable per-partition resume point: CDC is
-  a delivery accelerator over the event store, not a source of truth (`docs/cdc.md` §1) - so it inherits (b)'s costs.
+  a delivery accelerator over the event store, not a source of truth (`docs/design/cdc.md` §1) - so it inherits (b)'s costs.
 - CDC is off by default and falls back to polling; a processing mode cannot depend on it.
 
 **Rejected as a foundation.** CDC stays useful underneath (a0)/(a1) for reader latency.
@@ -376,7 +376,7 @@ Two consequences:
 - **Ordering.** Per aggregate only, as §2 says.
 - **At-least-once, with more sources of duplicates than today.** Duplicates come from three places: the reader
   re-forwarding after an unclean failover (≤ `snapshotResumePointsEvery` of events), the engine redelivering after a
-  unit moves mid-handler (`docs/durable-queue-shard-owned.md` §8.3, "Handlers must be idempotent"), and the ack not
+  unit moves mid-handler (`docs/design/durable-queue-shard-owned.md` §8.3, "Handlers must be idempotent"), and the ack not
   committing with the view update (adapter `CLAUDE.md:30`). The Version = EventOrder guard stops being advice and
   becomes a requirement.
 - **Re-forwarding collides with the ordered lane's primary key.** `shard_queue_ordered` has
@@ -779,7 +779,7 @@ or show that it does not happen. And compare per-key order against the exact `Ev
 | `FENCED_LOCK_TOKEN` metadata | `ViewEventProcessor` stamps queued messages with the lock token (`ViewEventProcessor.java:177-178`). Partitioned handlers have none | Do not stamp it. Document that handlers cannot fence on it |
 | Lag invisible in the admin UI | `ApiSubscription` (`EssentialsAdminApiSpec.java:113`, `:152-169`) is keyed `(subscriberId, aggregateType)`, describes the **reader**, and is reported per instance ("null when not running in this instance"). The handler side shows only as a shard-owned queue (`/shard-owned-queues/{queueName}/status`). There is no processor-level entity and no reset operation in the spec | v1: no new admin operation. Document "lag = reader lag + queue depth" and name the processor's queue predictably (`<processorName>:queue`, as `ViewEventProcessor.java:149`). A processor-level status would be the three-place change (SPI, spec mapping, controller) and is deferred (Q6) |
 | Long handlers | A handler outlasting `leaseTtl` can overlap a successor on the same key (`components/postgresql-queue-shard-owned/CLAUDE.md:99`) | Same rule as any ordered-lane consumer. `handlersOutlastingLease` is the signal |
-| Engine maturity | "Still no production use" (`docs/durable-queue-shard-owned.md:5`) | The mode exists only on this engine, so the risk is contained to applications that opt in |
+| Engine maturity | "Still no production use" (`docs/design/durable-queue-shard-owned.md:5`) | The mode exists only on this engine, so the risk is contained to applications that opt in |
 
 ---
 
@@ -821,7 +821,7 @@ Answered since the first version of this document:
   type - shipped with (a0).
 - **Should the mode exist only on the `EventProcessor` side** (old Q1, second half): it exists there now, as
   `PartitionedEventProcessor`. What remains is whether views get it too (`PartitionedViewEventProcessor`).
-- **Class or setting:** a class per contract (`docs/event-processor-specializations.md`).
+- **Class or setting:** a class per contract (`docs/design/event-processor-specializations.md`).
 - **(a1) and questions 2-7 (2026-10-30):** build it, as `PartitionedViewEventProcessor` (named like
   `PartitionedEventProcessor`), with the recommendations below: a reference in the forwarded message, the key qualified
   with the aggregate type, reset only while the processor is stopped cluster-wide, no new admin entity, a clean stop to

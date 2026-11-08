@@ -18,7 +18,7 @@ wider migration effort rather than being a surprise on their own. Every item bel
 migration-guide obligation, and §7 says what that means concretely.
 
 **On evidence.** Every claim in this document is sourced from the code on `main` or from
-`docs/RELEASE-NOTES-0.50.0.md`, and was read rather than assumed. Where a removal would benefit from a
+`docs/releases/RELEASE-NOTES-0.50.0.md`, and was read rather than assumed. Where a removal would benefit from a
 measurement that does not exist, the document says so instead of quoting a number.
 
 ---

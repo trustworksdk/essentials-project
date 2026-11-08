@@ -1,8 +1,8 @@
 # Proposal: shard-owned consumer overhead that grows with instances
 
 **Status (2026-11-08):** candidate 1 (one horizon probe per pump pass) is built — `3be11d757`, measured in
-`docs/durable-queue-measurements.md` §3.12. Candidate 2 is open and needs profiling first. Evidence from the trading demo's EF-2 measurements
-(`docs/key-partitioned-event-processing.md` §5, "Investigation of the forwarder slowdown").
+`docs/design/durable-queue-measurements.md` §3.12. Candidate 2 is open and needs profiling first. Evidence from the trading demo's EF-2 measurements
+(`docs/design/key-partitioned-event-processing.md` §5, "Investigation of the forwarder slowdown").
 **Module:** `components/postgresql-queue-shard-owned`.
 **Where it would land:** a new branch off `main` once 0.60.1 is released — not `queue_improvements`, which is being
 assembled into that release.

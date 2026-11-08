@@ -51,7 +51,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Drain rate of an {@link EventProcessor} over a backlog, opt-in via {@code -Dbenchmark.run=true}: EF-2
- * ({@code docs/key-partitioned-event-processing.md} §5, "Field evidence").
+ * ({@code docs/design/key-partitioned-event-processing.md} §5, "Field evidence").
  * <p>
  * Every order stream carries five events, as the trading demo's {@code Orders} stream does. In the
  * {@code two_of_five} shape the processor has handlers for two of them, as the demo's {@code ExchangeOrderRouter} and

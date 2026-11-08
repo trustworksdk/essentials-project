@@ -244,7 +244,7 @@ This smoke test does not require `wal2json`; CDC path is exercised in `auto` fal
 
 `EventCausationCostIT` measures what recording event causation costs, as an interleaved A/B on whether the
 `CausationPersistableEventEnricher` is registered (the starter's `essentials.eventstore.causation.enabled`). It is the
-performance gate for the causation work in `docs/event-causation.md`, and opt-in like every measuring suite:
+performance gate for the causation work in `docs/design/event-causation.md`, and opt-in like every measuring suite:
 
 ```bash
 mvn verify -pl examples/essentials-performance-lab -Dit.test=EventCausationCostIT -Dbenchmark.run=true

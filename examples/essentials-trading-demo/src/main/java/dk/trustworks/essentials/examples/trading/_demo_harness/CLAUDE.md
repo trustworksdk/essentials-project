@@ -302,7 +302,7 @@ quotes `ACME` by default). Done when every order released its hold and every fil
 **2026-10-22**, same 200 × 50 run with the demo's defaults (`trading-demo.orders.consumers` 1 / 1 / 2, 20-connection
 pool) and the fixes since (CDC warm-up, shard-owned read plans, batched CDC inbox): **~196 completed orders/s on polling, ~184 on
 CDC**, end to end p50 ~30 s on CDC, every run alike. What bounds it now is per-event handling; see
-`docs/key-partitioned-event-processing.md` §5, "Two speeds, and where the ceiling sits now". With the `compose`
+`docs/design/key-partitioned-event-processing.md` §5, "Two speeds, and where the ceiling sits now". With the `compose`
 profile's settings of the day - 8 / 8 / 8 consumers, a 40-connection pool, the processors forwarding in batches of 100 -
 it completes at **~366 orders/s**, end to end p50 ~16 s (same section, "Batched forward, built and measured"). The
 paragraph below is the 2026-10-19 reading.
@@ -310,7 +310,7 @@ paragraph below is the 2026-10-19 reading.
 No conflicts and no refusals in either. The cap is the `EventProcessor` forward: the router reaches `OrderPlaced`
 45 s late (p50) and the ledger processor adds 15 s, while the stub and the reports' inbox add nothing measurable.
 Each processor forwards all five `Orders` events of an order, one per unit of work. Analysis and what it means for
-EF-2: `docs/key-partitioned-event-processing.md` §5, "Field evidence".
+EF-2: `docs/design/key-partitioned-event-processing.md` §5, "Field evidence".
 
 ## The funding scenario (phase 2)
 
@@ -341,7 +341,7 @@ into `Funding:PaymentReports`, outcome into the ledger.
 
 `NoOpAccountsViewProcessor` and `NoOpAccountsEventProcessor` — off unless `trading-demo.ef2.noop-view-processor` /
 `noop-event-processor` is `true`; `/api/admin/ef2/noop-stats` (GET, `POST /reset`). Handlers only count, so their rate
-is the reader's ceiling (M1 in `docs/key-partitioned-event-processing.md` §5, results there). A fresh one reads the
+is the reader's ceiling (M1 in `docs/design/key-partitioned-event-processing.md` §5, results there). A fresh one reads the
 stream from the beginning, so the existing backlog is the workload — measure a fixed window after warm-up, one
 processor at a time. Their resume points persist under their own names; they do nothing while switched off.
 `BatchedAccountsForwarder` (`trading-demo.ef2.batched-forwarder=true`, `.batch-size`, `.consumers`, `.run-token`) is
@@ -637,7 +637,7 @@ end-to-end latency needs several alternating runs per arm. Next: what the JVM sp
 samples, `shard-queue-pump` threads 18 % (10.6 % in asking every owner whether it needed attention), Jackson ~11 %,
 subscription gap handling ~6-7 %, reflection in `AggregateRoot.initialize` 2.8 %. bcrypt (6.6 %) was the monitoring
 scripts' HTTP Basic polls, not the driver, whose customers keep a session. The pump now visits only owners that
-signalled or came due (`752c4fa2`, `docs/durable-queue-measurements.md` §3.13). Alternating uninstrumented runs,
+signalled or came due (`752c4fa2`, `docs/design/durable-queue-measurements.md` §3.13). Alternating uninstrumented runs,
 before (`a106dae6`) against it:
 
 | | Before, 6 runs | One-visit pump, 5 runs |

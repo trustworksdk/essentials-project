@@ -5,6 +5,10 @@ targets, with a `-N` suffix for plugin-only releases.
 
 ## 0.60.1-9 — targets Essentials 0.60.1
 
+- **Release documents moved** — the Essentials repository now keeps its release notes and migration guides under
+  `docs/releases/` and its design documents under `docs/design/`. `migration-plan.py` cites them at their new paths
+  and still links to the path each file has at the cited release tag; the bundled references link to the tagged
+  paths the same way. No skill, rule or command changed.
 - **Failed-batch replay on an I/O failure** — the postgresql-event-store reference says that when the one-event-per-unit-of-work
   replay of a skipped batch fails with an I/O or connection error, the subscription stops at the batch and forwards
   all of it again once resumed, instead of skipping it. No skill, rule or script changed.

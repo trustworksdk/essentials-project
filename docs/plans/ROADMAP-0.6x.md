@@ -15,7 +15,7 @@ The open fixes and improvements planned for the 0.6x line. Every item here was c
   each entry says everything needed to pick it up.
   `DU-n` ids come from dependency-update rounds (`/tw-jvm:deps`): a bump that was tried, failed and was held back.
   Put it in the commit message that fixes the item, so the history can be searched by it.
-- When an item ships, delete it here and add its entry to `docs/NEXT_VERSION_RELEASE.md` in the same commit. When an
+- When an item ships, delete it here and add its entry to `docs/releases/NEXT_VERSION_RELEASE.md` in the same commit. When an
   item is partly done, rewrite it to say only what remains.
 - Each entry has three parts: the problem, why it matters, and the planned fix. Where the plan names an API, the name
   is a proposal, not a commitment.
@@ -42,7 +42,7 @@ Added to 0.60.1 on 2026-10-08:
 
 ## 0. Planned for 0.60.0 but never shipped
 
-All shipped in 0.60.1; see `docs/RELEASE-NOTES-0.60.1.md`. One planned fix was rejected rather than shipped:
+All shipped in 0.60.1; see `docs/releases/RELEASE-NOTES-0.60.1.md`. One planned fix was rejected rather than shipped:
 making objenesis a compile dependency of `immutable-jackson3` (N-5, SB-1). Every third-party dependency of a module
 or starter stays `provided`, by design; the plugin's S2.1 table and its generated POM declare objenesis, and mapper
 creation fails naming it when it is missing (SB-2).

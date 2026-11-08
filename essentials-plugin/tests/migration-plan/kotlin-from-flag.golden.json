@@ -23,7 +23,7 @@
       "tolerated": [],
       "reason": "the release itself",
       "cite": {
-        "path": "docs/RELEASE-NOTES-0.60.1.md",
+        "path": "docs/releases/RELEASE-NOTES-0.60.1.md",
         "line": 1,
         "token": "Essentials 0.60.1",
         "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L1"
@@ -52,7 +52,7 @@
       "tolerated": [],
       "reason": "the starters are built and tested against Spring Boot 4.1; 4.0.x is no longer supported",
       "cite": {
-        "path": "docs/MIGRATION-0.60.md",
+        "path": "docs/releases/MIGRATION-0.60.md",
         "line": 15,
         "token": "Spring Boot 4.1.x is required",
         "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L15"
@@ -71,7 +71,7 @@
       "tolerated": [],
       "reason": "artifacts are compiled with --release 25; an older runtime rejects them",
       "cite": {
-        "path": "docs/MIGRATION-0.60.md",
+        "path": "docs/releases/MIGRATION-0.60.md",
         "line": 13,
         "token": "Java 25 is the minimum",
         "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L13"
@@ -98,7 +98,7 @@
       "tolerated": [],
       "reason": "a Kotlin compiler older than 2.3 cannot target JVM 25 or inline the Essentials inline/reified functions",
       "cite": {
-        "path": "docs/MIGRATION-0.60.md",
+        "path": "docs/releases/MIGRATION-0.60.md",
         "line": 17,
         "token": "Kotlin consumers need Kotlin 2.3 or later",
         "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L17"
@@ -118,13 +118,13 @@
       "stackLint": [],
       "cites": [
         {
-          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.0.md",
           "line": 1046,
           "token": "Start from 0.50.0 and clear every deprecation warning",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1046"
         },
         {
-          "path": "docs/MIGRATION-0.60.md",
+          "path": "docs/releases/MIGRATION-0.60.md",
           "line": 570,
           "token": "Each had a replacement named in its own",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L570"
@@ -141,13 +141,13 @@
       "stackLint": [],
       "cites": [
         {
-          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.0.md",
           "line": 1048,
           "token": "Move to the Jackson 3 flavour on 0.50",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1048"
         },
         {
-          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.0.md",
           "line": 1052,
           "token": "handler that relied on `FullyTransactional`",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1052"
@@ -175,13 +175,13 @@
       ],
       "cites": [
         {
-          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.0.md",
           "line": 1053,
           "token": "Raise the platform",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1053"
         },
         {
-          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.0.md",
           "line": 1054,
           "token": "Bump Essentials to 0.60.0",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1054"
@@ -203,25 +203,25 @@
       ],
       "cites": [
         {
-          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.0.md",
           "line": 1054,
           "token": "swap `types-jackson`/`immutable-jackson`",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1054"
         },
         {
-          "path": "docs/MIGRATION-0.60.md",
+          "path": "docs/releases/MIGRATION-0.60.md",
           "line": 43,
           "token": "drop that workaround if you added it",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L43"
         },
         {
-          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.0.md",
           "line": 1051,
           "token": "Remove `transactional-mode` and `use-ordered-unordered-query`",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1051"
         },
         {
-          "path": "docs/MIGRATION-0.60.md",
+          "path": "docs/releases/MIGRATION-0.60.md",
           "line": 672,
           "token": "springdoc describes semantic types as their JSON",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L672"
@@ -251,19 +251,19 @@
       "stackLint": [],
       "cites": [
         {
-          "path": "docs/MIGRATION-0.60.md",
+          "path": "docs/releases/MIGRATION-0.60.md",
           "line": 45,
           "token": "### Removed and renamed API",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L45"
         },
         {
-          "path": "docs/MIGRATION-0.60.md",
+          "path": "docs/releases/MIGRATION-0.60.md",
           "line": 64,
           "token": "### Your own types under Jackson 3",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L64"
         },
         {
-          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.0.md",
           "line": 1051,
           "token": "Remove `transactional-mode` and `use-ordered-unordered-query`",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1051"
@@ -286,13 +286,13 @@
       "stackLint": [],
       "cites": [
         {
-          "path": "docs/MIGRATION-0.60.md",
+          "path": "docs/releases/MIGRATION-0.60.md",
           "line": 574,
           "token": "Code that still calls a removed member no longer compiles",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L574"
         },
         {
-          "path": "docs/MIGRATION-0.60.md",
+          "path": "docs/releases/MIGRATION-0.60.md",
           "line": 45,
           "token": "### Removed and renamed API",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md#L45"
@@ -309,7 +309,7 @@
       "stackLint": [],
       "cites": [
         {
-          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.0.md",
           "line": 1055,
           "token": "Review dead-letter behaviour",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1055"
@@ -339,7 +339,7 @@
       "stackLint": [],
       "cites": [
         {
-          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.0.md",
           "line": 1059,
           "token": "Back up, then deploy.",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1059"
@@ -361,7 +361,7 @@
       "stackLint": [],
       "cites": [
         {
-          "path": "docs/RELEASE-NOTES-0.60.0.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.0.md",
           "line": 1060,
           "token": "Afterwards, and optionally:",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md#L1060"
@@ -383,7 +383,7 @@
       "stackLint": [],
       "cites": [
         {
-          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.1.md",
           "line": 1,
           "token": "Essentials 0.60.1",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L1"
@@ -400,19 +400,19 @@
       "stackLint": [],
       "cites": [
         {
-          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.1.md",
           "line": 65,
           "token": "the additions can still stop your code compiling",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L65"
         },
         {
-          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.1.md",
           "line": 70,
           "token": "`ShardOwnerSettings`, a record, gains a fifteenth component",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L70"
         },
         {
-          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.1.md",
           "line": 75,
           "token": "`SchemaChange`, a record, gains a fifth component",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L75"
@@ -429,7 +429,7 @@
       "stackLint": [],
       "cites": [
         {
-          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.1.md",
           "line": 135,
           "token": "Silent behaviour changes",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L135"
@@ -455,7 +455,7 @@
       "stackLint": [],
       "cites": [
         {
-          "path": "docs/RELEASE-NOTES-0.60.1.md",
+          "path": "docs/releases/RELEASE-NOTES-0.60.1.md",
           "line": 121,
           "token": "Only if you run `essentials.schema.mode=validate`",
           "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L121"

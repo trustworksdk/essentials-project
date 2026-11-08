@@ -70,7 +70,7 @@ aggregates.
 the engine capability (refuses to start).
 **Be aware:** only for views where each row belongs to one aggregate - a view that reads or writes rows shared across
 aggregates (totals, "latest N across all accounts", a parent row written by another aggregate) breaks. Resetting the
-view needs it stopped on every instance. Design and open points: `docs/key-partitioned-event-processing.md` §3.2, §4, §8.
+view needs it stopped on every instance. Design and open points: `docs/design/key-partitioned-event-processing.md` §3.2, §4, §8.
 
 ### `InTransactionEventProcessor` (exists, unchanged)
 
@@ -93,7 +93,7 @@ view needs it stopped on every instance. Design and open points: `docs/key-parti
 Released API is unchanged: `getInboxMessageConsumptionMode()` stays overridable; only the unsafe combination becomes
 a start-up failure, which is a behaviour change for anyone relying on it today and goes in the release notes.
 
-Spreading whole processors over instances by spreading their locks (`docs/key-partitioned-event-processing.md` §3.5)
+Spreading whole processors over instances by spreading their locks (`docs/design/key-partitioned-event-processing.md` §3.5)
 is not a processor contract and is not part of this proposal; it would be a lock-manager setting, decided separately.
 
 ## Decisions
@@ -103,4 +103,4 @@ is not a processor contract and is not part of this proposal; it would be a lock
    to start; a breaking-change entry in the release notes.
 3. **The partitioned classes fix the consumption mode** (`getInboxMessageConsumptionMode()` is final).
 4. **`PartitionedEventProcessor` first;** the view class after EF-2's view decisions
-   (`docs/key-partitioned-event-processing.md` §8).
+   (`docs/design/key-partitioned-event-processing.md` §8).

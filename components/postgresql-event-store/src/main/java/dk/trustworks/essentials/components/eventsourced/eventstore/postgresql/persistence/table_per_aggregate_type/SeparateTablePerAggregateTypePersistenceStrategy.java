@@ -1300,7 +1300,7 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
             throw new CausationIndexNotEnabledException("Looking up the events caused by an event needs the caused-by-event-id index, which is not enabled. "
                                                     + "Set essentials.eventstore.causation.index-enabled=true, or call enableCausationIndex() on the "
                                                     + SeparateTablePerAggregateTypePersistenceStrategy.class.getSimpleName()
-                                                    + ". On large existing tables build the index concurrently first - see docs/event-causation.md");
+                                                    + ". On large existing tables build the index concurrently first - see docs/design/event-causation.md");
         }
         var events = new ArrayList<PersistedEvent>();
         aggregateTypeConfigurations.values()

@@ -2,7 +2,7 @@
 
 Work that is **not built yet**: plans, proposals and improvement lists. A document lives here while it has open
 items. When the work ships, the part that describes the feature goes into a reference document in `docs/` (or the
-module's `LLM/` doc), and the plan moves to [`../archive/`](../archive/).
+module's `LLM/` doc), and the plan moves to [`../archive/`](../archive).
 
 Last checked against the code: 2026-11-08.
 
@@ -25,7 +25,7 @@ document above.
 | Open item | Source |
 |---|---|
 | CDC P10 Tier 2 (deferred) | [../archive/cdc-improvements.md](../archive/cdc-improvements.md) |
-| Event causation phase 9: the webshop worked example (capture webhook binds `FundsCaptureRequested`, end-to-end test of the F6 chains) | [../event-causation.md](../event-causation.md) |
-| Key-partitioned processing §9.1 batched handling of queued messages; §9.2 a rebuild path for `InTransactionEventProcessor` | [../key-partitioned-event-processing.md](../key-partitioned-event-processing.md) |
-| Schema harness step 8 (Mongo contributors and `MongoSchemaApplier`), steps 11–12 (`essentials-schema-flyway`, `essentials-schema-liquibase`) | [../database-schema-harness.md](../database-schema-harness.md) §9 |
+| Event causation phase 9: the webshop worked example (capture webhook binds `FundsCaptureRequested`, end-to-end test of the F6 chains) | [../design/event-causation.md](../design/event-causation.md) |
+| Key-partitioned processing §9.1 batched handling of queued messages; §9.2 a rebuild path for `InTransactionEventProcessor` | [../design/key-partitioned-event-processing.md](../design/key-partitioned-event-processing.md) |
+| Schema harness step 8 (Mongo contributors and `MongoSchemaApplier`), steps 11–12 (`essentials-schema-flyway`, `essentials-schema-liquibase`) | [../design/database-schema-harness.md](../design/database-schema-harness.md) §9 |
 | A start-up check of total connections held against the pool size | [../archive/processor-settings-inventory.md](../archive/processor-settings-inventory.md) §3 |

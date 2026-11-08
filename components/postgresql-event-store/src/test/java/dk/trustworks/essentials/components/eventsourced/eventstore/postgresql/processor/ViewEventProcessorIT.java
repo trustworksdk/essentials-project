@@ -326,7 +326,7 @@ public class ViewEventProcessorIT {
     /**
      * The view handles {@code OrderPlacedEvent} but not {@code OrderConfirmedEvent}. An event it has no handler for is
      * passed over before the queued-for-key check, the deserialization and the savepoint - it used to take all three,
-     * and the handler call then matched nothing (EF-2, {@code docs/key-partitioned-event-processing.md} §5).
+     * and the handler call then matched nothing (EF-2, {@code docs/design/key-partitioned-event-processing.md} §5).
      */
     @Test
     public void events_the_view_has_no_handler_for_are_passed_over_without_touching_the_queue() {

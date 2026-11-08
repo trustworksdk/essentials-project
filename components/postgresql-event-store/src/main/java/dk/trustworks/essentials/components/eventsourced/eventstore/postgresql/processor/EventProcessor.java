@@ -503,7 +503,7 @@ public abstract class EventProcessor extends AbstractEventProcessor {
      * Above {@code 1} the subscription is an {@link ExclusiveBatchedAsynchronousSubscription}: the same fenced lock and
      * resume point, so a processor can switch either way without losing its place, but one commit per batch. Forwarding
      * event by event bounded a forwarding processor at about 850 events/s, and a chain of them - the trading demo's order
-     * flow - at the slowest one's commit rate (EF-2, {@code docs/key-partitioned-event-processing.md} §5). What a batch
+     * flow - at the slowest one's commit rate (EF-2, {@code docs/design/key-partitioned-event-processing.md} §5). What a batch
      * changes: the {@link SubscriptionErrorPolicy} retries and stops at the batch as a whole, and an event is forwarded
      * only once its batch is full or {@link #getForwardMaxLatency()} has passed. A policy that skips first forwards the
      * failed batch's events again one per unit of work, each tried once more on its own, without the policy's retries, so

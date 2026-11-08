@@ -1,6 +1,6 @@
 ---
 name: prepare-release
-description: Prepare an Essentials release up to a local commit — convert docs/NEXT_VERSION_RELEASE.md into docs/RELEASE-NOTES-<version>.md and reset it, move the plugin version, CHANGELOG heading and essentials.version pin, write the plugin's migration notes, regenerate what reads the pin, run every release check, write the GitHub release body (local, uncommitted GITHUB-RELEASE-<version>.md), and print the tag, push and gh release commands for the maintainer. Never tags, never pushes. Use when asked to prepare, cut or get ready a release, a patch release or a version bump of Essentials. Argument - the version, e.g. 0.60.1.
+description: Prepare an Essentials release up to a local commit — convert docs/releases/NEXT_VERSION_RELEASE.md into docs/releases/RELEASE-NOTES-<version>.md and reset it, move the plugin version, CHANGELOG heading and essentials.version pin, write the plugin's migration notes, regenerate what reads the pin, run every release check, write the GitHub release body (local, uncommitted GITHUB-RELEASE-<version>.md), and print the tag, push and gh release commands for the maintainer. Never tags, never pushes. Use when asked to prepare, cut or get ready a release, a patch release or a version bump of Essentials. Argument - the version, e.g. 0.60.1.
 argument-hint: "<version, e.g. 0.60.1>"
 ---
 
@@ -34,11 +34,11 @@ Stop and report at the first one that fails.
 4. **The previous release is the one you expect.** `git tag --merged HEAD --sort=-v:refname | head -1`.
 5. **origin/main is current**, because the CHANGELOG decision reads plugin.json there: `git fetch origin main`.
 6. **Patch, minor or major.** Patch: upgrade steps live in the release notes §1 only. Minor or major: you also
-   write `docs/MIGRATION-<major.minor>.md` (§3.5); a major also carries out `docs/MIGRATION-NEXT_MAJOR.md`.
+   write `docs/releases/MIGRATION-<major.minor>.md` (§3.5); a major also carries out `docs/releases/MIGRATION-NEXT_MAJOR.md`.
 
 ## 1. Read before running anything
 
-- `docs/NEXT_VERSION_RELEASE.md` in full.
+- `docs/releases/NEXT_VERSION_RELEASE.md` in full.
 - `git log --oneline <previous tag>..HEAD`. Compare it with the file: a user-visible change with no entry is a
   missing entry. Add it to `NEXT_VERSION_RELEASE.md` now, in its section, before the conversion. (Judgement.)
 
@@ -58,8 +58,8 @@ sources; read that diff too (`git diff --stat`).
 
 Do them in this order: the migrations JSON cites the notes by line, so the notes settle first.
 
-1. **The intro paragraph** of `docs/RELEASE-NOTES-<version>.md`. Replace the `<!-- prepare-release: … -->` marker and
-   the draft below it (the old "So far" summary). Shape: `docs/RELEASE-NOTES-0.60.0.md` lines 6-37. Say what the
+1. **The intro paragraph** of `docs/releases/RELEASE-NOTES-<version>.md`. Replace the `<!-- prepare-release: … -->` marker and
+   the draft below it (the old "So far" summary). Shape: `docs/releases/RELEASE-NOTES-0.60.0.md` lines 6-37. Say what the
    release is, what a user must do, and whether the persisted format changes. A comparison table only when the
    platform moves.
 2. **Section numbers.** The script drops empty sections; renumber the rest and every `§` reference and anchor
@@ -70,7 +70,7 @@ Do them in this order: the migrations JSON cites the notes by line, so the notes
    When it inserted a new section, write its entry in place of the marker.
 4. **Upgrade order.** Add a `## Recommended upgrade order` section (and its table-of-contents line) only when the
    release has two or more steps whose order matters.
-5. **Minor or major only:** write `docs/MIGRATION-<major.minor>.md` in the shape of `docs/MIGRATION-0.60.md`, and
+5. **Minor or major only:** write `docs/releases/MIGRATION-<major.minor>.md` in the shape of `docs/releases/MIGRATION-0.60.md`, and
    link it from the notes.
 6. **The migrations JSON**, `essentials-plugin/references/stack/migrations/<prev major.minor>-to-<major.minor>.json`.
    The script wrote a skeleton (the pin step and the `essentials.version` pin). Each §1 item with an `ESS-NNN` id
@@ -92,7 +92,7 @@ Do them in this order: the migrations JSON cites the notes by line, so the notes
    instead of "Under active development" when this release starts a new one; drop the stale "Upgrading from
    0.40.x" note if it no longer applies; check the PostgreSQL floor paragraph.
 9. **The roadmap.** `grep -n '<version>\|shipped' docs/ROADMAP-*.md`. Shipped items are deleted when they ship (the
-   rule at the top of the file); a "see `docs/NEXT_VERSION_RELEASE.md`" pointer for shipped work now points at
+   rule at the top of the file); a "see `docs/releases/NEXT_VERSION_RELEASE.md`" pointer for shipped work now points at
    the release notes. Items waiting for "when the pins move to <version>" are now due: do them or report them.
 10. **After any `LLM/` edit:** `scripts/sync-plugin-llm.sh`. The pre-commit hook does the same once installed
     (`scripts/install-git-hooks.sh`, once per clone).
@@ -136,7 +136,7 @@ The tag need not exist yet; `check.py` resolves the tag-pinned links against the
 
 ```bash
 python3 -I .claude/skills/github-release/check.py GITHUB-RELEASE-<version>.md <version> \
-    docs/RELEASE-NOTES-<version>.md docs/MIGRATION-<major.minor>.md docs/MIGRATION-NEXT_MAJOR.md
+    docs/releases/RELEASE-NOTES-<version>.md docs/releases/MIGRATION-<major.minor>.md docs/releases/MIGRATION-NEXT_MAJOR.md
 ```
 
 Any fix it makes under `docs/` goes in a new commit before the tag, or its anchors do not exist at the tag. When an

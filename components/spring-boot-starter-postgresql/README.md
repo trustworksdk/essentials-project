@@ -208,7 +208,7 @@ essentials.durable-queues.verbose-tracing=false
 | `max-polling-interval` | `2s` | Maximum polling delay                                                       |
 | `verbose-tracing` | `false` | Include all operations in traces (not just top-level)                       |
 
-**Removed in 0.60.0:** `transactional-mode`, `use-ordered-unordered-query`, `enable-queue-statistics`, `shared-queue-statistics-table-name`, `enable-queue-statistics-ttl`, `queue-statistics-ttl-duration`. Every queue operation runs in its own transaction (what `single-operation-transaction` did); there is no mode to choose. Since 0.60.1 the starter logs an ERROR at startup for each removed `essentials.*` property still set, and the configuration metadata marks them as errors for the IDE. See [MIGRATION-0.60](../../docs/MIGRATION-0.60.md) (`TransactionalMode` is retired, `useOrderedUnorderedQuery` is removed, the queue statistics feature is removed).
+**Removed in 0.60.0:** `transactional-mode`, `use-ordered-unordered-query`, `enable-queue-statistics`, `shared-queue-statistics-table-name`, `enable-queue-statistics-ttl`, `queue-statistics-ttl-duration`. Every queue operation runs in its own transaction (what `single-operation-transaction` did); there is no mode to choose. Since 0.60.1 the starter logs an ERROR at startup for each removed `essentials.*` property still set, and the configuration metadata marks them as errors for the IDE. See [MIGRATION-0.60](../../docs/releases/MIGRATION-0.60.md) (`TransactionalMode` is retired, `useOrderedUnorderedQuery` is removed, the queue statistics feature is removed).
 
 ### UnitOfWork Configuration
 
@@ -344,7 +344,7 @@ essentials.immutable-jackson-module-enabled=true
 ### Database Schema Configuration
 
 Every Essentials component describes the tables, indexes, functions and triggers it needs; `essentials.schema.mode`
-decides what happens to them. Design: [docs/database-schema-harness.md](../../docs/database-schema-harness.md).
+decides what happens to them. Design: [docs/design/database-schema-harness.md](../../docs/design/database-schema-harness.md).
 
 ```properties
 essentials.schema.mode=create

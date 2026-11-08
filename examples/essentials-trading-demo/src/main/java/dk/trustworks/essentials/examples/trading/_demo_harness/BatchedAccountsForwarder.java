@@ -40,7 +40,7 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * EF-2 measurement M4 (design note {@code docs/key-partitioned-event-processing.md} §3.1 (a1), §5): the proposed
+ * EF-2 measurement M4 (design note {@code docs/design/key-partitioned-event-processing.md} §3.1 (a1), §5): the proposed
  * topology, built from parts that exist today. One reader in the cluster, behind a {@link FencedLock}, holds a
  * <em>batched</em> subscription to the {@code Accounts} stream and forwards each batch into an inbox with one
  * {@code addMessagesReceived} call - one unit of work and one multi-row enqueue per batch, instead of one per event.

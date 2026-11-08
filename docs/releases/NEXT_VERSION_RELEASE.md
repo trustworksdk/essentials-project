@@ -2,7 +2,7 @@
 
 _Working draft. Collects every change since the last release tag, **`0.60.1`**, that a user of the framework,
 the `essentials` plugin or the examples would notice. The version number is decided at release time; this file
-then becomes `docs/RELEASE-NOTES-<version>.md` (same structure as
+then becomes `docs/releases/RELEASE-NOTES-<version>.md` (same structure as
 [`RELEASE-NOTES-0.60.1.md`](RELEASE-NOTES-0.60.1.md)) and is reset to an empty skeleton._
 
 _Add an entry in the same commit as the change. Cite the commit or PR. Write it for the person upgrading: what
@@ -221,7 +221,7 @@ DEBUG at all.
 
 ## 2. New features
 
-**The shard-owned changes together, against 0.60.1** (`docs/durable-queue-measurements.md` §3.16; 2 pumps, 2 ms handler,
+**The shard-owned changes together, against 0.60.1** (`docs/design/durable-queue-measurements.md` §3.16; 2 pumps, 2 ms handler,
 three alternating rounds each): ordered-lane latency p50 / p99 at 8 queues and 2 000 msg/s 5.8-7.9 / 9.9-12.1 ms →
 2.8-3.1 / 4.1-5.3 ms, at 3 000 msg/s 9.1-11.0 / 15.7-33.9 ms → 2.9-3.1 / 5.0-8.1 ms; at 32 queues 3.3-4.2 / 8.3-10.7 ms
 against 11.6-15.7 / 21.7-349 ms, with the pumps using about a third less CPU under load (167-189 → 117-122 ms per 1 000
@@ -247,7 +247,7 @@ connection only for a pass with database work and returns it at the end of that 
 pump during a rush, and the start-up check still counts all of them; this frees connections for the application while
 queues are quiet. `ShardOwnerMetrics.pumpConnectionsReleased` counts the releases.
 
-Measured (`docs/durable-queue-measurements.md` §3.15): with 4 pumps and 1 held, the trading demo holds 2 connections
+Measured (`docs/design/durable-queue-measurements.md` §3.15): with 4 pumps and 1 held, the trading demo holds 2 connections
 instead of 5 while quiet, between rushes as well as when idle, with latency unchanged within the spread. The default
 (every pump held) is unchanged, and benchmarks the same as before.
 
@@ -265,7 +265,7 @@ notification a background notifier sends batched, outside the business transacti
 `enqueue(Connection, …)` keeps notifying inside the transaction, unchanged. A wake-up lost on the way costs latency up to
 the head sweep, as a lost notification always did.
 
-Measured (`docs/durable-queue-measurements.md` §3.14): the lock wait disappears, the database's active time falls 20-35 %,
+Measured (`docs/design/durable-queue-measurements.md` §3.14): the lock wait disappears, the database's active time falls 20-35 %,
 and the ordered-lane benchmark's p99 falls from 9-70 ms to 5-7 ms, at about 30 % more pump statements per message. In
 the demo, booked p50 255-261 ms → 237-244 ms and placed→submitted p99 1 271-1 496 ms → 796-992 ms over three runs each.
 
@@ -280,7 +280,7 @@ needing attention without having signalled or come due is counted in `ShardOwner
 (it should stay 0). An owner whose scheduling throws is paced like any other failing owner, 200 ms later, and ends no
 pass. (`752c4fa29`)
 
-Measured (`docs/durable-queue-measurements.md` §3.13, 2 000 msg/s, 2 pumps): pump CPU per message falls by a third at
+Measured (`docs/design/durable-queue-measurements.md` §3.13, 2 000 msg/s, 2 pumps): pump CPU per message falls by a third at
 32 queues (2 048 units, 217 → 146 ms per 1 000 messages); at 8 queues it is unchanged, with 12 % more statements per
 message, as smaller passes share batched reads among fewer owners. Idle cost unchanged.
 
@@ -291,7 +291,7 @@ delivered message under load and the pumps' most frequent statement. A pump pass
 read-ahead for the owners that read for themselves - takes ONE probe for every owner still behind its watermark, and
 then runs each owner's pass, which retires and records watermark candidates exactly as before. (`3be11d757`)
 
-Measured (`docs/durable-queue-measurements.md` §3.12, 8 ordered queues, 2 pumps, 3 000 msg/s): p99 151 → 71 ms, probes
+Measured (`docs/design/durable-queue-measurements.md` §3.12, 8 ordered queues, 2 pumps, 3 000 msg/s): p99 151 → 71 ms, probes
 per message 2.59 → 0.24, transactions per message −23 %. With handlers that burn CPU at saturation the extra passes
 cost CPU instead (§3.12 has the caveat). Idle cost unchanged.
 
@@ -585,7 +585,7 @@ calls, 5 rounds on one JVM: the calendar path takes 180-260 ns, the clock-and-zo
 Additive: an aggregate that does not set `periodSource` behaves as before. Not covered: business weeks or months.
 `asDecisionPolicy()` rolls on access only; to roll idle aggregates on a scheduled scan as well, business-calendar ones
 included, use `asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)` with a scan rollover (§2.16). Design:
-`docs/closing-books-business-day-boundary.md`.
+`docs/design/closing-books-business-day-boundary.md`.
 
 ### 2.16 Scheduled closing books can roll an aggregate the way the application does on access (`eventsourced-aggregates`)
 
@@ -673,7 +673,7 @@ while holding the generation lock, as the built-in scan's rollover does) and poi
 ## 4. The `essentials` Claude Code plugin
 
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
-the full entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md).
+the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md).
 
 - `0.60.1-3` - the LLM docs show `Money`'s `amount` as a JSON number, the form it is written in, and say a quoted
   amount is also read (§3).
@@ -754,7 +754,7 @@ Not published; listed because they are the reference for how to use the framewor
   always-open exchange. The simulator's operator clock endpoints are switched on (`clock.operator_control`).
 
 - **`essentials-trading-demo`: a guide, a stop script, and polling versus CDC measured.**
-  [`docs/DEMO_GUIDE.md`](../examples/essentials-trading-demo/docs/DEMO_GUIDE.md) covers starting, stopping and
+  [`docs/DEMO_GUIDE.md`](../../examples/essentials-trading-demo/docs/DEMO_GUIDE.md) covers starting, stopping and
   resetting the stack, the operator page, the customer UI and what to show with each, and a measured comparison of the
   demo on CDC, on polling and on polling woken by `NOTIFY` (CDC fastest and cheapest at the default load; `NOTIFY`
   doubled the statements). `./stop-instances.sh` stops the instances, the load driver and the containers and keeps

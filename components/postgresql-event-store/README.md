@@ -626,7 +626,7 @@ with `CREATE INDEX CONCURRENTLY`.
 
 Full rules - joins, batch subscriptions, explicit bindings, cost - in
 [LLM-postgresql-event-store.md](../../LLM/LLM-postgresql-event-store.md#event-causation); design in
-[docs/event-causation.md](../../docs/event-causation.md).
+[docs/design/event-causation.md](../../docs/design/event-causation.md).
 
 ## Multitenancy
 
@@ -2572,7 +2572,7 @@ Slot ownership and safety:
 
 Design details:
 
-- [Hybrid CDC design](../../docs/cdc.md)
+- [Hybrid CDC design](../../docs/design/cdc.md)
 
 Operational API:
 

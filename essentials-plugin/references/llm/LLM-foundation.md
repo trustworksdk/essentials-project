@@ -1076,7 +1076,7 @@ Optional<EventId> cause = CausationContext.current();     // read
 ## Database Schema Harness
 
 **Package**: `dk.trustworks.essentials.components.foundation.schema` (SPI), PostgreSQL appliers in `.postgresql`.
-Design and rationale: [docs/database-schema-harness.md](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/database-schema-harness.md).
+Design and rationale: [docs/design/database-schema-harness.md](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/database-schema-harness.md).
 
 Every Essentials component that owns tables *describes* its schema as `SchemaChange`s; an applier decides what
 happens to them. In Spring, `essentials.schema.mode` selects the applier - see

@@ -241,7 +241,7 @@ EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventSt
 
 > **Which delivery mechanism should I use?** Subscribers are always correct regardless —
 > the choice is only *how fast the fast path is* and *what operational footprint you accept*.
-> See **[cdc.md §12.6 "Choosing a delivery mechanism"](../../docs/cdc.md)**
+> See **[cdc.md §12.6 "Choosing a delivery mechanism"](../../docs/design/cdc.md)**
 > for the full comparison (plain/jittered/notify polling vs CDC INBOX/DIRECT, with indicative
 > latency and DB-load numbers). Quick guide:
 > - **Simplest, any Postgres, new project** → leave CDC off (the default) and run polling
@@ -256,7 +256,7 @@ EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventSt
 > every CDC bean is gated on it being `true` with no `matchIfMissing`. An application that says
 > nothing about CDC gets no replication slot, no publication changes and no tailer: the event store
 > polls, exactly as before CDC existed. CDC's operational surface (replication slot, publication,
-> WAL retention; see [cdc.md §5](../../docs/cdc.md)) is heavier than polling, so adopt it
+> WAL retention; see [cdc.md §5](../../docs/design/cdc.md)) is heavier than polling, so adopt it
 > deliberately:
 > ```properties
 > essentials.eventstore.cdc.enabled=true

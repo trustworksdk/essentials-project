@@ -14,7 +14,7 @@ the `correlation_id` column; it stays as it is, available to an application whos
 wants to set it.
 
 **Status:** phases 1–8 are built and shipped in **0.60.0** (release notes §2.9, migration guide §1.1.7). Phase 9, the
-webshop worked example, is still open and is tracked in [`plans/README.md`](plans/README.md). The paragraph below is
+webshop worked example, is still open and is tracked in [`plans/README.md`](../plans/README.md). The paragraph below is
 the original reasoning, kept for the record.
 
 **Not in 0.60, and does not need a breaking release.** An earlier draft targeted "the next major" on two grounds:
@@ -445,7 +445,7 @@ Nothing breaks, so this can ship in a minor release:
 - **Queued messages gain one metadata entry** while a cause is bound. A consumer that asserts on the exact
   contents of `MessageMetaData` will see it.
 - **No schema change unless asked for.** The index is opt-in (F5), so an upgrade alone runs no DDL. Enabling it
-  is the one operational step, and the migration notes — in the style of `docs/MIGRATION-0.60.md` — must carry
+  is the one operational step, and the migration notes — in the style of `docs/releases/MIGRATION-0.60.md` — must carry
   the concurrent-build recipe for large tables and the validate-mode note.
 
 ## Decided
@@ -540,7 +540,7 @@ integration tests (Docker).
 
 There are no recorded baselines for the paths causation touches. The performance lab
 (`examples/essentials-performance-lab`) writes its results to `target/`, so nothing is committed; the only committed
-figures are `docs/durable-queue-measurements.md`, which compare the two queue engines with each other, and the lab has
+figures are `docs/design/durable-queue-measurements.md`, which compare the two queue engines with each other, and the lab has
 no scenario that drives event → `EventProcessor` → handler → append at all.
 
 Rather than record a "before" on `release/0.60` and compare it with an "after" from a different run — which the
@@ -561,7 +561,7 @@ using `essentials.eventstore.causation.enabled` as the switch (it exists from ph
 
 The acceptance bar is "no difference outside the run-to-run noise of the same arm" for throughput and latency. WAL
 bytes per event are expected to grow by the size of the value written, and the check is that they grow by no more. A result outside it is a design
-question, not a tuning task, and gets written up next to the numbers in `docs/durable-queue-measurements.md` style.
+question, not a tuning task, and gets written up next to the numbers in `docs/design/durable-queue-measurements.md` style.
 
 ### Measured
 

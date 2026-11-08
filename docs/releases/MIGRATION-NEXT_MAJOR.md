@@ -4,7 +4,7 @@
 > 0.60; this guide stays as the reference for what replaces each member. What else changed is in
 > [MIGRATION-0.60.md](./MIGRATION-0.60.md).
 >
-> Design rationale: `docs/constructor-ergonomics-and-optional-policy.md`.
+> Design rationale: `docs/design/constructor-ergonomics-and-optional-policy.md`.
 
 ## What changed and why
 

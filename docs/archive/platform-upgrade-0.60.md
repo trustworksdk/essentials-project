@@ -4,7 +4,7 @@
 
 **Target: 0.60.** This is the breaking major, and it already carries the durable-queues refactor
 (`docs/archive/durable-queues-breaking-refactor.md`) and the `forRemoval` constructor removals promised by
-`docs/MIGRATION-NEXT_MAJOR.md`. This document covers the platform side of that release:
+`docs/releases/MIGRATION-NEXT_MAJOR.md`. This document covers the platform side of that release:
 
 | # | Workstream                      | From                                  | To                                   |
 |---|---------------------------------|---------------------------------------|--------------------------------------|
@@ -289,7 +289,7 @@ the one check the golden files cannot fully replace.
 ### Step 5 — Documentation and release material
 
 **Done except the release notes:** root and module `CLAUDE.md` / `README.md`, `LLM/*.md`, the examples, and
-`docs/MIGRATION-0.60.md` (platform and Jackson sections). `RELEASE-NOTES-0.60.0.md` is written at release time,
+`docs/releases/MIGRATION-0.60.md` (platform and Jackson sections). `RELEASE-NOTES-0.60.0.md` is written at release time,
 because 0.60 still has unfinished work (the `forRemoval` constructor removals, the schema harness).
 
 1. Root `CLAUDE.md`: rewrite line 3 (JDK), the command table (drop `mvn -Pjackson2 test`), and delete or collapse the
@@ -320,7 +320,7 @@ because 0.60 still has unfinished work (the `forRemoval` constructor removals, t
      to the `tools.jackson.databind.annotation` equivalents.
    - The Jackson 3 constructor-parameter-name rule from the root `CLAUDE.md`, restated for consumers, because it
      now applies to everyone.
-6. `docs/RELEASE-NOTES-0.60.0.md`.
+6. `docs/releases/RELEASE-NOTES-0.60.0.md`.
 7. `graphify update .` after the code changes.
 
 ## 4. Risks
@@ -400,5 +400,5 @@ stands in 0.60:
 - Adopting Java 25 language or library features (D6).
 - The `forRemoval` constructor removals from `MIGRATION-NEXT_MAJOR.md`. Separate 0.60 work, done on
   `removal/0.60-forremoval` after the platform upgrade: see "The 0.50 `forRemoval` members are removed everywhere else"
-  in `docs/MIGRATION-0.60.md`.
-- The database schema harness (`docs/database-schema-harness.md`).
+  in `docs/releases/MIGRATION-0.60.md`.
+- The database schema harness (`docs/design/database-schema-harness.md`).

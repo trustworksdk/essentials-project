@@ -2,7 +2,7 @@
 
 > **ARCHIVED (2026-11-08).** Every item that was going to be built is built (P1–P6, P8, P9, P10 Tier 1). The two open items, P7 Path B (consumer-group-scoped resume points, the same as S3) and P10 Tier 2, are tracked in [`../plans/README.md`](../plans/README.md).
 
-Companion to [cdc.md](../cdc.md) §13 (Known Limitations). The items here are the
+Companion to [cdc.md](../design/cdc.md) §13 (Known Limitations). The items here are the
 ones judged to have meaningful operational ROI and a tractable implementation
 path. Items in §13 that are *not* repeated here are accepted as-is.
 
@@ -720,7 +720,7 @@ polling for its whole life. Now fixed for real deployments.
 > delivers them, and each subscription's `CdcDeliveryTracker` delivers an event that commits after a higher global
 > order when it arrives. `liveDrainStallThreshold`, `CdcLiveDrainStalledException` and the
 > `essentials.cdc.backfill_live.stall_detected` counter are deprecated and have no effect. See
-> [cdc.md](../cdc.md) for the current design. The section is kept as the record of the earlier approach.
+> [cdc.md](../design/cdc.md) for the current design. The section is kept as the record of the earlier approach.
 
 > **Status.** Tier 1 (stall-detect → subscription restart) is implemented — see the
 > "Tier 1" section below for the as-built notes. Tier 2 (in-drain probe + classify)
@@ -907,7 +907,7 @@ self-perpetuating — but lower ROI than the delivered items above.
 
 ## Explicitly out of scope
 
-These were considered and deliberately left in [cdc.md](../cdc.md) §13 rather than
+These were considered and deliberately left in [cdc.md](../design/cdc.md) §13 rather than
 added here:
 
 - **Orphaned-slot auto-cleanup** (§13.1) — fundamentally requires human judgement; auto-drop is too dangerous.

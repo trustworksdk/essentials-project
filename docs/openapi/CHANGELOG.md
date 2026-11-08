@@ -15,8 +15,8 @@ The contract still declares version `1.0.0` and is still served under `/api/esse
 are breaking against the released `v1` contract, the compatibility gate now diffs against
 `baseline/essentials-admin-api-v2.yaml`; `baseline/essentials-admin-api-v1.yaml` is kept unchanged as
 the 0.50.0 contract. The change-by-change record for these releases is in the Essentials release notes
-(`docs/RELEASE-NOTES-0.60.0.md`, `docs/RELEASE-NOTES-0.60.1.md`) and, for unreleased work,
-`docs/NEXT_VERSION_RELEASE.md`.
+(`docs/releases/RELEASE-NOTES-0.60.0.md`, `docs/releases/RELEASE-NOTES-0.60.1.md`) and, for unreleased work,
+`docs/releases/NEXT_VERSION_RELEASE.md`.
 
 ## v1.0.0 — Essentials 0.50.0
 
@@ -75,7 +75,7 @@ Scheduler, added later in the same unreleased version:
   request reached an instance not holding the scheduler lock. This is the first operation declaring
   `409`.
 
-Event causation, added later in the same unreleased version (`docs/event-causation.md`):
+Event causation, added later in the same unreleased version (`docs/design/event-causation.md`):
 
 - **`GET /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events`**
   (`EventStoreApi.findAggregateEvents`) lists an aggregate's most recent events (`limit`, default 100, at most

@@ -47,7 +47,7 @@ Three things the decided design assumed were not so:
 - **The books do not roll at the exchange's close.** `AccountClosingBooksPolicy` rolls at `END_OF_DAY` New York on the
   wall clock - the interim until EF-1. A day played at 60x would settle, expire and clear on the exchange's days and
   roll the books at real midnight. **Decided (Q-10):** build EF-1 in this phase (D24, design in
-  `docs/closing-books-business-day-boundary.md` at the repository root), then roll the accounts on the exchange's
+  `docs/design/closing-books-business-day-boundary.md` at the repository root), then roll the accounts on the exchange's
   `BusinessDayClosed`. EF-1b (rolling on a scheduled scan) stays a separate change: the demo rolls an account on its
   next mutation.
 - **The operator clock endpoints are off.** `/api/clock/{freeze,resume,speed}` answer only with
@@ -184,7 +184,7 @@ it is harness tooling. Imports follow the harness's existing practice: command t
 ## 9. As built
 
 - **EF-1 first** (`83b7cce47`), then sessions and the accounts'
-  business-day books (`53a2a69a8`), then the page. The design note `docs/closing-books-business-day-boundary.md` has
+  business-day books (`53a2a69a8`), then the page. The design note `docs/design/closing-books-business-day-boundary.md` has
   EF-1's own as-built notes.
 - **Code** in `_demo_harness/demo_control/` (`OpsPage`, `DemoControlAPI`, `ExchangeClockControl`, `BackgroundTraffic`),
   the page in `templates/ops/index.html` and `static/ops_ui/` (on the customer UI's stylesheet). Simulators profile

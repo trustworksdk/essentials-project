@@ -79,7 +79,7 @@ public record Message(byte[] payload, int payloadType, String key, long keyOrder
      * does not hold across the two. {@code PostgresqlDurableQueues} blocks the key behind a delayed
      * message instead, so the same call behaves differently on the two engines — a known difference,
      * deliberately left, with the reasoning and the trigger to revisit it in
-     * {@code docs/durable-queue-shard-owned.md} §18.3.
+     * {@code docs/design/durable-queue-shard-owned.md} §18.3.
      * <p>
      * Safe when a key's messages are either all delayed or all not, and when the delay is the same for
      * all of them. Otherwise use {@link #ordered} and let the handler decide when to act.

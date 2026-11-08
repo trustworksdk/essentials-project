@@ -18,7 +18,7 @@ Single package: `dk.trustworks.essentials.components.boot.autoconfigure.postgres
 | `EssentialsSchemaConfiguration` | `@AutoConfiguration` — the `SchemaApplier` `essentials.schema.mode` selects, and `EssentialsSchemaHarnessRunner` |
 | `EssentialsSchemaHarnessRunner` | `SmartInitializingSingleton` — applies every `EssentialsSchemaContributor` bean after all singletons exist, before lifecycles start; in `emit` stops the app with exit 0 on `ApplicationStartedEvent` |
 
-**Schema mode.** Every bean that owns schema is built with `properties.getSchema().getMode().schemaOwnership()`: `COMPONENT` in `create` (the default, today's behaviour), `HARNESS` otherwise. A new bean that creates tables must do the same, or it silently creates schema in `validate` mode. Outside `create` the fenced lock manager is `build()`, not `buildAndStart()` — its confirmation thread reads the lock table at once. In `emit` the lifecycle manager starts nothing. Design: `docs/database-schema-harness.md` §8.
+**Schema mode.** Every bean that owns schema is built with `properties.getSchema().getMode().schemaOwnership()`: `COMPONENT` in `create` (the default, today's behaviour), `HARNESS` otherwise. A new bean that creates tables must do the same, or it silently creates schema in `validate` mode. Outside `create` the fenced lock manager is `build()`, not `buildAndStart()` — its confirmation thread reads the lock table at once. In `emit` the lifecycle manager starts nothing. Design: `docs/design/database-schema-harness.md` §8.
 
 **Beans wired by `EssentialsComponentsConfiguration` (in dependency order):**
 1. `EssentialTypesJacksonModule` / `EssentialsImmutableJacksonModule` — Jackson modules

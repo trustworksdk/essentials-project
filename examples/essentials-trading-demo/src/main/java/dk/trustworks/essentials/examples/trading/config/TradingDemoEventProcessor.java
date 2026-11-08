@@ -26,7 +26,7 @@ import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_fo
  * <p>
  * <b>A test aid, not a pattern to copy.</b> It lets the same processors run on both engines. An application picks the
  * contract in its code instead: {@link PartitionedEventProcessor} (every instance, refuses to start on an engine that
- * cannot keep the order) or {@link EventProcessor} (one instance) - see {@code docs/event-processor-specializations.md}.
+ * cannot keep the order) or {@link EventProcessor} (one instance) - see {@code docs/design/event-processor-specializations.md}.
  */
 public abstract class TradingDemoEventProcessor extends EventProcessor {
     private final boolean keepsKeyOrderAcrossInstances;

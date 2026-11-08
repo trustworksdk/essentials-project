@@ -52,7 +52,7 @@ import static dk.trustworks.essentials.components.eventsourced.eventstore.postgr
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * IT-4 of {@code docs/key-partitioned-event-processing.md}: an exclusive {@link EventProcessor} on the shard-owned
+ * IT-4 of {@code docs/design/key-partitioned-event-processing.md}: an exclusive {@link EventProcessor} on the shard-owned
  * engine whose reader fails over uncleanly re-forwards the events since its last resume-point snapshot. Some of them are
  * still queued - the ordered lane's primary key is {@code (queue_id, shard, msg_key, key_order)} and its insert has no
  * {@code ON CONFLICT} - so the re-forward collides with them.

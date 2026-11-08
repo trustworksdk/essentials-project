@@ -37,7 +37,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * {@link BatchedPersistedEventHandler} in ONE unit of work - which also advances the resume point - rather than one unit
  * of work per event. Built for {@code EventProcessor}'s batched forward (see {@code EventProcessor#getForwardBatchSize()}):
  * forwarding event by event committed once per event, which bounded a forwarding processor at about 850 events/s
- * (EF-2, {@code docs/key-partitioned-event-processing.md} §5, M1 and M4).
+ * (EF-2, {@code docs/design/key-partitioned-event-processing.md} §5, M1 and M4).
  * <p>
  * Kept line for line beside {@link ExclusiveAsynchronousSubscription}: the lock handling is the same, only the handler
  * and the subscriber it builds differ. A change to one belongs in the other.
@@ -307,7 +307,7 @@ public class ExclusiveBatchedAsynchronousSubscription extends AbstractEventStore
      * Asking the lock manager instead ({@link FencedLockManager#isLockedByThisLockManagerInstance(LockName)}) looked
      * the lock up in the database, in a unit of work of its own - and the subscriber requests after every event it
      * handles, so every exclusive subscription paid a transaction per event for it (EF-2,
-     * {@code docs/key-partitioned-event-processing.md} §5). The database answer was no safer: the lock can be lost the
+     * {@code docs/design/key-partitioned-event-processing.md} §5). The database answer was no safer: the lock can be lost the
      * moment after either check, and fencing is the lock token's job, not this guard's.
      */
     @Override

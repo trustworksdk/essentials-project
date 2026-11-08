@@ -42,7 +42,7 @@ class FailoverRedeliveryPolicyTest {
     }
 
     /**
-     * The figures {@code docs/NEXT_VERSION_RELEASE.md} quotes for the starters' defaults: {@code PostgresqlDurableQueues}
+     * The figures {@code docs/releases/NEXT_VERSION_RELEASE.md} quotes for the starters' defaults: {@code PostgresqlDurableQueues}
      * and {@code MongoDurableQueues} report twice their 30 s message-handling timeout (the stuck-message reset's cadence
      * included). The PostgreSQL and MongoDB starters both default to a 15 s lock timeout and a 30 s message-handling
      * timeout, so this one case covers both.

@@ -100,7 +100,7 @@ essentials:
     subscription-manager:
       # Events per event-store read for every subscription (projections, processors, the harness). It was 5, which
       # made a batched subscription read a 100-event batch in ~21 queries (plus as many gap-table lookups) and capped
-      # the EF-2 forwarder measurement; see docs/key-partitioned-event-processing.md. The starter's default is 10.
+      # the EF-2 forwarder measurement; see docs/design/key-partitioned-event-processing.md. The starter's default is 10.
       event-store-polling-batch-size: 100
       snapshot-resume-points-every: 2s
       event-store-polling-interval: 200
@@ -151,7 +151,7 @@ trading-demo:
   orders:
     # The order flow's two EventProcessors and the exchange reports' inbox. Batching the forward pays only together
     # with more inbox consumers; together they took the order flow from ~180 to ~366 completed orders/s (EF-2,
-    # docs/key-partitioned-event-processing.md section 5, "Batched forward, built and measured").
+    # docs/design/key-partitioned-event-processing.md section 5, "Batched forward, built and measured").
     #
     # 16 each: at 8 every stage capped the 600/s open burst. Raising only the router moved the backlog to the next two
     # inboxes; raising all three halved the booked p99 (5.3-6.6 s -> 2.9-4.5 s) for no more CPU
@@ -171,5 +171,5 @@ trading-demo:
     # such a view goes through its queue, so this times the instances is how many are handled at once
     partitioned-consumers: 8
     # Forward each event itself rather than a reference the consumer loads again: measured 11 % shorter drain and 8 %
-    # less CPU for 11 % more WAL on the ledger load (docs/key-partitioned-event-processing.md, question 2)
+    # less CPU for 11 % more WAL on the ledger load (docs/design/key-partitioned-event-processing.md, question 2)
     partitioned-forward-payloads: true

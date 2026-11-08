@@ -488,10 +488,22 @@ def fold(steps: list[dict], scan: dict, lint: dict, pairs: set[tuple[str, str]])
 # The plan
 
 
+# The release notes and migration guides moved from docs/ to docs/releases/; the first tag with the new
+# layout is RELEASES_DIR_SINCE. A citation's path is where the file is in the repository now (what --check
+# reads); its URL points at the release tag, so a tag cut before the move gets the path the file had there.
+RELEASES_DIR_SINCE = (0, 61, 0)
+
+
+def path_at_tag(path: str, tag: str) -> str:
+    if path.startswith("docs/releases/") and (version_tuple(tag) or ()) < RELEASES_DIR_SINCE:
+        return "docs/" + path[len("docs/releases/"):]
+    return path
+
+
 def cite_out(cat: Catalogue, c: dict, tag: str) -> dict:
     out = {"path": c["path"], "line": c["line"], "token": c["token"]}
     if cat.blob:
-        out["url"] = f"{cat.blob}{tag}/{c['path']}#L{c['line']}"
+        out["url"] = f"{cat.blob}{tag}/{path_at_tag(c['path'], tag)}#L{c['line']}"
     return out
 
 

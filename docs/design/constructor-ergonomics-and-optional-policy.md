@@ -4,7 +4,7 @@
 remain.
 
 This is the *why*. For the per-class before-and-after tables, and for what a consumer has to change,
-see **[MIGRATION-NEXT_MAJOR.md](MIGRATION-NEXT_MAJOR.md)** — nothing here is required reading to upgrade.
+see **[MIGRATION-NEXT_MAJOR.md](../releases/MIGRATION-NEXT_MAJOR.md)** — nothing here is required reading to upgrade.
 The rules are stated normatively for contributors in `.claude/rules/code-style.md`; this document is what
 those two are derived from.
 
@@ -225,7 +225,7 @@ persisted data first.
 
 ## See also
 
-- [MIGRATION-NEXT_MAJOR.md](MIGRATION-NEXT_MAJOR.md) — consumer-facing before-and-after, per module
+- [MIGRATION-NEXT_MAJOR.md](../releases/MIGRATION-NEXT_MAJOR.md) — consumer-facing before-and-after, per module
 - `.claude/rules/code-style.md` — the rules as normative contributor guidance
 - `components/foundation-test/src/main/java/…/architecture/EssentialsConstructionRules.java` — the rules
 - `components/foundation-test/src/main/java/…/architecture/AbstractEssentialsConstructionErgonomicsTest.java` — the harness

@@ -304,7 +304,7 @@ RULES_LIST = [
     # 0.50.0: EssentialsComponentsProperties.java:286 binds durable-queues.transactional-mode.
     Rule("s5-transactional-mode", "S5", "Should-fix", [("C", 288, "binds to nothing")],
          "essentials.durable-queues.transactional-mode in configuration",
-         "docs/MIGRATION-0.60.md:542; EssentialsComponentsProperties.java:292-303 (no such field)",
+         "docs/releases/MIGRATION-0.60.md:542; EssentialsComponentsProperties.java:292-303 (no such field)",
          target_only=True),
     Rule("s5-aggregate-declarations", "S5", "Should-fix", [("C", 298, "`EssentialsAggregateDeclarations`")],
          "an aggregate policy annotation on a class no EssentialsAggregateDeclarations bean declares",

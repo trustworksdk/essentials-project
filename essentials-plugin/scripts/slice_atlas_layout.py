@@ -5,7 +5,7 @@ Why this exists
 ---------------
 The Atlas page (`references/slice/atlas/`) only draws, filters and navigates; it derives nothing.
 Layout lives here so it is golden-tested, identical on every run, and laid out once over the union
-of a before and an after map when the Diff lens is on (design `docs/slice-atlas-design.md` §4, §9.3).
+of a before and an after map when the Diff lens is on (design `docs/design/slice-atlas-design.md` §4, §9.3).
 `slice_atlas.py` calls `compute()` and stores the result under the data's `layout` key.
 
     import slice_atlas_layout
