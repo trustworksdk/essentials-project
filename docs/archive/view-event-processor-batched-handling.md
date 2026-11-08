@@ -1,5 +1,7 @@
 # Plan: batched direct handling for `ViewEventProcessor`
 
+> **ARCHIVED (2026-11-08).** Built, including step 3: `ViewEventProcessor.getDirectHandlingBatchSize()` / `getDirectHandlingMaxLatency()`, `BatchedPersistedEventSubscriber`, `handOffFailedBatch`. Kept as the design record; the code is authoritative.
+
 **Status:** decided, being built (2026-10-23). Unparked before the release merge, by the user's call: the phase 6
 baseline (`examples/essentials-trading-demo/.../_demo_harness/CLAUDE.md`, the business-day run) measures it now, and
 again once the release lands. Step 1 is therefore skipped; conflicts with the release are resolved at the merge.

@@ -1,7 +1,9 @@
 # Platform upgrade for 0.60 — JDK 25, Kotlin 2.4, Spring Boot 4.1.1, Jackson 3 only
 
+> **ARCHIVED (2026-11-08).** Shipped in 0.60.0 (JDK 25, Kotlin 2.4, Spring Boot 4.1, Jackson 3 only). Kept as the record of the upgrade decisions.
+
 **Target: 0.60.** This is the breaking major, and it already carries the durable-queues refactor
-(`docs/durable-queues-breaking-refactor.md`) and the `forRemoval` constructor removals promised by
+(`docs/archive/durable-queues-breaking-refactor.md`) and the `forRemoval` constructor removals promised by
 `docs/MIGRATION-NEXT_MAJOR.md`. This document covers the platform side of that release:
 
 | # | Workstream                      | From                                  | To                                   |
@@ -301,7 +303,7 @@ because 0.60 still has unfinished work (the `forRemoval` constructor removals, t
 3. `LLM/*.md`: `LLM-types-integrations.md`, `LLM-types-jackson.md`, `LLM-immutable-jackson.md`,
    `LLM-types-spring-web.md`, `LLM-types.md`, `LLM.md` and `LLM-immutable.md`. Rename `LLM-types-jackson.md` only if
    it is renamed in `LLM/LLM.md`'s index at the same time.
-4. `docs/durable-queues-breaking-refactor.md`: remove the "Both Jackson flavors" obligation, and add a cross-reference
+4. `docs/archive/durable-queues-breaking-refactor.md`: remove the "Both Jackson flavors" obligation, and add a cross-reference
    here.
 5. Migration guide for 0.60 (the "larger document" the queue plan refers to). Merge it with `MIGRATION-NEXT_MAJOR.md`
    and add:

@@ -13,14 +13,13 @@ Micrometer tracing interceptors already carry W3C trace context through event me
 the `correlation_id` column; it stays as it is, available to an application whose own `PersistableEventMapper`
 wants to set it.
 
-**Status:** implemented on `feature/event-causation`, cut from `release/0.60`; phases 1–8 are done, phase 9 waits
-for the webshop to reach the release line. 0.60 is not yet tagged, so merging the branch ships it in **0.60.0**; the
-release notes and migration guide carry it there (§2.9, §1.1.7). The paragraph below is the original reasoning, kept
-for the record.
+**Status:** phases 1–8 are built and shipped in **0.60.0** (release notes §2.9, migration guide §1.1.7). Phase 9, the
+webshop worked example, is still open and is tracked in [`plans/README.md`](plans/README.md). The paragraph below is
+the original reasoning, kept for the record.
 
 **Not in 0.60, and does not need a breaking release.** An earlier draft targeted "the next major" on two grounds:
 the mapper SPI could take a new parameter, and the JDK 25 baseline would make `ScopedValue` available. 0.60 has
-since shipped the JDK 25 baseline without this work (`docs/platform-upgrade-0.60.md`, D6, deliberately deferred
+since shipped the JDK 25 baseline without this work (`docs/archive/platform-upgrade-0.60.md`, D6, deliberately deferred
 adopting `ScopedValue`), and the code already has an additive write hook — `PersistableEventEnricher` — that the
 earlier draft missed. The design below is additive and can land in any release after 0.60.
 

@@ -3,13 +3,6 @@
 > **0.60 has carried out these removals.** Everything below marked deprecated in 0.50 is gone from the public API in
 > 0.60; this guide stays as the reference for what replaces each member. What else changed is in
 > [MIGRATION-0.60.md](./MIGRATION-0.60.md).
-
-> **Nothing in this guide is urgent yet.** Every constructor named below still exists, still compiles and still
-> behaves exactly as it did. This release only marks them `@Deprecated(forRemoval = true)` and adds a better way to
-> construct each type alongside. Upgrading and changing nothing gives you deprecation warnings and no errors.
->
-> The removals happen at the next major (`<NEXT_MAJOR>`), which is separate, later work. This guide is what to do
-> between now and then.
 >
 > Design rationale: `docs/constructor-ergonomics-and-optional-policy.md`.
 

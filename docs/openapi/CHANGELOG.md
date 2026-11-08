@@ -7,7 +7,18 @@ The contract follows semantic versioning, with the major aligned to the path pre
 (`/api/essentials/admin/v{major}`). Additive changes are released as minor versions within the same
 major; breaking changes are introduced under a new major path served side-by-side.
 
-## v1.0.0 — unreleased
+## Since 0.50.0 — Essentials 0.60.x
+
+The contract still declares version `1.0.0` and is still served under `/api/essentials/admin/v1`, but
+0.60 changed it, breaking changes included: the durable-queue statistics operations and
+`ApiQueuedStatistics` were removed, and operations and optional fields were added. Because the removals
+are breaking against the released `v1` contract, the compatibility gate now diffs against
+`baseline/essentials-admin-api-v2.yaml`; `baseline/essentials-admin-api-v1.yaml` is kept unchanged as
+the 0.50.0 contract. The change-by-change record for these releases is in the Essentials release notes
+(`docs/RELEASE-NOTES-0.60.0.md`, `docs/RELEASE-NOTES-0.60.1.md`) and, for unreleased work,
+`docs/NEXT_VERSION_RELEASE.md`.
+
+## v1.0.0 — Essentials 0.50.0
 
 Initial contract, generated code-first from the seven Essentials admin SPI interfaces:
 

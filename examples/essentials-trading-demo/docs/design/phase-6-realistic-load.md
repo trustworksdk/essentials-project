@@ -157,7 +157,7 @@ The plan says phase 6 benchmarks against `main`. `main` has none of this demo's 
 run there. Proposed reading: **a phase 6 baseline** - the profile of §4 run at the start of the phase on this branch,
 recorded (driver report plus Grafana snapshots) in `_demo_harness/CLAUDE.md` - and every library change the phase
 leads to is measured before and after against it, from worktrees, under the existing rule for queue changes. Changes
-expected: EF-2 or the parked batched view handling (`docs/view-event-processor-batched-handling.md`), once the release
+expected: EF-2 or the parked batched view handling (`docs/archive/view-event-processor-batched-handling.md`), once the release
 is merged in, since the views are the known bottleneck.
 
 The driver reports per run: rates and latencies per step and per flow (placement, end to end, by stage from the event

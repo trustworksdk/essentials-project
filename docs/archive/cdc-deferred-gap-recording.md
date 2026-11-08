@@ -1,5 +1,7 @@
 # CDC: deferred recording of opened gaps
 
+> **ARCHIVED (2026-11-08).** Implemented in `components/postgresql-event-store` (`DeferredGapRecording`) and released. Kept as the design record; the code is authoritative.
+
 Status: implemented (`components/postgresql-event-store`), ships in the next release.
 
 ## Problem

@@ -1,5 +1,7 @@
 # Durable Queues — breaking refactor and cleanup plan for 0.60
 
+> **ARCHIVED (2026-11-08).** Shipped in 0.60.0. The two items it deferred (`retryIndefinitelyOn`, a durable statistics sink) were never picked up. Kept as the design record; the code is authoritative.
+
 Four pieces of work:
 
 1. **Remove the legacy claim query.** Only the ordered/unordered split path remains, with the cleanup that follows

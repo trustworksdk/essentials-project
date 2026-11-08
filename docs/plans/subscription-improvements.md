@@ -1,6 +1,6 @@
 # Subscription Improvements
 
-Companion to the CDC improvements log ([cdc-improvements.md](cdc-improvements.md)),
+Companion to the CDC improvements log ([cdc-improvements.md](../archive/cdc-improvements.md)),
 scoped to the subscription / event-delivery layer rather than the CDC pipeline itself.
 
 ---
@@ -31,7 +31,7 @@ latency / load optimisation that's safe to miss.
 ### The key insight: it's a pluggable strategy, not a new subscription type
 
 The framework already routes every subscription's poll cadence through
-[`EventStorePollingOptimizer`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/EventStorePollingOptimizer.java):
+[`EventStorePollingOptimizer`](../../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/EventStorePollingOptimizer.java):
 
 ```java
 public interface EventStorePollingOptimizer {
@@ -163,7 +163,7 @@ That's the entire bridge — ~30 lines.
 #### Trigger installation (no new class)
 
 Installed in
-[`SeparateTablePerAggregateTypePersistenceStrategy`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/persistence/table_per_aggregate_type/SeparateTablePerAggregateTypePersistenceStrategy.java)'s
+[`SeparateTablePerAggregateTypePersistenceStrategy`](../../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/persistence/table_per_aggregate_type/SeparateTablePerAggregateTypePersistenceStrategy.java)'s
 `addAggregateEventStreamConfiguration` path, immediately after the existing
 `createEventStreamTable(...)`, guarded by the same
 `PostgresqlUtil.acquireBootstrapLock(handle)` used for the P6 concurrent-startup fix:

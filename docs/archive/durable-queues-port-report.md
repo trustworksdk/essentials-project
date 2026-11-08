@@ -1,3 +1,5 @@
+> **ARCHIVED (2026-11-08).** A dated experiment report. Every takeaway was verified and turned into fixes in [`../plans/durable-queues-improvement-plan.md`](../plans/durable-queues-improvement-plan.md), which tracks what is still open.
+
 Essentials 0.60.0 · postgresql-queue · Rust port experiment
 
 # Durable Queues Port Report

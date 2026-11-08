@@ -765,7 +765,7 @@
                                       that pairs with its Jackson 2.22.x. Raising it would move every module's
                                       Jackson 3 runtime onto an annotations release Jackson 3.1 does not ship
                                       with. Drop this exclude when jackson3-bom.version moves to 3.2.x, which
-                                      pairs with annotations 2.22 (docs/ROADMAP-0.6x.md, DU-1).
+                                      pairs with annotations 2.22 (docs/plans/ROADMAP-0.6x.md, DU-1).
                                     -->
                                     <excludes>
                                         <exclude>com.fasterxml.jackson.core:jackson-annotations</exclude>

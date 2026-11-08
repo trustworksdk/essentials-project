@@ -492,7 +492,7 @@ deployments on the same cluster, the shared publication is fine.
   rewinds. **Always namespace subscriber IDs by group name in multi-group
   deployments.** See "Namespacing subscriber IDs" below for the recommended
   pattern; framework-level scope-by-group is tracked as **P7** in
-  [cdc-improvements.md](cdc-improvements.md).
+  [cdc-improvements.md](archive/cdc-improvements.md).
 - **Backfill polls the same `*_events` table.** Both groups doing initial
   backfill at the same time means duplicate read load on the source table. For
   large historical windows, stagger group starts or use replica reads — but
@@ -1683,7 +1683,7 @@ always available as the fallback, by construction. Don't disable polling.
 finer choices — the **polling sub-variants** (plain, jittered, notify-driven) and the
 **CDC delivery modes** (INBOX vs DIRECT) — into one place, with indicative numbers and a
 need-based recommendation. For the polling-side tuning detail see
-[subscription-improvements.md](subscription-improvements.md); for the INBOX/DIRECT delivery
+[subscription-improvements.md](plans/subscription-improvements.md); for the INBOX/DIRECT delivery
 guarantees see the `CdcDeliveryMode` javadoc.
 
 > **The numbers below are *indicative* (a 10 Hz / 1 s-window smoke run, plus the S1
@@ -1720,7 +1720,7 @@ never choosing *between* correctness and speed — only how fast the fast path i
 ## 13. Known Limitations
 
 These are deliberate trade-offs or accepted gaps. The
-[CDC improvements list](cdc-improvements.md) tracks the items considered worth
+[CDC improvements list](archive/cdc-improvements.md) tracks the items considered worth
 fixing; the items below are documented because they're either unfixable in this
 architecture or low enough impact to live with.
 

@@ -1,6 +1,7 @@
 # Design: construction ergonomics and the `Optional` policy
 
-**Status:** in force, enforced by ArchUnit, sweep in progress.
+**Status:** in force, enforced by ArchUnit. The sweep is done; only the deliberately frozen classes in "What is left"
+remain.
 
 This is the *why*. For the per-class before-and-after tables, and for what a consumer has to change,
 see **[MIGRATION-NEXT_MAJOR.md](MIGRATION-NEXT_MAJOR.md)** — nothing here is required reading to upgrade.

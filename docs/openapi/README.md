@@ -17,7 +17,8 @@ is built on top of it. See the roadmap at the end.
 |----------|----------|
 | Canonical contract | [`components/admin-api-spec/openapi/essentials-admin-api.yaml`](../../components/admin-api-spec/openapi/essentials-admin-api.yaml) |
 | Published contract artifact | `dk.trustworks.essentials.components:admin-api-spec:<version>:yaml:openapi` (also on the jar's classpath at `/openapi/essentials-admin-api.yaml`) |
-| Last-released baseline (compat gate) | `components/admin-api-spec/openapi/baseline/essentials-admin-api-v1.yaml` |
+| Compatibility-gate baseline (the major under development) | `components/admin-api-spec/openapi/baseline/essentials-admin-api-v2.yaml` |
+| Last released contract (0.50.0, kept unchanged) | `components/admin-api-spec/openapi/baseline/essentials-admin-api-v1.yaml` |
 | Contract generator + drift/compat/validation tests | `components/admin-api-spec` |
 | HTTP adapter (Spring Boot starter) | `components/spring-boot-starter-admin-api` |
 | Optional default UI (Spring Boot starter) | `components/spring-boot-starter-admin-ui` |
@@ -171,9 +172,13 @@ whatever credentials your deployment uses via `ApiClient.setRequestInterceptor(.
   serves against the contract's operations, in both directions — an unimplemented operation and an
   endpoint outside the contract both fail the build.
 - **Compatibility gate.** `OpenApiContractCompatibilityTest` diffs the regenerated contract against
-  the checked-in baseline (`baseline/essentials-admin-api-v1.yaml`) with
+  the checked-in baseline (`baseline/essentials-admin-api-v2.yaml`) with
   [openapi-diff](https://github.com/OpenAPITools/openapi-diff). A breaking change within the same
-  major fails the build.
+  major fails the build. The gate was re-seeded from `v1` to `v2` when 0.60 removed admin operations,
+  which is breaking against the released `v1` contract by construction; a further deliberate break is
+  a reviewed re-seed of `v2` in the same commit. `EssentialsAdminApiSpec.BASE_PATH` and
+  `CONTRACT_VERSION` still say `v1` / `1.0.0` — bumping them changes the URL every consumer calls and
+  is a release decision.
 - **Deprecation.** Mark an operation/field `deprecated: true` for at least one minor release before
   removing it; removal happens only at the next major.
 
@@ -202,7 +207,7 @@ Promote the current contract to the baseline at release time (additive minor):
 
 ```bash
 cp components/admin-api-spec/openapi/essentials-admin-api.yaml \
-   components/admin-api-spec/openapi/baseline/essentials-admin-api-v1.yaml
+   components/admin-api-spec/openapi/baseline/essentials-admin-api-v2.yaml
 ```
 
 Generate the Java client (sources are produced at build time):

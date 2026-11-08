@@ -478,7 +478,7 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         // conservative w.r.t. resume-point resets (it never advances past an unprocessed event).
         // Advancing the checkpoint for active subscribers (as stop() does) would trim that one-event
         // overlap, but risks skipping an in-flight event if the "is this boundary clean?" decision is
-        // wrong — turning a harmless duplicate into a loss. Tracked as S4 in docs/subscription-improvements.md.
+        // wrong — turning a harmless duplicate into a loss. Tracked as S4 in docs/plans/subscription-improvements.md.
         saveResumePointsOfActiveSubscribers(resumePoint -> true);
     }
 
@@ -494,7 +494,7 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     /**
      * Only ever called on the single resume-point scheduler thread. A save in flight here cannot overwrite a reset that
      * commits concurrently on another thread: the repository refuses a write from an older reposition epoch - see
-     * {@link SubscriptionResumePoint} and S6 in docs/subscription-improvements.md
+     * {@link SubscriptionResumePoint} and S6 in docs/plans/subscription-improvements.md
      */
     private void saveResumePointsOfActiveSubscribers(Predicate<SubscriptionResumePoint> filter) {
         try {

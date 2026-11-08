@@ -1,4 +1,10 @@
-# Database schema harness for 0.60
+# Database schema harness
+
+**Status (2026-11-08):** built and shipped in 0.60.0 — the SPI (`SchemaChange`, `EssentialsSchemaContributor`,
+`SchemaOwnership`), the ledger and the PostgreSQL `create`, `validate` and `emit` appliers, with the Spring starter
+wiring (`essentials.schema.*`). Still open from §9: step 8 (Mongo contributors and `MongoSchemaApplier`) and steps
+11–12 (the optional Flyway and Liquibase modules), tracked in [`plans/README.md`](plans/README.md). The text below
+was written as the plan and keeps that voice; where it says "today", it means before 0.60.
 
 Essentials creates its own database objects at runtime, from inside the components that use them. This plan
 moves that work behind a describe-then-apply seam: components declare the schema they need, and a pluggable

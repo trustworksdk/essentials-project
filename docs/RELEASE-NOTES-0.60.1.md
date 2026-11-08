@@ -233,7 +233,7 @@ What you may notice:
 
 Pinned by `EssentialsObjectMappersWireFormatTest` (`postgresql-event-store`), `EssentialsImmutableJacksonModuleTest`
 and `EssentialTypesJacksonModuleTest`. A startup check that also catches a mapper Essentials did not build is still
-open; see `docs/ROADMAP-0.6x.md` §0.1.
+open; see `docs/plans/ROADMAP-0.6x.md` §0.1.
 
 #### 1.1.3 `OptimisticLockingException` is unchecked
 
@@ -1483,8 +1483,8 @@ Not published; listed because they are the reference for how to use the framewor
   counting it in their fair share until then, so before that a survivor already at its share takes none of the
   units it released. The docs said it always deregistered at once. (`54fe3981a`)
 - **Design documents:** `docs/slice-atlas-design.md` and `docs/slice-enrich-design.md` (`764af560`, `73d1993f`);
-  `docs/durable-queues-improvement-plan.md`, the measurements and open items behind the durable-queue changes, and
-  `docs/Durable Queues Port Report.md`, the Rust port experiment they came from (`0925b7ca`).
+  `docs/plans/durable-queues-improvement-plan.md`, the measurements and open items behind the durable-queue changes, and
+  `docs/archive/durable-queues-port-report.md`, the Rust port experiment they came from (`0925b7ca`).
 
 ---
 

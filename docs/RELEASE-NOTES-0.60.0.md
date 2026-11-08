@@ -1094,8 +1094,8 @@ test utility, and the `examples/` modules are not released. 0.50.0 published the
 |---|---|
 | [`docs/MIGRATION-0.60.md`](MIGRATION-0.60.md) | Every consumer-facing change, with what to do |
 | [`docs/MIGRATION-NEXT_MAJOR.md`](MIGRATION-NEXT_MAJOR.md) | Per-module tables of removed `forRemoval` members and replacements |
-| [`docs/platform-upgrade-0.60.md`](platform-upgrade-0.60.md) | The platform upgrade plan and its decisions |
-| [`docs/durable-queues-breaking-refactor.md`](durable-queues-breaking-refactor.md) | The durable queue refactor: classification, statistics, `TransactionalMode` |
+| [`docs/archive/platform-upgrade-0.60.md`](archive/platform-upgrade-0.60.md) | The platform upgrade plan and its decisions |
+| [`docs/archive/durable-queues-breaking-refactor.md`](archive/durable-queues-breaking-refactor.md) | The durable queue refactor: classification, statistics, `TransactionalMode` |
 | [`docs/database-schema-harness.md`](database-schema-harness.md) | Schema harness design and decisions |
 | [`docs/durable-queue-shard-owned.md`](durable-queue-shard-owned.md) | How the shard-owned engine works |
 | [`docs/durable-queue-ordered-routing-design.md`](durable-queue-ordered-routing-design.md) | The ordered lane's routing, as built |

@@ -1,5 +1,7 @@
 # Processor and queue settings: what can go wrong
 
+> **ARCHIVED (2026-11-08).** Every row is done or decided "nothing to do". The one remaining idea, a start-up check of total connections held against the pool size, is listed in [`../plans/README.md`](../plans/README.md).
+
 **Status:** for decision, 2026-10-29. Each row carries a recommendation; decided rows say so.
 
 The event-store, queue and lock settings number about 140 (`essentials.*` in the starters' metadata, plus the

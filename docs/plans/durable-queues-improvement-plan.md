@@ -1,6 +1,6 @@
 # Durable Queues Improvement Plan
 
-Follow-up to `docs/Durable Queues Port Report.md`. Every claim in the report was checked against the 0.60.0 source, and the stale-statistics claim was reproduced on PostgreSQL 17.11. This plan turns the verified findings into fixes. For each fix it says how to investigate or measure it first. It also covers three questions the report did not: how to cut the connection cost of `SingleOperationTransactionDurableQueuesInterceptor`, whether the polling optimizer should be on by default, and what the shard-owned implementation should fix or could lend to the classic queue.
+Follow-up to `docs/archive/durable-queues-port-report.md`. Every claim in the report was checked against the 0.60.0 source, and the stale-statistics claim was reproduced on PostgreSQL 17.11. This plan turns the verified findings into fixes. For each fix it says how to investigate or measure it first. It also covers three questions the report did not: how to cut the connection cost of `SingleOperationTransactionDurableQueuesInterceptor`, whether the polling optimizer should be on by default, and what the shard-owned implementation should fix or could lend to the classic queue.
 
 Compatibility rule for every item: central APIs change only additively in a minor release. A changed default, such as turning on the optimizer, is a behaviour change. It goes in the release notes and keeps an opt-out.
 

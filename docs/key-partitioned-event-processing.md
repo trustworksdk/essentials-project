@@ -1,7 +1,9 @@
 # EF-2 — Key-Partitioned Event Processing on the Shard-Owned Queue Engine
 
-**Status (2026-10-29):** partly built. What is built is opt-in and measured; what is left is a proposal for the views,
-with the decisions in §8 open.
+**Status (2026-11-08):** built, opt-in and measured. The §8 decisions were taken on 2026-10-30 and are built
+(`PartitionedViewEventProcessor`, payload forwarding, `enqueueIfAbsent`, lock spreading). What is still open is §9 —
+batched handling of queued messages and a rebuild path for `InTransactionEventProcessor` — tracked in
+[`plans/README.md`](plans/README.md).
 **Modules:** `components/postgresql-event-store` (package `…postgresql.processor`), `components/foundation`
 (`DurableQueues`, `Inboxes`), `components/postgresql-queue-shard-owned(-adapter)`, `spring-boot-starter-postgresql-event-store`.
 **Driven by:** EF-2 in `examples/essentials-trading-demo/docs/EXPANSION_PLAN.md`, and the trading demo's load and fault
@@ -18,7 +20,7 @@ where the time goes. EF-2 is about running the handling on every instance while 
 | `EventProcessor`: handlers on every instance (option (a0) below) | **Built** as the class `PartitionedEventProcessor`, measured with two instances | Release notes 0.61 §2.7, `docs/event-processor-specializations.md` |
 | Capability flag: does the queue keep one key in order across instances? | **Built**: `DurableQueues.keepsKeyOrderAcrossInstances()` / `Inboxes.keepsKeyOrderAcrossInstances()`, `true` only for the shard-owned adapter | foundation, adapter |
 | `EventProcessor`: batched forward from the reader to the inbox | **Built** (`getForwardBatchSize()`), measured | §5 "Batched forward, built and measured" |
-| `ViewEventProcessor`: batched handling (one unit of work per batch) | **Built** (`getDirectHandlingBatchSize()`), measured | `docs/view-event-processor-batched-handling.md` |
+| `ViewEventProcessor`: batched handling (one unit of work per batch) | **Built** (`getDirectHandlingBatchSize()`), measured | `docs/archive/view-event-processor-batched-handling.md` |
 | `ViewEventProcessor`: handling on every instance (option (a1)) | **Built** as the class `PartitionedViewEventProcessor` | Release notes 0.61 §2.10, §3.2 |
 | Spreading the fenced locks: whole processors over instances, on every queue engine (option (d)) | **Built, opt-in** (`essentials.fenced-lock-manager.spread-locks`, §3.5), with rate-limited rebalancing; measured in the demo | this document |
 

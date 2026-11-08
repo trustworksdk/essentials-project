@@ -991,8 +991,8 @@ consumer API; the `examples/` modules are excluded from the release.
 | [`docs/MIGRATION-NEXT_MAJOR.md`](MIGRATION-NEXT_MAJOR.md) | The complete per-module deprecated → replacement tables |
 | [`docs/constructor-ergonomics-and-optional-policy.md`](constructor-ergonomics-and-optional-policy.md) | Why the sweep was done and what the ArchUnit guard enforces |
 | [`docs/cdc.md`](cdc.md) | CDC design and operations — prerequisites, plugins, slots, poison handling |
-| [`docs/cdc-improvements.md`](cdc-improvements.md) | CDC hardening work in detail |
-| [`docs/subscription-improvements.md`](subscription-improvements.md) | Subscription statistics and observer work |
+| [`docs/archive/cdc-improvements.md`](archive/cdc-improvements.md) | CDC hardening work in detail |
+| [`docs/plans/subscription-improvements.md`](plans/subscription-improvements.md) | Subscription statistics and observer work |
 | [`docs/openapi/README.md`](openapi/README.md) | The admin API contract, its gates and its changelog |
 | [`docs/ai-tooling.md`](ai-tooling.md) | AI tooling conventions used in this repository |
 | [`LLM/LLM.md`](../LLM/LLM.md) | Entry point for the per-module consumer references |
