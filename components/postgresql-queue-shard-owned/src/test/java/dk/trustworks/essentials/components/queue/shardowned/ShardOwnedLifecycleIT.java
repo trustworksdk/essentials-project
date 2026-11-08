@@ -63,9 +63,12 @@ class ShardOwnedLifecycleIT {
      * before some premises are read: far past that, each premise read before the bound keeps several seconds of margin on
      * a loaded build. Longer than {@code SHUTDOWN_BUDGET} plus the network bound on the flush's waits at these tests'
      * {@code leaseTtl} (1 s, so 2 s), so it is what a unit still waiting for that flush is given up at
-     * ({@code ShardOwnedQueue.stopFlushGiveUpAfter}).
+     * ({@code ShardOwnedQueue.stopFlushGiveUpAfter}). Those tests pass it by advancing the queue's clock
+     * ({@link TestNanoClock}) rather than by waiting it out, so its length costs nothing and buys the premises their margin;
+     * {@code a_unit_a_stop_kept_whose_flush_outlasts_a_short_stuck_handler_timeout_...} keeps waiting for its bound in real
+     * time, which covers the queue's default clock.
      */
-    private static final Duration HUNG_FLUSH_BOUND = Duration.ofSeconds(12);
+    private static final Duration HUNG_FLUSH_BOUND = Duration.ofSeconds(30);
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();
@@ -716,6 +719,7 @@ class ShardOwnedLifecycleIT {
         var release     = new CountDownLatch(1);
         var settings    = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setStuckHandlerTimeout(HUNG_FLUSH_BOUND).build();
         var instanceId  = "kept-behind-a-hung-stop-flush";
+        var clock       = new TestNanoClock();
         var holding     = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
         var logged      = new ListAppender<ILoggingEvent>();
         var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
@@ -727,7 +731,7 @@ class ShardOwnedLifecycleIT {
         ownerLogger.addAppender(ownerLogged);
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
-                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+                                       .setInstanceId(instanceId).setRuntime(runtime).build().useNanoTime(clock);
             try {
                 queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                     // The first delivery of the key holds its handler; a later one returns at once.
@@ -741,7 +745,7 @@ class ShardOwnedLifecycleIT {
 
                 // The stop's budget thread hangs as it asks for its connection, before it has flushed anything.
                 holding.holdConnections();
-                var stoppedAt = System.nanoTime();
+                var stoppedAt = clock.getAsLong();
                 queue.stop();
                 assertThat(holding.awaitConnectionHeld(Duration.ofSeconds(10))).as("premise: the stop's budget thread hangs").isTrue();
                 assertThat(queue.handBackStillRunning()).as("premise: the stop gave up waiting for its budget thread").isTrue();
@@ -750,18 +754,20 @@ class ShardOwnedLifecycleIT {
                 var kept     = new UnitFence(keptUnit, fenceOf("ordered", keptUnit));
                 assertThat(queue.stopFlushGiveUpAfter(settings)).as("premise: the unit still waiting for the flush is given up at the bound")
                                                                 .isEqualTo(settings.stuckHandlerTimeout());
-                assertThat(Duration.ofNanos(System.nanoTime() - stoppedAt)).as("premise: well within the bound")
-                                                                           .isLessThan(settings.stuckHandlerTimeout().minusSeconds(2));
+                assertThat(clock.since(stoppedAt)).as("premise: well within the bound")
+                                                  .isLessThan(settings.stuckHandlerTimeout().minusSeconds(2));
                 assertThat(queue.releaseKeptOrderedUnit(instanceId, keptUnit))
                         .as("premise: within the bound, a release on request waits for the stop's flush")
                         .hasValueSatisfying(answer -> assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.BUSY));
 
-                Awaitility.await().atMost(HUNG_FLUSH_BOUND.plusSeconds(20)).pollInterval(Duration.ofMillis(500)).untilAsserted(
+                // Past the bound by the queue's clock rather than by waiting it out (TestNanoClock).
+                clock.advance(HUNG_FLUSH_BOUND);
+                Awaitility.await().atMost(Duration.ofSeconds(20)).pollInterval(Duration.ofMillis(100)).untilAsserted(
                         () -> assertThat(queue.releaseKeptOrderedUnit(instanceId, keptUnit))
                                 .as("past the bound, released on request though the stop's flush still hangs")
                                 .hasValueSatisfying(answer -> assertThat(answer.outcome()).isEqualTo(KeptUnitRelease.Outcome.RELEASED)));
-                assertThat(Duration.ofNanos(System.nanoTime() - stoppedAt)).as("not before the bound")
-                                                                           .isGreaterThanOrEqualTo(settings.stuckHandlerTimeout());
+                assertThat(clock.since(stoppedAt)).as("not before the bound")
+                                                  .isGreaterThanOrEqualTo(settings.stuckHandlerTimeout());
                 assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread still hangs").isTrue();
                 assertThat(holding.awaitAcknowledgementHeld(Duration.ZERO)).as("premise: before it has flushed anything").isFalse();
                 assertThat(ownerOf("ordered", kept.shard())).as("the kept unit's row is released").isNull();
@@ -836,6 +842,7 @@ class ShardOwnedLifecycleIT {
         var release    = new CountDownLatch(1);
         var settings   = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setStuckHandlerTimeout(HUNG_FLUSH_BOUND).build();
         var instanceId  = "kept-behind-a-hung-stop-flush-restarted";
+        var clock       = new TestNanoClock();
         var holding     = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
         var logged      = new ListAppender<ILoggingEvent>();
         var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
@@ -847,7 +854,7 @@ class ShardOwnedLifecycleIT {
         ownerLogger.addAppender(ownerLogged);
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
-                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+                                       .setInstanceId(instanceId).setRuntime(runtime).build().useNanoTime(clock);
             try {
                 queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                     // The first delivery of the key holds its handler; a later one returns at once.
@@ -869,7 +876,9 @@ class ShardOwnedLifecycleIT {
                 queue.start();
                 assertThat(queue.shardsHeld()).as("premise: the restart leaves the kept unit alone").isEqualTo(ShardOwnedSchema.ORDERED_UNITS - 1);
 
-                Awaitility.await().atMost(HUNG_FLUSH_BOUND.plusSeconds(20)).untilAsserted(() -> {
+                // Past the bound by the queue's clock rather than by waiting it out (TestNanoClock).
+                clock.advance(HUNG_FLUSH_BOUND);
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
                     assertThat(fenceOf("ordered", kept.shard())).as("taken over past the bound, under a new fence").isGreaterThan(kept.fence());
                     assertThat(ownerOf("ordered", kept.shard())).as("by the restarted queue").isEqualTo(instanceId);
                     assertThat(queue.shardsHeld()).as("every unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
@@ -938,6 +947,7 @@ class ShardOwnedLifecycleIT {
         var release     = new CountDownLatch(1);
         var settings    = settingsWithShedGrace(Duration.ofMillis(300)).toBuilder().setStuckHandlerTimeout(HUNG_FLUSH_BOUND).build();
         var instanceId  = "kept-behind-a-hung-stop-flush-handed-back";
+        var clock       = new TestNanoClock();
         var holding     = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
         var logged      = new ListAppender<ILoggingEvent>();
         var queueLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ShardOwnedQueue.class);
@@ -949,7 +959,7 @@ class ShardOwnedLifecycleIT {
         ownerLogger.addAppender(ownerLogged);
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(holding).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
-                                       .setInstanceId(instanceId).setRuntime(runtime).build();
+                                       .setInstanceId(instanceId).setRuntime(runtime).build().useNanoTime(clock);
             try {
                 queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                     // The first delivery of the key holds its handler; a later one returns at once.
@@ -962,7 +972,7 @@ class ShardOwnedLifecycleIT {
                 assertThat(entered.await(20, TimeUnit.SECONDS)).isTrue();
 
                 holding.holdConnections();
-                var stoppedAt = System.nanoTime();
+                var stoppedAt = clock.getAsLong();
                 queue.stop();
                 assertThat(holding.awaitConnectionHeld(Duration.ofSeconds(10))).as("premise: the stop's budget thread hangs").isTrue();
                 assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the busy unit is kept").isEqualTo(1);
@@ -976,18 +986,18 @@ class ShardOwnedLifecycleIT {
                 release.countDown();
                 Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(
                         () -> assertThat(queue.metrics().keptUnitsInHandler()).as("premise: the kept key has left its handler").isZero());
-                assertThat(Duration.ofNanos(System.nanoTime() - stoppedAt)).as("premise: the handler returned within the bound")
-                                                                           .isLessThan(settings.stuckHandlerTimeout().minusSeconds(1));
+                assertThat(clock.since(stoppedAt)).as("premise: the handler returned within the bound")
+                                                  .isLessThan(settings.stuckHandlerTimeout().minusSeconds(1));
                 assertThat(ownerOf("ordered", kept.shard())).as("premise: nothing hands the unit back while the flush hangs").isEqualTo(instanceId);
                 assertThat(fenceOf("ordered", kept.shard())).as("premise: nor takes it over").isEqualTo(kept.fence());
 
+                // Past the bound by the queue's clock rather than by waiting it out (TestNanoClock).
+                clock.advance(HUNG_FLUSH_BOUND);
                 if (restartPastTheBound) {
                     // Nothing reviews the kept units of a stopped queue: the start does, once the bound has passed.
-                    Awaitility.await().atMost(HUNG_FLUSH_BOUND.plusSeconds(20)).until(
-                            () -> Duration.ofNanos(System.nanoTime() - stoppedAt).compareTo(settings.stuckHandlerTimeout().plusMillis(500)) >= 0);
                     queue.start();
                 }
-                Awaitility.await().atMost(HUNG_FLUSH_BOUND.plusSeconds(20)).untilAsserted(() -> {
+                Awaitility.await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
                     assertThat(logged.list).extracting(ILoggingEvent::getFormattedMessage)
                                            .filteredOn(message -> message.contains("released ordered unit " + kept.shard() + " on queue")
                                                    && message.contains("under the fence a stop kept it under"))
@@ -996,8 +1006,8 @@ class ShardOwnedLifecycleIT {
                     assertThat(fenceOf("ordered", kept.shard())).as("under a new fence").isGreaterThan(kept.fence());
                     assertThat(queue.shardsHeld()).as("every unit").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
                 });
-                assertThat(Duration.ofNanos(System.nanoTime() - stoppedAt)).as("not before the bound")
-                                                                           .isGreaterThanOrEqualTo(settings.stuckHandlerTimeout());
+                assertThat(clock.since(stoppedAt)).as("not before the bound")
+                                                  .isGreaterThanOrEqualTo(settings.stuckHandlerTimeout());
                 assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread still hangs").isTrue();
                 assertThat(holding.awaitAcknowledgementHeld(Duration.ZERO)).as("premise: before it has flushed anything").isFalse();
                 assertThat(queue.remaining()).as("the handled message was acknowledged by the hand-back").isZero();
