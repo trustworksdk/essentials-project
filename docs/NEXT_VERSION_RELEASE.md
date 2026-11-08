@@ -793,6 +793,11 @@ Not published; listed because they are the reference for how to use the framewor
 
 - **`essentials-trading-demo`'s integration tests are opt-in** (`-Ddemo.its`): they took ~6 minutes of every full
   build and test the demo, not the framework. The reactor build runs the demo's unit tests only (~30 s).
+- **`essentials-trading-demo`: a partial return of an uncleared deposit no longer makes the rest of it withdrawable.**
+  `Account` dropped the whole deposit from its uncleared deposits on any return that released uncleared money, so the
+  part not returned counted as cleared at once. It now reduces the uncleared amount by the event's `unclearedReleased`
+  and removes the deposit only when nothing is left; `DepositReturned` is unchanged, and replaying old events gives the
+  corrected state.
 
 ## 6. Documentation
 

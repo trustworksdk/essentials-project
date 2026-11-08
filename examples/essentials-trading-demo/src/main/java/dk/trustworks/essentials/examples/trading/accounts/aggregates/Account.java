@@ -562,8 +562,15 @@ public class Account extends AggregateRoot<AccountGenerationId, AccountEvent, Ac
     @EventHandler
     private void on(DepositReturned e) {
         settledCash = settledCash.subtract(e.amount());
-        if (e.unclearedReleased().signum() > 0) {
-            unclearedDeposits.remove(e.depositId());
+        var uncleared = unclearedDeposits.get(e.depositId());
+        if (uncleared != null && e.unclearedReleased().signum() > 0) {
+            // A partial return releases only its share; the rest stays uncleared until it clears
+            var remaining = uncleared.amount().subtract(e.unclearedReleased());
+            if (remaining.signum() > 0) {
+                unclearedDeposits.put(e.depositId(), new UnclearedDeposit(e.depositId(), remaining, uncleared.clearsOn()));
+            } else {
+                unclearedDeposits.remove(e.depositId());
+            }
         }
         handledReferences.add(ref("RET", e.depositId()));
     }

@@ -176,6 +176,39 @@ class AccountTest {
     }
 
     @Test
+    void a_partial_return_of_an_uncleared_deposit_leaves_the_remainder_uncleared() {
+        var account = openAccount();
+        account.creditDeposit(DepositId.of("DEP-1"), usd("1000"), TRADE_DATE, TRADE_DATE.plusDays(3));
+
+        account.returnDeposit(DepositId.of("DEP-1"), usd("400"));
+
+        assertMoney(account.settledCash(), "600");
+        assertMoney(account.withdrawable(), "0");
+
+        account.clearDeposit(DepositId.of("DEP-1"));
+        assertMoney(account.withdrawable(), "600");
+    }
+
+    @Test
+    void a_full_return_of_an_uncleared_deposit_removes_it() {
+        var account = openAccount();
+        account.creditDeposit(DepositId.of("DEP-1"), usd("1000"), TRADE_DATE, TRADE_DATE.plusDays(3));
+        account.creditDeposit(DepositId.of("DEP-2"), usd("500"), TRADE_DATE, TRADE_DATE.plusDays(3));
+        account.clearDeposit(DepositId.of("DEP-2"));
+
+        account.returnDeposit(DepositId.of("DEP-1"), usd("1000"));
+
+        assertMoney(account.settledCash(), "500");
+        assertMoney(account.withdrawable(), "500");
+        // Nothing of DEP-1 is left to clear
+        account.clearDeposit(DepositId.of("DEP-1"));
+        assertThat(account.getUncommittedChanges().events)
+                .filteredOn(DepositCleared.class::isInstance)
+                .extracting(event -> ((DepositCleared) event).depositId())
+                .containsExactly(DepositId.of("DEP-2"));
+    }
+
+    @Test
     void every_booking_is_applied_once_however_often_it_is_sent() {
         var account = openAccount();
         account.creditDeposit(DepositId.of("DEP-1"), usd("1000"), TRADE_DATE, TRADE_DATE.plusDays(3));
