@@ -54,7 +54,7 @@ import static org.awaitility.Awaitility.await;
 })
 @DirtiesContext // close while this class's container is still up; a cached context outlives it and stalls the next context switch
 class ExternalEventIntakeIT {
-    private static final String SECRET   = "whsec_test_0123456789";
+    private static final String SECRET   = "whsec_test_0123456789"; // gitleaks:allow (test fixture)
     private static final String CONSUMER = "IntakeIT:orders";
 
     @Container

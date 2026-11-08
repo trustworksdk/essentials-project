@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * in the exchange-simulator), so this verifier and the sender cannot drift apart unnoticed.
  */
 class WebhookSignatureVerifierTest {
-    private static final String SECRET    = "whsec_test_0123456789";
+    private static final String SECRET    = "whsec_test_0123456789"; // gitleaks:allow (test fixture)
     private static final String TIMESTAMP = "1760443200";
     private static final byte[] BODY      = "{\"eventId\":\"e-1\"}".getBytes(StandardCharsets.UTF_8);
     private static final String VALID     = "sha256=cde596a7a23fd7c03b27e1cf91e6fba42e15936f765508360d753019cd935bc1";

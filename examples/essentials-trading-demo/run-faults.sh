@@ -143,7 +143,7 @@ start_instance() {
 wait_for_instance() {
   local n=$1
   for _ in $(seq 1 180); do
-    if [[ $(curl -s -o /dev/null -w '%{http_code}' -u operator@demo.local:operator-demo-password "localhost:$((8079 + n))/api/admin/load-report?runPrefix=none" || true) == 200 ]]; then
+    if [[ $(curl -s -o /dev/null -w '%{http_code}' -u operator@demo.local:operator-demo-password "localhost:$((8079 + n))/api/admin/load-report?runPrefix=none" || true) == 200 ]]; then # gitleaks:allow (published demo credential)
       return 0
     fi
     kill -0 "$(cat "$OUT/app-$RUN$(suffix "$n").pid")" 2>/dev/null || { log "instance $n died; see $OUT/app-$RUN$(suffix "$n").log"; return 1; }
