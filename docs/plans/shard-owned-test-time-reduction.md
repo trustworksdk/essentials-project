@@ -1,11 +1,15 @@
 # Shard-owned queue modules: test-time reduction plan
 
-Status: items 1, 2, 3 and 6 done, item 5 skipped (see each item's status line); items 4 and 7 open. Written 2026-11-08
+Status: items 1, 2, 3, 4 and 6 done, item 5 skipped, item 7 measured and not worth doing (see each item's status line). Written 2026-11-08
 against `feature/trading-demo-expansion` at `4ffad19fb`.
 
 After items 1, 2, 3 and 6, `postgresql-queue-shard-owned` alone (`mvn verify -pl components/postgresql-queue-shard-owned`,
 same machine and knobs as 1.1): **9 min 57 s** wall clock against 12 min 42 s, Failsafe sum **1,070.7 s** against
 1,351.8 s (69 classes, 495 tests, all green), Surefire 30.5 s.
+
+After item 4 as well, same command: **8 min 40 s** wall clock, Failsafe sum **878.7 s** (69 classes, 495 tests, all
+green), Surefire 49.5 s (its own noise: 13.5 s of it is `RuntimeScopedSettingsTest`, untouched).
+`postgresql-queue-shard-owned-adapter` stays green (45 integration and 73 unit tests).
 
 The shard-owned queue modules' test time grew by roughly ten minutes over the 0.60.1 release. Almost all of the growth
 is integration tests added by the review-fix runs that went into 0.60.1. Those tests guard real defects and must keep
@@ -202,6 +206,17 @@ once" tests keep the restart waiting past two budgets before the release. Covera
 
 ### Item 4: An elapsed-time seam for the stuck-handler and kept-unit bounds
 
+**Status: done** (`8cd1904b4` seam, `d3d8d6eab` and `70c305dcd` tests). `ShardOwnedQueue.useNanoTime` /
+`PostgresqlMessageQueue.useNanoTime` (package-private) hand a `LongSupplier` to every owner and `KeptUnit`; test helper
+`TestNanoClock` (real time plus an offset the test advances). `ShardOwnedLifecycleIT` 265.0 s -> 226 s,
+`ShardOwnedUnsubscribeIT` 153.4 s -> 121 s, `ShardOwnedOrderedRebalanceIT` 94.4 s -> 40 s, `ShardOwnedDeadPumpHandBackIT`
+91.2 s -> 59 s, `ShardOwnedUnorderedReleaseChargeIT` 49.6 s -> 36 s (each the mean of three green runs): **172 s saved**,
+39 s of it in the long-pole class. Below the 190 s estimate because the converted Lifecycle and Unsubscribe tests still
+pay their stop budgets and lease waits (item 5's finding). One real-time canary per bound kept (listed in the module
+`CLAUDE.md`), each failing with the default clock stubbed to a constant. Pump CPU, latency and idle cost unchanged in
+`ShardOwnedOrderedLoadedCostIT`, `ShardOwnedUnorderedReadCostIT` and `ShardOwnedMultiQueueCostIT` (numbers in the seam
+commit). Coverage checks in the commit messages.
+
 - Targets, with their current time:
   - `ShardOwnedLifecycleIT`: the five hung-flush methods (`HUNG_FLUSH_BOUND`, lines 711, 831, 933 and two more), 70 s.
   - `ShardOwnedUnsubscribeIT`: `an_unsubscribed_subscription_whose_stop_flush_hangs_…` (line 966, 22.3 s),
@@ -282,6 +297,16 @@ membership row a minute back. `ShardOwnedTakeoverAttemptsIT` 48.2 s -> 8.6 s, `S
 - Verify: as for item 4, revert the guarded fix and confirm a failure.
 
 ### Item 7 (measure first): One PostgreSQL container per fork instead of per class
+
+**Status: measured, not done.** In the full module run after item 4, Testcontainers reports 67 PostgreSQL starts
+(one per class that has a container) taking **44.1 s summed**, 0.66 s on average and 1.06 s at most, readiness wait
+included. Stopping one (`docker rm -f` of a ready `postgres:17.5-bookworm`, five runs) takes 73 to 87 ms, about 6 s
+over the run. A start by hand (`docker run` to the second "ready to accept connections") took 648 to 680 ms, which
+matches. So one container per fork would save about 50 s summed, about 25 s of wall clock at two forks: under 6 % of
+the 878.7 s Failsafe sum, against a day's work and a new way for classes to leak state into each other (triggers,
+advisory locks, `LISTEN` channels, membership rows). Nothing in `foundation-test` provides it:
+`EssentialsTestContainers` has only the Testcontainers reuse opt-in, which is unsafe with more than one fork. Not worth
+doing now; revisit only if container starts get slower (a bigger image, a slower Docker host).
 
 - Targets: the 61 classes using `static PostgreSQLContainer postgres = LabPostgres.create()` with no arguments, and
   `ShardOwnedSchemaContributorIT`'s per-test container.
