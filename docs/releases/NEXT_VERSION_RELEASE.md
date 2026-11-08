@@ -821,4 +821,6 @@ Not published; listed because they are the reference for how to use the framewor
 
 ## 7. Build and tooling
 
-None so far.
+- `postgresql-queue-shard-owned`: the stuck-handler and kept-unit bounds (`stuckHandlerTimeout`, and how long a unit
+  kept by a stop waits for that stop's flush) are read through a package-private clock that the integration tests
+  advance instead of sleeping through them. No behaviour, setting or API changes.

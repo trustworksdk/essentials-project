@@ -95,6 +95,11 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * when idle, so a queue that is never stopped holds nothing for it.
      */
     private volatile ShardWakeupNotifier ownNotifier;
+    /**
+     * The clock each subscription's lanes time {@code stuckHandlerTimeout} and their kept units by
+     * ({@code ShardOwnedQueue.useNanoTime}). {@link System#nanoTime()} unless a test set another ({@link #useNanoTime}).
+     */
+    private volatile LongSupplier       nanoTime = System::nanoTime;
 
     /**
      * Added to and removed from only under {@link #lifecycleLock} - removed from by a {@link Subscription#unsubscribe()}
@@ -305,6 +310,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     /**
      * The interned id this queue addresses.
      */
+    /**
+     * Have the lanes of every later {@link #consume} time {@code stuckHandlerTimeout} and the units their stops keep by
+     * {@code nanoTime} instead of {@link System#nanoTime()} ({@code ShardOwnedQueue.useNanoTime}), so a test can move past
+     * those bounds instead of waiting them out. Tests only.
+     */
+    PostgresqlMessageQueue useNanoTime(LongSupplier nanoTime) {
+        this.nanoTime = requireNonNull(nanoTime, "No nanoTime provided");
+        return this;
+    }
+
     public short queueId() {
         return queueId;
     }
@@ -867,7 +882,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                                .setMetrics(engineMetrics)
                                                .setParallelConsumers(options.parallelConsumers())
                                                .setRuntime(runtime)
-                                               .build();
+                                               .build()
+                                               .useNanoTime(nanoTime);
         unorderedConsumer.configureUnordered((messageId, payload, payloadType) -> invoke(handler, messageId, null, 0L, payload, payloadType),
                                              settings, options.maxShards(), policy);
         // setShardCount is INERT on this consumer and is passed only because the builder requires a
@@ -886,7 +902,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                              .setMetrics(engineMetrics)
                                              .setParallelConsumers(options.parallelConsumers())
                                              .setRuntime(runtime)
-                                             .build();
+                                             .build()
+                                             .useNanoTime(nanoTime);
         orderedConsumer.configureOrdered(new OrderedPayloadHandler() {
                                             @Override
                                             public void handle(MessageId messageId, String key, byte[] payload, int payloadType) {

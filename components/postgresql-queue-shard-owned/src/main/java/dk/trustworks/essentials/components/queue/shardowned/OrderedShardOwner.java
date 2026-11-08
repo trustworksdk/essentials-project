@@ -24,6 +24,7 @@ import java.sql.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.*;
+import java.util.function.LongSupplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -63,6 +64,13 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
     private final int                   shard;
     private final long                  fence;
     private final ShardOwnerSettings    settings;
+    /**
+     * The clock {@code stuckHandlerTimeout} is timed by: the stamp of each key in {@link #keysInFlight} and every reading
+     * compared with it ({@link #keysInHandler()}, {@link #releaseChargeCandidates}). {@link System#nanoTime()} outside
+     * tests; a test advances it past the bound instead of waiting it out ({@code ShardOwnedQueue.useNanoTime}). Nothing
+     * else reads it: the shed grace, the dead-pump wait and every lease time stay on real time.
+     */
+    private final LongSupplier          nanoTime;
     private final OrderedPayloadHandler handler;
     private final ShardOwnerMetrics     metrics;
     private final RedeliveryPolicy      redeliveryPolicy;
@@ -158,7 +166,7 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
     private final Map<String, TreeMap<Long, ShardOwnedStorage.OrderedRow>> readyByKey            = new HashMap<>();
     /**
      * Keys with a message currently in a handler, each with that message's sequence value, its {@code key_order}, and when
-     * it was handed to the handler executor, by {@link System#nanoTime()} - which {@link #keysInHandler()} times the longest
+     * it was handed to the handler executor, by {@link #nanoTime} - which {@link #keysInHandler()} times the longest
      * of from. At most one per key, which is what enforces FIFO.
      */
     private final Map<String, InHandler>                                   keysInFlight          = new LinkedHashMap<>();
@@ -400,7 +408,28 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
                       ShardWakeup wakeup,
                       HandlerDispatch dispatch,
                       boolean previousOwnerReleased) {
+        this(storage, shard, fence, settings, handler, metrics, redeliveryPolicy, instanceId, wakeup, dispatch,
+             previousOwnerReleased, System::nanoTime);
+    }
+
+    /**
+     * @param nanoTime the clock {@code stuckHandlerTimeout} is timed by ({@link #nanoTime}); {@link System#nanoTime()}
+     *                 outside tests
+     */
+    OrderedShardOwner(ShardOwnedStorage storage,
+                      int shard,
+                      long fence,
+                      ShardOwnerSettings settings,
+                      OrderedPayloadHandler handler,
+                      ShardOwnerMetrics metrics,
+                      RedeliveryPolicy redeliveryPolicy,
+                      String instanceId,
+                      ShardWakeup wakeup,
+                      HandlerDispatch dispatch,
+                      boolean previousOwnerReleased,
+                      LongSupplier nanoTime) {
         this.storage = requireNonNull(storage, "No storage provided");
+        this.nanoTime = requireNonNull(nanoTime, "No nanoTime provided");
         this.shard = shard;
         this.fence = fence;
         this.settings = requireNonNull(settings, "No settings provided");
@@ -923,7 +952,7 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
                 }
                 highestDeliveredOrder.merge(key, next.getKey(), Math::max);
 
-                keysInFlight.put(key, new InHandler(next.getValue().seq(), next.getKey(), System.nanoTime()));
+                keysInFlight.put(key, new InHandler(next.getValue().seq(), next.getKey(), nanoTime.getAsLong()));
                 activeKeys.incrementAndGet();
                 metrics.maxConcurrentKeys.accumulateAndGet(activeKeys.get(), Math::max);
                 submitted++;
@@ -1800,7 +1829,7 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
      * @return empty when no key is in a handler
      */
     Optional<KeysInHandler> keysInHandler() {
-        var now = System.nanoTime();
+        var now = nanoTime.getAsLong();
         synchronized (stateLock) {
             if (keysInFlight.isEmpty()) {
                 return Optional.empty();
@@ -1816,7 +1845,7 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
      * @param seq        the message's sequence value
      * @param keyOrder   the message's {@code key_order}: where its key is blocked if the charge before a release
      *                   dead-letters it ({@link #chargeKeysInHandlerBeforeRelease})
-     * @param sinceNanos when it was handed to the handler executor, by {@link System#nanoTime()}
+     * @param sinceNanos when it was handed to the handler executor, by {@link OrderedShardOwner#nanoTime}
      */
     record InHandler(long seq, long keyOrder, long sinceNanos) {
     }
@@ -1970,7 +1999,7 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
      * handler has returned ({@link #returnedFromHandler}) is not one: its handler records its outcome.
      */
     private Map<Long, ReleaseChargeLedger.Candidate> releaseChargeCandidates(ReleaseChargeScope scope) {
-        var now        = System.nanoTime();
+        var now        = nanoTime.getAsLong();
         var bound      = settings.stuckHandlerTimeout().toNanos();
         var candidates = new LinkedHashMap<Long, ReleaseChargeLedger.Candidate>();
         synchronized (stateLock) {

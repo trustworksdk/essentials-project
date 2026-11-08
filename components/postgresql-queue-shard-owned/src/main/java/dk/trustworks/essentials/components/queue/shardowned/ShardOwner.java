@@ -27,6 +27,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.LongSupplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -56,6 +57,12 @@ final class ShardOwner implements LeasedOwner {
     private final    int                                          shard;
     private final    long                                         fence;
     private final    ShardOwnerSettings                           settings;
+    /**
+     * The clock {@code stuckHandlerTimeout} is timed by: the stamp of each message in {@link #inFlight} and the reading
+     * compared with it ({@link #inHandlerPastStuckHandlerTimeout}). {@link System#nanoTime()} outside tests; a test
+     * advances it past the bound instead of waiting it out ({@code ShardOwnedQueue.useNanoTime}). Nothing else reads it.
+     */
+    private final    LongSupplier                                 nanoTime;
     private final    PayloadHandler                               handler;
     private final    ShardOwnerMetrics                            metrics;
     private final    RedeliveryPolicy                             redeliveryPolicy;
@@ -145,7 +152,7 @@ final class ShardOwner implements LeasedOwner {
     private final NavigableSet<Long>       deliveredAheadOfCursor = new TreeSet<>();
     /**
      * In a handler: delivered and not yet returned, so a sweep does not deliver them twice. Each with when it was handed to
-     * the handler executor, by {@link System#nanoTime()}, which {@link #chargeInHandlerBeforeRelease} times
+     * the handler executor, by {@link #nanoTime}, which {@link #chargeInHandlerBeforeRelease} times
      * {@code stuckHandlerTimeout} from.
      */
     private final NavigableMap<Long, Long> inFlight     = new TreeMap<>();
@@ -231,7 +238,28 @@ final class ShardOwner implements LeasedOwner {
                String instanceId,
                HandlerDispatch dispatch,
                boolean previousOwnerReleased) {
+        this(storage, shard, fence, settings, handler, metrics, redeliveryPolicy, wakeup, instanceId, dispatch,
+             previousOwnerReleased, System::nanoTime);
+    }
+
+    /**
+     * @param nanoTime the clock {@code stuckHandlerTimeout} is timed by ({@link #nanoTime}); {@link System#nanoTime()}
+     *                 outside tests
+     */
+    ShardOwner(ShardOwnedStorage storage,
+               int shard,
+               long fence,
+               ShardOwnerSettings settings,
+               PayloadHandler handler,
+               ShardOwnerMetrics metrics,
+               RedeliveryPolicy redeliveryPolicy,
+               ShardWakeup wakeup,
+               String instanceId,
+               HandlerDispatch dispatch,
+               boolean previousOwnerReleased,
+               LongSupplier nanoTime) {
         this.storage = requireNonNull(storage, "No storage provided");
+        this.nanoTime = requireNonNull(nanoTime, "No nanoTime provided");
         this.shard = shard;
         this.fence = fence;
         this.settings = requireNonNull(settings, "No settings provided");
@@ -751,7 +779,7 @@ final class ShardOwner implements LeasedOwner {
                 dispatch.release();
                 return false;
             }
-            inFlight.put(row.seq(), System.nanoTime());
+            inFlight.put(row.seq(), nanoTime.getAsLong());
             if (row.seq() > cursor) {
                 deliveredAheadOfCursor.add(row.seq());
             }
@@ -1312,7 +1340,7 @@ final class ShardOwner implements LeasedOwner {
      * whose handler has returned ({@link #returnedFromHandler}) is not one: its handler records its outcome.
      */
     private Map<Long, ReleaseChargeLedger.Candidate> inHandlerPastStuckHandlerTimeout() {
-        var now   = System.nanoTime();
+        var now   = nanoTime.getAsLong();
         var bound = settings.stuckHandlerTimeout().toNanos();
         var stuck = new TreeMap<Long, ReleaseChargeLedger.Candidate>();
         synchronized (stateLock) {
