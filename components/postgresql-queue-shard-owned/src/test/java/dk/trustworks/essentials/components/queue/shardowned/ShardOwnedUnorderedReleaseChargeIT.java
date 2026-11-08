@@ -60,6 +60,12 @@ class ShardOwnedUnorderedReleaseChargeIT {
     static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource dataSource;
+    /**
+     * The clock the queues of a test time {@code stuckHandlerTimeout} by ({@link TestNanoClock}): a test moves its message
+     * past the bound with {@link TestNanoClock#advance} instead of sleeping through it. The first test's queue keeps the
+     * default clock and sleeps, so the unordered lane's wiring to real time stays covered.
+     */
+    private final TestNanoClock clock = new TestNanoClock();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -94,7 +100,8 @@ class ShardOwnedUnorderedReleaseChargeIT {
         var seq      = new CompletableFuture<Long>();
         var logged   = captureQueueLog();
         try (var runtime = new ShardRuntime(dataSource, settings)) {
-            var queue = queue(runtime, "hangs-on-stop");
+            // On its default clock: this test keeps sleeping past the bound, which covers the wiring to real time.
+            var queue = queueOnRealTime(runtime, "hangs-on-stop");
             try {
                 queue.startConsuming((messageId, payload, payloadType) -> {
                     // Every delivery hangs, until the test ends.
@@ -212,7 +219,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
                     first.enqueue(List.of(("hangs-" + message).getBytes(StandardCharsets.UTF_8)), 1);
                 }
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: a message of every shard is in its handler").isTrue();
-                Thread.sleep(STUCK_HANDLER_TIMEOUT.toMillis() + 300);
+                clock.advance(STUCK_HANDLER_TIMEOUT.plusMillis(300));
 
                 second.startConsuming((messageId, payload, payloadType) -> redelivered.put(messageId.shard(),
                                                                                            attemptsOf(messageId.shard(), messageId.sequence())),
@@ -273,7 +280,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
                     first.enqueue(List.of(("hangs-" + message).getBytes(StandardCharsets.UTF_8)), 1);
                 }
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: a message of every shard is in its handler").isTrue();
-                Thread.sleep(STUCK_HANDLER_TIMEOUT.toMillis() + 300);
+                clock.advance(STUCK_HANDLER_TIMEOUT.plusMillis(300));
                 var failingFence = fenceOf(failingShard);
 
                 failUnorderedAttemptChargesOn(failingShard, true);
@@ -350,7 +357,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
                     first.enqueue(List.of(("hangs-" + message).getBytes(StandardCharsets.UTF_8)), 1);
                 }
                 assertThat(entered.tryAcquire(SHARD_COUNT, 20, TimeUnit.SECONDS)).as("premise: a message of every shard is in its handler").isTrue();
-                Thread.sleep(STUCK_HANDLER_TIMEOUT.toMillis() + 300);
+                clock.advance(STUCK_HANDLER_TIMEOUT.plusMillis(300));
 
                 LeaseReleaseRefusals.failLeaseReleasesInDoubtOf(dataSource, queueIds, "unordered", inDoubt);
                 try {
@@ -434,7 +441,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
                 }
                 assertThat(handled.await(20, TimeUnit.SECONDS)).as("premise: every message reached its handler").isTrue();
                 assertThat(hungSeq).as("premise: a message of the first shard shed hangs").isDone();
-                Thread.sleep(STUCK_HANDLER_TIMEOUT.toMillis() + 300);
+                clock.advance(STUCK_HANDLER_TIMEOUT.plusMillis(300));
                 var hungFence = fenceOf(hungShard);
 
                 failDeadLetterMoves(true);
@@ -510,7 +517,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the message is in its handler").isTrue();
                 failingShard = heldShard.get();
                 var shard = failingShard;
-                Thread.sleep(STUCK_HANDLER_TIMEOUT.toMillis() + 300);
+                clock.advance(STUCK_HANDLER_TIMEOUT.plusMillis(300));
                 var fenceBefore = fenceOf(shard);
 
                 failUnorderedAttemptChargesOn(shard, true);
@@ -582,7 +589,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
                 first.enqueue(List.of("hangs".getBytes(StandardCharsets.UTF_8)), 1);
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the message is in its handler").isTrue();
                 var shard = heldShard.get();
-                Thread.sleep(STUCK_HANDLER_TIMEOUT.toMillis() + 300);
+                clock.advance(STUCK_HANDLER_TIMEOUT.plusMillis(300));
                 var fenceBefore = fenceOf(shard);
                 var owner = first.owners().stream().filter(candidate -> candidate.shard() == shard).findFirst().orElseThrow();
                 // Another release of the shard's row, its statement still running: it holds this claim until the statement returns
@@ -652,7 +659,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                        .setInstanceId("observer-throws").setRuntime(runtime)
-                                       .setMetrics(new ShardOwnerMetrics(observer)).build();
+                                       .setMetrics(new ShardOwnerMetrics(observer)).build().useNanoTime(clock);
             try {
                 queue.startConsuming((messageId, payload, payloadType) -> {
                     heldShard.complete(messageId.shard());
@@ -662,7 +669,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
                 queue.enqueue(List.of("hangs".getBytes(StandardCharsets.UTF_8)), 1);
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the message is in its handler").isTrue();
                 var shard = heldShard.get();
-                Thread.sleep(STUCK_HANDLER_TIMEOUT.toMillis() + 300);
+                clock.advance(STUCK_HANDLER_TIMEOUT.plusMillis(300));
 
                 queue.stop();
 
@@ -710,7 +717,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                        .setInstanceId("deleted-in-handler").setRuntime(runtime)
-                                       .setMetrics(new ShardOwnerMetrics(observer)).build();
+                                       .setMetrics(new ShardOwnerMetrics(observer)).build().useNanoTime(clock);
             try {
                 queue.startConsuming((messageId, payload, payloadType) -> {
                     seqsBy.computeIfAbsent(messageId.shard(), shard -> new ConcurrentSkipListSet<>()).add(messageId.sequence());
@@ -725,7 +732,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
                 var shard = seqsBy.entrySet().stream().filter(entry -> entry.getValue().size() >= 2).map(Map.Entry::getKey).findFirst().orElseThrow();
                 var deletedSeq = seqsBy.get(shard).iterator().next();
                 deleteUnorderedMessage(shard, deletedSeq);
-                Thread.sleep(STUCK_HANDLER_TIMEOUT.toMillis() + 300);
+                clock.advance(STUCK_HANDLER_TIMEOUT.plusMillis(300));
 
                 queue.stop();
 
@@ -769,7 +776,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
                     first.enqueue(List.of(("hangs-" + message).getBytes(StandardCharsets.UTF_8)), 1);
                 }
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: a message of every shard is in its handler").isTrue();
-                Thread.sleep(STUCK_HANDLER_TIMEOUT.toMillis() + 300);
+                clock.advance(STUCK_HANDLER_TIMEOUT.plusMillis(300));
 
                 LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "unordered", refusedShard, true);
                 try {
@@ -890,7 +897,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
         try (var firstRuntime = new ShardRuntime(dataSource, settings); var secondRuntime = new ShardRuntime(dataSource, settings)) {
             var first  = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                         .setInstanceId("fails-first").setRuntime(firstRuntime)
-                                        .setMetrics(new ShardOwnerMetrics(observer)).build();
+                                        .setMetrics(new ShardOwnerMetrics(observer)).build().useNanoTime(clock);
             var second = queue(secondRuntime, "fails-second");
             try {
                 first.startConsuming((messageId, payload, payloadType) -> {
@@ -915,7 +922,7 @@ class ShardOwnedUnorderedReleaseChargeIT {
                     first.enqueue(List.of(("message-" + message).getBytes(StandardCharsets.UTF_8)), 1);
                 }
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the second delivery is in its handler").isTrue();
-                Thread.sleep(STUCK_HANDLER_TIMEOUT.toMillis() + 300);
+                clock.advance(STUCK_HANDLER_TIMEOUT.plusMillis(300));
 
                 LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, new short[]{QUEUE_ID}, "unordered", refusedShard, true);
                 try {
@@ -950,7 +957,17 @@ class ShardOwnedUnorderedReleaseChargeIT {
         }
     }
 
+    /**
+     * A queue timing {@code stuckHandlerTimeout} by the test's {@link #clock}.
+     */
     private ShardOwnedQueue queue(ShardRuntime runtime, String instanceId) {
+        return queueOnRealTime(runtime, instanceId).useNanoTime(clock);
+    }
+
+    /**
+     * A queue timing {@code stuckHandlerTimeout} by its default clock, {@link System#nanoTime()}.
+     */
+    private ShardOwnedQueue queueOnRealTime(ShardRuntime runtime, String instanceId) {
         return ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                               .setInstanceId(instanceId).setRuntime(runtime).build();
     }
