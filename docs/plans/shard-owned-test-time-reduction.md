@@ -1,6 +1,11 @@
 # Shard-owned queue modules: test-time reduction plan
 
-Status: plan, nothing built. Written 2026-11-08 against `feature/trading-demo-expansion` at `4ffad19fb`.
+Status: items 1, 2, 3 and 6 done, item 5 skipped (see each item's status line); items 4 and 7 open. Written 2026-11-08
+against `feature/trading-demo-expansion` at `4ffad19fb`.
+
+After items 1, 2, 3 and 6, `postgresql-queue-shard-owned` alone (`mvn verify -pl components/postgresql-queue-shard-owned`,
+same machine and knobs as 1.1): **9 min 57 s** wall clock against 12 min 42 s, Failsafe sum **1,070.7 s** against
+1,351.8 s (69 classes, 495 tests, all green), Surefire 30.5 s.
 
 The shard-owned queue modules' test time grew by roughly ten minutes over the 0.60.1 release. Almost all of the growth
 is integration tests added by the review-fix runs that went into 0.60.1. Those tests guard real defects and must keep
@@ -132,6 +137,10 @@ almost one for one.
 
 ### Item 1: Gate `ShardOwnedMultiQueueCostIT` behind `benchmark.run`
 
+**Status: done** (`fd633ec0e`). Class 72.3 s -> 2.1 to 2.3 s, **70 s saved**. Gated on the method, not the class:
+`several_queues_do_not_manufacture_holes_for_each_other` asserts a correctness property and stays. The connection-delta
+guard moved into `held_connections_do_not_scale_with_the_number_of_queues` (fails with one runtime per queue).
+
 - Target: `ShardOwnedMultiQueueCostIT.records_what_several_idle_queues_cost_in_threads_connections_and_queries`
   (71.2 s; sleeps at lines 151, 175, 188 and 203).
 - Cause: a cost recording. Its own Javadoc (line 43) says it records what the costs are rather than asserting they are
@@ -149,6 +158,9 @@ almost one for one.
 
 ### Item 2: Give `ShardOwnedSpiFairShareIT` a short lease
 
+**Status: done** (`cbd355998`). Class 26.1 s -> 4.6 to 4.7 s, **21 s saved**. Waits until `last_seen` has moved three
+heartbeat periods; fails with `shardsHeld()` counting the unordered lane alone.
+
 - Target: `ShardOwnedSpiFairShareIT.a_single_process_still_owns_every_shard_after_the_first_rebalance` (25.3 s, the
   `Thread.sleep(Duration.ofSeconds(25))` in the test body).
 - Cause: the queue runs on defaults, a 30 s lease with a heartbeat every 10 s, so the test sleeps through several real
@@ -162,6 +174,11 @@ almost one for one.
   the test must fail.
 
 ### Item 3: Replace fixed `pg_sleep` holds with a hold the test releases
+
+**Status: done** (`cfc30a25d`). Test helper `StatementHold` (advisory lock, old sleep kept as the bound).
+`ShardOwnedLifecycleIT` 345.1 s -> 265.2 to 265.8 s, `ShardOwnedUnsubscribeIT` 166.2 s -> 153.9 to 155.1 s,
+`ShardOwnedWatermarkXidWindowIT` 4.7 s -> 1.9 s: **93 s saved**, 80 s of it in the long-pole class. The two "says so
+once" tests keep the restart waiting past two budgets before the release. Coverage checks in the commit message.
 
 - Targets: `ShardOwnedLifecycleIT` helpers `slowTheAcquireOf`, `slowTheRegistrationOf` and `holdTheNextAcquireOf`
   (lines 5444 to 5485) and their callers at 2874, 2970, 3013, 3052, 3108, 3598, 3606, 3662, 3719 and 3969; also the
@@ -222,6 +239,11 @@ almost one for one.
 
 ### Item 5: A test-only stop budget
 
+**Status: skipped.** Built and measured with a package-private, JVM-wide budget setting at 500 ms: `ShardOwnedUnsubscribeIT`
+155 s -> 148 s, and `ShardOwnedDeadPumpHandBackIT`, `ShardOwnedUnorderedReleaseChargeIT` and `ShardOwnedOrderedRebalanceIT`
+unchanged (91.5 s, 50.2 s, 97.6 s against 90.7 s, 49.1 s, 96.8 s). About 7 s in all, not worth a production seam; their
+time is in the stuck-handler and lease waits of item 4, not in the budget. Reverted, nothing committed.
+
 - Targets: every test that stops a queue with a handler held and is not about the budget itself. The bulk of the 2 to 7 s
   methods in `ShardOwnedUnsubscribeIT` (25 methods over 2 s, about 110 s) and a share of `ShardOwnedLifecycleIT`,
   `ShardOwnedDeadPumpHandBackIT` and `ShardOwnedUnorderedReleaseChargeIT`.
@@ -238,6 +260,11 @@ almost one for one.
   `-Dfailsafe.forkCount=2`, then once under load (`-T 1C` across the reactor), before trusting it.
 
 ### Item 6: Age leases with SQL instead of waiting for them
+
+**Status: done** (`1462cf2e7`). The three 31 s methods shared one cause: the successor runs on default settings and judges
+the crashed instance's liveness by its own 30 s lease TTL. Test helper `CrashedInstances.ageMembershipOf` moves the
+membership row a minute back. `ShardOwnedTakeoverAttemptsIT` 48.2 s -> 8.6 s, `ShardOwnedQueueIT` 38.2 s -> 7.4 s,
+`ShardOwnedLocalHandoffIT` 32.7 s -> 2.2 s: **100 s saved**.
 
 - Targets: `ShardOwnedTakeoverAttemptsIT` (`Thread.sleep(LEASE_TTL.toMillis() + 200)` at lines 185, 225, 264 and 302)
   and `ShardOwnedQueueIT.a_new_owner_redelivers_what_a_crashed_owner_left_unacknowledged` (`Thread.sleep(1_200L)`).
