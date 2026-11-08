@@ -933,6 +933,7 @@ public class Account extends AggregateRoot<String, AccountEvent, Account> implem
 **Period-id format must match the boundary**: `END_OF_DAY`/`EVERY_N_DAYS` → `yyyy-MM-dd`, `END_OF_WEEK` → `yyyy-Www`, `END_OF_MONTH` → `yyyy-MM`, `END_OF_YEAR` → `yyyy`.
 
 ### Business-day boundary (`periodSource = BUSINESS_CALENDAR`)
+
 Books that roll at an exchange's or bank's close, not at midnight: keep `timeBoundary = END_OF_DAY` and set
 `periodSource = ClosingBooksPeriodSource.BUSINESS_CALENDAR` (annotation member, or `period-source` property). The days
 then come from a `ClosingBooksBusinessCalendar` the application supplies — `Optional<LocalDate> currentBusinessDate()` and

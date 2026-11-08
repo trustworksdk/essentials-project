@@ -32,6 +32,8 @@ targets, with a `-N` suffix for plugin-only releases.
   `EventProcessor` subscription held by another instance is read from its last saved resume point: one that never held
   the lock in this JVM has no resume point and times out; only one that held it and lost it reads the saved one. No
   skill, rule or script changed.
+- **Markdown lint** — blank lines added around a heading and two lists in the eventsourced-aggregates,
+  postgresql-event-store and traps references. Formatting only; no content, skill, rule or script changed.
 
 ## 0.60.1-8 — targets Essentials 0.60.1
 

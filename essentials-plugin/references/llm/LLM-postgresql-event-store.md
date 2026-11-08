@@ -194,6 +194,7 @@ Enabling also requires, on the database side:
 If a prerequisite is missing, `cdc.mode=auto` (the default once enabled) keeps the application up and subscribers on polling — so a broken CDC setup costs latency, not correctness, and is easy to miss. Verify via `/actuator/health/cdc` or the admin API's `event-store/cdc/status`. Full checklist: [docs/cdc.md §1.1](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/cdc.md).
 
 Key classes:
+
 - `cdc.WalReplicationTailer` - consumes logical replication stream into `eventstore_cdc_inbox` or publishes directly. In INBOX mode it writes received messages in batches - one transaction per up to `essentials.eventstore.cdc.wal-replication-tailer.inbox-write-batch-size` (500) messages, at most `inbox-write-max-delay` (50ms) late - and acknowledges the replication stream only after the batch commits; the dispatcher acknowledges published rows a batch at a time too
 - `cdc.CdcDispatcher` - converts inbox rows to `PersistedEvent` and publishes live events
 - `cdc.CdcEventStore` - chooses hybrid (`ACTIVE`) or polling fallback (`INACTIVE`/`FAILED`)

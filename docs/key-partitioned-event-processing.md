@@ -162,6 +162,7 @@ the engine instead of the inbox lock. Built as the class `PartitionedEventProces
 release: the contract belongs in the class a processor extends, not in configuration.
 
 Pros:
+
 - Spreads the expensive part of an `EventProcessor` - its handlers - over every instance; measured evenly split, 0
   ordering violations, nothing lost when the lock holder was killed.
 - The choice is visible in the code (the superclass) and cannot be configured into something unsafe.
@@ -169,6 +170,7 @@ Pros:
 - Every processor keeps its semantics otherwise, including `UnitOfWorkMode.NONE`.
 
 Cons:
+
 - Handlers run on several instances at once (for different aggregates). A handler keeping in-memory state across
   aggregates, or calling a downstream that takes one caller, must stay an `EventProcessor`.
 - Cross-aggregate order is gone (it already was with more than one consumer thread).
@@ -190,6 +192,7 @@ the producer rule the engine requires (`docs/durable-queue-shard-owned.md:580`).
 has no handler for) are allowed.
 
 Pros:
+
 - Spreads the work that is still concentrated after (a0): the views' SQL, about half of a view's per-event cost
   (§5 M1).
 - The reader becomes a thin, batched forwarder, which removes the per-event transaction that is the views' ceiling
@@ -198,6 +201,7 @@ Pros:
 - Resume point, subscriber id and lock name stay, so a view can switch over and keep its place.
 
 Cons:
+
 - **Per-aggregate order only.** A view that today sees one aggregate type's events in commit order loses
   cross-aggregate order (§6 lists the views that break).
 - **Latency:** the inline path (handle on the reader thread) is given up; event-to-view becomes reader commit → owner
@@ -215,10 +219,12 @@ Split each aggregate type into N partitions by `hash(aggregate_id) mod N`. Each 
 (e.g. `Proc:Accounts#3/16`), resume point and lock, read by whichever instance holds that lock.
 
 Pros:
+
 - Removes the single-reader ceiling, the only option that does.
 - Works on any queue implementation: order comes from the partition's single reader, not from the queue.
 
 Cons:
+
 - **Read amplification:** every partition reader scans the whole global order and discards (N−1)/N of it, unless the
   event tables get a partition-expression index - a schema change for every aggregate type in every application.
 - **Balancing:** N locks per processor, and `FencedLockManager` has no fair share - the first instance up takes all of
@@ -234,9 +240,11 @@ Every node's CDC dispatcher publishes events to its local `CdcEventBus` (`docs/c
 handle only the keys it "owns".
 
 Pros:
+
 - Low latency: no extra queue hop.
 
 Cons:
+
 - Ownership still has to come from somewhere, and correctness still needs a durable per-partition resume point: CDC is
   a delivery accelerator over the event store, not a source of truth (`docs/cdc.md` §1) - so it inherits (b)'s costs.
 - CDC is off by default and falls back to polling; a processing mode cannot depend on it.
@@ -269,6 +277,7 @@ handling, per processor per move. Rendezvous hashing bounds the moves to ~1/N of
 only locks whose preferred owner is alive ever move; a rolling deploy of N pods moves each lock at most out and back.
 
 Pros:
+
 - Works on every queue engine and for every processor type, views included; no change to any processor's semantics or
   ordering contract.
 - Even spread at start-up and on scale-out, whatever the start order; a crash spreads the dead instance's processors
@@ -276,6 +285,7 @@ Pros:
 - No schema change (membership rides on lock rows); opt-in, so nothing changes for anyone who does not turn it on.
 
 Cons:
+
 - A pause of a few seconds per moved processor, on every membership change - the price of the even spread. Bounded and
   rate-limited, not avoidable.
 - Spreads whole processors only: one busy view is still one thread on one instance (that is (a1)'s job).
@@ -469,7 +479,6 @@ heartbeating and becomes indistinguishable from a crash, so both refuse for as l
 `resetAllSubscriptionsIgnoringDepartedInstances()` as the explicit override once the old process is known to be gone.
 Resume points are moved through `EventStoreSubscriptionManager.resetStoredResumePoint`, so any instance can reset. The
 epoch below stays unbuilt.
-
 
 The proposal is a **reset epoch**: a per-processor counter, stored beside the resume point. The reader stamps every
 forwarded message with it. A reset runs: stop reader → bump epoch → purge queue → `onSubscriptionsReset` → start
@@ -774,7 +783,7 @@ or show that it does not happen. And compare per-key order against the exact `Ev
 
 ## 7. Test plan
 
-**Unit (no Docker)**
+### Unit (no Docker)
 
 - The forwarder builds `OrderedMessage`s with key = aggregate id (type-qualified, if Q3 decides so) and
   order = `EventOrder`, ascending per key within a batch, and skips events with no handler.
@@ -783,7 +792,7 @@ or show that it does not happen. And compare per-key order against the exact `Ev
   old-epoch messages are dropped by the consumer.
 - Properties bind and their defaults apply. Per-processor overrides win.
 
-**Integration (Docker, shard-owned engine)**
+### Integration (Docker, shard-owned engine)
 
 | IT | Asserts |
 |---|---|
@@ -877,6 +886,7 @@ a failure a savepoint cannot undo rolls the batch back and it is replayed messag
 `ViewEventProcessor.replayOneEventPerUnitOfWork` already follows.
 
 **What it needs:**
+
 - Engine: batch delivery on the ordered lane. Today `OrderedShardOwner` dispatches one message per handler call, and
   per-key exclusivity is its in-flight set. A batch spanning several keys keeps each of them in flight until the batch
   returns; a key's messages inside one batch stay in `key_order`. Acknowledgement already flushes in batches.
@@ -901,6 +911,7 @@ transaction and no lag - the view row commits with the events - and the work is 
 across every instance that handles them, with no partitioning machinery at all.
 
 What it costs:
+
 - **Coupling.** A view handler that throws fails the command's append: a view bug becomes a write outage. View writes
   add to the command transaction's duration and the locks it holds.
 - **No replay.** The in-transaction subscription has no resume point, so a reset or a new view cannot catch up from

@@ -132,6 +132,7 @@ the number they have where they are defined, never renumbered: `ESS-S<n>` for a 
 - <a id="ess-055"></a>`ESS-055` Unrelated ITs fail at random — a disruption test pauses a container other tests share → [LLM-foundation-test.md § Common Pitfalls](LLM-foundation-test.md#common-pitfalls)
 
 ### postgresql-event-store ([LLM-postgresql-event-store.md](LLM-postgresql-event-store.md))
+
 - <a id="ess-137"></a>`ESS-137` `IllegalStateException: ... Reset refused` from a `PartitionedEventProcessor`/`PartitionedViewEventProcessor` reset — they reset only while stopped on every instance, and a departed instance (crashed, or stopping with a handler still running) still holding part of the queue counts too; stop everywhere, wait for the handler, or after a crash use `resetAllSubscriptionsIgnoringDepartedInstances()` → [LLM-postgresql-event-store.md § Resetting a partitioned processor](LLM-postgresql-event-store.md#resetting-a-partitioned-processor)
 - <a id="ess-056"></a>`ESS-056` Concurrent writers silently interleave — `appendToStream` without an expected `EventOrder` skips optimistic concurrency → [LLM-postgresql-event-store.md § Gotchas](LLM-postgresql-event-store.md#gotchas)
 - <a id="ess-057"></a>`ESS-057` Every instance handles the same events — a non-exclusive async subscription runs on each node → [LLM-postgresql-event-store.md § Gotchas](LLM-postgresql-event-store.md#gotchas)

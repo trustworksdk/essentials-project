@@ -366,7 +366,6 @@ units, fenced locks from 41 to 35, and each inbox's deliveries split about evenl
 ledger 10 679 / 10 509) with 0 ordering violations. Killing the instance that held every lock lost nothing. The order
 ledger's inbox retried 2.9 % of its deliveries on two instances against 2.0 % on one, all successfully.
 
-
 ### 2.8 A handler that outlasts `message-handling-timeout` is logged (foundation, `postgresql-queue`)
 
 On `PostgresqlDurableQueues` and MongoDB a delivery older than `message-handling-timeout` (30 s) is taken back as stuck

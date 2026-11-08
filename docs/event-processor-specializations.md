@@ -44,6 +44,7 @@ of the aggregates (the queue engine assigns each aggregate to one instance at a 
 **What it does not do:** keep order across aggregates; run on an engine that keeps key order per node only - it refuses
 to start there, naming the setting to change (`essentials.shard-owned-queue.durable-queues-enabled`).
 **Be aware:**
+
 - Handlers run concurrently on several instances, for different aggregates. Not for handlers that keep in-memory state
   across aggregates or call something that accepts one caller only - use `EventProcessor` for those.
 - Handlers of different aggregates writing one shared stream (all orders of one account) conflict on it more often;
