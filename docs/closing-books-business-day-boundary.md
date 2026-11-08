@@ -133,13 +133,15 @@ skipped periods are not materialised as empty generations; the gap is only logge
   **generation row**: no next-generation factory runs and no period hint reaches the new generation. With one, the
   application's rollover runs instead (EF-1b, above).
 
-Two consequences matter for this design and exist today, independent of business days:
+Two consequences mattered for this design when it was written, independent of business days. Both are fixed by
+EF-1b (above):
 
-1. The built-in evaluator cannot drive a scheduled scan as-is, because `asDecisionPolicy()` answers
-   `KEEP_OPEN` for `SCHEDULED_SCAN`. `LLM/LLM-eventsourced-aggregates.md:933` says scans are "required …
-   for time-boundary policies on idle aggregates", which the built-in evaluator does not currently deliver.
-2. A scan-driven rollover produces a new generation whose stream is empty — no carried-forward balance and
-   no period id. For a period-bearing aggregate the scan path is only half a rollover.
+1. The built-in evaluator could not drive a scheduled scan, because `asDecisionPolicy()` answers
+   `KEEP_OPEN` for `SCHEDULED_SCAN`. It still does; `asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)` rolls
+   idle aggregates on a scan, business-calendar ones included.
+2. A scan-driven rollover produced a new generation whose stream is empty — no carried-forward balance and
+   no period id. With a `ClosingBooksScanRollover` on the scan processor the application's own rollover runs
+   instead; without one the scan still rolls only the generation row.
 
 ### 1.5 Where the trading demo is now
 

@@ -583,8 +583,9 @@ Cost on the hot path (every mutating command evaluates it), a warmed-up loop of 
 calls, 5 rounds on one JVM: the calendar path takes 180-260 ns, the clock-and-zone path 300-370 ns - the calendar reads a
 `volatile` snapshot and needs no zone conversion.
 
-Additive: an aggregate that does not set `periodSource` behaves as before. Not covered: business weeks or months, and
-rolling on a scheduled scan (the built-in evaluator rolls on access only). Design:
+Additive: an aggregate that does not set `periodSource` behaves as before. Not covered: business weeks or months.
+`asDecisionPolicy()` rolls on access only; to roll idle aggregates on a scheduled scan as well, business-calendar ones
+included, use `asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)` with a scan rollover (§2.16). Design:
 `docs/closing-books-business-day-boundary.md`.
 
 ### 2.16 Scheduled closing books can roll an aggregate the way the application does on access (`eventsourced-aggregates`)

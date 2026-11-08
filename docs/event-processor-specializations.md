@@ -1,7 +1,7 @@
 # Event processors by contract, not by knobs
 
-**Status:** decided 2026-10-29 (§ Decisions). `PartitionedEventProcessor` and the start-up refusal are built;
-`PartitionedViewEventProcessor` comes later.
+**Status:** decided 2026-10-29 (§ Decisions). `PartitionedEventProcessor`, `PartitionedViewEventProcessor` and the
+start-up refusal are built.
 
 ## Why
 
@@ -22,7 +22,7 @@ correctness.
 | Async reactions with retries (send a command, call a system) | `EventProcessor` | One instance | Per aggregate; close to commit order across aggregates with one consumer thread | Every queue engine |
 | The same, spread over instances | `PartitionedEventProcessor` (new) | Every instance | Per aggregate only | Engines that keep key order across instances (today: shard-owned) |
 | A read model, low latency | `ViewEventProcessor` | One instance | Commit order across aggregates | Every queue engine |
-| A read model, spread over instances | `PartitionedViewEventProcessor` (new, later - EF-2 (a1)) | Every instance | Per aggregate only | As `PartitionedEventProcessor` |
+| A read model, spread over instances | `PartitionedViewEventProcessor` (new - EF-2 (a1)) | Every instance | Per aggregate only | As `PartitionedEventProcessor` |
 | Work that must commit with the event | `InTransactionEventProcessor` | The appending instance | The appender's | Every queue engine |
 
 ## The classes
@@ -60,7 +60,7 @@ processor's queue and is retried there, and later events of the same aggregate q
 **Be aware:** one instance handles every event of the view, so a busy view is bounded by one thread; batching raises
 that bound.
 
-### `PartitionedViewEventProcessor` (new, later)
+### `PartitionedViewEventProcessor` (new)
 
 **Why use it:** a read model keyed by aggregate whose updates are the bottleneck.
 **What it does:** one instance reads and forwards in batches; every instance updates the view for its share of the

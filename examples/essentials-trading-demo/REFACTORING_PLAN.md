@@ -40,8 +40,9 @@ docker compose down -v && docker compose up -d
 
 The per-event JSON *payload* is unchanged (records keep the same component names, and every semantic
 type introduced below serializes as the same scalar), so this is purely an event-type rename. No
-upcasting is provided — this is a demo, and `TradingSimulationRunner` already detects partial seed
-data and tells the operator to wipe.
+upcasting is provided — this is a demo, and `TradingSimulationRunner` already detected partial seed
+data and told the operator to wipe. (Historical: `TradingSimulationRunner` was deleted with the `brokerage` context in
+phase 4, `docs/design/phase-4-settlement.md` Q-3; the database is now wiped with `./reset-stack.sh`.)
 
 ---
 
@@ -340,8 +341,9 @@ Written down rather than guessed at. None of these blocks the refactor.
    freely.
 2. **Is the direct-write price store domain or harness?** It was moved to `_demo_harness/` because
    its only purpose is to be benchmarked against the aggregate path, and because
-   `TradingSimulationRunner` seeds it purely so the comparison has something to compare. But
-   `TradingSimulationRunner` is bootstrap, not benchmark, so an argument exists for it being a
+   `TradingSimulationRunner` seeded it purely so the comparison had something to compare. But
+   `TradingSimulationRunner` was bootstrap, not benchmark (historical: it was deleted with the `brokerage` context in
+   phase 4), so an argument exists for it being a
    second, deliberately non-event-sourced write path inside `market_data`. If it stays in the
    harness, the trade path can never accidentally read it — which is the safer default and why it
    went there.

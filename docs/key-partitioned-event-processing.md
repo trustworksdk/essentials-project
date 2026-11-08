@@ -19,7 +19,7 @@ where the time goes. EF-2 is about running the handling on every instance while 
 | Capability flag: does the queue keep one key in order across instances? | **Built**: `DurableQueues.keepsKeyOrderAcrossInstances()` / `Inboxes.keepsKeyOrderAcrossInstances()`, `true` only for the shard-owned adapter | foundation, adapter |
 | `EventProcessor`: batched forward from the reader to the inbox | **Built** (`getForwardBatchSize()`), measured | §5 "Batched forward, built and measured" |
 | `ViewEventProcessor`: batched handling (one unit of work per batch) | **Built** (`getDirectHandlingBatchSize()`), measured | `docs/view-event-processor-batched-handling.md` |
-| `ViewEventProcessor`: handling on every instance (option (a1)) | **Proposal**: §4, decisions §8 | this document |
+| `ViewEventProcessor`: handling on every instance (option (a1)) | **Built** as the class `PartitionedViewEventProcessor` | Release notes 0.61 §2.10, §3.2 |
 | Spreading the fenced locks: whole processors over instances, on every queue engine (option (d)) | **Built, opt-in** (`essentials.fenced-lock-manager.spread-locks`, §3.5), with rate-limited rebalancing; measured in the demo | this document |
 
 Which queue implementation an application runs decides how much of this it can use at all: §3.6. In short, only an
@@ -179,7 +179,7 @@ Cons:
 
 ### 3.2 Option (a1) — key-partitioned views: one batched reader, view handling on every instance (built: `PartitionedViewEventProcessor`)
 
-The same topology for views, as a new class (working name `KeyPartitionedViewEventProcessor`): the view's own
+The same topology for views, as a new class, `PartitionedViewEventProcessor`: the view's own
 `FencedLock` guards a **batched** non-exclusive subscription that only forwards each batch into the shard-owned ordered
 lane, in one `queueMessages` call per batch, with the resume point. Every instance consumes the queue and runs the
 view's handlers. Details in §4.
@@ -351,7 +351,7 @@ Two consequences:
 
 | | (a0) competing inboxes | (a1) partitioned views | (b) partition readers | (c) CDC fan-out | (d) spread locks |
 |---|---|---|---|---|---|
-| Status | Built (class) | Proposal | Not pursued | Rejected | Open |
+| Status | Built (class) | Built (class) | Not pursued | Rejected | Open |
 | Spreads handling over instances | `EventProcessor`s | Views | Yes | Yes | Whole processors only |
 | Removes the reader ceiling | With the batched forward, mostly | Mostly (batched) | Yes | Only with (b)'s machinery | No |
 | Needs cross-instance key order | Yes | Yes | No | No | No - works on every engine |
@@ -405,7 +405,7 @@ processor types, so what is left is the class, the idempotent ordered enqueue an
 
 | Addition | Where | Notes |
 |---|---|---|
-| `KeyPartitionedViewEventProcessor` (working name) | `postgresql-event-store`, `…processor` | Extends `AbstractEventProcessor`. Takes the existing `ViewEventProcessorDependencies` (`ViewEventProcessor.java:100-106`), so no new dependencies bean is needed. Same subscriber id scheme, so a projection switched over keeps its resume point |
+| `PartitionedViewEventProcessor` | `postgresql-event-store`, `…processor` | Extends `AbstractEventProcessor`. Takes the existing `ViewEventProcessorDependencies` (`ViewEventProcessor.java:100-106`), so no new dependencies bean is needed. Same subscriber id scheme, so a projection switched over keeps its resume point |
 | Batched forwarding | same | Processor lock + `batchSubscribeToAggregateEventsAsynchronously` + one `queueMessages` per batch. Batch size and max latency are overridable protected methods |
 | Capability check on the queue engine | **Exists**: `DurableQueues.keepsKeyOrderAcrossInstances()` / `Inboxes.keepsKeyOrderAcrossInstances()` (shipped with (a0)) | The processor refuses to start without it, because on a per-node engine competing consumers break key order. (a0) falls back instead; a class whose name promises partitioning should refuse |
 | Idempotent ordered enqueue | engine SPI + adapter | A key/order already present counts as success. New method or option; existing enqueue semantics are unchanged |
@@ -417,7 +417,7 @@ Existing processors and `ViewEventProcessor`'s behaviour do not change.
 ### 4.2 How a projection opts in
 
 ```java
-public class AccountActivityProjection extends KeyPartitionedViewEventProcessor {
+public class AccountActivityProjection extends PartitionedViewEventProcessor {
     public AccountActivityProjection(ViewEventProcessorDependencies dependencies, JdbcTemplate jdbcTemplate) {
         super(dependencies);
         // ...
@@ -454,7 +454,7 @@ There is no processor registry in the starter. Processors are application beans 
 
 - `essentials.eventstore.key-partitioned-processors.forward-batch-size` (proposed default 100) and
   `.forward-max-latency` (proposed default 20 ms). Global defaults; a processor overrides them in code.
-- A startup check: a `KeyPartitionedViewEventProcessor` bean present while the `DurableQueues` bean lacks the
+- A startup check: a `PartitionedViewEventProcessor` bean present while the `DurableQueues` bean lacks the
   capability fails startup with a message naming `essentials.shard-owned-queue.durable-queues-enabled`.
 - Nothing on the shard-owned starter. Instance identity (`essentials.shard-owned-queue.instance-id`) and ordered
   units are already there.
