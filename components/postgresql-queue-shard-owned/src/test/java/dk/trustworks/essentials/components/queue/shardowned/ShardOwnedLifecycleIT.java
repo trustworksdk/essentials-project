@@ -71,6 +71,11 @@ class ShardOwnedLifecycleIT {
     static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource dataSource;
+    /**
+     * The hold the tests' triggers wait in ({@link StatementHold}), armed by {@link #armTheHold} and let go of by
+     * {@link #releaseTheHold}; null while none is armed.
+     */
+    private StatementHold hold;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -85,7 +90,8 @@ class ShardOwnedLifecycleIT {
     }
 
     @AfterEach
-    void tearDown() {
+    void tearDown() throws Exception {
+        releaseTheHold();
         if (dataSource != null) {
             dataSource.close();
         }
@@ -1788,7 +1794,7 @@ class ShardOwnedLifecycleIT {
      * A heartbeat tick still running when the queue stops on a borrowed shared runtime finishes quietly. {@code stop()}
      * cancels the heartbeat without interrupting a tick already running, then lets go of the runtime, and the tick's
      * rebalance read the field it had just nulled: a NullPointerException, logged as "Rebalance failed" with a stack trace
-     * during an ordinary shutdown. The tick is held inside its own membership heartbeat by a trigger that sleeps, so the
+     * during an ordinary shutdown. The tick is held inside its own membership heartbeat by a trigger until the test lets it go on, so the
      * stop happens part-way through it; the test holds a second borrow, so the shared runtime outlives the queue.
      */
     @Test
@@ -1802,21 +1808,25 @@ class ShardOwnedLifecycleIT {
         try {
             var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "stop-mid-tick");
             queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT);
+            armTheHold();
             try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
                 statement.execute("CREATE OR REPLACE FUNCTION slow_heartbeat() RETURNS trigger AS $$ BEGIN "
-                                          + "PERFORM pg_sleep(1.5); RETURN NEW; END $$ LANGUAGE plpgsql");
+                                          + StatementHold.performHold(1.5) + " RETURN NEW; END $$ LANGUAGE plpgsql");
                 statement.execute("CREATE TRIGGER slow_heartbeat BEFORE UPDATE ON " + ShardOwnedSchema.INSTANCE_TABLE
                                           + " FOR EACH ROW WHEN (OLD.instance_id = 'stop-mid-tick') EXECUTE FUNCTION slow_heartbeat()");
             }
             try {
-                Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aStatementIsHeld);
 
                 queue.stop();
+                // The stop has returned with the tick still held: let the tick go on.
+                releaseTheHold();
 
-                // The whole tick, its rebalance included, not just the sleeping statement: until then the assertions
+                // The whole tick, its rebalance included, not just the held statement: until then the assertions
                 // below would run before the regression could be logged.
                 awaitHeartbeatTickFinished(runtime);
             } finally {
+                releaseTheHold();
                 try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
                     statement.execute("DROP TRIGGER IF EXISTS slow_heartbeat ON " + ShardOwnedSchema.INSTANCE_TABLE);
                 }
@@ -1839,9 +1849,9 @@ class ShardOwnedLifecycleIT {
      * A heartbeat tick that is acquiring a unit when the queue stops leaves no owner behind. {@code stop()} ends and
      * releases the owners it finds; one the tick acquires after that was neither, and on a runtime shared with other
      * queues, whose pumps outlive the stopped queue, it went on reading and dispatching for it, its lease row naming an
-     * instance that had just deregistered. The tick is held inside the lease UPDATE of the acquire by a trigger that
-     * sleeps: the test frees one of the queue's shards, the next tick's lease check ends that owner and its rebalance
-     * takes the shard again, and the queue stops while that UPDATE sleeps.
+     * instance that had just deregistered. The tick is held inside the lease UPDATE of the acquire by a trigger, until the
+     * stop has returned: the test frees one of the queue's shards, the next tick's lease check ends that owner and its rebalance
+     * takes the shard again, and the queue stops while that UPDATE is held.
      */
     @Test
     void a_unit_a_heartbeat_tick_acquires_while_the_queue_stops_is_not_left_served_on_a_shared_runtime() throws Exception {
@@ -1922,7 +1932,8 @@ class ShardOwnedLifecycleIT {
                 holdTheNextAcquireOfUnitZero(lane, instanceId, 1.5);
 
                 queue.stop();
-                assertThat(aHeartbeatIsSleeping()).as("premise: the stop finished while the tick was still acquiring").isTrue();
+                assertThat(aStatementIsHeld()).as("premise: the stop finished while the tick was still acquiring").isTrue();
+                releaseTheHold();
                 awaitHeartbeatTickFinished(runtime);
 
                 assertThat(LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, 0))
@@ -1996,7 +2007,7 @@ class ShardOwnedLifecycleIT {
 
             var stoppedRun = queue.currentRunMonitor();
             queue.stop();
-            assertThat(aHeartbeatIsSleeping()).as("premise: the tick was still acquiring when the queue stopped").isTrue();
+            assertThat(aStatementIsHeld()).as("premise: the tick was still acquiring when the queue stopped").isTrue();
             var lostBefore        = metrics.leasesLost.sum();
             var acquiredBefore    = metrics.shardsAcquired.sum();
             var reportsBeforeRestart = reported.events().size();
@@ -2014,7 +2025,8 @@ class ShardOwnedLifecycleIT {
             });
             Awaitility.await().atMost(Duration.ofSeconds(10)).until(queue::isStarted);
             synchronized (stoppedRun) {
-                assertThat(aHeartbeatIsSleeping()).as("premise: the tick was still acquiring when the test took the lock it refuses under").isTrue();
+                assertThat(aStatementIsHeld()).as("premise: the tick was still acquiring when the test took the lock it refuses under").isTrue();
+                releaseTheHold();
                 starting.get(20, TimeUnit.SECONDS);
             }
             awaitHeartbeatTickFinished(runtime);
@@ -2115,6 +2127,8 @@ class ShardOwnedLifecycleIT {
                 queue.stop();
                 // Every shard but the stranded one: the restarted run is at its limit without it.
                 queue.startConsuming((messageId, payload, payloadType) -> { }, settings, SHARD_COUNT - 1);
+                // Stopped and started again with the earlier run's tick still held: let it go on.
+                releaseTheHold();
                 awaitHeartbeatTickFinished(runtime);
 
                 assertThat(LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, stranded))
@@ -2204,7 +2218,7 @@ class ShardOwnedLifecycleIT {
      * A shard (unordered) or unit (ordered) a heartbeat tick is releasing to rebalance while the queue stops is reported
      * released once. The stop releases every owner it finds, the one the tick is releasing included, and both used to
      * report it: a release counted, and told to the observer, twice for one acquisition. The tick's release is held
-     * inside its UPDATE by a trigger that sleeps; a second, never-ageing membership row gives the queue a fair share
+     * inside its UPDATE by a trigger until the test lets it go on; a second, never-ageing membership row gives the queue a fair share
      * below what it holds, so the tick sheds.
      */
     @ParameterizedTest
@@ -2222,9 +2236,10 @@ class ShardOwnedLifecycleIT {
             assertThat(units).as("premise: the sole instance holds every unit of the lane").isPositive();
             // Fair share against two live instances; the first unit past it is the first the tick releases.
             var firstShed = (units + 1) / 2;
+            armTheHold();
             try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
                 statement.execute("CREATE OR REPLACE FUNCTION slow_release() RETURNS trigger AS $$ BEGIN "
-                                          + "PERFORM pg_sleep(1); RETURN NULL; END $$ LANGUAGE plpgsql");
+                                          + StatementHold.performHold(1) + " RETURN NULL; END $$ LANGUAGE plpgsql");
                 statement.execute("CREATE TRIGGER slow_release AFTER UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
                                           + " FOR EACH ROW WHEN (OLD.owner = '" + instanceId + "' AND NEW.owner IS NULL"
                                           + " AND NEW.lane = '" + lane + "' AND NEW.shard = " + firstShed + ")"
@@ -2233,12 +2248,15 @@ class ShardOwnedLifecycleIT {
                                           + " VALUES (" + QUEUE_ID + ", 'phantom', now() + interval '1 hour')");
             }
             try {
-                Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aStatementIsHeld);
 
                 queue.stop();
+                // The stop has returned with the tick's release still held: let it go on.
+                releaseTheHold();
 
                 awaitHeartbeatTickFinished(runtime);
             } finally {
+                releaseTheHold();
                 try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
                     statement.execute("DROP TRIGGER IF EXISTS slow_release ON " + ShardOwnedSchema.LEASE_TABLE);
                 }
@@ -2856,7 +2874,7 @@ class ShardOwnedLifecycleIT {
      * released, the observer told of each one's acquisition before its release - but keeps the instance's membership row:
      * the start's Javadoc leaves it to age out rather than deleting it, so the sibling lane sharing the instance id keeps
      * its membership. Every other failing start in this class fails before any unit is adopted, with nothing in its run.
-     * Here the heartbeat's scheduling fails: the test stops the runtime it passed the queue while the start sleeps in the
+     * Here the heartbeat's scheduling fails: the test stops the runtime it passed the queue while the start is held in the
      * acquire of unit 1, and a stopped runtime's heartbeat refuses the task - by when the start has adopted every unit it
      * leased.
      */
@@ -2873,9 +2891,11 @@ class ShardOwnedLifecycleIT {
             try {
                 slowTheAcquireOf(lane, instanceId, 1, 3);
                 var starting = CompletableFuture.supplyAsync(() -> catchThrowable(() -> startConsuming(queue, lane, settings)));
-                Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aStatementIsHeld);
 
                 runtime.stop();
+                // The runtime is stopped under the held start: let it go on, into the refused heartbeat.
+                releaseTheHold();
 
                 var thrown = starting.get(30, TimeUnit.SECONDS);
                 assertThat(thrown).as("the heartbeat's refusal escapes the start as it was thrown")
@@ -2969,7 +2989,7 @@ class ShardOwnedLifecycleIT {
         try {
             slowTheAcquireOf(lane, instanceId, 1, 5);
             var starting = CompletableFuture.runAsync(() -> startUnchecked(queue, lane, settings));
-            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aStatementIsHeld);
             assertThat(queue.isStarted()).as("premise: the start has installed its run").isTrue();
 
             var stopCalled = System.nanoTime();
@@ -2980,6 +3000,7 @@ class ShardOwnedLifecycleIT {
             assertThat(starting).as("premise: the start was still leasing when the stop returned").isNotDone();
             assertThat(queue.isStarted()).as("the stop ended the run the start installed").isFalse();
 
+            releaseTheHold();
             starting.get(20, TimeUnit.SECONDS);
 
             assertThat(queue.isStarted()).as("the start, finding its run ended, left the queue stopped").isFalse();
@@ -3012,7 +3033,7 @@ class ShardOwnedLifecycleIT {
         try {
             slowTheAcquireOf("unordered", instanceId, 1, 3);
             var starting = CompletableFuture.runAsync(() -> startUnchecked(queue, "unordered", settings));
-            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aStatementIsHeld);
 
             var stopCalled = System.nanoTime();
             queue.stopAbruptly();
@@ -3022,6 +3043,7 @@ class ShardOwnedLifecycleIT {
             assertThat(starting).as("premise: the start was still leasing when stopAbruptly returned").isNotDone();
             assertThat(queue.isStarted()).isFalse();
 
+            releaseTheHold();
             starting.get(20, TimeUnit.SECONDS);
 
             assertThat(queue.isStarted()).as("the start, finding its run ended, left the queue stopped").isFalse();
@@ -3051,7 +3073,7 @@ class ShardOwnedLifecycleIT {
         try {
             slowTheAcquireOf("unordered", instanceId, 1, 3);
             var starting = CompletableFuture.runAsync(() -> startUnchecked(queue, "unordered", settings));
-            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aStatementIsHeld);
             assertThat(queue.isStarted()).as("premise: the start has installed its run").isTrue();
 
             var stopTook         = new AtomicLong();
@@ -3076,6 +3098,7 @@ class ShardOwnedLifecycleIT {
                                 .anyMatch(message -> message.contains("was interrupted"))
                                 .noneMatch(message -> message.contains("gave up waiting"));
 
+            releaseTheHold();
             starting.get(20, TimeUnit.SECONDS);
 
             assertThat(queue.isStarted()).as("the start, finding its run ended, left the queue stopped").isFalse();
@@ -3093,7 +3116,7 @@ class ShardOwnedLifecycleIT {
      * does the stop's work once its statements return - and says so: one WARN naming the queue and the instance once it
      * has waited the 2 s budget, however long it goes on waiting. It used to block with nothing in the log for as long as
      * the earlier start's statement did. It then starts the queue afresh. A trigger holds the earlier start inside the
-     * acquire of unit 1 for 8 s.
+     * acquire of unit 1 until the restart has waited past two budgets (at most 8 s).
      */
     @Test
     void a_start_called_while_an_earlier_start_still_owes_a_stop_waits_for_it_and_says_so_once() throws Exception {
@@ -3107,10 +3130,11 @@ class ShardOwnedLifecycleIT {
         try {
             slowTheAcquireOf("unordered", instanceId, 1, 8);
             var starting = CompletableFuture.runAsync(() -> startUnchecked(queue, "unordered", settings));
-            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aStatementIsHeld);
             queue.stop();
             assertThat(starting).as("premise: the stop handed its work to the start still leasing").isNotDone();
 
+            var restartCalled = System.nanoTime();
             var restarting = CompletableFuture.runAsync(queue::start);
             Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !waitingToStart(logged).isEmpty());
             assertThat(restarting).as("the restart waits for the earlier start").isNotDone();
@@ -3119,7 +3143,10 @@ class ShardOwnedLifecycleIT {
                                                          .contains("queue " + QUEUE_ID)
                                                          .contains("an earlier start");
 
-            // Waits for the held UPDATE to commit, so the restart's own acquire of unit 1 does not sleep.
+            // Past a second budget before the release, so a WARN per budget would have logged twice.
+            awaitRestartWaitedPastTwoBudgets(restartCalled);
+            assertThat(restarting).as("premise: the restart was still waiting for the earlier start after two budgets").isNotDone();
+            // Waits for the held UPDATE to commit, so the restart's own acquire of unit 1 is not held.
             dropSlowAcquire();
             starting.get(20, TimeUnit.SECONDS);
             restarting.get(20, TimeUnit.SECONDS);
@@ -3580,7 +3607,8 @@ class ShardOwnedLifecycleIT {
      * {@code ShardOwnedQueue.stop()} keeps to. It now waits up to the 2 s budget for the lock (on an interrupted thread
      * not at all), then stops without it: the unordered lane's consumer, still leasing, waits up to its own 2 s budget and
      * hands the stop's work to its start; the {@code consume()} or start then starts no further lane and stops both lanes
-     * again. A trigger holds the unordered lane's start inside the acquire of shard 1 for 10 s.
+     * again. A trigger holds the unordered lane's start inside the acquire of shard 1 until the stop has returned (at
+     * most 10 s).
      * <p>
      * A {@code Subscription.start()} after the queue's stop is such a start too. It took neither the queue's lock nor its
      * started flag, so the stop, finding the queue not started, returned at once having stopped nothing, and the
@@ -3607,7 +3635,7 @@ class ShardOwnedLifecycleIT {
                 starting = "subscription".equals(startedBy) ? CompletableFuture.runAsync(subscription.get()::start)
                                                             : CompletableFuture.runAsync(queue::start);
             }
-            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aStatementIsHeld);
 
             var stopTook = new AtomicLong();
             var stopping = new Thread(() -> {
@@ -3629,6 +3657,7 @@ class ShardOwnedLifecycleIT {
             assertThat(starting).as("premise: the " + startedBy + "() was still leasing when the stop returned").isNotDone();
             assertThat(queue.isStarted()).as("the stop left the queue not started").isFalse();
 
+            releaseTheHold();
             starting.get(30, TimeUnit.SECONDS);
 
             assertThat(queue.isStarted()).as("the " + startedBy + "(), finding the stop, left the queue not started").isFalse();
@@ -3648,7 +3677,8 @@ class ShardOwnedLifecycleIT {
      * waits for that {@code consume()} - which stops both lanes again once its starts return - and says so: one WARN naming
      * the queue and the instance once it has waited the 2 s budget, however long it goes on waiting. It used to block on
      * the queue's lifecycle lock with nothing in the log for as long as the lane's statement did. It then starts both
-     * lanes afresh. A trigger holds the unordered lane's start inside the acquire of shard 1 for 10 s.
+     * lanes afresh. A trigger holds the unordered lane's start inside the acquire of shard 1 until the restart has waited
+     * past two budgets (at most 10 s).
      */
     @Test
     void a_message_queue_start_called_while_an_earlier_consume_still_owes_a_stop_waits_for_it_and_says_so_once() throws Exception {
@@ -3661,10 +3691,11 @@ class ShardOwnedLifecycleIT {
         try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId)) {
             slowTheAcquireOf("unordered", instanceId, 1, 10);
             var consuming = CompletableFuture.runAsync(() -> subscription.set(consumeUnchecked(queue)));
-            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aStatementIsHeld);
             queue.stop();
             assertThat(consuming).as("premise: the stop handed its work to the consume() still leasing").isNotDone();
 
+            var restartCalled = System.nanoTime();
             var restarting = CompletableFuture.runAsync(queue::start);
             Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> !waitingToStart(logged).isEmpty());
             assertThat(restarting).as("the restart waits for the earlier consume()").isNotDone();
@@ -3673,7 +3704,10 @@ class ShardOwnedLifecycleIT {
                                                          .contains("queue " + QUEUE_ID)
                                                          .contains("an earlier consume() or start()");
 
-            // Waits for the held UPDATE to commit, so the restart's own acquire of shard 1 does not sleep.
+            // Past a second budget before the release, so a WARN per budget would have logged twice.
+            awaitRestartWaitedPastTwoBudgets(restartCalled);
+            assertThat(restarting).as("premise: the restart was still waiting for the earlier consume() after two budgets").isNotDone();
+            // Waits for the held UPDATE to commit, so the restart's own acquire of shard 1 is not held.
             dropSlowAcquire();
             consuming.get(30, TimeUnit.SECONDS);
             restarting.get(30, TimeUnit.SECONDS);
@@ -3693,7 +3727,7 @@ class ShardOwnedLifecycleIT {
      * marking it started on the way. It used to mark it started as it registered its pair, and to mark it not started
      * again only after waiting for every stop still stopping without the lock, so {@code isStarted()} read true after
      * a stop had returned with the queue stopped. A trigger holds the unordered lane's start inside the acquire of shard
-     * 1 for 10 s; the first stop returns while it is held, and a second stop that also gave up waiting is held inside its
+     * 1 until the second stop is held (at most 10 s); the first stop returns while it is held, and a second stop that also gave up waiting is held inside its
      * WARN, so the {@code consume()} waits for it with its pair registered.
      */
     @Test
@@ -3719,7 +3753,7 @@ class ShardOwnedLifecycleIT {
             slowTheAcquireOf("unordered", instanceId, 1, 10);
             var consuming = new Thread(() -> subscription.set(consumeUnchecked(queue)));
             consuming.start();
-            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aStatementIsHeld);
 
             queue.stop();
 
@@ -3730,6 +3764,8 @@ class ShardOwnedLifecycleIT {
             var secondStop = new Thread(queue::stop);
             secondStop.start();
             assertThat(secondStopHeld.await(10, TimeUnit.SECONDS)).as("premise: a second stop gave up waiting and is held in its WARN").isTrue();
+            // Both stops have given up on the held consume(): let it go on, to register its pair and wait for the second.
+            releaseTheHold();
             // Read through the queue, not the consume()'s stack: the second stop is still counted as stopping without the
             // lock, and the consume() has parked for good - once its pair is registered, the one untimed wait it has left
             // is the wait for that stop (letGoOfLifecycle); before it, it is in its lane's statements and timed waits.
@@ -3947,7 +3983,7 @@ class ShardOwnedLifecycleIT {
      * never set it back, so the stop stopped the nested pair only, and the outer pair's unordered lane went on leasing and
      * dispatching until the outer {@code consume()} stopped every consumer before it let go. Once the nested
      * {@code consume()} has returned, the observer arms a trigger that holds the next membership upsert of the outer
-     * pair's instance for 12 s: the outer ordered lane's start registering the instance, before the outer pair is
+     * pair's instance until the test has made its assertions (at most 12 s): the outer ordered lane's start registering the instance, before the outer pair is
      * registered with the queue. The nested pair's ordered lane, started first, holds every ordered unit by then.
      */
     @Test
@@ -3979,7 +4015,7 @@ class ShardOwnedLifecycleIT {
                 consuming.start();
                 Awaitility.await().atMost(Duration.ofSeconds(20))
                           .alias("premise: the nested consume() returned and the outer one is starting its ordered lane")
-                          .until(() -> nested.get() != null && aHeartbeatIsSleeping());
+                          .until(() -> nested.get() != null && aStatementIsHeld());
                 assertThat(unitsOwnedBy("unordered", instanceId)).as("premise: the outer pair's unordered lane holds shards").isPositive();
 
                 var stopping = CompletableFuture.runAsync(queue::stop);
@@ -5418,13 +5454,15 @@ class ShardOwnedLifecycleIT {
 
     /**
      * Free unit 0 of {@code lane}, hold the heartbeat tick that leases it again inside the lease UPDATE (see
-     * {@link #holdTheNextAcquireOfUnitZero}), stop the queue while it sleeps and wait for that tick to finish.
+     * {@link #holdTheNextAcquireOfUnitZero}), stop the queue while it is held, let it go on and wait for that tick to finish.
      */
     private void stopWhileAHeartbeatTickAcquiresUnitZero(ShardOwnedQueue queue, ShardRuntime runtime, String lane, String instanceId) throws Exception {
         try {
             holdTheNextAcquireOfUnitZero(lane, instanceId, 1.5);
 
             queue.stop();
+            // The stop has returned with the tick still held: let the tick go on.
+            releaseTheHold();
 
             awaitHeartbeatTickFinished(runtime);
         } finally {
@@ -5435,7 +5473,7 @@ class ShardOwnedLifecycleIT {
 
     /**
      * Give unit 0 of {@code lane} to an instance that is not running, and return once the heartbeat tick that leases it
-     * again is held inside the lease UPDATE, by a trigger that sleeps {@code sleepSeconds}. The tick's lease check finds the
+     * again is held inside the lease UPDATE, by a trigger, for at most {@code sleepSeconds}. The tick's lease check finds the
      * unit gone and ends its owner, and its rebalance drops that owner and acquires the unit again - into the trigger. The
      * trigger fires only on an acquire of unit 0 by {@code instanceId} from another owner, so another acquire of the unit by
      * the same instance, once the tick has taken it, does not sleep. The unit is handed to a departed instance rather than
@@ -5454,17 +5492,20 @@ class ShardOwnedLifecycleIT {
             statement.execute("UPDATE " + ShardOwnedSchema.LEASE_TABLE + " SET owner = 'departed' WHERE queue_id = " + QUEUE_ID
                                       + " AND lane = '" + lane + "' AND shard = " + unit);
         }
-        Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aHeartbeatIsSleeping);
+        Awaitility.await().atMost(Duration.ofSeconds(10)).until(this::aStatementIsHeld);
     }
 
     /**
-     * Make every acquire of {@code unit} of {@code lane} by {@code instanceId} from another owner, or from none, sleep
-     * {@code sleepSeconds} inside the lease UPDATE, by a trigger. Drop it with {@link #dropSlowAcquire}.
+     * Make every acquire of {@code unit} of {@code lane} by {@code instanceId} from another owner, or from none, wait inside
+     * the lease UPDATE, by a trigger, until the test releases the hold ({@link #releaseTheHold}, which
+     * {@link #dropSlowAcquire} does first) or {@code sleepSeconds} have passed, whichever comes first. Drop it with
+     * {@link #dropSlowAcquire}.
      */
     private void slowTheAcquireOf(String lane, String instanceId, int unit, double sleepSeconds) throws Exception {
+        armTheHold();
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
             statement.execute("CREATE OR REPLACE FUNCTION slow_acquire() RETURNS trigger AS $$ BEGIN "
-                                      + "PERFORM pg_sleep(" + sleepSeconds + "); RETURN NEW; END $$ LANGUAGE plpgsql");
+                                      + StatementHold.performHold(sleepSeconds) + " RETURN NEW; END $$ LANGUAGE plpgsql");
             statement.execute("CREATE TRIGGER slow_acquire BEFORE UPDATE ON " + ShardOwnedSchema.LEASE_TABLE
                                       + " FOR EACH ROW WHEN (OLD.owner IS DISTINCT FROM NEW.owner AND NEW.owner = '" + instanceId + "'"
                                       + " AND NEW.lane = '" + lane + "' AND NEW.shard = " + unit + ")"
@@ -5473,13 +5514,15 @@ class ShardOwnedLifecycleIT {
     }
 
     /**
-     * Make every membership upsert of {@code instanceId} - a lane's start registering it, a heartbeat refreshing it - sleep
-     * {@code sleepSeconds}, by a trigger. Drop it with {@link #dropSlowRegistration}.
+     * Make every membership upsert of {@code instanceId} - a lane's start registering it, a heartbeat refreshing it - wait,
+     * by a trigger, until the test releases the hold ({@link #releaseTheHold}, which {@link #dropSlowRegistration} does
+     * first) or {@code sleepSeconds} have passed. Drop it with {@link #dropSlowRegistration}.
      */
     private void slowTheRegistrationOf(String instanceId, double sleepSeconds) throws Exception {
+        armTheHold();
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
             statement.execute("CREATE OR REPLACE FUNCTION slow_registration() RETURNS trigger AS $$ BEGIN "
-                                      + "PERFORM pg_sleep(" + sleepSeconds + "); RETURN NEW; END $$ LANGUAGE plpgsql");
+                                      + StatementHold.performHold(sleepSeconds) + " RETURN NEW; END $$ LANGUAGE plpgsql");
             statement.execute("CREATE TRIGGER slow_registration BEFORE INSERT OR UPDATE ON " + ShardOwnedSchema.INSTANCE_TABLE
                                       + " FOR EACH ROW WHEN (NEW.instance_id = '" + instanceId + "')"
                                       + " EXECUTE FUNCTION slow_registration()");
@@ -5487,12 +5530,14 @@ class ShardOwnedLifecycleIT {
     }
 
     private void dropSlowRegistration() throws Exception {
+        releaseTheHold();
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
             statement.execute("DROP TRIGGER IF EXISTS slow_registration ON " + ShardOwnedSchema.INSTANCE_TABLE);
         }
     }
 
     private void dropSlowAcquire() throws Exception {
+        releaseTheHold();
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
             statement.execute("DROP TRIGGER IF EXISTS slow_acquire ON " + ShardOwnedSchema.LEASE_TABLE);
         }
@@ -5518,9 +5563,45 @@ class ShardOwnedLifecycleIT {
                            QUEUE_ID, instanceId);
     }
 
-    private boolean aHeartbeatIsSleeping() throws Exception {
-        return queryForInt(dataSource, "Counting the backends sleeping in pg_sleep",
-                           "SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'PgSleep'") > 0;
+    /**
+     * Wait until a restart called at {@code restartCalledNanos} has waited two {@code SHUTDOWN_BUDGET}s and a margin, so a
+     * restart that logged its WARN once per budget would have logged it twice.
+     */
+    private static void awaitRestartWaitedPastTwoBudgets(long restartCalledNanos) throws InterruptedException {
+        var due = restartCalledNanos + ShardOwnedQueue.SHUTDOWN_BUDGET.multipliedBy(2).plusMillis(500).toNanos();
+        var left = due - System.nanoTime();
+        if (left > 0) {
+            TimeUnit.NANOSECONDS.sleep(left);
+        }
+    }
+
+    /** Whether a statement is held in a test trigger now ({@link StatementHold}). */
+    private boolean aStatementIsHeld() throws Exception {
+        return StatementHold.aStatementIsHeld(dataSource);
+    }
+
+    /**
+     * Take the lock the tests' triggers wait on ({@link StatementHold#arm}), unless it is taken already. Before the trigger
+     * is created: a trigger firing while no hold is armed lets its statement through at once.
+     */
+    private synchronized void armTheHold() throws Exception {
+        if (hold == null) {
+            hold = StatementHold.arm(postgres);
+        }
+    }
+
+    /**
+     * Let every statement held in a test trigger through, now and from now on, until the hold is armed again. Call it once
+     * the test is done asserting what must be true while the statement is held; the trigger's bound is the backstop.
+     */
+    private synchronized void releaseTheHold() throws Exception {
+        if (hold != null) {
+            try {
+                hold.release();
+            } finally {
+                hold = null;
+            }
+        }
     }
 
     private static void awaitQuietly(CountDownLatch latch) {

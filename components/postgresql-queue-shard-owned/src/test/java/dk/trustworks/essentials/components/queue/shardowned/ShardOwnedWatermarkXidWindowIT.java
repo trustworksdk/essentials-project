@@ -28,7 +28,6 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 
-import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -44,7 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * Found in the trading demo, with two instances producing into the same ordered units: one ordering violation in
  * roughly twenty minutes, on a key whose producer numbered and committed strictly in order. The window is
- * microseconds wide there. Here a {@code BEFORE INSERT} trigger holds it open for seconds: it runs after the
+ * microseconds wide there. Here a {@code BEFORE INSERT} trigger holds it open until the test lets it go ({@link StatementHold}): it runs after the
  * {@code VALUES} expressions, {@code nextval} included, and before the heap insert that would assign the xid.
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -69,6 +68,8 @@ class ShardOwnedWatermarkXidWindowIT {
     static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource dataSource;
+    /** Holds writer A in the trigger until the test has seen writer B delivered (at most 3 s). */
+    private StatementHold    hold;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -81,6 +82,7 @@ class ShardOwnedWatermarkXidWindowIT {
 
         ShardOwnedSchema.recreate(dataSource);
         ShardOwnedSchema.registerQueue(dataSource, QUEUE_ID, SHARD_COUNT);
+        hold = StatementHold.arm(postgres);
         try (var connection = dataSource.getConnection();
              var statement = connection.createStatement()) {
             // Pauses exactly one insert, between nextval and the heap write.
@@ -88,10 +90,10 @@ class ShardOwnedWatermarkXidWindowIT {
                               CREATE OR REPLACE FUNCTION test_pause_before_insert() RETURNS trigger LANGUAGE plpgsql AS $$
                               BEGIN
                                   IF NEW.msg_key = '%s' AND NEW.key_order = 0 THEN
-                                      PERFORM pg_sleep(3);
+                                      %s
                                   END IF;
                                   RETURN NEW;
-                              END $$""".formatted(HELD_KEY));
+                              END $$""".formatted(HELD_KEY, StatementHold.performHold(3)));
             statement.execute("CREATE TRIGGER test_pause_before_insert BEFORE INSERT ON " + ShardOwnedSchema.ORDERED_TABLE
                                       + " FOR EACH ROW EXECUTE FUNCTION test_pause_before_insert()");
             // nextval() assigns an xid only when it WAL-logs, which a sequence does once per 32 values -
@@ -103,7 +105,10 @@ class ShardOwnedWatermarkXidWindowIT {
     }
 
     @AfterEach
-    void tearDown() {
+    void tearDown() throws Exception {
+        if (hold != null) {
+            hold.release();
+        }
         if (dataSource != null) {
             dataSource.close();
         }
@@ -133,6 +138,7 @@ class ShardOwnedWatermarkXidWindowIT {
             Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> received.contains(neighbour + "/0"));
 
             // A commits below the watermark, and the producer - strictly in order - sends the next one.
+            hold.release();
             writerA.get(10, TimeUnit.SECONDS);
             enqueue(queue, HELD_KEY, 1);
 
@@ -144,8 +150,7 @@ class ShardOwnedWatermarkXidWindowIT {
     }
 
     private boolean writerIsPausedInTrigger() throws Exception {
-        return queryForInt(dataSource, "Counting the backends sleeping in pg_sleep",
-                           "SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'PgSleep'") == 1;
+        return StatementHold.statementsHeld(dataSource) == 1;
     }
 
     private static void enqueue(ShardOwnedQueue queue, String key, long keyOrder) {

@@ -3346,7 +3346,7 @@ class ShardOwnedUnsubscribeIT {
      * {@code COMMIT} goes through on the server after all. Returns once it has.
      */
     private void releaseOnRequestWhoseDeadLetterMoveCommitsPastTheBound(PostgresqlMessageQueue queue, int unit, Duration bound) throws SQLException {
-        delayDeadLetterCommits(bound.plusSeconds(3));
+        var hold = delayDeadLetterCommits(bound.plusSeconds(3));
         try {
             var failure = new AtomicReference<SQLException>();
             Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> {
@@ -3364,6 +3364,8 @@ class ShardOwnedUnsubscribeIT {
             });
             assertThat((Throwable) failure.get()).as("premise: the request threw once its move had waited the bound").isNotNull();
         } finally {
+            // The request has stopped waiting: let the held COMMIT through on the server.
+            hold.release();
             // Waits for the held COMMIT: the transaction that fired the trigger holds a lock on the table until it ends
             dropDeadLetterCommitDelay();
         }
@@ -3373,17 +3375,22 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
-     * Hold the {@code COMMIT} of every transaction inserting a dead letter on the server for {@code delay}, then let it
-     * through: a deferred constraint trigger runs at {@code COMMIT}.
+     * Hold the {@code COMMIT} of every transaction inserting a dead letter on the server until the returned hold is
+     * released, or for at most {@code delay}, then let it through: a deferred constraint trigger runs at {@code COMMIT}.
      */
-    private void delayDeadLetterCommits(Duration delay) throws SQLException {
+    private StatementHold delayDeadLetterCommits(Duration delay) throws SQLException {
+        var hold = StatementHold.arm(postgres);
         try (var connection = dataSource.getConnection();
              var statement = connection.createStatement()) {
             statement.execute("CREATE OR REPLACE FUNCTION delay_dead_letter_commit() RETURNS trigger LANGUAGE plpgsql AS $$ "
-                                      + "BEGIN PERFORM pg_sleep(" + delay.toMillis() / 1000.0 + "); RETURN NULL; END $$");
+                                      + "BEGIN " + StatementHold.performHold(delay) + " RETURN NULL; END $$");
             statement.execute("CREATE CONSTRAINT TRIGGER delay_dead_letter_commit AFTER INSERT ON " + ShardOwnedSchema.DLQ_TABLE
                                       + " DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION delay_dead_letter_commit()");
+        } catch (SQLException | RuntimeException e) {
+            hold.release();
+            throw e;
         }
+        return hold;
     }
 
     private void dropDeadLetterCommitDelay() throws SQLException {
