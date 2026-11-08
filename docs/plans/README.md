@@ -14,6 +14,7 @@ Last checked against the code: 2026-11-08.
 | [durable-queues-improvement-plan.md](durable-queues-improvement-plan.md) | `postgresql-queue`, shard-owned engine | D4 virtual-thread handlers for the classic queue; E3 document a lower HikariCP `minimumIdle`; F5 a retrying shard-owned message keeps no error; C4 "skip the ordered claim" (reverted, measure first); batched acknowledgements. |
 | [shard-owned-queue-polling-reduction.md](shard-owned-queue-polling-reduction.md) | Shard-owned engine | Item 1(b) cache the Micrometer queue-depth read; items 2 and 4 (parked on `wip/` branches); item 5. |
 | [shard-owned-consumer-overhead-proposal.md](shard-owned-consumer-overhead-proposal.md) | Shard-owned engine | Candidate 2: the cost of the batched cursor read when units are split (profile first). |
+| [shard-owned-test-time-reduction.md](shard-owned-test-time-reduction.md) | Shard-owned engine tests | Whole document: cut 5 to 6 minutes of test time from the shard-owned modules (released `pg_sleep` holds, an elapsed-time seam for the stuck-handler bounds, a test-only stop budget, gating a cost recording). |
 | [subscription-improvements.md](subscription-improvements.md) | Event store subscriptions | S2 interruptible (reactive) wake-up; S3 consumer-group-scoped resume points; S4 trimming the one-event overlap after a crash. S1 phase 1, S5 and S6 are built. |
 | [event-store-subscription-redesign.md](event-store-subscription-redesign.md) | Event store subscriptions | Whole document: a proposal, nothing built or measured. |
 
@@ -29,3 +30,4 @@ document above.
 | Key-partitioned processing §9.1 batched handling of queued messages; §9.2 a rebuild path for `InTransactionEventProcessor` | [../design/key-partitioned-event-processing.md](../design/key-partitioned-event-processing.md) |
 | Schema harness step 8 (Mongo contributors and `MongoSchemaApplier`), steps 11–12 (`essentials-schema-flyway`, `essentials-schema-liquibase`) | [../design/database-schema-harness.md](../design/database-schema-harness.md) §9 |
 | A start-up check of total connections held against the pool size | [../archive/processor-settings-inventory.md](../archive/processor-settings-inventory.md) §3 |
+| Load-test the failure paths: run the phase-6 harness with faults injected (CDC gap stalls, failed-batch replay, closing-books rollover, two-instance ownership), and line the load driver's start up with the exchange day so A/B arms trade the same number of days (compare equal `steadyState.bursts`) | Review-fix performance A/B, 2026-11-08 |
