@@ -381,3 +381,25 @@ visible to anyone outside the module (it should not be).
 - Do not combine item 7 with `-Dessentials.test.containers.reuse=true` and more than one fork.
 - Do not move tests behind `benchmark.run` or `loadtest.skip` unless they only record numbers; a test that asserts a
   correctness property stays in the default build.
+
+## 7. What is left after items 1 to 7 (2026-11-09)
+
+Items 1, 2, 3, 4 and 6 are done; item 5 was skipped and item 7 measured and rejected. The engine module went from
+12:42 to 8:40 wall clock (Failsafe sum 1,351.8 s to 878.7 s). Against the 0.60.0 baseline of 3:50 it is still about
+4:50 slower, mostly in `ShardOwnedLifecycleIT` (about 226 s over 125 runs, roughly 1.8 s each) and
+`ShardOwnedUnsubscribeIT` (about 121 s).
+
+Most of what remains is behaviour the tests exist to check in real time: one engine start and stop per run, the
+real-time canaries kept by item 4 (one per bound), the 2 s `SHUTDOWN_BUDGET` (item 5 showed a shorter one saves only
+about 7 s), and lease and heartbeat waits, which are server-side `now()` and cannot be moved by a JVM clock.
+
+| Candidate | Likely saving | Risk |
+|---|---|---|
+| Age the remaining lease waits with `CrashedInstances.ageMembershipOf`, starting with the Unsubscribe test skipped in item 4 (`a_queue_restarted…longer_than_the_lease_ttl…`, 7.5 s) | tens of seconds | Low: the item 6 pattern; `ShardOwnedStaleLivenessIT` keeps a real-time lease lapse |
+| Review `ShardOwnedLifecycleIT`'s 125-row matrix for rows that exercise the same code path | possibly 30 to 60 s | Medium: conflicts with §6 "do not merge review-fix tests" unless each removed row is shown to duplicate another, not just to look like it |
+| A third Failsafe fork | unknown | Medium to high: §6 says over-forking makes this build slower and these tests flake under load; measure only, do not assume |
+
+The per-test figures above are not measured. Next step, report only: one module run that lists every remaining sleep
+and lease wait in `ShardOwnedLifecycleIT` and `ShardOwnedUnsubscribeIT` with its seconds, each marked convertible
+(SQL ageing, released hold, seam) or deliberate (canary, real-time property). Decide from that list. Everything in §6
+still applies.
