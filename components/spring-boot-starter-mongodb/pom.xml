@@ -159,6 +159,26 @@
             <version>${spring-boot.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Spring Boot's own Micrometer auto-configurations, so the tests prove the starter's @ConditionalOnBean checks
+             run after them (the tracing and metrics interceptors). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-micrometer-metrics</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-micrometer-observation</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-micrometer-tracing</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>test</scope>
+        </dependency>
         <!-- ArchUnit drives EssentialsConstructionErgonomicsTest. This starter is the only place in the reactor whose
              classpath holds springdata-mongo-queue and springdata-mongo-distributed-fenced-lock at all — nothing
              downstream of the MongoDB implementations exists otherwise — so the construction-ergonomics guard runs
