@@ -126,8 +126,8 @@ All beans use `@ConditionalOnMissingBean` for easy overriding.
 
 | Bean | Condition | Description |
 |------|-----------|-------------|
-| `DurableQueuesMicrometerTracingInterceptor` | Micrometer `Tracer`, `Propagator` and `ObservationRegistry` beans present and `essentials.durable-queues.tracing-enabled=true` (default). Before 0.61.0: only with `management.tracing.enabled=true` | Distributed tracing |
-| `DurableQueuesMicrometerInterceptor` | A `MeterRegistry` is present and `essentials.durable-queues.queue-metrics-enabled=true` (default). Before 0.61.0: only with `management.tracing.enabled=true` | Micrometer metrics |
+| `DurableQueuesMicrometerTracingInterceptor` | `management.tracing.enabled=true` | Distributed tracing |
+| `DurableQueuesMicrometerInterceptor` | `management.tracing.enabled=true` | Micrometer metrics |
 | `RecordExecutionTimeMessageHandlerInterceptor` | Always | Performance logging |
 | `RecordExecutionTimeCommandBusInterceptor` | Always | Performance logging |
 | `RecordExecutionTimeDurableQueueInterceptor` | Always | Performance logging |
@@ -166,8 +166,6 @@ essentials.durable-queues.message-handling-timeout=5s
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
 essentials.durable-queues.max-polling-interval=2s
 essentials.durable-queues.verbose-tracing=false
-essentials.durable-queues.tracing-enabled=true
-essentials.durable-queues.queue-metrics-enabled=true
 ```
 
 | Property | Default | Description                                                                   |
@@ -177,8 +175,6 @@ essentials.durable-queues.queue-metrics-enabled=true
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor when no messages found                                         |
 | `max-polling-interval` | `2s` | Maximum polling delay                                                         |
 | `verbose-tracing` | `false` | Include all operations in traces (not just top-level)                         |
-| `tracing-enabled` | `true` | Register `DurableQueuesMicrometerTracingInterceptor` when Micrometer tracing beans are present |
-| `queue-metrics-enabled` | `true` | Register `DurableQueuesMicrometerInterceptor` when a `MeterRegistry` is present (not the execution-time switch `essentials.metrics.durable-queues.enabled`) |
 
 **Removed in 0.60.0:** `transactional-mode`. Every queue operation runs in its own transaction (what `single-operation-transaction` did); there is no mode to choose. Since 0.60.1 the starter logs an ERROR at startup for each removed `essentials.*` property still set, and the configuration metadata marks them as errors for the IDE. See [MIGRATION-0.60](../../docs/MIGRATION-0.60.md#transactionalmode-is-retired).
 

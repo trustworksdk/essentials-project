@@ -96,9 +96,7 @@ See [spring-boot-starter-postgresql README](https://github.com/trustworksdk/esse
 - `TTLJobBeanPostProcessor` - Auto-register @TTLJob beans
 
 **Observability:**
-- `DurableQueuesMicrometerTracingInterceptor` - carries the trace context from enqueue to consumer; registered when a Micrometer `Tracer`, `Propagator` and `ObservationRegistry` are all present (opt out: `essentials.durable-queues.tracing-enabled=false`). Since 0.61.0; before, only with `management.tracing.enabled=true`, which Spring Boot 4 no longer reads
-- `DurableQueuesMicrometerInterceptor` - processed/handled/retry/dead-letter counters and queued/dead-letter gauges per queue; registered whenever a `MeterRegistry` is present, independent of tracing (opt out: `essentials.durable-queues.queue-metrics-enabled=false`). Same 0.61.0 change
-- With OpenTelemetry and `management.tracing.export.enabled=false`, Spring Boot itself installs a no-op propagator, so trace context is not carried across a queue (as for HTTP/Kafka)
+- Micrometer tracing interceptors (when `management.tracing.enabled=true`)
 - Performance logging interceptors
 
 **Admin APIs:**
@@ -160,7 +158,7 @@ See [spring-boot-starter-postgresql-event-store README](https://github.com/trust
 - `CausationCommandContextPropagator` - Added to every command-bus bean, for `sendAsync`/`sendAndDontWait`
 
 **Observability:**
-- `MicrometerTracingEventStoreInterceptor` - trace context in event meta-data; registered when a Micrometer `Tracer`, `Propagator` and `ObservationRegistry` are all present (opt out: `essentials.eventstore.tracing-enabled=false`). Since 0.61.0; before, only with `management.tracing.enabled=true`
+- `MicrometerTracingEventStoreInterceptor` - Distributed tracing (when enabled)
 - `RecordExecutionTimeEventStoreInterceptor` - Performance logging
 - `MeasurementEventStoreSubscriptionObserver` - Subscription metrics
 - `EventStoreSubscriptionMonitorManager` - Subscription health monitoring (runs every 1m by default)
@@ -224,8 +222,6 @@ Prefix: `essentials.durable-queues`
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy (centralized=false) |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
-| `tracing-enabled` | `true` | Register `DurableQueuesMicrometerTracingInterceptor` when tracing beans are present |
-| `queue-metrics-enabled` | `true` | Register `DurableQueuesMicrometerInterceptor` when a `MeterRegistry` is present. Not `essentials.metrics.durable-queues.enabled` (execution timing) |
 | `require-active-unit-of-work-for-enqueue` | `false` | `true`: an enqueue (`queueMessage`/`queueMessages`, so `Outbox.sendMessage`, `sendAndDontWait`) outside a `UnitOfWork`/Spring transaction throws `NoActiveUnitOfWorkException`. `false`: it commits on its own and WARNs once per call site, within a budget of 32 innermost application frames with up to 4 callers each. Shard-owned engine reads it too |
 
 Removed in 0.60.0, ignored if set (since 0.60.1 an ERROR is logged at startup per key, and the metadata marks them `error`): `transactional-mode` (every queue operation is its own transaction - a `fully-transactional` setup changed semantics, trap `ESS-103`), `use-ordered-unordered-query`, `enable-queue-statistics`, `shared-queue-statistics-table-name`, `enable-queue-statistics-ttl`, `queue-statistics-ttl-duration`. MongoDB starter: `transactional-mode`.
@@ -421,8 +417,6 @@ Prefix: `essentials.durable-queues`
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
-| `tracing-enabled` | `true` | Register `DurableQueuesMicrometerTracingInterceptor` when tracing beans are present |
-| `queue-metrics-enabled` | `true` | Register `DurableQueuesMicrometerInterceptor` when a `MeterRegistry` is present. Not `essentials.metrics.durable-queues.enabled` (execution timing) |
 | `require-active-unit-of-work-for-enqueue` | `false` | `true`: an enqueue (`queueMessage`/`queueMessages`, so `Outbox.sendMessage`, `sendAndDontWait`) outside a `UnitOfWork`/Spring transaction throws `NoActiveUnitOfWorkException`. `false`: it commits on its own and WARNs once per call site, within a budget of 32 innermost application frames with up to 4 callers each. |
 
 **Note:** No centralized message fetcher (PostgreSQL-only feature)
@@ -445,7 +439,6 @@ Prefix: `essentials.eventstore`
 | `json-column-type` | `jsonb` | `jsonb` (queryable) or `json` (faster writes) |
 | `use-event-stream-gap-handler` | `true` | Detect sequence gaps |
 | `verbose-tracing` | `false` | Low-level ops in traces |
-| `tracing-enabled` | `true` | Register `MicrometerTracingEventStoreInterceptor` when tracing beans are present |
 | `add-annotation-based-in-memory-projector` | `true` | Enable @EventHandler projections |
 | `auto-flush-and-publish-after-append-to-stream` | `false` | Flush Publishing: Immediate publish (for processors/views) |
 

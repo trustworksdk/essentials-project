@@ -133,56 +133,28 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @see dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockStorage
  * @see MultiTableChangeListener
  */
-// Ordered after Spring Boot's Micrometer auto-configurations, so the @ConditionalOnBean checks for Tracer, Propagator,
-// ObservationRegistry and MeterRegistry see the beans those create. Named, not referenced: they are optional (provided).
-@AutoConfiguration(afterName = {
-        "org.springframework.boot.micrometer.observation.autoconfigure.ObservationAutoConfiguration",
-        "org.springframework.boot.micrometer.tracing.autoconfigure.MicrometerTracingAutoConfiguration",
-        "org.springframework.boot.micrometer.tracing.autoconfigure.NoopTracerAutoConfiguration",
-        "org.springframework.boot.micrometer.tracing.brave.autoconfigure.BraveAutoConfiguration",
-        "org.springframework.boot.micrometer.tracing.opentelemetry.autoconfigure.OpenTelemetryTracingAutoConfiguration",
-        "org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration",
-        "org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterRegistryAutoConfiguration"
-})
+@AutoConfiguration
 @EnableConfigurationProperties(EssentialsComponentsProperties.class)
 public class EssentialsComponentsConfiguration {
     public static final Logger log = LoggerFactory.getLogger(EssentialsComponentsConfiguration.class);
 
-    /**
-     * Starts an observation per durable queue operation and carries the trace context from the enqueuing thread to the
-     * consumer. Registered when a Micrometer {@link Tracer}, {@link Propagator} and {@link ObservationRegistry} are all
-     * present, unless {@code essentials.durable-queues.tracing-enabled=false}. It does not read
-     * {@code management.tracing.export.enabled}: export is Spring Boot's concern (with OpenTelemetry, Spring Boot
-     * itself swaps in a no-op propagator when export is disabled). Until 0.61.0 it required
-     * {@code management.tracing.enabled=true}, which Spring Boot 4 no longer reads.
-     */
     @Bean
-    @ConditionalOnBean(type = {"io.micrometer.tracing.Tracer",
-                               "io.micrometer.tracing.propagation.Propagator",
-                               "io.micrometer.observation.ObservationRegistry"})
-    @ConditionalOnProperty(prefix = "essentials.durable-queues", name = "tracing-enabled", havingValue = "true", matchIfMissing = true)
-    public DurableQueuesMicrometerTracingInterceptor durableQueuesMicrometerTracingInterceptor(Tracer tracer,
-                                                                                               Propagator propagator,
-                                                                                               ObservationRegistry observationRegistry,
+    @ConditionalOnProperty(prefix = "management.tracing", name = "enabled", havingValue = "true")
+    public DurableQueuesMicrometerTracingInterceptor durableQueuesMicrometerTracingInterceptor(Optional<Tracer> tracer,
+                                                                                               Optional<Propagator> propagator,
+                                                                                               Optional<ObservationRegistry> observationRegistry,
                                                                                                EssentialsComponentsProperties properties) {
-        return new DurableQueuesMicrometerTracingInterceptor(tracer,
-                                                             propagator,
-                                                             observationRegistry,
+        return new DurableQueuesMicrometerTracingInterceptor(tracer.get(),
+                                                             propagator.get(),
+                                                             observationRegistry.get(),
                                                              properties.getDurableQueues().isVerboseTracing());
     }
 
-    /**
-     * Counts processed, handled, retried and dead-lettered messages and gauges the queued and dead-letter messages per
-     * queue. Registered whenever a {@link MeterRegistry} is present, independent of tracing, unless
-     * {@code essentials.durable-queues.queue-metrics-enabled=false}. Until 0.61.0 it required
-     * {@code management.tracing.enabled=true}.
-     */
     @Bean
-    @ConditionalOnBean(type = "io.micrometer.core.instrument.MeterRegistry")
-    @ConditionalOnProperty(prefix = "essentials.durable-queues", name = "queue-metrics-enabled", havingValue = "true", matchIfMissing = true)
-    public DurableQueuesMicrometerInterceptor durableQueuesMicrometerInterceptor(MeterRegistry meterRegistry,
+    @ConditionalOnProperty(prefix = "management.tracing", name = "enabled", havingValue = "true")
+    public DurableQueuesMicrometerInterceptor durableQueuesMicrometerInterceptor(Optional<MeterRegistry> meterRegistry,
                                                                                  EssentialsComponentsProperties properties) {
-        return new DurableQueuesMicrometerInterceptor(meterRegistry, properties.getTracingProperties().getModuleTag());
+        return new DurableQueuesMicrometerInterceptor(meterRegistry.get(), properties.getTracingProperties().getModuleTag());
     }
 
     /**

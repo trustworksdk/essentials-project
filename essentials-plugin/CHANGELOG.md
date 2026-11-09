@@ -3,15 +3,6 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
-## 0.60.1-10 — targets Essentials 0.60.1
-
-- **Tracing and queue metrics interceptors** — the spring-boot-starter-modules reference says the durable-queue and
-  event-store tracing interceptors are registered when a Micrometer `Tracer`, `Propagator` and `ObservationRegistry` are
-  present, and `DurableQueuesMicrometerInterceptor` whenever a `MeterRegistry` is, each with an opt-out switch
-  (`essentials.durable-queues.tracing-enabled`, `essentials.durable-queues.queue-metrics-enabled`,
-  `essentials.eventstore.tracing-enabled`), instead of only with `management.tracing.enabled=true`, which Spring Boot 4
-  no longer reads. No skill, rule or script changed.
-
 ## 0.60.1-1 — targets Essentials 0.60.1
 Field feedback from running `/essentials:slice-check` and `/essentials:upgrade` on a real 27-context project.
 - **Findings are graded by consequence.** An §R4 import is **Blocking** only when the imported thing can

@@ -112,17 +112,7 @@ import java.util.function.Function;
  * @see dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockStorage
  * @see dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener
  */
-// Ordered after Spring Boot's Micrometer auto-configurations, so the @ConditionalOnBean checks for Tracer, Propagator,
-// ObservationRegistry and MeterRegistry see the beans those create. Named, not referenced: they are optional (provided).
-@AutoConfiguration(afterName = {
-        "org.springframework.boot.micrometer.observation.autoconfigure.ObservationAutoConfiguration",
-        "org.springframework.boot.micrometer.tracing.autoconfigure.MicrometerTracingAutoConfiguration",
-        "org.springframework.boot.micrometer.tracing.autoconfigure.NoopTracerAutoConfiguration",
-        "org.springframework.boot.micrometer.tracing.brave.autoconfigure.BraveAutoConfiguration",
-        "org.springframework.boot.micrometer.tracing.opentelemetry.autoconfigure.OpenTelemetryTracingAutoConfiguration",
-        "org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration",
-        "org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterRegistryAutoConfiguration"
-})
+@AutoConfiguration
 @ConditionalOnClass(name = "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore")
 @EnableConfigurationProperties(EssentialsEventStoreProperties.class)
 public class EventStoreConfiguration {
@@ -162,8 +152,7 @@ public class EventStoreConfiguration {
      *     <li>{@link CausationPersistableEventEnricher} sets {@link PersistableEvent#causedByEventId()} to the event that
      *     caused the current work (see {@link #causationPersistableEventEnricher()})</li>
      *     <li>{@link MicrometerTracingEventStoreInterceptor} adds the trace context to the event meta-data, when
-     *     a Micrometer {@code Tracer}, {@code Propagator} and {@code ObservationRegistry} are present (see
-     *     {@link #micrometerTracingEventStoreInterceptor})</li>
+     *     {@code management.tracing.enabled=true}</li>
      * </ul>
      *
      * @return the {@link PersistableEventMapper} to use for all Events
@@ -533,24 +522,15 @@ public class EventStoreConfiguration {
         return propagator;
     }
 
-    /**
-     * Adds the trace context to the meta-data of every appended event. Registered when a Micrometer {@link Tracer},
-     * {@link Propagator} and {@link ObservationRegistry} are all present, unless
-     * {@code essentials.eventstore.tracing-enabled=false}. Until 0.61.0 it required
-     * {@code management.tracing.enabled=true}, which Spring Boot 4 no longer reads.
-     */
     @Bean
-    @ConditionalOnBean(type = {"io.micrometer.tracing.Tracer",
-                               "io.micrometer.tracing.propagation.Propagator",
-                               "io.micrometer.observation.ObservationRegistry"})
-    @ConditionalOnProperty(prefix = "essentials.eventstore", name = "tracing-enabled", havingValue = "true", matchIfMissing = true)
-    public MicrometerTracingEventStoreInterceptor micrometerTracingEventStoreInterceptor(Tracer tracer,
-                                                                                         Propagator propagator,
-                                                                                         ObservationRegistry observationRegistry,
+    @ConditionalOnProperty(prefix = "management.tracing", name = "enabled", havingValue = "true")
+    public MicrometerTracingEventStoreInterceptor micrometerTracingEventStoreInterceptor(Optional<Tracer> tracer,
+                                                                                         Optional<Propagator> propagator,
+                                                                                         Optional<ObservationRegistry> observationRegistry,
                                                                                          EssentialsEventStoreProperties essentialsComponentsProperties) {
-        return new MicrometerTracingEventStoreInterceptor(tracer,
-                                                          propagator,
-                                                          observationRegistry,
+        return new MicrometerTracingEventStoreInterceptor(tracer.get(),
+                                                          propagator.get(),
+                                                          observationRegistry.get(),
                                                           essentialsComponentsProperties.isVerboseTracing());
     }
 
