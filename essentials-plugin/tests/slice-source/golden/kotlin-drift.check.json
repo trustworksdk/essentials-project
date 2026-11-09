@@ -80,6 +80,7 @@
   "findings": [
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "11(b) handled events",
       "id": "ESS-G11b",
       "slice": "orders.notify_customer",
@@ -90,6 +91,18 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
+      "gate": "14 lane without write model",
+      "id": "ESS-G14",
+      "slice": "orders.notify_customer",
+      "file": "src/main/kotlin/com/example/shop/orders/automations/notify_customer/slice.yaml",
+      "line": null,
+      "message": "declares lane: decider, but 'orders' has no write-style signal \u2014 no decider, no aggregates/, no entities/",
+      "hint": "`lane` is machine-derived from the BC's write model, and this one has none yet \u2014 `--fix-manifests` drops it, or add the write side it names"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "6 undeclared mapping",
       "id": "ESS-G6",
       "slice": "orders.order_board",
@@ -100,6 +113,7 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "11(b) handled events",
       "id": "ESS-G11b",
       "slice": "orders.order_board",
@@ -110,6 +124,18 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
+      "gate": "14 lane without write model",
+      "id": "ESS-G14",
+      "slice": "orders.order_board",
+      "file": "src/main/kotlin/com/example/shop/orders/views/order_board/slice.yaml",
+      "line": null,
+      "message": "declares lane: decider, but 'orders' has no write-style signal \u2014 no decider, no aggregates/, no entities/",
+      "hint": "`lane` is machine-derived from the BC's write model, and this one has none yet \u2014 `--fix-manifests` drops it, or add the write side it names"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "6 discriminator",
       "id": "ESS-G6",
       "slice": "orders.order_board",
@@ -120,6 +146,7 @@
     },
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "6 discriminator",
       "id": "ESS-G6",
       "slice": "orders.order_board",
@@ -127,8 +154,24 @@
       "line": 17,
       "message": "declared endpoint GET /api/orders/board?state=closed: OrderBoardAPI.open (src/main/kotlin/com/example/shop/orders/views/order_board/OrderBoardAPI.kt:21) does not bind state=closed",
       "hint": "each discriminator after `?` must be bound in the handler that serves the route (manifest-guide.md \u00a73)"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "documentation",
+      "gate": "14 lane without write model",
+      "id": "ESS-G14",
+      "slice": "orders.order_feed",
+      "file": "src/main/kotlin/com/example/shop/orders/views/order_feed/slice.yaml",
+      "line": null,
+      "message": "declares lane: decider, but 'orders' has no write-style signal \u2014 no decider, no aggregates/, no entities/",
+      "hint": "`lane` is machine-derived from the BC's write model, and this one has none yet \u2014 `--fix-manifests` drops it, or add the write side it names"
     }
   ],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [],
+  "unhandledVariants": [],
   "unverified": [
     {
       "slice": "orders.order_feed",

@@ -33,6 +33,11 @@
     }
   ],
   "findings": [],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [],
+  "unhandledVariants": [],
   "unverified": [
     {
       "slice": "inbox.broken_view",

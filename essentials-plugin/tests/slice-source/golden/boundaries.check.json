@@ -1,0 +1,189 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/slice-source/cases/boundaries",
+  "manifests": 0,
+  "parsed": 0,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [
+    "billing.bill_order",
+    "billing.invoice_feed",
+    "orders.auto_reorder",
+    "orders.nudge_buyer",
+    "orders.courier",
+    "orders.place_order",
+    "orders.order_board",
+    "stock.restock",
+    "stock.stock_level"
+  ],
+  "lanes": [
+    {
+      "bc": "billing",
+      "path": "src/main/*/com/example/mall/billing",
+      "detected": "undetermined",
+      "signals": {
+        "decider": 0,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 0
+      },
+      "declared": {}
+    },
+    {
+      "bc": "orders",
+      "path": "src/main/*/com/example/mall/orders",
+      "detected": "decider",
+      "signals": {
+        "decider": 1,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 0
+      },
+      "declared": {}
+    },
+    {
+      "bc": "stock",
+      "path": "src/main/*/com/example/mall/stock",
+      "detected": "aggregate",
+      "signals": {
+        "decider": 0,
+        "aggregates": true,
+        "entities": false,
+        "eventStore": 1
+      },
+      "declared": {}
+    }
+  ],
+  "endpoints": [],
+  "findings": [
+    {
+      "severity": "Blocking",
+      "impact": "wrong-next-caller",
+      "gate": "8(b) slice import",
+      "id": "ESS-G8b",
+      "slice": "billing.bill_order",
+      "file": "src/main/java/com/example/mall/billing/automations/bill_order/BillOrderProcessor.java",
+      "line": 3,
+      "message": "imports com.example.mall.orders.automations.nudge_buyer.NudgeBuyerProcessor from slice orders.nudge_buyer (targetShape: event processor)",
+      "hint": "an event processor acts for its owner: collaborate through the owner's events, or send its command on the command bus (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Blocking",
+      "impact": "wrong-next-caller",
+      "gate": "8(c) bc-private import",
+      "id": "ESS-G8c",
+      "slice": "billing.bill_order",
+      "file": "src/main/java/com/example/mall/billing/automations/bill_order/BillOrderProcessor.java",
+      "line": 4,
+      "message": "imports com.example.mall.orders.routing.OrderCommand from orders/routing/ (targetShape: routing marker) into bounded context 'billing'; only events/ and types/ cross a BC boundary",
+      "hint": "a routing marker acts for its owner: collaborate through the owner's events, or send its command on the command bus (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Blocking",
+      "impact": "wrong-next-caller",
+      "gate": "8(c) bc-private import",
+      "id": "ESS-G8c",
+      "slice": "billing.bill_order",
+      "file": "src/main/java/com/example/mall/billing/automations/bill_order/BillOrderProcessor.java",
+      "line": 5,
+      "message": "imports com.example.mall.stock.aggregates.Stock from stock/aggregates/ (targetShape: aggregate) into bounded context 'billing'; only events/ and types/ cross a BC boundary",
+      "hint": "an aggregate acts for its owner: collaborate through the owner's events, or send its command on the command bus (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Blocking",
+      "impact": "coupling",
+      "gate": "8(d) command in domain",
+      "id": "ESS-G8d",
+      "slice": null,
+      "file": "src/main/java/com/example/mall/orders/events/OrderPlaced.java",
+      "line": 4,
+      "message": "events/ imports com.example.mall.orders.use_cases.place_order.PlaceOrder from command slice orders.place_order (targetShape: record); a BC-scoped domain artifact never references a slice's type",
+      "hint": "take the fields it needs; the emitting slice unpacks the command (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Blocking",
+      "impact": "wrong-next-caller",
+      "gate": "8(a) slice import",
+      "id": "ESS-G8a",
+      "slice": "orders.order_board",
+      "file": "src/main/java/com/example/mall/orders/views/order_board/OrderBoardProjection.java",
+      "line": 5,
+      "message": "imports com.example.mall.orders.use_cases.place_order.PlaceOrderDecider from slice orders.place_order (targetShape: decider)",
+      "hint": "a decider acts for its owner: collaborate through the owner's events, or send its command on the command bus (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Blocking",
+      "impact": "wrong-next-caller",
+      "gate": "8(a) slice import",
+      "id": "ESS-G8a",
+      "slice": "stock.restock",
+      "file": "src/main/java/com/example/mall/stock/automations/restock/RestockProcessor.java",
+      "line": 3,
+      "message": "imports com.example.mall.billing.views.invoice_feed.InvoiceFeedProjection from slice billing.invoice_feed (targetShape: event processor)",
+      "hint": "an event processor acts for its owner: collaborate through the owner's events, or send its command on the command bus (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "coupling",
+      "gate": "8(c) bc-private import",
+      "id": "ESS-G8c",
+      "slice": null,
+      "file": "src/main/java/com/example/mall/billing/config/BillingConfiguration.java",
+      "line": 3,
+      "message": "imports com.example.mall.orders.config.OrdersConfiguration from orders/config/ (targetShape: configuration) into bounded context 'billing'; only events/ and types/ cross a BC boundary",
+      "hint": "read-only (configuration): shared vocabulary belongs in the owner's types/ or events/; otherwise keep a copy on this side (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "coupling",
+      "gate": "8(c) bc-private import",
+      "id": "ESS-G8c",
+      "slice": "billing.invoice_feed",
+      "file": "src/main/java/com/example/mall/billing/views/invoice_feed/InvoiceFeedProjection.java",
+      "line": 3,
+      "message": "imports com.example.mall.orders.config.OrderDefaults.MAX_LINES from orders/config/ (targetShape: constant) into bounded context 'billing'; only events/ and types/ cross a BC boundary",
+      "hint": "read-only (constant): shared vocabulary belongs in the owner's types/ or events/; otherwise keep a copy on this side (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "coupling",
+      "gate": "8(c) bc-private import",
+      "id": "ESS-G8c",
+      "slice": "billing.invoice_feed",
+      "file": "src/main/java/com/example/mall/billing/views/invoice_feed/InvoiceFeedProjection.java",
+      "line": 5,
+      "message": "imports com.example.mall.orders.config.OrderLimits from orders/config/ (targetShape: record) into bounded context 'billing'; only events/ and types/ cross a BC boundary",
+      "hint": "read-only (record): shared vocabulary belongs in the owner's types/ or events/; otherwise keep a copy on this side (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "coupling",
+      "gate": "8(a) slice import",
+      "id": "ESS-G8a",
+      "slice": "orders.auto_reorder",
+      "file": "src/main/java/com/example/mall/orders/automations/auto_reorder/AutoReorderProcessor.java",
+      "line": 4,
+      "message": "imports com.example.mall.orders.use_cases.place_order.PlaceOrder from slice orders.place_order (targetShape: record)",
+      "hint": "a command type crosses a slice boundary only to be constructed and sent on the command bus; here it is used otherwise (rules/slice-design.md \u00a7R4)"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "coupling",
+      "gate": "8(a) slice import",
+      "id": "ESS-G8a",
+      "slice": "orders.courier",
+      "file": "src/main/java/com/example/mall/orders/external_systems/courier/CourierPublisher.java",
+      "line": 3,
+      "message": "imports com.example.mall.orders.views.order_board.OrderBoardRow from slice orders.order_board (targetShape: record)",
+      "hint": "read-only (record): shared vocabulary belongs in the owner's types/ or events/; otherwise keep a copy on this side (rules/slice-design.md \u00a7R4)"
+    }
+  ],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [],
+  "unhandledVariants": [],
+  "unverified": [],
+  "unparsed": []
+}

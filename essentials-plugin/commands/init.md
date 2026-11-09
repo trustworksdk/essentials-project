@@ -460,10 +460,10 @@ and the hook never runs. Use the project's path from the top level:
 git -C "${TARGET_DIR}" rev-parse --is-inside-work-tree     # not a repository ⇒ case 4
 PREFIX="$(git -C "${TARGET_DIR}" rev-parse --show-prefix)"  # "" at the top level, "orders-service/" below it
 git -C "${TARGET_DIR}" config --get core.hooksPath          # set ⇒ case 2
-test -e "$(git -C "${TARGET_DIR}" rev-parse --git-path hooks/pre-commit)"   # exists ⇒ case 3
+ls "$(git -C "${TARGET_DIR}" rev-parse --git-common-dir)/hooks" | grep -v '\.sample$'   # any ⇒ case 3
 ```
 
-1. **`core.hooksPath` unset and no existing `pre-commit` hook**: set it,
+1. **`core.hooksPath` unset and no hook in `.git/hooks`** (git's own `*.sample` files do not count): set it,
    `git -C "${TARGET_DIR}" config core.hooksPath "${PREFIX}.githooks"`, and say it is local to this
    clone — every other clone runs the README's command once.
 2. **`core.hooksPath` already set** — to `${PREFIX}.githooks`, nothing to do; to anything else (a
@@ -473,10 +473,12 @@ test -e "$(git -C "${TARGET_DIR}" rev-parse --git-path hooks/pre-commit)"   # ex
    for husky, `.husky/pre-commit` — before any `exit` in it:
    `"$(git rev-parse --show-toplevel)/${PREFIX}.githooks/pre-commit" || exit 1`.
    On no, print the line for the user to add.
-3. **`core.hooksPath` unset, but `.git/hooks/pre-commit` exists**: setting `core.hooksPath` would
-   disable that hook and every other one in `.git/hooks`. Offer the same forwarder line in that
-   file instead, and state the trade-off: the forwarder keeps the existing hook running but, being
-   in `.git/`, is local to this clone exactly like `core.hooksPath`. On no, print the line.
+3. **`core.hooksPath` unset, but `.git/hooks` holds a hook** — a `pre-commit`, or another tool's
+   `post-commit` or `post-checkout`: setting `core.hooksPath` would disable every one of them, so name
+   them. Offer the same forwarder line in `.git/hooks/pre-commit` instead, creating that file with a
+   `#!/usr/bin/env bash` line and the execute bit when only other hooks exist, and state the
+   trade-off: the forwarder keeps the existing hooks running but, being in `.git/`, is local to this
+   clone exactly like `core.hooksPath`. On no, print the line.
 4. **Not a git repository yet**: tell the user to run the README's command from the project
    directory after `git init` — `git config core.hooksPath "$(git rev-parse --show-prefix).githooks"`.
 

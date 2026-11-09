@@ -1,0 +1,569 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/slice-source/cases/boundaries",
+  "manifestsRead": true,
+  "sourceFiles": 25,
+  "bcs": [
+    {
+      "name": "billing",
+      "path": "src/main/*/com/example/mall/billing",
+      "dirs": [
+        "src/main/java/com/example/mall/billing"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "billing.bill_order",
+        "billing.invoice_feed"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "undetermined"
+      }
+    },
+    {
+      "name": "orders",
+      "path": "src/main/*/com/example/mall/orders",
+      "dirs": [
+        "src/main/java/com/example/mall/orders"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "orders.auto_reorder",
+        "orders.nudge_buyer",
+        "orders.courier",
+        "orders.place_order",
+        "orders.order_board"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [
+            {
+              "file": "src/main/java/com/example/mall/orders/use_cases/place_order/PlaceOrderDecider.java",
+              "line": 9,
+              "symbol": "PlaceOrderDecider",
+              "via": "Decider"
+            }
+          ],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "decider"
+      }
+    },
+    {
+      "name": "stock",
+      "path": "src/main/*/com/example/mall/stock",
+      "dirs": [
+        "src/main/java/com/example/mall/stock"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "stock.restock",
+        "stock.stock_level"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": {
+            "dir": "src/main/*/com/example/mall/stock/aggregates",
+            "files": 1
+          },
+          "entities": null,
+          "eventStore": [
+            {
+              "file": "src/main/java/com/example/mall/stock/aggregates/Stock.java",
+              "line": 7,
+              "symbol": "AggregateType"
+            }
+          ]
+        },
+        "declared": [],
+        "detected": "aggregate"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "billing.bill_order",
+      "idSource": "directory",
+      "bc": "billing",
+      "bcPath": "src/main/*/com/example/mall/billing",
+      "dir": "src/main/java/com/example/mall/billing/automations/bill_order",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.mall.billing.automations.bill_order",
+      "files": [
+        "BillOrderProcessor.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "billing.invoice_feed",
+      "idSource": "directory",
+      "bc": "billing",
+      "bcPath": "src/main/*/com/example/mall/billing",
+      "dir": "src/main/java/com/example/mall/billing/views/invoice_feed",
+      "role": "views",
+      "kind": "view",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.mall.billing.views.invoice_feed",
+      "files": [
+        "InvoiceFeedProjection.java"
+      ],
+      "processors": [
+        {
+          "class": "InvoiceFeedProjection",
+          "base": "EventProcessor",
+          "file": "src/main/java/com/example/mall/billing/views/invoice_feed/InvoiceFeedProjection.java",
+          "line": 14
+        }
+      ],
+      "handlers": [
+        {
+          "class": "InvoiceFeedProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/mall/billing/views/invoice_feed/InvoiceFeedProjection.java",
+          "line": 23,
+          "annotationLine": 22,
+          "message": {
+            "written": "OrderPlaced",
+            "name": "OrderPlaced",
+            "fqn": "com.example.mall.orders.events.OrderPlaced",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "OrderPlaced"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [
+        {
+          "aggregateType": "Stock",
+          "written": "Stock.STOCK",
+          "file": "src/main/java/com/example/mall/billing/views/invoice_feed/InvoiceFeedProjection.java",
+          "line": 19
+        }
+      ],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    },
+    {
+      "id": "orders.auto_reorder",
+      "idSource": "directory",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/mall/orders",
+      "dir": "src/main/java/com/example/mall/orders/automations/auto_reorder",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.mall.orders.automations.auto_reorder",
+      "files": [
+        "AutoReorderProcessor.java"
+      ],
+      "processors": [
+        {
+          "class": "AutoReorderProcessor",
+          "base": "EventProcessor",
+          "file": "src/main/java/com/example/mall/orders/automations/auto_reorder/AutoReorderProcessor.java",
+          "line": 8
+        }
+      ],
+      "handlers": [
+        {
+          "class": "AutoReorderProcessor",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/mall/orders/automations/auto_reorder/AutoReorderProcessor.java",
+          "line": 12,
+          "annotationLine": 11,
+          "message": {
+            "written": "OrderPlaced",
+            "name": "OrderPlaced",
+            "fqn": "com.example.mall.orders.events.OrderPlaced",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "OrderPlaced"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.nudge_buyer",
+      "idSource": "directory",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/mall/orders",
+      "dir": "src/main/java/com/example/mall/orders/automations/nudge_buyer",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.mall.orders.automations.nudge_buyer",
+      "files": [
+        "NudgeBuyerProcessor.java"
+      ],
+      "processors": [
+        {
+          "class": "NudgeBuyerProcessor",
+          "base": "EventProcessor",
+          "file": "src/main/java/com/example/mall/orders/automations/nudge_buyer/NudgeBuyerProcessor.java",
+          "line": 8
+        }
+      ],
+      "handlers": [
+        {
+          "class": "NudgeBuyerProcessor",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/mall/orders/automations/nudge_buyer/NudgeBuyerProcessor.java",
+          "line": 10,
+          "annotationLine": 9,
+          "message": {
+            "written": "OrderPlaced",
+            "name": "OrderPlaced",
+            "fqn": "com.example.mall.orders.events.OrderPlaced",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "OrderPlaced"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [
+        {
+          "name": "PlaceOrder",
+          "fqn": "com.example.mall.orders.use_cases.place_order.PlaceOrder",
+          "resolvedBy": "import",
+          "via": "sendAndDontWait",
+          "file": "src/main/java/com/example/mall/orders/automations/nudge_buyer/NudgeBuyerProcessor.java",
+          "line": 12,
+          "own": false
+        }
+      ],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.courier",
+      "idSource": "directory",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/mall/orders",
+      "dir": "src/main/java/com/example/mall/orders/external_systems/courier",
+      "role": "external_systems",
+      "kind": "translation",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.mall.orders.external_systems.courier",
+      "files": [
+        "CourierPublisher.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.place_order",
+      "idSource": "directory",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/mall/orders",
+      "dir": "src/main/java/com/example/mall/orders/use_cases/place_order",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.mall.orders.use_cases.place_order",
+      "files": [
+        "PlaceOrder.java",
+        "PlaceOrderDecider.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [
+        {
+          "name": "PlaceOrder",
+          "fqn": "com.example.mall.orders.use_cases.place_order.PlaceOrder",
+          "resolvedBy": "same-package",
+          "via": "Decider",
+          "file": "src/main/java/com/example/mall/orders/use_cases/place_order/PlaceOrderDecider.java",
+          "line": 9
+        }
+      ],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.order_board",
+      "idSource": "directory",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/mall/orders",
+      "dir": "src/main/java/com/example/mall/orders/views/order_board",
+      "role": "views",
+      "kind": "view",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.mall.orders.views.order_board",
+      "files": [
+        "OrderBoardProjection.java",
+        "OrderBoardRow.java"
+      ],
+      "processors": [
+        {
+          "class": "OrderBoardProjection",
+          "base": "ViewEventProcessor",
+          "file": "src/main/java/com/example/mall/orders/views/order_board/OrderBoardProjection.java",
+          "line": 9
+        }
+      ],
+      "handlers": [
+        {
+          "class": "OrderBoardProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/mall/orders/views/order_board/OrderBoardProjection.java",
+          "line": 14,
+          "annotationLine": 13,
+          "message": {
+            "written": "OrderPlaced",
+            "name": "OrderPlaced",
+            "fqn": "com.example.mall.orders.events.OrderPlaced",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "OrderPlaced"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    },
+    {
+      "id": "stock.restock",
+      "idSource": "directory",
+      "bc": "stock",
+      "bcPath": "src/main/*/com/example/mall/stock",
+      "dir": "src/main/java/com/example/mall/stock/automations/restock",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.mall.stock.automations.restock",
+      "files": [
+        "RestockProcessor.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "stock.stock_level",
+      "idSource": "directory",
+      "bc": "stock",
+      "bcPath": "src/main/*/com/example/mall/stock",
+      "dir": "src/main/java/com/example/mall/stock/views/stock_level",
+      "role": "views",
+      "kind": "view",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.mall.stock.views.stock_level",
+      "files": [
+        "StockLevelProjection.java"
+      ],
+      "processors": [
+        {
+          "class": "StockLevelProjection",
+          "base": "ViewEventProcessor",
+          "file": "src/main/java/com/example/mall/stock/views/stock_level/StockLevelProjection.java",
+          "line": 9
+        }
+      ],
+      "handlers": [
+        {
+          "class": "StockLevelProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/mall/stock/views/stock_level/StockLevelProjection.java",
+          "line": 15,
+          "annotationLine": 14,
+          "message": {
+            "written": "StockReserved",
+            "name": "StockReserved",
+            "fqn": "com.example.mall.stock.events.StockReserved",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "e",
+              "type": "StockReserved"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [
+        {
+          "aggregateType": "Stock",
+          "written": "Stock.STOCK",
+          "file": "src/main/java/com/example/mall/stock/views/stock_level/StockLevelProjection.java",
+          "line": 11
+        }
+      ],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    }
+  ],
+  "messages": [
+    {
+      "name": "OrderPlaced",
+      "type": "event",
+      "bc": "billing",
+      "found": true,
+      "identity": "id: OrderId",
+      "fields": [
+        "id: OrderId",
+        "lines: int"
+      ],
+      "declaredIn": "src/main/java/com/example/mall/orders/events/OrderPlaced.java",
+      "line": 6,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "PlaceOrder",
+      "type": "command",
+      "bc": "orders",
+      "found": true,
+      "identity": "id: OrderId",
+      "fields": [
+        "id: OrderId",
+        "lines: int"
+      ],
+      "declaredIn": "src/main/java/com/example/mall/orders/use_cases/place_order/PlaceOrder.java",
+      "line": 6,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "StockReserved",
+      "type": "event",
+      "bc": "stock",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "sku: String",
+        "units: int"
+      ],
+      "declaredIn": "src/main/java/com/example/mall/stock/events/StockReserved.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": [
+    {
+      "file": "src/main/java/com/example/mall/orders/automations/auto_reorder/AutoReorderProcessor.java",
+      "line": 14,
+      "what": "dispatch argument",
+      "reason": "type not statically known: previous"
+    }
+  ],
+  "tests": {
+    "roots": [],
+    "classes": []
+  }
+}

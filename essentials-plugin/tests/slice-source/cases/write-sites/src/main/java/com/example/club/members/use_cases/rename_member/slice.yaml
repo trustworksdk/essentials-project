@@ -1,0 +1,14 @@
+schemaVersion: "1.2"
+slice: members.rename_member
+kind: command
+bc: members
+owner: team
+status: live
+summary: Rename a member.
+generator: essentials
+language: java
+lane: service-entity
+handles: [RenameMember]
+writes: []
+tests:
+  unit: { present: false }

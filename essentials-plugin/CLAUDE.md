@@ -125,7 +125,8 @@ that load.
 - **Two scripts are the deterministic half of `slice-check`, and they stay deterministic.**
   `scripts/slice-lint.py` owns gates 1, 3 and 4, plus gate 14's manifest-only `14 tier` clause. It does
   parsing, JSON Schema validation and set intersection over manifests. `scripts/slice-source.py` owns the
-  syntactic half of gates 6, 11(b) and 14. It reads the Java and Kotlin sources with comments and strings
+  syntactic half of gates 6, 8, 11(b), 11(c) and 14, and the `writeSites` and `unhandledVariants` facts that gates 15,
+  19 and `/essentials:upgrade` Group D start from. It reads the Java and Kotlin sources with comments and strings
   stripped, and reports whatever it could not read (`unparsed`, exit 3) instead of guessing. `slice-check`
   Step 1.5 takes both outputs verbatim. Judgement stays in the command: the service-entity "state loaded,
   mutated and saved in place" criterion, gate 11(a), every other gate, and every judgement field of
@@ -325,6 +326,9 @@ that load.
   the project's own `docs/adr/`, never a directory of its own). Upgrade's gate command is derived on every
   run, asked for only when that fails, and never recorded. A plugin-owned directory starts as one
   report and accretes config, cache, and last-run state, which is how statelessness actually dies.
+  The one such decision taken so far is `slice-check-accepted.yaml`, which the project writes and owns: a
+  list of settled deviations, each with a reason and a `review-by` date, that `slice-source.py` and
+  `/essentials:slice-check` read and never write. The plugin never creates it.
 - **`slice-discover` never writes source, at any depth, and gains no `--fix` mode.** It *infers*
   structure where `slice-check` *audits* declared structure; an inferred boundary applied wrongly is
   worse than the layering it replaced. Its findings rank by **payoff**, never by the law's

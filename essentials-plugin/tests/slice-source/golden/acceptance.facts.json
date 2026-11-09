@@ -1,0 +1,171 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/slice-source/cases/acceptance",
+  "manifestsRead": true,
+  "sourceFiles": 5,
+  "bcs": [
+    {
+      "name": "reports",
+      "path": "src/main/*/com/example/desk/reports",
+      "dirs": [
+        "src/main/java/com/example/desk/reports"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "reports.daily_load"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "undetermined"
+      }
+    },
+    {
+      "name": "tickets",
+      "path": "src/main/*/com/example/desk/tickets",
+      "dirs": [
+        "src/main/java/com/example/desk/tickets"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "tickets.open_ticket",
+        "tickets.ticket_queue"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [
+            {
+              "file": "src/main/java/com/example/desk/tickets/use_cases/open_ticket/OpenTicketDecider.java",
+              "line": 5,
+              "symbol": "OpenTicketDecider",
+              "via": "Decider"
+            }
+          ],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "decider"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "reports.daily_load",
+      "idSource": "directory",
+      "bc": "reports",
+      "bcPath": "src/main/*/com/example/desk/reports",
+      "dir": "src/main/java/com/example/desk/reports/views/daily_load",
+      "role": "views",
+      "kind": "view",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.desk.reports.views.daily_load",
+      "files": [
+        "DailyLoadReport.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    },
+    {
+      "id": "tickets.open_ticket",
+      "idSource": "directory",
+      "bc": "tickets",
+      "bcPath": "src/main/*/com/example/desk/tickets",
+      "dir": "src/main/java/com/example/desk/tickets/use_cases/open_ticket",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.desk.tickets.use_cases.open_ticket",
+      "files": [
+        "OpenTicket.java",
+        "OpenTicketDecider.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [
+        {
+          "name": "OpenTicket",
+          "fqn": "com.example.desk.tickets.use_cases.open_ticket.OpenTicket",
+          "resolvedBy": "same-package",
+          "via": "Decider",
+          "file": "src/main/java/com/example/desk/tickets/use_cases/open_ticket/OpenTicketDecider.java",
+          "line": 5
+        }
+      ],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "tickets.ticket_queue",
+      "idSource": "directory",
+      "bc": "tickets",
+      "bcPath": "src/main/*/com/example/desk/tickets",
+      "dir": "src/main/java/com/example/desk/tickets/views/ticket_queue",
+      "role": "views",
+      "kind": "view",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.desk.tickets.views.ticket_queue",
+      "files": [
+        "TicketQueuePreview.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    }
+  ],
+  "messages": [
+    {
+      "name": "OpenTicket",
+      "type": "command",
+      "bc": "tickets",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "id: String"
+      ],
+      "declaredIn": "src/main/java/com/example/desk/tickets/use_cases/open_ticket/OpenTicket.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": [],
+  "tests": {
+    "roots": [],
+    "classes": []
+  }
+}

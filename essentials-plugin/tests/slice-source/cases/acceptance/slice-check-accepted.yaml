@@ -1,0 +1,30 @@
+- gate: "8(a)"
+  match: TicketQueuePreview
+  reason: preview runs the decider in memory until the what-if view ships
+  accepted: 2026-09-01
+  review-by: 2099-12-31
+- gate: "8"
+  match: DailyLoadReport
+  reason: limits shared until reports get their own copy
+  accepted: 1999-01-01
+  review-by: 2000-01-01
+- gate: "6"
+  match: Nowhere
+  reason: an endpoint that has since been removed
+  accepted: 2026-01-01
+  review-by: 2099-01-01
+- gate: "8"
+  match: DailyLoadReport
+  accepted: 2026-01-01
+  review-by: 2099-01-01
+- gate: "8(c)"
+  match: DailyLoadReport
+  reason: dated loosely
+  accepted: 2026-01-01
+  review-by: soon
+- gate: "8(c)"
+  match: DailyLoadReport
+  reason: misspelt key
+  accepted: 2026-01-01
+  review_by: 2099-01-01
+- just a note

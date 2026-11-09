@@ -286,9 +286,12 @@ Apply the gates of `${CLAUDE_PLUGIN_ROOT}/commands/slice-check.md` Step 2 **as w
 restated here — to the in-scope files, with the lane `slice-source.py` detected for each bounded
 context deciding which gates apply and how (its gate applicability table).
 
-- Gates 1, 3 and 4 are `slice-lint.py`'s; gate 6's request-mapping and raw-id checks, gate 11(b) and gate 14
-  are `slice-source.py`'s. Take them from Step 3; do not run them again by eye. What remains of gate 6 (the
-  no-adapter rule, a view mapping reading a repository the slice does not own) is judgement.
+- Gates 1, 3 and 4 are `slice-lint.py`'s; gate 8, gate 6's request-mapping and raw-id checks, gates 11(b)
+  and 11(c) and gate 14 are `slice-source.py`'s, and so are the `writeSites` gates 15(a) and 19 start
+  from. Take them from Step 3; do not run them again by eye. What remains of gate 6 (the no-adapter
+  rule, a view mapping reading a repository the slice does not own) is judgement.
+- Grade each judged finding by its consequence, as § Reporting severities does: an §R4 import is
+  Blocking or Should-fix by what the imported thing can do, and every row carries the law's impact.
 - Gate 12 is not a review check (above).
 - The cross-file gates (9, 13, 17) run only when the change adds, removes or renames a slice, a decider,
   a handler, a projection, a routing marker or a `config/` class — and then for that element only.
@@ -341,8 +344,8 @@ Rules for the report:
 
 - **Row shape:** `[Severity] id file:line message`, then `→ link · also <ids> · fix: <one line>
   [(mechanical)] [source]`. The source is the script's name or `judgement`. Rows sort Blocking →
-  Should-fix → Advisory, then by file and line. Severities are `rules/slice-design.md` § Reporting
-  severities' three levels; a script's severity is never changed.
+  Should-fix → Advisory, then by impact in the law's order, then by file and line. Severities are
+  `rules/slice-design.md` § Reporting severities' three levels; a script's severity is never changed.
 - **Not run is never omitted.** Every check that did not run is listed with its reason — a missing
   script dependency, no `pom.xml`, not on the law, a `notRun` or `unverified` entry, a file too large to
   read. A report with no findings says **"no findings in the checks that ran"**, followed by the Not run

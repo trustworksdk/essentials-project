@@ -1,0 +1,183 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/slice-source/cases/write-sites",
+  "manifests": 4,
+  "parsed": 4,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [
+    "members.welcome"
+  ],
+  "lanes": [
+    {
+      "bc": "members",
+      "path": "src/main/*/com/example/club/members",
+      "detected": "service-entity?",
+      "signals": {
+        "decider": 0,
+        "aggregates": false,
+        "entities": true,
+        "eventStore": 0
+      },
+      "declared": {
+        "service-entity": [
+          "members.join_club",
+          "members.rename_member",
+          "members.member_list"
+        ]
+      }
+    },
+    {
+      "bc": "notes",
+      "path": "src/main/*/com/example/club/notes",
+      "detected": "undetermined",
+      "signals": {
+        "decider": 0,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 0
+      },
+      "declared": {
+        "decider": [
+          "notes.note_list"
+        ]
+      }
+    }
+  ],
+  "endpoints": [],
+  "findings": [
+    {
+      "severity": "Should-fix",
+      "impact": "documentation",
+      "gate": "11(c) undeclared write",
+      "id": "ESS-G11c",
+      "slice": "members.rename_member",
+      "file": "src/main/java/com/example/club/members/use_cases/rename_member/RenameMemberHandler.java",
+      "line": 21,
+      "message": "use_cases slice members.rename_member writes Member \u2014 members.save (RenameMemberHandler.java), archive.update (RenameMemberHandler.java) \u2014 but its manifest's `writes` does not name it",
+      "hint": "the manifest is stale \u2014 `--fix-manifests` adds it; whether this slice may write the entity at all is gate 15's question"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "documentation",
+      "gate": "11(c) undeclared write",
+      "id": "ESS-G11c",
+      "slice": "members.member_list",
+      "file": "src/main/java/com/example/club/members/views/member_list/MemberListQueries.java",
+      "line": 15,
+      "message": "views slice members.member_list writes Member \u2014 members.delete (MemberListQueries.java) \u2014 but its manifest's `writes` does not name it",
+      "hint": "the manifest is stale \u2014 `--fix-manifests` adds it; whether this slice may write the entity at all is gate 15's question"
+    },
+    {
+      "severity": "Should-fix",
+      "impact": "documentation",
+      "gate": "14 lane without write model",
+      "id": "ESS-G14",
+      "slice": "notes.note_list",
+      "file": "src/main/java/com/example/club/notes/views/note_list/slice.yaml",
+      "line": null,
+      "message": "declares lane: decider, but 'notes' has no write-style signal \u2014 no decider, no aggregates/, no entities/",
+      "hint": "`lane` is machine-derived from the BC's write model, and this one has none yet \u2014 `--fix-manifests` drops it, or add the write side it names"
+    }
+  ],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [
+    {
+      "file": "src/main/java/com/example/club/config/SeedConfiguration.java",
+      "line": 13,
+      "receiver": "members",
+      "repository": "MemberRepository",
+      "method": "save",
+      "entity": "Member",
+      "bc": "members",
+      "fromBc": null,
+      "slice": null,
+      "callerRole": "outside-bc",
+      "declared": null
+    },
+    {
+      "file": "src/main/java/com/example/club/members/_seed/DemoMembers.java",
+      "line": 8,
+      "receiver": "repository",
+      "repository": "MemberRepository",
+      "method": "save",
+      "entity": "Member",
+      "bc": "members",
+      "fromBc": "members",
+      "slice": null,
+      "callerRole": "_seed",
+      "declared": null
+    },
+    {
+      "file": "src/main/java/com/example/club/members/use_cases/join_club/JoinClubHandler.java",
+      "line": 14,
+      "receiver": "members",
+      "repository": "MemberRepository",
+      "method": "save",
+      "entity": "Member",
+      "bc": "members",
+      "fromBc": "members",
+      "slice": "members.join_club",
+      "callerRole": "use_cases",
+      "declared": true
+    },
+    {
+      "file": "src/main/java/com/example/club/members/use_cases/rename_member/RenameMemberHandler.java",
+      "line": 21,
+      "receiver": "members",
+      "repository": "MemberRepository",
+      "method": "save",
+      "entity": "Member",
+      "bc": "members",
+      "fromBc": "members",
+      "slice": "members.rename_member",
+      "callerRole": "use_cases",
+      "declared": false
+    },
+    {
+      "file": "src/main/java/com/example/club/members/use_cases/rename_member/RenameMemberHandler.java",
+      "line": 22,
+      "receiver": "archive",
+      "repository": "DocumentDbRepository",
+      "method": "update",
+      "entity": "Member",
+      "bc": "members",
+      "fromBc": "members",
+      "slice": "members.rename_member",
+      "callerRole": "use_cases",
+      "declared": false
+    },
+    {
+      "file": "src/main/java/com/example/club/members/views/member_list/MemberListQueries.java",
+      "line": 15,
+      "receiver": "members",
+      "repository": "MemberRepository",
+      "method": "delete",
+      "entity": "Member",
+      "bc": "members",
+      "fromBc": "members",
+      "slice": "members.member_list",
+      "callerRole": "views",
+      "declared": false
+    },
+    {
+      "file": "src/main/kotlin/com/example/club/members/automations/welcome/WelcomeProcessor.kt",
+      "line": 8,
+      "receiver": "members",
+      "repository": "MemberRepository",
+      "method": "save",
+      "entity": "Member",
+      "bc": "members",
+      "fromBc": "members",
+      "slice": "members.welcome",
+      "callerRole": "automations",
+      "declared": null
+    }
+  ],
+  "unhandledVariants": [],
+  "unverified": [],
+  "unparsed": []
+}

@@ -85,6 +85,7 @@
   "findings": [
     {
       "severity": "Should-fix",
+      "impact": "documentation",
       "gate": "6 discriminator",
       "id": "ESS-G6",
       "slice": "billing.invoice_list",
@@ -94,6 +95,11 @@
       "hint": "each discriminator after `?` must be bound in the handler that serves the route (manifest-guide.md \u00a73)"
     }
   ],
+  "accepted": [],
+  "expiredAcceptances": [],
+  "unusedAcceptances": [],
+  "writeSites": [],
+  "unhandledVariants": [],
   "unverified": [],
   "unparsed": []
 }

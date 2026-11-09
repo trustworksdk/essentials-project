@@ -1,0 +1,14 @@
+schemaVersion: "1.2"
+slice: members.join_club
+kind: command
+bc: members
+owner: team
+status: live
+summary: Join the club.
+generator: essentials
+language: java
+lane: service-entity
+handles: [JoinClub]
+writes: [Member]
+tests:
+  unit: { present: false }

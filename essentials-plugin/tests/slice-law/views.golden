@@ -7,6 +7,7 @@
   The command and the view are the contract — no adapter layer
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Decider style — the API differs per language
   Spring Data repository surface
@@ -16,6 +17,8 @@
   Sanctioned sharing
   The published read seam
   The _shared/ promotion bar
+  Side effects after a state change
+  Side effects — event-sourced lanes
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -39,11 +42,14 @@
   The command and the view are the contract — no adapter layer
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Decider style — the API differs per language
   Sanctioned sharing
   The published read seam
   The _shared/ promotion bar
+  Side effects after a state change
+  Side effects — event-sourced lanes
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -126,6 +132,7 @@
   R2 — one API file per slice, owned by that slice
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Decider style — the API differs per language
   Spring Data repository surface
@@ -135,6 +142,8 @@
   Sanctioned sharing
   The published read seam
   The _shared/ promotion bar
+  Side effects after a state change
+  Side effects — event-sourced lanes
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -157,11 +166,14 @@
   R2 — one API file per slice, owned by that slice
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Decider style — the API differs per language
   Sanctioned sharing
   The published read seam
   The _shared/ promotion bar
+  Side effects after a state change
+  Side effects — event-sourced lanes
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -181,6 +193,7 @@
   R2 — one API file per slice, owned by that slice
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Decider style — the API differs per language
   Spring Data repository surface
@@ -190,6 +203,8 @@
   Sanctioned sharing
   The published read seam
   The _shared/ promotion bar
+  Side effects after a state change
+  Side effects — event-sourced lanes
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -212,11 +227,14 @@
   R2 — one API file per slice, owned by that slice
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Decider style — the API differs per language
   Sanctioned sharing
   The published read seam
   The _shared/ promotion bar
+  Side effects after a state change
+  Side effects — event-sourced lanes
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -237,6 +255,7 @@
   The command and the view are the contract — no adapter layer
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Aggregate style — the aggregate is the consistency boundary
   The aggregate's own bar
@@ -246,6 +265,8 @@
   Never name a query method after a CRUD base method
   Sanctioned sharing
   The published read seam
+  Side effects after a state change
+  Side effects — event-sourced lanes
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -269,11 +290,14 @@
   The command and the view are the contract — no adapter layer
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Aggregate style — the aggregate is the consistency boundary
   The aggregate's own bar
   Sanctioned sharing
   The published read seam
+  Side effects after a state change
+  Side effects — event-sourced lanes
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -356,6 +380,7 @@
   R2 — one API file per slice, owned by that slice
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Aggregate style — the aggregate is the consistency boundary
   The aggregate's own bar
@@ -365,6 +390,8 @@
   Never name a query method after a CRUD base method
   Sanctioned sharing
   The published read seam
+  Side effects after a state change
+  Side effects — event-sourced lanes
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -387,11 +414,14 @@
   R2 — one API file per slice, owned by that slice
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Aggregate style — the aggregate is the consistency boundary
   The aggregate's own bar
   Sanctioned sharing
   The published read seam
+  Side effects after a state change
+  Side effects — event-sourced lanes
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -411,6 +441,7 @@
   R2 — one API file per slice, owned by that slice
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Aggregate style — the aggregate is the consistency boundary
   The aggregate's own bar
@@ -420,6 +451,8 @@
   Never name a query method after a CRUD base method
   Sanctioned sharing
   The published read seam
+  Side effects after a state change
+  Side effects — event-sourced lanes
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -442,11 +475,14 @@
   R2 — one API file per slice, owned by that slice
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Aggregate style — the aggregate is the consistency boundary
   The aggregate's own bar
   Sanctioned sharing
   The published read seam
+  Side effects after a state change
+  Side effects — event-sourced lanes
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -467,6 +503,7 @@
   The command and the view are the contract — no adapter layer
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Service-entity style — the decision lives on a state-stored entity
   The read side on this lane
@@ -477,6 +514,8 @@
   Never name a query method after a CRUD base method
   Sanctioned sharing
   The published read seam
+  Side effects after a state change
+  Side effects — service-entity lane
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -500,12 +539,15 @@
   The command and the view are the contract — no adapter layer
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Service-entity style — the decision lives on a state-stored entity
   The read side on this lane
   The entity's own bar
   Sanctioned sharing
   The published read seam
+  Side effects after a state change
+  Side effects — service-entity lane
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -584,6 +626,7 @@
   R2 — one API file per slice, owned by that slice
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Service-entity style — the decision lives on a state-stored entity
   The read side on this lane
@@ -594,6 +637,8 @@
   Never name a query method after a CRUD base method
   Sanctioned sharing
   The published read seam
+  Side effects after a state change
+  Side effects — service-entity lane
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -616,12 +661,15 @@
   R2 — one API file per slice, owned by that slice
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Service-entity style — the decision lives on a state-stored entity
   The read side on this lane
   The entity's own bar
   Sanctioned sharing
   The published read seam
+  Side effects after a state change
+  Side effects — service-entity lane
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -641,6 +689,7 @@
   R2 — one API file per slice, owned by that slice
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Service-entity style — the decision lives on a state-stored entity
   The read side on this lane
@@ -651,6 +700,8 @@
   Never name a query method after a CRUD base method
   Sanctioned sharing
   The published read seam
+  Side effects after a state change
+  Side effects — service-entity lane
   Wiring is part of done
   Red flags
   Structural — every lane
@@ -673,12 +724,15 @@
   R2 — one API file per slice, owned by that slice
   R3 — split event hierarchies
   R4 — a slice never reaches into another slice's internals
+  Changing another bounded context's state
   R5 — use a standard Essentials design, per language
   Service-entity style — the decision lives on a state-stored entity
   The read side on this lane
   The entity's own bar
   Sanctioned sharing
   The published read seam
+  Side effects after a state change
+  Side effects — service-entity lane
   Wiring is part of done
   Red flags
   Structural — every lane

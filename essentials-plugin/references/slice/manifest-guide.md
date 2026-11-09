@@ -198,7 +198,9 @@ a command slice always writes `publishes` and a view slice always writes `projec
   *behave as if it were `custom`*, so a tier-aware reader skips the slice's per-tier structure sections
   and its manifest generation entirely — a wrong `tier` is worse than an absent one. `lane` is a **closed
   enum** because §R5 sanctions exactly three write styles and a fourth would be a change to the law.
-- **`writes` is the aggregate, not the table.** `writes: [Order]`.
+- **`writes` is the aggregate, not the table.** `writes: [Order]`. On the service-entity lane it is the
+  entity, and every slice whose code saves or deletes one names it. `/essentials:slice-check` reports
+  a write the manifest does not declare (`11(c) undeclared write`).
 - **`publishes` is the event type**, owned by this slice: `publishes: [OrderPlaced]`.
 - **`consumes` is what triggers the slice** — events for automations; for translations, the external
   messages the ingress receives and the internal events the outbound publisher handles.

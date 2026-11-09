@@ -198,7 +198,8 @@ essentials-plugin/
 │   │                             4 and 14 tier for slice-check; the copy /essentials:init and
 │   │                             /essentials:upgrade install into a project as a CI / pre-commit gate)
 │   ├── slice-source.py          (syntactic facts from Java/Kotlin sources and the test index;
-│   │                             --check backs slice-check gates 6, 11(b), 14)
+│   │                             --check backs slice-check gates 6, 8, 11(b), 11(c), 14,
+│   │                             write sites for 15/19, slice-check-accepted.yaml)
 │   ├── slice-index.py           (slice-map's data, the Atlas page (atlas), terminal graph, locate
 │   │                             queries and the html page)
 │   ├── slice_atlas.py           (the Atlas data: journeys, issues, lineage, diff, page assembly;

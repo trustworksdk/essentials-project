@@ -1,0 +1,247 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/slice-source/cases/write-sites",
+  "manifestsRead": true,
+  "sourceFiles": 13,
+  "bcs": [
+    {
+      "name": "members",
+      "path": "src/main/*/com/example/club/members",
+      "dirs": [
+        "src/main/java/com/example/club/members",
+        "src/main/kotlin/com/example/club/members"
+      ],
+      "languages": [
+        "java",
+        "kotlin"
+      ],
+      "slices": [
+        "members.join_club",
+        "members.rename_member",
+        "members.member_list",
+        "members.welcome"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": {
+            "dir": "src/main/*/com/example/club/members/entities",
+            "files": 3
+          },
+          "eventStore": []
+        },
+        "declared": [
+          {
+            "slice": "members.join_club",
+            "lane": "service-entity",
+            "file": "src/main/java/com/example/club/members/use_cases/join_club/slice.yaml"
+          },
+          {
+            "slice": "members.rename_member",
+            "lane": "service-entity",
+            "file": "src/main/java/com/example/club/members/use_cases/rename_member/slice.yaml"
+          },
+          {
+            "slice": "members.member_list",
+            "lane": "service-entity",
+            "file": "src/main/java/com/example/club/members/views/member_list/slice.yaml"
+          }
+        ],
+        "detected": "service-entity?"
+      }
+    },
+    {
+      "name": "notes",
+      "path": "src/main/*/com/example/club/notes",
+      "dirs": [
+        "src/main/java/com/example/club/notes"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "notes.note_list"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [
+          {
+            "slice": "notes.note_list",
+            "lane": "decider",
+            "file": "src/main/java/com/example/club/notes/views/note_list/slice.yaml"
+          }
+        ],
+        "detected": "undetermined"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "members.join_club",
+      "idSource": "manifest",
+      "bc": "members",
+      "bcPath": "src/main/*/com/example/club/members",
+      "dir": "src/main/java/com/example/club/members/use_cases/join_club",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/club/members/use_cases/join_club/slice.yaml",
+      "language": "java",
+      "package": "com.example.club.members.use_cases.join_club",
+      "files": [
+        "JoinClub.java",
+        "JoinClubHandler.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "members.rename_member",
+      "idSource": "manifest",
+      "bc": "members",
+      "bcPath": "src/main/*/com/example/club/members",
+      "dir": "src/main/java/com/example/club/members/use_cases/rename_member",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/club/members/use_cases/rename_member/slice.yaml",
+      "language": "java",
+      "package": "com.example.club.members.use_cases.rename_member",
+      "files": [
+        "RenameMember.java",
+        "RenameMemberHandler.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "members.member_list",
+      "idSource": "manifest",
+      "bc": "members",
+      "bcPath": "src/main/*/com/example/club/members",
+      "dir": "src/main/java/com/example/club/members/views/member_list",
+      "role": "views",
+      "kind": "view",
+      "manifest": "src/main/java/com/example/club/members/views/member_list/slice.yaml",
+      "language": "java",
+      "package": "com.example.club.members.views.member_list",
+      "files": [
+        "MemberListQueries.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    },
+    {
+      "id": "notes.note_list",
+      "idSource": "manifest",
+      "bc": "notes",
+      "bcPath": "src/main/*/com/example/club/notes",
+      "dir": "src/main/java/com/example/club/notes/views/note_list",
+      "role": "views",
+      "kind": "view",
+      "manifest": "src/main/java/com/example/club/notes/views/note_list/slice.yaml",
+      "language": "java",
+      "package": "com.example.club.notes.views.note_list",
+      "files": [
+        "NoteListAPI.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    },
+    {
+      "id": "members.welcome",
+      "idSource": "directory",
+      "bc": "members",
+      "bcPath": "src/main/*/com/example/club/members",
+      "dir": "src/main/kotlin/com/example/club/members/automations/welcome",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": null,
+      "language": "kotlin",
+      "package": "com.example.club.members.automations.welcome",
+      "files": [
+        "WelcomeProcessor.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    }
+  ],
+  "messages": [
+    {
+      "name": "JoinClub",
+      "type": "command",
+      "bc": "members",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "name: String"
+      ],
+      "declaredIn": "src/main/java/com/example/club/members/use_cases/join_club/JoinClub.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "RenameMember",
+      "type": "command",
+      "bc": "members",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "id: Long",
+        "name: String"
+      ],
+      "declaredIn": "src/main/java/com/example/club/members/use_cases/rename_member/RenameMember.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": [],
+  "tests": {
+    "roots": [],
+    "classes": []
+  }
+}

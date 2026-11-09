@@ -9,5 +9,5 @@ PASS if the report contains a finding that matches all of:
 - it concerns `src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java` (symbol `OrderStatusAPI.purge`)
 - it is filed under gate 15a (Write-repository purity and placement), id ESS-G15a, or plainly describes that check
 - its severity is Blocking
-- its substance: A mutating call (deleteById) on the bounded context's write repository from a view slice, outside use_cases/*.
+- its substance: A mutating call (deleteById) on the bounded context's write repository from a view slice, outside use_cases/*. Judgement, and its own row beside R9: slice-source's 11(c) says only that the manifest omits the write.
 FAIL if no finding matches, or the matching one has a different severity. Ignore formatting, ordering and other findings.

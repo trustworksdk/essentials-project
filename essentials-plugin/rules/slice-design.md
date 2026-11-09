@@ -96,6 +96,12 @@ and from the §R4 boundary check. Each must carry a one-line `CLAUDE.md` saying 
 is not a slice — a load-test harness or a scratch fixture is honest there and dishonest wedged into
 `use_cases/`. Use it sparingly; it is an escape hatch, not a fifth kind.
 
+**Application-level packages beside the BCs** — the root Spring `config/`, a shared kernel of id
+types — are outside this law and the §R4 boundary check.
+
+**Reference data** defined in code and immutable is a semantic type, in `types/`; data built at
+startup from a store is reached through a published read seam (§ Sanctioned sharing).
+
 ## R1 — one decision component per command slice
 
 Each command slice owns exactly one decider class, handling exactly one command type. **Never** a
@@ -283,6 +289,11 @@ directory split plus `/essentials:slice-check` gate 8 is what enforces it.
 Never reconstruct another slice's state and call its decider. Collaborate by publishing an event or
 by issuing that slice's command through the command bus.
 
+**A crossing is graded by what the imported thing can do.** **Blocking** if it can change state or
+decide — a decider, evolver or state, handler, processor, write repository, routing marker.
+**Should-fix** if read-only — a record, a config record, a catalogue, a pure function: nothing is
+wrong today, but the owner can no longer change it alone.
+
 **Issuing a command is the one sanctioned reason to name another slice's command type.** An
 automation or translation slice that dispatches `commandBus.send(new CancelOrder(...))` must import
 `CancelOrder` from `use_cases/cancel_order/`, and that is the collaboration this rule prescribes — not
@@ -305,7 +316,19 @@ public ShippingOrder(RegisterShippingOrder cmd) { … }
 Those artifacts take the **fields** they need; the emitting slice does the unpacking. The direction of
 the dependency is what matters: a slice may name BC-scoped types, never the reverse. The `events/`
 case is the worse of the two — `events/` is importable across BCs, so a command reference there makes
-a slice-private type part of a foreign BC's compile surface.
+a slice-private type part of a foreign BC's compile surface. It is **Blocking** always.
+
+### Changing another bounded context's state
+<!-- slice-law: kind=command,automation,translation -->
+
+Needing another BC's state changed, with no answer back, a slice issues the owning BC's command on
+the command bus (`sendAndDontWait` when it must not wait) or publishes an event that an automation
+there turns into that command. Never a state-changing interface in `types/`: a seam is read-only
+(bar 1 of § The published read seam).
+
+The cost: the write leaves the caller's transaction. `sendAndDontWait` is queued and redelivered on a
+`DurableLocalCommandBus`, lost on restart on a `LocalCommandBus` (`references/llm/LLM-reactive.md`
+§ Send Methods). An event-driven write is eventually consistent.
 
 ## R5 — use a standard Essentials design, per language
 
@@ -528,6 +551,13 @@ rule exists to prevent. And it is typed over the BC's *entity* while returning t
 which is legal precisely because it exposes no mutation: it is not the write repository wearing a
 different name.
 
+**On Essentials' `DocumentDbRepository` the rule holds and the shape differs.** It is one class with
+the whole CRUD and query surface and no projection mechanism
+(`references/llm/LLM-postgresql-document-db.md` § Query API), so nothing narrower can be declared over
+it. The view holds a view-private read class over it that calls only finders and `queryBuilder()` and
+returns the slice's read shape; its reads of the document's getters are not a finding. What still
+bites: a mutating call from a view, and a screen-shaped finder on the `entities/` write repository.
+
 Three consequences, stated so tooling and reviewers do not have to infer them:
 
 - **The read is strongly consistent** — same table, same transaction. That is the one thing this lane
@@ -555,10 +585,12 @@ and worse — an ORM *requires* members an aggregate never exposes:
    positive. A getter called from a `@RestController` or a view slice is the read side being served
    from the write model — project it instead. Make the distinction structural rather than
    conventional: `@Access(AccessType.FIELD)` (JPA) or field mapping (Mongo), plus package-private or
-   absent accessors.
+   absent accessors. A `DocumentDbRepository` view's read class is the exception (§ The read side on
+   this lane).
 3. **It does not grow one method per slice.** Same as the aggregate bar — method count tracking slice
    count with independent invariants is R1's router returned as a class.
 4. **The entity imports no command type.** See §R4.
+5. **A precondition belongs on the method**, not in a handler — there it holds only for that caller.
 
 Failing (1) or (3) across most methods is the signal that the BC wants decider style, not that the
 entity needs more trimming.
@@ -756,6 +788,32 @@ is on the record.
 **The standing test after promotion:** if `_shared/State` ever holds a field only one decider reads,
 split that field back out. A `_shared/` that only grows is one that was promoted too early.
 
+## Side effects after a state change
+<!-- slice-law: kind=command,automation,translation -->
+
+A handler that changes state and calls something outside its transaction — mail, HTTP, a broker,
+another service — is a **dual write**: the state can commit while the call fails, or the reverse.
+**Record the change, and drive the side effect from the record.**
+
+The cost: delivery is at-least-once, so a failure after the call repeats it. Make the side effect
+idempotent — check the recorded outcome before calling out, or pass a key the external system
+deduplicates on (`references/llm/LLM-foundation.md` § Blocking I/O in a Message Handler:
+`UnitOfWorkMode`).
+
+### Side effects — event-sourced lanes
+<!-- slice-law: lane=decider,aggregate -->
+
+The event stream is the outbox: an `EventProcessor` on the aggregate type makes the call from its
+`@MessageHandler`, with inbox redelivery behind it (`references/llm/LLM-postgresql-event-store.md`
+§ EventProcessor (Inbox-based)). A command handler making the call is the finding.
+
+### Side effects — service-entity lane
+<!-- slice-law: lane=service-entity -->
+
+The record is an `Outbox` message or `DurableQueues` enqueue in the save's unit of work; both join it
+and commit or roll back with it, and the consumer makes the call (`references/llm/LLM-foundation.md`
+§ Outbox Pattern; `LLM-foundation.md` § Spring Integration).
+
 ## Wiring is part of done
 
 Register every decider and processor (`@Bean` in the BC's `config/`) as part of the same change. An
@@ -855,6 +913,8 @@ boundary findings, the behavioural ones correctness bugs.
 - Querying a read model inside a decider to check an invariant — racy; use a transaction-time
   uniqueness projection instead.
 - Synchronous cross-context calls where an event would do.
+- A handler that changes state and calls an external system in the same method (§ Side effects after
+  a state change).
 - Bypassing the command bus to call a decider directly.
 
 ### Behavioural — event-sourced lanes
@@ -883,17 +943,24 @@ boundary findings, the behavioural ones correctness bugs.
 
 ## Reporting severities
 
-`/essentials:slice-check` and any review that cites this file report at three levels:
+`/essentials:slice-check` and any review that cites this file grade a finding by its consequence, at
+three levels:
 
-- **Blocking** — the code cannot be correct: R1/R2/R3/R4 violated, more than one write style in a BC,
-  a decider unwired, a view projection mutating a versioned read model from a `@MessageHandler` that
-  omits `OrderedMessage`, a read model queried inside a decider, a projection-returning query method
-  named after a CRUD base method.
-- **Should-fix** — the structure works but will rot: a slice missing its manifest, a `_shared/`
-  holding more than state, a view slice with no test, a view reading through the BC's write
-  repository, a repository extending a CRUD-family interface instead of the bare `Repository` marker.
+- **Blocking** — the code cannot be correct: R1/R2/R3 violated, an §R4 import of something that can
+  change state or decide, more than one write style in a BC, a decider unwired, a view projection
+  mutating a versioned read model from a `@MessageHandler` that omits `OrderedMessage`, a read model
+  queried inside a decider, a projection-returning query method named after a CRUD base method.
+- **Should-fix** — the structure works but will rot: a slice missing its manifest, an §R4 import of
+  something read-only, a `_shared/` holding more than state, a view slice with no test, a view reading
+  through the BC's write repository, a repository extending a CRUD-family interface instead of the
+  bare `Repository` marker, a dual write (§ Side effects after a state change).
 - **Advisory** — worth a look: file-cohesion smells, naming drift, a missing invariant record, an id
   taken at the API edge as a raw scalar where the bounded context has a semantic id type.
+
+Each finding also names its **impact**: **wrong today**, **wrong on the next caller** (holds only while
+callers obey a rule the code does not enforce), **structure-coupling** (two parts can no longer change
+apart), or **documentation** (a manifest or `CLAUDE.md` contradicts correct code). Reports sort by
+severity, then impact in that order.
 
 ## File cohesion (advisory)
 

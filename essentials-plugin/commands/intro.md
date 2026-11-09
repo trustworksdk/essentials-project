@@ -233,6 +233,13 @@ or auditing a slice, seeing the whole map, and reviewing a change.
                          consistent. What you skip is the projector, not the
                          slice. Choose the lane deliberately — a BC that never
                          needs history — and record the reason in its CLAUDE.md.
+  Side effects follow the record
+                         A handler that changes state never calls out in the
+                         same method. The event stream is the outbox on the
+                         event-sourced lanes; an Outbox in the save's unit of
+                         work on the service-entity lane. Another BC's state
+                         changes through its command or an event, never a
+                         writing interface.
   The command is the contract
                          No request/response DTOs and no mappers — the command
                          type is the request body, the read model is the
