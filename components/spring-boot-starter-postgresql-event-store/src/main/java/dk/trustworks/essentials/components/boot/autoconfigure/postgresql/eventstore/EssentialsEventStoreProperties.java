@@ -63,6 +63,7 @@ public class EssentialsEventStoreProperties {
     private       JSONColumnType                                   jsonColumnType                         = JSONColumnType.JSONB;
     private       boolean                                          useEventStreamGapHandler               = true;
     private       boolean                                          verboseTracing                         = false;
+    private       boolean                                          tracingEnabled                         = true;
     private       boolean                                          addAnnotationBasedInMemoryProjector    = true;
     private       boolean                                          autoFlushAndPublishAfterAppendToStream = false;
     private       EssentialsComponentsProperties.MetricsProperties metrics                                = new EssentialsComponentsProperties.MetricsProperties();
@@ -77,6 +78,30 @@ public class EssentialsEventStoreProperties {
     private final CdcProperties cdc = new CdcProperties();
 
     private final CausationProperties causation = new CausationProperties();
+
+    /**
+     * Whether the starter registers the {@code MicrometerTracingEventStoreInterceptor}, which adds the trace context to
+     * the meta-data of every appended event (default {@code true}).
+     * <p>
+     * The interceptor is registered only when a Micrometer {@code Tracer}, {@code Propagator} and
+     * {@code ObservationRegistry} bean are all present, as Spring Boot's tracing auto-configuration provides them.
+     * Until 0.61.0 it was registered only with {@code management.tracing.enabled=true}, a property Spring Boot 4
+     * replaced with {@code management.tracing.export.enabled} and no longer reads. Set this to {@code false} to keep
+     * the interceptor out although tracing is present.
+     *
+     * @return whether the event store tracing interceptor is registered when tracing is present
+     */
+    public boolean isTracingEnabled() {
+        return tracingEnabled;
+    }
+
+    /**
+     * @param tracingEnabled whether the event store tracing interceptor is registered when tracing is present
+     * @see #isTracingEnabled()
+     */
+    public void setTracingEnabled(boolean tracingEnabled) {
+        this.tracingEnabled = tracingEnabled;
+    }
 
     /**
      * Should the Tracing produces only include all operations or only top level operations (default false)

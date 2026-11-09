@@ -341,6 +341,9 @@ public class EssentialsComponentsProperties {
 
         private boolean verboseTracing = false;
 
+        private boolean tracingEnabled      = true;
+        private boolean queueMetricsEnabled = true;
+
         private boolean requireActiveUnitOfWorkForEnqueue = false;
 
         /**
@@ -351,6 +354,55 @@ public class EssentialsComponentsProperties {
          */
         public DurableQueuesHealthProperties getHealth() {
             return health;
+        }
+
+        /**
+         * Whether the starter registers the {@code DurableQueuesMicrometerTracingInterceptor}, which starts an
+         * observation per queue operation and carries the trace context from the enqueuing thread to the consumer
+         * through the message's meta-data (default {@code true}).
+         * <p>
+         * The interceptor is registered only when a Micrometer {@code Tracer}, {@code Propagator} and
+         * {@code ObservationRegistry} bean are all present, as Spring Boot's tracing auto-configuration provides them.
+         * Until 0.61.0 it was registered only with {@code management.tracing.enabled=true}, a property Spring Boot 4
+         * replaced with {@code management.tracing.export.enabled} and no longer reads. Set this to {@code false} to
+         * keep the interceptor out although tracing is present.
+         *
+         * @return whether the durable queues tracing interceptor is registered when tracing is present
+         */
+        public boolean isTracingEnabled() {
+            return tracingEnabled;
+        }
+
+        /**
+         * @param tracingEnabled whether the durable queues tracing interceptor is registered when tracing is present
+         * @see #isTracingEnabled()
+         */
+        public void setTracingEnabled(boolean tracingEnabled) {
+            this.tracingEnabled = tracingEnabled;
+        }
+
+        /**
+         * Whether the starter registers the {@code DurableQueuesMicrometerInterceptor}, which counts processed,
+         * handled, retried and dead-lettered messages and keeps a gauge of queued and dead-letter messages per queue
+         * (default {@code true}).
+         * <p>
+         * The interceptor is registered only when a {@code MeterRegistry} bean is present, independent of tracing.
+         * Until 0.61.0 it was registered only with {@code management.tracing.enabled=true}. This is not the
+         * {@code essentials.metrics.durable-queues.enabled} switch, which controls the execution-time measurement.
+         *
+         * @return whether the durable queues metrics interceptor is registered when a {@code MeterRegistry} is present
+         */
+        public boolean isQueueMetricsEnabled() {
+            return queueMetricsEnabled;
+        }
+
+        /**
+         * @param queueMetricsEnabled whether the durable queues metrics interceptor is registered when a
+         *                            {@code MeterRegistry} is present
+         * @see #isQueueMetricsEnabled()
+         */
+        public void setQueueMetricsEnabled(boolean queueMetricsEnabled) {
+            this.queueMetricsEnabled = queueMetricsEnabled;
         }
 
         /**
