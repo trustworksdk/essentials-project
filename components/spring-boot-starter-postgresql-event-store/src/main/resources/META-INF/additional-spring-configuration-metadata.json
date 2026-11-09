@@ -157,8 +157,8 @@
     },
     {
       "name": "essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy",
-      "description": "What happens to an inbox row once it has been dispatched: MARK_DISPATCHED marks it, DELETE removes it.",
-      "defaultValue": "MARK_DISPATCHED"
+      "description": "What happens to an inbox row once it has been dispatched: DELETE (default) removes it, MARK_DISPATCHED keeps it as DISPATCHED until the inbox TTL job removes it.",
+      "defaultValue": "DELETE"
     },
     {
       "name": "essentials.eventstore.cdc.cdc-dispatcher.query-timeout",

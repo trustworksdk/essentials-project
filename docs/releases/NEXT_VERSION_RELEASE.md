@@ -31,6 +31,7 @@ and two lock waits removed.
   an `EventProcessor` overridden to competing consumers on a per-node queue now refuses to start (§1); the default retry
   budget outlasts a failover, minutes instead of ~10 s (§1.1.4).
 - Command handlers: an `AnnotatedCommandHandler` failure is logged at DEBUG, not ERROR - the sender reports it (§1.1.5).
+- CDC: the inbox deletes a row once it is dispatched by default, instead of keeping it until the TTL job (§1.1.6).
 - Fenced locks: opt-in spreading of async-acquired locks, and so of exclusive processors, over the instances (§2.9).
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1). The
@@ -220,6 +221,27 @@ DEBUG at all.
 **What to do:** nothing, unless you relied on this log line - for example a `sendAndDontWait` with a custom
 `SendAndDontWaitErrorHandler` that logs nothing. Then override `getExceptionLogLevel` in your handler to return
 `Optional.of(Level.ERROR)`, or log in that error handler.
+
+#### 1.1.6 The CDC inbox deletes a row once it is dispatched (`postgresql-event-store`)
+
+`essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy` (`CdcDispatcherProperties.dispatchedRowPolicy`) now
+defaults to `DELETE`; it was `MARK_DISPATCHED`. In INBOX delivery mode the dispatcher used to keep every row it had
+published, with status `DISPATCHED`, until the inbox TTL job removed it after `inbox-ttl-duration-days` (default 90).
+The inbox therefore grew by every event the event store appended: in the trading demo's phase 6 load run
+(`examples/essentials-trading-demo/docs/design/phase-6-realistic-load.md` §4.1) that was about 75 MB of inbox rows per
+business day, and on a high-volume system the table, its index and the TTL job's deletes grow with the retention window.
+With `DELETE` the inbox stayed flat at its backlog size across the hour-long run, for a slightly slower acknowledgement
+of each dispatched batch. Rows the dispatcher could not process (`POISON`) and the relation rows the decoder primes its
+cache from after a restart are kept either way, and DIRECT delivery mode has no inbox and is unaffected.
+
+What you see: after an upgrade, `select count(*) from eventstore_cdc_inbox where status = 'DISPATCHED'` stops growing
+(rows dispatched before the upgrade stay until the TTL job removes them), and the dispatcher's startup INFO line reads
+`CDC dispatcher dispatched-row policy: DELETE`.
+
+**What to do:** nothing, unless you read dispatched rows from the inbox, for example to audit or debug what CDC
+published. Then set `essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy=MARK_DISPATCHED` (or
+`CdcDispatcherProperties.setDispatchedRowPolicy(DispatchedRowPolicy.MARK_DISPATCHED)`) to keep the old behaviour.
+Note the key is `cdc-dispatcher`: a `dispatcher:` block binds to nothing, silently.
 
 ---
 
@@ -720,9 +742,8 @@ Not published; listed because they are the reference for how to use the framewor
   in ~20 s (`docs/design/phase-6-realistic-load.md` §4.1). The load driver gained the steady-state check, store-size
   sampling (`store-sample-every-days`), queue-depth sampling (`queue-sample-millis`) and, with
   `trading-demo.orders.router-stage-timings.enabled`, a split of the router stage into queue wait, exchange call and
-  reports queue wait; its load report no longer times out on a database holding earlier runs. Under `compose` the CDC
-  inbox now deletes dispatched rows (`essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy: DELETE`) instead
-  of keeping them for the TTL job - note the `cdc-dispatcher` key: `dispatcher:` binds to nothing, silently.
+  reports queue wait; its load report no longer times out on a database holding earlier runs. The CDC inbox deletes
+  dispatched rows, which is now the framework default (§1.1.6).
   `reset-stack.sh` wipes the compose stack and its volumes before a run (the simulators' stores never prune and filled
   the disk), and under `compose` the load driver's `@load.local` users are stored with `{noop}` password hashes
   (`trading-demo.identity.unhashed-password-email-suffix`), so registering 10 000 of them no longer costs BCrypt.

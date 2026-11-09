@@ -38,9 +38,15 @@ class CdcDispatcherDirectModeKnobWarningTest {
         props.setBatchSize(42);
         props.setPollInterval(Duration.ofMillis(999));
         props.setPoisonPolicy(PoisonPolicy.STOP);
-        props.setDispatchedRowPolicy(DispatchedRowPolicy.DELETE);
+        props.setDispatchedRowPolicy(DispatchedRowPolicy.MARK_DISPATCHED);
 
         assertThat(CdcDispatcher.ignoredDispatcherKnobsForMode(props, CdcDeliveryMode.INBOX)).isEmpty();
+    }
+
+    @Test
+    void dispatched_rows_are_deleted_by_default() {
+        assertThat(CdcDispatcherProperties.defaults().getDispatchedRowPolicy()).isEqualTo(DispatchedRowPolicy.DELETE);
+        assertThat(new CdcProperties().getCdcDispatcher().getDispatchedRowPolicy()).isEqualTo(DispatchedRowPolicy.DELETE);
     }
 
     @Test
@@ -56,7 +62,7 @@ class CdcDispatcherDirectModeKnobWarningTest {
         props.setBatchSize(42);
         props.setPollInterval(Duration.ofMillis(999));
         props.setPoisonPolicy(PoisonPolicy.STOP);
-        props.setDispatchedRowPolicy(DispatchedRowPolicy.DELETE);
+        props.setDispatchedRowPolicy(DispatchedRowPolicy.MARK_DISPATCHED);
 
         var ignored = CdcDispatcher.ignoredDispatcherKnobsForMode(props, CdcDeliveryMode.DIRECT);
 

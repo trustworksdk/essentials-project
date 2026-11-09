@@ -111,7 +111,7 @@ only ~41 real seconds, so the steady-state check's exclusion (10 s before an ope
 §5's stores over the run: the event tables and the projections grow with the history they record (accounts and
 orders events ~20 MB per business day each); `external_inbound_event` ~9 MB per business day under its 7-day retention;
 snapshots stop at one per account; the CDC slot held back 21 KB-236 MB of WAL, never growing across samples. The CDC
-inbox stayed flat in rows on `DELETE`; on the default `MARK_DISPATCHED` the 10-day trial kept ~75 MB per business day
+inbox stayed flat in rows on `DELETE`; on `MARK_DISPATCHED` (then the default; `DELETE` is the default since) the 10-day trial kept ~75 MB per business day
 of dispatched rows, which the inbox TTL (the demo sets one real day) would prune only after an accelerated run
 of over a thousand business days.
 

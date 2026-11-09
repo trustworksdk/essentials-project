@@ -2559,7 +2559,7 @@ Startup semantics:
 - `cdc.mode=require` fails startup if CDC cannot become active
 - `cdc.mode=auto` marks CDC as failed/inactive and continues with polling fallback
 - `cdc.delivery-mode=inbox|direct` controls whether CDC uses durable inbox or direct publish mode
-- `cdc.cdc-dispatcher.dispatched-row-policy=mark-dispatched|delete` controls whether dispatched inbox rows are retained for TTL cleanup or deleted immediately
+- `cdc.cdc-dispatcher.dispatched-row-policy=delete|mark-dispatched` controls whether dispatched inbox rows are deleted immediately (default `delete`) or retained for TTL cleanup
 - CDC conversion only processes configured aggregate event stream inserts
   - `wal2json`: `kind=insert` rows on configured event tables
   - `pgoutput`: only insert messages for configured event tables; non-insert messages are ignored

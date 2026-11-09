@@ -136,12 +136,6 @@ essentials:
           mode: FOR_TABLE_LIST
       wal-parser-mode: bytes
       inbox-ttl-duration-days: 1
-      # DELETE removes an inbox row once dispatched instead of keeping it as DISPATCHED until the TTL job prunes it.
-      # A little slower per acknowledgement, but the inbox stays small: under phase 6 load MARK_DISPATCHED kept
-      # ~75 MB per business day (an accelerated day is a real minute, so the 1-day TTL never caught up within a run).
-      # The key is cdc-dispatcher (CdcProperties#getCdcDispatcher): a plain `dispatcher:` binds to nothing, silently.
-      cdc-dispatcher:
-        dispatched-row-policy: DELETE
 
 trading-demo:
   identity:

@@ -973,7 +973,7 @@ All keys live under `cdc.*` in [`CdcProperties`](../../components/postgresql-eve
 | `cdc.cdcDispatcher.pollInterval`          | `20ms`                      | How often the dispatcher polls the inbox.                                                |
 | `cdc.cdcDispatcher.batchSize`             | `500`                       | Max rows per dispatcher tick.                                                            |
 | `cdc.cdcDispatcher.poisonPolicy`          | `QUARANTINE_AND_CONTINUE`   | `QUARANTINE_AND_CONTINUE` or `STOP`.                                                     |
-| `cdc.cdcDispatcher.dispatchedRowPolicy`   | `MARK_DISPATCHED`           | `MARK_DISPATCHED` (rely on TTL purge) or `DELETE` (immediate row removal after dispatch).|
+| `cdc.cdcDispatcher.dispatchedRowPolicy`   | `DELETE`                    | `DELETE` (immediate row removal after dispatch; poison and relation rows kept) or `MARK_DISPATCHED` (rely on TTL purge).|
 | `cdc.cdcDispatcher.queryTimeout`          | `PT0S` (no timeout)         | Per-statement timeout on the dispatcher's `fetchNextBatch` poll query. `Duration.ZERO` defers to PG/JDBC/pool defaults; a positive value applies `Statement.setQueryTimeout(seconds)` and bounds the per-tick latency at the framework level. |
 | `cdc.cdcDispatcher.inboxMetricsEnabled`   | `true`                      | Master switch for the `essentials.cdc.inbox.*` backlog/poison gauges. INBOX delivery only. Gauges sample on demand at metrics scrape time. |
 
@@ -1586,9 +1586,10 @@ Sizing levers:
 
 - Drop `cdc.inboxTtlDurationDays` (default 90) — shorter retention, smaller table,
   shorter forensic window for debugging.
-- Switch `cdc.cdcDispatcher.dispatchedRowPolicy=DELETE` — rows go away
-  immediately on dispatch; only `POISON` rows accumulate. Loses the audit trail
-  but is the right call on high-volume systems.
+- Keep `cdc.cdcDispatcher.dispatchedRowPolicy=DELETE` (the default) — rows go
+  away immediately on dispatch; only `POISON` rows (and one relation row per
+  table) accumulate. The estimate above applies to `MARK_DISPATCHED`, which keeps
+  every dispatched row as an audit trail until the TTL removes it.
 - Move to DIRECT mode — no inbox at all.
 
 ### 11.5 PostgreSQL-side considerations

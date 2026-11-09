@@ -316,8 +316,22 @@ public class CdcProperties {
         DIRECT
     }
 
+    /**
+     * What the INBOX-mode dispatcher does with an inbox row once it has published it.
+     * Ignored in {@link CdcDeliveryMode#DIRECT} mode, which has no inbox.
+     */
     public enum DispatchedRowPolicy {
+        /**
+         * Keep the row with status {@code DISPATCHED} until the inbox TTL job removes it
+         * ({@code inboxTtlDurationDays}). Keeps a record of what was dispatched, at the cost of
+         * an inbox that grows by every dispatched event until the TTL catches up.
+         */
         MARK_DISPATCHED,
+        /**
+         * The default. Delete the row once it has been dispatched; only {@code POISON} rows and the
+         * relation (schema) rows the decoder primes itself from after a restart are kept.
+         * The inbox stays at its backlog size instead of growing with every dispatched event.
+         */
         DELETE
     }
 
@@ -775,7 +789,7 @@ public class CdcProperties {
         private Duration            pollInterval        = Duration.ofMillis(20);
         private int                 batchSize           = 500;
         private PoisonPolicy        poisonPolicy        = PoisonPolicy.QUARANTINE_AND_CONTINUE;
-        private DispatchedRowPolicy dispatchedRowPolicy = DispatchedRowPolicy.MARK_DISPATCHED;
+        private DispatchedRowPolicy dispatchedRowPolicy = DispatchedRowPolicy.DELETE;
 
         /**
          * Per-statement timeout applied to the dispatcher's
@@ -887,10 +901,23 @@ public class CdcProperties {
             this.poisonPolicy = poisonPolicy;
         }
 
+        /**
+         * @return what the dispatcher does with an inbox row once dispatched; default {@link DispatchedRowPolicy#DELETE}
+         */
         public DispatchedRowPolicy getDispatchedRowPolicy() {
             return dispatchedRowPolicy;
         }
 
+        /**
+         * Sets what the dispatcher does with an inbox row once dispatched. The default is
+         * {@link DispatchedRowPolicy#DELETE}: under load {@link DispatchedRowPolicy#MARK_DISPATCHED} kept every
+         * dispatched row until the inbox TTL job pruned it (in the trading demo's phase 6 load, about 75 MB of
+         * inbox rows per business day), while {@code DELETE} kept the inbox at its backlog size for a slightly
+         * slower acknowledgement. Choose {@code MARK_DISPATCHED} to keep dispatched rows as a record for
+         * {@code inboxTtlDurationDays}.
+         *
+         * @param dispatchedRowPolicy the policy
+         */
         public void setDispatchedRowPolicy(DispatchedRowPolicy dispatchedRowPolicy) {
             this.dispatchedRowPolicy = dispatchedRowPolicy;
         }
