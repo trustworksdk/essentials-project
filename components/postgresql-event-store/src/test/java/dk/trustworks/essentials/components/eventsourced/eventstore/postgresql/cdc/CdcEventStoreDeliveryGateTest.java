@@ -30,13 +30,14 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.functional.CheckedFunction;
 import dk.trustworks.essentials.types.LongRange;
+import org.jdbi.v3.core.Handle;
 import org.junit.jupiter.api.*;
 import reactor.core.Disposable;
 import reactor.core.publisher.Sinks;
 
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.*;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -45,6 +46,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
@@ -64,6 +66,8 @@ class CdcEventStoreDeliveryGateTest {
 
     private RecordingGapHandler                                              gapHandler;
     private EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork>      uowFactory;
+    /** The handle of every unit of work {@code uowFactory.withUnitOfWork} runs */
+    private Handle                                                           uowHandle;
     private ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate;
     private CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration> cdcEventStore;
 
@@ -301,7 +305,179 @@ class CdcEventStoreDeliveryGateTest {
         await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 5L)));
     }
 
+    /**
+     * The recording of the gaps kept in memory bounds how long a row lock can block it - and so how long it holds the
+     * gate lock: its own unit of work sets a lock_timeout before any gap is written
+     */
+    @Test
+    void recording_the_gaps_kept_in_memory_sets_a_lock_timeout_before_writing_them() {
+        setupDeferringGapRecording();
+        var gapsAddedWhenLockTimeoutWasSet = new CopyOnWriteArrayList<Integer>();
+        doAnswer(inv -> {
+            gapsAddedWhenLockTimeoutWasSet.add(gapHandler.transientGapsAdded.size());
+            return 0;
+        }).when(uowHandle).execute(anyString());
+        var received = subscribe();
+        poll(1, 3);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L)));
+
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+
+        verify(uowHandle).execute("SET LOCAL lock_timeout = '5000ms'");
+        assertThat(gapsAddedWhenLockTimeoutWasSet).as("set before any gap was written").containsExactly(0);
+        assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).containsExactly(LongRange.only(2));
+    }
+
+    /**
+     * A resume point save whose caller has a unit of work current must not record the gaps kept in memory in it: the gate
+     * forgets them once recorded, so a rollback of the caller's unit of work would lose them, and the next save - past
+     * the gap - would record nothing that makes a restart wait for the gap's event
+     */
+    @Test
+    void gaps_kept_in_memory_stay_recorded_when_the_unit_of_work_current_on_the_saving_thread_rolls_back() throws Exception {
+        setupDeferringGapRecording();
+        var received = subscribe();
+        poll(1, 3);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L)));
+        assertThat(gapHandler.transientGapsAdded).as("kept in memory").isEmpty();
+
+        // A save on a thread whose own unit of work then rolls back
+        var callerWithUnitOfWork = Thread.ofPlatform().unstarted(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close());
+        doAnswer(inv -> Thread.currentThread().equals(callerWithUnitOfWork) ? Optional.of(mock(EventStoreUnitOfWork.class)) : Optional.empty())
+                .when(uowFactory).getCurrentUnitOfWork();
+        callerWithUnitOfWork.start();
+        callerWithUnitOfWork.join(Duration.ofSeconds(5));
+        assertThat(callerWithUnitOfWork.isAlive()).isFalse();
+        gapHandler.transientGapsAdded.removeIf(added -> callerWithUnitOfWork.equals(added.thread()));
+
+        // A later save with no unit of work current
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+
+        assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).containsExactly(LongRange.only(2));
+    }
+
+    /**
+     * A recording on a virtual thread that outlasts the wait - blocked, say, by a lock the saving thread's unit of work
+     * holds - keeps the gate lock until it commits. The saving thread, still in that unit of work, must not then wait for
+     * the gate lock without a limit: not on a second save, not acknowledging a fill, not ending the subscription
+     */
+    @Test
+    void a_thread_whose_recording_outlasted_the_wait_does_not_wait_for_the_gate_lock_without_a_limit() throws Exception {
+        setupDeferringGapRecording();
+        cdcEventStore.deferredGapsRecordingWait(Duration.ofMillis(200));
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var received        = subscribe(Optional.of(acknowledgement));
+        // 2 fills a gap kept in memory and is not acknowledged yet; 5 opens a gap kept in memory
+        poll(1, 3, 2, 5);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 2L, 5L)));
+        var recordingMayEnd = new CountDownLatch(1);
+        gapHandler.addingTransientGapsMayEnd = recordingMayEnd;
+        try {
+            var outcomes = new CopyOnWriteArrayList<String>();
+            var callerWithUnitOfWork = Thread.ofPlatform().daemon().unstarted(() -> {
+                outcomes.add(outcomeOf(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close()));
+                outcomes.add(outcomeOf(() -> cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close()));
+                outcomes.add(outcomeOf(() -> acknowledgement.acknowledge(event(2))));
+                // As awaitProcessed asks it: an order the gate holds nothing for is still awaited, as far as it can tell
+                outcomes.add(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(7)) ? "awaited" : "not awaited");
+                outcomes.add(outcomeOf(() -> subscriptions.forEach(Disposable::dispose)));
+            });
+            doAnswer(inv -> Thread.currentThread().equals(callerWithUnitOfWork) ? Optional.of(mock(EventStoreUnitOfWork.class)) : Optional.empty())
+                    .when(uowFactory).getCurrentUnitOfWork();
+            callerWithUnitOfWork.start();
+            callerWithUnitOfWork.join(Duration.ofSeconds(5));
+
+            assertThat(callerWithUnitOfWork.isAlive()).as("waits for the gate lock without a limit").isFalse();
+            assertThat(outcomes).containsExactly("IllegalStateException", "IllegalStateException", "IllegalStateException", "awaited", "returned");
+            assertThat(delegateAcknowledged).as("acknowledged to the delegate although the gate could not tell").contains(2L);
+        } finally {
+            recordingMayEnd.countDown();
+        }
+        // The recording goes on, and records the gaps once what blocked it is gone
+        await().atMost(Duration.ofSeconds(5))
+               .untilAsserted(() -> assertThat(gapHandler.transientGapsAdded).extracting(TransientGapsAdded::gaps).contains(LongRange.only(2), LongRange.only(4)));
+    }
+
+    /**
+     * An acknowledgement on a thread whose interrupt flag is set - a handler's backoff the polling/CDC source switch
+     * interrupted - still takes the gate lock when it is free
+     */
+    @Test
+    void an_acknowledgement_on_an_interrupted_thread_takes_a_free_gate_lock() throws Exception {
+        setupDeferringGapRecording();
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var received        = subscribe(Optional.of(acknowledgement));
+        // 2 fills a gap kept in memory and is not acknowledged yet
+        poll(1, 3, 2);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 2L)));
+        var outcome = new CopyOnWriteArrayList<String>();
+        var interrupted = Thread.ofPlatform().daemon().unstarted(() -> {
+            Thread.currentThread().interrupt();
+            outcome.add(outcomeOf(() -> acknowledgement.acknowledge(event(2))));
+        });
+        interrupted.start();
+        interrupted.join(Duration.ofSeconds(5));
+
+        assertThat(outcome).containsExactly("returned");
+        // Done with before any save: nothing is left to record
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+        assertThat(gapHandler.transientGapsAdded).isEmpty();
+    }
+
+    private static String outcomeOf(Runnable action) {
+        try {
+            action.run();
+            return "returned";
+        } catch (RuntimeException e) {
+            return e.getClass().getSimpleName();
+        }
+    }
+
+    @Test
+    void a_recording_on_a_virtual_thread_that_does_not_end_is_waited_for_no_longer_than_the_wait() throws Exception {
+        var mayEnd = new CountDownLatch(1);
+        try {
+            var started = System.nanoTime();
+            assertThatThrownBy(() -> CdcEventStore.runOnAVirtualThreadWaitingAtMost("blocked-recording", Duration.ofMillis(100), () -> {
+                try {
+                    mayEnd.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            })).isInstanceOf(TimeoutException.class);
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+        } finally {
+            mayEnd.countDown();
+        }
+    }
+
+    @Test
+    void a_recording_on_a_virtual_thread_that_fails_in_time_throws_its_failure() {
+        var failure = new IllegalStateException("Recording failed");
+        assertThatThrownBy(() -> CdcEventStore.runOnAVirtualThreadWaitingAtMost("failing-recording", Duration.ofSeconds(5), () -> {
+            throw failure;
+        })).isSameAs(failure);
+    }
+
     // ------------------------------------------------------------------------------------------------------------
+
+    /**
+     * As {@link #setup(Duration)}, with the gap handler a {@link PostgresqlEventStreamGapHandler} - the one that can record
+     * a gap without its event - and {@link #SUBSCRIBER} opted in to keeping narrow gaps in memory until a resume point save
+     */
+    @SuppressWarnings("unchecked")
+    private void setupDeferringGapRecording() {
+        setup(Duration.ofSeconds(10));
+        PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> gapHandlers = mock(PostgresqlEventStreamGapHandler.class);
+        when(gapHandlers.gapHandlerFor(any())).thenReturn(gapHandler);
+        cdcEventStore = new CdcEventStore<>(delegate,
+                                            uowFactory,
+                                            gapHandlers,
+                                            new CdcEventBus(),
+                                            new CdcProperties(),
+                                            new CdcAvailability());
+        cdcEventStore.deferGapRecordingUntilResumePointSave(SUBSCRIBER, ORDERS);
+    }
 
     /**
      * Writes a tenant's column value in lower case, so "ACME" and "acme" are the same tenant
@@ -348,7 +524,10 @@ class CdcEventStoreDeliveryGateTest {
         delegate = mock(ConfigurableEventStore.class);
         uowFactory = mock(EventStoreUnitOfWorkFactory.class);
         EventStreamGapHandler<?>                                                  gapHandlers = mock(EventStreamGapHandler.class);
-        when(uowFactory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(inv -> ((CheckedFunction<Object, ?>) inv.getArgument(0)).apply(null));
+        uowHandle = mock(Handle.class);
+        var unitOfWork = mock(EventStoreUnitOfWork.class);
+        when(unitOfWork.handle()).thenReturn(uowHandle);
+        when(uowFactory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(inv -> ((CheckedFunction<Object, ?>) inv.getArgument(0)).apply(unitOfWork));
         when(gapHandlers.gapHandlerFor(any())).thenReturn(gapHandler);
         when(delegate.findAggregateEventStreamConfiguration(ORDERS)).thenReturn(configuration);
         when(delegate.getEventStoreSubscriptionObserver()).thenReturn(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver());
@@ -406,6 +585,12 @@ class CdcEventStoreDeliveryGateTest {
     }
 
     /**
+     * One {@code addTransientGaps} call, and the thread it ran on - so a test can tell which unit of work it was in
+     */
+    private record TransientGapsAdded(LongRange gaps, Thread thread) {
+    }
+
+    /**
      * Records what the gate asks of it, and has no transient gaps recorded from before
      */
     private static final class RecordingGapHandler implements SubscriptionGapHandler {
@@ -413,9 +598,12 @@ class CdcEventStoreDeliveryGateTest {
         private final List<Reconciliation> reconciliations       = new CopyOnWriteArrayList<>();
         private final List<List<Long>>     givenUp               = new CopyOnWriteArrayList<>();
         private final List<List<Long>>     resolved              = new CopyOnWriteArrayList<>();
+        private final List<TransientGapsAdded> transientGapsAdded = new CopyOnWriteArrayList<>();
         private volatile int               findTransientGapsCalls;
         private volatile boolean           failGivingUp;
         private volatile boolean           failResolving;
+        /** When set, {@code addTransientGaps} waits for it - as for a lock another unit of work holds */
+        private volatile CountDownLatch    addingTransientGapsMayEnd;
 
         private RecordingGapHandler(Duration giveUpThreshold) {
             this.giveUpThreshold = giveUpThreshold;
@@ -449,6 +637,21 @@ class CdcEventStoreDeliveryGateTest {
             if (failResolving) throw new IllegalStateException("Resolving failed");
             resolved.add(gapFills.stream().map(event -> event.globalEventOrder().longValue()).toList());
             return new GapReconciliation(0, gapFills.size(), 0);
+        }
+
+        @Override
+        public GapReconciliation addTransientGaps(AggregateType aggregateType, LongRange gaps) {
+            var mayEnd = addingTransientGapsMayEnd;
+            if (mayEnd != null) {
+                try {
+                    mayEnd.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+            }
+            transientGapsAdded.add(new TransientGapsAdded(gaps, Thread.currentThread()));
+            return GapReconciliation.NONE;
         }
 
         @Override

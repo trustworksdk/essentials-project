@@ -28,7 +28,7 @@ citations just start pointing at the wrong thing. This script is the gate that m
   leaves a gap and a retired id brought back is a duplicate — no git history needed;
 - every relative link in the traps file resolves to a file and a heading (or anchor) in it;
 - every `ESS-NNN` cited in LLM/, docs/, essentials-plugin/ (the generated references/llm/ copy aside) or any
-  src/main Java/Kotlin file names an active id, and one cited in docs/MIGRATION-*.md belongs to a line linking there;
+  src/main Java/Kotlin file names an active id, and one cited in docs/releases/MIGRATION-*.md belongs to a line linking there;
 - with --baseline <git-ref>: no id present at that ref has vanished, and no id retired there is active again.
 
 `ESS-S<n>` (stack contract) and `ESS-G<gate><clause>` (slice-check gates) are the essentials plugin's own namespaces,
@@ -301,7 +301,7 @@ def check_citations(root, catalogue):
         text = read_text(path)
         if text is None or ("ESS-" not in text and "#ess-" not in text):
             continue
-        migration = re.fullmatch(r"docs/(MIGRATION-[^/]+\.md)", rel)
+        migration = re.fullmatch(r"docs/releases/(MIGRATION-[^/]+\.md)", rel)
         for line_no, line in enumerate(text.splitlines(), 1):
             if IGNORE_MARKER in line:
                 continue
@@ -418,14 +418,14 @@ def trap(number, href="LLM-a.md#gotchas", anchor=None):
     return f'- <a id="ess-{anchor}"></a>`ESS-{number:03d}` Symptom {number} → [LLM-a.md § Gotchas]({href})'
 
 
-CLEAN = [trap(1), trap(2, "LLM-a.md#gotchas-1"), trap(3, "../docs/MIGRATION-0.60.md#thing-that-bites")]
+CLEAN = [trap(1), trap(2, "LLM-a.md#gotchas-1"), trap(3, "../docs/releases/MIGRATION-0.60.md#thing-that-bites")]
 
 SELF_TEST_CASES = [
     ("clean", {}, set()),
     ("clean with a tombstone and its replacement cited",
      {TRAPS: traps_text(CLEAN, [trap(4) + " — retired: split into [ESS-003](#ess-003)"])}, set()),
     ("duplicate id", {TRAPS: traps_text(CLEAN + [trap(2)])}, {"duplicate"}),
-    ("gap", {TRAPS: traps_text([trap(1), trap(3, "../docs/MIGRATION-0.60.md#thing-that-bites")])}, {"gap"}),
+    ("gap", {TRAPS: traps_text([trap(1), trap(3, "../docs/releases/MIGRATION-0.60.md#thing-that-bites")])}, {"gap"}),
     ("anchor differs from id", {TRAPS: traps_text([trap(1, anchor="010")] + CLEAN[1:])}, {"anchor"}),
     ("line without an id", {TRAPS: traps_text(CLEAN + ["- Symptom → [x](LLM-a.md#gotchas)"])}, {"missing-id"}),
     ("four-digit id", {TRAPS: traps_text(CLEAN + [trap(4).replace("ESS-004", "ESS-0004")])}, {"format"}),
@@ -449,14 +449,14 @@ SELF_TEST_CASES = [
     ("tombstone names a missing replacement",
      {TRAPS: traps_text(CLEAN, [trap(4) + " — retired: replaced by [ESS-008](#ess-008)"])}, {"dangling", "link"}),
     ("migration cites an id linking elsewhere",
-     {"docs/MIGRATION-0.60.md": SELF_TEST_MIGRATION + "\nSee ESS-001.\n"}, {"migration-link"}),
-    ("migration cites its own id", {"docs/MIGRATION-0.60.md": SELF_TEST_MIGRATION + "\nSee ESS-003.\n"}, set()),
+     {"docs/releases/MIGRATION-0.60.md": SELF_TEST_MIGRATION + "\nSee ESS-001.\n"}, {"migration-link"}),
+    ("migration cites its own id", {"docs/releases/MIGRATION-0.60.md": SELF_TEST_MIGRATION + "\nSee ESS-003.\n"}, set()),
 ]
 
 BASELINE_CASES = [
     ("unchanged", traps_text(CLEAN), traps_text(CLEAN), set()),
     ("id added", traps_text(CLEAN), traps_text(CLEAN + [trap(4)]), set()),
-    ("id retired", traps_text(CLEAN), traps_text(CLEAN[:2], [trap(3, "../docs/MIGRATION-0.60.md#thing-that-bites")]),
+    ("id retired", traps_text(CLEAN), traps_text(CLEAN[:2], [trap(3, "../docs/releases/MIGRATION-0.60.md#thing-that-bites")]),
      set()),
     ("id deleted with its tombstone", traps_text(CLEAN, [trap(4)]), traps_text(CLEAN), {"baseline-lost"}),
     ("tombstone dropped and id reused", traps_text(CLEAN, [trap(4)]), traps_text(CLEAN + [trap(4)]),
@@ -480,7 +480,7 @@ def self_test(out):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tree = {TRAPS: traps_text(CLEAN), "LLM/LLM-a.md": SELF_TEST_DOC,
-                    "docs/MIGRATION-0.60.md": SELF_TEST_MIGRATION}
+                    "docs/releases/MIGRATION-0.60.md": SELF_TEST_MIGRATION}
             tree.update(files)
             for rel, content in tree.items():
                 (root / rel).parent.mkdir(parents=True, exist_ok=True)

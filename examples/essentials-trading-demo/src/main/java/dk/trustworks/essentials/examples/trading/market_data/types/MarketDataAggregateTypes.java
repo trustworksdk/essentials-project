@@ -24,16 +24,14 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
  * <p>These sit in {@code types/} rather than on the repository wrappers because an {@link AggregateType} is part of
  * this context's <b>public</b> contract: a foreign context that subscribes to {@code market_data}'s events has to name
  * the stream it is subscribing to, and §R4 makes {@code events/} and {@code types/} the only packages it may import.
- * {@code brokerage.trade_valuation} projects {@link dk.trustworks.essentials.examples.trading.market_data.events.PriceUpdated}
- * into its own read model and needs {@link #INSTRUMENT_PRICES} to do it; reaching into {@code aggregates/} for the same
- * constant would have made a BC-private package part of that slice's compile surface.
+ * Reaching into {@code aggregates/} for the same constant would make a BC-private package part of the subscriber's
+ * compile surface.
  *
  * <p>The wrappers re-expose these as their own {@code AGGREGATE_TYPE} so that the aggregate and its stream name still
  * read together at the point of use.
  */
 public final class MarketDataAggregateTypes {
-    public static final AggregateType INSTRUMENTS       = AggregateType.of("Instruments");
-    public static final AggregateType INSTRUMENT_PRICES = AggregateType.of("InstrumentPrices");
+    public static final AggregateType INSTRUMENTS = AggregateType.of("Instruments");
 
     private MarketDataAggregateTypes() {
     }

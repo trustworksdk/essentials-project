@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: identity.users
+kind: view
+bc: identity
+owner: identity-team
+status: live
+summary: List users and serve one by id, for operators. No credentials.
+generator: essentials
+language: java
+
+serves: [ListUsers, GetUser]
+endpoints:
+  - { method: GET, path: /api/admin/users, auth: operator }
+  - { method: GET, path: "/api/admin/users/{userId}", auth: operator }
+reads:
+  - { name: UserSummary }
+projections:
+  - name: UsersProjection
+    from: [UserRegistered, UserLocked, UserUnlocked]
+    consistency: eventual
+    store: postgresql
+forbidden:
+  - cross-slice-internal:identity
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

@@ -28,7 +28,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * <b>Every statement must be safe to run against a database where the object already exists in that shape</b> -
  * {@code CREATE ... IF NOT EXISTS}, {@code DROP ... IF EXISTS}, {@code ADD COLUMN IF NOT EXISTS}. That is how a
  * database created by an Essentials release older than the schema harness is adopted: on first boot the statements
- * run, change nothing, and the ledger records them (see {@code docs/database-schema-harness.md} §7).
+ * run, change nothing, and the ledger records them (see {@code docs/design/database-schema-harness.md} §7).
  * <p>
  * <b>A repeatable change must take no table lock when its objects already exist.</b> It runs on every start, against
  * tables the instances already running keep writing to - see {@link #repeatable(String, String, String...)}.

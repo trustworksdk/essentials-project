@@ -1,0 +1,24 @@
+schemaVersion: "1.1"
+slice: funding.record_payment_outcome
+kind: command
+bc: funding
+owner: funding-team
+status: live
+summary: "Record what the payment gateway reported about a deposit or withdrawal."
+generator: essentials
+language: java
+
+handles: [RecordPaymentOutcome]
+publishes: [DepositInitiated, DepositCompleted, DepositFailed, DepositReturnedByBank, WithdrawalInitiated, WithdrawalCompleted, WithdrawalFailed, WithdrawalReturnedByBank]
+writes: [Deposit, Withdrawal]
+endpoints: []
+invariants:
+  - id: INV-RPO-1
+    text: "Every report is a fact, recorded once in any order; a return waits for its completion"
+    enforcedBy: Deposit, Withdrawal
+forbidden:
+  - cross-slice-internal:funding
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/aggregates/FundingAggregatesTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/FundingIT.java" }
+  contract: { present: false }

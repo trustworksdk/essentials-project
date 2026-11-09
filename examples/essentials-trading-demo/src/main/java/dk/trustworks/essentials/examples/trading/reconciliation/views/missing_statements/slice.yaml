@@ -1,0 +1,29 @@
+schemaVersion: "1.1"
+slice: reconciliation.missing_statements
+kind: view
+bc: reconciliation
+owner: reconciliation-team
+status: live
+summary: "Clearing and bank statements expected for a business day and not received within their grace."
+generator: essentials
+language: java
+
+serves: [GetMissingStatements]
+endpoints:
+  - { method: GET, path: "/api/admin/reconciliation/missing-statements", auth: operator }
+reads:
+  - { name: KnownExecution }
+  - { name: KnownPayment }
+  - { name: ClearingStatement }
+  - { name: BankStatement }
+  - { name: BusinessCalendar }
+invariants:
+  - id: INV-MS-1
+    text: "The grace runs from the exchange's cutoff on the exchange's clock, never this application's"
+    enforcedBy: MissingStatementsQuery
+forbidden:
+  - cross-slice-internal:reconciliation
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/ClearingReconciliationIT.java" }
+  contract: { present: false }

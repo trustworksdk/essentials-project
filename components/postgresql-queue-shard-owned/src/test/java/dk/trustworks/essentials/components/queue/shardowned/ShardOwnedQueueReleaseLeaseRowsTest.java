@@ -27,6 +27,7 @@ import java.io.PrintWriter;
 import java.lang.reflect.*;
 import java.sql.*;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.*;
 import java.util.logging.Logger;
 
@@ -364,8 +365,15 @@ class ShardOwnedQueueReleaseLeaseRowsTest {
         }
 
         @Override
-        public long parkDeadlineMillis() {
-            return Long.MAX_VALUE;
+        public long nextAttentionNanos() {
+            return System.nanoTime() + TimeUnit.DAYS.toNanos(1);
+        }
+
+        private final ShardWakeup wakeup = new ShardWakeup();
+
+        @Override
+        public ShardWakeup wakeup() {
+            return wakeup;
         }
 
         @Override

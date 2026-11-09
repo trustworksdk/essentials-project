@@ -1,0 +1,28 @@
+schemaVersion: "1.1"
+slice: reconciliation.open_cases
+kind: automation
+bc: reconciliation
+owner: reconciliation-team
+status: live
+summary: "At each business day's close, opens a case for every break still there and clears the cases whose break has gone."
+generator: essentials
+language: java
+
+reactsTo: [BusinessDayClosedNotice]
+sends: [OpenCase, ClearCase]
+reads:
+  - { name: ClearingBreak, via: ClearingStatementBreaksQuery }
+  - { name: StatementBreak, via: BankStatementBreaksQuery }
+  - { name: MissingStatement, via: MissingStatementsQuery }
+  - { name: ReconciliationCase, via: CasesProjection }
+endpoints: []
+invariants:
+  - id: INV-OC-1
+    text: "A break becomes a case only when still present at the next business day's close; a case whose break has gone is cleared unless resolved"
+    enforcedBy: CaseOpening
+forbidden:
+  - cross-slice-internal:reconciliation
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/ClearingReconciliationIT.java" }
+  contract: { present: false }

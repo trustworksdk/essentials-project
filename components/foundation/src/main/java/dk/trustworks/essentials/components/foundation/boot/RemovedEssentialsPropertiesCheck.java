@@ -49,12 +49,12 @@ public final class RemovedEssentialsPropertiesCheck implements BeanFactoryPostPr
                     + "If it was set to fully-transactional, delivery semantics changed: a UnitOfWork.markAsRollbackOnly() in a message handler no longer rolls "
                     + "the message handling back, and an enqueue no longer requires or joins an enclosing UnitOfWork for its write - call queueMessage inside "
                     + "your own UnitOfWork to keep the entity change and the enqueue atomic. Remove the property. "
-                    + "See docs/MIGRATION-0.60.md, 'TransactionalMode is retired'.";
+                    + "See docs/releases/MIGRATION-0.60.md, 'TransactionalMode is retired'.";
 
     private static final String QUEUE_STATISTICS_GUIDANCE =
             "The trigger-based durable-queue statistics were removed, with their table, trigger and TTL job. Per-instance statistics "
                     + "(QueueStatisticsRegistry, GET /durable-queues/queues/{queueName}/statistics) replace them and need no property. "
-                    + "Remove the property. See docs/MIGRATION-0.60.md, 'The queue statistics feature is removed'.";
+                    + "Remove the property. See docs/releases/MIGRATION-0.60.md, 'The queue statistics feature is removed'.";
 
     /**
      * Every removed {@code essentials.*} key, in canonical (kebab-case) form, with what the application should do.
@@ -64,7 +64,7 @@ public final class RemovedEssentialsPropertiesCheck implements BeanFactoryPostPr
             "essentials.durable-queues.transactional-mode", "Removed in 0.60.0. " + TRANSACTIONAL_MODE_GUIDANCE,
             "essentials.durable-queues.use-ordered-unordered-query",
             "Removed in 0.60.0. The unified claim query it selected is gone, and the ordered/unordered pair is the only claim path - "
-                    + "the behaviour of the former default (true). Remove the property. See docs/MIGRATION-0.60.md, 'useOrderedUnorderedQuery is removed'.",
+                    + "the behaviour of the former default (true). Remove the property. See docs/releases/MIGRATION-0.60.md, 'useOrderedUnorderedQuery is removed'.",
             "essentials.durable-queues.enable-queue-statistics", "Removed in 0.60.0. " + QUEUE_STATISTICS_GUIDANCE,
             "essentials.durable-queues.shared-queue-statistics-table-name", "Removed in 0.60.0. " + QUEUE_STATISTICS_GUIDANCE,
             "essentials.durable-queues.enable-queue-statistics-ttl", "Removed in 0.60.0. " + QUEUE_STATISTICS_GUIDANCE,

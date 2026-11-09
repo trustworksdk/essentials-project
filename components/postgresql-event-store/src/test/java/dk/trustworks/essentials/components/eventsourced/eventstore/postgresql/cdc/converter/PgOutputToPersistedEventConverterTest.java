@@ -33,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static java.util.Map.entry;
 
 class PgOutputToPersistedEventConverterTest {
+    private static final String PAYLOAD_AS_STORED = "{\"price\": 1.10, \"amount\": 42, \"currency\": \"DKK\"}";
     private final AggregateType orders = AggregateType.of("Orders");
     private final PgOutputToPersistedEventConverter converter = new PgOutputToPersistedEventConverter(
             EssentialsJSONEventSerializers.create(),
@@ -57,7 +58,7 @@ class PgOutputToPersistedEventConverterTest {
                         entry("global_order", text("17")),
                         entry("timestamp", text("2026-04-17 10:15:30+00")),
                         entry("event_type", text("OrderCreated")),
-                        entry("event_payload", text("{\"amount\": 42, \"currency\":\"DKK\"}")),
+                        entry("event_payload", text(PAYLOAD_AS_STORED)),
                         entry("event_metadata", text("{\"traceId\":\"abc\"}")),
                         entry("caused_by_event_id", text("cause-1")),
                         entry("correlation_id", text("corr-1")),
@@ -78,7 +79,8 @@ class PgOutputToPersistedEventConverterTest {
         assertThat(event.eventRevision().intValue()).isEqualTo(1);
         assertThat(event.globalEventOrder().longValue()).isEqualTo(17L);
         assertThat(event.event().getEventTypeOrNamePersistenceValue()).isEqualTo(EventType.of("OrderCreated").toString());
-        assertThat(event.event().getJson()).isEqualTo("{\"amount\":42,\"currency\":\"DKK\"}");
+        // Passed on as the column text, unparsed - the same text the polling path reads, with nothing to rewrite 1.10 as 1.1
+        assertThat(event.event().getJson()).isEqualTo(PAYLOAD_AS_STORED);
         assertThat(event.metaData().getJson()).isEqualTo("{\"traceId\":\"abc\"}");
         assertThat(event.causedByEventId()).isPresent();
         assertThat(event.correlationId()).isPresent();

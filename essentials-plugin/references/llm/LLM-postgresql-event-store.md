@@ -191,13 +191,14 @@ Enabling also requires, on the database side:
 - a role with `REPLICATION` — the tailer opens its own replication connection
 - for `pgoutput`, a publication covering the event-stream tables; let the framework own it with `cdc.pg-output.publication.auto-manage=true` (`mode: FOR_TABLE_LIST` needs table ownership, `FOR_ALL_TABLES` needs superuser)
 
-If a prerequisite is missing, `cdc.mode=auto` (the default once enabled) keeps the application up and subscribers on polling — so a broken CDC setup costs latency, not correctness, and is easy to miss. Verify via `/actuator/health/cdc` or the admin API's `event-store/cdc/status`. Full checklist: [docs/cdc.md §1.1](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/cdc.md).
+If a prerequisite is missing, `cdc.mode=auto` (the default once enabled) keeps the application up and subscribers on polling — so a broken CDC setup costs latency, not correctness, and is easy to miss. Verify via `/actuator/health/cdc` or the admin API's `event-store/cdc/status`. Full checklist: [docs/design/cdc.md §1.1](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/cdc.md).
 
 Key classes:
-- `cdc.WalReplicationTailer` - consumes logical replication stream into `eventstore_cdc_inbox` or publishes directly
+
+- `cdc.WalReplicationTailer` - consumes logical replication stream into `eventstore_cdc_inbox` or publishes directly. In INBOX mode it writes received messages in batches - one transaction per up to `essentials.eventstore.cdc.wal-replication-tailer.inbox-write-batch-size` (500) messages, at most `inbox-write-max-delay` (50ms) late - and acknowledges the replication stream only after the batch commits; the dispatcher acknowledges published rows a batch at a time too
 - `cdc.CdcDispatcher` - converts inbox rows to `PersistedEvent` and publishes live events
 - `cdc.CdcEventStore` - chooses hybrid (`ACTIVE`) or polling fallback (`INACTIVE`/`FAILED`)
-- `cdc.CdcAvailability` - state machine + metrics (`essentials.cdc.active`, `...fallback_total`, `...warmup_poll_total`, `...start_failures_total`). A poll on the inactive path **before** CDC has ever been active is a warm-up (`warmupPollCount`), not a fallback — subscriptions start before the WAL tailer connects, so this happens on every startup and is not an error. `fallbackCount` counts polls after CDC had been active - a subscription starting on polling, or a running one switching off the CDC bus - one per subscription per outage; that is the alertable signal. `everActive=false` with a non-zero `warmupPollCount` means CDC never came up. **Interruptions** (`CdcAvailability.interruptions()`, `interruptions` in the admin API CDC status, health details `interruptions.*`, metric `essentials.cdc.interruptions_total`) count outages once each - every departure from `ACTIVE` except a requested stop - and keep the last one's time, reason and recovery time after CDC is active again. The availability `reason` is cleared on recovery, so interruptions are where a dropped replication connection that reconnected on its own shows up
+- `cdc.CdcAvailability` - state machine + metrics (`essentials.cdc.active`, `...fallback_total`, `...warmup_poll_total`, `...start_failures_total`). A poll on the inactive path **before** CDC has ever been active is a warm-up (`warmupPollCount`), not a fallback — subscriptions start before the WAL tailer connects, so this happens on every startup and is not an error. A warm-up subscription moves onto the CDC bus as soon as availability is `ACTIVE`; `essentials.eventstore.cdc.health-check.active-cutback-debounce` (default 60 s) delays only a recovery after an interruption, never the first activation after startup. `fallbackCount` counts polls after CDC had been active - a subscription starting on polling, or a running one switching off the CDC bus - one per subscription per outage; that is the alertable signal. `everActive=false` with a non-zero `warmupPollCount` means CDC never came up. **Interruptions** (`CdcAvailability.interruptions()`, `interruptions` in the admin API CDC status, health details `interruptions.*`, metric `essentials.cdc.interruptions_total`) count outages once each - every departure from `ACTIVE` except a requested stop - and keep the last one's time, reason and recovery time after CDC is active again. The availability `reason` is cleared on recovery, so interruptions are where a dropped replication connection that reconnected on its own shows up
 
 Operational model:
 - advisory lock per slot ensures one active tailer per slot (`slotLockAcquired`)
@@ -485,6 +486,8 @@ Base package: `dk.trustworks.essentials.components.eventsourced.eventstore.postg
 | `EventProcessor` | Async (Inbox) | Yes | Higher | Eventual | Yes | External integrations, long ops |
 | `InTransactionEventProcessor` | Sync (in-tx) | Configurable | Lowest | Strong | No | Consistent projections |
 | `ViewEventProcessor` | Async Direct + queue on failure | Yes | Low | Eventual | Yes | Low-latency views |
+| `PartitionedEventProcessor` | Async (Inbox), handlers on every instance | Reader only | Higher | Eventual, per-aggregate order only | Yes (stopped everywhere) | Spreading handler work; shard-owned engine only |
+| `PartitionedViewEventProcessor` | Async (queue), handlers on every instance | Reader only | A few ms | Eventual, per-aggregate order only | Yes (stopped everywhere) | Views keyed by aggregate, spread over instances; shard-owned engine only |
 
 Note: All `@MessageHandler` annotated methods accept an optional `OrderedMessage` parameter as 2. parameter.
 
@@ -528,6 +531,115 @@ public class ShippingKafkaPublisher extends EventProcessor {
 **Features**: Exclusive (`FencedLock`), ordered per-aggregate (`OrderedMessage` via `Inbox`), redelivery (`RedeliveryPolicy`), command handling (`@CmdHandler` via `DurableLocalCommandBus`).
 
 A handler that fails throws; see [Handler failures](#handler-failures) for redelivery, dead letters and what to alert on.
+
+#### Throughput: inbox consumers and the batched forward
+
+Two knobs, and they only pay together. `getNumberOfParallelInboxMessageConsumers()` (default 1) sets how many threads
+handle the inbox; with `MessageConsumptionMode.SingleGlobalConsumer` (the default) one aggregate's messages still stay
+in order on any number of them. `getForwardBatchSize()` (default 1, event by event) lets the processor's exclusive
+subscription hand events over in batches and forward each batch to the inbox in one unit of work, together with the
+resume point, instead of committing per event; `getForwardMaxLatency()` (default 20 ms) bounds how long a partial batch
+waits. Batching alone does not shorten the drain while one consumer handles the inbox - it only fills the inbox faster;
+more consumers alone leave the forward as the limit. Measured (`EventProcessorForwardBenchmarkIT`, 10 000 events, every
+one handled): one consumer 5.3 s either way, 8 consumers 1.9 s, 8 consumers and batches of 100 1.1 s. Each consumer
+holds a pooled connection while it handles a message - size the pool for it.
+
+```java
+@Override protected int getNumberOfParallelInboxMessageConsumers() { return 8; }
+@Override protected int getForwardBatchSize() { return 100; }
+```
+
+Switching either way keeps the processor's resume point and fenced lock (same subscriber id). With a batch, the
+`SubscriptionErrorPolicy` retries and stops at the batch as a whole. A policy that skips first forwards the failed
+batch's events again one per unit of work, each tried once more on its own without the policy's retries, so the skip
+loses only the events that cannot be forwarded on their own either. A replay that fails with an I/O or connection error
+(`IOExceptionUtil.isIOException`, e.g. the database unreachable) ends at once and skips nothing: the subscription stops
+at the batch's first event, is auto-resumed like a stopping policy, and forwards the whole batch again - events the
+replay already forwarded are delivered twice, so their handling must be idempotent. Up to a batch is still skipped
+when a stopping policy turns into a skip after `AutoResume.maxAttempts()` resumes. Whether the policy skips is read from the policy the subscription was built with, whichever
+`EventStoreSubscriptionManager` built it. An override of
+`forwardEventToInbox` still applies to each event, in a batch and in the replay.
+
+#### Several instances: `PartitionedEventProcessor`
+
+The subscription is exclusive, and by default so is the inbox: `SingleGlobalConsumer` puts the `@MessageHandler`s behind
+a fenced lock of their own (`Inbox:<processorName>`), so with several instances they all run on the instance holding
+that lock - usually the first one started. To run them on every instance, extend `PartitionedEventProcessor` instead of
+`EventProcessor`:
+
+```java
+public class OrderLedgerProcessor extends PartitionedEventProcessor {
+    public OrderLedgerProcessor(EventProcessorDependencies dependencies) { super(dependencies); }
+    // getProcessorName(), reactsToEventsRelatedToAggregateTypes() and @MessageHandler methods as for an EventProcessor
+}
+```
+
+- **What it does:** one instance reads and forwards (batched, `getForwardBatchSize()` default 100); every instance handles
+  its share of the aggregates; one aggregate's events stay in order.
+- **What it does not do:** keep order across aggregates; or start where `Inboxes.keepsKeyOrderAcrossInstances()` is
+  `false` (`PostgresqlDurableQueues`, MongoDB) - `start()` throws. It needs the shard-owned engine
+  (`essentials.shard-owned-queue.durable-queues-enabled=true`) in every environment, tests included.
+  `getInboxMessageConsumptionMode()` is final.
+- **Be aware:** handlers run on several instances at once. Not for a handler with in-memory state across aggregates, or
+  one calling something that takes one caller only - keep those on `EventProcessor`. Handlers of different aggregates
+  writing one shared stream conflict on it more often (redelivered). Handlers must be idempotent.
+- An `EventProcessor` that overrides `getInboxMessageConsumptionMode()` to `GlobalCompetingConsumers` on a queue without
+  cross-instance key order refuses to start (since 0.61): it could handle one aggregate's events out of order.
+
+#### Views on several instances: `PartitionedViewEventProcessor`
+
+The view counterpart of `PartitionedEventProcessor`. The holder of `<processorName>:lock` reads and forwards the events in
+batches (`getForwardBatchSize()`, default 100) to `<processorName>:queue`; every instance consumes the queue and handles
+its share of the aggregates, each message in its own `UnitOfWork` with its acknowledgement. Takes
+`ViewEventProcessorDependencies`.
+
+```java
+public class AccountActivityProjection extends PartitionedViewEventProcessor {
+    public AccountActivityProjection(ViewEventProcessorDependencies dependencies) { super(dependencies); }
+
+    @Override public String getProcessorName() { return "AccountActivityProjection"; }
+    @Override protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() { return List.of(ACCOUNTS); }
+
+    @MessageHandler
+    void on(FundsHeld e, OrderedMessage m) {
+        // idempotent: write only if m.getOrder() is above the order stored with the row
+    }
+}
+```
+
+- **Per-aggregate order only.** Not for a view that needs one aggregate's row before another's, or that read-modify-writes
+  rows shared by many aggregates - keep those on `ViewEventProcessor`.
+- **No inline path**: every event goes through the queue. **Handlers must be idempotent** (re-forward after a reader
+  failover, redelivery when a unit moves). No `FENCED_LOCK_TOKEN` metadata. `UnitOfWorkMode.NONE` is refused.
+- **Refuses to start** without `DurableQueues.keepsKeyOrderAcrossInstances()` - the shard-owned engine, everywhere.
+- **Queue key** is `<aggregateType>|<aggregateId>`; handlers see the plain id as `OrderedMessage.getKey()`.
+- **A forward that fails:** as for a batched `EventProcessor` - the `SubscriptionErrorPolicy` retries and stops at a
+  batch as a whole; a policy that skips first queues the failed batch's events again one per unit of work, so the skip
+  loses only the events that cannot be queued on their own either; an I/O failure in that replay stops at the batch
+  and queues all of it again once resumed, as there.
+- **Lag** = reader lag + queue depth of `<processorName>:queue`; the resume point means *forwarded*.
+- **`forwardsEventPayloads()`** (default `false`): `true` queues each event itself instead of a reference, saving the
+  event-store load per event on the handling side, for larger queue rows (measured: ~8 % less CPU, ~11 % more WAL).
+- **Switching from `ViewEventProcessor`** keeps resume point, lock and queue names - stop the view on every instance first.
+  **Drain the queue first**: the key changes from the plain aggregate id to `<aggregateType>|<aggregateId>`, so a
+  redelivery or dead letter the old processor left in `<processorName>:queue` is not ordered with newer events of the
+  same aggregate (it lands on top of them) and `awaitProcessed` does not see it. Wait for
+  `getTotalMessagesQueuedFor` to reach 0 and resolve every dead letter before switching; nothing checks this at start.
+
+#### Resetting a partitioned processor
+
+`PartitionedEventProcessor` and `PartitionedViewEventProcessor` reset **only while stopped on every instance** -
+`resetAllSubscriptions()`/`resetSubscriptions(...)` throw `IllegalStateException` otherwise (unlike `EventProcessor`,
+whose reset runs live on the reading instance). Refused while: the processor is started on the calling instance; any
+instance holds a reader lock; the queue counts a live consumer (`DurableQueues.getQueueConsumers`); or a **departed**
+instance still holds part of the queue - crashed, or stopped while a handler was running. The engine cannot tell those
+two apart, so the refusal lasts as long as the unit is held. After a crash: start and cleanly stop one instance, or -
+having made sure the old process is gone - `resetAllSubscriptionsIgnoringDepartedInstances()`. A start registers its
+consumer under `<processorName>:reset`, which the reset holds, so a start never slips in mid-reset. The reset may run on
+any instance, also one that never read.
+The reset methods of both partitioned processors are `final`, so a subclass cannot route a reset around these checks;
+to act on a reset (for example, code a `ViewEventProcessor` ran in an overridden `resetSubscriptions`), override
+`onSubscriptionsReset(AggregateType, GlobalEventOrder)`, which the reset calls once per aggregate type it resets.
 
 #### Blocking I/O in a handler: `UnitOfWorkMode.NONE`
 
@@ -585,7 +697,7 @@ public class InstrumentRiskApprovalProcessor extends EventProcessor {
 
 1. **Idempotency is mandatory.** The blocking call is no longer part of the transaction that acknowledges the message: a failure after it returned but before the tail committed redelivers the event and repeats the call. Guard on state (e.g. the aggregate applies nothing once the decision exists), don't assume once-only.
 2. **The blocking call must time out well inside `DurableQueues` `messageHandlingTimeout`** (`essentials.durable-queues.message-handling-timeout`, 30s by default). Past it the message is reset as stuck and can be redelivered while the first attempt is still blocked.
-3. **Ordering degrades on that timeout** — a stuck-message reset can hand the same `OrderedMessage` key to another consumer thread, so the per-key guarantee holds only while handlers complete inside the timeout.
+3. **Ordering degrades on that timeout** — a stuck-message reset can hand the same `OrderedMessage` key to another consumer thread, so the per-key guarantee holds only while handlers complete inside the timeout. On the shard-owned engine the bound is `leaseTtl` instead (`essentials.shard-owned-queue.lease-ttl`, 30 s): a handler running longer while its instance stops renewing (a GC pause, overload) can have its key started on another instance beside it. The engine WARNs, at most once a minute, when a handler outlasts the lease ([LLM-postgresql-queue-shard-owned.md](LLM-postgresql-queue-shard-owned.md)).
 
 Worked example: `market_data/use_cases/risk_approve_instrument` in `examples/essentials-trading-demo`. See also `UnitOfWorkMode` in [LLM-foundation.md](./LLM-foundation.md#blocking-io-in-a-message-handler-unitofworkmode) for handlers dispatched by an `Inbox`/`Outbox` rather than a processor.
 
@@ -653,6 +765,34 @@ A savepoint only undoes SQL. When the failed handler left `UnitOfWork` state tha
 
 Instead the whole `UnitOfWork` rolls back - nothing the failed handler did is persisted or published - and the subscription's `SubscriptionErrorPolicy` runs its retries as for any failure (see [Direct async subscribers retry, stop and resume at a failing event](#direct-async-subscribers-retry-stop-and-resume-at-a-failing-event)). When the policy would give up - skip under `skip()`/`retryThenSkip(...)`, stop under `stop()`/`retryThenStop(...)` (the default) - the processor takes the event over instead (`PersistedEventHandler#handOffFailedEvent`) and queues it in a `UnitOfWork` of its own, after the rollback. From there the queue's `RedeliveryPolicy` and dead-letter handling apply, exactly as for any other failed event: **under every policy the event ends up in the view or in the queue, never lost**, and a stopping policy does not stop the subscription for it. One WARN line records the hand-off. Only if that queueing itself fails does the policy give up on the event. The subscriber moves its resume point past the event only after the queued message committed, and later events for the same aggregate find it queued and queue behind it. A `UnitOfWork` implementation that cannot report this state (the `EventStoreUnitOfWork.getNumberOfEventsPersisted()` / `UnitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()` defaults throw `UnsupportedOperationException`) is treated as having it; every Essentials implementation reports it. The stateful, flex and decider repository callbacks report pending changes only while there are uncommitted events.
 
+#### Throughput: handling in batches
+
+`getDirectHandlingBatchSize()` (default 1, event by event) lets the processor handle up to that many events in one
+`UnitOfWork` - one commit, together with the resume point, per batch - instead of one per event; `getDirectHandlingMaxLatency()`
+(default 20 ms) bounds how long a partial batch waits. Each event still runs under a savepoint of its own, so a failing event
+is queued exactly as above and the batch's other events commit; a later event of the batch for the same aggregate queues
+behind it. Measured (`EventProcessorForwardBenchmarkIT`, 50 000 events, every one handled): 3 600 events/s event by event,
+6 900 in batches of 100. A projection that handles few of its aggregate type's events gains little - events it has no
+handler for already cost almost nothing.
+
+```java
+@Override protected int getDirectHandlingBatchSize() { return 100; }
+```
+
+What changes with a batch:
+
+- **An escalating failure** (the cases above a savepoint cannot undo) rolls the **whole batch** back, the events before it
+  included. The `SubscriptionErrorPolicy` retries the batch; once it gives up, the batch is handled again one event per
+  `UnitOfWork` through the event-by-event path, so only the failing event is queued and the others commit
+  (`BatchedPersistedEventHandler#handOffFailedBatch`). Nothing is lost.
+- **A failure the replay cannot get past either** (the database is unreachable, say) leaves the policy's skip or stop to the
+  **whole batch**: under `skip()`/`retryThenSkip(...)` up to a batch of events can be missing from the view, where event by
+  event it would be one. Events the replay had already committed are handled again by a subscription that restarts at the
+  batch - delivery is at least once, so keep projections idempotent (*Version = EventOrder* below).
+- **Row locks are held for the length of a batch.** A view that updates rows shared across aggregates (per-instrument
+  totals, say) can deadlock with the queue consumer; the batch is retried, nothing is lost, throughput suffers.
+- Switching either way keeps the processor's resume point (same subscriber id).
+
 ```java
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessor;
 
@@ -719,7 +859,13 @@ What a throw does:
    `EventProcessor`, the durable queue (`getDurableQueueRedeliveryPolicy()`) for a `ViewEventProcessor` once its direct
    handling failed. The queue's built-in permanent-error list applies, so an `IllegalArgumentException` dead-letters on
    the first attempt (see [LLM-foundation.md § The built-in permanent-error list](LLM-foundation.md#the-built-in-permanent-error-list)).
-2. When the redeliveries are used up, the message becomes a dead letter.
+2. When the redeliveries are used up, the message becomes a dead letter. **The default policy retries for minutes, not
+   seconds** (since 0.61): quick first retries (200 ms, doubling to 10 s), for 4 × (lock timeout + the queue's
+   `maxUnservedAfterInstanceLoss()`, twice the `message-handling-timeout` on `PostgresqlDurableQueues`) - about 5
+   minutes with the PostgreSQL starter's defaults - so a handler that throws until another
+   processor's work is there does not dead-letter while that work fails over to another instance. `start()` logs the
+   budget. A different budget: override the getter; to size your own `Inbox` policy the same way, use
+   `FailoverRedeliveryPolicy.outlasting(lockTimeOut, queueWindow)`.
 3. The subscription's resume point **keeps advancing**: the event is in the queue, so the processor goes on with the
    next events. Only that aggregate is held: messages are ordered by aggregate id (`OrderedMessage` key), and later
    events of the same aggregate wait behind its dead letter (a `ViewEventProcessor` queues them behind it), while every
@@ -846,12 +992,33 @@ What "processed" means per processor type:
   handled.
 - Dead letters count as queued, so a dead-lettered event is **never** reported processed — the call times out.
 - Conservative: a later event of the same aggregate still queued holds the barrier too.
-- On timeout it throws `AwaitProcessedTimeoutException` naming the processor, aggregate type, global event order, the
-  current resume point, why the event does not count yet and the queue's queued/dead-letter counts (also as accessors).
-- It reads this JVM's processor. An exclusive subscription held by another instance is read from its last saved resume
-  point (lags by the snapshot interval); a `ViewEventProcessor` whose lock another instance holds times out.
-- Call it **after** the appending `UnitOfWork` committed; inside it the subscription cannot see the event.
-- `IllegalArgumentException` for an aggregate type the processor does not react to.
+- **What the timeout bounds.** `awaitProcessed` checks immediately, then every 25 ms, and returns as soon as a check
+  finds the event processed. It compares the deadline only between checks, so it can return or throw later than
+  `timeout` by the check in progress: a few database reads (resume point, the event, the queue), and under a
+  `CdcEventStore` up to 10 s more while a deferred gap recording holds one of the subscription's delivery gates.
+  `Duration.ZERO` means one check.
+- `awaitProcessedAsync` runs each check on `Schedulers.boundedElastic()` and holds no thread between checks. Its
+  timeout starts when the `Mono` is subscribed, not when the method is called, and fires on time even while a check
+  is running.
+- **On timeout** `awaitProcessed` throws, and `awaitProcessedAsync` signals, `AwaitProcessedTimeoutException` naming the
+  processor, aggregate type, global event order, timeout, the resume point seen by the last check (or "unknown"), why
+  the event does not count yet and the queue's queued/dead-letter counts (also as accessors). Nothing is cancelled: the
+  processor may still handle the event afterwards.
+- **It reads this JVM's processor, and times out where the processor does not run here.** When the processor has no
+  subscription for the aggregate type in this JVM - not started, or a `ViewEventProcessor` or
+  `PartitionedViewEventProcessor` whose lock this instance never acquired - every check answers "not yet" and the call
+  times out. An `EventProcessor` whose exclusive subscription has not held its lock in this JVM has no resume point and
+  times out too; one that held it and lost it reads the resume point last saved to the database on every check, which
+  trails the lock holder's by up to the subscription manager's `snapshotResumePointsEvery`. A `ViewEventProcessor`
+  that lost its lock keeps the resume point it had then: an event it handled before still counts, a later one times out.
+- Call it **after** the appending `UnitOfWork` committed; inside it the subscription cannot see the event, and a global
+  event order with no committed event behind it times out; once the subscription has moved past that order, the
+  exception's reason says no committed event with it exists.
+- `IllegalArgumentException`, thrown by the call (also by `awaitProcessedAsync`, never signalled), for an aggregate
+  type the processor does not react to, a `null` argument or a negative timeout. An interrupted `awaitProcessed` throws
+  `IllegalStateException` and keeps the thread's interrupt flag set.
+- `InTransactionEventProcessor` checks the aggregate type and the `null` arguments the same way, then returns at once
+  (`awaitProcessedAsync`: an empty `Mono`); it does not use the timeout.
 
 Where N comes from: `eventStore.appendToStream(...)` returns the `PersistedEvent`s. When the append happens further
 down - a `commandBus.send(...)`, a repository - wrap the call in `AppendedEvents.recordDuring(...)`
@@ -908,9 +1075,12 @@ appends and then reads its read model at once races it. Rules:
 - **An existence check that must not lag asks the write side.** An idempotency probe ("does this order already
   exist?") reads the aggregate - a repository's `findX`, `tryLoad(id)` or `eventStore.fetchStream(...)` - never an
   eventually consistent view.
-- **`awaitProcessed` sees only the processor in this JVM.** When another instance holds the processor's lock (a
-  second application on the same test database, a reused container), a `ViewEventProcessor` times out and an
-  `EventProcessor` reads a resume point that lags by the snapshot interval.
+- **`awaitProcessed` sees only the processor in this JVM.** When the processor is not started here, or another
+  instance holds its lock (a second application on the same test database, a reused container), the call throws
+  `AwaitProcessedTimeoutException` once the timeout has passed: a `ViewEventProcessor` or `EventProcessor` that never
+  held the lock here has no resume point to read. One that held it and lost it reads a stale resume point instead - a
+  `ViewEventProcessor` the one it had when it lost the lock, an `EventProcessor` the last one saved to the database,
+  which lags by up to `snapshotResumePointsEvery`.
 
 For the seams `awaitProcessed` cannot cover - an aggregate fold or a cache downstream of a processor, or a processor
 whose lock another instance holds - poll with an assertion and a deadline (e.g. Awaitility's
@@ -1272,7 +1442,7 @@ eventBus.addAsyncSubscriber(events ->
 ## Event Causation
 
 Every persisted event can record the id of the event that caused it: `PersistedEvent.causedByEventId()`, column
-`caused_by_event_id`. Design: [`docs/event-causation.md`](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/event-causation.md).
+`caused_by_event_id`. Design: [`docs/design/event-causation.md`](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/event-causation.md).
 
 **On by default with the Spring Boot starter.** `essentials.eventstore.causation.enabled=false` turns off everything
 that writes it. Correlation ids are not populated - use trace context (OpenTelemetry) for "what did this request do".
@@ -1708,8 +1878,12 @@ protected Optional<SubscriptionErrorPolicy> getSubscriptionErrorPolicy() {   // 
 (default `false`) is called on the delivery thread once the policy has used up its retries, in place of skipping or stopping, after
 the event's `UnitOfWork` was rolled back - so take the event over in a `UnitOfWork` of your own (e.g. queue it). Return `true` and the
 subscription carries on as if the event had been handled: no skip, no stop, no `handleEventFailed` callback, the resume point moves past
-it. Return `false`, or throw, and the policy gives up as usual. Single-event async subscriptions only (not batched, not in-transaction).
-`ViewEventProcessor` uses it to queue failures it could not queue in the subscription's `UnitOfWork` - see [ViewEventProcessor](#vieweventprocessor).
+it. Return `false`, or throw, and the policy gives up as usual. Async subscriptions only, not in-transaction ones. A batched subscription's
+`BatchedPersistedEventHandler#handOffFailedBatch(events, failure)` is the same for a whole batch; the subscriber calls its
+overload `handOffFailedBatch(events, failure, subscriptionErrorPolicy)`, which hands over the policy that gave up on the batch and by
+default delegates to the two-argument one. `ViewEventProcessor` uses `handOffFailedEvent` to
+queue failures it could not queue in the subscription's `UnitOfWork`, and the two-argument `handOffFailedBatch` to handle a failed batch again event by event - see
+[ViewEventProcessor](#vieweventprocessor).
 
 **Retries block only their own subscription.** They are synchronous on the subscription's delivery thread (that is what keeps
 events in order), and every async subscription has its own: polling `Publish-<subscriber>-<aggregateType>`, CDC

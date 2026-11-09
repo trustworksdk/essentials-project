@@ -183,6 +183,39 @@ class ShardOwnedQueuesApiIT {
                 .satisfies(message -> assertThat(message.payload()).isEqualTo("secret"));
     }
 
+    /**
+     * The admin UI opens a dead letter from the dead-letter list by its id. That lookup searched live messages only and
+     * answered 404 for every dead letter, so an operator could not read the error that parked it.
+     */
+    @Test
+    void a_dead_letter_is_found_by_its_id_in_both_lanes() throws Exception {
+        var queue     = queues.queue(ORDERS);
+        var unordered = queue.enqueue(Message.of("unordered".getBytes(StandardCharsets.UTF_8), 1));
+        var ordered   = queue.enqueue(Message.ordered("ordered".getBytes(StandardCharsets.UTF_8), 1, "key-1", 0));
+        queue.markAsDeadLetter(unordered, "failed unordered");
+        queue.markAsDeadLetter(ordered, "failed ordered");
+
+        assertThat(api.getMessage(payloadReader(), ORDERS, unordered)).hasValueSatisfying(message -> {
+            assertThat(message.isDeadLetter()).isTrue();
+            assertThat(message.lastError()).isEqualTo("failed unordered");
+            assertThat(message.payload()).isEqualTo("unordered");
+        });
+        assertThat(api.getMessage(payloadReader(), ORDERS, ordered)).hasValueSatisfying(message -> {
+            assertThat(message.isDeadLetter()).isTrue();
+            assertThat(message.key()).isEqualTo("key-1");
+            assertThat(message.lastError()).isEqualTo("failed ordered");
+        });
+        assertThat(queue.getMessage(ordered)).as("the live lookup stays live-only").isEmpty();
+    }
+
+    @Test
+    void a_queue_is_named_in_log_lines_by_its_registered_name() throws Exception {
+        var queueId = ((dk.trustworks.essentials.components.queue.shardowned.PostgresqlMessageQueue) queues.queue(ORDERS)).queueId();
+
+        assertThat(new dk.trustworks.essentials.components.queue.shardowned.ShardOwnedStorage(dataSource, queueId).queueLabel())
+                .isEqualTo("'api-orders' (id " + queueId + ")");
+    }
+
     // ------------------------------------------------------- name resolution
 
     /**
@@ -223,7 +256,11 @@ class ShardOwnedQueuesApiIT {
                 .isAfter(java.time.OffsetDateTime.now().plusMinutes(50));
 
         assertThat(api.markAsDeadLetterMessage(writer(), ORDERS, park, "operator parked it")).isTrue();
-        assertThat(api.getMessage(reader(), ORDERS, park)).isEmpty();
+        // A dead letter keeps its id, so the same id still finds it - now as a dead letter with its error
+        assertThat(api.getMessage(reader(), ORDERS, park)).hasValueSatisfying(message -> {
+            assertThat(message.isDeadLetter()).isTrue();
+            assertThat(message.lastError()).isEqualTo("operator parked it");
+        });
         assertThat(api.getDeadLetterMessages(reader(), ORDERS, 0, 10)).hasSize(1);
 
         assertThat(api.resurrectDeadLetterMessage(writer(), ORDERS, park)).isTrue();

@@ -1,73 +1,61 @@
 # Bounded context: market_data
 
-Instrument reference data, and the authoritative event-sourced store of the latest market price per
-instrument.
+Instrument reference data — the brokerage's decision to offer an instrument (D21) — and the current market as the
+exchange's market-data feed reports it.
 
-Separate lifecycle and separate write cadence from `brokerage`: reference data changes rarely, prices tick
-at high frequency. No invariant is shared with trading — nothing here reads or writes a trading account, a
-trade or a settlement.
+No invariant is shared with trading — nothing here reads or writes a trading account, a trade or a settlement.
 
-**Write style: aggregate (`rules/slice-design.md` §R5).** Decisions live in `aggregates/`, on `Instrument`
-and `InstrumentPrice`, both `AggregateRoot`s reached through a `StatefulAggregateRepository`. This is a
-sanctioned lane, not a legacy one — do **not** convert these to `Decider`s. Command slices still own
+**Write style: aggregate (`rules/slice-design.md` §R5).** Decisions live in `aggregates/`, on `Instrument`, an
+`AggregateRoot` reached through a `StatefulAggregateRepository`. This is a sanctioned lane, not a legacy one — do
+**not** convert it to a `Decider`. Command slices still own
 everything else: their command type, their one API file, their handler and their test.
 
 ## Slices
 
 | Slice | Kind | Role |
 |---|---|---|
-| `use_cases/register_instrument` | command | Registers an instrument with its symbol and display name |
+| `use_cases/register_instrument` | command | Registers an instrument with its symbol and display name; idempotent |
+| `external_systems/exchange` | external system | The exchange's `InstrumentListed` → register, `InstrumentUpdated` disabled → suspend (D18, SR-28); simulators profile only - otherwise instruments come only through `POST /api/admin/instruments` |
 | `use_cases/rename_instrument` | command | Changes an instrument's display name |
 | `use_cases/suspend_instrument` | command | Suspends an instrument, with a reason. One-way |
-| `use_cases/initialize_price` | command | Opens the price stream at a starting price |
-| `use_cases/update_price` | command | Records a price tick. The authoritative write path |
 | `use_cases/risk_approve_instrument` | automation | Runs a newly registered instrument through an external risk assessment and records the answer. The demo's `UnitOfWorkMode.NONE` example |
-| `views/latest_price` | view | Serves the current price of one instrument. Projection-backed, eventually consistent |
 | `views/instrument_details` | view | Lists instruments and serves one by id, from a projection. Includes risk status |
+| `views/market_quotes` | view | Latest quote per instrument from the exchange's market-data stream (synthetic without the simulators), in memory. Implements the `MarketQuotes` seam |
+| `views/closing_prices` | view | The exchange's `ClosingPriceIssued` per instrument and business day (SR-14), stored as issued (table `closing_price`; intake simulators profile only). Implements the `ClosingPrices` seam |
 
-## Two aggregates, one id
+## `views/market_quotes` — the market as the exchange's feed reports it (D14, D19)
 
-`Instrument` and `InstrumentPrice` are separate consistency boundaries — no transaction writes both — but
-they share an identity: `InstrumentPrice` is keyed by `InstrumentId`, not by a price id of its own. A price
-stream *is* the instrument, stored under a second `AggregateType`. That means the price for an instrument is
-reachable without a lookup table. Do not "fix" it by inventing an `InstrumentPriceId`.
-
-| Aggregate | `AggregateType` | Id | Snapshots |
-|---|---|---|---|
-| `Instrument` | `Instruments` | `InstrumentId` | no — baseline aggregate, short streams |
-| `InstrumentPrice` | `InstrumentPrices` | `InstrumentId` | `@AggregateSnapshotPolicy`, ASYNC_DURABLE, every 100 events |
-
-`Instrument` is the demo's baseline: neither snapshots nor closing books, so it is what the other aggregates
-in the demo are compared against.
-
-## The authoritative price store is the aggregate
-
-`InstrumentPrice` is the authority for latest price. The trade path loads it; a read model that needs the
-current market price projects `PriceInitialized` / `PriceUpdated`, as `views/latest_price` and
-`brokerage.trade_valuation` both do.
-
-The demo also has a direct-write JDBC latest-price table. That is a **benchmark comparison artifact**: its
-only purpose is to be timed against the aggregate path. It lives in the demo harness, not in this context,
-so the trade path cannot reach it by accident. Do not move it here, and do not make anything in this context
-read it.
-
-## `views/latest_price` is an ordinary eventually-consistent view
-
-Aggregate state is private, and read models project events rather than reading the write model.
-`LatestPriceProjection` is a `ViewEventProcessor`, like every other view here, so it can be replayed: a new
-subscription starts at the first price event, and a subscription reset truncates the table and rebuilds it.
-It once read a public `InstrumentPrice.latestPrice()`, and later projected in the appending transaction, both
-to give the demo bootstrap's "already seeded?" probe a strongly-consistent answer. Neither is needed: the
-probe asks `InstrumentPrices.findPrice(...)`, a write-side existence check, and nothing reads this view
-strongly consistently. Do not add the accessor back, and do not move the projection back in-transaction.
+- **Not event-sourced and not persisted.** A quote is a high-rate feed, not a decision. Each instance subscribes to
+  the feed itself and keeps the latest quote per instrument in memory; nothing is shared between instances.
+- **`types/MarketQuotes` is a published read seam** (`rules/slice-design.md`, § The published read seam): `orders`
+  sizes a market buy's hold on `bestAsk`, and the stub exchange prices its fills on it. It answers only from a fresh
+  quote — stale (`trading-demo.market-data.stale-after`, 10s) is empty, so a hold is never sized on a vanished price.
+- **Two feeds behind `MarketQuoteFeed`.** Under the `simulators` profile `ExchangeMarketQuoteFeed` reads the exchange's
+  SSE stream (`/api/marketdata/stream`, SR-13) and resynchronises from its snapshot after every (re)subscription;
+  otherwise `SyntheticMarketQuoteFeed`, a random walk per configured instrument (`trading-demo.market-data.synthetic.*`;
+  `volatility: 0` holds quotes still, for tests). Both conditional on `trading-demo.simulators.exchange.base-url`.
+- **The exchange quotes only on change, so the feed re-reads the snapshot every half `stale-after`**, and
+  `LatestMarketQuotes` lets an *equal* `mdSequence` refresh a quote. Stale means "the exchange stopped confirming it",
+  not "the price did not move" - otherwise a quiet book (a closed market, live prices) refuses every market buy `422`.
+- **An empty side (`bestBid`/`bestAsk` null) publishes nothing**; the last quote goes stale rather than be trusted.
+- **Trading sessions (D32)**: outside the session the exchange pulls its quotes, so no quote says the market is closed.
+  `ExchangeMarketQuoteFeed` records each instrument's `session` from the snapshot (every half `stale-after`) and any
+  stream message carrying it; `GET /api/market-data/sessions` answers `OPEN`/`CLOSED` per instrument, nothing for a
+  market without sessions (the synthetic feed).
+- **`mdSequence` restarts at 1 whenever the exchange starts**, so it orders quotes only within one run of the exchange.
+  Every subscription starts an epoch; quotes are ordered by (epoch, `mdSequence`) (`MarketQuote.isOlderThan`). By
+  sequence alone a restarted exchange's quotes were all "older" and every quote stayed stale for good (phase 6 F-4).
+  `reference` messages are not quoted - the price source's price is not the market's.
+- **It replaced the `InstrumentPrice` aggregate** (D19, removed in phase 3), together with its `initialize_price`
+  and `update_price` slices, `views/latest_price` and the harness's price-path benchmark. Prices are a high-rate
+  feed, not decisions; the aggregate was an exercise.
 
 ## Every mutating method is an idempotent no-op
 
 `Instrument.rename` to the display name already held, `Instrument.suspend` on an already-suspended instrument,
 and `Instrument.recordRiskApproval` / `recordRiskRejection` on an instrument that already carries a risk
-decision all return without applying. So does `InstrumentPrice.updatePrice` when the tick repeats the price
-already held — which matters at this write rate: an unchanged market must not lengthen the stream. Repeat
-commands leave no trace instead of growing history. Keep it that way.
+decision all return without applying. Repeat commands leave no trace instead of growing history. Keep it that
+way.
 
 Suspension is one-way: there is no un-suspend event, so the first reason stands for the life of the stream.
 
@@ -98,37 +86,22 @@ Two things follow from it that are easy to get wrong elsewhere:
 `InstrumentRiskRejected` and `InstrumentSuspended` stay separate events: a rejection says the instrument was
 never cleared, a suspension says a cleared one was stopped.
 
-## Prices are positive by construction
-
-`InstrumentPriceEvent.requirePositive` rejects a price of zero or less. Both variants validate through that
-one method, so the rule cannot drift between them — and because it runs in the record's canonical
-constructor it is enforced on *deserialization* too: a stream containing a non-positive price fails loudly
-on replay rather than projecting a nonsense valuation.
-
 ## Boundaries
 
 The importable surface of this context is `events/` and `types/`, and nothing else. `aggregates/` is
 BC-private.
 
-`brokerage` imports exactly two things from here, both on the sanctioned surface:
+`orders`, `accounts` and `settlement` import `types/InstrumentId`; `orders` also the `types/MarketQuotes` seam,
+`accounts`' valuation the `types/ClosingPrices` seam. Nothing imports an aggregate.
 
-- `types/InstrumentId` — a trade names the instrument it was placed against.
-- `events/PriceInitialized` and `events/PriceUpdated` — `brokerage.trade_valuation` projects them into its
-  own read model so a trade can be valued at the current market price. That is the law's answer to a
-  cross-context read: project the other context's events into a model you own, rather than calling into its
-  write side. The old `TradeAdminQueryService` did the opposite — it injected this context's
-  `InstrumentPriceService` — which is the §R4 violation this replaced.
-
-It imports no aggregate and no other type. Keep the list at these two.
-
-The stream names live in `types/MarketDataAggregateTypes` rather than on the repository wrappers, because a
+The stream name lives in `types/MarketDataAggregateTypes` rather than on the repository wrapper, because a
 foreign context that subscribes to these events has to name the stream — and `aggregates/` is not on its
-importable surface. `Instruments`/`InstrumentPrices` re-expose them as `AGGREGATE_TYPE` so the aggregate and
-its stream name still read together at the point of use.
+importable surface. `Instruments` re-exposes it as `AGGREGATE_TYPE` so the aggregate and its stream name still
+read together at the point of use.
 
 ## Directories beside the slices
 
-- `events/` — both sealed hierarchies, `InstrumentEvent` and `InstrumentPriceEvent`, one variant per file
-- `types/` — `InstrumentId`, `Symbol`, `RiskRating`
-- `aggregates/` — the two aggregates plus their `StatefulAggregateRepository` wrappers (`Instruments`,
-  `InstrumentPrices`), which persist an already-constructed aggregate and never build one
+- `events/` — the sealed `InstrumentEvent` hierarchy, one variant per file
+- `types/` — `InstrumentId`, `Symbol`, `RiskRating`, `MarketDataAggregateTypes`, the `MarketQuotes` and `ClosingPrices` seams
+- `aggregates/` — `Instrument` plus its `StatefulAggregateRepository` wrapper `Instruments`, which persists an
+  already-constructed aggregate and never builds one

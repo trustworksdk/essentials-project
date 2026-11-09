@@ -251,6 +251,11 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable, App
      * to the cache, which only means it is stopped along with the others on shutdown.
      */
     @Override
+    public Optional<Duration> leaseTtl() {
+        return Optional.of(settings.leaseTtl());
+    }
+
+    @Override
     public Optional<MessageQueue> findQueue(QueueName queueName) throws SQLException {
         requireNonNull(queueName, "No queueName provided");
         var cached = queues.get(queueName);

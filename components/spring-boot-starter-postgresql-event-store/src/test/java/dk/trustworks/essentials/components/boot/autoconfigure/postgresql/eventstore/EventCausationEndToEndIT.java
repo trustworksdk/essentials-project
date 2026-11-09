@@ -48,7 +48,7 @@ import static dk.trustworks.essentials.components.eventsourced.aggregates.statef
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The test that decides whether event causation works (phase 7 of {@code docs/event-causation.md}): the two shapes of the
+ * The test that decides whether event causation works (phase 7 of {@code docs/design/event-causation.md}): the two shapes of the
  * webshop's capture flow, through the real auto-configuration and lifecycle, with nothing bound by hand except where an
  * application would bind it.
  * <ol>

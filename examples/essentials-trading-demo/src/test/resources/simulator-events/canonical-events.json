@@ -1,0 +1,607 @@
+{
+ "exchange": [
+  {
+   "eventId": "01a17f26-fee3-7409-ab9b-bf63616eca2d",
+   "sequence": 1,
+   "eventType": "InstrumentListed",
+   "schemaVersion": 1,
+   "source": "exchange",
+   "simulationId": null,
+   "aggregateId": "ACME",
+   "correlationId": null,
+   "occurredAt": "2030-01-07T13:00:07.335960Z",
+   "payload": {
+    "currency": "USD",
+    "currencyScale": 2,
+    "cusip": null,
+    "enabled": true,
+    "instrumentId": "ACME",
+    "isin": null,
+    "liquidity": null,
+    "lotSize": 1,
+    "mic": "XNAS",
+    "priceSource": {
+     "initialPrice": "100.00"
+    },
+    "referenceSymbol": null,
+    "symbol": "ACME",
+    "tickSize": "0.01",
+    "tickSizeMinor": 1
+   }
+  },
+  {
+   "eventId": "01a17f27-521a-76c7-a4ea-39c919acd2d9",
+   "sequence": 12,
+   "eventType": "BusinessDayClosed",
+   "schemaVersion": 1,
+   "source": "exchange",
+   "simulationId": null,
+   "aggregateId": "2030-01-07",
+   "correlationId": null,
+   "occurredAt": "2030-01-07T21:30:00Z",
+   "payload": {
+    "businessDate": "2030-01-07",
+    "cutoffAt": "2030-01-07T21:30:00Z",
+    "nextBusinessDate": "2030-01-08",
+    "timeZone": "America/New_York"
+   }
+  },
+  {
+   "eventId": "01a17f27-521a-76c7-a4ea-39ca63e0cf58",
+   "sequence": 13,
+   "eventType": "ClosingPriceIssued",
+   "schemaVersion": 1,
+   "source": "exchange",
+   "simulationId": null,
+   "aggregateId": "AAPL",
+   "correlationId": "2030-01-07",
+   "occurredAt": "2030-01-07T21:30:00Z",
+   "payload": {
+    "basis": "REFERENCE",
+    "businessDate": "2030-01-07",
+    "closingPrice": "476.56",
+    "closingPriceTicks": 47656,
+    "currency": "USD",
+    "instrumentId": "AAPL",
+    "volume": 0
+   }
+  },
+  {
+   "eventId": "01a17f27-9bd6-7552-af6e-25e3e7c41071",
+   "sequence": 24,
+   "eventType": "OrderAccepted",
+   "schemaVersion": 1,
+   "source": "exchange",
+   "simulationId": null,
+   "aggregateId": "01a17f27-9bd6-7552-af6e-25e23d9c38e7",
+   "correlationId": "01a17f27-9bd6-7552-af6e-25e23d9c38e7",
+   "occurredAt": "2030-01-08T05:04:27.691586Z",
+   "payload": {
+    "bustedQuantity": 0,
+    "clientOrderId": "LD-f1smoke3-O4",
+    "filledQuantity": 0,
+    "instrumentId": "ACME",
+    "orderId": "01a17f27-9bd6-7552-af6e-25e23d9c38e7",
+    "participantId": "DEMO-BROKER",
+    "price": "95.28",
+    "priceTicks": 9528,
+    "quantity": 5,
+    "remainingQuantity": 5,
+    "sequence": 16691,
+    "side": "BUY",
+    "status": "OPEN",
+    "timeInForce": "DAY",
+    "type": "LIMIT"
+   }
+  },
+  {
+   "eventId": "01a17f27-9bd8-722f-adf3-19dc3466175f",
+   "sequence": 26,
+   "eventType": "TradeExecuted",
+   "schemaVersion": 1,
+   "source": "exchange",
+   "simulationId": null,
+   "aggregateId": "01a17f27-9bd8-722f-adf3-19da69f6299f",
+   "correlationId": "01a17f27-9bd8-722f-adf3-19d924b41e79",
+   "occurredAt": "2030-01-08T05:04:29.766205Z",
+   "payload": {
+    "buyOrderId": "01a17f27-9bd8-722f-adf3-19d924b41e79",
+    "buyerFee": {
+     "amount": "0.00",
+     "amountMinor": 0,
+     "currency": "USD"
+    },
+    "buyerId": "DEMO-BROKER",
+    "buyerSettlement": null,
+    "currency": "USD",
+    "currencyScale": 2,
+    "executedAt": "2030-01-08T05:04:29.766205Z",
+    "executionId": "01a17f27-9bd8-722f-adf3-19da69f6299f",
+    "instrument": {
+     "currency": "USD",
+     "cusip": null,
+     "id": "AAPL",
+     "isin": null,
+     "mic": "XNAS",
+     "symbol": "AAPL"
+    },
+    "instrumentId": "AAPL",
+    "intendedSettlementDate": "2030-01-09",
+    "price": "481.68",
+    "priceTicks": 48168,
+    "quantity": 2,
+    "sellOrderId": "01a17f27-9b5e-71fb-a171-64c18ab883d2",
+    "sellerFee": {
+     "amount": "0.00",
+     "amountMinor": 0,
+     "currency": "USD"
+    },
+    "sellerId": "LP",
+    "sellerSettlement": null,
+    "tickSizeMinor": 1,
+    "tradeDate": "2030-01-08"
+   }
+  },
+  {
+   "eventId": "01a17f27-9bd8-722f-adf3-19dde7ccce98",
+   "sequence": 27,
+   "eventType": "OrderFilled",
+   "schemaVersion": 1,
+   "source": "exchange",
+   "simulationId": null,
+   "aggregateId": "01a17f27-9bd8-722f-adf3-19d924b41e79",
+   "correlationId": "01a17f27-9bd8-722f-adf3-19d924b41e79",
+   "occurredAt": "2030-01-08T05:04:29.766205Z",
+   "payload": {
+    "bustedQuantity": 0,
+    "clientOrderId": "LD-f1smoke3-O1",
+    "executionId": "01a17f27-9bd8-722f-adf3-19da69f6299f",
+    "filledQuantity": 2,
+    "instrumentId": "AAPL",
+    "intendedSettlementDate": "2030-01-09",
+    "lastFee": {
+     "amount": "0.00",
+     "amountMinor": 0,
+     "currency": "USD"
+    },
+    "lastPrice": "481.68",
+    "lastPriceTicks": 48168,
+    "lastQuantity": 2,
+    "orderId": "01a17f27-9bd8-722f-adf3-19d924b41e79",
+    "participantId": "DEMO-BROKER",
+    "price": "506.27",
+    "priceTicks": 50627,
+    "quantity": 2,
+    "remainingQuantity": 0,
+    "sequence": 16702,
+    "side": "BUY",
+    "status": "FILLED",
+    "timeInForce": "DAY",
+    "tradeDate": "2030-01-08",
+    "type": "LIMIT"
+   }
+  },
+  {
+   "eventId": "01a17f27-9bd8-722f-adf3-19de4c499919",
+   "sequence": 28,
+   "eventType": "SettlementPending",
+   "schemaVersion": 1,
+   "source": "settlement-simulator",
+   "simulationId": null,
+   "aggregateId": "01a17f27-9bd8-722f-adf3-19da69f6299f",
+   "correlationId": "01a17f27-9bd8-722f-adf3-19da69f6299f",
+   "occurredAt": "2030-01-08T05:04:29.766205Z",
+   "payload": {
+    "amountMinor": 96336,
+    "attempt": 0,
+    "buyerId": "DEMO-BROKER",
+    "clearing": {
+     "businessDate": "2030-01-08",
+     "buyer": {
+      "obligationId": "CS:2030-01-08:DEMO-BROKER:AAPL:2030-01-09",
+      "statementId": "CS:2030-01-08:DEMO-BROKER"
+     },
+     "seller": {
+      "obligationId": "CS:2030-01-08:LP:AAPL:2030-01-09",
+      "statementId": "CS:2030-01-08:LP"
+     }
+    },
+    "currency": "USD",
+    "executionId": "01a17f27-9bd8-722f-adf3-19da69f6299f",
+    "instrumentId": "AAPL",
+    "intendedSettlementDate": "2030-01-09",
+    "priceTicks": 48168,
+    "quantity": 2,
+    "sellerId": "LP",
+    "settlementAmount": "963.36",
+    "settlementDays": 1,
+    "status": "PENDING",
+    "tradeDate": "2030-01-08",
+    "tradeSequence": 26
+   }
+  },
+  {
+   "eventId": "01a17f27-aa35-7275-b56c-1e62ab491477",
+   "sequence": 581,
+   "eventType": "OrderCancelled",
+   "schemaVersion": 1,
+   "source": "exchange",
+   "simulationId": null,
+   "aggregateId": "01a17f27-a223-713b-b33a-55ffd7170945",
+   "correlationId": "01a17f27-a223-713b-b33a-55ffd7170945",
+   "occurredAt": "2030-01-08T06:32:45.254608Z",
+   "payload": {
+    "bustedQuantity": 0,
+    "cancelReason": "REQUESTED",
+    "clientOrderId": "LD-f1smoke3-O70",
+    "filledQuantity": 0,
+    "instrumentId": "AMZN",
+    "orderId": "01a17f27-a223-713b-b33a-55ffd7170945",
+    "participantId": "DEMO-BROKER",
+    "price": "491.60",
+    "priceTicks": 49160,
+    "quantity": 5,
+    "remainingQuantity": 5,
+    "sequence": 18060,
+    "side": "BUY",
+    "status": "CANCELLED",
+    "timeInForce": "DAY",
+    "type": "LIMIT"
+   }
+  },
+  {
+   "eventId": "01a17f28-3d15-7233-855c-a5d5c6b8d19c",
+   "sequence": 2189,
+   "eventType": "OrderExpired",
+   "schemaVersion": 1,
+   "source": "exchange",
+   "simulationId": null,
+   "aggregateId": "01a17f27-9bd6-7552-af6e-25e23d9c38e7",
+   "correlationId": "01a17f27-9bd6-7552-af6e-25e23d9c38e7",
+   "occurredAt": "2030-01-08T21:30:00Z",
+   "payload": {
+    "businessDate": "2030-01-08",
+    "bustedQuantity": 0,
+    "clientOrderId": "LD-f1smoke3-O4",
+    "filledQuantity": 0,
+    "instrumentId": "ACME",
+    "orderId": "01a17f27-9bd6-7552-af6e-25e23d9c38e7",
+    "participantId": "DEMO-BROKER",
+    "price": "95.28",
+    "priceTicks": 9528,
+    "quantity": 5,
+    "remainingQuantity": 5,
+    "sequence": 16691,
+    "side": "BUY",
+    "status": "EXPIRED",
+    "timeInForce": "DAY",
+    "type": "LIMIT"
+   }
+  },
+  {
+   "eventId": "01a17f28-3d37-7021-8ac8-7816a92f340d",
+   "sequence": 2242,
+   "eventType": "ClearingStatementIssued",
+   "schemaVersion": 1,
+   "source": "clearinghouse",
+   "simulationId": null,
+   "aggregateId": "CS:2030-01-08:DEMO-BROKER",
+   "correlationId": "DEMO-BROKER",
+   "occurredAt": "2030-01-08T21:30:00Z",
+   "payload": {
+    "businessDate": "2030-01-08",
+    "cutoffAt": "2030-01-08T21:30:00Z",
+    "issuedAt": "2030-01-08T21:30:00Z",
+    "obligations": [
+     {
+      "cashNet": "-191776.40",
+      "cashNetMinor": -19177640,
+      "currency": "USD",
+      "currencyScale": 2,
+      "feesNet": "0.00",
+      "feesNetMinor": 0,
+      "instrumentId": "AAPL",
+      "intendedSettlementDate": "2030-01-09",
+      "obligationId": "CS:2030-01-08:DEMO-BROKER:AAPL:2030-01-09",
+      "securitiesNet": 396,
+      "tradeCount": 88
+     },
+     {
+      "cashNet": "-52422.18",
+      "cashNetMinor": -5242218,
+      "currency": "USD",
+      "currencyScale": 2,
+      "feesNet": "0.00",
+      "feesNetMinor": 0,
+      "instrumentId": "ACME",
+      "intendedSettlementDate": "2030-01-09",
+      "obligationId": "CS:2030-01-08:DEMO-BROKER:ACME:2030-01-09",
+      "securitiesNet": 522,
+      "tradeCount": 143
+     },
+     {
+      "cashNet": "-182364.64",
+      "cashNetMinor": -18236464,
+      "currency": "USD",
+      "currencyScale": 2,
+      "feesNet": "0.00",
+      "feesNetMinor": 0,
+      "instrumentId": "AMZN",
+      "intendedSettlementDate": "2030-01-09",
+      "obligationId": "CS:2030-01-08:DEMO-BROKER:AMZN:2030-01-09",
+      "securitiesNet": 353,
+      "tradeCount": 83
+     }
+    ],
+    "participantId": "DEMO-BROKER",
+    "statementId": "CS:2030-01-08:DEMO-BROKER",
+    "timeZone": "America/New_York",
+    "trades": [
+     {
+      "amount": "963.36",
+      "amountMinor": 96336,
+      "currency": "USD",
+      "currencyScale": 2,
+      "executedAt": "2030-01-08T05:04:29.766205Z",
+      "executionId": "01a17f27-9bd8-722f-adf3-19da69f6299f",
+      "fee": "0.00",
+      "feeMinor": 0,
+      "instrumentId": "AAPL",
+      "intendedSettlementDate": "2030-01-09",
+      "obligationId": "CS:2030-01-08:DEMO-BROKER:AAPL:2030-01-09",
+      "priceTicks": 48168,
+      "quantity": 2,
+      "side": "BUY",
+      "tradeDate": "2030-01-08",
+      "tradeSequence": 26
+     },
+     {
+      "amount": "2458.00",
+      "amountMinor": 245800,
+      "currency": "USD",
+      "currencyScale": 2,
+      "executedAt": "2030-01-08T05:04:30.882086Z",
+      "executionId": "01a17f27-9bd8-722f-adf3-19ede3ab4d37",
+      "fee": "0.00",
+      "feeMinor": 0,
+      "instrumentId": "NVDA",
+      "intendedSettlementDate": "2030-01-09",
+      "obligationId": "CS:2030-01-08:DEMO-BROKER:NVDA:2030-01-09",
+      "priceTicks": 49160,
+      "quantity": 5,
+      "side": "BUY",
+      "tradeDate": "2030-01-08",
+      "tradeSequence": 30
+     },
+     {
+      "amount": "4334.67",
+      "amountMinor": 433467,
+      "currency": "USD",
+      "currencyScale": 2,
+      "executedAt": "2030-01-08T05:04:31.417105Z",
+      "executionId": "01a17f27-9bd9-775f-b758-9ac6d7b36ac0",
+      "fee": "0.00",
+      "feeMinor": 0,
+      "instrumentId": "AAPL",
+      "intendedSettlementDate": "2030-01-09",
+      "obligationId": "CS:2030-01-08:DEMO-BROKER:AAPL:2030-01-09",
+      "priceTicks": 48163,
+      "quantity": 9,
+      "side": "BUY",
+      "tradeDate": "2030-01-08",
+      "tradeSequence": 34
+     }
+    ],
+    "tradesFrom": "2030-01-07T21:30:00Z"
+   }
+  },
+  {
+   "eventId": "01a17f28-54d8-756d-85e3-01ae5aa1122e",
+   "sequence": 2244,
+   "eventType": "SettlementCompleted",
+   "schemaVersion": 1,
+   "source": "settlement-simulator",
+   "simulationId": null,
+   "aggregateId": "01a17f27-9bd8-722f-adf3-19da69f6299f",
+   "correlationId": "01a17f27-9bd8-722f-adf3-19da69f6299f",
+   "occurredAt": "2030-01-09T00:00:00Z",
+   "payload": {
+    "amountMinor": 96336,
+    "attempt": 1,
+    "buyerId": "DEMO-BROKER",
+    "clearing": {
+     "businessDate": "2030-01-08",
+     "buyer": {
+      "obligationId": "CS:2030-01-08:DEMO-BROKER:AAPL:2030-01-09",
+      "statementId": "CS:2030-01-08:DEMO-BROKER"
+     },
+     "seller": {
+      "obligationId": "CS:2030-01-08:LP:AAPL:2030-01-09",
+      "statementId": "CS:2030-01-08:LP"
+     }
+    },
+    "currency": "USD",
+    "executionId": "01a17f27-9bd8-722f-adf3-19da69f6299f",
+    "instrumentId": "AAPL",
+    "intendedSettlementDate": "2030-01-09",
+    "priceTicks": 48168,
+    "quantity": 2,
+    "sellerId": "LP",
+    "settledAt": "2030-01-09T00:00:00Z",
+    "settlementAmount": "963.36",
+    "status": "SETTLED",
+    "tradeDate": "2030-01-08",
+    "tradeSequence": 26
+   }
+  }
+ ],
+ "payment-gateway": [
+  {
+   "eventId": "01a17f27-0404-70cd-aab3-ca123c36aad0",
+   "sequence": 1,
+   "eventType": "ClockChanged",
+   "schemaVersion": 1,
+   "source": "payment-gateway",
+   "simulationId": null,
+   "aggregateId": "clock",
+   "correlationId": null,
+   "occurredAt": "2030-01-07T13:24:39.155249Z",
+   "payload": {
+    "change": "follow",
+    "effectiveAt": "2026-10-27T20:57:05.504857Z",
+    "mode": "virtual",
+    "now": "2030-01-07T13:24:39.155249280Z",
+    "running": true,
+    "speed": 1440.0
+   }
+  },
+  {
+   "eventId": "01a17f27-9f09-778e-b7c8-639b39f1da89",
+   "sequence": 2,
+   "eventType": "PaymentPending",
+   "schemaVersion": 1,
+   "source": "payment-gateway",
+   "simulationId": null,
+   "aggregateId": "01a17f27-9f09-778e-b7c8-639ace766fd2",
+   "correlationId": "LDA-61",
+   "occurredAt": "2030-01-08T05:24:25.913935Z",
+   "payload": {
+    "accountId": "LDA-61",
+    "amount": "871.00",
+    "amountMinor": 87100,
+    "bankAccount": {
+     "holderName": "Load customer 61",
+     "iban": "GB82WEST12345698765432"
+    },
+    "completedAt": null,
+    "createdAt": "2030-01-08T05:24:25.913935Z",
+    "currency": "USD",
+    "currencyScale": 2,
+    "failedAt": null,
+    "idempotencyKey": "LD-f1smoke3-D1",
+    "paymentId": "01a17f27-9f09-778e-b7c8-639ace766fd2",
+    "reason": null,
+    "reference": "Deposit LD-f1smoke3-D1",
+    "returnedAt": null,
+    "sequence": 1,
+    "status": "PENDING",
+    "type": "DEPOSIT",
+    "updatedAt": "2030-01-08T05:24:25.913935Z",
+    "valueDate": null
+   }
+  },
+  {
+   "eventId": "01a17f27-a253-7152-8031-d55a11a681fe",
+   "sequence": 3,
+   "eventType": "PaymentCompleted",
+   "schemaVersion": 1,
+   "source": "payment-gateway",
+   "simulationId": null,
+   "aggregateId": "01a17f27-9f09-778e-b7c8-639ace766fd2",
+   "correlationId": "LDA-61",
+   "occurredAt": "2030-01-08T05:44:02.913935Z",
+   "payload": {
+    "accountId": "LDA-61",
+    "amount": "871.00",
+    "amountMinor": 87100,
+    "bankAccount": {
+     "holderName": "Load customer 61",
+     "iban": "GB82WEST12345698765432"
+    },
+    "completedAt": "2030-01-08T05:44:02.913935Z",
+    "createdAt": "2030-01-08T05:24:25.913935Z",
+    "currency": "USD",
+    "currencyScale": 2,
+    "failedAt": null,
+    "idempotencyKey": "LD-f1smoke3-D1",
+    "paymentId": "01a17f27-9f09-778e-b7c8-639ace766fd2",
+    "reason": null,
+    "reference": "Deposit LD-f1smoke3-D1",
+    "returnedAt": null,
+    "sequence": 1,
+    "status": "COMPLETED",
+    "type": "DEPOSIT",
+    "updatedAt": "2030-01-08T05:44:02.913935Z",
+    "valueDate": "2030-01-08"
+   }
+  },
+  {
+   "eventId": "01a17f28-3c7e-745b-9a13-44320e394b11",
+   "sequence": 82,
+   "eventType": "BankStatementIssued",
+   "schemaVersion": 1,
+   "source": "bank",
+   "simulationId": null,
+   "aggregateId": "BS:2030-01-08:USD",
+   "correlationId": "USD",
+   "occurredAt": "2030-01-08T21:30:00Z",
+   "payload": {
+    "accountIban": "DK5000400440116243",
+    "businessDate": "2030-01-08",
+    "closingBalance": "10024390.00",
+    "closingBalanceMinor": 1002439000,
+    "currency": "USD",
+    "currencyScale": 2,
+    "cutoffAt": "2030-01-08T21:30:00Z",
+    "entries": [
+     {
+      "accountId": "LDA-61",
+      "amount": "871.00",
+      "amountMinor": 87100,
+      "bookedAt": "2030-01-08T05:44:02.913935Z",
+      "counterparty": {
+       "holderName": "Load customer 61",
+       "iban": "GB82WEST12345698765432"
+      },
+      "direction": "CREDIT",
+      "endToEndId": "LD-f1smoke3-D1",
+      "entryId": "BS:2030-01-08:USD:1",
+      "kind": "DEPOSIT",
+      "paymentId": "01a17f27-9f09-778e-b7c8-639ace766fd2",
+      "valueDate": "2030-01-08"
+     },
+     {
+      "accountId": "LDA-62",
+      "amount": "1960.00",
+      "amountMinor": 196000,
+      "bookedAt": "2030-01-08T05:59:53.801257Z",
+      "counterparty": {
+       "holderName": "Load customer 62",
+       "iban": "GB82WEST12345698765432"
+      },
+      "direction": "CREDIT",
+      "endToEndId": "LD-f1smoke3-D2",
+      "entryId": "BS:2030-01-08:USD:2",
+      "kind": "DEPOSIT",
+      "paymentId": "01a17f27-a303-76ad-9d64-795f45812544",
+      "valueDate": "2030-01-08"
+     },
+     {
+      "accountId": "LDA-32",
+      "amount": "1161.00",
+      "amountMinor": 116100,
+      "bookedAt": "2030-01-08T06:50:56.883337Z",
+      "counterparty": {
+       "holderName": "Load customer 32",
+       "iban": "GB82WEST12345698765432"
+      },
+      "direction": "CREDIT",
+      "endToEndId": "LD-f1smoke3-D4",
+      "entryId": "BS:2030-01-08:USD:3",
+      "kind": "DEPOSIT",
+      "paymentId": "01a17f27-aac9-77be-8d0c-807dd84cf98a",
+      "valueDate": "2030-01-08"
+     }
+    ],
+    "entriesFrom": "2030-01-07T21:30:00Z",
+    "issuedAt": "2030-01-08T21:30:00Z",
+    "openingBalance": "10000000.00",
+    "openingBalanceMinor": 1000000000,
+    "statementId": "BS:2030-01-08:USD",
+    "timeZone": "America/New_York",
+    "totalCreditsMinor": 2989000,
+    "totalDebitsMinor": -550000
+   }
+  }
+ ]
+}

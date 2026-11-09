@@ -249,8 +249,11 @@ public class EssentialsComponentsConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnMissingClass("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.SpringTransactionAwareEventStoreUnitOfWorkFactory")
     public HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory(Jdbi jdbi,
-                                                                                           PlatformTransactionManager transactionManager) {
-        return new SpringTransactionAwareJdbiUnitOfWorkFactory(jdbi, transactionManager);
+                                                                                           PlatformTransactionManager transactionManager,
+                                                                                           EssentialsComponentsProperties properties) {
+        var unitOfWorkFactory = new SpringTransactionAwareJdbiUnitOfWorkFactory(jdbi, transactionManager);
+        unitOfWorkFactory.setTransactionIsolation(properties.getUnitOfWork().getTransactionIsolation());
+        return unitOfWorkFactory;
     }
 
     /**
@@ -276,6 +279,9 @@ public class EssentialsComponentsConfiguration {
                                           .setLockConfirmationInterval(properties.getFencedLockManager().getLockConfirmationInterval())
                                           .setFencedLocksTableName(properties.getFencedLockManager().getFencedLocksTableName())
                                           .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(properties.getFencedLockManager().isReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation())
+                                          .setSpreadLocks(properties.getFencedLockManager().isSpreadLocks())
+                                          .setSpreadLocksAcquireGrace(properties.getFencedLockManager().getSpreadLocksAcquireGrace())
+                                          .setSpreadLocksRebalanceInterval(properties.getFencedLockManager().getSpreadLocksRebalanceInterval())
                                           .setEventBus(eventBus)
                                           .setSchemaOwnership(properties.getSchema().getMode().schemaOwnership());
         // Started at once in the create mode, as it always was. Otherwise the lifecycle manager starts it, after the

@@ -30,5 +30,5 @@ tier: cqrs-es
 flow: instrument-lifecycle
 tests:
   unit: { present: false }
-  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/market_data/InstrumentRiskApprovalTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/market_data/InstrumentRiskApprovalIT.java" }
   contract: { present: false }

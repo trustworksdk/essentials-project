@@ -275,7 +275,7 @@ Package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 All types from: `dk.trustworks.essentials.types`
 
 The `Double`-backed `Amount`/`Percentage` converters remain the auto-applied default so existing schemas keep working,
-and because a generated `numeric(38,2)` would round silently. See [MIGRATION-0.60.md](../docs/MIGRATION-0.60.md).
+and because a generated `numeric(38,2)` would round silently. See [MIGRATION-0.60.md](../docs/releases/MIGRATION-0.60.md).
 
 ## Integration Points
 

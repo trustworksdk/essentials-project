@@ -84,6 +84,28 @@ class BuiltInClosingBooksPolicyEvaluatorTest {
     }
 
     @Test
+    void a_gap_is_logged_and_counted_once_per_rollover_not_again_for_the_next_period_id() {
+        var registry = new SimpleMeterRegistry();
+        var evaluator = new BuiltInClosingBooksPolicyEvaluator<TestAggregate>(AggregateType.of("Accounts"),
+                                                                              ClosingBooksDefaultPolicyType.EVENT_COUNT_OR_TIME_BOUNDARY,
+                                                                              3,
+                                                                              ClosingBooksTimeBoundary.END_OF_MONTH,
+                                                                              ZoneId.of("UTC"),
+                                                                              null,
+                                                                              Clock.fixed(Instant.parse("2026-06-02T00:00:00Z"), ZoneOffset.UTC),
+                                                                              Optional.of(registry),
+                                                                              TestAggregate::eventCount,
+                                                                              TestAggregate::periodId);
+        // Over the event threshold as well: the gap is still reported
+        var aggregate = new TestAggregate(5, "2026-03");
+
+        assertThat(evaluator.shouldRolloverOnAccess(aggregate)).isTrue();
+        assertThat(evaluator.nextPeriodId(aggregate)).isEqualTo("2026-06");
+
+        assertThat(registry.get("essentials.closing_books.time_boundary_gap_detected").counter().count()).isEqualTo(1.0);
+    }
+
+    @Test
     void time_boundary_policy_requires_current_period_id_provider() {
         assertThatThrownBy(() -> new BuiltInClosingBooksPolicyEvaluator<TestAggregate>(AggregateType.of("Accounts"),
                                                                                        ClosingBooksDefaultPolicyType.TIME_BOUNDARY,

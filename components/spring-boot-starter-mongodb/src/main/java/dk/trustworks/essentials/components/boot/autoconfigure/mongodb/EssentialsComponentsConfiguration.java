@@ -292,6 +292,9 @@ public class EssentialsComponentsConfiguration {
                                      .setLockConfirmationInterval(properties.getFencedLockManager().getLockConfirmationInterval())
                                      .setFencedLocksCollectionName(properties.getFencedLockManager().getFencedLocksCollectionName())
                                      .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(properties.getFencedLockManager().isReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation())
+                                     .setSpreadLocks(properties.getFencedLockManager().isSpreadLocks())
+                                     .setSpreadLocksAcquireGrace(properties.getFencedLockManager().getSpreadLocksAcquireGrace())
+                                     .setSpreadLocksRebalanceInterval(properties.getFencedLockManager().getSpreadLocksRebalanceInterval())
                                      .setEventBus(eventBus)
                                      .buildAndStart();
     }

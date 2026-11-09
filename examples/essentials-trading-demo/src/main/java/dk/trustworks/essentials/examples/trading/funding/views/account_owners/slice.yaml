@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: funding.account_owners
+kind: view
+bc: funding
+owner: funding-team
+status: live
+summary: "Who owns which account, for the funding endpoints' ownership check."
+generator: essentials
+language: java
+
+serves: [MayFund]
+endpoints: []
+reads:
+  - { name: AccountOwner }
+projections:
+  - name: FundingAccountOwnersProjection
+    from: [AccountOpened]
+    consistency: eventual
+    store: postgresql
+forbidden:
+  - cross-slice-internal:funding
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/FundingIT.java" }
+  contract: { present: false }

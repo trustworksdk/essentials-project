@@ -160,7 +160,7 @@ class SubscriptionResumePointTest {
 
     @Test
     void test_a_save_captured_before_a_reset_cannot_mark_the_reset_persisted() {
-        // The race S6 in docs/subscription-improvements.md: a save binds 500, a reset to 10 is saved and marked,
+        // The race S6 in docs/plans/subscription-improvements.md: a save binds 500, a reset to 10 is saved and marked,
         // then the older save's markAsPersisted arrives
         var resumePoint = resumePointAt(100);
         resumePoint.advanceResumeFromAndIncluding(GlobalEventOrder.of(500));

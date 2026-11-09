@@ -3,7 +3,7 @@
 
 Usage (from the repository root):
     python3 -I .claude/skills/github-release/check.py GITHUB-RELEASE-0.60.0.md 0.60.0 \
-        docs/RELEASE-NOTES-0.60.0.md docs/MIGRATION-0.60.md docs/MIGRATION-NEXT_MAJOR.md
+        docs/releases/RELEASE-NOTES-0.60.0.md docs/releases/MIGRATION-0.60.md docs/releases/MIGRATION-NEXT_MAJOR.md
 
 Checks:
   links    every link is absolute; every link into this repository is pinned to the release tag,

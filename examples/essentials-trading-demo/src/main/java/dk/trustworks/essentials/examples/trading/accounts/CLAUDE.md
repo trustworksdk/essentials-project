@@ -1,0 +1,68 @@
+# Bounded context: accounts
+
+The trading account ledger: cash buckets, positions, holds, reservations, and the figures customers see. Design:
+`docs/design/phase-1-account-core.md`. Its own `Accounts` stream; it replaced the `brokerage` context's
+`TradingAccount`, and `brokerage` was deleted in phase 4 (generation archival moved here).
+
+**Write style: aggregate (§R5)** — `Account` behind `Accounts` (a `ClosingBooksLogicalAggregateRepository`), closing
+books `END_OF_DAY` on the exchange's business days (EF-1, `periodSource = BUSINESS_CALENDAR`: roll at the exchange's
+close, via `integration/ExchangeClosingBooksCalendar`; without the exchange, midnight New York on the app clock), snapshots every 25 events (100 left most accounts without a snapshot;
+`_demo_harness/CLAUDE.md`, "Snapshot interval").
+
+## Rules that are easy to break
+
+- **Requests are checked, facts are not.** `holdFunds`, `reserveShares` refuse with `LedgerRuleViolation` (`422`).
+  Deposits, returns, withdrawals, trades and settlements are facts from outside and are never refused for funds; they
+  can restrict the account (settled cash < 0). Do not add a funds check to a fact.
+- **Every mutating slice loads through `Accounts.getAccountForMutation`** — the closing-books trigger. Only
+  `roll_account_books` must not, or one roll becomes two.
+- **Idempotency is per external reference**, and open items carry into the next generation (`OpeningBalances`). A new
+  kind of open item must be added to `OpeningBalances` and `openStateForNextGeneration`, or it is lost at the next roll.
+- **A close that finds nothing open is silent only if it is a duplicate.** Opened and closed in this generation → no
+  event. Never opened here → `UnknownReferenceIgnored`, once per kind and reference. That is how reordering shows
+  instead of silently leaving a hold or trade open (it cost a cycle in the phase 1 load test). Any new closing command
+  must call `ignoreIfUnknown` the same way.
+- **Events carry their own effect** (`holdConsumed`, `costBasisChange`, `realizedPnl`, `unclearedReleased`).
+  Projections read those, never recompute them.
+- **The two balance projections apply deltas, so they are versioned** (generation + last `EventOrder`, the event-store
+  docs' "Version = EventOrder" pattern). A `ViewEventProcessor` may redeliver; an unguarded delta is wrong money.
+  `account_activity` is insert-only on `(stream, event order)` instead.
+- **Simple-name clashes break Spring**: bean names are simple class names, so two contexts may not both have, say, a
+  `SettleTradeHandler` (hence `ReleaseHold`, `RollAccountBooks` from when `brokerage` existed, and
+  `FundingAccountOwnersProjection` beside `orders`' `AccountOwnersProjection`).
+- **`Money` in a request body is `{"amount": 100.50, "currency": "USD"}` with a JSON *number*.** Essentials' deserializer
+  refuses a string amount (`400`, `cannot coerce value "100.50"`).
+- **`Account` implements `HasClosingBooksPeriodId`, and must.** With `essentials.eventstore.closing-books.enabled`
+  (the `compose` profile, not the tests) the starter refuses to start a time-boundary aggregate without it. The tests
+  never enable it, so only a real run catches its absence.
+- **A deposit's `clearsOn` is that many of the exchange's business days on, holidays included**
+  (`BusinessCalendar.businessDaysAfter`, SR-35); without the simulators, or with the calendar unreadable, weekdays
+  (`BusinessDays.add`).
+- **Deposits clear on the exchange's business days**, never on a clock (D10): `DepositClearing` clears what
+  `uncleared_deposits` lists as due when `BusinessCalendar` announces a close, and at startup from the latest closed day
+  (a notice can be missed). Without the simulators nothing drives it; the operator endpoint still clears.
+- **Do not send commands from a `@TransactionalEventListener(AFTER_COMMIT)` directly.** Spring's synchronization is
+  inactive in the after-commit callback, and `SpringTransactionAwareUnitOfWorkFactory` fails to open a unit of work
+  (`Transaction synchronization is not active`). `DepositClearing` hands the work to its own thread.
+- **Snapshots**: test a change to `Account`'s state through `DefaultAggregateSnapshotStateAdapter` (see `AccountTest`),
+  not a plain serializer — the adapter is what leaves the `AggregateRoot` base fields out.
+
+## Slices
+
+| Slice | Kind | Driven by (from phase) |
+|---|---|---|
+| `open_account` | command | customer, for themselves (1) |
+| `adjust_cash` | command | operator; reconciliation (5) |
+| `credit_deposit`, `clear_deposit`, `return_deposit` | command | operator now; payment gateway (2) |
+| `hold_funds`, `release_hold`, `withdraw_cash` | command | operator now; orders (3), withdrawals (2) |
+| `credit_withdrawal_return` | command | operator; `funding`, a withdrawal the bank returned (2) |
+| `reserve_shares`, `release_shares` | command | operator now; orders (3) |
+| `book_trade`, `settle_trade`, `reverse_trade_booking` | command | operator now; exchange (3), settlement (4) |
+| `correct_settlement_amount` | command | operator; `settlement`, a corrected settlement (4) |
+| `roll_account_books` | command | operator; end of day (EF-1) |
+| `archive_account_generation` | command | operator (`POST /api/admin/accounts/{accountId}/generations/{generation}/archive`); needs `essentials.eventstore.archives.enabled` (moved from `brokerage`, 4) |
+| `account_generation_archives`, `account_generation_events` | view | operator: archived generations and their content; a sealed generation's raw events (moved from `brokerage`, 4) |
+| `account_overview`, `positions`, `account_activity` | view | customer (own accounts) and operator |
+| `account_valuation` | view | customer (`GET /api/accounts/{accountId}/valuation`): current positions at the latest closing prices (`market_data`'s `ClosingPrices` seam), worked out when asked, not kept per day (4) |
+| `uncleared_deposits` | view | `clear_deposits` |
+| `automations/clear_deposits` | automation | the exchange's business days (`integration/BusinessCalendar`), simulators profile only (2) |

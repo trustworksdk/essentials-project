@@ -16,8 +16,15 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
+import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.AggregateRoot;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.PersistableEvent;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventTypeOrName;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import org.jdbi.v3.core.Jdbi;
@@ -35,6 +42,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.List;
 import java.util.stream.IntStream;
 
+import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
+import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -48,12 +57,13 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
                                                                                                            .withUsername("test-user")
                                                                                                            .withPassword("secret-password");
 
+    private Jdbi                                          jdbi;
     private EventStoreManagedUnitOfWorkFactory            unitOfWorkFactory;
     private PostgresqlClosingBooksGenerationRepository<String> repository;
 
     @BeforeEach
     void setup() {
-        var jdbi = Jdbi.create(postgreSQLContainer.getJdbcUrl(),
+        jdbi = Jdbi.create(postgreSQLContainer.getJdbcUrl(),
                                postgreSQLContainer.getUsername(),
                                postgreSQLContainer.getPassword());
         jdbi.installPlugin(new PostgresPlugin());
@@ -125,6 +135,127 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
                     assertThat(current.isOpen()).isTrue();
                 });
         assertThat(repository.loadGenerations(ACCOUNTS, logicalAggregateId)).hasSize(1);
+    }
+
+    /**
+     * EF-1b: a scan's rollover runs inside the generation lock and a unit of work, and the application's own rollover
+     * takes both again (its repository's closeAndOpenNextGeneration). On PostgreSQL that must re-enter, not wait for
+     * itself; and a rollover that fails must roll the whole decision back.
+     */
+    @Test
+    void a_scan_rollover_re_enters_the_generation_lock_and_its_failure_rolls_back() {
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var coordinator = new ClosingBooksCoordinator<>(ACCOUNTS,
+                                                        repository,
+                                                        (type, id, generation) -> id.value() + "#" + generation,
+                                                        unitOfWorkFactory);
+        coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        ClosingBooksDecisionPolicy<String, String> roll = context -> ClosingBooksDecision.CLOSE_AND_OPEN_NEXT;
+
+        var rolled = coordinator.evaluatePolicy(logicalAggregateId, "aggregate", ClosingBooksTriggerMode.SCHEDULED_SCAN, roll,
+                                                context -> coordinator.closeAndOpenNextGeneration(context.logicalAggregateId()));
+        assertThat(rolled.generation()).isEqualTo(2);
+        assertThat(rolled.isOpen()).isTrue();
+
+        assertThatThrownBy(() -> coordinator.evaluatePolicy(logicalAggregateId, "aggregate", ClosingBooksTriggerMode.SCHEDULED_SCAN, roll,
+                                                            context -> {
+                                                                coordinator.closeAndOpenNextGeneration(context.logicalAggregateId());
+                                                                throw new IllegalStateException("the next-generation factory failed");
+                                                            }))
+                .rootCause()
+                .hasMessage("the next-generation factory failed");
+        assertThat(repository.resolveCurrentGeneration(ACCOUNTS, logicalAggregateId))
+                .as("the rollover's close and open rolled back with it")
+                .hasValueSatisfying(current -> assertThat(current.generation()).isEqualTo(2));
+        assertThat(repository.loadGenerations(ACCOUNTS, logicalAggregateId)).hasSize(2);
+    }
+
+    /**
+     * F-008: the scan's rollover records the aggregate's closing event on {@code context.aggregate()} and calls the
+     * logical repository's {@code closeAndOpenNextGeneration}. A {@link StatefulAggregateRepository} flushes only the
+     * aggregates registered with the unit of work that commits, so the scan must load the aggregate in the rollover's
+     * unit of work - loaded in one of its own, the closing event was silently dropped.
+     */
+    @Test
+    void a_scan_rollover_persists_the_closing_event_it_records_on_the_scanned_aggregate() {
+        // The unit of work factory's Jdbi: the persistence strategy registers its argument factories on it
+        var persistenceStrategy = SeparateTablePerAggregateTypePersistenceStrategy.builder()
+                                                                                  .setJdbi(jdbi)
+                                                                                  .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                                  .setEventMapper((aggregateId, configuration, event, eventOrder) ->
+                                                                                                          PersistableEvent.builder()
+                                                                                                                          .setEvent(event)
+                                                                                                                          .setAggregateType(configuration.aggregateType)
+                                                                                                                          .setAggregateId(aggregateId)
+                                                                                                                          .setEventTypeOrName(EventTypeOrName.with(event.getClass()))
+                                                                                                                          .setEventOrder(eventOrder)
+                                                                                                                          .build())
+                                                                                  .setAggregateEventStreamConfigurationFactory(standardSingleTenantConfiguration(
+                                                                                          EssentialsJSONEventSerializers.create(),
+                                                                                          IdentifierColumnType.TEXT,
+                                                                                          JSONColumnType.JSONB))
+                                                                                  .build();
+        var eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
+        var accounts   = StatefulAggregateRepository.from(eventStore, ACCOUNTS, reflectionBasedAggregateRootFactory(), Account.class);
+        var coordinator = new ClosingBooksCoordinator<>(ACCOUNTS,
+                                                        repository,
+                                                        (type, id, generation) -> id.value() + "#" + generation,
+                                                        unitOfWorkFactory);
+        var logicalAccounts    = new ClosingBooksLogicalAggregateRepository<>(ACCOUNTS, accounts, coordinator, ClosingBooksIdSerializer.stringBased());
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        unitOfWorkFactory.usingUnitOfWork(() -> logicalAccounts.open(logicalAggregateId, context -> Account.opened(context.streamAggregateId())));
+
+        var processor = DefaultClosingBooksScheduledScanProcessor.<String, Account>builder()
+                                                                 .setAggregateType(ACCOUNTS)
+                                                                 .setGenerationRepository(repository)
+                                                                 // As an application writes it: a repository load needs a unit of work
+                                                                 .setAggregateLoader(streamAggregateId -> unitOfWorkFactory.withUnitOfWork(() -> accounts.tryLoad(streamAggregateId)))
+                                                                 .setPolicy(context -> ClosingBooksDecision.CLOSE_AND_OPEN_NEXT)
+                                                                 .setCoordinator(coordinator)
+                                                                 .setClock(java.time.Clock.systemUTC())
+                                                                 .setScanRetryDelay(java.time.Duration.ofMinutes(5))
+                                                                 .setScanRollover(context -> {
+                                                                     context.aggregate().closeBooks();
+                                                                     logicalAccounts.closeAndOpenNextGeneration(context.logicalAggregateId(),
+                                                                                                                context.aggregate(),
+                                                                                                                null,
+                                                                                                                (closed, next, hint) -> Account.opened(next.streamAggregateId()));
+                                                                 })
+                                                                 .build();
+
+        assertThat(processor.processNextBatch(10)).isEqualTo(1);
+
+        assertThat(repository.resolveCurrentGeneration(ACCOUNTS, logicalAggregateId))
+                .hasValueSatisfying(current -> assertThat(current.generation()).isEqualTo(2));
+        List<Object> closedStream = unitOfWorkFactory.withUnitOfWork(uow -> eventStore.fetchStream(ACCOUNTS, "Account-123#1")
+                                                                                      .map(stream -> stream.eventList().stream().map(event -> (Object) event.event().deserialize()).toList())
+                                                                                      .orElseThrow());
+        assertThat(closedStream).as("the closing event is persisted in the closed generation's stream")
+                                .containsExactly(new AccountOpened("Account-123#1"), new BooksClosed("Account-123#1"));
+        boolean nextStreamExists = unitOfWorkFactory.withUnitOfWork(uow -> eventStore.fetchStream(ACCOUNTS, "Account-123#2").isPresent());
+        assertThat(nextStreamExists).as("the next generation is opened with its own stream").isTrue();
+    }
+
+    public record AccountOpened(String accountId) {
+    }
+
+    public record BooksClosed(String accountId) {
+    }
+
+    public static class Account extends AggregateRoot<String, Object, Account> {
+        public Account(String accountId) {
+            super(accountId);
+        }
+
+        static Account opened(String accountId) {
+            var account = new Account(accountId);
+            account.apply(new AccountOpened(accountId));
+            return account;
+        }
+
+        void closeBooks() {
+            apply(new BooksClosed(aggregateId()));
+        }
     }
 
     @Test

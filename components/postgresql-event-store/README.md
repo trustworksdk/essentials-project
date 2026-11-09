@@ -626,7 +626,7 @@ with `CREATE INDEX CONCURRENTLY`.
 
 Full rules - joins, batch subscriptions, explicit bindings, cost - in
 [LLM-postgresql-event-store.md](../../LLM/LLM-postgresql-event-store.md#event-causation); design in
-[docs/event-causation.md](../../docs/event-causation.md).
+[docs/design/event-causation.md](../../docs/design/event-causation.md).
 
 ## Multitenancy
 
@@ -1679,6 +1679,19 @@ The `OrderedMessage` provides access to:
 | **Replay support** | Yes                                                            | No | Yes                                      |
 | **Throughput** | High (parallel workers)                                        | Limited by transaction | High (direct path)                       |
 
+Two more processors run their handlers on **every instance** instead of one. Both need the shard-owned queue engine (`essentials.shard-owned-queue.durable-queues-enabled=true`) and refuse to start on a queue that does not keep key order across instances:
+
+| Characteristic | `PartitionedEventProcessor` | `PartitionedViewEventProcessor` |
+|----------------|-----------------------------|---------------------------------|
+| **Best for** | Spreading `EventProcessor` handler work over the instances | View projections keyed by aggregate, spread over the instances |
+| **Processing** | Async via Inbox, handled on every instance | Async via the processor's DurableQueue (no direct path), handled on every instance |
+| **Exclusive** | Reader only (via FencedLock); handlers on every instance | Reader only (via FencedLock); handlers on every instance |
+| **Latency** | Higher (queued) | Higher than `ViewEventProcessor` (queued; no direct path) |
+| **Consistency** | Eventual, order kept per aggregate only | Eventual, order kept per aggregate only |
+| **Failure handling** | Automatic redelivery | Automatic redelivery |
+| **Replay support** | Yes, only while stopped on every instance | Yes, only while stopped on every instance |
+| **Throughput** | High (every instance handles its share of the aggregates) | High (every instance handles its share of the aggregates) |
+
 **When to use each:**
 
 - **`EventProcessor`**: External system integrations (Kafka, email, webhooks), long-running operations, operations that may fail and need retry. Events are queued to an Inbox and processed by background workers with configurable parallelism and redelivery policies. Higher latency but maximum reliability.
@@ -1686,6 +1699,12 @@ The `OrderedMessage` provides access to:
 - **`InTransactionEventProcessor`**: View projections that must be atomically consistent with events. Processing happens synchronously within the same database transaction that appends the event. If processing fails, the entire transaction (including the event) rolls back. Lowest latency but no replay capability.
 
 - **`ViewEventProcessor`**: View projections where low latency is critical but occasional failures are acceptable. Events are handled directly (no queue) for minimal latency. On failure, events are queued to a [DurableQueue](../foundation/README.md#durablequeues-messaging) for retry - unless the failed handler appended events or changed an aggregate, in which case the failure goes to the subscription's [Subscription Error Policy](#subscription-error-policy) (see [Behavior](#behavior)). If the queue has pending messages for an aggregate, new events are also queued to maintain ordering. Best balance of latency and reliability for read models.
+
+- **`PartitionedEventProcessor`**: An `EventProcessor` whose `@MessageHandler`s run on every instance, each handling its share of the aggregates; one instance reads the events and forwards them to the Inbox in batches (`getForwardBatchSize()`, default 100). One aggregate's events stay in order, but there is no order across aggregates. Not for a handler that keeps in-memory state across aggregates or calls something that accepts one caller only - keep those on `EventProcessor`. Handlers must be idempotent. See [Several instances: `PartitionedEventProcessor`](../../LLM/LLM-postgresql-event-store.md#several-instances-partitionedeventprocessor).
+
+- **`PartitionedViewEventProcessor`**: The view counterpart: one instance reads and forwards the events in batches to the processor's DurableQueue (`<processorName>:queue`), and every instance handles its share of the aggregates, each message in a `UnitOfWork` of its own. There is no direct path, handlers must be idempotent, and `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` handlers are refused at start. Not for a view that needs one aggregate's row before another's - keep those on `ViewEventProcessor`. See [Views on several instances: `PartitionedViewEventProcessor`](../../LLM/LLM-postgresql-event-store.md#views-on-several-instances-partitionedvieweventprocessor).
+
+Both partitioned processors reset only while stopped on every instance: `resetAllSubscriptions()`/`resetSubscriptions(...)` throw `IllegalStateException` while it runs on any instance, and also while a departed (crashed, or stopped mid-handler) instance still holds part of its queue - unlike an `EventProcessor`, whose reset runs live on the reading instance. `resetAllSubscriptionsIgnoringDepartedInstances()` skips only the departed-instance check, for use once the old process is known to be gone. See [Resetting a partitioned processor](../../LLM/LLM-postgresql-event-store.md#resetting-a-partitioned-processor).
 
 ### EventProcessor
 
@@ -1737,7 +1756,8 @@ public class ShippingEventKafkaPublisher extends EventProcessor {
 
 - **Exclusive Subscription**: Only one instance per cluster processes events (via FencedLock)
 - **Ordered Processing**: Events for same aggregate processed in order (via [OrderedMessage](../foundation/README.md#ordered-message-processing))
-- **Redelivery**: Failed events are retried per `RedeliveryPolicy`
+- **Redelivery**: Failed events are retried per `RedeliveryPolicy`. The default `getInboxRedeliveryPolicy()` is derived from failover timing (`FailoverRedeliveryPolicy`): quick first retries (200 ms, doubling to 10 s) for 4 × (fenced-lock timeout + the queue's `maxUnservedAfterInstanceLoss()`, twice the `message-handling-timeout` on `PostgresqlDurableQueues`) - about 5 minutes with the PostgreSQL starter's defaults - so a handler that waits for another processor's work does not dead-letter while that work fails over to another instance. `start()` logs the budget. The example above overrides it with a shorter one; see [Handler failures](../../LLM/LLM-postgresql-event-store.md#handler-failures)
+- **Batched forward**: `getForwardBatchSize()` (default 1, event by event) above 1 forwards each batch of events to the Inbox in one unit of work, together with the resume point; `getForwardMaxLatency()` (default 20 ms) bounds how long a partial batch waits. The `SubscriptionErrorPolicy` then retries and stops at a batch as a whole; a policy that skips first forwards the failed batch's events again one per unit of work, so the skip loses only the events that cannot be forwarded on their own either. Batching pays only together with more Inbox consumers (`getNumberOfParallelInboxMessageConsumers()`); see [Throughput: inbox consumers and the batched forward](../../LLM/LLM-postgresql-event-store.md#throughput-inbox-consumers-and-the-batched-forward)
 - **Command Handling**: `@CmdHandler` methods handle commands via `DurableLocalCommandBus`
 
 #### `@CmdHandler` and Delayed Messages
@@ -1872,6 +1892,8 @@ public class OrderDashboardProcessor extends ViewEventProcessor {
 1. Events are handled **directly** for low latency
 2. On **error**, the event is queued to a [DurableQueue](../foundation/README.md#durablequeues-messaging) for retry
 3. If queue already has messages for that aggregate ID, new events are queued to maintain order
+
+The queue's default `getDurableQueueRedeliveryPolicy()` is the same failover-derived budget as `EventProcessor`'s default Inbox policy (see [Key Features](#key-features)), sized with this view's queue.
 
 The direct handler runs under a savepoint in the subscription's transaction, so a handler that fails - for example on a constraint violation - has only its own SQL writes rolled back, and the event is queued in the same transaction.
 A savepoint only undoes SQL, however. If the failed handler left state in the `UnitOfWork` that a savepoint cannot undo, committing the `UnitOfWork` to queue the event would act on that state although the handler failed. So in these cases the event is **not** queued in that `UnitOfWork`:
@@ -2537,7 +2559,7 @@ Startup semantics:
 - `cdc.mode=require` fails startup if CDC cannot become active
 - `cdc.mode=auto` marks CDC as failed/inactive and continues with polling fallback
 - `cdc.delivery-mode=inbox|direct` controls whether CDC uses durable inbox or direct publish mode
-- `cdc.cdc-dispatcher.dispatched-row-policy=mark-dispatched|delete` controls whether dispatched inbox rows are retained for TTL cleanup or deleted immediately
+- `cdc.cdc-dispatcher.dispatched-row-policy=delete|mark-dispatched` controls whether dispatched inbox rows are deleted immediately (default `delete`) or retained for TTL cleanup
 - CDC conversion only processes configured aggregate event stream inserts
   - `wal2json`: `kind=insert` rows on configured event tables
   - `pgoutput`: only insert messages for configured event tables; non-insert messages are ignored
@@ -2550,7 +2572,7 @@ Slot ownership and safety:
 
 Design details:
 
-- [Hybrid CDC design](../../docs/cdc.md)
+- [Hybrid CDC design](../../docs/design/cdc.md)
 
 Operational API:
 

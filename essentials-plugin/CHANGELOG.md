@@ -3,6 +3,117 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-9 — targets Essentials 0.60.1
+
+- **Release documents moved** — the Essentials repository now keeps its release notes and migration guides under
+  `docs/releases/` and its design documents under `docs/design/`. `migration-plan.py` cites them at their new paths
+  and still links to the path each file has at the cited release tag; the bundled references link to the tagged
+  paths the same way. No skill, rule or command changed.
+- **Failed-batch replay on an I/O failure** — the postgresql-event-store reference says that when the one-event-per-unit-of-work
+  replay of a skipped batch fails with an I/O or connection error, the subscription stops at the batch and forwards
+  all of it again once resumed, instead of skipping it. No skill, rule or script changed.
+- **Closing-books refusal** — the eventsourced-aggregates reference warns that a `ClosingBooksGenerationMovedException`
+  from a guarded closing-books method leaves the unit of work rollback-only: catch it outside the unit of work, reload
+  and retry in a new one. No skill, rule or script changed.
+- **Failed-batch hand-off policy** — the postgresql-event-store reference describes the overload
+  `BatchedPersistedEventHandler#handOffFailedBatch(events, failure, subscriptionErrorPolicy)`, which the batched
+  subscriber calls with the policy that gave up on the batch and which by default delegates to the two-argument one.
+  An `EventProcessor` reads whether that policy skips from it, whichever `EventStoreSubscriptionManager` built the
+  subscription, so the reference no longer lists a manager other than `DefaultEventStoreSubscriptionManager` as a case
+  where a failed batch is skipped whole. It also names the methods `ViewEventProcessor` uses: `handOffFailedEvent` and
+  the two-argument `handOffFailedBatch`. No skill, rule or script changed.
+- **Declared aggregate policies take precedence** — the eventsourced-aggregates reference says that with the Spring
+  Boot starter's default policy registries the annotation on a declared aggregate class wins over an explicit
+  `register(...)` or a policy `BeanPostProcessor` registration of the same class, whichever came first, and that an
+  application-supplied policy registry decides this itself. No skill, rule or script changed.
+- **MongoDB starter fenced-lock defaults** — the spring-boot-starter-modules reference gives the MongoDB starter's
+  `essentials.fenced-lock-manager.lock-time-out` default as `15s` and `lock-confirmation-interval` as `4s`, the values
+  in that starter's `EssentialsComponentsProperties`; it said `12s` and `5s`. No skill, rule or script changed.
+- **What `awaitProcessed` waits for** — the postgresql-event-store reference states the bounded wait as the processors
+  implement it: checks every 25 ms, the deadline compared between checks (so a call can overrun its timeout by the
+  check in progress), `awaitProcessedAsync`'s timeout counted from subscription, `AwaitProcessedTimeoutException` on
+  timeout, `IllegalArgumentException` for a negative timeout or a `null` argument. It no longer says an exclusive
+  `EventProcessor` subscription held by another instance is read from its last saved resume point: one that never held
+  the lock in this JVM has no resume point and times out; only one that held it and lost it reads the saved one. No
+  skill, rule or script changed.
+- **Markdown lint** — blank lines added around a heading and two lists in the eventsourced-aggregates,
+  postgresql-event-store and traps references. Formatting only; no content, skill, rule or script changed.
+
+## 0.60.1-8 — targets Essentials 0.60.1
+
+- **Guarded closing-books rollovers** — the eventsourced-aggregates reference describes
+  `ClosingBooksLogicalAggregateRepository.closeAndOpenNextGenerationGuarded(id, currentAggregate, hint, factory)` and
+  the coordinator's guarded `closeAndOpenNextGeneration(AggregateGeneration)` and
+  `evaluatePolicy(AggregateGeneration loadedFrom, …)`, which throw `ClosingBooksGenerationMovedException`, closing
+  nothing, when the aggregate's generation is no longer the open one, and says the unguarded
+  `closeAndOpenNextGeneration` closes whichever generation is open under the generation lock. No skill, rule or script
+  changed.
+
+## 0.60.1-7 — targets Essentials 0.60.1
+
+- **Default inbox retry budget** — the postgresql-event-store reference says the queue's
+  `maxUnservedAfterInstanceLoss()` is twice the `message-handling-timeout` on `PostgresqlDurableQueues`, since the
+  stuck-message reset runs at most once per timeout, so the default budget is about 5 minutes with the PostgreSQL
+  starter's defaults; it said about 3 minutes. No skill, rule or script changed.
+
+## 0.60.1-6 — targets Essentials 0.60.1
+
+- **Business-calendar period source** — the eventsourced-aggregates reference says a business calendar with a boundary
+  other than `END_OF_DAY` fails `build()` and startup validation except boundary `NONE` under a policy other than
+  `TIME_BOUNDARY`/`EVENT_COUNT_OR_TIME_BOUNDARY`, where the calendar is never read, so such an aggregate may inherit a
+  global `period-source=business-calendar`; it said every boundary other than `END_OF_DAY` failed.
+  No skill, rule or script changed.
+
+## 0.60.1-5 — targets Essentials 0.60.1
+
+- **Closing-books scheduled scan** — the eventsourced-aggregates reference says the scan calls the aggregate loader
+  inside the generation lock and the rollover's unit of work, from the generation it decides on: the rollover's
+  `context.aggregate()` belongs to `context.currentGeneration()` and may be mutated, and a closing event recorded on
+  it is persisted with the rollover when the loader's repository joins the unit of work, as a
+  `StatefulAggregateRepository` does. A generation rolled or closed after the scan read it is left alone.
+  No skill, rule or script changed.
+
+## 0.60.1-4 — targets Essentials 0.60.1
+
+- **Shard-owned `leaseTtl`** — the shard-owned reference's settings table says `leaseTtl` is how long after its
+  owner dies without releasing a shard becomes takeable, and that a survivor takes it on its next heartbeat tick,
+  so it stays unserved for up to `leaseTtl` plus one heartbeat interval; it said the shard stayed unserved for
+  `leaseTtl`. No skill, rule or script changed.
+
+## 0.60.1-3 — targets Essentials 0.60.1
+
+- **`Money` JSON** — the types-jackson and types-integrations references show `Money`'s `amount` as a JSON number
+  (`{"amount":99.99,"currency":"USD"}`), which is what the serializer writes; they showed it quoted. The
+  types-jackson reference says `MoneyDeserializer` keeps the amount at the scale it was written with, also reads a
+  quoted number, needs both properties in any order and ignores other properties.
+  No skill, rule or script changed.
+
+## 0.60.1-2 — targets Essentials 0.60.1
+
+- **`PartitionedViewEventProcessor` and the partitioned reset** — the event-store reference describes the view
+  counterpart of `PartitionedEventProcessor` and that both partitioned processors reset only while stopped on every
+  instance (trap `ESS-137`), with reset methods that are `final`: a subclass acts on a reset by overriding
+  `onSubscriptionsReset`. `slice-check`, `slice-map` and enrichment recognise `PartitionedEventProcessor` and
+  `PartitionedViewEventProcessor` as event processors; a slice built on one was not counted as a processor before.
+  The reference also describes the partitioned view's opt-in to forward event payloads instead of references, and
+  that switching a `ViewEventProcessor` to it needs its queue drained first: the queue key changes, so a left-over
+  redelivery or dead letter is applied out of order.
+- **Framework docs for the next Essentials release** — the shard-owned reference describes elastic pump
+  connections, waking owners after commit instead of `NOTIFY` in the enqueue transaction, pumps that visit
+  only owners that signalled or came due, and one horizon probe per pass; the event-store reference the
+  `EventProcessor` batched forward; the foundation reference `JSONSerializer.readProperties` and
+  `resolveClass`. The `InboxConfig.builder()` examples compile: that builder's methods take no `set` prefix.
+  The event-store reference describes `PartitionedEventProcessor` (handlers on every instance, on a queue that keeps
+  key order across instances) and the start-up refusal of competing inbox consumers on a per-node queue, and that a
+  processor's default retry budget now outlasts a failover (`FailoverRedeliveryPolicy`).
+  The shard-owned reference's `holeExpiry` row says a message committed after it is delivered late by the head
+  sweep, no longer that it may be lost.
+  The foundation reference describes opt-in lock spreading (`essentials.fenced-lock-manager.spread-locks`), its
+  rate-limited rebalancing (`spread-locks-rebalance-interval`) and their costs.
+  The reactive reference says `AnnotatedCommandHandler` logs a rethrown handler failure at DEBUG, not ERROR.
+  The foundation reference describes `IdentifiedByKeyAndOrder`; the shard-owned reference `enqueueIfAbsent`.
+  No skill, rule or script changed.
+
 ## 0.60.1-1 — targets Essentials 0.60.1
 Field feedback from running `/essentials:slice-check` and `/essentials:upgrade` on a real 27-context project.
 - **Findings are graded by consequence.** An §R4 import is **Blocking** only when the imported thing can

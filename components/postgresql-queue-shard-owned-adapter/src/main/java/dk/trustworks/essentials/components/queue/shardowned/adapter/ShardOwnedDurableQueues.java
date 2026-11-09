@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedQueue;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
 // Single-type imports, not the package: shardowned.spi and foundation...queue BOTH export QueueName,
 // Message and QueuedMessage. Those three are written out in full wherever an engine one is meant, so
@@ -185,6 +186,16 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     private final StartHook startHook;
 
     private final AtomicBoolean warnedAboutUnitOfWorkWithoutConnection = new AtomicBoolean();
+    /**
+     * How long after a refused enqueue of {@link IdentifiedByKeyAndOrder} messages their queue is written with the engine's
+     * "if absent" insert - long enough for the backlog a reader re-forwards after an unclean failover to drain
+     */
+    static final Duration IF_ABSENT_AFTER_A_REFUSAL = Duration.ofMinutes(10);
+    /**
+     * Queues whose {@link IdentifiedByKeyAndOrder} messages are enqueued "if absent", mapped to until when (by
+     * {@link System#nanoTime()}) - see {@link #identifiedByKeyAndOrder}
+     */
+    private final ConcurrentMap<QueueName, Long> enqueueIfAbsentUntilNanos = new ConcurrentHashMap<>();
 
     private final EnqueueOutsideUnitOfWorkGuard enqueueOutsideUnitOfWorkGuard = new EnqueueOutsideUnitOfWorkGuard(ShardOwnedDurableQueues.class);
 
@@ -318,6 +329,49 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     }
 
     /**
+     * {@code true}: an ordered message's key maps to one ordered unit, a unit has one owner cluster-wide (a lease, renewed
+     * by the owner's heartbeat), and an owner that lost its lease is fenced out of acknowledging. So competing consumers
+     * on several instances still deliver a key in {@code key_order}; a unit only changes owner by draining, or after its
+     * owner stopped renewing for the lease TTL.
+     */
+    @Override
+    public boolean keepsKeyOrderAcrossInstances() {
+        return true;
+    }
+
+    /**
+     * The engine's lease TTL plus one heartbeat interval ({@link ShardOwnedQueue#maxUnservedAfterInstanceLoss(Duration)}):
+     * an ordered unit or shard of an instance that died becomes takeable once the instance's row is older than the lease
+     * TTL, and a surviving instance takes it on its next heartbeat tick, every third of the lease TTL. The lease TTL is
+     * the one the engine runs with (the configured one, raised to 1 s when shorter). Left out, as the engine method that
+     * defines the figure precisely says: the survivor's acquisition of the unit and its read of the unit's messages,
+     * which come on top. Empty when the engine does not say what its lease TTL is.
+     */
+    @Override
+    public Optional<Duration> maxUnservedAfterInstanceLoss() {
+        return queues.leaseTtl().map(ShardOwnedQueue::maxUnservedAfterInstanceLoss);
+    }
+
+    /**
+     * From the engine's records of the queue: {@code QueueHealth.liveInstances()} - instances registered and heartbeating
+     * within the lease TTL - and {@code MessageQueue.departedInstancesHoldingUnits()} - instances past it that still own a
+     * unit, a crashed one or one whose stop kept a unit for a handler still running. Nothing for a queue that is not
+     * registered: nobody has consumed it. Never registers the queue.
+     */
+    @Override
+    public Optional<QueueConsumers> getQueueConsumers(QueueName queueName) {
+        requireNonNull(queueName, "No queueName provided");
+        var engineQueueName = dk.trustworks.essentials.components.queue.shardowned.spi.QueueName.of(queueName.toString());
+        var queue           = onQueue(queueName, "find queue '" + queueName + "'", () -> queues.findQueue(engineQueueName));
+        if (queue.isEmpty()) {
+            return Optional.of(new QueueConsumers(0, 0));
+        }
+        var live     = onQueue(queueName, "read the health of queue '" + queueName + "'", () -> queue.get().health()).liveInstances();
+        var departed = onQueue(queueName, "count the departed instances holding units of queue '" + queueName + "'", () -> queue.get().departedInstancesHoldingUnits());
+        return Optional.of(new QueueConsumers(live, departed));
+    }
+
+    /**
      * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@link UnitOfWork} or Spring transaction?
      * Default {@code false}: such an enqueue commits on its own, and each call site's first one is logged at WARN. In Spring Boot:
      * {@value EnqueueOutsideUnitOfWorkGuard#REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}. See {@link EnqueueOutsideUnitOfWorkGuard}.
@@ -443,8 +497,11 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                 // withUnitOfWork, not getCurrentUnitOfWork(): it joins an Essentials UnitOfWork already bound AND a plain
                 // Spring transaction (@Transactional / TransactionTemplate) nothing has bound one to yet - the Spring-aware
                 // factories create one for that transaction. Outside any transaction it starts a UnitOfWork and commits it.
+                var identified = identifiedByKeyAndOrder(messagesToQueue);
+                var ifAbsent   = identified && enqueuesIfAbsent(queueName);
                 ids = unitOfWorkFactory.withUnitOfWork(unitOfWork -> unitOfWork instanceof HandleAwareUnitOfWork handleAwareUnitOfWork
-                                                                     ? onQueue(queueName, what, () -> queue.enqueue(handleAwareUnitOfWork.handle().getConnection(), messages))
+                                                                     ? onQueue(queueName, what, () -> enqueueNotingARefusal(queueName, identified && !ifAbsent,
+                                                                                                                             () -> enqueueWakingAfterCommit(queue, handleAwareUnitOfWork, messages, ifAbsent)))
                                                                      : enqueueOnOwnConnection(queue, queueName, what, messages, unitOfWork));
             } catch (UnitOfWorkException e) {
                 // withUnitOfWork wraps whatever the enqueue threw. The queue-naming DurableQueueException is what this
@@ -868,13 +925,34 @@ public class ShardOwnedDurableQueues implements DurableQueues {
      * The stated objection was also wrong. This is a prefix seek on the ordered table's primary key
      * {@code (queue_id, shard, msg_key, key_order)}, and it runs on the producing thread once per
      * event — not on the delivery path.
+     * <p>
+     * Asked on the connection of the {@link UnitOfWork} in progress, when there is one. The processor
+     * asks from inside its own unit of work, and asking on a connection of the queue's own took a second
+     * one from the pool while the first sat idle in its transaction: the trading demo's view processors
+     * did exactly that at every rush, several connections of a 40-connection pool held idle at a time
+     * waiting for another - and with every holder doing it at once, a pool can deadlock.
      */
     @Override
     public boolean hasOrderedMessageQueuedForKey(QueueName queueName, String key) {
         requireNonNull(queueName, "No queueName provided");
         requireNonNull(key, "No key provided");
         return onQueue(queueName, "check for queued messages on key '" + key + "'",
-                       () -> resolve(queueName).hasOrderedMessagesForKey(key));
+                       () -> resolve(queueName).hasOrderedMessagesForKey(currentTransactionConnection(), key));
+    }
+
+    /**
+     * One statement for all the keys, on the connection of the {@link UnitOfWork} in progress when there
+     * is one - see {@link #hasOrderedMessageQueuedForKey(QueueName, String)}.
+     */
+    @Override
+    public Set<String> getKeysWithOrderedMessagesQueued(QueueName queueName, Collection<String> keys) {
+        requireNonNull(queueName, "No queueName provided");
+        requireNonNull(keys, "No keys provided");
+        if (keys.isEmpty()) {
+            return Set.of();
+        }
+        return onQueue(queueName, "check for queued messages on " + keys.size() + " key(s)",
+                       () -> resolve(queueName).keysWithOrderedMessages(currentTransactionConnection(), keys));
     }
 
     @Override
@@ -1036,7 +1114,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     private ShardOwnedQueuedMessage toQueuedMessage(QueueName queueName, dk.trustworks.essentials.components.queue.shardowned.spi.QueuedMessage message) {
         return ShardOwnedQueuedMessage.read(QueueEntryIdCodec.encode(queueName, message.id()),
                                             queueName,
-                                            MessageEnvelope.deserialize(jsonSerializer, message.payload(),
+                                            MessageEnvelope.deserialize(jsonSerializer, message.payload(), message.payloadType(),
                                                                         message.key(), message.keyOrder()),
                                             message.attempts(),
                                             message.enqueuedAt(),
@@ -1048,13 +1126,183 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     private ShardOwnedQueuedMessage toQueuedMessage(QueueName queueName, DeadLetter deadLetter) {
         return ShardOwnedQueuedMessage.read(QueueEntryIdCodec.encode(queueName, deadLetter.id()),
                                             queueName,
-                                            MessageEnvelope.deserialize(jsonSerializer, deadLetter.payload(),
+                                            MessageEnvelope.deserialize(jsonSerializer, deadLetter.payload(), deadLetter.payloadType(),
                                                                         deadLetter.key(), deadLetter.keyOrder()),
                                             deadLetter.attempts(),
                                             null,
                                             null,
                                             true,
                                             deadLetter.lastError());
+    }
+
+    /**
+     * Enqueue in {@code unitOfWork}, waking the owners after it commits.
+     * <p>
+     * Not with the engine's in-transaction notification: a transaction that sends {@code NOTIFY} takes, at commit, a
+     * lock every notifying transaction in the cluster shares and holds it through its WAL flush, so every enqueueing
+     * unit of work committed one at a time behind the others - a third of the database's active time at the trading
+     * demo's peaks. The wake-up is registered before the rows are written, so a unit of work that cannot carry the
+     * callback gets the in-transaction notification instead.
+     */
+    private List<MessageId> enqueueWakingAfterCommit(MessageQueue queue, HandleAwareUnitOfWork unitOfWork,
+                                                     List<dk.trustworks.essentials.components.queue.shardowned.spi.Message> messages,
+                                                     boolean ifAbsent) throws SQLException {
+        var connection = unitOfWork.handle().getConnection();
+        var wakeUp     = new PendingWakeUp(queue);
+        try {
+            unitOfWork.registerLifecycleCallbackForResource(wakeUp, WAKE_UP_AFTER_COMMIT);
+        } catch (UnsupportedOperationException cannotCarryTheCallback) {
+            return ifAbsent ? queue.enqueueIfAbsent(connection, messages) : queue.enqueue(connection, messages);
+        }
+        var ids = ifAbsent ? queue.enqueueWithoutWakeupIfAbsent(connection, messages) : queue.enqueueWithoutWakeup(connection, messages);
+        wakeUp.ids = ids;
+        return ids;
+    }
+
+    /**
+     * Whether every ordered message of the call is {@link IdentifiedByKeyAndOrder} - an event processor's forward - and so
+     * may be written with the engine's "if absent" ordered insert, which leaves one already queued under its key and order
+     * in place instead of failing the call on the ordered lane's primary key. Only then: an unmarked ordered message in the
+     * same call keeps the refusal, so a reused key and order is never dropped silently. Unordered messages carry no
+     * identity and do not count either way.
+     * <p>
+     * Not always: the "if absent" insert is a speculative insertion, measured at about 25 % more time and 11 % more WAL
+     * per message (424 to 472 bytes) than the plain one, paid by every forward for a failover that is rare. So a queue is
+     * written plain until such a call is refused for a duplicate key - a reader re-forwarding after an unclean failover -
+     * and "if absent" for {@link #IF_ABSENT_AFTER_A_REFUSAL} from then on ({@link #enqueueNotingARefusal}). The refused
+     * call fails as before; the reader's retry, under its subscription's error policy, is then written "if absent" and
+     * succeeds. Only the unit-of-work path; an enqueue that commits on its own is always plain.
+     */
+    private static boolean identifiedByKeyAndOrder(List<? extends Message> messages) {
+        var anyOrdered = false;
+        for (var message : messages) {
+            if (message instanceof OrderedMessage) {
+                if (!(message instanceof IdentifiedByKeyAndOrder)) {
+                    return false;
+                }
+                anyOrdered = true;
+            }
+        }
+        return anyOrdered;
+    }
+
+    private boolean enqueuesIfAbsent(QueueName queueName) {
+        var until = enqueueIfAbsentUntilNanos.get(queueName);
+        if (until == null) {
+            return false;
+        }
+        if (System.nanoTime() - until < 0) {
+            return true;
+        }
+        enqueueIfAbsentUntilNanos.remove(queueName, until);
+        return false;
+    }
+
+    /**
+     * Runs a plain enqueue of {@link IdentifiedByKeyAndOrder} messages ({@code noteARefusal}) and, when the ordered lane
+     * refuses one as a duplicate (SQL state {@code 23505}), writes that queue's such messages "if absent" for
+     * {@link #IF_ABSENT_AFTER_A_REFUSAL} before rethrowing - see {@link #identifiedByKeyAndOrder}
+     */
+    private List<MessageId> enqueueNotingARefusal(QueueName queueName, boolean noteARefusal, SqlSupplier<List<MessageId>> enqueue) throws SQLException {
+        try {
+            return enqueue.get();
+        } catch (SQLException e) {
+            if (noteARefusal && isUniqueViolation(e)) {
+                var until = System.nanoTime() + IF_ABSENT_AFTER_A_REFUSAL.toNanos();
+                if (enqueueIfAbsentUntilNanos.put(queueName, until) == null) {
+                    log.info("[{}] A message identified by its key and order is already queued - an event processor's reader re-forwarding "
+                             + "after an unclean failover. Enqueuing such messages if absent for the next {}, so the reader's retry succeeds",
+                             queueName, IF_ABSENT_AFTER_A_REFUSAL);
+                }
+            }
+            throw e;
+        }
+    }
+
+    private static boolean isUniqueViolation(SQLException exception) {
+        for (SQLException e = exception; e != null; e = e.getNextException()) {
+            if ("23505".equals(e.getSQLState())) {
+                return true;
+            }
+            for (var cause = e.getCause(); cause != null; cause = cause.getCause()) {
+                if (cause instanceof SQLException sqlCause && "23505".equals(sqlCause.getSQLState())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Ids enqueued in a unit of work whose owners are woken once it commits. Compared by identity, so every enqueue
+     * of the unit of work is a resource of its own.
+     */
+    private static final class PendingWakeUp {
+        private final MessageQueue                                                              queue;
+        private volatile List<MessageId> ids = List.of();
+
+        private PendingWakeUp(MessageQueue queue) {
+            this.queue = queue;
+        }
+    }
+
+    /**
+     * Wakes the owners of what a unit of work enqueued, after it commits; a rollback took the rows, so nothing to wake.
+     */
+    private static final UnitOfWorkLifecycleCallback<PendingWakeUp> WAKE_UP_AFTER_COMMIT = new UnitOfWorkLifecycleCallback<>() {
+        @Override
+        public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<PendingWakeUp> associatedResources) {
+            return BeforeCommitProcessingStatus.COMPLETED;
+        }
+
+        @Override
+        public void afterCommit(UnitOfWork unitOfWork, List<PendingWakeUp> associatedResources) {
+            for (var pending : associatedResources) {
+                try {
+                    pending.queue.wakeUp(pending.ids);
+                } catch (RuntimeException e) {
+                    // A wake-up is a hint: the owner's head sweep finds the rows regardless
+                    log.warn("Could not wake the owners of {} enqueued message(s); they are delivered after the owners' next sweep",
+                             pending.ids.size(), e);
+                }
+            }
+        }
+
+        @Override
+        public void beforeRollback(UnitOfWork unitOfWork, List<PendingWakeUp> associatedResources, Throwable causeOfTheRollback) {
+        }
+
+        @Override
+        public void afterRollback(UnitOfWork unitOfWork, List<PendingWakeUp> associatedResources, Throwable causeOfTheRollback) {
+        }
+
+        /**
+         * Nothing a rollback to a savepoint cannot undo: the rows go with it, and waking an owner for rows that are not
+         * there costs it one empty read. Answering {@code true} would stop a {@code ViewEventProcessor} from rolling
+         * back to a savepoint.
+         */
+        @Override
+        public boolean hasPendingChanges(PendingWakeUp resource) {
+            return false;
+        }
+    };
+
+    /**
+     * The JDBC connection of the {@link UnitOfWork} in progress, or {@code null} if there is none.
+     * <p>
+     * This is what makes a transactional enqueue transactional: handing the engine the caller's own
+     * connection means the rows commit or roll back with the caller's work, which is the Outbox's
+     * whole purpose. Without a unit of work the engine opens its own connection and commits the batch
+     * on its own, which is what a caller outside a transaction is asking for.
+     */
+    private java.sql.Connection currentTransactionConnection() {
+        if (unitOfWorkFactory == null) {
+            return null;
+        }
+        return unitOfWorkFactory.getCurrentUnitOfWork()
+                                .filter(HandleAwareUnitOfWork.class::isInstance)
+                                .map(unitOfWork -> ((HandleAwareUnitOfWork) unitOfWork).handle().getConnection())
+                                .orElse(null);
     }
 
     /**

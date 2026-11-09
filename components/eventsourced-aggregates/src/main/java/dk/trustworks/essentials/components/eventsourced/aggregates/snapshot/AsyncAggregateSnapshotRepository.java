@@ -52,6 +52,10 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
     private static final Logger log = LoggerFactory.getLogger(AsyncAggregateSnapshotRepository.class);
 
     private final AggregateSnapshotStore                            snapshotStore;
+    /**
+     * The newest snapshot found when each aggregate was loaded - saves re-querying it on the update that follows
+     */
+    private final LoadedSnapshotOrders loadedSnapshotOrders = new LoadedSnapshotOrders();
     private final AggregateSnapshotStateAdapter                     snapshotStateAdapter;
     private final AddNewAggregateSnapshotStrategy                   addNewSnapshotStrategy;
     private final AggregateSnapshotDeletionStrategy                 snapshotDeletionStrategy;
@@ -169,10 +173,14 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
                                                                                                        ID aggregateId,
                                                                                                        EventOrder withLastIncludedEventOrderLessThanOrEqualTo,
                                                                                                        Class<AGGREGATE_IMPL_TYPE> aggregateImplType) {
-        return snapshotStore.loadSnapshot(aggregateType,
-                                          aggregateId,
-                                          withLastIncludedEventOrderLessThanOrEqualTo,
-                                          aggregateImplType);
+        return loadedSnapshotOrders.recordLoaded(aggregateType,
+                                                 aggregateId,
+                                                 withLastIncludedEventOrderLessThanOrEqualTo,
+                                                 aggregateImplType,
+                                                 snapshotStore.loadSnapshot(aggregateType,
+                                                                            aggregateId,
+                                                                            withLastIncludedEventOrderLessThanOrEqualTo,
+                                                                            aggregateImplType));
     }
 
     @Override
@@ -197,9 +205,12 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
         var aggregateType     = persistedEvents.aggregateType();
         var aggregateId       = persistedEvents.aggregateId();
         var aggregateImplType = (Class<AGGREGATE_IMPL_TYPE>) aggregate.getClass();
-        var mostRecentlyStoredSnapshotLastIncludedEventOrder = snapshotStore.findMostRecentLastIncludedEventOrder(aggregateType,
-                                                                                                                  aggregateId,
-                                                                                                                  aggregateImplType);
+        var mostRecentlyStoredSnapshotLastIncludedEventOrder = loadedSnapshotOrders.newestSnapshotEventOrder(aggregateType,
+                                                                                                              aggregateId,
+                                                                                                              aggregateImplType,
+                                                                                                              () -> snapshotStore.findMostRecentLastIncludedEventOrder(aggregateType,
+                                                                                                                                                                       aggregateId,
+                                                                                                                                                                       aggregateImplType));
         if (!shouldWeAddANewAggregateSnapshot(aggregate,
                                               persistedEvents,
                                               aggregateType,
@@ -332,11 +343,13 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
 
     @Override
     public <AGGREGATE_IMPL_TYPE> void deleteAllSnapshots(Class<AGGREGATE_IMPL_TYPE> ofAggregateImplementationType) {
+        loadedSnapshotOrders.forgetAll(ofAggregateImplementationType);
         snapshotStore.deleteAllSnapshots(ofAggregateImplementationType);
     }
 
     @Override
     public <ID, AGGREGATE_IMPL_TYPE> void deleteSnapshots(AggregateType aggregateType, ID aggregateId, Class<AGGREGATE_IMPL_TYPE> withAggregateImplementationType) {
+        loadedSnapshotOrders.forget(aggregateType, aggregateId, withAggregateImplementationType);
         snapshotStore.deleteSnapshots(aggregateType, aggregateId, withAggregateImplementationType);
     }
 
@@ -345,6 +358,7 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
                                                           ID aggregateId,
                                                           Class<AGGREGATE_IMPL_TYPE> withAggregateImplementationType,
                                                           List<EventOrder> snapshotEventOrdersToDelete) {
+        loadedSnapshotOrders.forget(aggregateType, aggregateId, withAggregateImplementationType);
         snapshotStore.deleteSnapshots(aggregateType,
                                       aggregateId,
                                       withAggregateImplementationType,

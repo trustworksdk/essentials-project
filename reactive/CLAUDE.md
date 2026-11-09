@@ -40,7 +40,7 @@ In-process event bus + command bus for JVM-local messaging. Maven: `essentials-r
 - `CommandBusInterceptor` — all three default methods (`interceptSend`, `interceptSendAsync`, `interceptSendAndDontWait`); implement any subset; ordering via `@Order`
 - `OnErrorHandler` — async subscriber error callback; receives subscriber, event, exception
 - `SendAndDontWaitErrorHandler` — fire-and-forget error callback on `LocalCommandBus`
-- `AnnotatedCommandHandler.getExceptionLogLevel(Exception)` — override to suppress or change log level per exception type
+- `AnnotatedCommandHandler.getExceptionLogLevel(Exception)` — override to suppress or change log level per exception type. Default DEBUG since 0.61 (was ERROR + stack, then rethrow → every failure logged twice, per retry on a durable bus; ~6 000 stack traces/2 min in the trading demo). The sender reports it: `send` throws, `SendAndDontWaitErrorHandler` logs ERROR, durable queue keeps `last_delivery_error` + ERROR on dead letter
 
 ## Gotchas
 

@@ -260,7 +260,7 @@ not `equals` to what was written. Give the column the scale your domain writes, 
 `numeric` (`@Column(columnDefinition = "numeric")`) when values of different scales must round-trip unchanged.
 
 `double precision` stays the auto-applied default in 0.60, so existing schemas are untouched. Opting in changes a
-column's type; see [MIGRATION-0.60.md](../docs/MIGRATION-0.60.md) for migrating an existing column.
+column's type; see [MIGRATION-0.60.md](../docs/releases/MIGRATION-0.60.md) for migrating an existing column.
 
 ## Gotchas
 

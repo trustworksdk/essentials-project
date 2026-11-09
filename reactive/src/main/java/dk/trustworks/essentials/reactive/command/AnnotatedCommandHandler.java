@@ -155,13 +155,19 @@ public class AnnotatedCommandHandler implements CommandHandler {
      * Return {@link Optional#empty()} to suppress logging entirely.
      * Return an {@link Optional} containing a {@link Level} to log at that level.
      * <p>
-     * Default implementation returns {@link Level#ERROR}.
+     * Default implementation returns {@link Level#DEBUG}: the exception is rethrown to whoever sent the command, and every
+     * sender reports it already - a {@code send} caller gets it thrown, a {@code sendAndDontWait}'s
+     * {@link SendAndDontWaitErrorHandler} logs it, a durable command bus's queue consumer keeps the error on the queued
+     * message and logs the dead letter at ERROR (a retry at DEBUG).
+     * At {@link Level#ERROR} (the default until 0.61) each failure was logged twice, with a full stack trace on every retry,
+     * including failures the sender expects and retries on purpose: a trading-demo instance logged about 6 000 of them in
+     * two minutes. Override to log here as well, e.g. {@link Level#ERROR} for a command type nothing upstream reports.
      *
      * @param exception the exception that was caught during command handling
      * @return an Optional containing the log level, or empty to suppress logging
      */
     protected Optional<Level> getExceptionLogLevel(Exception exception) {
-        return Optional.of(Level.ERROR);
+        return Optional.of(Level.DEBUG);
     }
 
     private Method getHandlerMethod(Class<?> commandType) {

@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: orders.record_exchange_answer
+kind: command
+bc: orders
+owner: orders-team
+status: live
+summary: "Record the exchange's answer to an order's submission: taken, live, or refused."
+generator: essentials
+language: java
+
+handles: [RecordExchangeAnswer]
+emits: [OrderSubmitted, OrderAccepted, OrderRejected, OrderClosed]
+writes:
+  - { name: Order }
+endpoints: []
+invariants:
+  - id: INV-REA-1
+    text: "Exchange answers are facts: applied once, in whatever order they arrive, and never refused"
+    enforcedBy: Order
+forbidden:
+  - cross-slice-internal:orders
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/aggregates/OrderTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
+  contract: { present: false }

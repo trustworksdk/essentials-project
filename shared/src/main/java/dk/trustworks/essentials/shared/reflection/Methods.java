@@ -28,6 +28,19 @@ import static dk.trustworks.essentials.shared.reflection.Parameters.parameterTyp
  */
 public final class Methods {
     /**
+     * What {@link #methods(Class)} found per type. Every aggregate instance builds a {@code PatternMatchingMethodInvoker},
+     * which asks for its class's methods; walking the hierarchy, copying every declared-method array and making each
+     * method accessible again for every instance was 2.8 % of the trading demo's CPU under load. A {@link ClassValue}
+     * does not keep a class from being unloaded.
+     */
+    private static final ClassValue<Set<Method>> METHODS = new ClassValue<>() {
+        @Override
+        protected Set<Method> computeValue(Class<?> type) {
+            return Set.copyOf(resolveMethods(type));
+        }
+    };
+
+    /**
      * Find a matching method based on:
      * <ul>
      *     <li>method name</li>
@@ -61,12 +74,17 @@ public final class Methods {
      * Get all methods on type. For overridden methods only the most specific (typically being the method overridden by a subclass) is returned
      *
      * @param type the type we want to find all methods within
-     * @return the list of all methods (each marked as accessible) on this type
+     * @return the list of all methods (each marked as accessible) on this type - a new, modifiable set on every call;
+     * the methods in it are resolved once per type and shared
      * @see Accessibles#accessible
      */
-    @SuppressWarnings("DuplicatedCode")
     public static Set<Method> methods(final Class<?> type) {
         requireNonNull(type, "You must supply a type");
+        return new HashSet<>(METHODS.get(type));
+    }
+
+    @SuppressWarnings("DuplicatedCode")
+    private static Set<Method> resolveMethods(final Class<?> type) {
         var methods = new HashSet<Method>();
 
         var currentType = type;

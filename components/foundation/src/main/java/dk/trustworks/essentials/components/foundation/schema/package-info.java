@@ -22,6 +22,6 @@
  * {@link dk.trustworks.essentials.components.foundation.schema.EssentialsSchemaHarness} collects and orders the
  * contributions and hands them over.
  * <p>
- * Design and sequencing: {@code docs/database-schema-harness.md}.
+ * Design and sequencing: {@code docs/design/database-schema-harness.md}.
  */
 package dk.trustworks.essentials.components.foundation.schema;

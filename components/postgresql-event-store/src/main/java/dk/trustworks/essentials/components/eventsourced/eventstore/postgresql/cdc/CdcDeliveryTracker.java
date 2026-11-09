@@ -643,6 +643,41 @@ final class CdcDeliveryTracker {
     }
 
     /**
+     * Every order still waited for, as closed ranges - unlike {@link #awaitedGaps(int)} complete, whatever the number and
+     * width of the gaps: the earlier gaps (consecutive ones as one range), the middles of wide gaps an earlier subscription
+     * awaited in memory, and every gap below the highest order delivered - its ends and, for a wide one, its middle
+     * awaited in memory only. What {@link #isAwaited} answers true for, apart from fills handed on and not done with. A
+     * catch-up loads the events within them: one that filled a gap while the subscription was off the bus is only in the
+     * database. At most one range per gap the tracker keeps ({@link #DEFAULT_MAX_TRACKED_GAPS} by default), plus the
+     * earlier ones
+     */
+    synchronized List<LongRange> awaitedRanges() {
+        giveUpExpiredGaps();
+        var  ranges = new ArrayList<LongRange>();
+        long from   = Long.MIN_VALUE;
+        long to     = Long.MIN_VALUE;
+        for (long earlierGap : earlierGaps) {
+            if (from != Long.MIN_VALUE && earlierGap == to + 1) {
+                to = earlierGap;
+                continue;
+            }
+            if (from != Long.MIN_VALUE) ranges.add(LongRange.between(from, to));
+            from = earlierGap;
+            to = earlierGap;
+        }
+        if (from != Long.MIN_VALUE) ranges.add(LongRange.between(from, to));
+        ranges.addAll(earlierMiddles.awaited());
+        long gapFrom = watermark + 1;
+        for (var run : runsAboveWatermark.entrySet()) {
+            if (run.getKey() > gapFrom) {
+                ranges.add(LongRange.between(gapFrom, run.getKey() - 1));
+            }
+            gapFrom = run.getValue().end + 1;
+        }
+        return ranges;
+    }
+
+    /**
      * @return the contiguous watermark - every order at or below it is delivered or given up (earlier gaps aside)
      */
     long watermark() {

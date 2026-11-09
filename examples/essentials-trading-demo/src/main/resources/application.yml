@@ -1,3 +1,13 @@
+# The session cookie is named per instance. Browsers keep cookies per host, not per port, so two instances on one
+# machine (localhost:8080 and localhost:8081) that both used JSESSIONID logged each other out: a login on one replaced
+# the other's cookie, and an open page polling the other instance lost its session. The instance id is what
+# run-instance.sh and compose.app.yml set (demo-1, demo-2); without one, the port.
+server:
+  servlet:
+    session:
+      cookie:
+        name: TRADING_DEMO_SESSION_${essentials.shard-owned-queue.instance-id:${server.port:8080}}
+
 spring:
   application:
     name: essentials-trading-demo
@@ -32,11 +42,38 @@ management:
       show-details: always
 
 trading-demo:
+  identity:
+    # Registered at startup when absent (_demo_harness/DemoUsersSeeder). Demo values, like the simulators' webhook
+    # secret: change them for anything but a local demo. The operator may do everything; customers only reach
+    # /api/accounts/** for their own accounts.
+    seed-users:
+      - user-id: USR-OPERATOR
+        email: operator@demo.local
+        display-name: Demo Operator
+        roles: [OPERATOR]
+        password: operator-demo-password
+      - user-id: USR-ALICE
+        email: alice@demo.local
+        display-name: Alice Customer
+        roles: [CUSTOMER]
+        password: alice-demo-password
+        # Opened and funded at startup (_demo_harness/DemoAccountsSeeder), so Alice can trade in the customer UI at once.
+        account:
+          account-id: ACC-ALICE-1
+          iban: DK5000400440116243
+          deposit: 100000
+      - user-id: USR-BOB
+        email: bob@demo.local
+        display-name: Bob Customer
+        roles: [CUSTOMER]
+        password: bob-demo-password
   # Drives the shard-owned queue engine on BOTH lanes at once: unordered price ticks and
-  # per-account ordered activity. Off by default so the demo still starts on a small machine;
-  # POST /api/admin/queue-load/start turns it on, and /spike sends a burst.
+  # per-account ordered activity, on a queue of its own that nothing in the trading contexts reads.
+  # Off by default: the real flows already run on the engine, and its trickle (10 messages per lane
+  # every 250 ms) would keep the queues from ever going quiet. POST /api/admin/queue-load/start turns
+  # it on; /spike sends a burst and /faults injects retry and poison messages.
   queue-load:
-    enabled: true
+    enabled: false
     queue-name: trading-events
     shard-count: 4
     sustained-interval: 250ms
@@ -45,22 +82,6 @@ trading-demo:
     key-count: 200
     handler-delay: 1ms
     parallel-consumers: 8
-  accounts:
-    closing-books:
-      mode: event-count-or-time-boundary
-      event-threshold: 100
-      time-boundary: end-of-month
-      zone-id: Europe/Copenhagen
-  simulation:
-    enabled: true
-    account-count: 3
-    deposits-per-account: 2
-    settlements-per-account: 1
-    instrument-count: 2
-    # The accounts' opening period is derived from the configured closing-books time boundary, not configured
-    # here: a hardcoded period id ages into the past and makes every later evaluation report skipped periods.
-    # ACC-DEMO-001 is rolled by the policy, ACC-DEMO-002 by an explicit command, ACC-DEMO-003 not at all.
-    max-policy-driven-events: 500
   risk-approval:
     # How long the stubbed risk service blocks the message handler that calls it. The handler is declared
     # @MessageHandler(unitOfWork = UnitOfWorkMode.NONE), so it holds no database connection while it waits — raise this
@@ -69,24 +90,20 @@ trading-demo:
     # It must stay well below essentials.durable-queues.message-handling-timeout (30s by default): past that
     # the in-flight message is reset as stuck and redelivered while the first attempt is still blocked.
     latency: 500ms
-    # Symbols the stub refuses, so the rejection path is demonstrable without a random outcome. MSFT is the second
-    # instrument the bootstrap seeds, so a freshly started demo shows one approved and one rejected instrument.
+    # Symbols the stub refuses, so the rejection path is demonstrable without a random outcome. MSFT is one of the
+    # instruments the exchange lists (simulators/exchange.yaml), so a demo on the simulators shows it rejected and the
+    # others approved.
     rejected-symbols:
       - MSFT
-  load:
-    enabled: false
-    trade-interval: 2s
-    price-update-interval: 1s
-    max-generated-trades: 500
-    price-jitter:
-      min: 3
-      max: 9
 
 essentials:
-  # The shard-owned queue engine is off by default in its starter; the demo always runs it, since
-  # QueueLoadGenerator drives it and the adapter can back DurableQueues. Tuning lives in application-compose.yml.
+  # The shard-owned queue engine is off by default in its starter; the demo always runs it, and runs the
+  # application's DurableQueues on it in every profile, tests included: the account views are
+  # PartitionedViewEventProcessors, which refuse to start on an engine that keeps a key in order per
+  # node only. Tuning lives in application-compose.yml.
   shard-owned-queue:
     enabled: true
+    durable-queues-enabled: true
   eventstore:
     causation:
       # Causation is recorded by default; the index behind "what did this event cause?" is opt-in. The demo turns it

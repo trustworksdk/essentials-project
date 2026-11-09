@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: funding.link_bank_account
+kind: command
+bc: funding
+owner: funding-team
+status: live
+summary: "Link the bank account a trading account deposits from and withdraws to."
+generator: essentials
+language: java
+
+handles: [LinkBankAccount]
+publishes: [BankAccountLinked]
+writes: [BankAccountLink]
+reads:
+  - { name: AccountOwner, via: FundingAccountOwnersQuery }
+endpoints:
+  - { method: PUT, path: "/api/accounts/{accountId}/bank-account", auth: customer }
+invariants:
+  - id: INV-LBA-1
+    text: "Linking the account already linked adds nothing"
+    enforcedBy: BankAccountLink
+forbidden:
+  - cross-slice-internal:funding
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/aggregates/FundingAggregatesTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/FundingIT.java" }
+  contract: { present: false }

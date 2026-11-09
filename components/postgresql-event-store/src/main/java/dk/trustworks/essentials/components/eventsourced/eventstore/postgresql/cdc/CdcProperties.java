@@ -316,8 +316,22 @@ public class CdcProperties {
         DIRECT
     }
 
+    /**
+     * What the INBOX-mode dispatcher does with an inbox row once it has published it.
+     * Ignored in {@link CdcDeliveryMode#DIRECT} mode, which has no inbox.
+     */
     public enum DispatchedRowPolicy {
+        /**
+         * Keep the row with status {@code DISPATCHED} until the inbox TTL job removes it
+         * ({@code inboxTtlDurationDays}). Keeps a record of what was dispatched, at the cost of
+         * an inbox that grows by every dispatched event until the TTL catches up.
+         */
         MARK_DISPATCHED,
+        /**
+         * The default. Delete the row once it has been dispatched; only {@code POISON} rows and the
+         * relation (schema) rows the decoder primes itself from after a restart are kept.
+         * The inbox stays at its backlog size instead of growing with every dispatched event.
+         */
         DELETE
     }
 
@@ -354,7 +368,8 @@ public class CdcProperties {
         private boolean  includeTimestamp          = true;
         private boolean  includeLsn                = true;
         /**
-         * Hard ceiling on how long the tailer will sit on a silent replication stream before
+         * Hard ceiling on how long the tailer will sit on a silent replication stream - no data message, and no
+         * server keepalive that moved the received WAL position on - before
          * treating it as stale (half-open TCP, server-side state gone dark, etc.) and forcing
          * a reconnect. The tailer already ack's the current read LSN every 30s to keep Postgres
          * advancing {@code confirmed_flush_lsn} even on idle streams, but a genuinely broken
@@ -385,6 +400,22 @@ public class CdcProperties {
          * "disable" mode. If null at startup, the framework falls back to the 30-second default.
          */
         private Duration idleLsnPushInterval        = Duration.ofSeconds(30);
+
+        /**
+         * How many received WAL messages the tailer writes to the CDC inbox in one transaction ({@code INBOX} delivery
+         * mode). It writes what has arrived - a full batch, whatever the stream has ready when it runs dry, or what has
+         * waited {@link #inboxWriteMaxDelay} - and acknowledges the replication stream only once that transaction has
+         * committed, so a crash re-streams an unwritten batch rather than losing it. One transaction per message capped
+         * CDC at about 1 500 events/s on a laptop, and a burst reached subscribers seconds late. {@code 1} restores
+         * per-message writes. Default {@code 500}, the dispatcher's batch size.
+         */
+        private int      inboxWriteBatchSize        = 500;
+
+        /**
+         * The longest a received WAL message waits for its batch to fill while the stream keeps delivering; a stream
+         * that runs dry is written at once. Bounds the latency batching adds under a steady trickle. Default {@code 50ms}.
+         */
+        private Duration inboxWriteMaxDelay         = Duration.ofMillis(50);
 
 
         public static WalReplicationTailerProperties defaults(Duration pollInterval,
@@ -622,6 +653,22 @@ public class CdcProperties {
         public void setIdleLsnPushInterval(Duration idleLsnPushInterval) {
             this.idleLsnPushInterval = idleLsnPushInterval;
         }
+
+        public int getInboxWriteBatchSize() {
+            return inboxWriteBatchSize;
+        }
+
+        public void setInboxWriteBatchSize(int inboxWriteBatchSize) {
+            this.inboxWriteBatchSize = inboxWriteBatchSize;
+        }
+
+        public Duration getInboxWriteMaxDelay() {
+            return inboxWriteMaxDelay;
+        }
+
+        public void setInboxWriteMaxDelay(Duration inboxWriteMaxDelay) {
+            this.inboxWriteMaxDelay = inboxWriteMaxDelay;
+        }
     }
 
     public static class PgOutputProperties {
@@ -742,7 +789,7 @@ public class CdcProperties {
         private Duration            pollInterval        = Duration.ofMillis(20);
         private int                 batchSize           = 500;
         private PoisonPolicy        poisonPolicy        = PoisonPolicy.QUARANTINE_AND_CONTINUE;
-        private DispatchedRowPolicy dispatchedRowPolicy = DispatchedRowPolicy.MARK_DISPATCHED;
+        private DispatchedRowPolicy dispatchedRowPolicy = DispatchedRowPolicy.DELETE;
 
         /**
          * Per-statement timeout applied to the dispatcher's
@@ -854,10 +901,23 @@ public class CdcProperties {
             this.poisonPolicy = poisonPolicy;
         }
 
+        /**
+         * @return what the dispatcher does with an inbox row once dispatched; default {@link DispatchedRowPolicy#DELETE}
+         */
         public DispatchedRowPolicy getDispatchedRowPolicy() {
             return dispatchedRowPolicy;
         }
 
+        /**
+         * Sets what the dispatcher does with an inbox row once dispatched. The default is
+         * {@link DispatchedRowPolicy#DELETE}: under load {@link DispatchedRowPolicy#MARK_DISPATCHED} kept every
+         * dispatched row until the inbox TTL job pruned it (in the trading demo's phase 6 load, about 75 MB of
+         * inbox rows per business day), while {@code DELETE} kept the inbox at its backlog size for a slightly
+         * slower acknowledgement. Choose {@code MARK_DISPATCHED} to keep dispatched rows as a record for
+         * {@code inboxTtlDurationDays}.
+         *
+         * @param dispatchedRowPolicy the policy
+         */
         public void setDispatchedRowPolicy(DispatchedRowPolicy dispatchedRowPolicy) {
             this.dispatchedRowPolicy = dispatchedRowPolicy;
         }
@@ -1183,6 +1243,11 @@ public class CdcProperties {
          * <p>
          * Nothing published during the window is lost: polling keeps delivering until the cutback, and the cutback
          * attaches to the bus first and then catches up from the event store on whatever polling had not fetched.
+         * <p>
+         * Only a recovery is debounced. The first activation after boot is not: subscriptions start before the WAL
+         * tailer, so each begins on polling (warm-up) and moves onto the bus as soon as CDC is ACTIVE. Until CDC has
+         * been interrupted once there is nothing to recover from, and debouncing it kept every subscription on polling
+         * for the whole window after every start.
          * <p>
          * Default = {@link #interval}, matching the natural rhythm of the effectiveness monitor:
          * we wait one full monitor window of steady ACTIVE before trusting that CDC has

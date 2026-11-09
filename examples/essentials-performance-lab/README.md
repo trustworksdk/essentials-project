@@ -244,7 +244,7 @@ This smoke test does not require `wal2json`; CDC path is exercised in `auto` fal
 
 `EventCausationCostIT` measures what recording event causation costs, as an interleaved A/B on whether the
 `CausationPersistableEventEnricher` is registered (the starter's `essentials.eventstore.causation.enabled`). It is the
-performance gate for the causation work in `docs/event-causation.md`, and opt-in like every measuring suite:
+performance gate for the causation work in `docs/design/event-causation.md`, and opt-in like every measuring suite:
 
 ```bash
 mvn verify -pl examples/essentials-performance-lab -Dit.test=EventCausationCostIT -Dbenchmark.run=true
@@ -826,7 +826,7 @@ A `verdict=FAIL` here usually means either:
 - Both compose services run with no restart policy and no inter-app dependency
   — both JVMs start truly concurrently. The framework's
   `PostgresqlUtil.acquireBootstrapLock(handle)` (delivered as **P6** in
-  [cdc-improvements.md](../../docs/cdc-improvements.md))
+  [cdc-improvements.md](../../docs/archive/cdc-improvements.md))
   serializes their `CREATE TABLE IF NOT EXISTS` calls behind a transaction-scoped
   PG advisory lock, so the loser of the bootstrap race waits a few ms then sees
   the table exists and proceeds normally. Prior to P6 the compose profile used

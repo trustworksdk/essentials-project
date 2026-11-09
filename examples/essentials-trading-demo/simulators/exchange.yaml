@@ -1,0 +1,102 @@
+# The exchange-simulator as the trading demo runs it. Mounted at /etc/exchange/exchange.yaml, layered over the
+# simulator's built-in defaults; see SIMULATOR_REQUIREMENTS.md and the simulator's configuration guide.
+#
+# Webhook subscriptions, one per consuming translation slice, signed with the shared demo secret (the compose secret).
+# Delivered to the demo on the host (instance 1, port 8080); every slice also reads the event log, so an event the
+# webhook could not deliver - another instance, an outage - still arrives. Unordered (D11): ordering is the demo's.
+webhooks:
+  subscriptions:
+    # orders/external_systems/exchange (ExchangeOrderEvents)
+    - name: demo-orders
+      url: http://host.docker.internal:8080/webhooks/exchange/orders
+      event_types: [OrderAccepted, OrderRejected, OrderPartiallyFilled, OrderFilled, OrderCancelled, OrderExpired]
+      secret_file: /run/secrets/webhook_secret
+      participants: [DEMO-BROKER]
+    # settlement/external_systems/exchange (SettlementEvents): the firm's settlements
+    - name: demo-settlement
+      url: http://host.docker.internal:8080/webhooks/exchange/settlements
+      event_types: [SettlementPending, SettlementDelayed, SettlementCompleted, SettlementFailed, SettlementCancelled, SettlementRejected, SettlementCorrected]
+      secret_file: /run/secrets/webhook_secret
+      participants: [DEMO-BROKER]
+    # market_data/views/closing_prices (ClosingPriceIntake): end-of-day prices (SR-14)
+    - name: demo-closing-prices
+      url: http://host.docker.internal:8080/webhooks/exchange/closing-prices
+      event_types: [ClosingPriceIssued]
+      secret_file: /run/secrets/webhook_secret
+    # market_data/external_systems/exchange (InstrumentListings): the instruments the exchange lists (D18, SR-28)
+    - name: demo-instruments
+      url: http://host.docker.internal:8080/webhooks/exchange/instruments
+      event_types: [InstrumentListed, InstrumentUpdated]
+      secret_file: /run/secrets/webhook_secret
+    # reconciliation/external_systems/clearinghouse (ClearingStatements): the firm's clearing statements
+    - name: demo-clearing
+      url: http://host.docker.internal:8080/webhooks/exchange/clearing-statements
+      event_types: [ClearingStatementIssued]
+      secret_file: /run/secrets/webhook_secret
+      participants: [DEMO-BROKER]
+    # integration/BusinessCalendar: the business days as the exchange closes them (D10, SR-26)
+    - name: demo-business-calendar
+      url: http://host.docker.internal:8080/webhooks/exchange/business-days
+      event_types: [BusinessDayClosed]
+      secret_file: /run/secrets/webhook_secret
+clock:
+  # A simulated day per real minute, starting on a Monday morning. Business dates always come from the exchange's
+  # events, never from the demo's own clock (EXPANSION_PLAN.md D10). `mode: system` turns the virtual clock off.
+  mode: virtual
+  start: "2030-01-07T13:00:00Z"
+  running: true
+  speed: 1440
+  # Lets the demo's operator page (/ops) pause, resume and change the speed through /api/clock (D31, D32).
+  operator_control: true
+# The exchange owns the instruments (D18): ACME, the order flow's and the order tests' instrument, and the demo's ten
+# seed instruments, listed at startup with an InstrumentListed each. The id is the demo's InstrumentId (its symbol). SAP and NOVO-B are listed as their US ADRs, quoted under SAP
+# and NVO, since the demo trades USD only (D3). One-cent ticks, lots of one share.
+instruments:
+  - { id: ACME, symbol: ACME, mic: XNAS, currency: USD, currency_scale: 2, price_source: { initial_price: "100.00" } }
+  - { id: AAPL, symbol: AAPL, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: AAPL, price_source: { initial_price: "475.00" } }
+  - { id: MSFT, symbol: MSFT, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: MSFT, price_source: { initial_price: "487.00" } }
+  - { id: NVDA, symbol: NVDA, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: NVDA, price_source: { initial_price: "499.00" } }
+  - { id: AMZN, symbol: AMZN, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: AMZN, price_source: { initial_price: "511.00" } }
+  - { id: GOOGL, symbol: GOOGL, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: GOOGL, price_source: { initial_price: "523.00" } }
+  - { id: META, symbol: META, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: META, price_source: { initial_price: "535.00" } }
+  - { id: TSLA, symbol: TSLA, mic: XNAS, currency: USD, currency_scale: 2, reference_symbol: TSLA, price_source: { initial_price: "547.00" } }
+  - { id: JPM, symbol: JPM, mic: XNYS, currency: USD, currency_scale: 2, reference_symbol: JPM, price_source: { initial_price: "559.00" } }
+  - { id: SAP, symbol: SAP, mic: XNYS, currency: USD, currency_scale: 2, reference_symbol: SAP, price_source: { initial_price: "571.00" } }
+  - { id: NOVO-B, symbol: NOVO-B, mic: XNYS, currency: USD, currency_scale: 2, reference_symbol: NVO, price_source: { initial_price: "583.00" } }
+# Reference prices: synthetic (seeded, D15) unless live prices are switched on. The starting prices are the ones the
+# demo's synthetic quote feed uses when it runs without the simulators. For live Finnhub prices set
+# EXCHANGE__PRICE_SOURCES__DEFAULT__KIND=finnhub
+# next to the key in simulators/secrets/finnhub.env.
+price_sources:
+  default: { kind: synthetic }
+# The exchange's built-in liquidity provider (participant LP, SR-6) quotes a ladder around each reference price, so the
+# firm's orders have something to trade against.
+# max_inventory: the provider stops quoting a side once it is this many shares long or short. The default (10 000) is
+# used up within minutes by the load driver's customers, who buy more than they sell (phase 6): with no ask there is no
+# quote, and the brokerage refuses market orders ("No current price").
+liquidity:
+  default: { mode: "on", max_inventory: 10000000 }
+# Trading sessions (SR-16, D32): both markets trade 09:30-16:00 New York on business days, so a played trading day has a
+# pre-open, an open, a close and an after-close. Outside a session the exchange rejects new orders MARKET_CLOSED, and a
+# DAY order expires at its session's close. The business day itself still ends at the clearing cutoff (16:30, below).
+# The integration tests run without this block (SimulatorImages.demoExchange): they assume an always-open market.
+sessions:
+  XNAS: { open: "09:30", close: "16:00", time_zone: America/New_York }
+  XNYS: { open: "09:30", close: "16:00", time_zone: America/New_York }
+settlement:
+  mode: simulated
+  settlement_days: 1
+  fail_probability: 0.0
+  delay_probability: 0.0
+clearing:
+  # US stocks (D3, D16): the business day ends after the New York close.
+  enabled: true
+  cutoff: "16:30"
+  time_zone: America/New_York
+  # The US market holidays of 2030 (SR-35): no business day, no close, markets shut. On the accelerated clock the demo
+  # meets one every few real minutes, with T+1 settlement, deposit return windows and DAY orders spanning it.
+  holidays: ["2030-01-01", "2030-01-21", "2030-02-18", "2030-04-19", "2030-05-27", "2030-06-19", "2030-07-04",
+             "2030-09-02", "2030-11-28", "2030-12-25"]
+# Mounts /test: clock control, reset, fault injection and the reconciliation break lists. A demo environment only.
+test_control:
+  enabled: true

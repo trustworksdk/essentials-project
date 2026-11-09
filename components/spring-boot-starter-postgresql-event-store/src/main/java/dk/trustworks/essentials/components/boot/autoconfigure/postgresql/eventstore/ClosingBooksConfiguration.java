@@ -68,14 +68,26 @@ public class ClosingBooksConfiguration {
      *
      * The registry serves as a component to manage and retrieve aggregate closing books policies,
      * facilitating policy registration, retrieval, and application for different aggregate types.
+     * <p>
+     * The default registry registers the {@link AggregateClosingBooksPolicy} of every
+     * {@link EssentialsAggregateDeclarations declared} aggregate before it answers its first read, so every reader -
+     * including an application-supplied {@link AggregateClosingBooksConfigurationResolver} or an application bean
+     * resolving while it is being built - sees the declared policies; the one exception is a read made while an
+     * {@link EssentialsAggregateDeclarations} bean (or something it depends on) is itself being created, which sees the
+     * registry without them. This does not cover an application-supplied registry: it gets them from
+     * {@link AggregateDeclarationPolicyRegistrar} only when that registrar runs, so a read before then finds them
+     * missing; such a registry must register the declared policies itself (see
+     * {@link AggregateDeclarationPolicyRegistrar#registerDeclaredClosingBooksPolicies}) to be safe for early readers.
      *
+     * @param declarations every {@link EssentialsAggregateDeclarations} bean in the context; may be empty. Read on the
+     *                     registry's first read, not here
      * @return an instance of {@link AggregateClosingBooksPolicyRegistry}, specifically an {@link InMemoryAggregateClosingBooksPolicyRegistry},
      *         which offers an in-memory storage mechanism for managing policy descriptors.
      */
     @Bean
     @ConditionalOnMissingBean
-    public AggregateClosingBooksPolicyRegistry aggregateClosingBooksPolicyRegistry() {
-        return new InMemoryAggregateClosingBooksPolicyRegistry();
+    public AggregateClosingBooksPolicyRegistry aggregateClosingBooksPolicyRegistry(ObjectProvider<EssentialsAggregateDeclarations> declarations) {
+        return new DeclaredPoliciesAggregateClosingBooksPolicyRegistry(() -> declarations.orderedStream().toList());
     }
 
     /**
@@ -112,7 +124,8 @@ public class ClosingBooksConfiguration {
      * @param properties the {@link EssentialsEventStoreProperties} containing configuration properties
      *                   related to the event store and aggregate lifecycle.
      * @param registry   the {@link AggregateClosingBooksPolicyRegistry} responsible for registering
-     *                   and managing aggregate closing books policies.
+     *                   and managing aggregate closing books policies. The default registry holds the declared
+     *                   aggregates' policies from its first read on (see {@link #aggregateClosingBooksPolicyRegistry}).
      * @return an instance of {@link AggregateClosingBooksConfigurationResolver} for resolving
      *         aggregate-specific closing books configurations.
      */
@@ -129,8 +142,10 @@ public class ClosingBooksConfiguration {
      * {@link EssentialsAggregateDeclarations declared} aggregate implementation class into the two policy registries.
      * <p>
      * Aggregate roots are not Spring beans, so the policy {@code BeanPostProcessor}s never see them; without a
-     * declaration the annotations reach no registry at all. See {@link AggregateDeclarationPolicyRegistrar} for why the
-     * registrar is an {@link org.springframework.beans.factory.InitializingBean} injected into
+     * declaration the annotations reach no registry at all. The default registries already register the declared
+     * policies on their first read; the registrar is what brings them into an application-supplied registry. See
+     * {@link AggregateDeclarationPolicyRegistrar} for why the registrar is an
+     * {@link org.springframework.beans.factory.InitializingBean} injected into
      * {@link #aggregateLifecycleConfigurationValidator} rather than a {@code SmartInitializingSingleton}.
      *
      * @param declarations               every {@link EssentialsAggregateDeclarations} bean in the context; may be empty

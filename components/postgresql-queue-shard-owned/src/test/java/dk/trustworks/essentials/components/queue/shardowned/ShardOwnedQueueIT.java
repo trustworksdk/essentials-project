@@ -266,9 +266,9 @@ class ShardOwnedQueueIT {
 
         Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> !firstReceived.isEmpty());
         first.stopAbruptly();
-
-        // Wait past the lease so the shards are genuinely free.
-        Thread.sleep(1_200L);
+        // Crashed long ago, as far as the next owner can tell, so its shards are genuinely free. Waiting past the crashed
+        // owner's own short lease was not enough: the next owner judges liveness by its own lease TTL, 30 s on defaults.
+        CrashedInstances.ageMembershipOf(dataSource, QUEUE_ID, "instance-1");
 
         var secondReceived = new CopyOnWriteArrayList<String>();
         try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-2")) {

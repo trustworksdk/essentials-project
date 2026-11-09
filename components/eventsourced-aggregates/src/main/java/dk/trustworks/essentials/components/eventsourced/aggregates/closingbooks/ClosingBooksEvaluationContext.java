@@ -30,7 +30,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param aggregateType       The type of the aggregate being evaluated.
  * @param logicalAggregateId  The logical identifier for the aggregate.
  * @param currentGeneration   The current generation of the aggregate.
- * @param aggregate           The aggregate instance being evaluated.
+ * @param aggregate           The aggregate instance being evaluated. When {@link DefaultClosingBooksScheduledScanProcessor}
+ *                            evaluates it, it is loaded from {@code currentGeneration}'s stream under the generation
+ *                            lock; through {@link ClosingBooksCoordinator#evaluatePolicy} (any trigger mode) it is the
+ *                            aggregate the caller passed.
  * @param triggerMode         The mode used to trigger the evaluation process.
  * @param now                 The current date and time of this evaluation context.
  */

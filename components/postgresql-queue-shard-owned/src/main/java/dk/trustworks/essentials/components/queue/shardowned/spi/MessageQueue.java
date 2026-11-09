@@ -125,6 +125,76 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     }
 
     /**
+     * As {@link #enqueue(Connection, List)}, but without the wake-up notification: the caller wakes the owners with
+     * {@link #wakeUp(Collection)} once its transaction has committed, and does nothing if it rolls back.
+     * <p>
+     * A transaction that sends {@code NOTIFY} takes, at commit, a lock every notifying transaction in the cluster
+     * shares, and holds it through its WAL flush, so those commits run one at a time. Issued inside every enqueue
+     * transaction, that lock was a third of the database's active time at the trading demo's peaks. Woken after commit
+     * instead, an owner in this process is signalled in memory and needs no notification at all, and the rest are
+     * sent batched, outside the business transaction.
+     * <p>
+     * The rows are still written in the caller's transaction, so the enqueue is exactly as transactional; only the
+     * wake-up moves. A caller that never calls {@link #wakeUp(Collection)} loses no messages - owners find them on
+     * their head sweep - only latency.
+     * <p>
+     * The default enqueues with the notification, for implementations that do not separate the two; their
+     * {@link #wakeUp(Collection)} then has nothing to do.
+     *
+     * @return the ids to pass to {@link #wakeUp(Collection)} after commit
+     */
+    default List<MessageId> enqueueWithoutWakeup(Connection connection, List<Message> messages) throws SQLException {
+        return enqueue(connection, messages);
+    }
+
+    /**
+     * As {@link #enqueue(Connection, List)}, but an ordered message whose key and {@code key_order} are already queued is
+     * not enqueued again - and not refused. {@link #enqueue(Connection, List)} refuses it, so a reused {@code key_order}
+     * never silently replaces or drops a queued message; this is for a producer whose key and order identify the
+     * message, so that enqueuing it again while it is queued means nothing: an event processor's reader re-forwarding,
+     * after an unclean failover, the events since its last resume point. Unordered messages are enqueued as by
+     * {@link #enqueue(Connection, List)} - they carry no identity to compare.
+     * <p>
+     * The id returned for a message not enqueued again is the queued message's, or one with {@code seq} 0, which
+     * addresses nothing, when that message was delivered and acknowledged meanwhile. The default enqueues as
+     * {@link #enqueue(Connection, List)} does, refusal included.
+     *
+     * @param connection the caller's connection, inside the caller's transaction
+     * @param messages   the messages
+     * @return one id per message, in the order given
+     * @throws SQLException when the enqueue fails
+     */
+    default List<MessageId> enqueueIfAbsent(Connection connection, List<Message> messages) throws SQLException {
+        return enqueue(connection, messages);
+    }
+
+    /**
+     * {@link #enqueueIfAbsent(Connection, List)} without the wake-up notification, as
+     * {@link #enqueueWithoutWakeup(Connection, List)} is to {@link #enqueue(Connection, List)}. The default enqueues as
+     * {@link #enqueueWithoutWakeup(Connection, List)} does.
+     *
+     * @param connection the caller's connection, inside the caller's transaction
+     * @param messages   the messages
+     * @return one id per message, in the order given
+     * @throws SQLException when the enqueue fails
+     */
+    default List<MessageId> enqueueWithoutWakeupIfAbsent(Connection connection, List<Message> messages) throws SQLException {
+        return enqueueWithoutWakeup(connection, messages);
+    }
+
+    /**
+     * Wake the owners of the units {@code enqueued} were written to, after the transaction that wrote them by
+     * {@link #enqueueWithoutWakeup(Connection, List)} has committed. Never blocks on the database: owners in this
+     * process are signalled in memory, and the notifications for the rest are queued and sent batched.
+     * <p>
+     * The default does nothing, matching the default {@link #enqueueWithoutWakeup(Connection, List)}.
+     *
+     * @param enqueued ids returned by {@link #enqueueWithoutWakeup(Connection, List)}; only their lane and shard are used
+     */
+    default void wakeUp(Collection<MessageId> enqueued) {
+    }
+
+    /**
      * Consume with a handler. The engine leases shards, enforces per-key order, retries and
      * dead-letters according to {@code policy}, and acknowledges on the handler's behalf.
      * <p>
@@ -181,6 +251,34 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     boolean hasOrderedMessagesForKey(String key) throws SQLException;
 
     /**
+     * As {@link #hasOrderedMessagesForKey(String)}, on the caller's connection. A caller asking from inside its own
+     * transaction must use this: the connection-less form takes a second connection from the pool while the
+     * transaction's sits idle, which under pool pressure is how a pool runs dry - and, with every holder doing it at
+     * once, deadlocks.
+     *
+     * @param connection the caller's connection; {@code null} to use one of the queue's own
+     */
+    default boolean hasOrderedMessagesForKey(Connection connection, String key) throws SQLException {
+        return hasOrderedMessagesForKey(key);
+    }
+
+    /**
+     * {@link #hasOrderedMessagesForKey(Connection, String)} asked once for many keys.
+     *
+     * @param connection the caller's connection; {@code null} to use one of the queue's own
+     * @return the keys among {@code keys} the ordered lane holds a message for
+     */
+    default Set<String> keysWithOrderedMessages(Connection connection, Collection<String> keys) throws SQLException {
+        var queued = new HashSet<String>();
+        for (var key : keys) {
+            if (hasOrderedMessagesForKey(connection, key)) {
+                queued.add(key);
+            }
+        }
+        return queued;
+    }
+
+    /**
      * What this process's consumers of this queue have done since they started — see
      * {@link QueueStatistics} for why the scope matters before the numbers do.
      * <p>
@@ -209,6 +307,20 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * of which hold a handful of rows per queue.
      */
     QueueHealth health() throws SQLException;
+
+    /**
+     * How many instances that no longer count as live ({@link QueueHealth#liveInstances()} leaves them out) still own a
+     * unit of this queue: one that crashed, or one that stopped while a handler was running and kept the unit until it
+     * returns. The two cannot be told apart from the database. A caller that must know no handler may still be running
+     * anywhere - a partitioned processor's reset - asks this beside {@link QueueHealth#liveInstances()}.
+     *
+     * @return the number of departed instances still owning a unit
+     * @throws SQLException                  if the count cannot be read
+     * @throws UnsupportedOperationException (the default) if the implementation cannot tell
+     */
+    default int departedInstancesHoldingUnits() throws SQLException {
+        throw new UnsupportedOperationException(getClass().getName() + " cannot tell which departed instances still hold units");
+    }
 
     /**
      * Read one message by id, for an admin surface or an operator with a support ticket.
@@ -276,6 +388,17 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     List<DeadLetter> deadLetters(int offset, int limit) throws SQLException;
 
     /**
+     * One dead letter by the id its message had in its lane - a dead letter keeps that id when it is parked, so the id
+     * an operator saw in {@link #deadLetters} or a log line addresses it. {@link #getMessage} finds live messages only.
+     *
+     * @return the dead letter, or empty if no dead letter has that id. The default finds none; an engine that parks
+     * dead letters overrides it
+     */
+    default Optional<DeadLetter> getDeadLetter(MessageId messageId) throws SQLException {
+        return Optional.empty();
+    }
+
+    /**
      * Return a dead letter to its lane for redelivery, resetting its attempt count.
      *
      * @return true if it was still parked and has been resurrected
@@ -338,7 +461,7 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * whose stop kept it runs no heartbeat while it stays stopped - and an ended subscription's lanes never run again -
      * so nothing would pick up a recorded request, and the answer is what the caller's
      * follow-up is decided from, so it is given at once. A caller behind a load balancer therefore sends the request to
-     * that process directly. Design notes: {@code docs/durable-queue-shard-owned.md} §13.7 and §18.3.
+     * that process directly. Design notes: {@code docs/design/durable-queue-shard-owned.md} §13.7 and §18.3.
      *
      * @param instanceId the instance id the stop's WARN names - the subscription's, which may carry a suffix
      * @param unit       the ordered unit, as the stop's WARN names it; from {@code 0} to the queue's ordered unit count,

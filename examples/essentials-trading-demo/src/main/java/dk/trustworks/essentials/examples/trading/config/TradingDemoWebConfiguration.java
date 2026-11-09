@@ -24,7 +24,7 @@ import org.springframework.context.annotation.Import;
 
 /**
  * Makes the demo's semantic types usable at the HTTP boundary, so an endpoint can declare
- * {@code @PathVariable TradingAccountId} and {@code @RequestBody PlaceTrade} instead of taking a
+ * {@code @PathVariable AccountId} and {@code @RequestBody PlaceOrder} instead of taking a
  * {@code String} and converting it by hand.
  * <p>
  * Two registrations are needed, and neither happens on its own — this is module-level infrastructure and

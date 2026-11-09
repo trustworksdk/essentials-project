@@ -108,6 +108,12 @@ public class DefaultAggregateClosingBooksConfigurationResolver implements Aggreg
                                                                              .filter(value -> value > 0)
                                                                              .orElse(closingBooksProperties.getIntervalDays()));
 
+        var periodSource = aggregatePolicyOverride.flatMap(override -> Optional.ofNullable(override.getPeriodSource()))
+                                                  .orElseGet(() -> descriptor.map(AggregateClosingBooksPolicyDescriptor::policy)
+                                                                             .map(AggregateClosingBooksPolicy::periodSource)
+                                                                             .filter(source -> source != ClosingBooksPeriodSource.CLOCK)
+                                                                             .orElse(closingBooksProperties.getPeriodSource()));
+
         Long resolvedEventThreshold;
         if (eventThresholdRequired(defaultPolicy) && (eventThreshold == null || eventThreshold <= 0)) {
             resolvedEventThreshold = DEFAULT_EVENT_THRESHOLD;
@@ -127,7 +133,8 @@ public class DefaultAggregateClosingBooksConfigurationResolver implements Aggreg
                                                               resolvedEventThreshold,
                                                               timeBoundary,
                                                               zoneId,
-                                                              resolvedIntervalDays);
+                                                              resolvedIntervalDays,
+                                                              periodSource);
     }
 
     private static boolean eventThresholdRequired(ClosingBooksDefaultPolicyType policy) {

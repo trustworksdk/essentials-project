@@ -21,12 +21,14 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessorDependencies;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instruments;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRegistered;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRenamed;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRiskApproved;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRiskRejected;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentSuspended;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -34,20 +36,20 @@ import java.util.List;
 /**
  * Projects {@code InstrumentEvent} into this slice's own read model.
  * <p>
- * A {@link ViewEventProcessor}, so the model is eventually consistent and can be rebuilt by replay: nothing needs an
- * instrument's reference data <em>strongly</em> consistently. Like {@code views/latest_price}, it never reads the
- * aggregate.
+ * A {@link TradingDemoViewEventProcessor}, so the model is eventually consistent and can be rebuilt by replay: nothing needs an
+ * instrument's reference data <em>strongly</em> consistently. It never reads the aggregate.
  * <p>
  * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
- * {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit together. The
+ * {@link ViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
+ * with Spring's {@code JdbcTemplate}, only while the Spring wiring binds both to one connection. The
  * constructor's DDL and the reset run where none is active, so they go through
  * {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)}, which opens one.
  */
 @Service
-public class InstrumentDetailsProjection extends ViewEventProcessor {
+public class InstrumentDetailsProjection extends TradingDemoViewEventProcessor {
     public InstrumentDetailsProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("""
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
                                                                                CREATE TABLE IF NOT EXISTS projection_instrument_details (
                                                                                    instrument_id VARCHAR PRIMARY KEY,
                                                                                    symbol VARCHAR NOT NULL,
@@ -62,8 +64,8 @@ public class InstrumentDetailsProjection extends ViewEventProcessor {
         // The two risk columns arrived after the table did, and CREATE TABLE IF NOT EXISTS is a no-op against a demo
         // database that already has it. Both statements are idempotent, so they cost one round trip at startup and
         // spare anyone with an existing demo database an "column risk_status does not exist" on the first query.
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_status VARCHAR NOT NULL DEFAULT 'PENDING'"));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> uow.handle().execute("ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_detail VARCHAR NULL"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_status VARCHAR NOT NULL DEFAULT 'PENDING'"));
+        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_detail VARCHAR NULL"));
     }
 
     @Override

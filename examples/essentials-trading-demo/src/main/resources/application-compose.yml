@@ -23,11 +23,22 @@ spring:
     # by event-store subscriptions, both load generators, lease renewal and the projections. Until the
     # starter passed its runtime to its queues there were two runtimes holding 6, and a restart against
     # a database the demo had already run on failed start-up with the pool exhausted.
+    #
+    # 60 since the order flow runs 16 / 16 / 16 inbox consumers (trading-demo.orders.consumers below); the exchange
+    # reports' and ledger consumers hold a connection while they handle a message. At 40 the pool ran full at every
+    # open with up to 88 requests waiting; at 60 it still peaks (up to 49 waiting) but the order flow drained twice as
+    # fast (_demo_harness/CLAUDE.md, "Inbox consumers at the opens"). Two instances at 60 need compose.yml's
+    # max_connections=200 - PostgreSQL's default of 100 is too few.
     hikari:
-      maximum-pool-size: 20
+      maximum-pool-size: 60
 
 essentials:
   immutable-jackson-module-enabled: true
+  unit-of-work:
+    # The compose PostgreSQL runs with its stock default, READ COMMITTED, so asking for it explicitly only costs a
+    # SHOW TRANSACTION ISOLATION LEVEL round trip per transaction (~620 000 in one order-flow run; 13 % more completed
+    # orders/s without them - EF-2 doc §5)
+    transaction-isolation: database-default
   scheduler:
     enabled: true
     number-of-threads: 2
@@ -49,26 +60,37 @@ essentials:
   # fixed space, recorded per queue when the queue is created.
   shard-owned-queue:
     initialize-schema: true
-    pump-threads: 2
+    # Every queue's delivery and acknowledgement runs on these threads, one database round trip at a
+    # time, and each holds a pooled connection for good. At 2 they capped the order router's inbox at
+    # ~230 orders/s under a 300/s rush; 4 measured best (router inbox wait p99 6.4 s -> 4.6 s); at 8 the
+    # router's handlers waited for connections from the 40-connection pool instead
+    # (_demo_harness/CLAUDE.md, "The order path under a rush").
+    pump-threads: 4
+    # Only one of them keeps its connection between rushes; the other three give theirs back to the pool
+    # once they have delivered nothing for 10 s, and borrow one only for a pass with work. The pool still has to
+    # fit all four at a rush - this frees three connections while the queues are quiet.
+    min-held-pump-connections: 1
     # No `queues:` list. Nothing here needs one: the DurableQueues adapter registers the queues the
     # framework invents, and QueueLoadGenerator registers its own through
     # ShardOwnedQueueFactory.register, so its name lives in that class rather than in two places that
     # have to agree. Listing a queue here is for one an application wants to exist before anything
     # touches it — `name: <unordered shard count>`, with `ordered-units.<name>` to size the other lane.
-    # Run the application's DurableQueues on this engine, so Inbox, Outbox and every
-    # EventProcessor's projections are delivered by it. Set to false to run the same demo on
-    # PostgresqlDurableQueues instead — both implement the interface, so it is an A/B.
-    #
-    # This is the only line needed. The queues the framework invents — Inbox:<processor>,
-    # <processor>:queue, DefaultCommandQueue — register themselves on first use with
-    # auto-register-shard-count unordered shards, which defaults to 4.
-    durable-queues-enabled: true
+    # durable-queues-enabled is set in application.yml, for every profile: the account views are
+    # PartitionedViewEventProcessors and need this engine. The queues the framework invents —
+    # Inbox:<processor>, <processor>:queue, DefaultCommandQueue — register themselves on first use
+    # with auto-register-shard-count unordered shards, which defaults to 4.
 
   fenced-lock-manager:
     fenced-locks-table-name: fenced_locks
     lock-confirmation-interval: 5s
     lock-time-out: 12s
     release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation: false
+    # Spread the exclusive processors' and consumers' fenced locks over the running instances (release notes 2.9):
+    # without it the first instance to start takes all ~35 and a second one only takes over when the first dies. Each
+    # lock has a preferred instance; a holder hands at most one lock every two confirmation intervals (10 s) to an
+    # instance that prefers it, so a second instance gets its share within a few minutes. Each move pauses that one
+    # processor for a few seconds, on every start and stop - which /ops shows under "Fenced locks".
+    spread-locks: true
   event-store:
     identifier-column-type: text
     json-column-type: jsonb
@@ -76,20 +98,16 @@ essentials:
     archives:
       enabled: true
     subscription-manager:
-      event-store-polling-batch-size: 5
+      # Events per event-store read for every subscription (projections, processors, the harness). It was 5, which
+      # made a batched subscription read a 100-event batch in ~21 queries (plus as many gap-table lookups) and capped
+      # the EF-2 forwarder measurement; see docs/design/key-partitioned-event-processing.md. The starter's default is 10.
+      event-store-polling-batch-size: 100
       snapshot-resume-points-every: 2s
       event-store-polling-interval: 200
     snapshots:
       enabled: true
     closing-books:
       enabled: true
-      aggregates:
-        TradingAccounts:
-          # TradingAccount does not implement HasClosingBooksPeriodId - TradingAccountClosingBooksPolicy
-          # builds its BuiltInClosingBooksPolicyEvaluator with an explicit currentPeriodIdProvider
-          # (account -> account.periodId) instead. Opt out of the startup check that would otherwise
-          # reject the time-boundary policy.
-          period-id-provided-externally: true
     cdc:
       # CDC is OFF by default (CdcProperties#enabled = false) — it needs database-side setup the
       # framework won't assume. The demo opts in, and the compose Postgres is started with
@@ -120,14 +138,32 @@ essentials:
       inbox-ttl-duration-days: 1
 
 trading-demo:
-  accounts:
-    closing-books:
-      mode: event-count-or-time-boundary
-      event-threshold: 100
-      time-boundary: end-of-month
-      zone-id: Europe/Copenhagen
-  load:
-    enabled: true
-    trade-interval: 2s
-    price-update-interval: 1s
-    max-generated-trades: 500
+  identity:
+    # The load driver's customers (lda-<n>@load.local, one shared demo password) are stored {noop} instead of BCrypt:
+    # registering and logging in 10 000 of them took every load run minutes of the whole machine (identity/config/CredentialHashing).
+    unhashed-password-email-suffix: "@load.local"
+  orders:
+    # The order flow's two EventProcessors and the exchange reports' inbox. Batching the forward pays only together
+    # with more inbox consumers; together they took the order flow from ~180 to ~366 completed orders/s (EF-2,
+    # docs/design/key-partitioned-event-processing.md section 5, "Batched forward, built and measured").
+    #
+    # 16 each: at 8 every stage capped the 600/s open burst. Raising only the router moved the backlog to the next two
+    # inboxes; raising all three halved the booked p99 (5.3-6.6 s -> 2.9-4.5 s) for no more CPU
+    # (_demo_harness/CLAUDE.md, "Inbox consumers at the opens").
+    consumers:
+      exchange-router: 16
+      ledger: 16
+      exchange-reports: 16
+    forwarding:
+      batch-size: 100
+  # The projections (config/TradingDemoViewEventProcessor) handle up to this many events per unit of work instead of one
+  # (ViewEventProcessor#getDirectHandlingBatchSize; docs/archive/view-event-processor-batched-handling.md). Phase 6 measured the
+  # order list (OrdersProjection) falling 5 000-7 500 events behind in a business day at 300 orders/s rushes.
+  views:
+    direct-handling-batch-size: 100
+    # Queue consumer threads per instance of each PartitionedViewEventProcessor (the account views): every event of
+    # such a view goes through its queue, so this times the instances is how many are handled at once
+    partitioned-consumers: 8
+    # Forward each event itself rather than a reference the consumer loads again: measured 11 % shorter drain and 8 %
+    # less CPU for 11 % more WAL on the ledger load (docs/design/key-partitioned-event-processing.md, question 2)
+    partitioned-forward-payloads: true

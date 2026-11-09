@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: reconciliation.assign_case
+kind: command
+bc: reconciliation
+owner: reconciliation-team
+status: live
+summary: "An operator assigns a reconciliation case."
+generator: essentials
+language: java
+
+handles: [AssignCase]
+publishes: [CaseAssigned]
+writes: [ReconciliationCase]
+reads:
+  - { name: ReconciliationCase }
+endpoints:
+  - { method: POST, path: "/api/admin/reconciliation/cases/{caseId}/assignment", auth: operator }
+invariants:
+  - id: INV-AC-1
+    text: "A resolved or cleared case cannot be assigned"
+    enforcedBy: ReconciliationCase
+forbidden:
+  - cross-slice-internal:reconciliation
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/aggregates/ReconciliationCaseTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/ClearingReconciliationIT.java" }
+  contract: { present: false }

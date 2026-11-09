@@ -29,7 +29,7 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.constructors;
  * The construction-ergonomics guard for the Essentials reactor, defined once and consumed by a thin
  * {@code *ConstructionErgonomicsTest} in each module that can see the classes it needs to check.
  * <p>
- * It encodes the policy documented in {@code docs/constructor-ergonomics-and-optional-policy.md} and in
+ * It encodes the policy documented in {@code docs/design/constructor-ergonomics-and-optional-policy.md} and in
  * {@code .claude/rules/code-style.md}:
  * <ol>
  *     <li>A public or protected constructor declares no {@link Optional} parameter — absence is a neutral default,
@@ -209,7 +209,7 @@ public final class EssentialsConstructionRules {
     public static ArchRule constructorsMustNotDeclareOptionalParametersUnlessDeprecatedForRemoval() {
         return constructors().that(PUBLIC_OR_PROTECTED.and(DescribedPredicate.not(IS_A_RECORDS_CANONICAL_CONSTRUCTOR)))
                              .should(NOT_DECLARE_AN_OPTIONAL_PARAMETER_OR_BE_DEPRECATED_FOR_REMOVAL)
-                             .because("Optional belongs in return types, not in construction — see docs/constructor-ergonomics-and-optional-policy.md")
+                             .because("Optional belongs in return types, not in construction — see docs/design/constructor-ergonomics-and-optional-policy.md")
                              .allowEmptyShould(true);
     }
 
@@ -223,7 +223,7 @@ public final class EssentialsConstructionRules {
         return constructors().that(PUBLIC_OR_PROTECTED.and(DescribedPredicate.not(IS_A_RECORDS_CANONICAL_CONSTRUCTOR)))
                              .should(STAY_WITHIN_THE_PARAMETER_CEILING_OR_BE_DEPRECATED_FOR_REMOVAL)
                              .because("above five parameters the arguments are a parameter object or a builder, not a signature — "
-                                              + "see docs/constructor-ergonomics-and-optional-policy.md")
+                                              + "see docs/design/constructor-ergonomics-and-optional-policy.md")
                              .allowEmptyShould(true);
     }
 

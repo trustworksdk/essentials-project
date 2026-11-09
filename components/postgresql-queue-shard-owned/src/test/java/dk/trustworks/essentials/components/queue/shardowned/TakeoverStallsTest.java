@@ -438,8 +438,14 @@ class TakeoverStallsTest {
         }
 
         @Override
-        public long parkDeadlineMillis() {
-            return Long.MAX_VALUE;
+        public long nextAttentionNanos() {
+            return System.nanoTime() + TimeUnit.DAYS.toNanos(1);
+        }
+
+        @Override
+        public ShardWakeup wakeup() {
+            // Never served by a pump: a fresh one does
+            return new ShardWakeup();
         }
 
         @Override

@@ -58,6 +58,23 @@ interface LeasedOwner {
     boolean needsAttention();
 
     /**
+     * When {@link #needsAttention()} next becomes true on time alone - a sweep, a delayed row, a retry, an
+     * acknowledgement flush or a re-check falling due - as a {@link System#nanoTime()} value; now or earlier if it
+     * already is. Everything else that makes an owner need attention signals its {@link #wakeup()}.
+     * <p>
+     * The pump schedules each owner by this after pumping it, and visits only the owners that were signalled or have
+     * come due, instead of asking every owner it serves on every pass: with a few thousand ordered units the asking
+     * itself was most of the pumps' CPU, and it grew with the number of units whatever the traffic. Must mirror every
+     * time-based case of {@link #needsAttention()}; one it misses waits for the pump's periodic full scan.
+     */
+    long nextAttentionNanos();
+
+    /**
+     * The wake-up this owner's notifications, hand-offs, finished handlers and state changes signal.
+     */
+    ShardWakeup wakeup();
+
+    /**
      * Called once per connection, including after a reconnect - and, when it throws on a healthy connection,
      * again by the pump {@link ShardPump#TAKEOVER_RETRY_NANOS} after each failure until it completes. {@link #pumpOnce} is not called before it has completed,
      * so it must be safe to call again after failing part way through.
@@ -84,13 +101,6 @@ interface LeasedOwner {
      */
     void flushOnStop(Connection connection) throws SQLException;
 
-    /**
-     * Longest this owner may be parked before it needs attention regardless of notifications — a
-     * retry falling due. {@link Long#MAX_VALUE} when nothing is pending.
-     */
-    long parkDeadlineMillis();
-
-
     int shard();
 
     /**
@@ -113,6 +123,15 @@ interface LeasedOwner {
      * {@code "unordered"} or {@code "ordered"} — leases are scoped per lane.
      */
     String lane();
+
+    /**
+     * Whether this owner is on its way out - draining for a stop, or (ordered) shedding its unit - and so may not be
+     * the one serving the unit by the time a message enqueued now commits. A wake-up for such a unit is sent as a
+     * notification rather than signalled only in memory, so a successor elsewhere hears of it too.
+     */
+    default boolean handingOver() {
+        return false;
+    }
 
     /**
      * Where this owner's lease row stands: the one place that says so. Each owner keeps it in a {@link LeaseRowState}, which

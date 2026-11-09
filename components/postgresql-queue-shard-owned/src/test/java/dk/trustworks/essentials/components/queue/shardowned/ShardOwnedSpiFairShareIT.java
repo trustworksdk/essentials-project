@@ -27,6 +27,7 @@ import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForInt;
+import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQueries.queryForLong;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -42,6 +43,13 @@ class ShardOwnedSpiFairShareIT {
 
     private static final short QUEUE_ID    = 1;
     private static final int   SHARD_COUNT = 4;
+    /**
+     * Short, so the heartbeat - and the {@code rebalance} it runs - ticks about once a second instead of every 10 s on
+     * the default 30 s lease. The property is "still owns every shard after several rebalances", not "after 25 s".
+     */
+    private static final Duration LEASE_TTL   = Duration.ofSeconds(3);
+    /** The heartbeat period: a third of the lease TTL ({@code ShardOwnedQueue}). */
+    private static final Duration HEARTBEAT   = LEASE_TTL.dividedBy(3);
 
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();
@@ -71,17 +79,27 @@ class ShardOwnedSpiFairShareIT {
     void a_single_process_still_owns_every_shard_after_the_first_rebalance() throws Exception {
         var delivered        = ConcurrentHashMap.<String>newKeySet();
         var deliveredShards  = ConcurrentHashMap.<Integer>newKeySet();
-        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "spi-fair-1")) {
+        var settings = ShardOwnerSettings.builder().setLeaseTtl(LEASE_TTL).build();
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "spi-fair-1", settings)) {
             var subscription = queue.consume((messageId, key, payload, payloadType) -> {
                                                  delivered.add(new String(payload, StandardCharsets.UTF_8));
                                                  deliveredShards.add(messageId.shard());
                                              },
                                              ConsumerOptions.defaults());
 
-            // The default lease TTL is holeExpiry x 3 = 30s and the heartbeat runs at a third of it,
-            // so rebalances land at about 10, 20 and 30 seconds. Wait past several of them: the two
-            // consumers tick in an arbitrary order, so the first tick may see only one instance row.
-            Thread.sleep(Duration.ofSeconds(25));
+            // The heartbeat runs at a third of the lease TTL and runs rebalance on every tick. Wait past
+            // several of them: the two consumers tick in an arbitrary order, so the first tick may see
+            // only one instance row. Counted in heartbeats, not in wall-clock time: only a heartbeat
+            // writes last_seen, so once it has moved three heartbeat periods past its first value,
+            // at least three ticks have run.
+            var firstSeenMillis = org.awaitility.Awaitility.await()
+                                                           .atMost(Duration.ofSeconds(30))
+                                                           .until(this::lastSeenMillis, millis -> millis > 0);
+            org.awaitility.Awaitility.await()
+                                     .atMost(Duration.ofSeconds(30))
+                                     .pollInterval(Duration.ofMillis(100))
+                                     .until(this::lastSeenMillis,
+                                            millis -> millis >= firstSeenMillis + 3 * HEARTBEAT.toMillis());
 
             assertThat(countLiveInstanceRows())
                     .describedAs("one process consuming through the contract is ONE instance, not one per lane")
@@ -123,6 +141,13 @@ class ShardOwnedSpiFairShareIT {
                            "SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE
                            + " WHERE queue_id = ? AND lane = ? AND (owner IS NULL OR lease_until <= now())",
                            QUEUE_ID, lane);
+    }
+
+    /** The latest heartbeat of any instance row of the queue, in epoch milliseconds, or 0 while there is none. */
+    private long lastSeenMillis() throws Exception {
+        return queryForLong(dataSource, "Reading the latest heartbeat of queue " + QUEUE_ID,
+                            "SELECT coalesce((extract(epoch FROM max(last_seen)) * 1000)::bigint, 0) FROM "
+                            + ShardOwnedSchema.INSTANCE_TABLE + " WHERE queue_id = ?", QUEUE_ID);
     }
 
     private int countLiveInstanceRows() throws Exception {

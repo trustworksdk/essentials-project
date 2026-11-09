@@ -19,12 +19,18 @@ package dk.trustworks.essentials.jackson;
 import tools.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.jackson.model.*;
 import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
+import dk.trustworks.essentials.types.*;
 import org.junit.jupiter.api.Test;
+import tools.jackson.core.exc.StreamConstraintsException;
 import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.DeserializationContext;
+import tools.jackson.databind.deser.DeserializationProblemHandler;
+import tools.jackson.databind.exc.InvalidFormatException;
 
-import java.util.Map;
+import java.math.*;
+import java.util.*;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 /**
  * A map keyed by a value type must round-trip without any per-property annotation.
@@ -62,5 +68,71 @@ class SingleValueTypeMapKeyTest {
         assertThat(json).isEqualTo("{\"7\":\"seven\"}");
         assertThat(objectMapper.<Map<Quantity, String>>readValue(json, new TypeReference<Map<Quantity, String>>() {}))
                 .isEqualTo(original);
+    }
+
+    /**
+     * A key is bounded only by the name-length limit, so a numeric key is held to the number-length limit before it is
+     * parsed, as a quoted number value is.
+     */
+    @Test
+    void a_numeric_key_longer_than_the_number_length_limit_is_refused_before_it_is_parsed() {
+        var tooLong    = "1".repeat(1001);
+        var atTheLimit = "1".repeat(1000);
+
+        assertThatThrownBy(() -> objectMapper.readValue("{\"" + tooLong + "\":\"x\"}", new TypeReference<Map<KeyBigInteger, String>>() {}))
+                .isInstanceOf(StreamConstraintsException.class);
+        assertThatThrownBy(() -> objectMapper.readValue("{\"" + tooLong + ".5\":\"x\"}", new TypeReference<Map<KeyBigDecimal, String>>() {}))
+                .isInstanceOf(StreamConstraintsException.class);
+        assertThat(objectMapper.<Map<KeyBigInteger, String>>readValue("{\"" + atTheLimit + "\":\"x\"}", new TypeReference<Map<KeyBigInteger, String>>() {}))
+                .containsOnlyKeys(new KeyBigInteger(new BigInteger(atTheLimit)));
+    }
+
+    /**
+     * A numeric key that is not a number is reported the way Jackson reports any weird key - an
+     * {@link InvalidFormatException}, not a bare {@link NumberFormatException} - including over-long text with a
+     * non-numeric character, which the length check refuses without parsing.
+     */
+    @Test
+    void a_numeric_key_that_is_not_a_number_is_refused_with_an_InvalidFormatException() {
+        assertThatThrownBy(() -> objectMapper.readValue("{\"abc\":\"x\"}", new TypeReference<Map<Quantity, String>>() {}))
+                .isInstanceOf(InvalidFormatException.class);
+        assertThatThrownBy(() -> objectMapper.readValue("{\"2.5\":\"x\"}", new TypeReference<Map<Quantity, String>>() {}))
+                .isInstanceOf(InvalidFormatException.class);
+        assertThatThrownBy(() -> objectMapper.readValue("{\"" + "a".repeat(1001) + "\":\"x\"}", new TypeReference<Map<KeyBigInteger, String>>() {}))
+                .isInstanceOf(InvalidFormatException.class);
+    }
+
+    /** A registered problem handler sees a bad numeric key and the key it returns is used. */
+    @Test
+    void a_registered_problem_handler_is_consulted_for_a_numeric_key_that_is_not_a_number() {
+        var seen = new ArrayList<String>();
+        var lenientMapper = objectMapper.rebuild()
+                                        .addHandler(new DeserializationProblemHandler() {
+                                            @Override
+                                            public Object handleWeirdKey(DeserializationContext ctxt, Class<?> rawKeyType, String keyValue, String failureMsg) {
+                                                seen.add(keyValue);
+                                                return new KeyBigInteger(BigInteger.ZERO);
+                                            }
+                                        })
+                                        .build();
+        var overLong = "a".repeat(1001);
+
+        assertThat(lenientMapper.<Map<KeyBigInteger, String>>readValue("{\"abc\":\"x\"}", new TypeReference<Map<KeyBigInteger, String>>() {}))
+                .containsOnlyKeys(new KeyBigInteger(BigInteger.ZERO));
+        assertThat(lenientMapper.<Map<KeyBigInteger, String>>readValue("{\"" + overLong + "\":\"x\"}", new TypeReference<Map<KeyBigInteger, String>>() {}))
+                .containsOnlyKeys(new KeyBigInteger(BigInteger.ZERO));
+        assertThat(seen).containsExactly("abc", overLong);
+    }
+
+    public static class KeyBigInteger extends BigIntegerType<KeyBigInteger> {
+        public KeyBigInteger(BigInteger value) {
+            super(value);
+        }
+    }
+
+    public static class KeyBigDecimal extends BigDecimalType<KeyBigDecimal> {
+        public KeyBigDecimal(BigDecimal value) {
+            super(value);
+        }
     }
 }

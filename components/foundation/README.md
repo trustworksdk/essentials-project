@@ -828,7 +828,7 @@ The `RedeliveryPolicy` determines how message redelivery is handled when a `Dura
 
 > Before 0.60 neither `linearBackoff` nor `exponentialBackoff` grew: every redelivery after the first waited
 > `initialRedeliveryDelay + followupRedeliveryDelay × followupRedeliveryDelayMultiplier`. To keep that timing, use
-> `fixedBackoff` with that value — see [MIGRATION-0.60](../../docs/MIGRATION-0.60.md#redelivery-delays-now-grow).
+> `fixedBackoff` with that value — see [MIGRATION-0.60](../../docs/releases/MIGRATION-0.60.md#redelivery-delays-now-grow).
 
 #### Configuration Parameters
 

@@ -1,0 +1,26 @@
+schemaVersion: "1.1"
+slice: identity.lock_user
+kind: command
+bc: identity
+owner: identity-team
+status: live
+summary: Stop a user from logging in.
+generator: essentials
+language: java
+
+handles: [LockUser]
+publishes: [UserLocked]
+writes: [User]
+reads: []
+endpoints:
+  - { method: POST, path: "/api/admin/users/{userId}/lock?reason=", auth: operator }
+invariants:
+  - id: INV-LU-1
+    text: "The credentials row is locked in the same unit of work as UserLocked, so the lock applies to the very next login"
+    enforcedBy: LockUserHandler
+forbidden:
+  - cross-slice-internal:identity
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

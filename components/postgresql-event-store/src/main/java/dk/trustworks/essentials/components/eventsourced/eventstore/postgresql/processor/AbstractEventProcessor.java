@@ -19,14 +19,18 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.p
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.BatchedPersistedEventHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.BatchedPersistedEventSubscriber;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.PersistedEventHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionResumePoint;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
+import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.json.JSONDeserializationException;
+import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
@@ -73,8 +77,23 @@ import static java.util.stream.Collectors.toMap;
  * configurations such as message handler interceptors, subscription policies, and processing logic.
  * This class requires concrete subclasses to define the set of {@link AggregateType}s they are reacting to
  * as well as the processor's name.
+ * <p>
+ * <h3>Naming a reset method</h3>
+ * A method of this class or of {@link EventProcessor} that moves a subscription's resume point (e.g. through
+ * {@link EventStoreSubscription#resetFrom}) or purges the processor's durable queue or {@link Inbox} must be named
+ * {@code reset*} or {@code doReset*}. {@link PartitionedEventProcessor} and {@link PartitionedViewEventProcessor} reset
+ * only while stopped on every instance, through {@code StoppedEverywhereReset}; {@code PartitionedProcessorResetRoutingTest}
+ * finds the methods each of them must override {@code final} onto that check by this name prefix alone. A method named
+ * otherwise is inherited by them unchecked, and would reset while they run.
  */
 public abstract class AbstractEventProcessor implements Lifecycle {
+    /**
+     * The default longest time a partial batch waits for more events before it is forwarded or handled, 20 ms: returned by
+     * {@code EventProcessor.getForwardMaxLatency()}, {@code PartitionedViewEventProcessor.getForwardMaxLatency()} and
+     * {@code ViewEventProcessor.getDirectHandlingMaxLatency()}.
+     */
+    public static final Duration DEFAULT_BATCH_MAX_LATENCY = Duration.ofMillis(20);
+
     protected final Logger log = LoggerFactory.getLogger(this.getClass());
 
     protected final EventStoreSubscriptionManager eventStoreSubscriptionManager;
@@ -669,18 +688,57 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     }
 
     /**
-     * Get the {@link RedeliveryPolicy} used when consuming messages from the underlying Durable queue
+     * Get the {@link RedeliveryPolicy} used when consuming messages from the underlying Durable queue.
+     * <p>
+     * Default: {@link #failoverRedeliveryPolicy(Optional)} - quick first retries, and retrying for long enough to outlast a
+     * failover, so a handler that waits for another processor's work does not dead-letter while that work moves to
+     * another instance. Override for a different budget.
      *
      * @return the {@link RedeliveryPolicy} used when consuming messages from the underlying Durable queue
      */
     protected RedeliveryPolicy getDurableQueueRedeliveryPolicy() {
-        return RedeliveryPolicy.exponentialBackoff()
-                               .setInitialRedeliveryDelay(Duration.ofMillis(200))
-                               .setFollowupRedeliveryDelay(Duration.ofMillis(200))
-                               .setFollowupRedeliveryDelayMultiplier(1.1d)
-                               .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofSeconds(3))
-                               .setMaximumNumberOfRedeliveries(20)
-                               .build();
+        return failoverRedeliveryPolicy(Optional.empty()).policy();
+    }
+
+    /**
+     * A {@link FailoverRedeliveryPolicy} for this processor: from the lock timeout of its subscription manager's
+     * {@link FencedLockManager} and the given queue window ({@code DurableQueues#maxUnservedAfterInstanceLoss()}),
+     * each falling back to its default when unknown.
+     *
+     * @param queueWindow how long the processor's queue can leave a dead instance's messages unserved
+     * @return the policy and what it was derived from
+     */
+    protected final FailoverRedeliveryPolicy failoverRedeliveryPolicy(Optional<Duration> queueWindow) {
+        return FailoverRedeliveryPolicy.outlasting(eventStoreSubscriptionManager.getFencedLockManager().flatMap(FencedLockManager::getLockTimeOut),
+                                                   queueWindow);
+    }
+
+    /**
+     * Says at start which retry budget a queue consumer runs with: the derived default's, or that the processor chose its
+     * own. One line, so an operator reading a dead letter can tell how long it was retried.
+     * <p>
+     * The policy in use counts as the default only when it has the default's delays <em>and</em> classifies errors the
+     * same way: {@link RedeliveryPolicy#equals(Object)} leaves the {@link MessageDeliveryErrorHandler} out, so a policy
+     * that keeps the derived delays but sets its own handler (for example {@code alwaysRetryOn(...)}) is logged as the
+     * processor's own, with its handler.
+     */
+    protected final void logRedeliveryPolicy(String processorName, RedeliveryPolicy inUse, FailoverRedeliveryPolicy derivedDefault) {
+        if (inUse.equals(derivedDefault.policy()) && sameDeliveryErrorHandler(inUse.getDeliveryErrorHandler(), derivedDefault.policy().getDeliveryErrorHandler())) {
+            log.info("[{}] {}", processorName, derivedDefault.describe());
+        } else {
+            log.info("[{}] Uses its own RedeliveryPolicy: {}", processorName, inUse);
+        }
+    }
+
+    /**
+     * The {@link MessageDeliveryErrorHandler}s implement no {@code equals}, and every build of the derived default creates
+     * a new one, so two handlers count as the same when they are equal, or of the same class with the same
+     * {@code toString()} - which for the built-in handlers names the exceptions they classify. A handler whose
+     * {@code toString()} is the identity default (a lambda) is never the same as another instance.
+     */
+    private static boolean sameDeliveryErrorHandler(MessageDeliveryErrorHandler inUse, MessageDeliveryErrorHandler derivedDefault) {
+        return inUse.equals(derivedDefault) ||
+                (inUse.getClass() == derivedDefault.getClass() && inUse.toString().equals(derivedDefault.toString()));
     }
 
     /**
@@ -725,6 +783,76 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      */
     protected Optional<SubscriptionErrorPolicy> getSubscriptionErrorPolicy() {
         return Optional.empty();
+    }
+
+    /**
+     * What the batched forwards ({@link EventProcessor#getForwardBatchSize()}, {@link PartitionedViewEventProcessor}) do
+     * with a batch the {@link SubscriptionErrorPolicy} gave up on, as their
+     * {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable, SubscriptionErrorPolicy)}. Whether the policy
+     * skips or stops is read from the policy the {@link BatchedPersistedEventSubscriber} hands over - the one it was built
+     * with - so it holds whichever {@link EventStoreSubscriptionManager} built the subscription.
+     * <p>
+     * When the policy <b>skips</b> ({@link SubscriptionErrorPolicy#stopsOnError()} {@code false}), the batch's events are
+     * forwarded again one per {@link UnitOfWork}, so an event that still cannot be forwarded no longer takes the batch's
+     * other events with it: the skip loses the events that fail again. Each event is tried once more, without the policy's
+     * retries.
+     * <p>
+     * An I/O or connection failure ({@link IOExceptionUtil#isIOException(Throwable)}) while forwarding an event again ends
+     * the replay at once: the events after it are not tried, and the failure is thrown, which makes the
+     * {@link BatchedPersistedEventSubscriber} stop at the batch's first event instead of skipping the batch (see
+     * {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable, SubscriptionErrorPolicy)}). The whole batch is
+     * forwarded again once the subscription is resumed - also the events this replay already forwarded, so they are
+     * delivered at least twice and their handling must be idempotent.
+     * <p>
+     * When the policy <b>stops</b>, nothing is forwarded and the batch is left to the policy: the subscription stops at the
+     * batch's first event and forwards the whole batch again once it is resumed. A stop that turns into a skip after
+     * {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()} resumes skips the whole batch.
+     *
+     * @param events                  the batch the policy gave up on, in order
+     * @param batchFailure            the failure the policy gave up on
+     * @param subscriptionErrorPolicy the policy the subscriber handles the batch's failures with
+     * @param forwardEvent            forwards one event; called inside a {@link UnitOfWork} of its own
+     * @return true if every event of the batch was forwarded; false if the policy stops
+     * @throws RuntimeException the I/O failure that ended the replay, as soon as it happened (the subscription then stops
+     *                          at the batch); otherwise the failure of the first event that could not be forwarded (those of
+     *                          the others added as suppressed), after every other event was forwarded: the policy then
+     *                          skips the batch
+     */
+    boolean forwardFailedBatchOneEventPerUnitOfWork(List<PersistedEvent> events,
+                                                    Throwable batchFailure,
+                                                    SubscriptionErrorPolicy subscriptionErrorPolicy,
+                                                    Consumer<PersistedEvent> forwardEvent) {
+        if (subscriptionErrorPolicy.stopsOnError()) {
+            return false;
+        }
+        log.warn(msg("[{}] Forwarding the batch [#{} - #{}] failed and its SubscriptionErrorPolicy skips it - forwarding its {} events again one per UnitOfWork",
+                     getProcessorName(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder(), events.size()), batchFailure);
+        RuntimeException firstFailure = null;
+        for (var event : events) {
+            try {
+                eventStore.getUnitOfWorkFactory().usingUnitOfWork(() -> forwardEvent.accept(event));
+            } catch (RuntimeException failure) {
+                if (IOExceptionUtil.isIOException(failure)) {
+                    log.warn(msg("[{}] Forwarding the event with global-event-order {} again failed with an I/O error - ending the replay of the batch [#{} - #{}]; the subscription stops at the batch and forwards all of it again once resumed",
+                                 getProcessorName(), event.globalEventOrder(), events.getFirst().globalEventOrder(), events.getLast().globalEventOrder()), failure);
+                    if (firstFailure != null) {
+                        failure.addSuppressed(firstFailure);
+                    }
+                    throw failure;
+                }
+                log.error(msg("[{}] Could not forward the event with global-event-order {} ({} '{}', event-order {}) on its own either - it is skipped",
+                              getProcessorName(), event.globalEventOrder(), event.aggregateType(), event.aggregateId(), event.eventOrder()), failure);
+                if (firstFailure == null) {
+                    firstFailure = failure;
+                } else {
+                    firstFailure.addSuppressed(failure);
+                }
+            }
+        }
+        if (firstFailure != null) {
+            throw firstFailure;
+        }
+        return true;
     }
 
     /**
@@ -1023,7 +1151,10 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * the {@link PersistedEvent#aggregateId()} as the {@link OrderedMessage#getKey()} and
      * the {@link PersistedEvent#eventOrder()} as the {@link OrderedMessage#getOrder()}
      */
-    public static class EventReferenceOrderedMessage extends OrderedMessage {
+    // IdentifiedByKeyAndOrder: the key is the aggregate id and the order the event order, so a reader re-forwarding after
+    // an unclean failover is a no-op for an event still queued rather than a refused enqueue that stops the reader
+    // (EventProcessorReForwardOnShardOwnedIT)
+    public static class EventReferenceOrderedMessage extends OrderedMessage implements IdentifiedByKeyAndOrder {
         /**
          * {@link MessageMetaData} key, that's used as a flag to indicate
          * that an {@link OrderedMessage} is an {@link EventProcessor.EventReferenceOrderedMessage}

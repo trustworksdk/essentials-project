@@ -51,6 +51,9 @@ public final class MongoFencedLockManagerBuilder {
     private Duration                                                  lockConfirmationInterval;
     boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation = false;
     private Optional<EventBus> eventBus = Optional.empty();
+    private boolean            spreadLocks;
+    private Duration           spreadLocksAcquireGrace;
+    private Duration           spreadLocksRebalanceInterval;
 
     /**
      * @param mongoTemplate the mongoTemplate instance
@@ -176,7 +179,44 @@ public final class MongoFencedLockManagerBuilder {
                                           lockTimeOut,
                                           lockConfirmationInterval,
                                           releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
-                                          eventBus);
+                                          eventBus,
+                                          LockSpreading.from(spreadLocks, spreadLocksAcquireGrace, spreadLocksRebalanceInterval, lockConfirmationInterval));
+    }
+
+    /**
+     * Spread the locks acquired asynchronously over the live lock manager instances - see {@link LockSpreading}, and its
+     * costs, before enabling it. Default {@code false}.
+     *
+     * @param spreadLocks whether to spread locks
+     * @return this builder instance
+     */
+    public MongoFencedLockManagerBuilder setSpreadLocks(boolean spreadLocks) {
+        this.spreadLocks = spreadLocks;
+        return this;
+    }
+
+    /**
+     * See {@link LockSpreading#acquireGrace()}. {@code null} (the default) means two lock confirmation intervals. Only
+     * used when {@link #setSpreadLocks(boolean)} is {@code true}.
+     *
+     * @param spreadLocksAcquireGrace the grace, or {@code null} for the default
+     * @return this builder instance
+     */
+    public MongoFencedLockManagerBuilder setSpreadLocksAcquireGrace(Duration spreadLocksAcquireGrace) {
+        this.spreadLocksAcquireGrace = spreadLocksAcquireGrace;
+        return this;
+    }
+
+    /**
+     * See {@link LockSpreading#rebalanceInterval()}. {@code null} (the default) means two lock confirmation intervals;
+     * {@link Duration#ZERO} turns rebalancing off. Only used when {@link #setSpreadLocks(boolean)} is {@code true}.
+     *
+     * @param spreadLocksRebalanceInterval the interval, {@link Duration#ZERO} for none, or {@code null} for the default
+     * @return this builder instance
+     */
+    public MongoFencedLockManagerBuilder setSpreadLocksRebalanceInterval(Duration spreadLocksRebalanceInterval) {
+        this.spreadLocksRebalanceInterval = spreadLocksRebalanceInterval;
+        return this;
     }
 
 

@@ -31,7 +31,7 @@ Cross-cutting primitives used by every other Essentials module. Maven: `shared`.
 | `Exceptions` | `sneakyThrow` + checked-exception unwrapping |
 | `Lifecycle` | Idempotent `start()`/`stop()`/`isStarted()` contract — all stateful components implement this |
 | `InterceptorChain` / `DefaultInterceptorChain` | Chain-of-responsibility used by event store, command bus, etc. Each chain instance is per-operation, not reusable. Ordering driven by `@InterceptorOrder` (default 10) |
-| `PatternMatchingMethodInvoker` | Reflective dispatcher — scans target object methods at construction time, caches type→method map, then dispatches by argument type at runtime. Used for `@EventHandler`, `@CommandHandler` etc. |
+| `PatternMatchingMethodInvoker` | Reflective dispatcher — scans target object methods at construction time, caches type→method map, then dispatches by argument type at runtime. Used for `@EventHandler`, `@CommandHandler` etc. Built per aggregate INSTANCE, so construction is a hot path: the hierarchy walk under it (`Methods.methods`) is cached per class in a `ClassValue` (4.0 → 0.8 µs per invoker); the per-instance type→method map is not, because the matcher holds state (annotation, root type). `Methods.methods` still returns a new modifiable set per call |
 | `MethodPatternMatcher` | SPI consumed by `PatternMatchingMethodInvoker` to decide invokability, arg-type resolution, and actual invocation |
 | `MeasurementTaker` | Fan-out timing facade; delegates to 0..N `MeasurementRecorder`s. Supports Micrometer and logging out-of-box |
 | `MeasurementRecorder` | SPI for custom metrics backends |

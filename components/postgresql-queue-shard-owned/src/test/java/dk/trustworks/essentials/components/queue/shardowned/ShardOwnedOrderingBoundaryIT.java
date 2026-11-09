@@ -117,6 +117,30 @@ class ShardOwnedOrderingBoundaryIT {
         }
     }
 
+    @Test
+    void an_if_absent_enqueue_of_a_queued_key_order_is_not_enqueued_again_and_not_refused() throws Exception {
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ordering-3")) {
+            var first = queue.enqueue(Message.ordered("first".getBytes(StandardCharsets.UTF_8), PAYLOAD_TYPE, KEY, 7L));
+
+            // A reader re-forwarding what is still queued, alongside a message that is new, in one batch
+            List<MessageId> ids;
+            try (var connection = dataSource.getConnection()) {
+                connection.setAutoCommit(false);
+                ids = queue.enqueueIfAbsent(connection, List.of(Message.ordered("re-forwarded".getBytes(StandardCharsets.UTF_8), PAYLOAD_TYPE, KEY, 7L),
+                                                                Message.ordered("new".getBytes(StandardCharsets.UTF_8), PAYLOAD_TYPE, KEY, 8L)));
+                connection.commit();
+            }
+
+            assertThat(ids).hasSize(2);
+            assertThat(ids.getFirst()).as("the queued message's id").isEqualTo(first);
+            assertThat(ids.get(1).sequence()).as("the new message, enqueued").isGreaterThan(first.sequence());
+            assertThat(queue.depth().ordered()).isEqualTo(2);
+            // The plain enqueue still refuses a reused key_order
+            assertThatThrownBy(() -> queue.enqueue(List.of(Message.ordered("again".getBytes(StandardCharsets.UTF_8), PAYLOAD_TYPE, KEY, 8L))))
+                    .isInstanceOf(SQLException.class);
+        }
+    }
+
     private static String body(byte[] payload) {
         return new String(payload, StandardCharsets.UTF_8);
     }

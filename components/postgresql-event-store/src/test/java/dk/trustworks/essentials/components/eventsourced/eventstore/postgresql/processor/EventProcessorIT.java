@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.p
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import tools.jackson.databind.*;
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
@@ -288,7 +288,7 @@ public class EventProcessorIT {
     void an_event_processor_that_is_stopped_and_started_again_handles_an_event_appended_after_the_restart() {
         // Running before it stops: the subscription holds its fenced lock and the Inbox consumes. Not straight after
         // start(): a stop while the first lock-acquiring tick is still in flight can leave the lock held for the stopped
-        // subscription - an open race, RW-11 in docs/ROADMAP-0.6x.md, which this test does not cover
+        // subscription - an open race, RW-11 in docs/plans/ROADMAP-0.6x.md, which this test does not cover
         Awaitility.waitAtMost(Duration.ofSeconds(10))
                   .until(() -> testProcessor.isActive() && testProcessor.getInboxForTesting().isConsumingMessages());
         testProcessor.stop();
@@ -338,7 +338,7 @@ public class EventProcessorIT {
         try {
             // Holding its fenced lock before it stops. Not straight after start(): a stop while the first lock-acquiring
             // tick is still in flight can leave the lock held for the stopped subscription - an open race, RW-11 in
-            // docs/ROADMAP-0.6x.md, which this test does not cover
+            // docs/plans/ROADMAP-0.6x.md, which this test does not cover
             Awaitility.waitAtMost(Duration.ofSeconds(10))
                       .until(inTransactionProcessor::isActive);
             inTransactionProcessor.stop();
@@ -408,6 +408,80 @@ public class EventProcessorIT {
         var deadLetterMessages = durableQueues.getDeadLetterMessages(queueName, DurableQueues.QueueingSortOrder.ASC, 0, 10);
         assertThat(deadLetterMessages).hasSize(1);
         assertThat(deadLetterMessages.get(0).getPayload()).isInstanceOf(FailingCommandSentViaInbox.class);
+    }
+
+    /**
+     * A processor switched to the batched forward - same name, so the same lock and resume point - picks up where the
+     * event-by-event one stopped, forwards in batches, and every event still reaches its handler exactly as before
+     */
+    @Test
+    void a_processor_switched_to_forwarding_in_batches_continues_from_its_resume_point() {
+        var subscriberId = AbstractEventProcessor.resolveSubscriberId(TEST_ORDERS, testProcessor.getProcessorName());
+        IntStream.range(0, 5).forEach(i -> commandBus.send(new PlaceOrderCommand(OrderId.random(), "before the switch")));
+        Awaitility.waitAtMost(Duration.ofSeconds(5)).untilAsserted(() ->
+            assertThat(eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS))
+                    .hasValueSatisfying(order -> assertThat(order.longValue()).isEqualTo(11L)));
+        // As a restart would: the event-by-event processor's subscription and command handlers go away, its resume point stays
+        testProcessor.shutDownForTesting(eventStoreSubscriptionManager);
+
+        // A fresh Inboxes, as after a restart: the one in use caches the stopped inbox, wired to the old processor
+        var batched = new BatchedTestOrderEventProcessor(new EventProcessorDependencies(eventStoreSubscriptionManager,
+                                                                                        new Inboxes.DurableQueueBasedInboxes(durableQueues, fencedLockManager),
+                                                                                        commandBus,
+                                                                                        List.of()),
+                                                         eventStore);
+        testProcessor = batched;
+        batched.start();
+        var orders = IntStream.range(0, 40).mapToObj(i -> OrderId.random()).toList();
+        orders.forEach(orderId -> commandBus.send(new PlaceOrderCommand(orderId, "after the switch")));
+
+        // Every order placed after the switch is confirmed: its OrderPlacedEvent was forwarded and handled once
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            assertThat(batched.getOrderPlacedEventCounter().get()).isEqualTo(orders.size());
+            assertThat(eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS))
+                    .hasValueSatisfying(order -> assertThat(order.longValue()).isEqualTo(11L + orders.size() * 2L));
+        });
+        orders.forEach(orderId -> assertThat(unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(TEST_ORDERS, orderId).get().eventList()))
+                .extracting(event -> (Object) event.event().getEventTypeAsJavaClass().get())
+                .containsExactly(OrderPlacedEvent.class, OrderConfirmedEvent.class));
+        assertThat(batched.subscriptionsForTesting()).singleElement().isInstanceOf(ExclusiveBatchedAsynchronousSubscription.class);
+        assertThat(batched.forwardedInBatches.get()).as("forwarded through the batched subscription").isGreaterThanOrEqualTo(orders.size());
+        var queueName = batched.getInboxForTesting().name().asQueueName();
+        assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isZero();
+    }
+
+    /**
+     * A batch whose forward keeps failing for one of its events, under a skipping SubscriptionErrorPolicy: the batch's
+     * events are forwarded again one per unit of work before the skip, so the skip loses that one event, not the whole batch
+     */
+    @Test
+    void a_skipped_batch_loses_only_the_event_that_cannot_be_forwarded() {
+        testProcessor.shutDownForTesting(eventStoreSubscriptionManager);
+        var orders   = IntStream.range(0, 8).mapToObj(i -> OrderId.random()).toList();
+        var poisoned = orders.get(3);
+        // Appended in one unit of work before the processor subscribes, so its first batch holds them all
+        unitOfWorkFactory.usingUnitOfWork(() -> orders.forEach(orderId -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "batched")))));
+
+        var skipping = new SkippingBatchedTestOrderEventProcessor(new EventProcessorDependencies(eventStoreSubscriptionManager,
+                                                                                                 new Inboxes.DurableQueueBasedInboxes(durableQueues, fencedLockManager),
+                                                                                                 commandBus,
+                                                                                                 List.of()),
+                                                                  eventStore,
+                                                                  poisoned);
+        testProcessor = skipping;
+        skipping.start();
+
+        var others = orders.stream().filter(orderId -> !orderId.equals(poisoned)).toList();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() ->
+            others.forEach(orderId -> assertThat(unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(TEST_ORDERS, orderId).get().eventList()))
+                    .as("order %s, in the batch with the event that cannot be forwarded", orderId)
+                    .extracting(event -> (Object) event.event().getEventTypeAsJavaClass().get())
+                    .containsExactly(OrderPlacedEvent.class, OrderConfirmedEvent.class)));
+        assertThat(skipping.getOrderPlacedEventCounter().get()).isEqualTo(others.size());
+        assertThat(skipping.forwardAttemptsOfPoisoned.get()).as("tried in the batch, then on its own").isGreaterThanOrEqualTo(2);
+        assertThat(unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(TEST_ORDERS, poisoned).get().eventList()))
+                .extracting(event -> (Object) event.event().getEventTypeAsJavaClass().get())
+                .containsExactly(OrderPlacedEvent.class);
     }
 
     @Test
@@ -666,6 +740,16 @@ public class EventProcessorIT {
             return super.getInbox();
         }
 
+        /**
+         * What a process shutting down leaves behind: no subscription in the manager and no command handler on the bus -
+         * only the durable resume point
+         */
+        public void shutDownForTesting(EventStoreSubscriptionManager eventStoreSubscriptionManager) {
+            stop();
+            eventStoreSubscriptions.forEach(eventStoreSubscriptionManager::unsubscribe);
+            getCommandBus().removeCommandHandler(commandBusHandlerDelegate);
+        }
+
         @Override
         protected RedeliveryPolicy getInboxRedeliveryPolicy() {
             return RedeliveryPolicy.fixedBackoff(Duration.ofMillis(200), 3);
@@ -731,6 +815,60 @@ public class EventProcessorIT {
         }
     }
 
+
+    /**
+     * {@link TestOrderEventProcessor} forwarding in batches of up to 10, counting what goes through the batched forward
+     */
+    public static class BatchedTestOrderEventProcessor extends TestOrderEventProcessor {
+        final AtomicInteger forwardedInBatches = new AtomicInteger();
+
+        public BatchedTestOrderEventProcessor(EventProcessorDependencies eventProcessorDependencies, PostgresqlEventStore<?> eventStore) {
+            super(eventProcessorDependencies, eventStore);
+        }
+
+        @Override
+        protected int getForwardBatchSize() {
+            return 10;
+        }
+
+        List<EventStoreSubscription> subscriptionsForTesting() {
+            return eventStoreSubscriptions;
+        }
+
+        @Override
+        protected void forwardEventToInbox(PersistedEvent event, Inbox forwardToInbox) {
+            forwardedInBatches.incrementAndGet();
+            super.forwardEventToInbox(event, forwardToInbox);
+        }
+    }
+
+    /**
+     * {@link BatchedTestOrderEventProcessor} with a skipping {@link SubscriptionErrorPolicy} that cannot forward the events
+     * of one order
+     */
+    public static class SkippingBatchedTestOrderEventProcessor extends BatchedTestOrderEventProcessor {
+        final AtomicInteger forwardAttemptsOfPoisoned = new AtomicInteger();
+        private final OrderId poisoned;
+
+        public SkippingBatchedTestOrderEventProcessor(EventProcessorDependencies eventProcessorDependencies, PostgresqlEventStore<?> eventStore, OrderId poisoned) {
+            super(eventProcessorDependencies, eventStore);
+            this.poisoned = poisoned;
+        }
+
+        @Override
+        protected Optional<SubscriptionErrorPolicy> getSubscriptionErrorPolicy() {
+            return Optional.of(SubscriptionErrorPolicy.skip());
+        }
+
+        @Override
+        protected void forwardEventToInbox(PersistedEvent event, Inbox forwardToInbox) {
+            if (poisoned.equals(event.aggregateId())) {
+                forwardAttemptsOfPoisoned.incrementAndGet();
+                throw new IllegalStateException("Cannot forward the events of order " + poisoned);
+            }
+            super.forwardEventToInbox(event, forwardToInbox);
+        }
+    }
 
     // -------------------------------------------------------------------------------------------------------------------
 

@@ -204,6 +204,10 @@ class OrderedShardOwnerKeysNamedAtReleaseTest {
                                                                   if ("close".equals(name) || name.startsWith("set")) {
                                                                       return null;
                                                                   }
+                                                                  if ("isWrapperFor".equals(name)) {
+                                                                      // Not pgjdbc's: ShardOwnedStorage.prepareFreshlyPlanned leaves its plan cache alone
+                                                                      return false;
+                                                                  }
                                                                   throw new UnsupportedOperationException(name);
                                                               });
         }

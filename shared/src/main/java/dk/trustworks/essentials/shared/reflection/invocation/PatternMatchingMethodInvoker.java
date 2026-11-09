@@ -269,19 +269,24 @@ public final class PatternMatchingMethodInvoker<ARGUMENT_COMMON_ROOT_TYPE> {
                                                                                                          .filter(argumentType -> argumentType.isAssignableFrom(resolvedInvokeMethodWithArgumentOfType))
                                                                                                          .collect(Collectors.toSet()));
 
-        var contextDescription = msg("resolvedInvokeMethodWithArgumentOfType: '{}' and argument-type: '{}'", resolvedInvokeMethodWithArgumentOfType.getName(), argument.getClass().getName());
         if (allMatchingArgumentTypes.isEmpty()) {
-            log.trace("invokeAllMatches: Didn't find any matching methods for {}, calling the noMatchingMethodsHandler", contextDescription);
+            if (log.isTraceEnabled()) {
+                log.trace("invokeAllMatches: Didn't find any matching methods for {}, calling the noMatchingMethodsHandler", describeResolution(resolvedInvokeMethodWithArgumentOfType, argument));
+            }
             noMatchingMethodsHandler.noMatchesFor(argument);
         } else {
-            log.trace("invokeAllMatches: Found {} matching methods for {}", allMatchingArgumentTypes.size(), contextDescription);
+            if (log.isTraceEnabled()) {
+                log.trace("invokeAllMatches: Found {} matching methods for {}", allMatchingArgumentTypes.size(), describeResolution(resolvedInvokeMethodWithArgumentOfType, argument));
+            }
             allMatchingArgumentTypes.forEach(methodInvokableType -> {
                 var methodToInvoke = invokableMethods.get(methodInvokableType);
                 if (methodToInvoke == null) {
-                    throw new IllegalStateException(msg("Expected to find a Method in invokableMethods that matched resolved invokableMethodType: '{}' based on {}", methodInvokableType.getName(), contextDescription));
+                    throw new IllegalStateException(msg("Expected to find a Method in invokableMethods that matched resolved invokableMethodType: '{}' based on {}", methodInvokableType.getName(), describeResolution(resolvedInvokeMethodWithArgumentOfType, argument)));
                 }
 
-                log.trace("invokeAllMatches: Invoking method {} based on {}", methodToInvoke.toGenericString(), contextDescription);
+                if (log.isTraceEnabled()) {
+                    log.trace("invokeAllMatches: Invoking method {} based on {}", methodToInvoke.toGenericString(), describeResolution(resolvedInvokeMethodWithArgumentOfType, argument));
+                }
                 invoke(methodToInvoke, argument, resolvedInvokeMethodWithArgumentOfType);
             });
         }
@@ -300,17 +305,20 @@ public final class PatternMatchingMethodInvoker<ARGUMENT_COMMON_ROOT_TYPE> {
         requireNonNull(noMatchingMethodsHandler, "noMatchingMethodsHandler may not be NULL");
 
         var mostSpecificMatchingArgumentType = findMostSpecificMatchingArgumentType(resolvedInvokeMethodWithArgumentOfType);
-        var contextDescription               = msg("resolvedInvokeMethodWithArgumentOfType: '{}' and argument-type: '{}'", resolvedInvokeMethodWithArgumentOfType.getName(), argument.getClass().getName());
         if (mostSpecificMatchingArgumentType != null) {
             var methodToInvoke = invokableMethods.get(mostSpecificMatchingArgumentType);
             if (methodToInvoke == null) {
-                throw new InvocationException(msg("Expected to find a Method that matched resolved mostSpecificMatchingArgumentType: '{}' based on {}", mostSpecificMatchingArgumentType.getName(), contextDescription));
+                throw new InvocationException(msg("Expected to find a Method that matched resolved mostSpecificMatchingArgumentType: '{}' based on {}", mostSpecificMatchingArgumentType.getName(), describeResolution(resolvedInvokeMethodWithArgumentOfType, argument)));
             }
 
-            log.trace("invokeMostSpecificTypeMatched: Resolved mostSpecificMatchingArgumentType '{}' and methodToInvoke: {} based on {}", mostSpecificMatchingArgumentType.getName(), methodToInvoke.toGenericString(), contextDescription);
+            if (log.isTraceEnabled()) {
+                log.trace("invokeMostSpecificTypeMatched: Resolved mostSpecificMatchingArgumentType '{}' and methodToInvoke: {} based on {}", mostSpecificMatchingArgumentType.getName(), methodToInvoke.toGenericString(), describeResolution(resolvedInvokeMethodWithArgumentOfType, argument));
+            }
             invoke(methodToInvoke, argument, resolvedInvokeMethodWithArgumentOfType);
         } else {
-            log.trace("invokeMostSpecificTypeMatched: Didn't find a matching method for {}, calling the noMatchingMethodsHandler", contextDescription);
+            if (log.isTraceEnabled()) {
+                log.trace("invokeMostSpecificTypeMatched: Didn't find a matching method for {}, calling the noMatchingMethodsHandler", describeResolution(resolvedInvokeMethodWithArgumentOfType, argument));
+            }
             noMatchingMethodsHandler.noMatchesFor(argument);
         }
     }
@@ -350,24 +358,43 @@ public final class PatternMatchingMethodInvoker<ARGUMENT_COMMON_ROOT_TYPE> {
         requireNonNull(methodToInvoke, "No methodToInvoke supplied");
         requireNonNull(argument, "No argument supplied");
 
-        var contextDescription = msg("method '{}' argument '{}' on '{}'", methodToInvoke.toGenericString(), argument, invokeMethodsOn);
-
+        // The descriptions below are built only when they are logged: this runs for every event an aggregate applies and every
+        // message a handler receives, and building them eagerly (toGenericString, the argument's toString, a regex) cost
+        // several percent of a busy application's CPU while trace logging was off
         try {
-            log.trace("Invoking {}", contextDescription);
+            if (log.isTraceEnabled()) {
+                log.trace("Invoking {}", describeInvocation(methodToInvoke, argument));
+            }
             var duration = time(CheckedRunnable.safe(() -> methodPatternMatcher.invokeMethod(methodToInvoke, argument, invokeMethodsOn, resolvedInvokeMethodWithArgumentOfType)));
             invocationTracker.trackMethodInvoked(methodToInvoke, invokeMethodsOn, duration, argument);
-            log.trace("Took {} ms to invoke {}", duration.toMillis(), contextDescription);
+            if (log.isTraceEnabled()) {
+                log.trace("Took {} ms to invoke {}", duration.toMillis(), describeInvocation(methodToInvoke, argument));
+            }
         } catch (CheckedExceptionRethrownException e) {
-            log.debug(msg("Failed to invoke {}", contextDescription), e.getCause());
+            if (log.isDebugEnabled()) {
+                log.debug(msg("Failed to invoke {}", describeInvocation(methodToInvoke, argument)), e.getCause());
+            }
             // Unwrap the real cause and rethrow this exception
             sneakyThrow(e.getCause());
         } catch (RuntimeException e) {
-            log.debug(msg("Failed to invoke {}", contextDescription), e);
+            if (log.isDebugEnabled()) {
+                log.debug(msg("Failed to invoke {}", describeInvocation(methodToInvoke, argument)), e);
+            }
             throw e;
         } catch (Throwable e) {
-            log.debug(msg("Failed to invoke {}", contextDescription), e);
+            if (log.isDebugEnabled()) {
+                log.debug(msg("Failed to invoke {}", describeInvocation(methodToInvoke, argument)), e);
+            }
             sneakyThrow(e);
         }
+    }
+
+    private String describeInvocation(Method methodToInvoke, Object argument) {
+        return msg("method '{}' argument '{}' on '{}'", methodToInvoke.toGenericString(), argument, invokeMethodsOn);
+    }
+
+    private static String describeResolution(Class<?> resolvedInvokeMethodWithArgumentOfType, Object argument) {
+        return msg("resolvedInvokeMethodWithArgumentOfType: '{}' and argument-type: '{}'", resolvedInvokeMethodWithArgumentOfType.getName(), argument.getClass().getName());
     }
 
     public boolean hasMatchingMethod(Class<?> argumentType) {

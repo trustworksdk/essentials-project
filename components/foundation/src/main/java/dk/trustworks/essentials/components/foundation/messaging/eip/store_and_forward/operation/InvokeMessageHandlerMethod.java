@@ -21,11 +21,11 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.Message;
 import java.lang.reflect.Method;
 
 public final class InvokeMessageHandlerMethod {
-    public final  Method   methodToInvoke;
-    private final Message  message;
-    private final Object   messagPayload;
-    public final  Object   invokeMethodOn;
-    public final  Class<?> resolvedInvokeMethodWithArgumentOfType;
+    public final Method   methodToInvoke;
+    public final Message  message;
+    public final Object   messagPayload;
+    public final Object   invokeMethodOn;
+    public final Class<?> resolvedInvokeMethodWithArgumentOfType;
 
     public InvokeMessageHandlerMethod(Method methodToInvoke, Message message, Object messagPayload, Object invokeMethodOn, Class<?> resolvedInvokeMethodWithArgumentOfType) {
         this.methodToInvoke = methodToInvoke;

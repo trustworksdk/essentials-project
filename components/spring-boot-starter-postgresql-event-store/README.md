@@ -241,7 +241,7 @@ EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventSt
 
 > **Which delivery mechanism should I use?** Subscribers are always correct regardless —
 > the choice is only *how fast the fast path is* and *what operational footprint you accept*.
-> See **[cdc.md §12.6 "Choosing a delivery mechanism"](../../docs/cdc.md)**
+> See **[cdc.md §12.6 "Choosing a delivery mechanism"](../../docs/design/cdc.md)**
 > for the full comparison (plain/jittered/notify polling vs CDC INBOX/DIRECT, with indicative
 > latency and DB-load numbers). Quick guide:
 > - **Simplest, any Postgres, new project** → leave CDC off (the default) and run polling
@@ -256,7 +256,7 @@ EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventSt
 > every CDC bean is gated on it being `true` with no `matchIfMissing`. An application that says
 > nothing about CDC gets no replication slot, no publication changes and no tailer: the event store
 > polls, exactly as before CDC existed. CDC's operational surface (replication slot, publication,
-> WAL retention; see [cdc.md §5](../../docs/cdc.md)) is heavier than polling, so adopt it
+> WAL retention; see [cdc.md §5](../../docs/design/cdc.md)) is heavier than polling, so adopt it
 > deliberately:
 > ```properties
 > essentials.eventstore.cdc.enabled=true
@@ -296,7 +296,7 @@ essentials.eventstore.cdc.wal-replication-tailer.poll-interval=PT0.025S
 | `essentials.eventstore.cdc.plugin` | `pgoutput` | Logical decoding plugin. `pgoutput` is the default; `wal2json` remains available for explicit use |
 | `essentials.eventstore.cdc.pg-output.publication-name` | `essentials_cdc_publication` | Publication used when `plugin=pgoutput` |
 | `essentials.eventstore.cdc.wal-parser-mode` | `string` | `string` or `bytes` parser path for wal2json payloads (recommend `bytes`) |
-| `essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy` | `mark-dispatched` | `mark-dispatched`: keep row for TTL cleanup. `delete`: remove row immediately after successful dispatch |
+| `essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy` | `delete` | `delete`: remove row immediately after successful dispatch (poison and relation rows are kept). `mark-dispatched`: keep row as `DISPATCHED` until the inbox TTL job removes it; under load the inbox then grows with every dispatched event |
 | `essentials.eventstore.cdc.event-bus.backpressure-buffer-size` | `8192` | DIRECT-mode CDC bus buffer size |
 | `essentials.eventstore.cdc.event-bus.non-serialized-max-retries` | `16` | Retries for `FAIL_NON_SERIALIZED` emit races |
 | `essentials.eventstore.cdc.event-bus.overflow-max-retries` | `20` | Retries for `FAIL_OVERFLOW` before applying overflow policy |

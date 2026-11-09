@@ -226,6 +226,14 @@ Prefix: `essentials.durable-queues`
 
 Removed in 0.60.0, ignored if set (since 0.60.1 an ERROR is logged at startup per key, and the metadata marks them `error`): `transactional-mode` (every queue operation is its own transaction - a `fully-transactional` setup changed semantics, trap `ESS-103`), `use-ordered-unordered-query`, `enable-queue-statistics`, `shared-queue-statistics-table-name`, `enable-queue-statistics-ttl`, `queue-statistics-ttl-duration`. MongoDB starter: `transactional-mode`.
 
+#### UnitOfWork
+
+Prefix: `essentials.unit-of-work` - applies to the `UnitOfWorkFactory` the PostgreSQL starter and the event store starter define
+
+| Property | Default | Notes |
+|----------|---------|-------|
+| `transaction-isolation` | `read-committed` | Isolation level every `UnitOfWork` transaction asks for. `database-default` asks for none: same guarantee where the database's default is READ COMMITTED (PostgreSQL's, unless `default_transaction_isolation` was changed for server, database or role), and saves a round trip per transaction - Spring reads the connection's isolation level (`SHOW TRANSACTION ISOLATION LEVEL`) before every transaction that names one. Nothing checks the database default; choose `database-default` only if you know it |
+
 #### MultiTableChangeListener
 
 Prefix: `essentials.multi-table-change-listener`
@@ -402,8 +410,8 @@ Prefix: `essentials.fenced-lock-manager`
 |----------|---------|-------|
 | `fenced-locks-collection-name` | `fenced_locks` | Collection name - see [Security](#security) |
 | `instance-id` | `<hostname>:<pid>` | Lock holder id shown in the lock table, admin API and logs; must be unique per instance. Since 0.60.1 (before: bare hostname, so two JVMs on one host looked like one holder) |
-| `lock-time-out` | `12s` | Must be > `lock-confirmation-interval` |
-| `lock-confirmation-interval` | `5s` | Heartbeat frequency |
+| `lock-time-out` | `15s` | Must be > `lock-confirmation-interval` |
+| `lock-confirmation-interval` | `4s` | Heartbeat frequency |
 | `release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation` | `false` | Local release on I/O error |
 
 #### DurableQueues

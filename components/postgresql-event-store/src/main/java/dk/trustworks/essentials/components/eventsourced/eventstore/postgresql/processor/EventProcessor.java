@@ -27,6 +27,7 @@ import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_fo
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.reactive.Handler;
 import dk.trustworks.essentials.reactive.command.*;
 import dk.trustworks.essentials.shared.Exceptions;
@@ -38,6 +39,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Event Modeling style Event Sourced Event Processor and Command Handler, which is capable of both containing {@link CmdHandler} as well as {@link MessageHandler}
@@ -310,11 +312,16 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                 warnOnceIfEventStoreIsNoAwaitedGapInspector();
                 UnhandledEventTypes.logHandledMessageTypes(processorName, this);
                 unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingInboxMessageHandlerDelegate, UnhandledEventTypes.Reporting.DEBUG);
+                var inboxMessageConsumptionMode = getInboxMessageConsumptionMode();
+                checkInboxConsumptionMode(processorName, inboxMessageConsumptionMode);
+                logConnectionPoolHint(processorName, getNumberOfParallelInboxMessageConsumers());
+                var inboxRedeliveryPolicy = getInboxRedeliveryPolicy();
+                logRedeliveryPolicy(processorName, inboxRedeliveryPolicy, failoverRedeliveryPolicy(inboxes.maxUnservedAfterInstanceLoss()));
                 inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
                                                             .inboxName(InboxName.of(processorName))
-                                                            .messageConsumptionMode(getInboxMessageConsumptionMode())
+                                                            .messageConsumptionMode(inboxMessageConsumptionMode)
                                                             .numberOfParallelMessageConsumers(getNumberOfParallelInboxMessageConsumers())
-                                                            .redeliveryPolicy(getInboxRedeliveryPolicy())
+                                                            .redeliveryPolicy(inboxRedeliveryPolicy)
                                                             .build(),
                                                  inboxMessageHandlerDelegate);
                 // The Inbox outlives a stop(): Inbox#stopConsuming() drops its message consumer, and getOrCreateInbox
@@ -353,28 +360,32 @@ public abstract class EventProcessor extends AbstractEventProcessor {
 
     private EventStoreSubscription subscribe(String processorName, AggregateType aggregateType) {
         var subscriberId = resolveSubscriberId(aggregateType, processorName);
-        var subscription = eventStoreSubscriptionManager.exclusivelySubscribeToAggregateEventsAsynchronously(
+        var lockAwareSubscriber = new FencedLockAwareSubscriber() {
+            @Override
+            public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint resumeFromAndIncluding) {
+                log.info("⚙️ [{}] Subscriber '{}' acquired lock. Will resumeFromAndIncluding: {}",
+                         processorName,
+                         subscriberId,
+                         resumeFromAndIncluding);
+            }
+
+            @Override
+            public void onLockReleased(FencedLock fencedLock) {
+                log.info("⚙️ [{}] Subscriber '{}''s lock was released",
+                         processorName,
+                         subscriberId);
+
+            }
+        };
+        var forwardBatchSize = getForwardBatchSize();
+        var subscription = forwardBatchSize > 1
+                           ? subscribeForwardingInBatches(subscriberId, aggregateType, forwardBatchSize, lockAwareSubscriber, processorName)
+                           : eventStoreSubscriptionManager.exclusivelySubscribeToAggregateEventsAsynchronously(
                 subscriberId,
                 aggregateType,
                 resolveStartSubscriptionFromGlobalEventOrder(),
                 Optional.empty(),
-                new FencedLockAwareSubscriber() {
-                    @Override
-                    public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint resumeFromAndIncluding) {
-                        log.info("⚙️ [{}] Subscriber '{}' acquired lock. Will resumeFromAndIncluding: {}",
-                                 processorName,
-                                 subscriberId,
-                                 resumeFromAndIncluding);
-                    }
-
-                    @Override
-                    public void onLockReleased(FencedLock fencedLock) {
-                        log.info("⚙️ [{}] Subscriber '{}''s lock was released",
-                                 processorName,
-                                 subscriberId);
-
-                    }
-                },
+                lockAwareSubscriber,
                 new PersistedEventHandler() {
                     @Override
                     public void handle(PersistedEvent event) {
@@ -391,9 +402,10 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                         return processorName;
                     }
                 });
-        log.info("⚙️ [{}] Created exclusive '{}' subscription: {}",
+        log.info("⚙️ [{}] Created exclusive '{}' subscription{}: {}",
                  processorName,
                  aggregateType,
+                 forwardBatchSize > 1 ? " forwarding in batches of up to " + forwardBatchSize : "",
                  subscription);
         return subscription;
     }
@@ -439,6 +451,84 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     }
 
     /**
+     * The batched forward: each batch's events are forwarded with {@link #forwardEventToInbox} - an override still
+     * applies - inside the one unit of work the batch is handled in, which also advances the resume point. A batch that
+     * fails rolls back whole, forwards included, and is retried as the {@link SubscriptionErrorPolicy} says. When the
+     * policy gives up on it and skips, its events are forwarded again one per unit of work first, so the skip loses only
+     * the events that fail again - see {@link #forwardFailedBatchOneEventPerUnitOfWork}.
+     */
+    private EventStoreSubscription subscribeForwardingInBatches(SubscriberId subscriberId,
+                                                                AggregateType aggregateType,
+                                                                int forwardBatchSize,
+                                                                FencedLockAwareSubscriber lockAwareSubscriber,
+                                                                String processorName) {
+        return eventStoreSubscriptionManager.exclusivelyBatchSubscribeToAggregateEventsAsynchronously(
+                subscriberId,
+                aggregateType,
+                resolveStartSubscriptionFromGlobalEventOrder(),
+                Optional.empty(),
+                forwardBatchSize,
+                requireNonNull(getForwardMaxLatency(), "getForwardMaxLatency() returned null"),
+                lockAwareSubscriber,
+                new BatchedPersistedEventHandler() {
+                    @Override
+                    public int handleBatch(List<PersistedEvent> events) {
+                        for (var event : events) {
+                            forwardEventToInbox(event, inbox);
+                        }
+                        return forwardBatchSize;
+                    }
+
+                    @Override
+                    public boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure, SubscriptionErrorPolicy subscriptionErrorPolicy) {
+                        return forwardFailedBatchOneEventPerUnitOfWork(events, failure, subscriptionErrorPolicy, event -> forwardEventToInbox(event, inbox));
+                    }
+
+                    @Override
+                    public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+                        return getSubscriptionErrorPolicy();
+                    }
+
+                    @Override
+                    public String toString() {
+                        return processorName;
+                    }
+                });
+    }
+
+    /**
+     * How many events the processor's exclusive subscription hands over at a time to be forwarded to the {@link Inbox}
+     * in one unit of work. Default {@code 1}: event by event, a unit of work - and a commit - each, as always.
+     * <p>
+     * Above {@code 1} the subscription is an {@link ExclusiveBatchedAsynchronousSubscription}: the same fenced lock and
+     * resume point, so a processor can switch either way without losing its place, but one commit per batch. Forwarding
+     * event by event bounded a forwarding processor at about 850 events/s, and a chain of them - the trading demo's order
+     * flow - at the slowest one's commit rate (EF-2, {@code docs/design/key-partitioned-event-processing.md} §5). What a batch
+     * changes: the {@link SubscriptionErrorPolicy} retries and stops at the batch as a whole, and an event is forwarded
+     * only once its batch is full or {@link #getForwardMaxLatency()} has passed. A policy that skips first forwards the
+     * failed batch's events again one per unit of work, each tried once more on its own, without the policy's retries, so
+     * the skip loses only the events that fail on their own as well. A stop that turns into a skip after
+     * {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()} resumes still loses up to a batch of events. A replay that
+     * fails with an I/O or connection error (the database unreachable) ends at once and skips nothing: the subscription
+     * stops at the batch and forwards all of it again once resumed, events the replay already forwarded included.
+     *
+     * @return the most events forwarded in one unit of work; values below {@code 2} forward event by event
+     */
+    protected int getForwardBatchSize() {
+        return 1;
+    }
+
+    /**
+     * The longest a partial batch waits for more events before it is forwarded, when {@link #getForwardBatchSize()} is
+     * above {@code 1}. Default {@link #DEFAULT_BATCH_MAX_LATENCY}.
+     *
+     * @return the maximum time a partial batch waits
+     */
+    protected Duration getForwardMaxLatency() {
+        return DEFAULT_BATCH_MAX_LATENCY;
+    }
+
+    /**
      * Forward the event to the <code>forwardToInbox</code> as an {@link OrderedMessage}<br>
      * The default implementation checks if the concrete {@link EventProcessor} class has an {@literal @MessageHandler} annotated method that
      * handles the event. Only events with a corresponding {@link MessageHandler} annotated method will be forwarded to the {@link Inbox} and thereby delegates to the
@@ -465,12 +555,57 @@ public abstract class EventProcessor extends AbstractEventProcessor {
 
     /**
      * Get the {@link MessageConsumptionMode} used by the consume event messages forwarded to the underlying {@link Inbox}<br>
-     * Default is {@link MessageConsumptionMode#SingleGlobalConsumer}
+     * Default is {@link MessageConsumptionMode#SingleGlobalConsumer}: one instance cluster-wide runs the {@code @MessageHandler}s,
+     * behind a {@code FencedLock} of the {@link Inbox}'s own. To run them on every instance, extend
+     * {@link PartitionedEventProcessor} instead, which states that contract in its name.
+     * <p>
+     * Returning {@link MessageConsumptionMode#GlobalCompetingConsumers} from an override is allowed only where
+     * {@link Inboxes#keepsKeyOrderAcrossInstances()}: elsewhere one aggregate's events could be handled out of order on two
+     * instances, so {@link #start()} refuses to start.
      *
      * @return the {@link MessageConsumptionMode} used by the consume event messages forwarded to the underlying {@link Inbox}
      */
     protected MessageConsumptionMode getInboxMessageConsumptionMode() {
         return MessageConsumptionMode.SingleGlobalConsumer;
+    }
+
+    /**
+     * Above this many inbox consumer threads a processor says, once at start, that each holds a pooled connection.
+     */
+    static final int CONNECTION_POOL_HINT_ABOVE_CONSUMERS = 4;
+
+    /**
+     * Each inbox consumer thread holds a pooled connection while it handles a message, so several processors with many
+     * threads can exhaust a pool sized for the default (Hikari: 10) - which shows up as connection timeouts under load,
+     * far from the cause. A hint, not a check: the pool size and the other holders are not known here.
+     */
+    private void logConnectionPoolHint(String processorName, int consumers) {
+        if (consumers > CONNECTION_POOL_HINT_ABOVE_CONSUMERS) {
+            log.info("[{}] {} inbox consumer threads: each holds a pooled database connection while it handles a message. " +
+                             "Size the connection pool for them, together with every other processor's consumer threads, the " +
+                             "queue engine's pumps and the application's own transactions",
+                     processorName, consumers);
+        }
+    }
+
+    /**
+     * Competing consumers on queues that keep a key in order per node only would handle one aggregate's events out of order
+     * on two instances: refused, before anything is created. Otherwise said once, at INFO, so a log shows where handlers run.
+     */
+    private void checkInboxConsumptionMode(String processorName, MessageConsumptionMode mode) {
+        if (mode != MessageConsumptionMode.GlobalCompetingConsumers) {
+            return;
+        }
+        if (!inboxes.keepsKeyOrderAcrossInstances()) {
+            throw new IllegalStateException(msg("[{}] Inbox consumed with GlobalCompetingConsumers, but {} does not keep an ordered message key in " +
+                                                        "order across instances: with more than one instance, one aggregate's events could be handled " +
+                                                        "out of order. Use a queue implementation that keeps key order across instances (the shard-owned " +
+                                                        "engine: essentials.shard-owned-queue.durable-queues-enabled=true), or let one instance handle the " +
+                                                        "Inbox (SingleGlobalConsumer, EventProcessor's default)",
+                                                processorName, inboxes.getClass().getSimpleName()));
+        }
+        log.info("[{}] Inbox consumed with GlobalCompetingConsumers: every instance handles it, one aggregate's events stay in order",
+                 processorName);
     }
 
     /**
@@ -484,18 +619,16 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     }
 
     /**
-     * Get the {@link RedeliveryPolicy} used when consuming messages from the underlying {@link Inbox}
+     * Get the {@link RedeliveryPolicy} used when consuming messages from the underlying {@link Inbox}.
+     * <p>
+     * Default: {@link #failoverRedeliveryPolicy(Optional)} with the {@link Inbox}es' window - quick first retries, and
+     * retrying for long enough to outlast a failover, so a handler that waits for another processor's work does not
+     * dead-letter while that work moves to another instance. Override for a different budget.
      *
      * @return the {@link RedeliveryPolicy} used when consuming messages from the underlying {@link Inbox}
      */
     protected RedeliveryPolicy getInboxRedeliveryPolicy() {
-        return RedeliveryPolicy.exponentialBackoff()
-                               .setInitialRedeliveryDelay(Duration.ofMillis(200))
-                               .setFollowupRedeliveryDelay(Duration.ofMillis(200))
-                               .setFollowupRedeliveryDelayMultiplier(1.1d)
-                               .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofSeconds(3))
-                               .setMaximumNumberOfRedeliveries(20)
-                               .build();
+        return failoverRedeliveryPolicy(inboxes.maxUnservedAfterInstanceLoss()).policy();
     }
 
     /**
@@ -553,6 +686,32 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                                                    currentInbox.getNumberOfDeadLetterMessages(),
                                                    null,
                                                    null));
+    }
+
+    /**
+     * How many instances consume this processor's {@link Inbox}, cluster-wide - see
+     * {@link Inboxes#getQueueConsumers(InboxName)}. Used by {@link PartitionedEventProcessor}'s reset.
+     */
+    Optional<QueueConsumers> getInboxConsumers() {
+        return inboxes.getQueueConsumers(InboxName.of(requireNonNull(getProcessorName(), "getProcessorName() returned null")));
+    }
+
+    /**
+     * Purge this processor's {@link Inbox} - also on an instance where the processor never started, whose {@code inbox}
+     * is {@code null}: the {@link Inbox} is then got from {@link Inboxes#getOrCreateInbox(InboxConfig)}, which consumes
+     * nothing, with the configuration {@link #start()} gives it.
+     */
+    void purgeInbox() {
+        var current = inbox;
+        if (current == null) {
+            current = inboxes.getOrCreateInbox(InboxConfig.builder()
+                                                          .inboxName(InboxName.of(requireNonNull(getProcessorName(), "getProcessorName() returned null")))
+                                                          .messageConsumptionMode(getInboxMessageConsumptionMode())
+                                                          .numberOfParallelMessageConsumers(getNumberOfParallelInboxMessageConsumers())
+                                                          .redeliveryPolicy(getInboxRedeliveryPolicy())
+                                                          .build());
+        }
+        current.deleteAllMessages();
     }
 
     /**

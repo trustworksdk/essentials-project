@@ -1,0 +1,34 @@
+schemaVersion: "1.1"
+slice: funding.payment_gateway
+kind: external_system
+bc: funding
+owner: funding-team
+status: live
+summary: "Initiates deposits and withdrawals at the payment gateway and records what it reports back. The payment-gateway simulator under the simulators profile, a stub otherwise."
+generator: essentials
+language: java
+
+reactsTo: [DepositRequested, WithdrawalRequested]
+sends: [RecordPaymentOutcome]
+endpoints:
+  # The gateway's signed webhook (subscription demo-funding); its event log is read as well
+  - { method: POST, path: "/webhooks/payment-gateway/funding", auth: service }
+invariants:
+  - id: INV-PG-1
+    text: "The gateway is called with no UnitOfWork active, so no database connection is held for the duration of the call"
+    enforcedBy: PaymentRouter
+  - id: INV-PG-2
+    text: "Every gateway report reaches the payment through the Funding:PaymentReports inbox, which redelivers a report that collided with another write"
+    enforcedBy: PaymentReports
+  - id: INV-PG-3
+    text: "A payment is initiated once per id: the gateway's idempotencyKey is our DepositId / WithdrawalId"
+    enforcedBy: SimulatorPaymentGateway
+  - id: INV-PG-4
+    text: "Each gateway event reaches the payment once, whether by webhook or by the event-log catch-up"
+    enforcedBy: ExternalEventIntake
+forbidden:
+  - cross-slice-internal:funding
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/external_systems/payment_gateway/PaymentEventTranslationTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/FundingIT.java" }
+  contract: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/external_systems/payment_gateway/PaymentGatewayIT.java" }

@@ -16,24 +16,59 @@
 
 package dk.trustworks.essentials.jackson.types;
 
-import tools.jackson.core.JacksonException;
-import tools.jackson.core.JsonParser;
+import tools.jackson.core.*;
 import tools.jackson.databind.*;
 import tools.jackson.databind.deser.std.StdDeserializer;
 import dk.trustworks.essentials.types.*;
 
+import java.math.BigDecimal;
+
 public final class MoneyDeserializer extends StdDeserializer<Money> {
+    private static final QuotedNumbers.Parser QUOTED_AMOUNT_PARSER = (p, text) -> new BigDecimal(text);
+
     public MoneyDeserializer() {
         super(Money.class);
     }
 
     @Override
     public Money deserialize(JsonParser p, DeserializationContext ctxt) throws JacksonException {
-        JsonNode node = p.readValueAsTree();
-
-        var    amount       = node.get("amount").decimalValue();
-        String currencyCode = node.get("currency").asText();
-
+        // Read as a stream: building a JsonNode tree per Money to read two properties out of it was 1.2 % of the
+        // trading demo's CPU under load. Accepts a numeric amount, kept at the scale it was written with, or a quoted
+        // number ("99.99", read by QuotedNumbers.readQuotedNumber, the rule NumberTypeJsonDeserializer also reads one by),
+        // the properties in any order, and any other property ignored
+        var        token        = p.currentToken() == JsonToken.START_OBJECT ? p.nextToken() : p.currentToken();
+        BigDecimal amount       = null;
+        String     currencyCode = null;
+        for (; token == JsonToken.PROPERTY_NAME; token = p.nextToken()) {
+            var name  = p.currentName();
+            var value = p.nextToken();
+            switch (name) {
+                case "amount" -> {
+                    if (value.isNumeric()) {
+                        amount = p.getDecimalValue();
+                    } else if (value == JsonToken.VALUE_STRING) {
+                        // The quoted-number rule NumberTypeJsonDeserializer applies, from the same helper; a problem is
+                        // reported against BigDecimal, the type the amount is read as here
+                        amount = (BigDecimal) QuotedNumbers.readQuotedNumber(p, ctxt, BigDecimal.class, QUOTED_AMOUNT_PARSER, "not a valid Money 'amount'");
+                    } else {
+                        return (Money) ctxt.reportInputMismatch(this, "Money 'amount' must be a JSON number or a quoted number, but was %s", value);
+                    }
+                }
+                case "currency" -> {
+                    if (value == JsonToken.VALUE_STRING) {
+                        currencyCode = p.getString();
+                    } else {
+                        // Step over an object or array value first, so the parser is not left inside it
+                        p.skipChildren();
+                        return (Money) ctxt.reportInputMismatch(this, "Money 'currency' must be a JSON string, but was %s", value);
+                    }
+                }
+                default -> p.skipChildren();
+            }
+        }
+        if (amount == null || currencyCode == null) {
+            return (Money) ctxt.reportInputMismatch(this, "Money needs both 'amount' and 'currency', but got amount=%s currency=%s", amount, currencyCode);
+        }
         return new Money(Amount.of(amount),
                          CurrencyCode.of(currencyCode));
     }

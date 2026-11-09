@@ -147,6 +147,44 @@ public interface Inboxes {
     Collection<Inbox> getInboxes();
 
     /**
+     * Whether the {@link Inbox}es created here deliver one {@link OrderedMessage#getKey()}'s messages in order even when
+     * consumed with {@link MessageConsumptionMode#GlobalCompetingConsumers} on several instances - so that
+     * {@link MessageConsumptionMode#SingleGlobalConsumer} is not needed for {@link OrderedMessage}s.
+     * <p>
+     * {@code false} by default. The {@link Inboxes} created by {@link #durableQueueBasedInboxes(DurableQueues, FencedLockManager)}
+     * answer what their {@link DurableQueues#keepsKeyOrderAcrossInstances()} answers.
+     *
+     * @return {@code true} if competing consumers on several instances keep a key's ordered messages in order
+     */
+    default boolean keepsKeyOrderAcrossInstances() {
+        return false;
+    }
+
+    /**
+     * The longest a message of these {@link Inbox}es can stay unserved after the instance handling it dies; see
+     * {@link DurableQueues#maxUnservedAfterInstanceLoss()}. {@link Optional#empty()} by default; the {@link Inboxes} created
+     * by {@link #durableQueueBasedInboxes(DurableQueues, FencedLockManager)} answer what their {@link DurableQueues} answer.
+     *
+     * @return the window, or {@link Optional#empty()} if unknown
+     */
+    default Optional<Duration> maxUnservedAfterInstanceLoss() {
+        return Optional.empty();
+    }
+
+    /**
+     * Who may be handling the {@link Inbox}'s messages right now, cluster-wide - see
+     * {@link DurableQueues#getQueueConsumers(QueueName)}. {@link Optional#empty()} by default; the {@link Inboxes} created by
+     * {@link #durableQueueBasedInboxes(DurableQueues, FencedLockManager)} answer what their {@link DurableQueues} answer for
+     * the inbox's queue.
+     *
+     * @param inboxName the inbox
+     * @return the inbox's consumers, or {@link Optional#empty()} if unknown
+     */
+    default Optional<QueueConsumers> getQueueConsumers(InboxName inboxName) {
+        return Optional.empty();
+    }
+
+    /**
      * Create an {@link Inboxes} instance that uses a {@link DurableQueues} as its storage and message delivery mechanism.
      *
      * @param durableQueues     The {@link DurableQueues} implementation used by the {@link Inboxes} instance returned
@@ -196,6 +234,22 @@ public interface Inboxes {
         @Override
         public Collection<Inbox> getInboxes() {
             return inboxes.values();
+        }
+
+        @Override
+        public boolean keepsKeyOrderAcrossInstances() {
+            return durableQueues.keepsKeyOrderAcrossInstances();
+        }
+
+        @Override
+        public Optional<Duration> maxUnservedAfterInstanceLoss() {
+            return durableQueues.maxUnservedAfterInstanceLoss();
+        }
+
+        @Override
+        public Optional<QueueConsumers> getQueueConsumers(InboxName inboxName) {
+            requireNonNull(inboxName, "No inboxName provided");
+            return durableQueues.getQueueConsumers(inboxName.asQueueName());
         }
 
         public class DurableQueueBasedInbox implements Inbox {

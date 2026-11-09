@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: reconciliation.bank_statement_breaks
+kind: view
+bc: reconciliation
+owner: reconciliation-team
+status: live
+summary: "Each bank statement's differences from the brokerage's payments: unknown, missing, and mismatched entries."
+generator: essentials
+language: java
+
+serves: [GetBankStatements, GetBankStatementBreaks]
+endpoints:
+  - { method: GET, path: "/api/admin/reconciliation/bank-statements", auth: operator }
+  - { method: GET, path: "/api/admin/reconciliation/bank-statements/{statementId}/breaks", auth: operator }
+reads:
+  - { name: BankStatement }
+  - { name: KnownPayment }
+invariants:
+  - id: INV-BSB-1
+    text: "Breaks are worked out when read, from both sides as they are now, so a late projection never leaves a false break"
+    enforcedBy: BankStatementBreaksQuery
+forbidden:
+  - cross-slice-internal:reconciliation
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/BankStatementReconciliationIT.java" }
+  contract: { present: false }

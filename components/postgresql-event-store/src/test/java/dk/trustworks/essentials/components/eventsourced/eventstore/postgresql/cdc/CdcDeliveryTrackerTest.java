@@ -114,6 +114,25 @@ class CdcDeliveryTrackerTest {
     }
 
     @Test
+    void awaited_ranges_name_every_awaited_order_whatever_their_number_unlike_the_lowest_first_selection() {
+        var tracker = tracker(10, 10_000);
+        tracker.seedEarlierGaps(List.of(GlobalEventOrder.of(3), GlobalEventOrder.of(4), GlobalEventOrder.of(6)));
+        // 1 500 single-order gaps, then one gap three orders wide
+        for (long order = 12; order <= 3_010; order += 2) {
+            tracker.markDelivered(order);
+        }
+        tracker.markDelivered(3_014);
+
+        var ranges = tracker.awaitedRanges();
+        assertThat(ranges).startsWith(LongRange.between(3, 4), LongRange.only(6), LongRange.only(11));
+        assertThat(ranges).endsWith(LongRange.only(3_009), LongRange.between(3_011, 3_013));
+        assertThat(ranges.stream().mapToLong(range -> range.toInclusive - range.fromInclusive + 1).sum()).isEqualTo(3 + 1_500 + 3);
+        assertThat(ranges.stream().flatMapToLong(LongRange::stream).allMatch(tracker::isAwaited)).isTrue();
+        // The lowest-first selection stops at its limit
+        assertThat(tracker.awaitedGaps(1_000)).hasSize(1_000).doesNotContain(GlobalEventOrder.of(3_013));
+    }
+
+    @Test
     void gaps_filled_in_any_order_end_in_one_contiguous_watermark() {
         var tracker = tracker(0, 100);
         tracker.markDelivered(10);

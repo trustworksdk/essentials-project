@@ -27,6 +27,7 @@ import dk.trustworks.essentials.shared.Lifecycle;
 import io.micrometer.core.instrument.*;
 import org.jdbi.v3.core.*;
 import org.postgresql.PGConnection;
+import org.postgresql.replication.LogSequenceNumber;
 import org.postgresql.replication.PGReplicationStream;
 import org.postgresql.replication.fluent.logical.ChainedLogicalStreamBuilder;
 import org.slf4j.*;
@@ -112,6 +113,15 @@ public class WalReplicationTailer implements Lifecycle {
      * when unset or non-positive (defensive — this is a load-bearing safety mechanism).
      */
     private final long                                                          idleLsnPushIntervalNanos;
+    /**
+     * Received messages not yet written to the inbox, and the highest LSN received with them - filtered messages
+     * included. Written as one transaction ({@link #flushInbox}); the stream is acknowledged only after it commits.
+     * Touched only by the tailer thread, and reset per replication session: what a dropped session left unwritten was
+     * never acknowledged, so the next session streams it again.
+     */
+    private final List<PendingInboxMessage>                                     pendingInbox = new ArrayList<>();
+    private org.postgresql.replication.LogSequenceNumber                        pendingAckLsn;
+    private long                                                                pendingSinceNanos;
 
     /**
      * How often the tailer emits a "CDC heartbeat" INFO log from inside the streamOnce inner
@@ -474,6 +484,8 @@ public class WalReplicationTailer implements Lifecycle {
                                  .start()) {
 
                 onStreamStarted();
+                pendingInbox.clear();
+                pendingAckLsn = null;
 
                 // Track timing for three independent watchdogs:
                 //  - Connected-heartbeat log every HEARTBEAT_INTERVAL_NANOS so operators can see
@@ -482,13 +494,16 @@ public class WalReplicationTailer implements Lifecycle {
                 //    so Postgres can advance confirmed_flush_lsn even when pgoutput has nothing
                 //    to emit (publication quiet), preventing WAL retention from growing on idle
                 //    slots.
-                //  - Max-idle detection: if no message arrives for maxIdleDuration, throw a
+                //  - Max-idle detection: if the server shows no sign of life for maxIdleDuration, throw a
                 //    StaleReplicationStreamException so the outer reconnect loop fires. Protects
                 //    against silently half-open TCP sockets where readPending() returns null
-                //    forever without the connection reporting as dead.
+                //    forever without the connection reporting as dead. A sign of life is a data
+                //    message, or the server's WAL position moving on: its keepalives carry it, so a
+                //    stream whose publication is quiet while the database writes elsewhere is alive.
                 long lastHeartbeatNs   = System.nanoTime();
                 long lastIdleLsnPushNs = System.nanoTime();
                 long lastMessageAtNs   = System.nanoTime();
+                LogSequenceNumber lastServerLsn = stream.getLastReceiveLSN();
                 long maxIdleNs = tailerProperties.getMaxIdleDuration() == null
                                  ? 0L
                                  : tailerProperties.getMaxIdleDuration().toNanos();
@@ -497,6 +512,12 @@ public class WalReplicationTailer implements Lifecycle {
                     ByteBuffer msg   = stream.readPending();
                     long       nowNs = System.nanoTime();
                     if (msg == null) {
+                        // The stream has nothing more right now: write what has arrived before waiting for more
+                        flushInbox(stream);
+                        if (stopping.get()) {
+                            // A STOP may have left messages unwritten: the idle LSN push below would acknowledge them
+                            break;
+                        }
                         handleNullPoll();
                         if (nowNs - lastHeartbeatNs >= HEARTBEAT_INTERVAL_NANOS) {
                             logConnectedHeartbeat();
@@ -506,13 +527,20 @@ public class WalReplicationTailer implements Lifecycle {
                             forceIdleLsnPush(stream);
                             lastIdleLsnPushNs = nowNs;
                         }
+                        // The server's keepalives move the received WAL position on while the publication is quiet:
+                        // the connection is alive, so it is not stale
+                        var serverLsn = stream.getLastReceiveLSN();
+                        if (serverLsn != null && !serverLsn.equals(lastServerLsn)) {
+                            lastServerLsn = serverLsn;
+                            lastMessageAtNs = nowNs;
+                        }
                         // Stale-stream detection. Zero-threshold disables the check; positive
                         // threshold forces a reconnect when exceeded.
                         if (maxIdleNs > 0 && nowNs - lastMessageAtNs >= maxIdleNs) {
                             long idleMs = TimeUnit.NANOSECONDS.toMillis(nowNs - lastMessageAtNs);
                             long maxMs  = TimeUnit.NANOSECONDS.toMillis(maxIdleNs);
                             throw new StaleReplicationStreamException(msg(
-                                    "[{}] CDC stream idle for {} ms — exceeded maxIdleDuration ({} ms). " +
+                                    "[{}] CDC stream silent for {} ms (no data, WAL position unchanged) — exceeded maxIdleDuration ({} ms). " +
                                             "Treating as half-open TCP / stale stream and forcing a reconnect. " +
                                             "Tune essentials.eventstore.cdc.wal-replication-tailer.max-idle-duration " +
                                             "if this fires on genuinely-idle-but-healthy streams.",
@@ -531,13 +559,21 @@ public class WalReplicationTailer implements Lifecycle {
                             log.trace("Message not handled");
                         }
                     }
+                    if (!pendingInbox.isEmpty()
+                            && (pendingInbox.size() >= inboxWriteBatchSize()
+                                || nowNs - pendingSinceNanos >= tailerProperties.getInboxWriteMaxDelay().toNanos())) {
+                        flushInbox(stream);
+                    }
                 }
             }
         } catch (Exception e) {
             availability.failed(slotName, e.getMessage());
             WalReplicationTailerErrorHandler.Decision decision = errorHandler.onStreamError(slotName, e);
 
-            if (decision == WalReplicationTailerErrorHandler.Decision.RETRY_CONNECTION) {
+            if (e instanceof StaleReplicationStreamException) {
+                // A routine safeguard, not a fault: the server sent nothing at all for maxIdleDuration
+                log.info("[{}] {} - reconnecting", slotName, e.getMessage());
+            } else if (decision == WalReplicationTailerErrorHandler.Decision.RETRY_CONNECTION) {
                 // No stack trace here: the rethrow below reaches runPollLoop, whose "streamOnce failed" line logs
                 // this same exception with the attempt, duration and LSN context. Logging it twice made one
                 // dropped connection - a suspended laptop, a wal_sender_timeout - read as two separate failures.
@@ -686,6 +722,12 @@ public class WalReplicationTailer implements Lifecycle {
         long durMs = (System.nanoTime() - startNs) / 1_000_000;
         long nextBackoffMs = (long) Math.min(tailerProperties.getMaxPollBackoffInterval().toMillis(),
                                              backoffMs * tailerProperties.getBackOffFactor());
+        if (e instanceof StaleReplicationStreamException) {
+            // Already logged by streamOnce, without a stack trace: an expected reconnect, not a failure
+            log.info("[{}] CDC stream reconnects after a silent stream (attempt #{}, durationMs={}, lastAckedLsn={})",
+                     slotName, attempt, durMs, lastAckedLsn.get());
+            return;
+        }
         log.warn("[{}] CDC streamOnce failed (attempt #{}, durationMs={}, backoffMsNext={}, " +
                          "messages={}, inboxWrites={}, inboxWriteFailures={}, handlerFailures={}, " +
                          "lastReceiveLsn={}, lastAckedLsn={}, lastMsgPreview='{}')",
@@ -1098,11 +1140,24 @@ public class WalReplicationTailer implements Lifecycle {
         if (logicalDecodingPlugin.preFiltersRawPayloads()
                 && !walMessageFilter.shouldPersist(payload.bytes())) {
             logFilteredMessage(payload, lsnStr);
-            acknowledge(stream, lsn);
+            if (pendingInbox.isEmpty()) {
+                acknowledge(stream, lsn);
+            } else {
+                // Acknowledging it now would confirm the batch received before it, which is not written yet
+                pendingAckLsn = lsn;
+            }
             return false;
         }
 
         recordReceivedMessage(payload, lsnStr);
+        if (batchesInboxWrites() && lsn != null) {
+            if (pendingInbox.isEmpty()) {
+                pendingSinceNanos = System.nanoTime();
+            }
+            pendingInbox.add(new PendingInboxMessage(payload, lsnStr, logicalDecodingPlugin.inboxDedupKey(payload.bytes(), lsnStr)));
+            pendingAckLsn = lsn;
+            return true;
+        }
         try {
             persistMessage(payload, lsnStr);
         } catch (ContinueStreamingException | StopStreamingException ignored) {
@@ -1110,6 +1165,63 @@ public class WalReplicationTailer implements Lifecycle {
         }
         acknowledge(stream, lsn);
         return true;
+    }
+
+    private boolean batchesInboxWrites() {
+        return deliveryMode != CdcDeliveryMode.DIRECT && inboxWriteBatchSize() > 1;
+    }
+
+    private int inboxWriteBatchSize() {
+        return Math.max(1, tailerProperties.getInboxWriteBatchSize());
+    }
+
+    /**
+     * Writes the received messages to the inbox in one transaction, then acknowledges the highest LSN received with
+     * them. Should the batch fail, it is written again message by message through {@link #persistMessage}, so the
+     * error handler decides per message exactly as it does for an unbatched write: {@code CONTINUE} skips the message,
+     * {@code STOP} ends streaming with the rest unacknowledged, {@code RETRY_CONNECTION} rethrows to reconnect.
+     * After a {@code STOP} nothing is acknowledged, also not through {@link #forceIdleLsnPush}: the caller checks
+     * {@link #stopping} before anything else acknowledges.
+     */
+    private void flushInbox(PGReplicationStream stream) throws Exception {
+        if (pendingInbox.isEmpty()) {
+            if (pendingAckLsn != null) {
+                acknowledge(stream, pendingAckLsn);
+                pendingAckLsn = null;
+            }
+            return;
+        }
+        var batch = List.copyOf(pendingInbox);
+        var ackLsn = pendingAckLsn;
+        pendingInbox.clear();
+        pendingAckLsn = null;
+        boolean[] inserted;
+        try {
+            inserted = inboxRepository.insertAllIfAbsent(slotName, batch.stream()
+                                                                        .map(message -> new CdcInboxRepository.InboxInsert(message.dedupKey(), message.payload().bytes()))
+                                                                        .toList());
+        } catch (Exception batchFailure) {
+            log.warn("[{}] Writing {} WAL messages to the CDC inbox as one batch failed - writing them one by one: {}",
+                     slotName, batch.size(), batchFailure.getMessage());
+            for (var message : batch) {
+                try {
+                    persistMessage(message.payload(), message.lsn());
+                } catch (ContinueStreamingException ignored) {
+                    // Skipped, as an unbatched write the error handler continues past is
+                } catch (StopStreamingException stop) {
+                    return;
+                }
+            }
+            acknowledge(stream, ackLsn);
+            return;
+        }
+        for (var i = 0; i < batch.size(); i++) {
+            recordPersistenceOutcome(inserted[i], batch.get(i).dedupKey());
+        }
+        acknowledge(stream, ackLsn);
+    }
+
+    private record PendingInboxMessage(WalPayload payload, String lsn, String dedupKey) {
     }
 
     private void logFilteredMessage(WalPayload payload, String lsnStr) {
@@ -1234,8 +1346,11 @@ public class WalReplicationTailer implements Lifecycle {
      * start position — which holds WAL indefinitely and has been observed to correlate with
      * sender throttling / disconnection. Safe to call even when the LSN hasn't changed:
      * in that case we skip the setter calls and just re-send the keepalive status.
+     * Pushes nothing once {@link #stopping} is set: a {@code STOP} decision can leave received messages unwritten, and
+     * acknowledging the received position would confirm them.
      */
     private void forceIdleLsnPush(PGReplicationStream stream) {
+        if (stopping.get()) return;
         try {
             var currentLsn = stream.getLastReceiveLSN();
             if (currentLsn == null) return;

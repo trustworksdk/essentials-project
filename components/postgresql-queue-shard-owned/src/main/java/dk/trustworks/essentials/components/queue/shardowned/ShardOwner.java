@@ -27,6 +27,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.LongSupplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -56,6 +57,12 @@ final class ShardOwner implements LeasedOwner {
     private final    int                                          shard;
     private final    long                                         fence;
     private final    ShardOwnerSettings                           settings;
+    /**
+     * The clock {@code stuckHandlerTimeout} is timed by: the stamp of each message in {@link #inFlight} and the reading
+     * compared with it ({@link #inHandlerPastStuckHandlerTimeout}). {@link System#nanoTime()} outside tests; a test
+     * advances it past the bound instead of waiting it out ({@code ShardOwnedQueue.useNanoTime}). Nothing else reads it.
+     */
+    private final    LongSupplier                                 nanoTime;
     private final    PayloadHandler                               handler;
     private final    ShardOwnerMetrics                            metrics;
     private final    RedeliveryPolicy                             redeliveryPolicy;
@@ -136,8 +143,16 @@ final class ShardOwner implements LeasedOwner {
      */
     private final NavigableMap<Long, Long> pendingHoles = new TreeMap<>();
     /**
+     * Sequence values above {@link #cursor} that this owner has already delivered - the head sweep reads from the head
+     * whatever the cursor, and routinely reaches the row just above it first. Once such a row is handled and
+     * acknowledged it is gone from the table, and the cursor read stepping over it recorded it as a hole that no chase
+     * could ever find: chased every {@code chaseDelay} and holding the range acknowledgement back until
+     * {@code holeExpiry}. Pruned as the cursor passes.
+     */
+    private final NavigableSet<Long>       deliveredAheadOfCursor = new TreeSet<>();
+    /**
      * In a handler: delivered and not yet returned, so a sweep does not deliver them twice. Each with when it was handed to
-     * the handler executor, by {@link System#nanoTime()}, which {@link #chargeInHandlerBeforeRelease} times
+     * the handler executor, by {@link #nanoTime}, which {@link #chargeInHandlerBeforeRelease} times
      * {@code stuckHandlerTimeout} from.
      */
     private final NavigableMap<Long, Long> inFlight     = new TreeMap<>();
@@ -223,7 +238,28 @@ final class ShardOwner implements LeasedOwner {
                String instanceId,
                HandlerDispatch dispatch,
                boolean previousOwnerReleased) {
+        this(storage, shard, fence, settings, handler, metrics, redeliveryPolicy, wakeup, instanceId, dispatch,
+             previousOwnerReleased, System::nanoTime);
+    }
+
+    /**
+     * @param nanoTime the clock {@code stuckHandlerTimeout} is timed by ({@link #nanoTime}); {@link System#nanoTime()}
+     *                 outside tests
+     */
+    ShardOwner(ShardOwnedStorage storage,
+               int shard,
+               long fence,
+               ShardOwnerSettings settings,
+               PayloadHandler handler,
+               ShardOwnerMetrics metrics,
+               RedeliveryPolicy redeliveryPolicy,
+               ShardWakeup wakeup,
+               String instanceId,
+               HandlerDispatch dispatch,
+               boolean previousOwnerReleased,
+               LongSupplier nanoTime) {
         this.storage = requireNonNull(storage, "No storage provided");
+        this.nanoTime = requireNonNull(nanoTime, "No nanoTime provided");
         this.shard = shard;
         this.fence = fence;
         this.settings = requireNonNull(settings, "No settings provided");
@@ -324,6 +360,11 @@ final class ShardOwner implements LeasedOwner {
     }
 
     @Override
+    public boolean handingOver() {
+        return draining.get();
+    }
+
+    @Override
     public int shard() {
         return shard;
     }
@@ -331,11 +372,6 @@ final class ShardOwner implements LeasedOwner {
     @Override
     public short queueId() {
         return storage.queueId();
-    }
-
-    @Override
-    public ShardOwnerMetrics ownerMetrics() {
-        return metrics;
     }
 
     @Override
@@ -454,30 +490,46 @@ final class ShardOwner implements LeasedOwner {
     }
 
     @Override
-    public long parkDeadlineMillis() {
+    public long nextAttentionNanos() {
         var now = System.nanoTime();
-        // The sweep counts as a deadline too: a pump parked on its backstop must still come back in
-        // time to run each of its shards' sweeps, whatever the backstop happens to be set to.
-        var untilSweep = (sweepIntervalNanos - (now - lastSweepNanos)) / 1_000_000L;
-        var deadline   = Math.max(0L, untilSweep);
+        if (draining.get() || !localHandoffs.isEmpty()) {
+            return now;
+        }
+        var due = lastSweepNanos + sweepIntervalNanos;
         if (nextVisibleAtNanos != Long.MAX_VALUE) {
-            deadline = Math.min(deadline, Math.max(0L, (nextVisibleAtNanos - now) / 1_000_000L));
+            due = earliest(due, nextVisibleAtNanos);
         }
         synchronized (stateLock) {
             if (!retrySchedule.isEmpty()) {
-                var untilRetry = Math.max(0L, (retrySchedule.peek().dueNanos() - now) / 1_000_000L);
-                deadline = Math.min(deadline, untilRetry);
+                due = earliest(due, retrySchedule.peek().dueNanos());
+            }
+            if (!pendingHoles.isEmpty()) {
+                due = earliest(due, lastChaseNanos + settings.chaseDelayNanos());
             }
             if (!pendingAcks.isEmpty()) {
                 // Acknowledgements are a deadline too. Without this the pump could park until the
                 // next sweep — up to maxSweepInterval once it has backed off — while handled
                 // messages sat undeleted, which showed up as a queue that drained tens of seconds
                 // after its last delivery.
-                var untilFlush = Math.max(0L, (settings.ackFlushIntervalNanos() - (now - lastAckFlushNanos)) / 1_000_000L);
-                deadline = Math.min(deadline, untilFlush);
+                due = earliest(due, lastAckFlushNanos + settings.ackFlushIntervalNanos());
             }
         }
-        return deadline;
+        return due;
+    }
+
+    /** The earlier of two {@link System#nanoTime()} values, compared by difference as nanoTime requires. */
+    private static long earliest(long a, long b) {
+        return a - b <= 0 ? a : b;
+    }
+
+    @Override
+    public ShardWakeup wakeup() {
+        return wakeup;
+    }
+
+    @Override
+    public ShardOwnerMetrics ownerMetrics() {
+        return metrics;
     }
 
     /**
@@ -567,11 +619,15 @@ final class ShardOwner implements LeasedOwner {
             synchronized (stateLock) {
                 // Everything skipped over is a hole: allocated by a transaction that has not committed.
                 for (var missing = cursor + 1; missing < row.seq(); missing++) {
+                    if (deliveredAheadOfCursor.contains(missing)) {
+                        continue;
+                    }
                     if (pendingHoles.putIfAbsent(missing, System.nanoTime()) == null) {
                         metrics.holesObserved.increment();
                     }
                 }
                 cursor = Math.max(cursor, row.seq());
+                deliveredAheadOfCursor.headSet(cursor, true).clear();
             }
             if (deliver(row)) {
                 delivered++;
@@ -723,7 +779,18 @@ final class ShardOwner implements LeasedOwner {
                 dispatch.release();
                 return false;
             }
-            inFlight.put(row.seq(), System.nanoTime());
+            inFlight.put(row.seq(), nanoTime.getAsLong());
+            if (row.seq() > cursor) {
+                deliveredAheadOfCursor.add(row.seq());
+            }
+            // A hole whose row another path reached first - the head sweep, typically - is resolved by that delivery.
+            // Left in place it was chased every chaseDelay for a row already handled, and held the range
+            // acknowledgement back, until holeExpiry
+            var missedAt = pendingHoles.remove(row.seq());
+            if (missedAt != null) {
+                metrics.holeResolutionNanos.add(System.nanoTime() - missedAt);
+                metrics.holesResolved.increment();
+            }
             // Whichever path gets there first invalidates the other. A failed message exists in two
             // places timed by different clocks — the table's `visible_at` by the database's now(),
             // the in-memory schedule by System.nanoTime() — so the sweep can deliver, acknowledge
@@ -1087,7 +1154,13 @@ final class ShardOwner implements LeasedOwner {
             // Only above the takeover cursor: anything at or below it came from the head sweep and is acknowledged
             // by exact sequence value, so the range delete cannot reach a late commit below it - see takeoverCursor
             var rangeCandidates = pendingAcks.tailSet(takeoverCursor, false);
-            contiguousThrough = takeoverCursor;
+            // The range starts just below the run's first acknowledged seq, not at the takeover cursor. Between the
+            // two there can be a row nobody here delivered: a hole that expired and was dropped from pendingHoles,
+            // whose transaction then committed. The hole floor no longer covers it, so a range reaching down to the
+            // takeover cursor deleted it undelivered (ShardOwnedLateCommitAfterHoleExpiryIT). Every seq in
+            // (rangeAbove, contiguousThrough] is in pendingAcks, so the range deletes only what was handled
+            rangeAbove = rangeCandidates.isEmpty() ? takeoverCursor : rangeCandidates.first() - 1;
+            contiguousThrough = rangeAbove;
             var expected = rangeCandidates.isEmpty() ? Long.MAX_VALUE : rangeCandidates.first();
             for (var seq : rangeCandidates) {
                 // A message that has failed before is acknowledged by its exact seq, never by the
@@ -1120,10 +1193,9 @@ final class ShardOwner implements LeasedOwner {
                     stragglers.add(seq);
                 }
             }
-            if (contiguousThrough == takeoverCursor && stragglers.isEmpty()) {
+            if (contiguousThrough == rangeAbove && stragglers.isEmpty()) {
                 return;
             }
-            rangeAbove = takeoverCursor;
         }
 
         // The round trip happens outside the monitor, so handlers finishing are not blocked on it.
@@ -1268,7 +1340,7 @@ final class ShardOwner implements LeasedOwner {
      * whose handler has returned ({@link #returnedFromHandler}) is not one: its handler records its outcome.
      */
     private Map<Long, ReleaseChargeLedger.Candidate> inHandlerPastStuckHandlerTimeout() {
-        var now   = System.nanoTime();
+        var now   = nanoTime.getAsLong();
         var bound = settings.stuckHandlerTimeout().toNanos();
         var stuck = new TreeMap<Long, ReleaseChargeLedger.Candidate>();
         synchronized (stateLock) {

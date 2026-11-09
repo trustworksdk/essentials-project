@@ -16,6 +16,10 @@
 
 package dk.trustworks.essentials.examples.trading.config;
 
+import dk.trustworks.essentials.examples.trading.accounts.types.LedgerRuleViolation;
+import dk.trustworks.essentials.examples.trading.funding.types.FundingRuleViolation;
+import dk.trustworks.essentials.examples.trading.orders.types.OrderRuleViolation;
+import dk.trustworks.essentials.examples.trading.reconciliation.types.CaseRuleViolation;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -36,6 +40,49 @@ import java.util.Map;
  */
 @RestControllerAdvice
 public class TradingDemoErrorHandler {
+
+    /**
+     * The account ledger refused a request (not enough buying power, a restricted account, ...): the caller's request
+     * cannot be satisfied as sent.
+     */
+    @ExceptionHandler(LedgerRuleViolation.class)
+    public ResponseEntity<Map<String, Object>> handleLedgerRuleViolation(LedgerRuleViolation e) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
+                             .body(Map.of("timestamp", OffsetDateTime.now().toString(),
+                                          "status", HttpStatus.UNPROCESSABLE_CONTENT.value(),
+                                          "error", HttpStatus.UNPROCESSABLE_CONTENT.getReasonPhrase(),
+                                          "message", e.getMessage()));
+    }
+
+    /**
+     * The order rules refused a request (a market order before market data exists, a cancel of a closed order).
+     */
+    @ExceptionHandler(OrderRuleViolation.class)
+    public ResponseEntity<Map<String, Object>> handleOrderRuleViolation(OrderRuleViolation e) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
+                             .body(Map.of("timestamp", OffsetDateTime.now().toString(),
+                                          "status", HttpStatus.UNPROCESSABLE_CONTENT.value(),
+                                          "error", HttpStatus.UNPROCESSABLE_CONTENT.getReasonPhrase(),
+                                          "message", e.getMessage()));
+    }
+
+    @ExceptionHandler(FundingRuleViolation.class)
+    public ResponseEntity<Map<String, Object>> handleFundingRuleViolation(FundingRuleViolation e) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
+                             .body(Map.of("timestamp", OffsetDateTime.now().toString(),
+                                          "status", HttpStatus.UNPROCESSABLE_CONTENT.value(),
+                                          "error", HttpStatus.UNPROCESSABLE_CONTENT.getReasonPhrase(),
+                                          "message", e.getMessage()));
+    }
+
+    @ExceptionHandler(CaseRuleViolation.class)
+    public ResponseEntity<Map<String, Object>> handleCaseRuleViolation(CaseRuleViolation e) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
+                             .body(Map.of("timestamp", OffsetDateTime.now().toString(),
+                                          "status", HttpStatus.UNPROCESSABLE_CONTENT.value(),
+                                          "error", HttpStatus.UNPROCESSABLE_CONTENT.getReasonPhrase(),
+                                          "message", e.getMessage()));
+    }
 
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Map<String, Object>> handleUnavailablePrecondition(IllegalStateException e) {

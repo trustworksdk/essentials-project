@@ -1,0 +1,28 @@
+schemaVersion: "1.1"
+slice: market_data.closing_prices
+kind: view
+bc: market_data
+owner: market-data-team
+status: live
+summary: "The exchange's closing price per instrument and business day; answers the ClosingPrices seam."
+generator: essentials
+language: java
+
+serves: [ClosingPrices]
+provides: [ClosingPrices]
+reactsTo: [ClosingPriceIssued]
+endpoints:
+  # The exchange's signed webhook (subscription demo-closing-prices); its event log is read as well
+  - { method: POST, path: "/webhooks/exchange/closing-prices", auth: service }
+reads:
+  - { name: ClosingPrice }
+invariants:
+  - id: INV-CP-1
+    text: "One closing price per instrument and business day, stored as the exchange issued it"
+    enforcedBy: ClosingPriceIntake
+forbidden:
+  - cross-slice-internal:market_data
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/accounts/views/account_valuation/AccountValuationIT.java" }
+  contract: { present: false }

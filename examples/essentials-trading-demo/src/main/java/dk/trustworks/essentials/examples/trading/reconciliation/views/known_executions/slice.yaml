@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: reconciliation.known_executions
+kind: view
+bc: reconciliation
+owner: reconciliation-team
+status: live
+summary: "The brokerage's executions as reconciliation checks a clearing statement against them."
+generator: essentials
+language: java
+
+serves: []
+endpoints: []
+reads:
+  - { name: KnownExecution }
+projections:
+  - name: KnownExecutionsProjection
+    from: [OrderFilled]
+    consistency: eventual
+    store: postgresql
+forbidden:
+  - cross-slice-internal:reconciliation
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/ClearingReconciliationIT.java" }
+  contract: { present: false }
