@@ -17,6 +17,7 @@ Last checked against the code: 2026-11-08.
 | [shard-owned-test-time-reduction.md](shard-owned-test-time-reduction.md) | Shard-owned engine tests | Items 1–4 and 6 done (engine module 12:42 → 8:40). Open: §7, a profiling pass over the remaining waits in `ShardOwnedLifecycleIT` and `ShardOwnedUnsubscribeIT`, then SQL lease ageing where safe. |
 | [subscription-improvements.md](subscription-improvements.md) | Event store subscriptions | S2 interruptible (reactive) wake-up; S3 consumer-group-scoped resume points; S4 trimming the one-event overlap after a crash. S1 phase 1, S5 and S6 are built. |
 | [event-store-subscription-redesign.md](event-store-subscription-redesign.md) | Event store subscriptions | Whole document: a proposal, nothing built or measured. |
+| [identifier-column-codec.md](identifier-column-codec.md) | `postgresql-event-store` | Whole document: a proposal for pluggable identifier column types (`BIGINT`) and a per-stream event-id generator, compatible with 0.61.0. Nothing built. |
 
 ## Open items from documents kept elsewhere
 
