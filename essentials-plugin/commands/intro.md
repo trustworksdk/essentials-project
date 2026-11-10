@@ -149,7 +149,8 @@ or auditing a slice, seeing the whole map, and reviewing a change.
                          that release requires, under a decision note you approve,
                          on its own branch, code migrations included, gated by a
                          full build. Reports before it writes and offers each fix
-                         on its own. Never regenerates a skeleton or restructures
+                         on its own, optionally one commit per fix on a branch,
+                         and writes what stays open to a backlog. Never regenerates a skeleton or restructures
                          slice source; --check is a report-only dry run that
                          shows the whole plan.
   /essentials:doctor     Checks this machine for the tools the commands run —

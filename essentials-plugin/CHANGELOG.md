@@ -55,6 +55,13 @@ machines, contradictions in the instructions, and how much text each command and
 **Commands and skills**
 - `/essentials:upgrade` runs `doctor --for upgrade` first and falls back to `python3` where `uv` is missing; it
   shows `--check` as its argument hint.
+- `/essentials:upgrade` helps with the findings an existing project already has. Before the first fix it shows
+  how many Blocking, Should-fix and Advisory fixes it will offer. It can work on an `essentials-conformance-<date>`
+  branch with one commit per fix. Should-fix and Advisory fixes come up to four at a time, each with its own
+  yes, and all the Advisory fixes can be skipped at once. Whatever stays open (skipped fixes, judgement rows,
+  findings in slice source) can be written to a backlog file at a path you choose. Each entry names the
+  command that fixes it later. When the closing `verify` fails, the run first checks whether the project
+  already failed before it started, and only then bisects the fix commits to the one to revert.
 - `/essentials:review` lists every gate `slice-source.py` covers when the script cannot run (gates 8 and 11(c)
   went missing).
 - Contradictions fixed: one language-detection rule; `essentials-change` tells an Essentials project that is not

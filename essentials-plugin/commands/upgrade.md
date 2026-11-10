@@ -7,8 +7,9 @@ description: >-
   against the stack contract (S1-S11), silent-startup failures first, and move a project on an older
   Essentials release to the plugin's essentials.version plus only the platform pins that release
   requires, under a decision note you approve, on its own branch, code migrations included, verified
-  by a full build. Reports every finding before writing and offers each fix singly; --check reports
-  only, the upgrade plan included, and writes nothing. Never regenerates
+  by a full build. Reports every finding before writing and offers each fix for its own yes, optionally
+  on a branch with one commit per fix, and can write what stays open to a backlog file you place; --check
+  reports only, the upgrade plan included, and writes nothing. Never regenerates
   a skeleton, never restructures slice source, and never moves a pin the release does not require
   except a Kotlin compiler too old for the project's own Java baseline, and - one at a time, each on a
   yes - the Spring Boot patch, Kotlin compiler and Maven wrapper floors the Essentials build runs on.
@@ -481,10 +482,73 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/migration-plan.py" .     # with --from as
 
 ## Step 6 — Offer each fix, one at a time
 
-Blocking first, then Should-fix, then Advisory. For each, `AskUserQuestion` with **Apply / Skip /
-Show me the change first**. Never bundle unrelated fixes behind one confirmation, and never apply an
-Advisory without asking because it "seemed safe". Nothing in the "applies with the Essentials
-upgrade" block is offered here — Group D applies it — and no pin move but the ones Step 4 names.
+Nothing in the "applies with the Essentials upgrade" block is offered here — Group D applies it — and
+no pin move but the ones Step 4 names. Every fix still gets its own yes: never bundle unrelated fixes
+behind one confirmation, and never apply an Advisory without asking because it "seemed safe".
+
+**1. Triage.** Before the first question, print one line per severity with the number of fixes to
+offer, how many are `mechanical`, and the files they touch, so the user sees the size of what follows
+and can stop knowing what is left:
+
+```
+  To offer: 2 Blocking (2 mechanical) · 3 Should-fix (1 mechanical) · 9 Advisory (7 mechanical)
+            backend/pom.xml, backend/src/main/resources/application.yml, config/WebConfig.kt
+  Report only (no fix this command applies): 2 judgement · 1 in slice source
+```
+
+**2. The branch, asked once.** When at least one fix is to be offered and the project is a git
+repository, ask before the first fix, in one `AskUserQuestion`:
+
+- **"New branch, one commit per fix (Recommended)"** — `git switch -c essentials-conformance-<YYYY-MM-DD>`
+  (a name that exists already gets `-2`, `-3`, …), then one commit per applied fix, staging only the
+  files that fix changed (`git add <paths>`, never `-A`), message `essentials:upgrade: <id> <check>`.
+  A failing Step 7 can then be traced to one commit and reverted alone, and the starting branch keeps
+  exactly the commits it had.
+- **"This branch, one commit per fix"** — the same commits on the current branch.
+- **"No commits"** — everything stays uncommitted, as before; Step 7 can then name a failure's
+  cause only by reverting fixes by hand.
+
+Offer the two commit options only on a clean working tree: a fix's file may hold the user's own
+uncommitted edits, and a per-fix commit would sweep them in. On a dirty tree say so and use
+"No commits". Not a git repository: skip the question, nothing is committed.
+
+**3. The rounds.** Blocking first, one `AskUserQuestion` per finding with **Apply / Skip / Show me the
+change first**. Then Should-fix, then Advisory, in rounds: one `AskUserQuestion` call with up to four
+questions, one per finding, each with the same three options, and findings that touch the same file or
+the same requirement in the same round. Each question stands on its own: `id`, `check`, `file:line`, the
+message, and what the fix changes in one line. A `mechanical: false` finding is never in a round: it
+goes on its own, with the change shown in the question. "Show me the change first" prints the edit and
+asks that finding again on its own. Before the first Advisory round, when there are more than four,
+ask once: **Go through the N Advisory fixes / Skip them all** — the second leaves every one open for
+the backlog (item 5).
+
+**4. After each yes,** apply the fix (below), then commit it when item 2 chose commits. A fix whose ops
+did not apply (a signature mismatch, per § Applying a fix descriptor) is not committed and counts as
+skipped, with the reason.
+
+**5. The backlog.** When the run ends with findings still open — skipped, not offered (judgement rows,
+slice source, a `notRun` the user can act on), or "applies with the Essentials upgrade" with Group D
+declined — offer once to write them down: **Write to <path> / Print it / No**. Suggest
+`docs/essentials-backlog.md`; the path is the user's. One entry per finding, grouped by severity:
+
+```markdown
+# Essentials conformance backlog — <project>, <YYYY-MM-DD>, plugin <plugin version>, essentials <PROJECT_ESSENTIALS>
+
+Written by /essentials:upgrade. No command reads this file: rerun `/essentials:upgrade --check` for the current state.
+
+## Should-fix
+- [ ] **ESS-S9 s9-…** `config/SecurityConfig.kt:12` — <message>
+      Fix: <fix.text, or the judgement row's ask>. Why it matters: <the symptom from Group C's table>.
+      Later: <who fixes it>. Skipped because: <the user's reason, when given>.
+```
+
+"Later" names the one command that owns it: `/essentials:upgrade` again for a stack-lint finding with
+a fix; `/essentials:review --fix` when it should land with a change; `/essentials:slice-check --fix-source`
+for a finding in slice source, which this command never edits; Group D (`/essentials:upgrade` once the
+user is ready to move releases) for an "applies with the Essentials upgrade" finding; and "by hand, see
+<contract § and line>" for a judgement row. Overwrite an existing file only after showing it and asking:
+it may hold the team's own notes. On the branch of item 2, commit it on its own; otherwise leave it
+uncommitted. The file is the project's, read by nothing, so the statelessness rule holds.
 
 **A `stack-lint` finding carries its own fix.** `fix.text` is what to show; `fix.ops` is the edit.
 Apply the ops exactly as `commands/review.md` § Applying a fix descriptor specifies — the one
@@ -572,8 +636,17 @@ unverified. Use `mvn` when there is no wrapper, and say which you used. `/essent
 requirement table applies verbatim to reading the output — map a failure back to the requirement
 rather than improvising dependencies until it boots.
 
-**If the context started before this run and does not now, the run made it worse.** Say that
-plainly, name the fix that did it, and offer to revert exactly that fix. Do not chase it with
+Run it once, after the last fix — not after each: a verify is 30–90 seconds, and the commits of
+Step 6 item 2 make a single run traceable.
+
+**If `verify` fails, first find out whether this run caused it.** With per-fix commits, run the same
+command on the commit the run started from (`git switch --detach <start>`, run it, `git switch -`). If
+that fails too, the project was already broken before this run: say so, and do not chase it with
+further changes. If it passes, the run made it worse: say that plainly and find the commit with
+`git bisect start HEAD <start> && git bisect run <the verify command>` (then `git bisect reset`) — a
+handful of verifies, not one per fix. Name the fix that did it, and offer to revert exactly that commit
+(`git revert <sha>`). Without commits, name the fixes applied in this run, most recent first, and offer
+to undo them one at a time, re-running `verify` after each. Either way, do not chase the failure with
 further changes.
 
 This command — `./mvnw` (else `mvn`) `-B verify`, plus `-Pskip-frontend` when the project has that
@@ -629,10 +702,12 @@ contract says — the pin's `reason` and `cite` — and that the release does no
 "applies with the Essentials upgrade" findings, `s1-boot-line` among them, stay open; the rest of the
 run goes on.
 
-**3. The branch.** `git switch -c essentials-<to>`, unless a rerun is already on it. The changes Step 6 applied come with it. The
+**3. The branch.** `git switch -c essentials-<to>`, unless a rerun is already on it. The changes Step 6 applied come with it, and so do
+its commits when Step 6 made them on an `essentials-conformance-…` branch. The
 starting branch keeps exactly the commits it had; nothing is merged, and merging stays the user's.
 
-**4. Commits.** Write the note file if one was chosen. Ask once: **Commit each step?** On yes, first
+**4. Commits.** Write the note file if one was chosen. When Step 6 already committed per fix, do not ask
+again: commit the note, then one commit per step. Otherwise ask once: **Commit each step?** On yes, first
 commit what is already there — Step 6's fixes, then the note, each on its own — then one commit per
 step below that changed a file. On no, everything stays uncommitted on the branch.
 
@@ -726,8 +801,9 @@ silently unparseable.
   require, no "upgrade to latest". The moves outside a release are a Kotlin compiler the project's
   own Java baseline already outgrew, and the Spring Boot patch, Kotlin and Maven wrapper floors the
   Essentials build runs on, each offered on its own (Step 4).
-- **Stateless.** The version stamp is a comment in the project's own `CLAUDE.md`. The decision note is
-  printed, or written to a path the user chooses. The gate command is derived each run and never
+- **Stateless.** The version stamp is a comment in the project's own `CLAUDE.md`. The decision note and
+  the backlog of open findings (Step 6) are printed, or written to a path the user chooses, and no
+  command reads either back. The gate command is derived each run and never
   recorded. Do not introduce a `.essentials/` directory, a config file, or a run log — that is a
   design decision to raise.
 

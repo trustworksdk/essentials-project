@@ -749,7 +749,7 @@ the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plug
   translation webhook fails closed and gets a per-event path. The Maven wrapper verifies its checksum, Spring
   Modulith is gone and the dev password is dev-profile only. The slice scripts no longer double every slice in
   a Claude Code worktree or crash on non-UTF-8 input. Commands and skills lose contradictions and load much
-  less text. To check an existing project: run `/essentials:upgrade --check`.
+  less text. To check an existing project: run `/essentials:upgrade --check`. `/essentials:upgrade` now shows how many fixes it will offer before the first one. It can commit each fix on its own branch, and it writes the findings you skip to a backlog file you choose.
 - `0.60.1-11` - the LLM docs describe when the starters register the tracing and queue metrics interceptors, and
   their opt-out switches (§1.1.6).
 - `0.60.1-3` - the LLM docs show `Money`'s `amount` as a JSON number, the form it is written in, and say a quoted
