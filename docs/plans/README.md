@@ -16,7 +16,8 @@ Last checked against the code: 2026-11-08.
 | [shard-owned-consumer-overhead-proposal.md](shard-owned-consumer-overhead-proposal.md) | Shard-owned engine | Candidate 2: the cost of the batched cursor read when units are split (profile first). |
 | [shard-owned-test-time-reduction.md](shard-owned-test-time-reduction.md) | Shard-owned engine tests | Items 1–4 and 6 done (engine module 12:42 → 8:40). Open: §7, a profiling pass over the remaining waits in `ShardOwnedLifecycleIT` and `ShardOwnedUnsubscribeIT`, then SQL lease ageing where safe. |
 | [subscription-improvements.md](subscription-improvements.md) | Event store subscriptions | S2 interruptible (reactive) wake-up; S3 consumer-group-scoped resume points; S4 trimming the one-event overlap after a crash. S1 phase 1, S5 and S6 are built. |
-| [event-store-subscription-redesign.md](event-store-subscription-redesign.md) | Event store subscriptions | Whole document: a proposal, nothing built or measured. |
+| [event-store-subscription-redesign.md](event-store-subscription-redesign.md) | Event store subscriptions and append path | Whole document: a proposal, nothing built or measured. Revised 2026-11-10 with the Marten findings; phase 0 (investigation spikes P0.0–P0.6) comes first. |
+| [marten-event-store-design.md](marten-event-store-design.md) | Reference (Marten, .NET) | Not a plan: how Marten's event store works, the source of the redesign's 2026-11-10 revision. |
 
 ## Open items from documents kept elsewhere
 
