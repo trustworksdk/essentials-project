@@ -526,9 +526,12 @@ the backlog (item 5).
 did not apply (a signature mismatch, per § Applying a fix descriptor) is not committed and counts as
 skipped, with the reason.
 
-**5. The backlog.** When the run ends with findings still open — skipped, not offered (judgement rows,
+**5. The backlog — offered once, at the end of the run** (Step 8's closing, or where a Fail-safe
+stops the run), not here: Steps 7 and 7.5 still change what is open — a reverted fix reopens its
+finding, and Group D closes or leaves the "applies with the Essentials upgrade" block. Collect as the
+run goes. When it ends with findings still open — skipped, reverted, not offered (judgement rows,
 slice source, a `notRun` the user can act on), or "applies with the Essentials upgrade" with Group D
-declined — offer once to write them down: **Write to <path> / Print it / No**. Suggest
+declined or stopped — offer once to write them down: **Write to <path> / Print it / No**. Suggest
 `docs/essentials-backlog.md`; the path is the user's. One entry per finding, grouped by severity:
 
 ```markdown
@@ -543,17 +546,18 @@ Written by /essentials:upgrade. No command reads this file: rerun `/essentials:u
 ```
 
 "Later" names the one command that owns it: `/essentials:upgrade` again for a stack-lint finding with
-a fix; `/essentials:review --fix` when it should land with a change; `/essentials:slice-check --fix-source`
+a fix (not `/essentials:review --fix`, which applies only what a change introduced and routes a
+pre-existing finding back here); `/essentials:slice-check --fix-source`
 for a finding in slice source, which this command never edits; Group D (`/essentials:upgrade` once the
 user is ready to move releases) for an "applies with the Essentials upgrade" finding; and "by hand, see
 <contract § and line>" for a judgement row. Overwrite an existing file only after showing it and asking:
-it may hold the team's own notes. On the branch of item 2, commit it on its own; otherwise leave it
-uncommitted. The file is the project's, read by nothing, so the statelessness rule holds.
+it may hold the team's own notes. When item 2 (or Step 7.5's item 4) chose commits, commit it on its
+own; otherwise leave it uncommitted. The file is the project's, read by nothing, so the statelessness rule holds.
 
 **A `stack-lint` finding carries its own fix.** `fix.text` is what to show; `fix.ops` is the edit.
 Apply the ops exactly as `commands/review.md` § Applying a fix descriptor specifies — the one
 applier spec `/essentials:review --fix` uses too: one op at a time, the location re-read and its
-signature confirmed first, skip and re-run the lint on a mismatch, and `mechanical: false` shown
+signature confirmed first, skipped on a mismatch, and `mechanical: false` shown
 and confirmed rather than applied.
 
 **A scratch render** supplies whole files the contract describes and a fix needs — the
@@ -643,8 +647,9 @@ Step 6 item 2 make a single run traceable.
 command on the commit the run started from (`git switch --detach <start>`, run it, `git switch -`). If
 that fails too, the project was already broken before this run: say so, and do not chase it with
 further changes. If it passes, the run made it worse: say that plainly and find the commit with
-`git bisect start HEAD <start> && git bisect run <the verify command>` (then `git bisect reset`) — a
-handful of verifies, not one per fix. Name the fix that did it, and offer to revert exactly that commit
+`git bisect start HEAD <start> && git bisect run sh -c '<the verify command, without | tail>'` (then
+`git bisect reset`) — a handful of verifies, not one per fix. The pipe must go: `bisect run` reads the
+command's exit status, and a pipeline's is `tail`'s, which marks every commit good. Name the fix that did it, and offer to revert exactly that commit
 (`git revert <sha>`). Without commits, name the fixes applied in this run, most recent first, and offer
 to undo them one at a time, re-running `verify` after each. Either way, do not chase the failure with
 further changes.
@@ -757,7 +762,8 @@ applied.
 `/essentials:init` Step 13.7's symptom table and the `ESS-093`… lines of
 `references/llm/LLM-traps.md` § Upgrading, and offer to revert that step — `git revert` its commit,
 else undo exactly its edits. Never add dependencies or edits until it boots. Then stop the run: the
-branch stays for the user, the starting branch is untouched, and Step 8 does not restamp.
+branch stays for the user, the starting branch is untouched, and Step 8 does not restamp — but offer
+the backlog (Step 6 item 5) before stopping.
 
 ## Step 8 — Restamp
 
@@ -777,7 +783,7 @@ grep -rn 'essentials-init:' . --exclude=CLAUDE.md --exclude-dir={.git,node_modul
 A hit means a script, CI job or tool reads the stamp, and the `essentials <version>` form will not
 match what it expects: name the files and warn. Report only; replace the stamp as above.
 
-Close with what remains: skipped findings as runnable next steps; when the project is behind and
+Close with what remains, then offer the backlog (Step 6 item 5): skipped findings as runnable next steps; when the project is behind and
 Group D did not run, the open "applies with the Essentials upgrade" block and why; when it ran, the
 branch, its commits, and the checklist items still to decide; and `/essentials:slice-check` if the
 lint gate was just installed — its first run is the one that finds the manifests that have been
