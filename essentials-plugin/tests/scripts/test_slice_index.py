@@ -17,6 +17,7 @@ page was seen to produce.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -394,6 +395,71 @@ class Behaviour(unittest.TestCase):
     def test_query_exit_code(self):
         self.assertEqual(run("query", "tests/slice-index/twin", "who-handles", "PlaceOrder").returncode, 0)
         self.assertEqual(run("query", "tests/slice-index/twin", "who-handles", "Nothing").returncode, 1)
+
+    def test_an_agent_worktree_copy_is_not_mapped_twice(self):
+        write(self.root, "orders/use_cases/place_order", manifest("orders.place_order", "command"))
+        write(self.root, ".claude/worktrees/agent1/orders/use_cases/place_order",
+              manifest("orders.place_order", "command"))
+        write(self.root, "target/classes/orders/use_cases/place_order", manifest("orders.place_order", "command"))
+        r = run("map", self.root, "--sha", "x")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(data["meta"]["sliceCount"], 1)
+        self.assertEqual([s["path"] for s in data["slices"]], ["orders/use_cases/place_order"])
+
+    def test_a_manifest_that_is_not_utf8_is_an_error_row(self):
+        p = self.root / "orders" / "use_cases" / "place_order" / "slice.yaml"
+        p.parent.mkdir(parents=True)
+        p.write_bytes(manifest("orders.place_order", "command").replace("summary: s", "summary: café")
+                      .encode("latin-1"))
+        r = run("map", self.root, "--sha", "x")
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        [row] = json.loads(r.stdout)["slices"]
+        self.assertTrue(row["error"])
+        self.assertEqual(row["flags"][0]["level"], "error")
+
+    def test_html_out_under_a_file_is_unwritable_exit_4(self):
+        write(self.root, "orders/views/list", manifest("orders.list", "view"))
+        blocker = self.root / "blocker"
+        blocker.write_text("a file, not a directory", encoding="utf-8")
+        r = run("html", self.root, "--out", blocker / "page.html", "--sha", "x")
+        self.assertEqual(r.returncode, 4, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("nothing written", r.stderr)
+
+    def test_html_out_in_a_missing_directory_is_exit_2(self):
+        write(self.root, "orders/views/list", manifest("orders.list", "view"))
+        out = self.root / "missing" / "page.html"
+        r = run("html", self.root, "--out", out, "--sha", "x")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("cannot write", r.stderr)
+        self.assertFalse(out.exists())
+
+
+def load_slice_index():
+    spec = importlib.util.spec_from_file_location("slice_index", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["slice_index"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class LoadRef(unittest.TestCase):
+    def test_a_stuck_git_is_a_value_error_not_a_hang(self):
+        from unittest import mock
+        si = load_slice_index()
+
+        def stuck(argv, **kwargs):
+            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+
+        with mock.patch.object(si.subprocess, "run", side_effect=stuck):
+            with self.assertRaises(ValueError) as caught:
+                si.load_ref(PLUGIN, "HEAD", False)
+        self.assertIn("no answer after 300 s", str(caught.exception))
+        self.assertIn("--before-map", str(caught.exception))
 
 
 if __name__ == "__main__":

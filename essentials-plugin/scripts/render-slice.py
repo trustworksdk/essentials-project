@@ -207,6 +207,41 @@ class RenderError(Exception):
     """A render that must not write anything. Exit 2."""
 
 
+class NotUtf8(RenderError):
+    """A project file a wiring edit would rewrite is not valid UTF-8: editing it would change bytes the
+    edit never meant to touch, so the edit is reported `manual` instead."""
+
+
+def read_for_edit(path: Path) -> str:
+    """A project file a wiring edit rewrites: strict UTF-8, because the text is written back."""
+    data = path.read_bytes()
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise NotUtf8(f"{path} is not valid UTF-8 (byte 0x{data[e.start]:02x} at offset {e.start}); "
+                      "editing it would rewrite bytes the edit does not touch — make this edit by hand") from None
+
+
+def read_to_scan(path: Path) -> str:
+    """A project file only searched, never written back: undecodable bytes replaced, so one Latin-1
+    file anywhere under the source root cannot stop a render."""
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def split_lines(text: str) -> list[str]:
+    """Lines split on "\\n" only, a trailing "\\r" dropped — the numbering an editor shows. str.splitlines()
+    also breaks on \\x0c, \\x1c-\\x1e, \\x85, U+2028 and U+2029."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return [ln[:-1] if ln.endswith("\r") else ln for ln in lines]
+
+
+def lines_keepends(text: str) -> list[str]:
+    """split_lines with each line's "\\n" kept, so joining them gives the text back byte for byte."""
+    return re.findall(r"[^\n]*\n|[^\n]+$", text)
+
+
 # ---------------------------------------------------------------- inputs
 
 def pascal(snake: str) -> str:
@@ -352,7 +387,7 @@ def destination(lang: str, family: str, tpl: Path, text: str, values: dict[str, 
 
 
 def check_leftovers(path: str, text: str) -> None:
-    for i, line in enumerate(text.splitlines(), 1):
+    for i, line in enumerate(split_lines(text), 1):
         if "{{" in line or "__" in line:
             raise RenderError(f"{path}:{i}: unsubstituted text after rendering: {line.strip()[:120]}")
 
@@ -507,7 +542,7 @@ def split_blocks(text: str, where: str) -> tuple[list[str], list[Block], list[st
     header: list[str] = []
     blocks: list[Block] = []
     pending: list[str] = []
-    for line in text.splitlines(keepends=True):
+    for line in lines_keepends(text):
         bare = line.rstrip("\r\n")
         if not bare.strip() or bare.startswith("#"):
             pending.append(line)
@@ -753,6 +788,8 @@ def manifest_inputs(path: Path, kind: str, lang: str, lane: str, values: dict[st
         text = path.read_text(encoding="utf-8")
     except OSError as e:
         raise RenderError(f"--manifest {path}: {e.strerror or e}")
+    except UnicodeDecodeError as e:
+        raise RenderError(f"--manifest {path}: not valid UTF-8 ({e.reason} at offset {e.start})") from None
     _, blocks, _ = split_blocks(text, str(path))
     byk = {b.key: b for b in blocks}
     ident = {k: manifest_value(byk, k, str(path)) for k in IDENTITY}
@@ -875,7 +912,7 @@ class Stage:
         self.files[path] = text
 
     def read(self, path: Path) -> str:
-        return self.files[path] if path in self.files else path.read_text(encoding="utf-8")
+        return self.files[path] if path in self.files else read_for_edit(path)
 
     def is_file(self, path: Path) -> bool:
         return path in self.files or path.is_file()
@@ -916,7 +953,7 @@ class Txn:
         self.originals: dict[Path, bytes] = {}
 
     def read(self, path: Path) -> str:
-        return path.read_text(encoding="utf-8")
+        return read_for_edit(path)
 
     def is_file(self, path: Path) -> bool:
         return path.is_file()
@@ -969,7 +1006,10 @@ def wire_bean(path: Path, lang: str, values: dict[str, str], txn: "Txn | Stage")
     entry = {"path": path, "edit": f"@Bean {values['sliceCamel']}Decider()"}
     if not txn.is_file(path):
         return {**entry, "status": "manual", "reason": "configuration class not found"}
-    text = txn.read(path)
+    try:
+        text = txn.read(path)
+    except NotUtf8 as e:
+        return {**entry, "status": "manual", "reason": str(e)}
     slice_pkg = f"{values['packagePath']}.{values['bc']}.use_cases.{values['slice']}"
     decider = f"{values['Slice']}Decider"
     if lang == "java":
@@ -1001,7 +1041,10 @@ def wire_permits(path: Path, values: dict[str, str], txn: "Txn | Stage") -> dict
     entry = {"path": path, "edit": f"permits += {event}"}
     if not txn.is_file(path):
         return {**entry, "status": "manual", "reason": "sealed event parent not found"}
-    text = txn.read(path)
+    try:
+        text = txn.read(path)
+    except NotUtf8 as e:
+        return {**entry, "status": "manual", "reason": str(e)}
     m = PERMITS_LINE.search(text)
     if not m:
         return {**entry, "status": "manual", "reason": "single-line 'permits … {   // /essentials:add-slice "
@@ -1020,7 +1063,7 @@ def configurators(main_root: Path, stage: Stage | None = None) -> list[Path]:
     paths = {p for p in main_root.rglob("*") if p.suffix in (".java", ".kt") and p.is_file()}
     paths |= {p for p in staged if p.suffix in (".java", ".kt") and p.is_relative_to(main_root)}
     return sorted(p for p in paths
-                  if CONFIGURATOR_CALL.search(staged[p] if p in staged else p.read_text(encoding="utf-8")))
+                  if CONFIGURATOR_CALL.search(staged[p] if p in staged else read_to_scan(p)))
 
 
 def check_configurator(main_root: Path, written: Path | None, txn: "Txn | Stage") -> dict:
@@ -1056,7 +1099,7 @@ def wire(lang, kind, lane, values, main_root, txn: "Txn | Stage", app_wiring: Pa
 def todos(files: list[Planned], rel) -> list[str]:
     out = []
     for f in sorted(files, key=lambda f: f.dest):
-        for i, line in enumerate(f.text.splitlines(), 1):
+        for i, line in enumerate(split_lines(f.text), 1):
             if "TODO" in line:
                 out.append(f"{rel(f.dest)}:{i}: {line.strip()}")
     return out
@@ -1483,7 +1526,7 @@ def main(argv: list[str] | None = None) -> int:
     except NotWritable as e:
         print(f"render-slice: {e}", file=sys.stderr)
         return 4
-    except (OSError, json.JSONDecodeError) as e:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
         print(f"render-slice: {e}", file=sys.stderr)
         return 2
     return 2

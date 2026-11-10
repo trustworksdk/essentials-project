@@ -4,11 +4,11 @@ description: >-
   Check this machine for the tools the essentials plugin's commands run — python3 3.11+, uv (or
   pyyaml and jsonschema), the pinned JDK, Maven, Docker, npm, git and ripgrep — and say what each missing
   one costs: a command that stops, a gate that is not run, a compile-only smoke build, a slower
-  fallback. Runs scripts/doctor.sh for one profile (init, review, slice, docs) or all of them, then
+  fallback. Runs scripts/doctor.sh for one profile (init, review, slice, docs, upgrade) or all of them, then
   explains each gap with an install hint for this OS. Installs nothing.
 user-invocable: true
 allowed-tools: [Bash]
-argument-hint: "[init|review|slice|docs|all]"
+argument-hint: "[init|review|slice|docs|upgrade|all]"
 ---
 
 # /essentials:doctor
@@ -20,8 +20,9 @@ user's permission either; it prints the command and leaves running it to them.
 ## Step 1 — Run the script
 
 The argument is a profile: `init`, `review`, `slice` (add-slice, the slice skills, slice-check,
-slice-map, slice-map-html), `docs` (the docs skill's search and the slice law), or `all`, the default. Anything else:
-say which values exist and stop.
+slice-map, slice-map-html, slice-enrich), `docs` (the docs skill's search and the slice law), `upgrade`
+(`/essentials:upgrade`: its scripts, the JDK, Maven, Docker and git of its re-check and its Essentials upgrade), or
+`all`, the default. Anything else: say which values exist and stop.
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh" --for <profile>

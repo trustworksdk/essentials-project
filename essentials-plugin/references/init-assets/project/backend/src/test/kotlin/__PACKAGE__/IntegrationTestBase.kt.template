@@ -1,6 +1,7 @@
 package {{packagePath}}
 
 <!-- IF db!=mongo -->
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil
 import org.jdbi.v3.core.Jdbi
 <!-- END db -->
 <!-- IF db=mongo -->
@@ -47,6 +48,8 @@ abstract class IntegrationTestBase {
     @BeforeEach
     fun truncateReadModels() {
         val tables = readModelTablesToTruncate()
+        // The names are concatenated into SQL, so each one is checked first (S9: names are an injection surface).
+        tables.forEach { PostgresqlUtil.checkIsValidTableOrColumnName(it) }
         if (tables.isNotEmpty()) {
             jdbi.useHandle<RuntimeException> { it.execute("TRUNCATE TABLE " + tables.joinToString(", ")) }
         }

@@ -234,5 +234,67 @@ class TreeMode(unittest.TestCase):
         self.assertIn("not a directory", err)
 
 
+class Encoding(unittest.TestCase):
+    """Bytes are decoded as UTF-8 with replacement whatever the locale, and lines split on "\n" only."""
+
+    NOTIFY = "  void f() { x.enableNotifyTriggerInstallation(true); }"
+
+    def test_lines_split_on_newline_only(self):
+        self.assertEqual(rs.split_lines("a\x0cb\r\nc\x85d e\x1cf\n"), ["a\x0cb", "c\x85d e\x1cf"])
+        self.assertEqual(rs.split_lines("a\n\nb"), ["a", "", "b"])
+        self.assertEqual(rs.split_lines(""), [])
+
+    def test_a_form_feed_in_a_comment_does_not_cut_the_hunk(self):
+        diff = ("diff --git a/src/main/java/A.java b/src/main/java/A.java\n--- /dev/null\n"
+                "+++ b/src/main/java/A.java\n@@ -0,0 +1,4 @@\n+class A {\n+  // page\x0cbreak\n"
+                f"+{self.NOTIFY}\n+}}\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out, _ = run("--diff", "-", "--json", "--root", tmp, stdin=diff)
+        self.assertEqual(code, 1, out)
+        self.assertEqual([(f["file"], f["line"], f["check"]) for f in json.loads(out)["findings"]],
+                         [("src/main/java/A.java", 3, "ess-110-notify-trigger-installation")])
+
+    def test_a_latin1_byte_on_stdin_is_scanned_not_a_traceback(self):
+        diff = ("--- /dev/null\n+++ b/src/main/java/A.java\n@@ -0,0 +1,2 @@\n"
+                "+// caf\xe9\n" f"+{self.NOTIFY}\n").encode("latin-1")
+        with tempfile.TemporaryDirectory() as tmp:
+            r = subprocess.run([sys.executable, "-I", str(SCRIPT), "--diff", "-", "--json", "--root", tmp],
+                               input=diff, capture_output=True, env={"LC_ALL": "C", "PYTHONIOENCODING": "ascii"})
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertEqual([f["line"] for f in json.loads(r.stdout)["findings"]], [2])
+
+    def test_a_latin1_byte_in_a_git_diff_is_scanned_not_a_traceback(self):
+        if shutil.which("git") is None:
+            self.skipTest("git not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git(root, "init", "-q")
+            git(root, "config", "user.email", "t@example.com")
+            git(root, "config", "user.name", "t")
+            src = root / "src" / "main" / "java" / "A.java"
+            src.parent.mkdir(parents=True)
+            src.write_bytes(b"class A {\n}\n")
+            git(root, "add", "-A")
+            git(root, "commit", "-q", "-m", "base")
+            src.write_bytes(b"class A {\n  // caf\xe9\n" + self.NOTIFY.encode() + b"\n}\n")
+            code, out, err = run("--base", "HEAD", "--root", str(root), "--json")
+            self.assertEqual(code, 1, err)
+            self.assertEqual([(f["line"], f["kind"]) for f in json.loads(out)["findings"]], [(3, "confirmed")])
+            code, out, err = run("--tree", str(root), "--json")
+            self.assertEqual(code, 1, err)
+            self.assertEqual([f["line"] for f in json.loads(out)["findings"]], [3])
+
+    def test_an_internal_error_exits_2_with_one_line(self):
+        original = rs.scan_text
+        rs.scan_text = lambda *_: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            code, _, err = run("--diff", "-", stdin="")
+        finally:
+            rs.scan_text = original
+        self.assertEqual(code, 2)
+        self.assertEqual(err.strip().splitlines(), ["review-scan: internal error: RuntimeError: boom "
+                                                    "(set REVIEW_SCAN_DEBUG=1 for the traceback)"])
+
+
 if __name__ == "__main__":
     unittest.main()

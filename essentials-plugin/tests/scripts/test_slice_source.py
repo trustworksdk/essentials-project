@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -612,6 +613,49 @@ class Units(unittest.TestCase):
         self.assertEqual(ss.gate_id("11(b) handled events"), "ESS-G11b")
         self.assertEqual(ss.gate_id("6 discriminator"), "ESS-G6")
         self.assertEqual(ss.gate_id("14 stale lane"), "ESS-G14")
+
+
+class WalkedTree(unittest.TestCase):
+    """What the walk skips, and what an unreadable file becomes instead of a traceback."""
+
+    def project(self, tmp):
+        project = Path(tmp) / "project"
+        shutil.copytree(CASES / "java-clean", project)
+        return project
+
+    def test_an_agent_worktree_and_build_output_copy_are_not_counted(self):
+        code, clean = run_json(rel_case("java-clean"))
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self.project(tmp)
+            shutil.copytree(CASES / "java-clean", project / ".claude" / "worktrees" / "agent1")
+            shutil.copytree(CASES / "java-clean", project / "build" / "resources")
+            copied_code, copied = run_json(str(project))
+        self.assertEqual(copied_code, code)
+        self.assertEqual([(s["id"], s["dir"], s["files"]) for s in copied["slices"]],
+                         [(s["id"], s["dir"], s["files"]) for s in clean["slices"]])
+
+    def test_a_manifest_that_is_not_utf8_is_skipped_not_a_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self.project(tmp)
+            manifest = sorted(project.rglob("slice.yaml"))[0]
+            manifest.write_bytes("summary: café\n".encode("latin-1"))
+            code, out, err = run(str(project), "--check", "--json")
+            self.assertNotEqual(code, 2, err)
+            self.assertNotIn("Traceback", err)
+            skipped = json.loads(out)["skippedManifests"]
+            self.assertEqual([s["file"] for s in skipped], [manifest.relative_to(project).as_posix()])
+            self.assertIn("not UTF-8 text: byte 0xE9", skipped[0]["reason"])
+
+    def test_an_acceptance_file_that_is_not_utf8_is_a_finding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self.project(tmp)
+            (project / "slice-check-accepted.yaml").write_bytes("- reason: café\n".encode("latin-1"))
+            code, out, err = run(str(project), "--check", "--json")
+            self.assertEqual(code, 1, err)
+            self.assertNotIn("Traceback", err)
+            [f] = [f for f in json.loads(out)["findings"] if f["gate"] == "0 acceptance record"]
+            self.assertEqual((f["severity"], f["file"]), ("Should-fix", "slice-check-accepted.yaml"))
+            self.assertIn("not UTF-8 text", f["message"])
 
 
 if __name__ == "__main__":

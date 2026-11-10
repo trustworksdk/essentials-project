@@ -12,13 +12,17 @@
     <artifactId>{{artifactId}}</artifactId>
     <name>{{projectName}} backend</name>
 
-<!-- IF frontend=embedded -->
     <properties>
+        <!-- spring-boot:run starts the application with the `dev` Spring profile, the only one with development
+             fallbacks such as the local database password (application.yml). The packaged application has none,
+             so it never runs on a development credential. -Dspring-boot.run.profiles=... replaces it. -->
+        <spring-boot.run.profiles>dev</spring-boot.run.profiles>
+<!-- IF frontend=embedded -->
         <!-- Set by the skip-frontend profile (S11): backend-only work does not install Node or build the SPA. -->
         <skipFrontend>false</skipFrontend>
+<!-- END frontend -->
     </properties>
 
-<!-- END frontend -->
     <dependencies>
         <!-- ===== Web, security, operations ===== -->
         <dependency>
@@ -166,6 +170,10 @@
         </dependency>
 <!-- IF db=mongo -->
         <dependency>
+            <!-- Not an S2.1 row: no Essentials Mongo module needs it, and the Postgres profiles already
+                 declare it in the S2.1 block above. Spring's own Kotlin support needs it: BeanUtils
+                 resolves a Kotlin class's primary constructor only when KotlinDetector.isKotlinReflectPresent().
+                 jackson-module-kotlin brings it at compile scope today; declared so it does not hang on that. -->
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-reflect</artifactId>
         </dependency>

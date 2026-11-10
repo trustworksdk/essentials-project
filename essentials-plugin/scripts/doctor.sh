@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # doctor.sh — which of the tools the essentials plugin's commands run are on this machine, and what
 # each missing one costs. Backs /essentials:doctor and the preflights of /essentials:init,
-# /essentials:review, /essentials:slice-check, /essentials:slice-map, /essentials:slice-map-html and
-# /essentials:slice-enrich.
+# /essentials:review, /essentials:slice-check, /essentials:slice-map, /essentials:slice-map-html,
+# /essentials:slice-enrich and /essentials:upgrade.
 #
 # Usage:
-#   doctor.sh [--for init|review|slice|docs|all] [--json]
+#   doctor.sh [--for init|review|slice|docs|upgrade|all] [--json]
 #   doctor.sh --help
 #
 # Bash, not Python: the first thing it has to detect is a missing or too-old python3. It runs on
@@ -22,9 +22,9 @@
 #           python3 (render-slice.py, slice-law.py); uv for slice-lint.py, slice-source.py, slice-index.py,
 #           slice-enrich.py
 #   docs    the essentials-docs and essentials-change skills: search.sh (rg optional) and slice-law.py
-#   all     every profile above, plus /essentials:upgrade (stack-lint.py, migration-plan.py; ./mvnw or mvn, Docker
-#           and git for its re-check and its Essentials upgrade)
-#           — the default
+#   upgrade /essentials:upgrade: python3 (stack-lint.py, migration-plan.py); uv for slice-lint.py and
+#           slice-source.py; the JDK, ./mvnw or mvn, Docker and git for its re-check and its Essentials upgrade
+#   all     every profile above — the default
 #
 # Requirements, from README.md § Requirements and the commands:
 #   bash      reported only; the script runs on it
@@ -93,20 +93,20 @@ json=false
 while [ $# -gt 0 ]; do
     case $1 in
         --for)
-            [ $# -ge 2 ] || { echo "doctor.sh: --for needs a profile: init, review, slice, docs or all" >&2; exit 2; }
+            [ $# -ge 2 ] || { echo "doctor.sh: --for needs a profile: init, review, slice, docs, upgrade or all" >&2; exit 2; }
             profile=$2
             shift 2 ;;
         --for=*) profile=${1#--for=}; shift ;;
         --json) json=true; shift ;;
         -h | --help) usage; exit 0 ;;
-        *) echo "doctor.sh: unknown argument '$1' (usage: doctor.sh [--for init|review|slice|docs|all] [--json])" >&2; exit 2 ;;
+        *) echo "doctor.sh: unknown argument '$1' (usage: doctor.sh [--for init|review|slice|docs|upgrade|all] [--json])" >&2; exit 2 ;;
     esac
 done
 
 case $profile in
-    init | review | slice | docs) tags=$profile ;;
+    init | review | slice | docs | upgrade) tags=$profile ;;
     all) tags="init review slice docs upgrade" ;;
-    *) echo "doctor.sh: unknown profile '$profile' (init, review, slice, docs or all)" >&2; exit 2 ;;
+    *) echo "doctor.sh: unknown profile '$profile' (init, review, slice, docs, upgrade or all)" >&2; exit 2 ;;
 esac
 
 # in_profile TAG...: true when any TAG belongs to the selected profile.
@@ -297,22 +297,25 @@ impacts() {
             echo "review|stop|/essentials:review stops at Step 0: no deterministic check can run, and it does not review by eye"
             echo "slice|stop|/essentials:add-slice and the slice skills cannot render a slice (render-slice.py) or load the slice law (slice-law.py)"
             echo "docs|stop|the essentials-docs and essentials-change skills cannot load the slice law (slice-law.py) before a slice change"
-            echo "upgrade|not-run|/essentials:upgrade cannot run stack-lint.py or migration-plan.py: Group C and the Essentials upgrade (Group D) are reported not run" ;;
+            echo "upgrade|stop|/essentials:upgrade stops at Step 0: without stack-lint.py, migration-plan.py, slice-lint.py and slice-source.py Groups C and D cannot be decided, and it does not audit by eye" ;;
         uv)
             case $status in
                 fallback)
                     echo "review|fallback|slice-lint.py and slice-source.py run with python3 and the pyyaml and jsonschema already installed, not the pinned versions"
-                    echo "slice|fallback|slice-lint.py, slice-source.py, slice-index.py and slice-enrich.py run with python3 and the pyyaml and jsonschema already installed, not the pinned versions" ;;
+                    echo "slice|fallback|slice-lint.py, slice-source.py, slice-index.py and slice-enrich.py run with python3 and the pyyaml and jsonschema already installed, not the pinned versions"
+                    echo "upgrade|fallback|slice-lint.py and slice-source.py run with python3 and the pyyaml and jsonschema already installed, not the pinned versions" ;;
                 partial)
                     echo "review|not-run|slice-lint.py cannot run (no jsonschema): /essentials:review lists its slice-law gates under Not run; slice-source.py runs with python3"
                     echo "slice|not-run|slice-lint.py cannot run (no jsonschema): /essentials:slice-check reports gates 1, 3, 4 and 14 tier not run; slice-source.py and slice-index.py run with python3"
-                    echo "slice|not-run|/essentials:slice-enrich drafts but writes nothing: slice-enrich.py apply validates every result against the schema and needs jsonschema" ;;
+                    echo "slice|not-run|/essentials:slice-enrich drafts but writes nothing: slice-enrich.py apply validates every result against the schema and needs jsonschema"
+                    echo "upgrade|not-run|slice-lint.py cannot run (no jsonschema): /essentials:upgrade cannot measure what refreshing the lint gate (Group A2) adds; slice-source.py runs with python3" ;;
                 *)
                     echo "review|not-run|slice-lint.py and slice-source.py cannot run (no pyyaml): /essentials:review lists the slice-law gates they cover under Not run"
                     echo "slice|not-run|/essentials:slice-check: slice-lint.py and slice-source.py cannot run, so gates 1, 3, 4 and 14 tier and the script halves of 6, 11(b) and 14 are not run"
                     echo "slice|stop|/essentials:slice-map stops: slice-index.py cannot run without pyyaml, and the map is never built by hand"
                     echo "slice|stop|/essentials:slice-map-html stops: slice-index.py cannot run without pyyaml, and the page is never built by hand"
-                    echo "slice|stop|/essentials:slice-enrich stops: slice-enrich.py cannot run without pyyaml, and no manifest is enriched by hand" ;;
+                    echo "slice|stop|/essentials:slice-enrich stops: slice-enrich.py cannot run without pyyaml, and no manifest is enriched by hand"
+                    echo "upgrade|not-run|slice-lint.py and slice-source.py cannot run (no pyyaml): /essentials:upgrade cannot measure what refreshing the lint gate (Group A2) adds, and does not predict the views that start warning in Group D" ;;
             esac ;;
         java)
             echo "init|not-run|/essentials:init's smoke build (Step 13.7) cannot build the rendered project, which targets the pinned Java release: its result is failed"
@@ -400,7 +403,7 @@ EOF
 
 row bash "ok" "$bash_found" "<null>" init review slice docs upgrade
 row python3 "$py_status" "$py_found" ">= 3.11" init review slice docs upgrade
-row uv "$uv_status" "$uv_found" "<null>" review slice
+row uv "$uv_status" "$uv_found" "<null>" review slice upgrade
 row java "$java_status" "$java_found" "$java_required" init upgrade
 row maven "$maven_status" "$maven_found" "<null>" init upgrade
 row docker "$docker_status" "$docker_found" "running daemon" init upgrade

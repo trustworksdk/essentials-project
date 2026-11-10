@@ -51,6 +51,12 @@ public class CancelOrderHandler extends AnnotatedCommandHandler {
 
     @CmdHandler
     public void handle(CancelOrder cmd) {
+        // requireNonNull throws IllegalArgumentException, which a durable queue's consumer (a command
+        // sent with sendAndDontWait) dead-letters on its first delivery. That is right for a null
+        // command, which no retry can fix. A condition that may become true later (a row or a
+        // projection that is not there yet) throws IllegalStateException instead, which is retried.
+        // A missing aggregate already does the right thing: getOrder throws
+        // AggregateNotFoundException, a plain RuntimeException.
         requireNonNull(cmd, "No cmd provided");
 
         var order = orders.getOrder(cmd.id());

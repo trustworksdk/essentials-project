@@ -434,8 +434,10 @@ The script pins `pyyaml` and `jsonschema` in inline script metadata, so `uv run 
 installed first; `python3 <plugin>/scripts/slice-lint.py` works where both are installed. It parses,
 validates against the schema, checks the three sole-ownership properties across manifests (a declared
 `supersedes` twin is not an ownership clash), reports a write style written into `tier`, and checks
-that every scenario names the slice's own messages (gate 1(d), the kind table in §3). Exit 0
-clean, 1 findings, 2 could not run — including a run without `jsonschema` that found nothing, because
+that every scenario names the slice's own messages (gate 1(d), the kind table in §3). A `slice.yaml`
+that is not UTF-8 is a Blocking 1(a) parse finding, never skipped. Exit 0
+clean, 1 findings, 2 could not run — including a run without `jsonschema`, or with one older than 4.0
+("too old … needs jsonschema 4.0 or newer": the schema is JSON Schema 2020-12), that found nothing, because
 a parse-only pass is not a pass (`--allow-skip-schema` accepts one, with its banner; never in CI).
 Findings win the exit code over a skipped validation, so read `schemaValidated` in the JSON. The
 script emits Blocking and Should-fix only, and both exit 1. An unknown key on a manifest stamped newer

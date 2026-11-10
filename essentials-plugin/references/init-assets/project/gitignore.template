@@ -3,6 +3,12 @@ target/
 *.iml
 .vscode/
 .DS_Store
+*.log
+
+# Local environment files carry credentials; only the committed example is shared
+.env
+.env.*
+!.env.example
 <!-- IF frontend!=none -->
 
 # Frontend: dependencies, the Node the build installs, build output, and the generated API client (never committed)

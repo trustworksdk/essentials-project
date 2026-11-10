@@ -190,7 +190,7 @@ or react to an event by issuing a follow-up command (automation)?
 ```
 
 The slice skills apply this per slice kind, including which dependencies bundle each base class
-takes and why a projection's handler takes `OrderedMessage` (`skills/essentials-view-slice/SKILL.md`
+takes and why a projection's handler takes `OrderedMessage` (`references/slice/view-event-sourced.md`
 §2c–2d, `skills/essentials-automation-slice/SKILL.md`, `skills/essentials-translation-slice/SKILL.md`).
 The comparison table (processing model, exclusivity, latency, consistency, replay) is
 [LLM-postgresql-event-store.md § EventProcessor Framework](../llm/LLM-postgresql-event-store.md#eventprocessor-framework).

@@ -12,12 +12,15 @@
   testable without either side running.
 - Inbound commands are dispatched with `sendAndDontWait`, so they are retried; the receiving slice
   must be idempotent.
+- The ingress fails closed: it rejects every request until `webhooks.{{externalSystem}}.shared-secret`
+  is configured, then accepts only a matching `X-Webhook-Secret` header. That check is a placeholder —
+  replace it with {{ExternalSystem}}'s own signature scheme, still failing closed (stack contract S9).
 
 ## Boundaries
 **Reacts to / reads:** `{{ExternalEvent}}` from {{ExternalSystem}} (inbound); `{{Event}}` from
 `{{bc}}/events/` (outbound)
 **Dispatches:** the internal command mapped in `slice.yaml` `maps`
-**External API:** none of its own — `/webhooks/{{externalSystem}}` is {{ExternalSystem}}'s ingress
+**External API:** none of its own — `/webhooks/{{externalSystem}}/{{ExternalEvent}}` is {{ExternalSystem}}'s ingress
 **Forbidden:**
   - Never import another slice's internals — only `{{bc}}/events/` and `{{bc}}/types/`.
   - Never let an external wire type cross out of this directory.
@@ -30,8 +33,8 @@
 - `{{ExternalSystem}}Translator.kt` — the pure mapping (both directions)
 - `{{ExternalSystem}}Client.kt` — typed outbound port
 - `{{ExternalSystem}}ClientAdapter.kt` — the transport behind the port; its `send` throws until you implement it; delete if `direction: inbound`
-- `On{{ExternalEvent}}.kt` — inbound ingress → CommandBus (Inbox); delete if `direction: outbound`
-- `{{ExternalSystem}}Publisher.kt` — outbound `EventProcessor` (Outbox); delete if `direction: inbound`
+- `On{{ExternalEvent}}.kt` — inbound ingress → CommandBus `sendAndDontWait` (a durable queue); delete if `direction: outbound`
+- `{{ExternalSystem}}Publisher.kt` — outbound `EventProcessor` (events delivered through its durable Inbox); delete if `direction: inbound`
 - test: `{{ExternalSystem}}TranslatorTest.kt`
 
 ## Direction

@@ -743,6 +743,13 @@ message a second time as soon as its claim is that old.
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md).
 
+- `0.60.1-12` - generated WebFlux projects run blocking Essentials work off the event loop (virtual threads, new
+  S5 clause and `stack-lint` rule). Service-entity handlers signal a missing entity with a retryable
+  `IllegalStateException`, so a durable-queue command that arrives early is no longer dead-lettered. The
+  translation webhook fails closed and gets a per-event path. The Maven wrapper verifies its checksum, Spring
+  Modulith is gone and the dev password is dev-profile only. The slice scripts no longer double every slice in
+  a Claude Code worktree or crash on non-UTF-8 input. Commands and skills lose contradictions and load much
+  less text. To check an existing project: run `/essentials:upgrade --check`.
 - `0.60.1-11` - the LLM docs describe when the starters register the tracing and queue metrics interceptors, and
   their opt-out switches (§1.1.6).
 - `0.60.1-3` - the LLM docs show `Money`'s `amount` as a JSON number, the form it is written in, and say a quoted

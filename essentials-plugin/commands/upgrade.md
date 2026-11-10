@@ -5,13 +5,15 @@ description: >-
   slice-rules pointer and the slice-manifest lint gate (installing and activating it if the project
   predates it), check the project CLAUDE.md still routes to the essentials-docs skill, audit the app
   against the stack contract (S1-S11), silent-startup failures first, and move a project on an older
-  Essentials release to the plugin's - essentials.version plus only the platform pins that release
+  Essentials release to the plugin's essentials.version plus only the platform pins that release
   requires, under a decision note you approve, on its own branch, code migrations included, verified
-  by a full build. Reports every finding before writing and offers each fix singly. Never regenerates
+  by a full build. Reports every finding before writing and offers each fix singly; --check reports
+  only, the upgrade plan included, and writes nothing. Never regenerates
   a skeleton, never restructures slice source, and never moves a pin the release does not require
   except a Kotlin compiler too old for the project's own Java baseline, and - one at a time, each on a
   yes - the Spring Boot patch, Kotlin compiler and Maven wrapper floors the Essentials build runs on.
 user-invocable: true
+argument-hint: "[--check]"
 allowed-tools: [Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion]
 ---
 
@@ -42,7 +44,9 @@ verified and the whole move gated by the project's full build.
 | Project behind the installed plugin — stale copies, an uninstalled gate, unmet S1–S11, an older Essentials release | **`/essentials:upgrade`** (this) |
 | Slices vs. the law — layout, manifests, R1–R5, wiring, handler shapes | `/essentials:slice-check` |
 | A codebase not on the law at all — infer contexts and candidate slices | `/essentials:slice-discover` |
-| What is here and how it connects | `/essentials:slice-map` |
+| What is here and how it connects | `/essentials:slice-map` (printed), `/essentials:slice-map-html` (the page) |
+| Human-owned manifest fields missing — journeys, scenarios, summary, tier | `/essentials:slice-enrich` |
+| What **one change** gets wrong — a branch, a ref, a pull request | `/essentials:review` |
 | A **new** project | `/essentials:init` |
 
 The overlap with `slice-check` is deliberate and bounded: both look at the two copied files
@@ -60,6 +64,25 @@ call site uses; a slice's structure stays `slice-check`'s business.
 
 `--check` is the safe first run and costs nothing — use it when you just want to know. It needs
 neither a clean working tree nor Docker.
+
+## Step 0 — Preconditions
+
+- `${CLAUDE_PLUGIN_ROOT}` unset ⇒ abort: "This command must be invoked from within Claude Code with the
+  essentials plugin installed."
+- Run `"${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh" --for upgrade` and keep its lines for the report. A
+  missing or too-old `python3` (its `python3` line, which makes doctor exit 1) means no script below can
+  run — not `stack-lint.py`, `migration-plan.py`, `slice-lint.py` or `slice-source.py` — so Groups C and D
+  cannot be decided: stop and say so rather than audit by eye. Any other gap is not a stop: each line names
+  what it costs (the Step 7 re-check without Maven or Docker, Group D outside git), and that part is
+  reported **not run**.
+- Its `uv` line decides how `slice-lint.py` and `slice-source.py` run, which carry their pinned `pyyaml`
+  (and, for slice-lint, `jsonschema`) in inline script metadata: `ok` ⇒ `uv run --script`, as written
+  below; any other status — `cache read-only → python3 fallback` included, where this shell cannot write
+  uv's cache and every `uv run` fails — ⇒ `python3 <script>` in its place, which uses the packages
+  already installed. A script whose package is missing exits 2, and the step that needed it is reported
+  **not run**; the line says in advance which one. `uv run --script` can also fail where doctor said `ok`,
+  for want of a writable cache: use `python3 <script>` from then on. `stack-lint.py`, `migration-plan.py`
+  and `init-render.py` are standard library only and always run with `python3`.
 
 ## Step 1 — Confirm the project, resolve the versions
 
@@ -173,144 +196,26 @@ grep -rln 'slice-lint' "${TOP}/.github/workflows" "${TOP}/.gitlab-ci.yml" "${TOP
   "${TOP}/azure-pipelines.yml" "${TOP}/bitbucket-pipelines.yml" 2>/dev/null
 ```
 
-`git rev-parse --git-path hooks/pre-commit` resolves the hook the way git does: `.git/hooks/pre-commit`
-with `core.hooksPath` unset, the file under it when set, and a relative `core.hooksPath` against the
-top level — so a bare `.githooks` in a project below the top level names a file that does not exist,
-which is the inactive case below.
+Read the output against `${CLAUDE_PLUGIN_ROOT}/references/init-assets/lint-gate.md`. It holds every A2
+finding (§ Reading the A2 detection), the activation `/essentials:init` Step 12 performs (§ Activating the
+hook), the hook self-test, the per-clone and CI checks, and how to measure a refresh before offering it.
+Load only what the output calls for. One section prints on its own with:
 
-- **Not installed at all** ⇒ **Should-fix**, and offer the install. This is the case
-  `/essentials:slice-check` gate 12 cannot see: its clause is conditional on the gate already
-  existing, so a project scaffolded before `/essentials:init` offered it is never told the gate
-  exists. Offer the same three options init's Step 9 offers — pre-commit hook, script only, or
-  neither. The hook body is `${CLAUDE_PLUGIN_ROOT}/references/init-assets/project/.githooks/pre-commit.template`
-  (it has no placeholders; copy it as `.githooks/pre-commit` in the project, executable, and activate
-  it as below); copy the schema beside the script (**required**, not optional: installed into a
-  project the script has no plugin root to walk up to).
-- **Installed but inactive** ⇒ **Should-fix**: a hook git never runs is no gate. It is active only
-  when it is both wired and executable:
-  - **Wired**: `core.hooksPath` is `${PREFIX}.githooks` (or that directory's absolute path), or the
-    pre-commit hook git does run — `RUNS`; for husky, `.husky/pre-commit` — has a line calling
-    `${PREFIX}.githooks/pre-commit`. A `core.hooksPath` of bare `.githooks` in a project below the top
-    level is not wired: a relative hooks path resolves against the top level, where no such directory
-    exists, so the hook never ran.
-  - **Executable**: neither `test -x` line printed `NOT EXECUTABLE` (for a file that does not exist,
-    that line means not wired, not this). Git skips a pre-commit hook that
-    lacks the execute bit, prints a hint, and commits; a forwarder that calls a project hook without it
-    fails with `Permission denied` and blocks every commit, whether it stages a `slice.yaml` or not.
-    An editor or a copy that rewrites the file in place can drop the bit (a `755` hook comes back
-    `600`), and the wiring check alone still reads such a hook as active. The fix is `chmod +x` on each
-    file named; when git tracks `.githooks/pre-commit` without it (`git ls-files -s .githooks/pre-commit`
-    shows mode `100644`), also offer `git update-index --chmod=+x .githooks/pre-commit`, so that the
-    next clone checks the hook out executable.
+```bash
+awk -v s='## The self-test' '$0 == s { on = 1; print; next } /^## / { on = 0 } on' \
+  "${CLAUDE_PLUGIN_ROOT}/references/init-assets/lint-gate.md"
+```
 
-  Anything else is inactive. Offer the activation `/essentials:init` Step 12 performs, by its cases
-  1–4: set `core.hooksPath` to `${PREFIX}.githooks` only when it is unset and the `ls` of `.git/hooks`
-  above printed nothing. When it printed any hook — a `pre-commit`, or another tool's `post-commit` or
-  `post-checkout` — recommend the forwarder line instead, in `.git/hooks/pre-commit` (created with a
-  `#!/usr/bin/env bash` line and the execute bit when only other hooks exist), and name the hooks
-  `core.hooksPath` would silence. With `core.hooksPath` already set, the forwarder goes in the hook
-  git already runs. State the trade-off in the offer: `core.hooksPath` replaces every hook in
-  `.git/hooks` rather than adding to them, and both it and a forwarder in `.git/` are local to this
-  clone. Every other clone runs the activation once: when the project `README.md` has no
-  "Slice-manifest lint gate" section, offer that section from a scratch render (Step 6) with
-  `lintGate` set to the project's choice; on no, print the command for the user.
-- **The self-test** — offer it once the hook reads as wired and executable, and again after any
-  activation, `chmod` or refresh this run applies. The static checks above say how the hook is set
-  up; only git running it says that a commit is actually checked. The hook decides whether to run
-  from the names staged in the index, but the linter it calls reads the files in the working tree.
-  So the test needs both: an unparseable `slice.yaml` in a temporary directory inside the project,
-  and that file staged in a **temporary index** (`GIT_INDEX_FILE`), a copy of the real one. Git then
-  runs the pre-commit hook the way a commit would, through `git hook run` (git 2.36 or later), and the
-  hook must exit non-zero, naming the test file. Then the temporary directory and the temporary index
-  are removed. The real index and every tracked file stay as they were; the only trace is an
-  unreachable blob that `git gc` prunes. When `RUNS` is not the project hook itself — a forwarder in
-  another tool's hook, a hook manager's wrapper — the test runs that whole hook, other tools' steps
-  included; say so in the offer. From the project directory:
-
-  ```bash
-  # A2 hook self-test: from the project directory; leaves the real index and every tracked file as they were
-  (
-    T="$(mktemp -d)"; P=".slice-hook-selftest.$$"
-    trap 'rm -rf "$T" "$P"' EXIT
-    mkdir "$P" && printf '%s\n' 'slice: selftest.broken' 'kind: command' \
-      'endpoints:' '  - { method: POST, path: /selftest/{id} }' > "$P/slice.yaml"
-    cp "$(git rev-parse --git-path index)" "$T/index" 2>/dev/null   # no index yet: git starts an empty one
-    GIT_INDEX_FILE="$T/index" git add -f -- "$P/slice.yaml"
-    GIT_INDEX_FILE="$T/index" git -c advice.ignoredHook=true hook run --ignore-missing pre-commit >"$T/out" 2>&1
-    rc=$?
-    if [ $rc -ne 0 ] && grep -qF "$P/slice.yaml" "$T/out"; then echo "SELF-TEST PASS: git ran the hook and it blocked an unparseable manifest"
-    elif grep -q 'is not a git command' "$T/out"; then echo "SELF-TEST NOT RUN: git hook run needs git 2.36 or later"
-    elif grep -q 'not set as executable' "$T/out"; then echo "SELF-TEST FAIL: git skipped the hook, which is not executable"
-    elif grep -q 'Permission denied' "$T/out"; then echo "SELF-TEST FAIL: a hook git runs could not run the next one, which is not executable"
-    elif [ $rc -eq 0 ] && [ ! -s "$T/out" ]; then echo "SELF-TEST FAIL: git runs no pre-commit hook in this clone"
-    else echo "SELF-TEST FAIL: the hook ran but did not block the unparseable manifest (exit $rc)"; fi
-    cat "$T/out"
-  )
-  ```
-
-  Take the first line as the verdict and show the output under it. A `FAIL` is the inactive finding
-  above, whatever the static checks said: fix by its line, then run the test again. `NOT RUN` leaves
-  the static checks as the only evidence; say so. A hook that ran and let the manifest through on a
-  machine with neither `uv` nor `python3` is the hook's documented fail-open, not a wiring fault.
-- **A hook is per clone, and CI is the gate.** Every activation above — `core.hooksPath`, a forwarder
-  in `.git/hooks` — is configuration of this clone, which a fresh clone does not carry, and
-  `git commit --no-verify` skips the hook on any clone. Say this in the report whenever the project
-  has a hook: the hook is a convenience that fails a commit early, and the CI job is the gate that no
-  contributor can bypass.
-  - **A devcontainer** (`.devcontainer/devcontainer.json` above): its post-create step runs on every
-    fresh container, so it can activate the hook for every contributor who uses it. When the
-    activation is `core.hooksPath` (case 1), offer this line in the script `postCreateCommand` runs,
-    or in `postCreateCommand` itself when it calls no script; it leaves a `core.hooksPath` that is
-    already set alone, and works from any directory of the repository:
-    `[ -n "$(git config --get core.hooksPath)" ] || git config core.hooksPath "${PREFIX}.githooks"`,
-    with `${PREFIX}` written out (`orders-service/.githooks`, or `.githooks` at the top level). A
-    forwarder in a hook-manager file the repository tracks (`.husky/pre-commit`) already reaches
-    every clone and needs no line; a forwarder in `.git/hooks` cannot be added safely from a
-    post-create step, so say that each clone adds it by hand.
-  - **CI**: when the `grep` above found a CI file that runs `slice-lint`, name it and say the gate
-    holds. When it found none, the manifests are checked only on clones whose hook is active ⇒
-    **Advisory**, and **Should-fix** when this clone has no active hook either (a "script only"
-    install included), since then nothing runs the linter at all. This check applies to every
-    installed gate, hook or not. Offer a step that runs the project README's command from the project
-    directory and fails the build on any exit but 0. Prefer `uv`, which reads the pins in the script's
-    own PEP 723 header. On a runner without `uv`, install `pyyaml` and `jsonschema` at the versions in
-    that header, never unpinned. Add it to the CI file the repository already has, beside its build
-    step. The `--baseline` ratchet below goes into this step.
-- **A hook at the top level only** (`${TOP}/.githooks/pre-commit`, the project below the top level)
-  ⇒ part of the refresh below: the current hook locates its project from its own path, so it belongs
-  in the project's `.githooks/`. Offer to move it there and activate it; leave a top-level hook that
-  carries lines of its own, and say why.
-- **Installed but differing** — the script, the schema or the hook differs ⇒ **Advisory**. A project
-  running a stale schema validates against yesterday's contract and reports a clean pass it has not
-  earned, and a stale hook can call the script in a way it no longer runs. The refresh replaces the
-  script, the schema and the hook together, as one fix — they are one contract and must not drift
-  apart. A schema copy older than 1.4 also rejects `flow`, `scenarios` and `requirements`, the
-  optional fields a spec-driven generator writes: the generator checks the project's copy for an
-  `x-manifestVersion` of `"1.4"` or later and, when it is absent, writes none of them and sends the
-  user here (`manifest-guide.md` §3). The refresh
-  is what lets those fields in. A project that chose "script only" has no `.githooks/pre-commit`;
-  that is not a finding, and the refresh covers the other two. If the project's hook carries lines of
-  its own beyond the template's, show the diff and offer to merge rather than replace.
-
-  **Measure the refresh before offering it**, exactly as `/essentials:slice-check` § Refreshing the
-  lint gate does: the plugin's copy over the project with `--baseline` of the project's copy's `--json`
-  output, handed over by process substitution so no file is written —
-  `slice-lint.py . --json --baseline <(uv run --script scripts/slice-lint.py . --schema scripts/slice-yaml.schema.json --json)`. What the second run prints is
-  what the refresh adds, and every one of those findings fails the hook and CI. State it in the offer:
-  "the refresh adds N findings in `<files>`; the hook and CI fail on them until they are fixed". Then
-  offer the manifest fixes **before** the refresh, one file at a time, by that section's list — for
-  `14 tier`, `tier: cqrs-es` where the BC is event-sourced, otherwise delete the `tier` line — so the
-  gate never goes red; rerun the measurement, and offer the refresh with what is left. Where findings
-  stay, also offer `--baseline` as a ratchet: commit the installed copy's `--json` output and pass
-  `--baseline <that file>` in CI, so existing findings stop failing the build and new ones still do.
-  It belongs in CI: the hook passes no baseline, and a baseline added to the hook is a project edit
-  the next A2 diff reports.
-
-  Say what the refreshed hook changes for contributors: it **blocks** a commit when the linter exits 2
-  — a `python3` without `pyyaml` or `jsonschema`, and no `uv` — where an older hook let it through, and
-  it fails when `scripts/slice-lint.py` is missing; only a machine with neither `uv` nor `python3`
-  still commits unchecked. Contributors need `uv`, or `python3` with `pyyaml` and `jsonschema`.
-- Identical and active — wired, executable, and the self-test passed where it ran ⇒ current.
+- **Current** — both the script and the schema `diff` printed nothing, and either a "script only" install
+  (no hook at either `ls` path) or a hook that is the project's own `.githooks/pre-commit`, whose `diff`
+  printed nothing, that is wired (`HOOKS` is `${PREFIX}.githooks` or that directory's absolute path, or
+  the `grep` printed a forwarder line) and for which no `NOT EXECUTABLE` line printed. Print only
+  § The self-test (when there is a hook) and § Per clone, and CI: offer the self-test, and apply the CI
+  check and the per-clone report line that section gives. Identical and active — wired, executable, and
+  the self-test passed where it ran ⇒ current.
+- **Anything else** — no `scripts/slice-lint.py` (its `diff` says `No such file`), a `diff` that printed
+  lines, a hook that is not wired or not executable, or a hook only at `${TOP}/.githooks/pre-commit` —
+  read the whole reference and report by its § Reading the A2 detection.
 
 **No third file joins these two.** If a check below wants a file copied into the project to fix
 itself, that is a design decision to raise with the user, not one to take here.
@@ -401,9 +306,9 @@ What the rows cover, so the report can say what was checked and what was clean:
 | C3 | **S3.3** | `s3.3-own-json-mapper` | — |
 | C4 | **S4** | `s4-*` — exactly one `Essentials*WebConfigurer` `@Import`ed, matching the web stack (`EssentialsWebMvcConfigurer` on spring-webmvc, `EssentialsWebFluxConfigurer` on spring-webflux). `s4-typed-edge-unregistered` (Blocking) names each `@PathVariable` / `@RequestParam` typed as a project `CharSequenceType` / `SingleValueType` that only the Essentials converter can build, in a project without the dependency or the `@Import`: its symptom is **HTTP 500 on a well-formed request** (`ConversionNotSupportedException`), never a startup failure, and it then stands in for `s4-configurer-missing` / `s4-types-spring-web-missing` | — |
 | C5 | **S3.5 / compiler** | `s3.5-*` | Constructor parameter names that differ from their JSON properties |
-| C6 | **S5** | `s5-*` — the `DocumentDbRepositoryFactory` bean, no document store on `mongo`, no `transactional-mode` key, aggregates declared | Writes outside the `UnitOfWork`; handler idempotency |
+| C6 | **S5** | `s5-*` — the `DocumentDbRepositoryFactory` bean, no document store on `mongo`, no `transactional-mode` key, aggregates declared, and on WebFlux `spring.threads.virtual.enabled: true` in the base configuration (`s5-webflux-virtual-threads`, Should-fix: without it a blocking handler runs on the event loop and requests stall under load) | Writes outside the `UnitOfWork`; handler idempotency. On WebFlux, the offload undone: an application `Executor` bean without `spring.task.execution.mode: force` (handlers fall back onto the event loop), or a `Mono`/`Flux`/`suspend` handler doing blocking Essentials work on the loop. **Should-fix**; the symptom is a stall under load and blocking-call warnings |
 | C7 | **S2** | `s2-*` — one starter; `spring.mongodb.*` connection keys; the modules the starters do not bring (`eventsourced-aggregates`, `kotlin-eventsourcing` on Kotlin, `postgresql-document-db`) | — |
-| C8 | **S9** | `s9-admin-spi` | A `SecurityConfig` exists and someone has **decided** what it says. A permit-all left exactly as `/essentials:init` emitted it is **Should-fix** — the contract's word is that security is decided, never inherited |
+| C8 | **S9** | `s9-admin-spi` | A `SecurityConfig` exists and someone has **decided** what it says. A permit-all left exactly as `/essentials:init` emitted it is **Should-fix** — the contract's word is that security is decided, never inherited. An inbound webhook that accepts a request with no configured secret, or compares it with `equals`, is not fail-closed (S9): **Should-fix**, report only |
 | C9 | **S7** | `s7-*` — the spec is regenerated by an integration test, the committed spec exists, the frontend builds from it, and `SingleValueTypeModelConverter` is registered wherever springdoc runs (without it every generated client types the semantic ids as objects). Whatever is left of the forked-app pipeline (`springdoc-openapi-maven-plugin`, a `spring-boot-maven-plugin` start/stop execution, `application-openapi.*`) is `s7-forked-pipeline`, reported whether or not a test now writes the spec; a missing `springdoc.writer-with-order-by-keys: true` is `s7-key-order`. Without a test writer `s7-spec-generation` fires too: the fetch serves a stale spec silently once an endpoint needs the database | — |
 | C10 | **S10** | `s10-*` — Testcontainers 2.x coordinates and packages, S10's `@AutoConfigureWebTestClient` package, Failsafe bound | Context caching and fork reuse |
 | C11 | **S8** | `s8-*` — both half-choices: embedded without CORS, base URL or dead pieces and with its SPA fallback and static copy; standalone with a base URL its Orval mutator reads from the build-time environment and prefixes (`VITE_*`, `NEXT_PUBLIC_*`, `REACT_APP_*` — `facts.frontendTooling`), a `CorsConfigurationSource` whose origins are bound through `@ConfigurationProperties` (`@Value` on a list key Blocking, on a scalar Should-fix: `s8-standalone-cors-value-scalar`), no wildcard with credentials; the generated client git-ignored (the paths `orval.config.*` names) | Whether the chosen mode is the one the deployment needs |
@@ -486,6 +391,9 @@ predictable from the source, so predict it while the project is still on the old
 ```bash
 uv run --script "${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py" . --check --json   # read .unhandledVariants
 ```
+
+The runner is Step 0's: `python3` in place of `uv run --script` under its fallback; exit 2 (a missing
+`pyyaml`) ⇒ this prediction is **not run**, and say so in the report.
 
 Take `unhandledVariants` verbatim — each entry a view slice, the processor's `file:line`, the sealed
 `parent` and the `variants` no handler accepts and no `@IgnoresEventTypes` lists — and ignore the

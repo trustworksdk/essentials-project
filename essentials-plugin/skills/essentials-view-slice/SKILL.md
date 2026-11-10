@@ -56,12 +56,14 @@ and most of this step does not apply there:
 | Read model | a **separate** projected model this slice owns | the **entity's own table**, shared with the write side |
 | Machinery | a projector, `EventOrder` idempotency, `OrderedMessage` | a slice-private read-only query interface + a closed projection interface |
 | Consistency | eventual | **strong** — same table, same transaction |
-| Applies below | §2a–§2f | §2a and §2b only, then § The read side on this lane |
+| Applies below | §2a–§2b here, then §2c–§2i in `references/slice/view-event-sourced.md` | §2a and §2b only, then § The read side on this lane |
 
-**On the service-entity lane, skip §2c–§2f entirely.** There is no processor to select, no
-`EventOrder` to compare, no `Version`, no `OrderedMessage`, and no DocumentDB entity. Read
+**On the service-entity lane, skip §2c–§2i entirely, and do not read `view-event-sourced.md`.** There
+is no processor to select, no `EventOrder` to compare, no `Version`, no `OrderedMessage`, and no
+DocumentDB entity. Read
 `rules/slice-design.md` § The read side on this lane, § Spring Data repository surface, and
-`slice-model.md` §3.5 instead, then go to Step 4. The four rules that replace them:
+`slice-model.md` §3.5 instead. §2a and §2b below still apply, and so does Step 3. The four rules that
+replace §2c–§2i:
 
 1. **Never read through the BC's write repository.** Declare this slice's own interface extending
    bare `Repository<Entity, Id>` — not `JpaRepository`/`MongoRepository`, which would expose `save`
@@ -76,10 +78,14 @@ and most of this step does not apply there:
 4. **Say that the read is strongly consistent** in the report. It is this lane's one advantage over a
    projection, and teams should not be told to add eventual consistency they do not need.
 
-Everything below applies to the two event-sourced lanes.
+**On the decider and aggregate lanes, Read
+`${CLAUDE_PLUGIN_ROOT}/references/slice/view-event-sourced.md` now.** It holds §2c–§2i, which apply to
+these two lanes only: processor selection, idempotency via `EventOrder`, handler shape, persistence and
+the Java entity gotchas, start position, handler failures, and testing the projection. Every rule there
+binds here exactly as if it were written in this step.
 
-Settle scope first — what this slice owns. Then the two decisions that, got wrong, make the slice
-fail silently in production: processor selection and idempotency.
+Settle scope first — what this slice owns (§2a, §2b). Then the two decisions that, got wrong, make the
+slice fail silently in production: processor selection (§2c) and idempotency (§2d).
 
 ### 2a. The slice is the read model, not the endpoint
 
@@ -114,128 +120,12 @@ Return the **view entity** from the query method. Do not emit a `…Response` ty
 not add a mapper, assembler, or `toDto()`. The templates already do this — keep it that way when you
 extend them. §R2, "The command and the view *are* the contract".
 
-**Kotlin: a value class in a handler signature needs an explicit operationId** (trap ESS-113). Kotlin
-mangles the JVM name of a handler that takes a value class as a parameter (nullable or `suspend`
-included) or returns one (`placeOrder-40lU5Lw`); springdoc uses that name as the `operationId`, and the
-generated frontend client inherits it. A value class only inside a generic (`List<OrderId>`) or a DTO
-does not mangle. Give exactly the mangling handlers
-`@Operation(operationId = "<viewCamel>…")` (`io.swagger.v3.oas.annotations.Operation`), named after the
-slice so it stays stable and unique; `@JvmName` is not an option on Spring's open methods. See
-`references/llm/LLM-types-spring-web.md` § Kotlin handler methods: set the operationId. The
+**Kotlin: a value class in a handler signature needs an explicit operationId** (trap ESS-113,
+`slice-authoring.md` §4d). In a view slice it is `@Operation(operationId = "<viewCamel>…")`. The
 service-entity template's lookup takes the typed `@PathVariable` id and so ships with
 `@Operation(operationId = "<viewCamel>By<Aggregate>Id")`; the event-sourced template's single list
 query has no value class in its signature. The first edit that moves one into another handler's
 signature needs its own.
-
-### 2c. Processor selection
-
-```
-Must the read model be current the moment the command API returns?
-├─ YES → InTransactionEventProcessor   (synchronous, in the same transaction as the append;
-│                                       also the tool for cross-aggregate uniqueness)
-└─ NO  → ViewEventProcessor            (async, low latency, eventually consistent, replayable)
-```
-
-A plain `EventProcessor` is **never** right for a view — that is the Inbox-backed base for external
-integration. The template ships `ViewEventProcessor`, which is correct for almost every read model.
-
-`ViewEventProcessor` takes **`ViewEventProcessorDependencies`**; `EventProcessor` and
-`InTransactionEventProcessor` take `EventProcessorDependencies`. They are not interchangeable.
-
-### 2d. Idempotency via `EventOrder`
-
-The Inbox redelivers. A projector that is not idempotent will double-count.
-
-The view carries a `version` equal to the projected event's `EventOrder`, and the update is
-conditional on it:
-
-- **Kotlin** — `repository.update(entity, Version(message.order))`. Use the constructor:
-  **`Version.of()` does not exist.**
-- **Java** — `repository.update(entity, message.getOrder())`, using the `long` overload so Java
-  never constructs the Kotlin `Version` value class.
-
-`repository.update(entity)` with no version is CRUD auto-increment, not projection. Skip an event
-whose order is not newer than the stored version.
-
-### 2e. Handler shape
-
-Every `@MessageHandler` **in a view projection** takes `OrderedMessage` as its second parameter.
-
-The reason is idempotency, not dispatch. `PatternMatchingMessageHandler` treats the second parameter
-as **optional** — a single-argument `@MessageHandler` is invoked normally. But `message.order` /
-`message.getOrder()` is the `EventOrder` a projection compares against the row's stored `version`,
-and that comparison is the whole mechanism in 2d. Without the parameter the projection has no way to
-recognise a replay, so redelivery double-applies. A handler that needs no ordering — a
-fire-and-forget publisher in a translation slice, say — may legitimately omit it.
-
-Do not report a missing `OrderedMessage` on an arbitrary `@MessageHandler` as a defect. Report it
-where the handler mutates a versioned read model without it.
-
-### 2f. Persistence
-
-Both languages use **DocumentDB**. Kotlin entities implement `VersionedEntity`; Java entities extend
-**`JavaVersionedEntity<ID, SELF>`**, which bridges the Kotlin `Version` value class to two primitive
-`long` accessors, and use the `Class<T>` factory overloads (`createForStringId`) and the string-path
-condition API (`eq("address.city", value)`, with an explicit `DbType` for numeric and temporal
-paths).
-
-A JDBI `@SqlObject` repository over a Flyway-managed table is the supported alternative in both
-languages — choose it when you need hand-tuned SQL or the view must live in an existing relational
-schema. No template ships for it: DocumentDB manages its own table and indexes, whereas JDBI means
-writing the migration and the SQL yourself.
-
-Java entity gotchas:
-
-- **The `@Id` field must be `public`.** `EntityConfiguration` resolves `@Id` through Kotlin reflection
-  over `memberProperties`; for a Java class the property is synthesised from the *field*, so reading
-  it is a direct field access, not a call to the getter. A private `@Id` makes the first `save`/
-  `update`/`delete` throw Kotlin's `IllegalCallableAccessException` (wrapping `IllegalAccessException`),
-  the message is dead-lettered, and the projection silently never populates — nothing fails at startup. `version` and `lastUpdated` escape this because they are
-  declared on `JavaVersionedEntity` as Kotlin properties with real getters, so their `KProperty1`
-  getter is a method call. Kotlin-declared property → method call; Java-declared field → field read.
-- Initialise the version field to `Version.NOT_SAVED_YET_VALUE` (`-1`), not `0`.
-- `version` and `lastUpdated` are hardcoded names in the reflection layer, so keep them and keep them
-  mutable.
-- **Name the `@Configuration` class `<View>RepositoryConfiguration`, never `<View>Repository`.** Spring
-  registers a `@Configuration` class's own bean under its decapitalised simple name, which would
-  collide with the `<viewCamel>Repository()` `@Bean` method it declares — a
-  `BeanDefinitionOverrideException` at context startup that fails *every* `@SpringBootTest` in the
-  project, not just this slice. Keep the `@Bean` method name: that is what consumers inject by.
-- **Declare `kotlin-stdlib-jdk8` and `kotlin-reflect` in the module's `pom.xml`.**
-  `postgresql-document-db` declares both in `provided` scope, so they are not transitive, and a pure-Java
-  consumer still needs them at compile time — `createForStringId` and the `Condition` DSL expose
-  `KClass`/`KProperty1` overloads javac must resolve. Missing them fails with
-  `cannot access kotlin.reflect.KClass`. Adding a view slice is what pulls this module in; Step 4's
-  `requires` names whichever of the three the build file lacks.
-
-### 2g. Start position
-
-A new projector starts at global order 1 and replays the whole history — that is what a view needs, so leave
-`isStartSubscriptionFromLatestEvent()` at its default `false` and do not override
-`resolveStartSubscriptionFromGlobalEventOrder()`. A view that starts from the latest event never backfills: aggregates
-whose events came before its first start never get a row. Either hook only applies on the first start under the
-processor name; after that the stored resume point wins. See `references/llm/LLM-postgresql-event-store.md` § Start
-position.
-
-### 2h. Handler failures
-
-A projection handler throws on a failure it cannot handle; never wrap it in a `try`/`catch` that logs and returns — the
-event is then acknowledged and the row is missing for good. A throw queues the event for redelivery and, once the
-redeliveries are used up, dead-letters it. The resume point keeps advancing, and only that aggregate's later events wait
-behind the dead letter. Say in the report that the team alerts on `essentials.messaging.durable_queues.dead_lettered`
-(or `DurableQueuesHealthIndicator`), fixes the cause and calls `resurrectDeadLetterMessage`. See
-`references/llm/LLM-postgresql-event-store.md` § Handler failures.
-
-### 2i. Testing the projection
-
-When filling the projector IT's "await the projection" TODO, call `awaitProcessed` on the projector with the **last**
-event the test appended (`appendToStream(...).lastEvent()`, or `AppendedEvents.recordDuring(...)` around the
-`commandBus.send` - import `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.AppendedEvents`; it
-records every append, decider or repository), then read the row once. Do not poll the view under a guessed timeout. `awaitProcessed` sees only
-the projector in this JVM; poll with an assertion and a deadline only for what it cannot see — a seam downstream of the
-projector, or a projector whose lock another instance holds. An existence check that must not lag (an idempotency
-probe) reads the write side, never this view. See `references/llm/LLM-postgresql-event-store.md` § Testing
-asynchronous projections.
 
 ## Step 3 — Check or scaffold the bounded context
 
@@ -258,7 +148,7 @@ to add it before going on:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py requires --lang <language> --kind view \
-    --lane <lane> --build <the build file from add-slice Step 0>
+    --lane <lane> --build <the project's build file, slice-authoring.md §2>
 ```
 
 Then render. Pass the inputs you were given; the script derives the rest (`slice-authoring.md` §4b):
@@ -276,21 +166,9 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py render --lang <language> -
 
 Exit 2 means nothing was written: relay the message and stop.
 
-**Exit 4 means the shell may not write the project** (a read-only filesystem, or a sandbox that lets
-the Write tool write but not Bash). Nothing was written. Do not stop, and never render a file by hand;
-take the emit fallback (`slice-authoring.md` §4b):
-
-1. Run the same command with `--emit` added, once. It writes nothing; its JSON report lists every file
-   in `files` with `path` (relative to `<projectRoot>`), `action` and `content`. If the output is too
-   large to read whole, run it again with `--only <path>` for each path in `files`: that prints the one
-   file's content, raw.
-2. Write every file with the Write tool at `<projectRoot>/<path>`, `content` verbatim: no edit, and no
-   TODO filled on the way. Never import or patch `render-slice.py`.
-3. Then run the same command with `verify` in place of `render` and without `--emit`. Exit 0: the slice is
-   rendered; go on from the emitted report as after a plain render. Exit 1 names each file `missing` or
-   `differs`: report them and stop. Never repair one by hand.
-
-Say in the final report, in one line, that the files were written through the emit fallback.
+**Exit 4 means the shell may not write the project.** Nothing was written. Do not stop, and never
+render a file by hand: take the emit fallback in `slice-authoring.md` §4b, all three steps, exactly
+as written there.
 
 The tables below are what it writes; then fill the TODOs the JSON lists under `todos`.
 
@@ -324,7 +202,7 @@ Spring Data Mongo, so the same files serve both.
 The repository file differs by language because the two shapes differ: Kotlin ships a real
 `@Repository` component extending `DelegatingDocumentDbRepository`, whereas Java ships a
 `@Configuration` that *produces* a `DocumentDbRepository` `@Bean` — and a `@Configuration` class must
-not be named for the bean it declares (see the naming gotcha in 2f).
+not be named for the bean it declares (see the naming gotcha in `view-event-sourced.md` §2f).
 
 The script refuses an existing slice directory and any file it would overwrite.
 

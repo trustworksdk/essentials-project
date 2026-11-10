@@ -260,7 +260,7 @@ def find_chrome(explicit):
 
 def substitute(template_text, data_text):
     if template_text.count(PLACEHOLDER) != 1:
-        raise HarnessError("placeholder line drifted — commands/slice-map.md §6 and the template must "
+        raise HarnessError("placeholder line drifted — references/slice/slice-map-contract.md and the template must "
                            "agree on: " + PLACEHOLDER)
     return template_text.replace(PLACEHOLDER, "const SLICE_MAP = " + data_text.strip() + ";")
 

@@ -24,7 +24,7 @@ Supplied by the dispatching command. **Never re-elicit these.**
 |---|---|
 | `language` | `kotlin` \| `java` |
 | `lane` | `decider` \| `aggregate` — the owning BC's §R5 write style. The two event-sourced lanes get the same files; the lane is passed so the manifest can record it. **`service-entity` is refused** (Step 0) |
-| `tier` | `cqrs-es` (both event-sourced lanes) \| `service-entity`. **Derived from `lane`, and not the same value** — the manifest's `architectureTier` vocabulary, a different axis (`slice-authoring.md` §4). Never render `tier: aggregate`: it is not a tier value, and another tool reading the manifest silently downgrades an unrecognised tier to `custom` and skips the slice |
+| `tier` | `cqrs-es`. **Derived from `lane`, and not the same value** — the manifest's `architectureTier` vocabulary, a different axis (`slice-authoring.md` §4). Never render `tier: aggregate`: it is not a tier value, and another tool reading the manifest silently downgrades an unrecognised tier to `custom` and skips the slice |
 | `projectRoot`, `sourceRoot`, `testRoot`, `packagePath` | resolved from the project |
 | `bc` / `Bc`, `AggregateType` | `orders` / `Orders`, `Orders` |
 | `slice` / `Slice` / `sliceCamel` | `fulfillment` / `Fulfillment` / `fulfillment` |
@@ -104,7 +104,7 @@ to add it before going on:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py requires --lang <language> --kind automation \
-    --lane <lane> --build <the build file from add-slice Step 0>
+    --lane <lane> --build <the project's build file, slice-authoring.md §2>
 ```
 
 Then render. Pass the inputs you were given; the script derives the rest (`slice-authoring.md` §4b):
@@ -119,21 +119,9 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py render --lang <language> -
 
 Exit 2 means nothing was written: relay the message and stop.
 
-**Exit 4 means the shell may not write the project** (a read-only filesystem, or a sandbox that lets
-the Write tool write but not Bash). Nothing was written. Do not stop, and never render a file by hand;
-take the emit fallback (`slice-authoring.md` §4b):
-
-1. Run the same command with `--emit` added, once. It writes nothing; its JSON report lists every file
-   in `files` with `path` (relative to `<projectRoot>`), `action` and `content`. If the output is too
-   large to read whole, run it again with `--only <path>` for each path in `files`: that prints the one
-   file's content, raw.
-2. Write every file with the Write tool at `<projectRoot>/<path>`, `content` verbatim: no edit, and no
-   TODO filled on the way. Never import or patch `render-slice.py`.
-3. Then run the same command with `verify` in place of `render` and without `--emit`. Exit 0: the slice is
-   rendered; go on from the emitted report as after a plain render. Exit 1 names each file `missing` or
-   `differs`: report them and stop. Never repair one by hand.
-
-Say in the final report, in one line, that the files were written through the emit fallback.
+**Exit 4 means the shell may not write the project.** Nothing was written. Do not stop, and never
+render a file by hand: take the emit fallback in `slice-authoring.md` §4b, all three steps, exactly
+as written there.
 
 The script always writes the stateful shape from `templates/<language>/automation/`; **for a
 stateless automation (Step 2), delete the two files marked below and reduce the processor's handler

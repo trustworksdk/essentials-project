@@ -108,10 +108,21 @@ Also ask `owner`, defaulting to `<bc>-team`.
 Read ${CLAUDE_PLUGIN_ROOT}/skills/essentials-<kind>-slice/SKILL.md
 ```
 
-Follow it to completion, passing a literal `## Inputs` block with every resolved value: `language`,
-`lane`, `tier`, `projectRoot`, `sourceRoot`, `testRoot`, `packagePath`, `bc`, `Bc`, `slice`, `Slice`,
-`sliceCamel`, `aggregate`, `Aggregate`, `AggregateType`, `apiPath`, `owner`, plus the kind-specific
-names. **`tier` is derived from `lane`, and is not the same value** — `decider` and `aggregate` are
+Follow it to completion, passing a literal `## Inputs` block with every resolved value. Every kind
+takes `language`, `lane`, `tier`, `projectRoot`, `sourceRoot`, `testRoot`, `packagePath`, `bc`, `Bc`,
+`AggregateType` and `owner`; the rest is per kind, and is exactly the skill's own `## Inputs` table:
+
+| Kind | Also pass |
+|---|---|
+| command | `slice` / `Slice` / `sliceCamel`, `aggregate` / `Aggregate`, `Command`, `Event`, `apiPath` |
+| view | `view` / `View` / `viewCamel` (the view name of Step 4, not `slice`), `aggregate` / `Aggregate`, `Event` (the first event it projects), `apiPath` |
+| automation | `slice` / `Slice` / `sliceCamel`, `Event` (the first event that drives it) |
+| translation | `externalSystem` / `ExternalSystem` (not `slice`), `ExternalEvent`, `direction`, `Event` (the internal event it publishes) |
+
+For an **existing** bounded context, `Aggregate`, `AggregateType` (and `Aggregates`, `Entity`) are not
+elicited: they are read from the BC's scaffold, and `render-slice.py` derives each one it is not passed
+when the scaffold names exactly one (`slice-authoring.md` §4b). Ask only when the scaffold names none or
+several. **`tier` is derived from `lane`, and is not the same value** — `decider` and `aggregate` are
 both `cqrs-es`; only `service-entity` maps to itself (`slice-authoring.md` §4). Both go into the
 manifest, because they answer different questions: `tier` is how the backend is organised,
 `lane` is where the decision lives inside it. On the **service-entity** lane also pass `entity` / `Entity` — derived from

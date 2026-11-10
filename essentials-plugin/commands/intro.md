@@ -108,9 +108,8 @@ or auditing a slice, seeing the whole map, and reviewing a change.
                          per journey, a Diff lens against the branch's merge
                          base, field lineage, a coupling matrix and a metro
                          map, with an issues dock and deep links. Written by
-                         script; audits nothing. --per-app: one page per
-                         application of a multi-application folder, plus an
-                         index page.
+                         script; audits nothing. --out <dir> on a multi-application
+                         folder: one page per application, plus an index page.
   /essentials:slice-enrich
                          Catches older manifests up on the fields they lack —
                          flow, scenarios, summary, invariants, tier — drafted
@@ -151,12 +150,14 @@ or auditing a slice, seeing the whole map, and reviewing a change.
                          on its own branch, code migrations included, gated by a
                          full build. Reports before it writes and offers each fix
                          on its own. Never regenerates a skeleton or restructures
-                         slice source; --check shows the whole plan.
-                         --check is a report-only dry run.
+                         slice source; --check is a report-only dry run that
+                         shows the whole plan.
   /essentials:doctor     Checks this machine for the tools the commands run —
-                         python3, uv, the pinned JDK, Maven, Docker, npm — and
-                         says what each missing one costs: a command that stops,
-                         a gate not run, a compile-only build. Installs nothing.
+                         python3, uv, the pinned JDK, Maven, Docker, npm, git,
+                         ripgrep — and says what each missing one costs: a
+                         command that stops, a gate not run, a compile-only
+                         build. Profiles: init, review, slice, docs, upgrade.
+                         Installs nothing.
 
 ━━━ WHAT /essentials:init SETS UP ━━━
 
@@ -279,6 +280,7 @@ or auditing a slice, seeing the whole map, and reviewing a change.
   /essentials:slice-check ← existing project that follows the law; audit it
   /essentials:slice-discover ← existing project that does not; map it first
   /essentials:review      ← before you open a pull request
+  /essentials:doctor      ← a command stopped on a missing tool
   Just ask                ← both skills load themselves: a question routes to
                             the docs, a change request routes to the slice
 ```

@@ -332,6 +332,36 @@ class RenderAndWireTest(unittest.TestCase):
         self.assertEqual(check["status"], "manual")
         self.assertIn("2 configurators found", check["reason"])
 
+    def test_a_latin1_source_anywhere_does_not_stop_a_decider_render(self):
+        self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire")
+        stray = self.p.main / "com" / "example" / "shop" / "legacy" / "Legacy.java"
+        stray.parent.mkdir(parents=True)
+        stray.write_bytes(b"// caf\xe9\nclass Legacy {}\n")
+        code, out, err = self.p.render("command", "decider", {**BASE, "slice": "cancel_order", "Command": "CancelOrder",
+                                                              "Event": "OrderCancelled"}, "--wire")
+        self.assertEqual(code, 0, err)
+        self.assertEqual([w["status"] for w in json.loads(out)["wiring"]], ["present", "applied", "applied"])
+        self.assertEqual(stray.read_bytes(), b"// caf\xe9\nclass Legacy {}\n")
+
+    def test_a_latin1_file_to_edit_is_left_alone_and_reported_manual(self):
+        self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire")
+        parent = self.p.bc / "events" / "OrderEvent.java"
+        latin1 = parent.read_bytes().replace(b"package", b"// caf\xe9\npackage", 1)
+        parent.write_bytes(latin1)
+        code, out, err = self.p.render("command", "decider", {**BASE, "slice": "cancel_order", "Command": "CancelOrder",
+                                                              "Event": "OrderCancelled"}, "--wire")
+        self.assertEqual(code, 0, err)
+        permits = json.loads(out)["wiring"][2]
+        self.assertEqual(permits["status"], "manual")
+        self.assertIn("not valid UTF-8", permits["reason"])
+        self.assertEqual(parent.read_bytes(), latin1)
+
+    def test_lines_split_on_newline_only(self):
+        self.assertEqual(rs.split_lines("a\x0cb\r\nc\n"), ["a\x0cb", "c"])
+        self.assertEqual(rs.lines_keepends("a\x0cb\r\nc"), ["a\x0cb\r\n", "c"])
+        text = "slice: a.b\n# note\x0c more\nkind: command\n"
+        self.assertEqual([b.key for b in rs.split_blocks(text, "x")[1]], ["slice", "kind"])
+
     def test_todos_are_reported_with_locations(self):
         _, out, _ = self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc")
         todos = json.loads(out)["todos"]

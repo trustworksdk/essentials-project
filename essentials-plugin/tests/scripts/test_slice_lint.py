@@ -14,6 +14,7 @@ as slice-check Step 1.5 and a project's pre-commit hook run it.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -772,6 +773,167 @@ class UnknownKeys(unittest.TestCase):
                            ["if"]["properties"]["schemaVersion"]["pattern"])
         self.assertEqual([bool(newer.match(f"{major}.{m}")) for m in range(minor + 12)],
                          [m > minor for m in range(minor + 12)])
+
+
+WALKERS = ("slice-lint.py", "slice-index.py", "slice-source.py", "slice-law.py")
+
+
+def prune_block(script):
+    """The prune rule's text in one script: from its comment through pruned_dir()'s return line."""
+    text = (PLUGIN / "scripts" / script).read_text(encoding="utf-8")
+    start = text.index("# The one prune rule of every manifest walker.")
+    last = "    return not (in_source_root and name in PACKAGE_NAMED_LIKE_OUTPUT)\n"
+    end = text.index(last, start) + len(last)
+    return text[start:end]
+
+
+def with_copies(src, tmp):
+    """`src` copied to tmp/project, plus two more copies of it where a walker must not look: a Claude Code
+    agent worktree (.claude/worktrees/agent1) and a build output directory (target/classes)."""
+    project = Path(tmp) / "project"
+    shutil.copytree(src, project)
+    shutil.copytree(src, project / ".claude" / "worktrees" / "agent1")
+    shutil.copytree(src, project / "target" / "classes")
+    return project
+
+
+class PruneRule(unittest.TestCase):
+    """slice-lint, slice-index, slice-source and slice-law walk the same trees and must skip the same
+    directories; each keeps its own copy of the rule, because slice-lint.py ships into projects alone."""
+
+    def test_the_four_walkers_carry_one_identical_rule(self):
+        blocks = {script: prune_block(script) for script in WALKERS}
+        self.assertEqual(len(set(blocks.values())), 1,
+                         "the prune rule differs between " + ", ".join(blocks) + " — keep the copies identical")
+
+    def test_rule_prunes_dot_and_build_output_directories(self):
+        namespace = {}
+        exec(prune_block("slice-lint.py"), namespace)
+        pruned = namespace["pruned_dir"]
+        for name in (".git", ".claude", ".idea", ".gradle", ".mvn", "target", "build", "out", "dist", "node_modules"):
+            self.assertTrue(pruned(name, ()), name)
+            self.assertTrue(pruned(name, ("backend",)), name)
+            self.assertTrue(pruned(name, ("src", "main")), name)                 # not yet a source root
+            self.assertTrue(pruned(name, ("src", "main", "resources")), name)    # not a Java or Kotlin root
+        for name in ("src", "main", "java", "orders", "use_cases", "claude", "outbox", "builds"):
+            self.assertFalse(pruned(name, ()), name)
+
+    def test_inside_a_source_root_build_out_and_dist_are_packages(self):
+        # A hexagonal adapters/out, com.example.build: no build tool writes into src/<set>/<lang>, so there
+        # those names are packages. target, node_modules and dot-directories stay pruned everywhere.
+        namespace = {}
+        exec(prune_block("slice-lint.py"), namespace)
+        pruned = namespace["pruned_dir"]
+        for parent in (("src", "main", "java"), ("src", "main", "java", "com", "example", "adapters"),
+                       ("backend", "src", "test", "kotlin", "com"), ("src", "integrationTest", "java")):
+            for name in ("build", "out", "dist"):
+                self.assertFalse(pruned(name, parent), (parent, name))
+            for name in ("target", "node_modules", ".git", ".claude"):
+                self.assertTrue(pruned(name, parent), (parent, name))
+
+    def test_every_walker_finds_a_slice_under_a_package_named_out(self):
+        # The four walkers once pruned `out` at any depth, and a slice under adapters/out vanished from the
+        # lint, the map, the source scan and the lane detection alike.
+        def put(rel, text):
+            p = project / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding="utf-8")
+
+        manifest = ('schemaVersion: "1.3"\nslice: orders.place_order\nkind: command\nbc: orders\nowner: t\n'
+                    "status: live\nsummary: s\ntests:\n  unit: { present: true }\n")
+        bc = "src/main/java/com/example/adapters/out/orders"
+        source = "package com.example.adapters.out.orders.use_cases.place_order;\n\nclass PlaceOrder {\n}\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            put(f"{bc}/use_cases/place_order/slice.yaml", manifest)
+            put(f"{bc}/use_cases/place_order/PlaceOrder.java", source)
+            put(f"{bc}/aggregates/Order.java", "package com.example.adapters.out.orders.aggregates;\n\nclass Order {\n}\n")
+            # IntelliJ's out/ at the project root copies the same manifest: still pruned there
+            put("out/production/resources/orders/use_cases/place_order/slice.yaml", manifest)
+
+            _, doc = lint(project)
+            self.assertEqual(doc["manifests"], 1, "slice-lint")
+
+            r = subprocess.run([sys.executable, str(PLUGIN / "scripts" / "slice-index.py"), "map", str(project),
+                                "--sha", "x"], capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            data = json.loads(r.stdout)
+            self.assertEqual([s["path"] for s in data["slices"]], [f"{bc}/use_cases/place_order"], "slice-index")
+
+            r = subprocess.run([sys.executable, str(PLUGIN / "scripts" / "slice-source.py"), str(project), "--json"],
+                               capture_output=True, text=True, timeout=60)
+            self.assertTrue(r.stdout.lstrip().startswith("{"), r.stderr)
+            facts = json.loads(r.stdout)
+            [sl] = facts["slices"]
+            self.assertEqual((sl["id"], sl["files"]), ("orders.place_order", ["PlaceOrder.java"]), "slice-source")
+
+            spec = importlib.util.spec_from_file_location("slice_law", PLUGIN / "scripts" / "slice-law.py")
+            assert spec is not None and spec.loader is not None
+            law = importlib.util.module_from_spec(spec)
+            sys.modules["slice_law"] = law  # @dataclass looks its module up there
+            spec.loader.exec_module(law)
+            self.assertEqual(law.detect_lanes(project), {"aggregate"}, "slice-law")
+
+    def test_agent_worktree_and_build_output_copies_are_not_duplicates(self):
+        # A project copy under .claude/worktrees/ used to make every slice its own duplicate (gates 3 and 4,
+        # Blocking, exit 1 — the pre-commit hook then refused every commit).
+        src = PLUGIN / "tests" / "fixtures" / "worked-example"
+        clean_code, clean = lint(src)
+        with tempfile.TemporaryDirectory() as tmp:
+            code, doc = lint(with_copies(src, tmp))
+        self.assertEqual((code, doc["manifests"], doc["findings"]), (clean_code, clean["manifests"], []))
+        self.assertEqual(clean_code, 0)
+
+
+class NotUtf8(unittest.TestCase):
+    def test_a_manifest_that_is_not_utf8_is_a_parse_finding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp) / "src" / "main" / "java" / "orders" / "use_cases" / "cancel_order"
+            d.mkdir(parents=True)
+            (d / "slice.yaml").write_bytes("summary: café\n".encode("latin-1"))
+            code, doc = lint(tmp)
+        self.assertEqual(code, 1)
+        [f] = doc["findings"]
+        self.assertEqual((f["severity"], f["gate"], f["id"]), ("Blocking", "1(a) parse", "ESS-G1a"))
+        self.assertIn("not UTF-8 text (byte 0xE9 at offset 12)", f["message"])
+
+
+# Runs the script against a stand-in for jsonschema 3.2 (Ubuntu 22.04's python3-jsonschema): no
+# Draft202012Validator, and a validator_for that ignores `default` for an unknown $schema and answers
+# with its newest draft — which is how the old copy silently validated as Draft 7.
+OLD_JSONSCHEMA = """
+import importlib.metadata, runpy, sys, types
+jsonschema = types.ModuleType("jsonschema")
+validators = types.ModuleType("jsonschema.validators")
+class Draft7Validator:
+    def __init__(self, schema): pass
+    @classmethod
+    def check_schema(cls, schema): pass
+    def iter_errors(self, instance): return iter(())
+validators.Draft7Validator = Draft7Validator
+validators.validator_for = lambda schema, default=Draft7Validator: Draft7Validator
+jsonschema.validators = validators
+sys.modules.update({"jsonschema": jsonschema, "jsonschema.validators": validators})
+real_version = importlib.metadata.version
+importlib.metadata.version = lambda name: "3.2.0" if name == "jsonschema" else real_version(name)
+script = sys.argv[1]
+sys.argv = sys.argv[1:]
+runpy.run_path(script, run_name="__main__")
+"""
+
+
+class OldJsonschema(unittest.TestCase):
+    def test_jsonschema_older_than_4_is_treated_as_absent(self):
+        clean = PLUGIN / "tests" / "fixtures" / "worked-example"
+        r = subprocess.run([sys.executable, "-c", OLD_JSONSCHEMA, str(SCRIPT), str(clean)],
+                           cwd=PLUGIN, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("SCHEMA VALIDATION SKIPPED — the installed `jsonschema` (3.2.0) is too old", r.stdout)
+        self.assertIn("jsonschema>=4.0", r.stdout)
+        r = subprocess.run([sys.executable, "-c", OLD_JSONSCHEMA, str(SCRIPT), str(clean), "--json"],
+                           cwd=PLUGIN, capture_output=True, text=True, timeout=60)
+        self.assertFalse(json.loads(r.stdout)["schemaValidated"])
+        self.assertEqual(r.returncode, 2)
 
 
 if __name__ == "__main__":

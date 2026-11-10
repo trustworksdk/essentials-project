@@ -875,13 +875,59 @@ def diff(before, after):
     }
 
 
+# tarfile's extraction filters (PEP 706) arrived in Python 3.11.4; the scripts' floor is 3.11.0, where
+# extractall() has no `filter` parameter and a call passing one fails with TypeError.
+HAS_DATA_FILTER = hasattr(tarfile, "data_filter")
+
+
+def safe_extract(tar: tarfile.TarFile, dest: Path):
+    """Unpack `tar` under dest, refusing any member that would land outside it. Uses the "data" filter
+    where the interpreter has one; otherwise makes the same refusals by hand: an absolute name, a name
+    that climbs out of dest, a symlink whose target does, a hard link, and a device or FIFO. Raises
+    tarfile.TarError naming the member."""
+    if HAS_DATA_FILTER:
+        tar.extractall(dest, filter="data")
+        return
+    base = dest.resolve()
+
+    def inside(path: Path) -> bool:
+        return path == base or base in path.parents
+
+    members = []
+    for m in tar.getmembers():
+        name = m.name
+        if (name.startswith(("/", "\\")) or Path(name).is_absolute() or ".." in Path(name).parts
+                or not inside((base / name).resolve())):
+            raise tarfile.TarError(f"refusing archive member {name!r}: outside the destination")
+        if m.issym():
+            if m.linkname.startswith(("/", "\\")) or not inside(((base / name).parent / m.linkname).resolve()):
+                raise tarfile.TarError(f"refusing symlink {name!r} -> {m.linkname!r}: outside the destination")
+        elif not (m.isfile() or m.isdir()):
+            raise tarfile.TarError(f"refusing archive member {name!r}: not a regular file, directory or symlink")
+        if m.isdir():  # the modes the "data" filter leaves: a directory the owner can enter, a file
+            m.mode = 0o755  # the owner can read and write, and no setuid, setgid, sticky or other write
+        elif m.isfile():
+            m.mode = (m.mode & 0o755 if m.mode & 0o100 else m.mode & 0o644) | 0o600
+        members.append(m)
+    tar.extractall(dest, members=members)
+
+
 def extract_ref(root: Path, ref: str, dest: Path, missing_ok: bool = False):
     """`git archive REF -- <root>` unpacked under dest. Returns (ROOT's copy inside dest, short sha).
-    Touches neither the working tree nor .git. Raises ValueError carrying git's message. With
-    `missing_ok`, a ROOT that REF does not hold (an application added since) extracts nothing, and the
-    returned path does not exist."""
+    Touches neither the working tree nor .git. Raises ValueError carrying git's message, or saying that
+    git did not answer in time; tarfile.TarError for an archive member that would land outside dest.
+    With `missing_ok`, a ROOT that REF does not hold (an application added since) extracts nothing, and
+    the returned path does not exist."""
+    def run_git(argv, cwd, timeout):
+        try:
+            return subprocess.run(["git", "-C", str(cwd), *argv], capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise ValueError(f"git {argv[0]} {ref}: no answer after {timeout} s — git is stuck or the "
+                             "repository is very large; pass --before-map with a map JSON taken at that "
+                             "ref instead") from None
+
     def git(*args, cwd=root):
-        r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, timeout=300)
+        r = run_git(args, cwd, 300)
         if r.returncode != 0:
             raise ValueError(f"git {args[0]} {ref}: {r.stderr.decode('utf-8', 'replace').strip()}")
         return r.stdout
@@ -889,12 +935,11 @@ def extract_ref(root: Path, ref: str, dest: Path, missing_ok: bool = False):
     top = Path(git("rev-parse", "--show-toplevel").decode("utf-8").strip()).resolve()
     sha = git("rev-parse", "--short", ref + "^{commit}").decode("utf-8").strip()
     rel = root.resolve().relative_to(top).as_posix()
-    if missing_ok and rel != "." and subprocess.run(["git", "-C", str(top), "cat-file", "-e", f"{sha}:{rel}"],
-                                                    capture_output=True, timeout=60).returncode != 0:
+    if missing_ok and rel != "." and run_git(["cat-file", "-e", f"{sha}:{rel}"], top, 60).returncode != 0:
         return dest / rel, sha
     data = git("archive", "--format=tar", sha, *(["--", rel] if rel != "." else []), cwd=top)
     with tarfile.open(fileobj=io.BytesIO(data)) as tar:
-        tar.extractall(dest, filter="data")
+        safe_extract(tar, dest)
     return dest / rel, sha
 
 
@@ -928,9 +973,13 @@ def assemble(template: Path, data) -> str:
         code = lens.read_text(encoding="utf-8")
         if "</script" in code.lower():
             raise ValueError(f"{lens} contains `</script`, which would end the page's script element")
+        if DATA_LINE in code:
+            raise ValueError(f"{lens} contains `{DATA_LINE}`, the template's data placeholder")
         lenses.append(f"/* ---- {lens.name} ---- */\n{code.rstrip()}\n")
-    page = page.replace(DATA_LINE, "const ATLAS = " + script_json(data) + ";")
-    return page.replace(LENS_LINE, "\n".join(lenses))
+    # Lenses first: the data is the project's own text (a summary, a field name) and may carry the lens
+    # placeholder verbatim, which a replace run after the data went in would expand inside the JSON.
+    page = page.replace(LENS_LINE, "\n".join(lenses))
+    return page.replace(DATA_LINE, "const ATLAS = " + script_json(data) + ";")
 
 
 INDEX_DATA_LINE = "const INDEX = /* __ATLAS_INDEX_DATA__ */ null;"

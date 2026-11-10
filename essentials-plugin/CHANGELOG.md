@@ -3,6 +3,71 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-12 — targets Essentials 0.60.1
+Fixes from a full review of the plugin: what generated projects do at runtime, script robustness on real
+machines, contradictions in the instructions, and how much text each command and skill loads.
+
+**Generated projects**
+- **WebFlux no longer blocks the event loop.** Both web stacks render `spring.threads.virtual.enabled: true`, so
+  Spring Boot runs every controller method that returns a plain value on a virtual thread instead of a Netty
+  event-loop thread. Before, every command and query in a WebFlux project ran its JDBC and unit of work on the
+  event loop: it passed every test and stalled under load. New S5 clause in the stack contract; `stack-lint`
+  rule `s5-webflux-virtual-threads` and an `/essentials:upgrade` Group C row report an existing project that
+  lacks it. `Mono`/`Flux` and Kotlin `suspend` handlers are not offloaded and must move blocking calls off the
+  loop themselves; an application `Executor` bean silently stops the offloading until
+  `spring.task.execution.mode: force` is set. The Kotlin guide no longer calls a `suspend` handler fine for
+  blocking work.
+- **A command that arrives before its entity is retried, not dead-lettered.** Service-entity command handlers
+  throw `IllegalStateException` for a missing entity. They threw `IllegalArgumentException`, which the durable
+  queue behind `sendAndDontWait` treats as permanent, so an automation or translation command that simply
+  arrived early was dead-lettered on its first delivery.
+- **The translation webhook fails closed and has its own path per event.** `POST /webhooks/<system>/<Event>`
+  answers 401 until `webhooks.<system>.shared-secret` is configured, then requires a matching
+  `X-Webhook-Secret` header (a placeholder, with a TODO to adopt the provider's signature scheme). Before, the
+  endpoint dispatched any request straight to the command bus, and a second translation slice for the same
+  system failed at startup with an ambiguous mapping. New S9 bullet.
+- The Maven wrapper verifies the Maven download's SHA-256 (new pin row).
+- The development database password applies only in the `dev` profile, which `spring-boot:run` activates; a
+  packaged application without `DATABASE_PASSWORD` no longer falls back to it.
+- Spring Modulith is no longer imported: nothing used it.
+- `.gitignore` covers `.env`, `.env.*` (keeping `.env.example`) and `*.log`. `IntegrationTestBase` validates the
+  table names it truncates. The translation templates no longer describe the publisher as an Outbox.
+
+**Scripts**
+- **Agent worktrees no longer double every slice.** The four manifest walkers (`slice-lint`, `slice-index`,
+  `slice-source`, `slice-law`) share one prune rule: every dot-directory, `target` and `node_modules`; `build`,
+  `out` and `dist` only outside a Java/Kotlin source root, so a package such as `adapters/out` is still read.
+  Before, a copy under `.claude/worktrees/` made `slice-lint` report every slice as a Blocking duplicate and the
+  pre-commit hook refused every commit.
+- **Non-UTF-8 input no longer crashes the scripts with exit 1** (which callers read as "findings"): a non-UTF-8
+  `slice.yaml` is a parse finding, diffs and sources are decoded with replacement, and `stack-lint` reports a
+  file it cannot read under "not run" instead of passing it silently. An unexpected `review-scan` error exits 2.
+- `slice-lint` treats a `jsonschema` older than 4.0 as absent (exit 2); before, it silently validated against
+  Draft 7 and changed its findings.
+- `review-scan` and `stack-lint` no longer drop the rest of a hunk, or misnumber lines, after a form feed or a
+  Unicode line separator.
+- The Slice Atlas Diff lens works on Python 3.11.0–3.11.3; its page data can no longer be corrupted by manifest
+  text; `slice-index html` and `slice-enrich apply` report unwritable output or a malformed accepted set with
+  their documented exit codes instead of a traceback.
+- macOS: the shell scripts users run were already bash 3.2/BSD-safe; the maintainer scripts that need bash 4.4
+  now say so up front, and a static portability test guards them. `doctor.sh` has an `upgrade` profile.
+
+**Commands and skills**
+- `/essentials:upgrade` runs `doctor --for upgrade` first and falls back to `python3` where `uv` is missing; it
+  shows `--check` as its argument hint.
+- `/essentials:review` lists every gate `slice-source.py` covers when the script cannot run (gates 8 and 11(c)
+  went missing).
+- Contradictions fixed: one language-detection rule; `essentials-change` tells an Essentials project that is not
+  on the slice law so instead of staying silent; § 5.4 finds a new event's view consumers through `who-reacts`;
+  the translation skill names DurableQueues and the Inbox correctly.
+- Smaller context: `slice-check` loads the law scoped to the project instead of the whole law, the schema and the
+  manifest guide (about 200 KB before the first gate, down to well under half), its gate table moved to
+  `references/slice/slice-check-gates.md` (anchors kept); `review` reads only the traps sections in scope (about
+  9 KB instead of 45 KB); the lint-gate material shared by `init` and `upgrade` moved to
+  `references/init-assets/lint-gate.md`; the slice-map data contract moved to
+  `references/slice/slice-map-contract.md`; the view and command skills load lane-specific material only for the
+  active lane.
+
 ## 0.60.1-11 — targets Essentials 0.60.1
 
 - **Tracing and queue metrics interceptors** — the spring-boot-starter-modules reference says the durable-queue and

@@ -3,8 +3,8 @@ name: essentials-translation-slice
 description: >-
   Scaffold a Trustworks Essentials translation slice (anti-corruption layer) in Java or Kotlin under
   external_systems/{system}/ — a typed client port, a pure translator, an inbound handler
-  dispatching internal commands via the Inbox, an optional outbound EventProcessor publisher
-  (Outbox), slice.yaml with externalSystem/direction/maps, per-slice CLAUDE.md, and the translator
+  dispatching internal commands with sendAndDontWait, an optional outbound Inbox-backed
+  EventProcessor publisher, slice.yaml with externalSystem/direction/maps, per-slice CLAUDE.md, and the translator
   round-trip test. Invoked by /essentials:add-slice and /essentials:add-translation-slice.
 user-invocable: false
 disable-model-invocation: true
@@ -24,7 +24,7 @@ Supplied by the dispatching command. **Never re-elicit these.**
 |---|---|
 | `language` | `kotlin` \| `java` |
 | `lane` | `decider` \| `aggregate` — the owning BC's §R5 write style. The two event-sourced lanes get the same files; the lane is passed so the manifest can record it. **`service-entity` is refused** (Step 0) |
-| `tier` | `cqrs-es` (both event-sourced lanes) \| `service-entity`. **Derived from `lane`, and not the same value** — the manifest's `architectureTier` vocabulary, a different axis (`slice-authoring.md` §4). Never render `tier: aggregate`: it is not a tier value, and another tool reading the manifest silently downgrades an unrecognised tier to `custom` and skips the slice |
+| `tier` | `cqrs-es`. **Derived from `lane`, and not the same value** — the manifest's `architectureTier` vocabulary, a different axis (`slice-authoring.md` §4). Never render `tier: aggregate`: it is not a tier value, and another tool reading the manifest silently downgrades an unrecognised tier to `custom` and skips the slice |
 | `projectRoot`, `sourceRoot`, `testRoot`, `packagePath` | resolved from the project |
 | `bc` / `Bc`, `AggregateType` | `orders` / `Orders`, `Orders` |
 | `externalSystem` / `ExternalSystem` | `billing` / `Billing` |
@@ -68,8 +68,8 @@ or view slice. If you own both sides of the schema and can change them together,
 
 | Direction | Emits | Mechanism |
 |---|---|---|
-| `inbound` | external message → internal command | ingress handler → `sendAndDontWait` (Inbox: durable, retried) |
-| `outbound` | internal event → external call | `EventProcessor` + `getInboxRedeliveryPolicy()` (Outbox) |
+| `inbound` | external message → internal command | ingress handler → `sendAndDontWait` (`DurableLocalCommandBus`: queued on its `DurableQueues`, durable, retried) |
+| `outbound` | internal event → external call | `EventProcessor` + `getInboxRedeliveryPolicy()` (Inbox-backed: each event is forwarded to the processor's `Inbox` and redelivered from there; no Essentials `Outbox` is involved) |
 | `both` | both of the above | both files |
 
 The template ships `both`; delete the half you do not need and set `direction` in `slice.yaml` to
@@ -87,7 +87,8 @@ asserting in review.
 **The client is an interface.** A typed port, so the transport (REST client, SDK, message producer)
 is swappable and the publisher is testable without the external system.
 
-**Inbound is Inbox-backed, so the receiver must be idempotent.** `sendAndDontWait` retries. The
+**Inbound is queued durably, so the receiver must be idempotent.** `sendAndDontWait` puts the command
+on the command bus's `DurableQueues` queue, which redelivers on failure. The
 command's target slice will see it more than once.
 
 **Test floor is a contract test — and this plugin bundles no contract-testing tooling.** The shipped
@@ -108,7 +109,7 @@ to add it before going on:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py requires --lang <language> --kind translation \
-    --lane <lane> --build <the build file from add-slice Step 0>
+    --lane <lane> --build <the project's build file, slice-authoring.md §2>
 ```
 
 Then render. Pass the inputs you were given; the script derives the rest (`slice-authoring.md` §4b).
@@ -126,21 +127,9 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py render --lang <language> -
 
 Exit 2 means nothing was written: relay the message and stop.
 
-**Exit 4 means the shell may not write the project** (a read-only filesystem, or a sandbox that lets
-the Write tool write but not Bash). Nothing was written. Do not stop, and never render a file by hand;
-take the emit fallback (`slice-authoring.md` §4b):
-
-1. Run the same command with `--emit` added, once. It writes nothing; its JSON report lists every file
-   in `files` with `path` (relative to `<projectRoot>`), `action` and `content`. If the output is too
-   large to read whole, run it again with `--only <path>` for each path in `files`: that prints the one
-   file's content, raw.
-2. Write every file with the Write tool at `<projectRoot>/<path>`, `content` verbatim: no edit, and no
-   TODO filled on the way. Never import or patch `render-slice.py`.
-3. Then run the same command with `verify` in place of `render` and without `--emit`. Exit 0: the slice is
-   rendered; go on from the emitted report as after a plain render. Exit 1 names each file `missing` or
-   `differs`: report them and stop. Never repair one by hand.
-
-Say in the final report, in one line, that the files were written through the emit fallback.
+**Exit 4 means the shell may not write the project.** Nothing was written. Do not stop, and never
+render a file by hand: take the emit fallback in `slice-authoring.md` §4b, all three steps, exactly
+as written there.
 
 The script writes the `both` shape into `<bc>/external_systems/<externalSystem>/`. **Then prune for
 `direction`**: delete the files the table marks for it, set `direction` in `slice.yaml`, and remove the
@@ -189,7 +178,10 @@ On `inbound` or `both`, an empty `maps` still means this is not a translation sl
 ## Step 6 — Report and self-check
 
 Report the files written. State plainly what is still missing: the client implementation, the real
-field mappings in both directions, and the contract test.
+field mappings in both directions, and the contract test. For an inbound slice, also say that its webhook
+listens on `/webhooks/<system>/<Event>` and answers 401 to every request until
+`webhooks.<system>.shared-secret` is set (from the environment, never committed), and that the shared-secret
+header check is a placeholder for the provider's own signature scheme.
 
 Walk § Red flags in the law printed in Step 1 — do not load it again — then check the ACL invariant
 directly: grep the rest of

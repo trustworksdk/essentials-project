@@ -161,7 +161,8 @@ as a *field* inside an event is the case that does need `@JsonTypeInfo`
 (`references/llm/LLM-kotlin-eventsourcing.md` § A sealed type used as a *field* inside an event needs
 type info).
 
-**Adding an event has consumers.** Before finishing, check `consumes:` across the manifests: an
+**Adding an event has consumers.** Before finishing, run `$q who-reacts <NewEvent>` (§3; it reads
+`consumes` and `projections[].from`, so views are included — without `uv`, the §3 grep fallback). An
 automation or view that must react to the new event is a separate, declared change — not something to
 discover in production.
 
@@ -257,7 +258,7 @@ the gates the change class implicates:
 | C — spans slices | R4 boundary, sole-writer, manifest agreement on every slice touched |
 | D — read-model change | Duplicate read model, `supersedes` pairing, projection idempotency |
 
-Offer the full `/essentials:slice-check` rather than running it: eighteen gates over a whole project is
+Offer the full `/essentials:slice-check` rather than running it: every gate over a whole project is
 a different task from verifying one edit, and running it uninvited buries the change's own report.
 
 Where the project has tests, run the touched slice's test — the plugin's own bar is that wiring is part

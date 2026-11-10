@@ -37,8 +37,13 @@ class CancelOrderHandler(
 
     @CmdHandler
     fun handle(cmd: CancelOrder) {
+        // A missing Order throws IllegalStateException, never IllegalArgumentException (nor Kotlin's
+        // require(...), which throws it). A command sent with sendAndDontWait runs on a durable queue,
+        // whose consumer dead-letters an IllegalArgumentException on its first delivery (the built-in
+        // permanent-error list), yet the row may only be missing because the transaction that creates
+        // it has not committed yet. IllegalStateException is retried by the RedeliveryPolicy.
         val order = orders.findById(cmd.id.value)
-            ?: throw IllegalArgumentException("No Order ${cmd.id.value}")
+            ?: throw IllegalStateException("No Order ${cmd.id.value}")
 
         // TODO: call the ONE invariant method this slice's intent maps to. The Boolean-returning
         //       shape is the idempotent form — false means the state was already reached, so a

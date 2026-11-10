@@ -94,7 +94,33 @@ SPRING_DATA_BUILD = re.compile(
     r"spring-boot-starter-data-(?:jpa|mongodb|jdbc|r2dbc|mongodb-reactive)\b"
     r"|<groupId>\s*org\.springframework\.data\s*</groupId>|[\"']org\.springframework\.data:")
 BUILD_FILES = {"pom.xml", "build.gradle", "build.gradle.kts"}
-SKIP_DIRS = {".git", "target", "build", "out", "node_modules", ".gradle", ".idea", "dist", ".claude"}
+
+# The one prune rule of every manifest walker. slice-lint.py, slice-index.py, slice-source.py and
+# slice-law.py each carry an identical copy of these constants and pruned_dir() — slice-lint.py is copied
+# into projects on its own, so it cannot import a shared one — and tests/scripts/test_slice_lint.py
+# fails when the four differ. A dot-directory is VCS or IDE state, or a full copy of the project: a
+# Claude Code agent worktree under .claude/worktrees/ holds every slice.yaml a second time, and a walker
+# that descended into it would report each slice as its own duplicate; it is pruned at any depth.
+# BUILD_OUTPUT_DIRS are build and package output, which can hold copied manifests too (IntelliJ's out/
+# copies resources from source roots). No build tool writes into a Java or Kotlin source root, though, and
+# there build, out and dist are ordinary package names (a hexagonal adapters/out, com.example.build):
+# inside src/<set>/java or src/<set>/kotlin those three are walked like any other package. target and
+# node_modules stay pruned there too (tests/slice-source/cases/tests holds a src/test/java/target that
+# the test-source walk must skip, as every other walk does).
+BUILD_OUTPUT_DIRS = frozenset({"target", "build", "out", "dist", "node_modules"})
+PACKAGE_NAMED_LIKE_OUTPUT = frozenset({"build", "out", "dist"})
+SOURCE_LANG_DIRS = frozenset({"java", "kotlin"})
+
+
+def pruned_dir(name: str, parent: tuple[str, ...]) -> bool:
+    """True for a directory no manifest walker descends into: any dot-directory, or build output outside
+    a source root. `parent` is the directory holding `name`, as path parts relative to the walked root."""
+    if name.startswith("."):
+        return True
+    if name not in BUILD_OUTPUT_DIRS:
+        return False
+    in_source_root = any(parent[i] == "src" and parent[i + 2] in SOURCE_LANG_DIRS for i in range(len(parent) - 2))
+    return not (in_source_root and name in PACKAGE_NAMED_LIKE_OUTPUT)
 
 
 class UsageError(Exception):
@@ -207,7 +233,8 @@ def detect_store(project: Path) -> str:
     if not project.is_dir():
         raise UsageError(f"--project: not a directory: {project}")
     for dirpath, dirnames, filenames in os.walk(project):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        parent = Path(dirpath).relative_to(project).parts
+        dirnames[:] = sorted(d for d in dirnames if not pruned_dir(d, parent))
         for name in sorted(filenames):
             if name in BUILD_FILES:
                 pattern = SPRING_DATA_BUILD
@@ -231,7 +258,8 @@ def detect_lanes(project: Path) -> set[str]:
     """The lanes of the project's bounded contexts, by marker directory; every lane when it has none."""
     lanes: set[str] = set()
     for dirpath, dirnames, _ in os.walk(project):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        parent = Path(dirpath).relative_to(project).parts
+        dirnames[:] = sorted(d for d in dirnames if not pruned_dir(d, parent))
         present = set(dirnames)
         if present & SLICE_DIRS:
             if "aggregates" in present:

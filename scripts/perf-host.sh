@@ -72,7 +72,12 @@ docker info >/dev/null 2>&1 || fail "Docker is not running. Start Docker Desktop
 
 JAVA_BIN="${JAVA_HOME:+$JAVA_HOME/bin/java}"
 JAVA_BIN="${JAVA_BIN:-java}"
-command -v "$JAVA_BIN" >/dev/null 2>&1 || fail "No java found. Install a JDK between 21 and 25."
+# The JDK range the root pom's enforcer accepts: [${java.release.version},<upper>), read from pom.xml, never restated.
+JAVA_MIN="$(sed -n 's:.*<java.release.version>\([0-9][0-9]*\)</java.release.version>.*:\1:p' pom.xml | head -n 1)"
+JAVA_UPPER="$(sed -n 's:.*<version>\[${java.release.version},\([0-9][0-9]*\))</version>.*:\1:p' pom.xml | head -n 1)"
+[[ -n "$JAVA_MIN" && -n "$JAVA_UPPER" ]] || fail "Could not read the JDK range from pom.xml (java.release.version, requireJavaVersion)."
+JAVA_MAX=$(( JAVA_UPPER - 1 ))
+command -v "$JAVA_BIN" >/dev/null 2>&1 || fail "No java found. Install a JDK between $JAVA_MIN and $JAVA_MAX."
 # Not `head -1`: a JVM with JAVA_TOOL_OPTIONS set prints "Picked up ..." before the version, and
 # this devcontainer is one of them. Match the version line itself.
 JAVA_VERSION="$("$JAVA_BIN" -version 2>&1 | grep -m1 'version "' || true)"
@@ -81,10 +86,10 @@ JAVA_MAJOR="$(sed -E 's/.*version "([0-9]+).*/\1/' <<<"$JAVA_VERSION")"
 # below. Unescaped, that file does not parse, which would defeat the one thing it is for.
 JAVA_VERSION_JSON="${JAVA_VERSION//\"/\'}"
 if ! [[ "$JAVA_MAJOR" =~ ^[0-9]+$ ]]; then
-  fail "Could not read a version from '$JAVA_BIN -version'. This build needs a JDK between 21 and 25."
+  fail "Could not read a version from '$JAVA_BIN -version'. This build needs a JDK between $JAVA_MIN and $JAVA_MAX."
 fi
-if (( JAVA_MAJOR < 21 || JAVA_MAJOR > 25 )); then
-  fail "Java $JAVA_MAJOR found ($JAVA_VERSION). This build needs 21 to 25 — the enforcer requires [21,26)."
+if (( JAVA_MAJOR < JAVA_MIN || JAVA_MAJOR > JAVA_MAX )); then
+  fail "Java $JAVA_MAJOR found ($JAVA_VERSION). This build needs $JAVA_MIN to $JAVA_MAX — the enforcer requires [$JAVA_MIN,$JAVA_UPPER)."
 fi
 
 OS="$(uname -s)"

@@ -36,7 +36,7 @@ Usage
     slice-index.py graph [ROOT] [--bc BC] [--json] [--repair-braced-paths]
     slice-index.py query [ROOT] WHAT NAME [--method M] [--json]
 
-    map     the slice-map data contract (commands/slice-map.md §6) as JSON on stdout
+    map     the slice-map data contract (references/slice/slice-map-contract.md) as JSON on stdout
     html    the same data substituted into the slice-map page, written to --out
     atlas   the Slice Atlas page (docs/design/slice-atlas-design.md): the map plus a diff against a baseline
             (--before-ref builds it from `git archive REF`, --before-map reads an earlier `map` JSON)
@@ -77,19 +77,21 @@ Usage
 Exit codes
 ----------
     0   done
-    1   done, but at least one manifest did not parse. `map` and `graph` still emit output, with the
-        broken manifest carried as an `error` row; `html` writes NOTHING, because a page that
-        silently omits a slice misleads. `atlas` writes its page, which draws each broken manifest
-        as an error node under a "map incomplete" banner. `query` exits 1 when nothing matched
-    2   could not run — bad arguments, unreadable input, no YAML parser. With --per-app: a page or map
-        could not be written (the others are), which outranks 1
+    1   done, but at least one manifest did not parse (not YAML, not a mapping, or not UTF-8 text).
+        `map` and `graph` still emit output, with the broken manifest carried as an `error` row;
+        `html` writes NOTHING, because a page that silently omits a slice misleads. `atlas` writes
+        its page, which draws each broken manifest as an error node under a "map incomplete" banner.
+        `query` exits 1 when nothing matched
+    2   could not run — bad arguments, unreadable input, no YAML parser, a --before-ref whose git or
+        slice-source run did not finish within its timeout. With --per-app: a page or map could not be
+        written (the others are), which outranks 1
     3   no slice.yaml under ROOT: nothing is declared, so there is nothing to map
         (/essentials:slice-discover is the command for that case)
-    4   `atlas`: the page (or, with --per-app, any page or the index) cannot be written — EROFS, EACCES:
-        a read-only mount, a sandbox that allows no writes. Checked before anything is written, so
-        nothing is; the map is still computed and its summary line printed, as `NOT written <out>`,
-        issue counts included. There is no --emit: the page inlines the Atlas's scripts, far too large
-        to hand to another tool
+    4   `atlas` or `html`: the page (or, with --per-app, any page or the index) cannot be written —
+        EROFS, EACCES: a read-only mount, a sandbox that allows no writes. Checked before anything is
+        written, so nothing is; for `atlas` the map is still computed and its summary line printed, as
+        `NOT written <out>`, issue counts included. There is no --emit: the page inlines the Atlas's
+        scripts, far too large to hand to another tool
 
 --source-facts and --source-check take `-` for standard input (one of them), or a process
 substitution `<(slice-source.py ROOT --json)`: neither needs a writable directory. --before-ref unpacks
@@ -116,7 +118,34 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import slice_atlas  # noqa: E402  (beside this script: the Atlas fields, issues, diff and page)
 
-SKIP_DIRS = {".git", "target", "build", "out", "node_modules", ".idea", ".gradle", "dist"}
+# The one prune rule of every manifest walker. slice-lint.py, slice-index.py, slice-source.py and
+# slice-law.py each carry an identical copy of these constants and pruned_dir() — slice-lint.py is copied
+# into projects on its own, so it cannot import a shared one — and tests/scripts/test_slice_lint.py
+# fails when the four differ. A dot-directory is VCS or IDE state, or a full copy of the project: a
+# Claude Code agent worktree under .claude/worktrees/ holds every slice.yaml a second time, and a walker
+# that descended into it would report each slice as its own duplicate; it is pruned at any depth.
+# BUILD_OUTPUT_DIRS are build and package output, which can hold copied manifests too (IntelliJ's out/
+# copies resources from source roots). No build tool writes into a Java or Kotlin source root, though, and
+# there build, out and dist are ordinary package names (a hexagonal adapters/out, com.example.build):
+# inside src/<set>/java or src/<set>/kotlin those three are walked like any other package. target and
+# node_modules stay pruned there too (tests/slice-source/cases/tests holds a src/test/java/target that
+# the test-source walk must skip, as every other walk does).
+BUILD_OUTPUT_DIRS = frozenset({"target", "build", "out", "dist", "node_modules"})
+PACKAGE_NAMED_LIKE_OUTPUT = frozenset({"build", "out", "dist"})
+SOURCE_LANG_DIRS = frozenset({"java", "kotlin"})
+
+
+def pruned_dir(name: str, parent: tuple[str, ...]) -> bool:
+    """True for a directory no manifest walker descends into: any dot-directory, or build output outside
+    a source root. `parent` is the directory holding `name`, as path parts relative to the walked root."""
+    if name.startswith("."):
+        return True
+    if name not in BUILD_OUTPUT_DIRS:
+        return False
+    in_source_root = any(parent[i] == "src" and parent[i + 2] in SOURCE_LANG_DIRS for i in range(len(parent) - 2))
+    return not (in_source_root and name in PACKAGE_NAMED_LIKE_OUTPUT)
+
+
 PLACEHOLDER = "const SLICE_MAP = /* __SLICE_MAP_DATA__ */ null;"
 
 # The unquoted `path:` value slice-lint detects: inside a flow mapping its '{' opens a nested mapping
@@ -179,7 +208,8 @@ def find_manifests(root: Path, exclude=()):
     applications nested inside this one, which own their own manifests)."""
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        parent = Path(dirpath).relative_to(root).parts
+        dirnames[:] = sorted(d for d in dirnames if not pruned_dir(d, parent))
         if "slice.yaml" in filenames and not _within(Path(dirpath).relative_to(root).as_posix(), exclude):
             found.append(Path(dirpath) / "slice.yaml")
     return sorted(found)
@@ -199,7 +229,8 @@ def applications(root: Path):
     root = root.resolve()
     builds, owned = set(), {}
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        parent = Path(dirpath).relative_to(root).parts
+        dirnames[:] = sorted(d for d in dirnames if not pruned_dir(d, parent))
         here = Path(dirpath)
         if any(f in filenames for f in BUILD_FILES):
             builds.add(here)
@@ -258,6 +289,10 @@ def load(root: Path, repair: bool, exclude=()):
         except OSError as exc:
             out.append((rel, None, f"unreadable: {exc}", []))
             continue
+        except UnicodeDecodeError as exc:  # a parse failure like any other: an `error` row, exit 1
+            out.append((rel, None, f"slice.yaml is not UTF-8 text (byte 0x{exc.object[exc.start]:02X} "
+                                   f"at offset {exc.start})", []))
+            continue
         out.append(parse_manifest(rel, text, repair))
     return out
 
@@ -290,8 +325,15 @@ def parse_manifest(rel, text, repair):
 def load_ref(root: Path, ref: str, repair: bool, exclude=(), missing_ok=False):
     """load() over ROOT as of REF, read from `git archive` in memory — nothing unpacked, nothing written.
     Returns (manifests, short sha); a ROOT that REF does not hold is no manifests when `missing_ok`."""
-    def git(*argv, cwd=root):
-        r = subprocess.run(["git", "-C", str(cwd), *argv], capture_output=True, timeout=300)
+    def stuck(what, seconds):
+        return (f"git {what} {ref}: no answer after {seconds} s — git is stuck or the repository is very "
+                "large; pass --before-map with a map JSON taken at that ref instead")
+
+    def git(*argv, cwd=root, timeout=300):
+        try:
+            r = subprocess.run(["git", "-C", str(cwd), *argv], capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise ValueError(stuck(argv[0], timeout))
         if r.returncode != 0:
             raise ValueError(f"git {argv[0]} {ref}: {r.stderr.decode('utf-8', 'replace').strip()}")
         return r.stdout
@@ -299,9 +341,14 @@ def load_ref(root: Path, ref: str, repair: bool, exclude=(), missing_ok=False):
     top = Path(git("rev-parse", "--show-toplevel").decode("utf-8").strip()).resolve()
     sha = git("rev-parse", "--short", ref + "^{commit}").decode("utf-8").strip()
     rel = root.resolve().relative_to(top).as_posix()
-    if missing_ok and rel != "." and subprocess.run(["git", "-C", str(top), "cat-file", "-e", f"{sha}:{rel}"],
-                                                    capture_output=True, timeout=60).returncode != 0:
-        return [], sha
+    if missing_ok and rel != ".":
+        try:
+            present = subprocess.run(["git", "-C", str(top), "cat-file", "-e", f"{sha}:{rel}"],
+                                     capture_output=True, timeout=60).returncode == 0
+        except subprocess.TimeoutExpired:
+            raise ValueError(stuck("cat-file", 60))
+        if not present:
+            return [], sha
     data = git("archive", "--format=tar", sha, *(["--", rel] if rel != "." else []), cwd=top)
     prefix = "" if rel == "." else rel + "/"
     out = []
@@ -311,7 +358,7 @@ def load_ref(root: Path, ref: str, repair: bool, exclude=(), missing_ok=False):
             if not (member.isfile() and member.name.startswith(prefix) and parts[-1] == "slice.yaml"):
                 continue
             here = "/".join(parts[:-1]) or "."
-            if any(d in SKIP_DIRS for d in parts[:-1]) or _within(here, exclude):
+            if any(pruned_dir(d, tuple(parts[:i])) for i, d in enumerate(parts[:-1])) or _within(here, exclude):
                 continue
             text = tar.extractfile(member).read().decode("utf-8", "replace")
             out.append(parse_manifest(here, text, repair))
@@ -1215,8 +1262,14 @@ def cmd_html(args):
         raise UsageError(f"cannot read template {template}: {exc}")
     if page.count(PLACEHOLDER) != 1:
         raise UsageError(f"template {template} does not carry the placeholder line exactly once: {PLACEHOLDER}")
+    refused = unwritable([args.out])
+    if refused:
+        raise Unwritable(f"cannot write {refused} — nothing written; re-run with a writable --out")
     data = json.dumps(build_map(index, args), ensure_ascii=False).replace("</", "<\\/")
-    Path(args.out).write_text(page.replace(PLACEHOLDER, "const SLICE_MAP = " + data + ";"), encoding="utf-8")
+    try:
+        Path(args.out).write_text(page.replace(PLACEHOLDER, "const SLICE_MAP = " + data + ";"), encoding="utf-8")
+    except OSError as exc:
+        raise UsageError(f"cannot write {args.out}: {exc}")
     print(f"slice-index: wrote {args.out}", file=sys.stderr)
     return 0
 
@@ -1491,6 +1544,9 @@ def before_diff(args, after):
             try:
                 root, sha = slice_atlas.extract_ref(Path(args.root), args.before_ref, Path(tmp) / "tree",
                                                     missing_ok=getattr(args, "app", None) is not None)
+            except subprocess.TimeoutExpired as exc:
+                raise UsageError(f"--before-ref: git did not answer within {exc.timeout} s — pass --before-map "
+                                 "with a map JSON taken at that ref instead")
             except (OSError, ValueError, tarfile.TarError) as exc:
                 raise UsageError(f"--before-ref: {exc}")
             before = before_map(args, root, sha, Path(tmp))
@@ -1509,8 +1565,12 @@ def before_map(args, root, sha, tmp):
     for wanted, extra, attr in ((args.source_facts, [], "source_facts"), (args.source_check, ["--check"], "source_check")):
         if not wanted:
             continue
-        r = subprocess.run([sys.executable, str(script), str(root), "--json", *extra],
-                           capture_output=True, text=True, timeout=600)
+        try:
+            r = subprocess.run([sys.executable, str(script), str(root), "--json", *extra],
+                               capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            raise UsageError(f"--before-ref: slice-source.py {' '.join(extra)} did not finish on the baseline "
+                             "within 600 s")
         if r.returncode not in (0, 1, 3):
             raise UsageError(f"--before-ref: slice-source.py {' '.join(extra)} failed on the baseline: {r.stderr.strip()}")
         path = tmp / f"{attr}.json"

@@ -80,7 +80,8 @@ if [ -z "${BASH_VERSION:-}" ]; then
     exec bash "$0" "$@"
 fi
 if [ "${BASH_VERSINFO[0]}" -lt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -lt 4 ]; }; then
-    echo "plugin-check: needs bash 4.4 or newer, this is $BASH_VERSION" >&2
+    echo "plugin-check: needs bash 4.4 or newer, this is $BASH_VERSION. On macOS (stock bash 3.2): brew install bash," >&2
+    echo "  then rerun with Homebrew's bin ahead of /bin on PATH, or as: \"\$(brew --prefix)/bin/bash\" $0 ..." >&2
     exit 2
 fi
 
@@ -192,7 +193,7 @@ declare -A step_desc=(
     [review-scan]="review signatures (review-scan.py --self-test + unit tests)"
     [migration-plan]="release-move notes resolve (ids, slugs, pins, citations) and plan the sample projects to their goldens (migration-plan.py --self-test + unit tests)"
     [docs-search]="the essentials-docs search script (test_search.py)"
-    [doctor]="doctor.sh's requirement lines, JSON and exit codes per profile on stubbed tools (test_doctor.py)"
+    [doctor]="doctor.sh's requirement lines, JSON and exit codes per profile on stubbed tools (test_doctor.py); the Mac-run shell scripts free of bash 4 and GNU-only constructs (test_shell_portability.py)"
     [check-patches]="review judgement cases, deterministic half (check-patches.py)"
     [check-expected]="fixture expected.yaml anchors still point at their lines (check-expected.py)"
     [eval-graders]="eval graders generated from their expected results, not edited (evals/build.py --check)"
@@ -373,7 +374,8 @@ step_docs-search() {
 }
 
 step_doctor() {
-    x "$plugin" uv run python -m unittest discover -s tests/scripts -p 'test_doctor.py'
+    x "$plugin" uv run python -m unittest discover -s tests/scripts -p 'test_doctor.py' &&
+        x "$plugin" uv run python -m unittest discover -s tests/scripts -p 'test_shell_portability.py'
 }
 
 step_check-patches() {
@@ -624,9 +626,9 @@ manual_checks() {
     sed -n '/━━━ CORE PRINCIPLES ━━━/,/━━━ [A-Z]/p' commands/intro.md | sed '$d'
     record core-principles READ 0 "slice-design.md sections vs intro CORE PRINCIPLES, above"
 
-    # The HTML template's substitution point matches commands/slice-map.md §6 verbatim: 1 and 1.
-    out=$(grep -c 'const SLICE_MAP = /\* __SLICE_MAP_DATA__ \*/ null;' references/slice/slice-map-template.html commands/slice-map.md)
-    echo "+ grep -c 'const SLICE_MAP = …' slice-map-template.html commands/slice-map.md"
+    # The HTML template's substitution point matches references/slice/slice-map-contract.md verbatim: 1 and 1.
+    out=$(grep -c 'const SLICE_MAP = /\* __SLICE_MAP_DATA__ \*/ null;' references/slice/slice-map-template.html references/slice/slice-map-contract.md)
+    echo "+ grep -c 'const SLICE_MAP = …' slice-map-template.html references/slice/slice-map-contract.md"
     echo "$out"
     if [ "$(printf '%s\n' "$out" | cut -d: -f2 | tr '\n' ' ')" = "1 1 " ]; then record slice-map-data-point PASS 0; else record slice-map-data-point FAIL 0 "want 1 and 1"; fi
 

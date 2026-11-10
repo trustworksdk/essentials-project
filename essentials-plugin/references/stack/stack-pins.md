@@ -18,7 +18,6 @@ in every project generated afterwards — and in every golden under `tests/golde
 | `kotlin.version` | **2.4.21** | The compiler Essentials itself builds with, and the one `/essentials:upgrade` suggests to a Kotlin project at or above the floor but below it (`s1-kotlin-patch`). Essentials artifacts carry Kotlin 2.3 `@Metadata` (language and API level 2.3); the floor is Kotlin **2.3**, because an older compiler cannot target JVM 25, and the application's `jvmTarget` must be 25 to inline Essentials' `inline`/`reified` functions. **Load-bearing on Java projects too** — `postgresql-document-db` is Kotlin, so `kotlin-stdlib-jdk8`/`kotlin-reflect` are runtime/compile requirements with no Kotlin sources present (S2.1) |
 | `essentials.version` | **0.60.1** | One property, every Essentials artifact (S1) |
 | `springdoc.version` | 3.1.1 | `springdoc-openapi-starter-webflux-ui`; the WebMvc variant on a servlet stack. Essentials builds `types-spring-web`'s springdoc converter against the same release (root `pom.xml` `springdoc.version`) |
-| `spring-modulith.version` | 2.0.7 | BOM import |
 | `testcontainers-bom.version` | 2.0.5 | 2.x artifact names: `testcontainers-postgresql`, `testcontainers-mongodb`, `testcontainers-kafka` (S10) |
 | `jdbi3-bom.version` | 3.55.0 | BOM import |
 | `mockito-bom.version` | 5.23.0 | BOM import |
@@ -39,6 +38,7 @@ in every project generated afterwards — and in every golden under `tests/golde
 | Node (via frontend-maven-plugin) | v25.0.0 | Build-time only; not a runtime dependency |
 | Maven | 3.10.0 | The version the generated Maven wrapper downloads, and the one the Essentials build's own wrapper runs. `/essentials:upgrade` suggests it to a project whose wrapper downloads an older Maven (`s11-maven-wrapper`) |
 | `maven-wrapper-plugin` | 3.3.4 | Generates `mvnw` (`only-script`) when `/essentials:init` runs |
+| Maven distribution SHA-256 | 1f6d9909266510f039f59aa0e13dcd2c66da85f043e56276e41f2918f8bddaff | SHA-256 of `apache-maven-<Maven>-bin.zip`, the archive the generated wrapper downloads (`distributionSha256Sum`): `mvnw` refuses a download that does not match. **Moves with the Maven row** — computed from the Maven Central zip, whose SHA-512 matches Central's published `.sha512` |
 
 ## Frontend
 

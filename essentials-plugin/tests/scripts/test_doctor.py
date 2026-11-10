@@ -24,7 +24,7 @@ PLUGIN = Path(__file__).resolve().parents[2]
 SCRIPT = PLUGIN / "scripts" / "doctor.sh"
 PINS = PLUGIN / "references" / "stack" / "stack-pins.md"
 BASH = shutil.which("bash")
-PROFILES = ("init", "review", "slice", "docs", "all")
+PROFILES = ("init", "review", "slice", "docs", "upgrade", "all")
 
 
 def java_pin() -> int:
@@ -149,6 +149,7 @@ class DoctorTest(unittest.TestCase):
             "review": ["bash", "python3", "uv", "git"],
             "slice": ["bash", "python3", "uv"],
             "docs": ["bash", "python3", "rg"],
+            "upgrade": ["bash", "python3", "uv", "java", "maven", "docker", "git"],
             "all": ["bash", "python3", "uv", "java", "maven", "docker", "npm", "git", "rg"],
         }
         for profile in PROFILES:
@@ -226,7 +227,7 @@ class DoctorTest(unittest.TestCase):
 
     def test_no_pyyaml_and_no_uv_blocks_slice_only(self) -> None:
         m = self.machine(py="3.11.0", java_major=self.pin + 1, docker_daemon=True)
-        expected = {"init": 0, "review": 0, "slice": 1, "docs": 0, "all": 1}
+        expected = {"init": 0, "review": 0, "slice": 1, "docs": 0, "upgrade": 0, "all": 1}
         for profile, code in expected.items():
             with self.subTest(profile=profile):
                 got, doc = m.json(profile)
@@ -290,6 +291,34 @@ class DoctorTest(unittest.TestCase):
                 r = requirement(doc, name)
                 self.assertEqual(r["status"], "missing")
                 self.assertIsNone(r["found"])
+
+    def test_upgrade_profile(self) -> None:
+        """/essentials:upgrade stops without python3 (Step 0) and only degrades without uv: the lint-gate refresh
+        measurement and the unhandled-variant prediction are reported not run."""
+        m = self.machine(py="3.12.0", java_major=self.pin, docker_daemon=True, git=True)
+        code, doc = m.json("upgrade")
+        self.assertEqual(code, 0, doc)
+        uv = requirement(doc, "uv")
+        self.assertEqual((uv["status"], uv["blocking"]), ("missing", False))
+        self.assertEqual({(i["profile"], i["effect"]) for i in uv["impacts"]}, {("upgrade", "not-run")})
+        self.assertIn("Group A2", uv["impacts"][0]["detail"])
+
+        partial = self.machine(py="3.12.0", yaml=True, java_major=self.pin, docker_daemon=True, git=True)
+        uv = requirement(partial.json("upgrade")[1], "uv")
+        self.assertEqual((uv["status"], [i["effect"] for i in uv["impacts"]]), ("partial", ["not-run"]))
+
+        fallback = self.machine(py="3.12.0", yaml=True, jsonschema=True, java_major=self.pin, docker_daemon=True,
+                                git=True)
+        uv = requirement(fallback.json("upgrade")[1], "uv")
+        self.assertEqual((uv["status"], [i["effect"] for i in uv["impacts"]]), ("fallback", ["fallback"]))
+
+        no_python = self.machine(py=None, java_major=self.pin, docker_daemon=True, git=True)
+        code, doc = no_python.json("upgrade")
+        self.assertEqual(code, 1)
+        self.assertEqual(doc["blocking"], ["python3"])
+        self.assertEqual([i["effect"] for i in requirement(doc, "python3")["impacts"]], ["stop"])
+        self.assertEqual(no_python.run("--for", "upgrade").stdout.splitlines()[-1],
+                         "BLOCKED: python3 — a command in profile upgrade stops without it")
 
     def test_project_wrapper_without_mvn(self) -> None:
         m = self.machine(py="3.12.0", mvn=False, mvnw=True)
