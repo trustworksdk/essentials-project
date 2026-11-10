@@ -450,7 +450,7 @@ sub-select is used, so an idle or contiguous system pays nothing (the queue meas
 
 ```sql
 WITH xid  AS MATERIALIZED (SELECT pg_current_xact_id() AS x),
-     head AS MATERIALIZED (SELECT coalesce(max(event_order), 0) AS v
+     head AS MATERIALIZED (SELECT coalesce(max(event_order), -1) AS v
                              FROM <event table> WHERE aggregate_id = $1),
      ok   AS (SELECT head.v FROM head, xid
                WHERE $2::bigint IS NULL OR head.v = $2)
@@ -466,9 +466,12 @@ RETURNING global_order, event_order;
 ```
 
 - `$2` is the caller's expected last event order (`appendEventsAfterEventOrder`), or null when the caller
-  gave none.
+  gave none. Event orders start at 0 and `NO_EVENTS_PREVIOUSLY_PERSISTED` is −1, hence the `-1` in `head`
+  (corrected after P0.4; the first draft had `0`, which would have started every stream at 1).
 - **Zero rows returned means an optimistic-concurrency conflict**, reported as
-  `OptimisticAppendToStreamException` with today's message. No `global_order` was consumed, so no hole.
+  `OptimisticAppendToStreamException` with today's message. No `global_order` was consumed, so no hole. This
+  covers a conflict with an append that committed before the statement started; one with an append still in
+  flight is §5.3's race, and P0.4 measured that as about half of all conflicts under contention.
 - **No round trip to find the last event order.** `head` is an index-only backward scan of the existing
   `UNIQUE(aggregate_id, event_order)` index, run on the server. `event_order` is still derived from
   committed state, so the ordering argument in §4.5 holds.
@@ -481,7 +484,9 @@ RETURNING global_order, event_order;
   insert, where the identity default calls `nextval`. That is the reasoning; spike P0.1 has to prove it,
   including under a plan that puts `unnest` on the outer side of the join.
 - Interceptors, `PersistableEventEnricher`s, serialisation and the `PersistedEvent` result stay in the
-  adapter, client-side, exactly as today.
+  adapter, client-side, exactly as today. One difference (P0.4): without an expected order the event order is
+  only known after the insert, so the `PersistableEventMapper` and enrichers get a provisional order and the
+  `PersistedEvent` is built from `RETURNING event_order`.
 
 ### 5.2 Several aggregates in one unit of work
 
@@ -491,19 +496,29 @@ right aggregate is named in the exception.
 
 ### 5.3 A race that both writers win the check
 
-Under READ COMMITTED two writers can both read the same `head` and both pass the check. The loser then
-fails on the unique index after `nextval`, exactly as today, and leaves one hole. That is the rare case
-of a true race rather than every stale read. For aggregates known to be hot, offer an opt-in
-`pg_advisory_xact_lock(<hash of table, aggregate id>)` as the first CTE. It serialises writers of that one
-aggregate until commit, which is what Marten's `FOR UPDATE` on the stream row does. It is opt-in because
-it holds a lock for the rest of the unit of work.
+Under READ COMMITTED two writers can both read the same `head` and both pass the check: `head` reads the
+statement's snapshot, so a competitor that has inserted but not yet committed is invisible. The loser then
+fails on the unique index after `nextval`, exactly as today, and leaves one hole. P0.4 measured this as not
+rare: with 8 writers on 10 aggregates about half of all conflicts were of this kind, and §5.1 burned 248-270
+identity values per 1 000 successful appends against today's 463-465 — half, not none.
+
+For aggregates known to be hot, offer an opt-in `pg_advisory_xact_lock(<hash of table, aggregate id>)`, **sent as
+its own statement before the append**. It serialises writers of that one aggregate until commit, which is what
+Marten's `FOR UPDATE` on the stream row does, and the append that follows starts with a snapshot that includes the
+previous holder's commit, so every conflict becomes a zero-row result: P0.4 measured zero holes. It costs one
+statement and round trip per append and, on a hot aggregate, throughput (a third of today's in P0.4's shape), which
+is why it is opt-in. The lock must **not** be a CTE of the append, as the first draft said: the statement's
+snapshot is taken before it waits for the lock, so `head` is still stale when the lock is granted, and P0.4
+measured no reduction in holes at all with that shape.
 
 ### 5.4 Relationship to the current engine
 
 The single-statement append has no dependency on the new engine: it is a better way to write the same
-rows. If phase 0's measurement (P0.4) shows it is faster, it can also replace the current engine's
-`PreparedBatch`, which would remove the lost-race holes the current gap handler has to wait 120 s for.
-That is a separate decision after P0.4.
+rows. It could also replace the current engine's `PreparedBatch`. P0.4 measured what that would buy: about half
+the lost-race holes the current gap handler has to wait 120 s for (not all of them, see §5.3), about a third less
+latency for appends of 100 events, half the latency and 2 instead of 6 or 11 round trips for five aggregates in one
+unit of work, and one round trip fewer whenever no expected order is given; nothing for appends of 1-10 events with
+an expected order, where it ties. That remains a separate decision.
 
 ---
 
@@ -844,8 +859,9 @@ and would make the switch one-way.
 - **Not measured:** JDBI's per-statement overhead compared with raw pgjdbc, in this codebase or the
   queue's. The queue's engine uses raw JDBC, but its documents attribute its gains to removing statements
   and writes (the claim write, the anti-join, the lock contention), not to the library.
-- **Not measured:** how many round trips today's `PreparedBatch` append costs, and how it compares with
-  the single-statement append (P0.4).
+- **Measured (P0.0, P0.4):** today's `PreparedBatch` append is one round trip however many events it holds,
+  plus one for the last-event-order lookup when no expected order is given; the single-statement append
+  is the same one round trip, saves the lookup, and executes one statement instead of N (see §21).
 - **Measured on the queue:** `bytea` instead of `jsonb` saved about 3% WAL for 200-byte payloads, and
   the saving is a fixed ~1.2–1.35 KB per message, so its share falls as payloads grow (history §9.1,
   measurements §3.4.3). "Real but small; it is not where the win lives."
@@ -1124,6 +1140,6 @@ To be filled in as each spike completes: date, setup, result, and which branch o
 | P0.1 | 2026-11-10 | **Holds.** Setup: throwaway `AppendXidBeforeIdentitySpikeIT` (postgresql-event-store, `spike` package, runs only with `-Dspike.run=true`), PostgreSQL 16.15, 17.5 and 18.4, each in four pgjdbc modes: simple protocol (`preferQueryMode=simple`), extended protocol with unnamed statements (`prepareThreshold=0`), a named server-side statement under the default `plan_cache_mode` (`prepareThreshold=1`, six executions first, the held one ran on the generic plan: `generic_plans=2 custom_plans=5`), and a named statement under `plan_cache_mode=force_generic_plan` (generic plan on every execution). A table shaped like the event-stream table, a `BEFORE INSERT` trigger that holds the first row of a three-event append after its identity value is taken, and one `nextval` taken up front so the calls under test do not WAL-log. Shapes: §5.1 as written, the same under `enable_nestloop=off`, `enable_material=off` and `join_collapse_limit=from_collapse_limit=1`, a rewrite that forces `unnest` to the outer side (`unnest … CROSS JOIN LATERAL (SELECT … FROM ok … OFFSET 0)`), and its mirror forcing `ok` outer; the executed plan of every held append was captured with `auto_explain`. In all 72 cases with the `xid` CTE, the held writer had a non-null `backend_xid` while holding its first identity value. Both controls without the `xid` CTE (planner order and `unnest` forced outer), in all 24 cases, showed `backend_xid` null at the same point, so the check does distinguish. Observations: a cross join has no join clause, so hash and merge joins are impossible and the plan is always a nested loop; left alone, every version and mode chose `head`/`xid` as the outer side; only the `LATERAL` rewrite put `unnest` outside, and the xid was still taken first, because no row reaches the insert until the inner side has produced a row from `ok`. An append with a stale expected event order returned zero rows and consumed no sequence value in every case (`last_value` unchanged, the next append got the next value). | Gate met. The single-statement append of §5.1 is kept as written; no separate `SELECT pg_current_xact_id()` is needed. Per §19 risk 2, the spike IT (or its engine successor) must run against every supported major in CI, because the guarantee rests on executor behaviour, not on anything the SQL standard promises. |
 | P0.2 | 2026-11-10 | **Holds in autocommit; unsafe in an explicit transaction that read `pg_stat_activity` earlier.** Setup: throwaway `CombinedProbeSnapshotOrderSpikeIT`, PostgreSQL 16.15, 17.5 and 18.4, the same four protocol modes as P0.1 (prepared modes executed six times first; the generic plan was confirmed through `pg_prepared_statements`). Writers take their xid first, then insert. (1) Writer A holds a value below writer B's committed one, uncommitted: the combined probe returned B's row only and A's xid was in the running set, in every case. (2) Ordering proof: the probe was held inside its own scan (a volatile `spike_hold()` in the `WHERE` clause), i.e. after its snapshot and before any row was projected; during the hold A committed and a new writer C took an xid. In every case A's row was invisible (snapshot taken before A's commit), A was absent from the running set and C was in it (the set was read after the hold). So the running set is read after the snapshot, on every protocol and plan tried. (3) Control, two statements with the running set read first: in every case the probe missed A (A ran, held a value at or below S, was unread, and was not in the set), so the test does fail against the broken order. The two-statement fallback in the correct order (tail, then set) kept the rule. (4) Inside an explicit transaction that had already read `pg_stat_activity`, the combined probe got a fresh READ COMMITTED snapshot (it saw B) but the cached backend status of the earlier access, and missed A, in every case: backend status is cached per transaction. `pg_stat_clear_snapshot()` before the probe made it safe again, and so did an explicit transaction whose first access to `pg_stat_activity` was the probe. A randomised race hunt (6 writers, 4 s per case, about 18 000 commits and 1 700 to 4 000 probes each, running the rule end to end: probe, wait for X to retire, read the holes once) found no violation for the combined probe, but it found none for the reversed control either, so it is not sensitive enough to count as evidence; the deterministic cases above are the result. Not tested: the case where the tail read returns no rows, in which the sub-select is never evaluated and the probe returns no running set at all. | Gate met, with a condition. The combined probe of §4.10 is kept, and the engine must run it in autocommit (its own transaction), or call `pg_stat_clear_snapshot()` immediately before it when it has to run inside a transaction. The "`running` once rather than per row" shape must also return the set when the tail is empty (for example as a `UNION ALL` row), or an empty read reveals nothing about outstanding candidates. |
 | P0.3 | — | — | — |
-| P0.4 | — | — | — |
+| P0.4 | 2026-11-10 | **Gate partly met.** Setup: throwaway `SingleStatementAppendSpikeIT` (`spike` package, runs only with `-Dspike.run=true`), reusing P0.0's wiring and round-trip proxy; PostgreSQL 17.5, pgjdbc 42.7.14 defaults, `fsync=off`, 8 CPUs, in-tree, `-Dfailsafe.forkCount=1`, two runs (fresh container each) of three rounds after a discarded warm-up round, arm order rotated per round, fresh table per (round, case, arm). Arms, all on tables created by `SeparateTablePerAggregateTypePersistenceStrategy`, in the same unit of work, same mapper and `EssentialsJSONEventSerializers.create()`: A = `PostgresqlEventStore.appendToStream`; C = today's two statements through raw pgjdbc; B = §5.1 through raw pgjdbc, five aggregates as one pgjdbc batch. A sanity test showed B writes rows identical to A's and the engine reads them back; a stale expected order returns zero rows and consumes no identity value; a batch reports per-aggregate counts. Append p50, run 1 / run 2 (ms), A vs B: 1 event without expected order 0.098 / 0.167 vs 0.122 / 0.136, 3 vs 2 round trips; 1 event with expected order 0.099 / 0.128 vs 0.113 / 0.135, 2 vs 2; 10 events without 0.326 / 0.291 vs 0.173 / 0.202, 3 vs 2; 10 with 0.199 / 0.257 vs 0.209 / 0.210, 2 vs 2; 100 without 1.48 / 1.34 vs 0.91 / 0.86; 100 with 1.40 / 1.26 vs 0.88 / 0.89; 5 aggregates × 10 without 1.18 / 1.26 vs 0.58 / 0.57, 11 vs 2 round trips; with 0.98 / 1.00 vs 0.57 / 0.56, 6 vs 2. Run 1 was noisy at small sizes (one round ran every arm at half latency). WAL per event equal (~955-985 B). C was 0.01-0.1 ms below A, much less than B's gains. Contended (8 writers, 10 aggregates, 20 s): burned identity values per 1 000 successful appends A 463 / 465, B 248 / 270, B with `pg_advisory_xact_lock` as first CTE 259 / 264 (no effect: the snapshot predates the lock wait), B with the lock as a separate statement before the append 0 / 0 at a third of A's throughput (11.5-11.9 k vs 34.5-34.7 k appends/s; B alone 23.6-24.6 k). About half of B's conflicts were unique violations of overlapping in-flight appends. Details: [`event-store-phase0-append.md`](event-store-phase0-append.md). | §5.1 is kept for the new engine: fewer holes (about half) and lower latency or fewer round trips at 100 events, for several aggregates per unit of work and whenever no expected order is given; at 1 and 10 events with an expected order it ties (not met there, but never worse). §5.1's text corrected: `coalesce(max(event_order), -1)` (event orders start at 0), the mapper gets a provisional event order without an expected order, and "no hole" applies only to conflicts with already-committed appends. §5.3 corrected: the opt-in advisory lock must be a separate statement before the append, not a CTE; it gives zero holes at one extra round trip. §5.4 not dropped but restated: replacing the current engine's batch would halve its holes, not remove them; still a separate decision. |
 | P0.5 | — | — | — |
 | P0.6 | — | — | — |
