@@ -17,6 +17,7 @@ Last checked against the code: 2026-11-08.
 | [shard-owned-test-time-reduction.md](shard-owned-test-time-reduction.md) | Shard-owned engine tests | Items 1–4 and 6 done (engine module 12:42 → 8:40). Open: §7, a profiling pass over the remaining waits in `ShardOwnedLifecycleIT` and `ShardOwnedUnsubscribeIT`, then SQL lease ageing where safe. |
 | [subscription-improvements.md](subscription-improvements.md) | Event store subscriptions | S2 interruptible (reactive) wake-up; S3 consumer-group-scoped resume points; S4 trimming the one-event overlap after a crash. S1 phase 1, S5 and S6 are built. |
 | [event-store-subscription-redesign.md](event-store-subscription-redesign.md) | Event store subscriptions | Whole document: a proposal, nothing built or measured. |
+| [payload-serialization-measurements.md](payload-serialization-measurements.md) | Event store and durable queue payloads | Measured: Jackson's CPU share and `jsonb`/`json`/`bytea` column cost (Fory not worth adopting). Open: §5, document `JSONColumnType.JSON`, a configurable queue payload column type, trimming Jackson per-call overhead. |
 
 ## Open items from documents kept elsewhere
 
