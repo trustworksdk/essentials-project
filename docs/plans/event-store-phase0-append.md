@@ -462,3 +462,157 @@ of the writer role's statements over attempts; it does not include statements th
   text arrays were a tie or slightly worse.
 - With small payloads, `json` against `jsonb` changes neither picture outside the noise; the payload-size effects
   are in the other doc.
+
+## 7. Table design options
+
+Date: 2026-11-11. The redesign may change the event table itself, so this measures layouts the current strategy
+cannot express. Nothing here is a decision; each table lists what was observed.
+
+**Code.** `TableDesignOptionsSpikeIT` (same `spike` package, same gating). Every arm creates its own table with spike
+DDL and writes through raw pgjdbc with one statement shape for all arms: the §5.1 append with binary `varchar[]`
+(`bytea[]` for the `bytea` arm) arrays expanded by `unnest`, the `xid` CTE first, always with an expected order. The
+**BASE** arm has today's columns and indexes (`text` ids, `integer` revision, `jsonb` payload and metadata,
+`UNIQUE(aggregate_id, event_order)`, `UNIQUE(event_id)`, identity `global_order`); each other arm changes one thing.
+Payload ~120 B, metadata ~35 B, event type the ~100-character `FQCN:` name. Per run on a fresh container: correctness
+checks; uncontended appends (single writer, new aggregate per unit of work, 1/10/100 events, 1 000/1 000/300
+iterations after 50 warm-up, one discarded round then two measured rounds with rotated arm order, fresh table per
+(round, size, arm)); a read shape on the 100-event table (2 000 reads of a random aggregate's 100 events, all columns,
+payload fetched as text or bytes); 8 writers on 10 aggregates for 20 s per arm in palindrome order (reversed in
+run 2), each attempt reading the last order and appending one event after it. Two runs, so four contended windows
+and four uncontended rounds per arm. Tables are dropped after use. Raw output: `target/spike-results/p0-7-table-design.txt`.
+
+```bash
+mvn -o verify -pl components/postgresql-event-store -DskipUTs \
+    -Dit.test=TableDesignOptionsSpikeIT -Dfailsafe.failIfNoSpecifiedTests=false \
+    -Dspike.run=true -Dfailsafe.forkCount=1 -DskipDependencyCheck=true
+# knobs: -Dspike.design.runs (2), .rounds (2), .seconds (20), .arms (all)
+```
+
+About 20 minutes. Same machine and caveats as §5: `fsync=off`, PostgreSQL 17.5, the client and the database share one
+8-CPU VM, so absolute numbers flatter and only differences between arms count; differences inside the
+round-to-round or window-to-window spread are treated as no difference.
+
+**Correctness, every arm, both runs.** A stale expected order returned zero rows and took no global-order value; the
+next append continued the stream; after every contended window every aggregate's event orders were contiguous from 0,
+and in the head-table arms every head row equalled its stream's `max(event_order)`. The xid check (a `BEFORE INSERT`
+trigger records `pg_current_xact_id_if_assigned()` when the first row's global order has been taken, P0.1's question
+in a cheaper form) found an xid in every arm, including the two whose statement has no `xid` CTE (the head-table
+arms: the head row's lock or update assigns it) and the explicit-`nextval` arm; a control plain `INSERT … VALUES` on
+each table found none, so the check can tell the difference. No arm raised any error other than unique violations.
+
+### 7.1 Uncontended appends and reads (BASE for reference)
+
+p50 latency in ms, server execution per unit of work, WAL per event, table plus indexes per row (heap per row); ranges
+over the four measured rounds.
+
+| Arm | 1 event p50 / exec | 10 events p50 / exec | 100 events p50 / exec | WAL B/event (1 / 100) | B/row at 100 (heap) | Read 100 events p50 / exec |
+|---|---|---|---|---|---|---|
+| BASE (`jsonb`) | 0.124-0.135 / 13.3-15.4 µs | 0.185-0.190 / 61-63 µs | 0.712-0.725 / 490-496 µs | 905-913 / 891-893 | 743-747 (546) | 0.183-0.184 ms / 129-130 µs |
+| `json` | 0.124-0.133 / 12.7-14.8 | 0.180-0.189 / 57-59 | 0.678-0.695 / 450-470 | 881-889 / 869 | 711-712 (512) | 0.118-0.119 / 73.5-74.9 |
+| `bytea` | 0.123-0.132 / 12.2-14.5 | 0.176-0.181 / 53-55 | 0.648-0.652 / 424-430 | 881-889 / 868-870 | 711-713 (512) | 0.117-0.119 / 71.0-72.8 |
+| no `UNIQUE(event_id)` | 0.123-0.131 / 11.9-14.1 | 0.172-0.180 / 50-51 | 0.585-0.592 / 361-368 | 780-796 / 761-762 | 670-672 (546) | 0.182-0.183 / 128-130 |
+| `uuid` event id, v4 | 0.125-0.132 / 13.5-14.9 | 0.183-0.187 / 59-60 | 0.672-0.694 / 449-455 | 848-852 / 832-834 | 672-675 (512) | 0.186-0.189 / 131-134 |
+| `uuid` event id, v7 | 0.125-0.133 / 14.0-15.5 | 0.179-0.182 / 56-59 | 0.631-0.651 / 428-438 | 843-847 / 822-828 | 673-682 (512) | 0.187-0.189 / 131-133 |
+| head table, `FOR UPDATE` | 0.128-0.139 / 16.3-19.4 | 0.185-0.188 / 63-65 | 0.716-0.725 / 492-498 | 1187-1198 / 894-897 | 747-751 (546) | 0.182-0.184 / 129-131 |
+| head table, guarded `UPDATE` | 0.125-0.138 / 15.9-19.7 | 0.184-0.197 / 64-66 | 0.727-0.741 / 505-513 | 1187-1195 / 894-896 | 747-750 (546) | 0.182-0.185 / 129-131 |
+| narrow row | 0.123-0.138 / 13.1-15.6 | 0.181-0.190 / 61-63 | 0.704-0.717 / 487-505 | 817-822 / 804-806 | 629-634 (431) | 0.182-0.184 / 133-134 |
+| explicit `nextval` | 0.125-0.138 / 13.7-15.9 | 0.186-0.191 / 62-63 | 0.721-0.755 / 497-524 | 905-914 / 892-895 | 744-748 (546) | 0.182-0.190 / 129-133 |
+
+(The uncontended appends always create a new aggregate, so in the head-table arms they measure the stream-creation
+path, an `INSERT … ON CONFLICT DO NOTHING` on the head table; appends to existing streams are the contended shape. The
+head-table B/row includes the head table, which has one row per stream: ~280 B per one-event stream, amortised to
+almost nothing at 100 events.)
+
+### 7.2 Contended appends
+
+8 writers, 10 aggregates, 20 s; four windows per arm (run 1's two / run 2's two). The head-table arms read the
+expected order from the head table, the others from the events table.
+
+| Arm | Appended/s (thousands) | Zero-row / unique-violation conflicts (share of attempts) | Burned per 1 000 appended | PostgreSQL CPU µs/attempt | Recorded exec µs/attempt | WAL B/appended |
+|---|---|---|---|---|---|---|
+| BASE | 23.6, 23.9 / 25.0, 25.8 | ~12% / ~20% | 287-305 | 98.1-105.3 | 22.4-26.1 | 1127-1187 |
+| `json` | 22.8, 25.6 / 24.1, 25.6 | similar | 280-292 | 98.5-107.3 | 22.2-24.3 | 1096-1148 |
+| `bytea` | 24.7, 25.2 / 24.6, 25.9 | similar | 278-286 | 97.3-99.9 | 21.4-22.2 | 1090-1141 |
+| no `UNIQUE(event_id)` | 25.8, 26.4 / 26.0, 27.0 | similar | 281-283 | 93.7-95.8 | 19.5-20.0 | 988-990 |
+| `uuid` v4 | 24.0, 24.6 / 25.3, 24.0 | similar | 282-289 | 99.7-103.4 | 22.7-23.4 | 1061-1069 |
+| `uuid` v7 | 24.6, 23.6 / 25.6, 24.7 | similar | 279-289 | 98.0-104.5 | 21.1-22.8 | 1044-1054 |
+| head table, `FOR UPDATE` | 16.9, 16.9 / 16.8, 17.1 | 34-35% / 0 | **0** | 124.2-126.2 | 65.1-66.1 | 1122 |
+| head table, guarded `UPDATE` | 21.7, 21.7 / 21.1, 21.3 | 32% / 0 | **0** | 106.5-111.3 | 40.5-44.1 | 1044-1049 |
+| narrow row | 23.9, 23.2 / 25.4, 26.8 | similar | 282-288 | 94.8-105.1 | 21.5-23.7 | 1011-1017 |
+| explicit `nextval` | 24.3, 21.9 / 24.4, 25.6 | similar | 285-300 | 99.7-110.5 | 23.4-25.4 | 1125-1179 |
+
+BASE here burns 287-305 per 1 000, more than §6's B variants on the engine's tables (222-262). The two set-ups differ in
+the lookup (raw pgjdbc against the engine's JDBI `loadLastPersistedEventRelatedTo`), the payload and the statement
+encoding, and the cause was not isolated; within this table all arms share the same set-up.
+
+### 7.3 Per option
+
+**Payload and metadata as `json`, `jsonb` or `bytea`.** Under contention, no difference outside the noise in
+throughput or holes (`bytea` and `json` 22.8-25.9 against BASE 23.6-25.8 thousand appends/s); `bytea` used
+~2-4 µs less server CPU per attempt in three of four windows. Uncontended, `bytea` < `json` < `jsonb` at 10 and 100
+events (100 events: 0.65 / 0.68-0.70 / 0.71-0.73 ms, execution 424-430 / 450-470 / 490-496 µs), the same at one event.
+Reads of 100 small events are ~35% faster on `json` or `bytea` (0.117-0.119 against 0.183-0.184 ms; server execution
+71-75 against 129-130 µs), consistent with the other doc's −22..−47%. Rows are ~32 B smaller and WAL ~22-24 B per
+event smaller than `jsonb` at these sizes. Correctness unchanged. Costs not measured here: `jsonb`'s SQL querying,
+the admin UI's use of it, and normalisation (see the other doc and §13.3).
+
+**No `UNIQUE(event_id)` index.** The largest single saving measured: 100-event appends 0.585-0.592 against
+0.712-0.725 ms (execution −26%), 10 events 0.172-0.180 against 0.185-0.190 ms, WAL −110 to −130 B per event, size
+−73 B per row; under contention 25.8-27.0 against 23.6-25.8 thousand appends/s (about +5%, at the edge of the spread
+but higher in all four windows) and 4-10 µs less server CPU per attempt. Holes and per-aggregate order unchanged.
+It breaks the database-level guarantee that an event id is unique, and `findEvent(EventId)` would need another path
+(§13.3).
+
+**`uuid` event ids, random (v4) and time-ordered (v7).** Typing the column `uuid` instead of `text` saves ~70 B per row
+(table plus indexes) and ~55-60 B WAL per event. v7 against v4 at 100 events: 0.631-0.651 against 0.672-0.694 ms,
+WAL ~8 B per event less; at 1 and 10 events, and under contention, no difference outside the noise. These tables hold
+at most ~30 000 rows per round, so the index locality that v7 buys on a large `UNIQUE(event_id)` index (fewer random
+page reads and full-page writes once the index outgrows memory) is not exercised here; that is the case §13.3 expects
+the larger effect from, and it was not measured.
+
+**Stream head table** (`aggregate_id text PRIMARY KEY, version bigint`, `fillfactor = 50`, `version` unindexed).
+Two variants:
+- *Guarded `UPDATE` in the append statement*: `WITH h AS (UPDATE streams SET version = version + n WHERE aggregate_id =
+  $id AND version = $expected RETURNING version - n) INSERT … SELECT … FROM h CROSS JOIN unnest(…)`. One statement,
+  same round trips as §5.1. A writer that loses the race waits for the winner's commit on the head row, re-checks the
+  `WHERE` against the new version (EvalPlanQual), updates nothing, so the `INSERT` produces no row and takes no
+  global-order value.
+- *`SELECT … FOR UPDATE` first*: a separate statement locks and checks the head row, then one statement inserts the
+  events and moves the head. One more round trip per append.
+
+Both: **zero burned values in all eight windows**; every conflict is a zero-row result (32-35% of attempts); event
+orders contiguous; head equal to `max(event_order)` everywhere; xid assigned before the first global order. Throughput
+under contention: guarded `UPDATE` 21.1-21.7 thousand appends/s (8-18% below BASE's 23.6-25.8), `FOR UPDATE`
+16.8-17.1 thousand (about 30% below). Their recorded execution per attempt includes the time spent waiting for the
+head-row lock (40-44 and 65-66 µs against BASE's 22-26). The head updates were almost all HOT (338 668 updates /
+338 659 HOT, and 434 093 / 434 085 in two sample windows), and the head table stayed at 90-480 KB for 10 rows. For
+comparison, §5.3's advisory lock as a separate statement also gave zero holes but at a third of A's throughput, with
+one extra round trip, on the engine's tables. Uncontended appends to a new stream cost 2-5 µs more execution, ~280 B
+more WAL per one-event append and one head row per stream; at 10 and 100 events they are within ~3% of BASE. Reads
+are unchanged (the read does not touch the head table). What it changes: the head table becomes the authority for
+the stream's version, so every write path (including any migration or repair tool) must keep it in step, and
+deleting or truncating a stream must touch both tables.
+
+**Narrower row** (`global_order`, `event_order`, `timestamp`, `event_type smallint`, `event_revision smallint`, then
+`aggregate_id`, `event_id`, `event_payload`, `event_meta`; metadata, causation id, correlation id and tenant merged
+into one `jsonb`; event types interned in a `td_event_types` table). Heap −115 B per row (431 against 546), table plus
+indexes −110 B, WAL −87 to −95 B per event, about 10% less. Latency and contended throughput within the noise of BASE
+(23.2-26.8 thousand appends/s; 282-288 burned). Reading 100 events costs the same (0.182-0.184 ms) with the type names
+resolved from an in-memory map. Nearly all of the saving is the interned event type (a ~100-character name against
+2 bytes); alignment ordering on its own is worth a few bytes. Costs: rows are not readable without the type registry,
+causation and correlation ids leave their own columns (no plain-column index on them), and the registry must be
+cached and kept consistent across instances.
+
+**Explicit `nextval` from a per-table sequence instead of an identity column.** No difference outside the noise in
+any shape (uncontended 100 events 0.721-0.755 against 0.712-0.725 ms, contended 21.9-25.6 against 23.6-25.8 thousand,
+holes 285-300 against 287-305). The xid check found the xid assigned before the explicit `nextval` too, with the
+`xid` CTE first; the ordering property depends on the statement shape, not on how the value is drawn.
+
+### 7.4 Not measured
+
+- Large payloads (covered for `json`/`jsonb`/`bytea` by the other doc), large tables (index locality of v7, page
+  splits, autovacuum), `fsync=on`, a separate database host, PostgreSQL majors other than 17.5.
+- Head-table appends to existing streams uncontended (only creation was timed uncontended), and the head table under
+  many aggregates with little contention.
+- Combinations of options (for example, head table + no `UNIQUE(event_id)` + `uuid` + narrow row).
+- A `(event_type, global_order)` index and partitioning, from §13.3.

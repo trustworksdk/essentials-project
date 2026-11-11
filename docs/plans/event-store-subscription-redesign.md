@@ -511,6 +511,14 @@ is why it is opt-in. The lock must **not** be a CTE of the append, as the first 
 snapshot is taken before it waits for the lock, so `head` is still stale when the lock is granted, and P0.4
 measured no reduction in holes at all with that shape.
 
+*Note 2026-11-11:* a stream head table (`aggregate_id` primary key, `version`), moved by a guarded
+`UPDATE … WHERE version = $expected` inside the append statement, gave zero holes in one statement and the same round
+trips as §5.1, at 8-18% below §5.1's contended throughput in that spike's set-up, against a third of today's
+for the advisory lock; a `SELECT … FOR UPDATE` first also gave zero holes, at about 30% below. This needs a new
+table, so it is outside "the same rows" of §5.4 and §12.4. Findings, not a decision:
+[`event-store-phase0-append.md`](event-store-phase0-append.md) §7.3. No cheaper parameter encoding brought §5.1's
+contended throughput up to today's engine; the extra server CPU is not Bind-time array parsing (same doc, §6).
+
 ### 5.4 Relationship to the current engine
 
 The single-statement append has no dependency on the new engine: it is a better way to write the same
@@ -827,6 +835,12 @@ existing subscription builders keep their signatures, and the defaults of §7.2 
 
 ### 12.4 Coexistence and migration on the same tables
 
+*Note 2026-11-11:* phase 0 now also measures table layouts that would not run on the existing tables (a stream head
+table, no `UNIQUE(event_id)`, `uuid` event ids, a narrower row with interned event types, `json`/`bytea` payloads),
+because the new design may change the schema; some measured gains (zero holes with a head table, −26% execution for
+100-event appends without `UNIQUE(event_id)`) depend on leaving this section's premise. See
+[`event-store-phase0-append.md`](event-store-phase0-append.md) §7.
+
 The watermark and the new append need no new column, and resume points remain `GlobalEventOrder` values.
 The new engine can therefore run on **the existing event-stream tables and the existing
 `durable_subscriptions` rows**:
@@ -921,6 +935,17 @@ measurement. None is needed for §4–§12.
 | **Insert-driven autovacuum tuning** (`autovacuum_vacuum_insert_scale_factor` per table) | Keeps the visibility map current on append-only tables, so the head probes (`max(event_order)` in §5.1, `max`/`min(global_order)`) stay index-only | A table-level setting. Document rather than force |
 | **Partitioning by `is_archived`** (Marten §8) or by `global_order` range | Smaller hot indexes; archiving | The unique constraints cannot be enforced across partitions unless they include the partition key, which breaks their meaning. Only as a later archival feature, if at all |
 | **Remove the gap tables** | Already follows from §4 | They stay until the old engine is retired |
+
+*Note 2026-11-11:* measured in [`event-store-phase0-append.md`](event-store-phase0-append.md) §7 on small tables with
+small payloads. Two findings differ from the expectations above: dropping `UNIQUE(event_id)` was the largest
+per-insert saving measured (−26% execution and −110 to −130 B WAL per event at 100 events, about +5% contended
+throughput), while UUIDv7 against random UUIDs showed a difference only at 100 events (−5% latency, ~8 B WAL per
+event), because index locality only pays once the index outgrows memory, which these tables did not; typing the id
+`uuid` instead of `text` saved ~70 B per row. Interning `event_type` together with merging the metadata columns cut
+~110 B per row and ~90 B WAL per event with the ~100-character type names Essentials stores, more than the "low
+value" expected. For the payload row, `json`/`bytea` reads of 100 small events were ~35% faster than `jsonb`; the
+size-dependent costs are in `perf/serialization-profiling:docs/plans/payload-serialization-measurements.md (not yet
+on main)`.
 
 ---
 
