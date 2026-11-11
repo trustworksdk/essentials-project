@@ -329,3 +329,116 @@ fixed commit cost per attempt grows and the shared-CPU amplification goes away, 
 was not measured. For §5.4's decision on replacing the current engine's `PreparedBatch`, the server CPU per
 small append is a cost to weigh against the halved holes, and the statement's per-call cost (array encoding,
 `head` scan) is worth reducing before the new engine adopts it.
+
+## 6. Encoding — in progress (checkpoint 2026-11-11)
+
+**Status: interrupted. The machine shut down. Every number below is partial: one container, single-writer windows that
+vary ±30-40% from round to round, and no contended run.** This section will be replaced when the experiment is
+finished.
+
+The question is whether a cheaper parameter encoding closes the single-statement append's (B) ~1.5× server cost per
+one-event append found in §5, and where that cost goes. The user also asked whether `json` instead of `jsonb` changes
+the picture. The general `json`/`jsonb`/`bytea` insert and read costs are already measured on branch
+`perf/serialization-profiling` in `docs/plans/payload-serialization-measurements.md` (not yet on main) and are not
+repeated here. This experiment covers only (a) whether B's *extra* server CPU over A shrinks on `json` tables, i.e.
+whether the cast inside `unnest` costs more than A's per-row parameter cast, and (b) A and B throughput under
+contention on `json` against `jsonb` with the small test payloads.
+
+**Code (in the commit).**
+- `SingleStatementAppendSpikeIT.Encoding` and `Writer.encoded(...)` provide these B variants:
+  - `TEXT_ARRAYS`: P0.4's statement.
+  - `BINARY_ARRAYS`: the same statement with the arrays bound by `setObject(i, String[])`. pgjdbc 42.7
+    (`PgPreparedStatement.setObjectArray`) sends them in binary as `varchar[]`. The elements are still text, so the
+    server still casts them per element.
+  - `JSONB_ONE`: one `jsonb` array parameter expanded with `jsonb_to_recordset`.
+  - `SCALAR_1`: one event, scalar parameters, no `unnest`.
+  - `NO_HEAD`: a diagnostic variant with no `head`/`ok` CTE.
+- `B_ENCODED` arm for `#append`, with `-Dspike.append.arms`, `-Dspike.append.encoding`, `-Dspike.append.encoding.multi`
+  and `-Dspike.append.jsonTypes=JSONB,JSON`. The append output now also records table bytes per row.
+- `CurrentEngineBaselineSpikeIT.Stack.writer(pg, role, JSONColumnType)`: event tables created by the real strategy
+  with `json` payload and metadata columns.
+- `ContendedAppendThroughputSpikeIT`:
+  - new arms `B_BINARY`, `B_JSONB_ONE`, `B_SCALAR_1` and `B_NO_HEAD`;
+  - an arm name may carry `:JSON` to use `json` tables;
+  - per window it now records WAL per event, table and heap bytes per row, PostgreSQL CPU per appended event, and the
+    container's CPU against `pg_stat_statements`' total execution time.
+- New `AppendEncodingAttributionSpikeIT`. It does four things:
+  - checks that every encoding writes the engine's rows;
+  - runs a text→`json`/`jsonb` conversion micro-measure;
+  - times the append statement's execution with a single writer, per variant, on `jsonb` and `json` tables;
+  - records `auto_explain` (analyze, buffers, verbose, generic plan forced) plans of every variant at 1 and 10 events.
+  
+  Output: `target/spike-results/p0-4-encoding.txt`.
+
+**Done and observed (partial).**
+- **Correctness:** every encoding writes rows identical to the engine's (1 and 2 events). A stale expected order gives
+  zero rows, except for `NO_HEAD`, which by design has no check.
+- **Conversion alone** (executor time per value, 200 000 values, best of 3):
+  - payload of 114 characters: text 0.12 µs, json 0.27 µs, jsonb 0.56 µs;
+  - metadata of 33 characters: text 0.12 µs, json 0.23 µs, jsonb 0.37 µs.
+  
+  So `jsonb` adds about 0.7 µs per event over `json` at these sizes, which is small next to B's ~10 µs extra per
+  append.
+- **`auto_explain`, one event, generic plan** (executor time of the append statement; one sample each):
+
+  | Variant | `jsonb` table | `json` table |
+  |---|---|---|
+  | A insert | 14 µs | 13 µs |
+  | B text arrays | 30 µs | 29 µs |
+  | B binary arrays | 21 µs | 22 µs |
+  | B one `jsonb` | 23 µs | — |
+  | B scalar | 27 µs | 54 µs (a single sample that also wrote a page; not meaningful) |
+  | B no head | 26 µs | — |
+
+  The `head` CTE is 5-8 µs: a backward index-only scan, 4 buffer hits, one heap fetch, against 12 buffer hits for A's
+  whole insert. The `unnest` Function Scan is 9 µs with text arrays, 3-4 µs with binary arrays and 5 µs with
+  `jsonb_to_recordset`. On `json` tables B's statement costs the same as on `jsonb` tables, so for these payloads the
+  cast inside `unnest` is not what makes B dearer than A (point (a), partial).
+- **Single writer, append execution per unit of work** (`pg_stat_statements`, two rounds, noisy):
+
+  | Variant | 1 event, `jsonb` | 1 event, `json` | 10 events, `jsonb` | 10 events, `json` |
+  |---|---|---|---|---|
+  | A | 12.8 µs (22.8 µs in one round, an outlier) | 13.2-13.9 µs | 72.5-90.0 µs | 75.3-80.7 µs |
+  | B text arrays | 23.2-33.4 µs | 24.8-30.6 µs | 73.3-82.6 µs | 69.2-73.4 µs |
+  | B binary arrays | 22.2-27.2 µs | 18.2-26.6 µs | 81.6-103.0 µs | 74.1-87.5 µs |
+  | B one `jsonb` | 20.8-28.9 µs | — | 84.8-98.5 µs | — |
+  | B scalar | 17.3-23.2 µs | 17.8-22.1 µs | — | — |
+  | B no head | 19.0-20.8 µs | — | 69.8-72.1 µs | — |
+
+  At one event, B costs 4 more buffer hits per call than A (16.3 against 12.3).
+- **Tentative reading, not a verdict:** at one event, B's extra execution over A is roughly the `head` CTE (~5 µs)
+  plus the CTE/`unnest` machinery (~4-9 µs). Binary arrays or scalar parameters may remove part of the second. Neither
+  `json` nor `jsonb` explains B's extra cost. At 10 events every variant is within the noise of A. The ~15-20 µs per
+  attempt that §5 could not attribute is still open; one hypothesis is text-array parsing at Bind, which is outside
+  the executor time.
+
+**Not yet run:**
+- The contended comparison, with all arms in one palindrome run (one was started and stopped before its first window
+  finished): A, B, B_BINARY, B_JSONB_ONE, B_SCALAR_1, B_NO_HEAD, A:JSON, B:JSON and B_SCALAR_1:JSON. This covers
+  point (b) and the throughput side of (a).
+- The uncontended `#append` shapes for the best variant, on `jsonb` and `json` (latency at 1, 10 and 100 events, WAL
+  per event, table bytes per row).
+- A longer or repeated single-writer attribution to tighten the noisy ranges above.
+- The verdict, and any change to redesign §5.1 or §13.3 (§13.3's payload row should then reference the
+  `perf/serialization-profiling` doc).
+
+**Resume with** (nothing else building; the contended run takes ~15 minutes):
+
+```bash
+A=A_ENGINE,B_SINGLE,B_BINARY,B_JSONB_ONE,B_SCALAR_1,B_NO_HEAD,A_ENGINE:JSON,B_SINGLE:JSON,B_SCALAR_1:JSON
+REV=$(echo $A | tr ',' '\n' | tac | paste -sd,)
+mvn -o verify -pl components/postgresql-event-store -DskipUTs \
+    -Dit.test=ContendedAppendThroughputSpikeIT -Dfailsafe.failIfNoSpecifiedTests=false \
+    -Dspike.run=true -Dfailsafe.forkCount=1 -DskipDependencyCheck=true \
+    -Dspike.contention.runs=2 -Dspike.contention.seconds=20 "-Dspike.contention.arms=$A,$REV"
+# then the uncontended shapes for the chosen variant, both column types:
+mvn -o verify -pl components/postgresql-event-store -DskipUTs \
+    -Dit.test='SingleStatementAppendSpikeIT#append' -Dfailsafe.failIfNoSpecifiedTests=false \
+    -Dspike.run=true -Dfailsafe.forkCount=1 -DskipDependencyCheck=true \
+    -Dspike.append.arms=A_ENGINE,B_SINGLE,B_ENCODED -Dspike.append.encoding=SCALAR_1 \
+    -Dspike.append.encoding.multi=BINARY_ARRAYS -Dspike.append.jsonTypes=JSONB,JSON
+# attribution (correctness, conversion, single-writer execution, plans), ~15 minutes:
+mvn -o verify -pl components/postgresql-event-store -DskipUTs \
+    -Dit.test=AppendEncodingAttributionSpikeIT -Dfailsafe.failIfNoSpecifiedTests=false \
+    -Dspike.run=true -Dfailsafe.forkCount=1 -DskipDependencyCheck=true
+```

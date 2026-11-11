@@ -73,7 +73,11 @@ class ContendedAppendThroughputSpikeIT {
         A_ENGINE("A engine"),
         C_RAW("C raw pgjdbc, today's statements"),
         B_SINGLE("B single statement"),
-        B_ON_CONFLICT("B + ON CONFLICT DO NOTHING");
+        B_ON_CONFLICT("B + ON CONFLICT DO NOTHING"),
+        B_BINARY("B, arrays sent binary (varchar[])"),
+        B_JSONB_ONE("B, one jsonb parameter"),
+        B_SCALAR_1("B, one event, scalar parameters"),
+        B_NO_HEAD("B without head CTE (diagnostic)");
 
         final String label;
 
@@ -112,7 +116,8 @@ class ContendedAppendThroughputSpikeIT {
 
     @Test
     void contention() throws Exception {
-        var arms = Arrays.stream(System.getProperty("spike.contention.arms", "A_ENGINE,C_RAW,B_SINGLE,B_ON_CONFLICT").split(",")).map(String::trim).map(Arm::valueOf).toList();
+        // an arm name may carry ":JSON" (or ":JSONB", the default): the JSON column type of its event table
+        var arms = Arrays.stream(System.getProperty("spike.contention.arms", "A_ENGINE,C_RAW,B_SINGLE,B_ON_CONFLICT").split(",")).map(String::trim).toList();
         record("");
         record("=== CONTENTION | " + Instant.now() + " | runs " + RUNS + " | CPUs " + Runtime.getRuntime().availableProcessors() + " | " + WRITERS + " writers, " + AGGREGATES
                        + " aggregates, " + SECONDS + " s per arm after a 2 s warm-up on a throwaway table, fresh table per arm, arm order rotates per run, arms " + arms
@@ -123,19 +128,25 @@ class ContendedAppendThroughputSpikeIT {
                     s.execute("ALTER SYSTEM SET pg_stat_statements.track_planning = on");
                     s.execute("SELECT pg_reload_conf()");
                 }
-                var w = new Writer(Stack.writer(pg, "writer"));
+                var writers = new EnumMap<JSONColumnType, Writer>(JSONColumnType.class);
+                writers.put(JSONColumnType.JSONB, new Writer(Stack.writer(pg, "writer", JSONColumnType.JSONB)));
+                writers.put(JSONColumnType.JSON, new Writer(Stack.writer(pg, "writer", JSONColumnType.JSON)));
                 var order = new ArrayList<>(arms);
                 Collections.rotate(order, run - 1);
-                for (var arm : order) {
-                    window(pg, w, arm, Duration.ofSeconds(2), run, true);
-                    window(pg, w, arm, Duration.ofSeconds(SECONDS), run, false);
+                for (var spec : order) {
+                    var parts = spec.split(":");
+                    var arm   = Arm.valueOf(parts[0]);
+                    var jt    = parts.length > 1 ? JSONColumnType.valueOf(parts[1]) : JSONColumnType.JSONB;
+                    var label = arm.label + " [" + jt.name().toLowerCase(Locale.ROOT) + "]";
+                    window(pg, writers.get(jt), arm, label, Duration.ofSeconds(2), run, true);
+                    window(pg, writers.get(jt), arm, label, Duration.ofSeconds(SECONDS), run, false);
                 }
-                w.stack.close();
+                for (var x : writers.values()) x.stack.close();
             }
         }
     }
 
-    private void window(Pg pg, Writer w, Arm arm, Duration duration, int run, boolean discard) throws Exception {
+    private void window(Pg pg, Writer w, Arm arm, String label, Duration duration, int run, boolean discard) throws Exception {
         var type = w.freshType("ct" + run);
         var cfg  = w.config(type);
         var aggregates = new ArrayList<OrderId>();
@@ -187,6 +198,10 @@ class ContendedAppendThroughputSpikeIT {
                                 switch (arm) {
                                     case A_ENGINE -> w.stack.eventStore.appendToStream(type, id, Optional.of(last), events);
                                     case C_RAW -> w.rawBatch(uow, cfg, new Append(id, Optional.of(last), events));
+                                    case B_BINARY, B_JSONB_ONE, B_SCALAR_1, B_NO_HEAD -> {
+                                        var result = w.encoded(uow, cfg, List.of(new Append(id, Optional.of(last), events)), encodingOf(arm));
+                                        if (result.counts()[0] == 0) throw new ZeroRows();
+                                    }
                                     case B_SINGLE, B_ON_CONFLICT -> {
                                         var result = w.single(uow, cfg, List.of(new Append(id, Optional.of(last), events)),
                                                               arm == Arm.B_SINGLE ? Lock.NONE : Lock.ON_CONFLICT_DO_NOTHING);
@@ -237,13 +252,19 @@ class ContendedAppendThroughputSpikeIT {
         }
         long successes = rowCount(pg, cfg) - rowsBefore;
         long burned    = sequenceLastValue(pg, cfg) - seqBefore - successes;
+        long walBytes  = SpikePostgres.queryLong(pg.observer, "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), '" + pg.lsnAtReset + "'::pg_lsn)::bigint");
+        long rowsAfter = rowCount(pg, cfg);
+        long tableBytes = SpikePostgres.queryLong(pg.observer, "SELECT pg_total_relation_size('" + cfg.eventStreamTableName + "')");
+        long heapBytes  = SpikePostgres.queryLong(pg.observer, "SELECT pg_relation_size('" + cfg.eventStreamTableName + "')");
         double seconds = duration.toMillis() / 1000.0;
         long attempts  = total.attempts();
         double machineBusy = (double) (machine1[0] - machine0[0]) / Math.max(1, machine1[1] - machine0[1]);
         record(String.format("CONTENTION run %d | %-34s | attempts %d (%.0f/s), appended %d (%.0f/s), zero-row %d, unique-violation %d, other %d, conflict rate %.1f%% | "
                                      + "burned %d (%.1f per 1 000 appended)",
-                             run, arm.label, attempts, attempts / seconds, successes, successes / seconds, total.count[ZERO], total.count[UNIQUE], total.count[OTHER],
+                             run, label, attempts, attempts / seconds, successes, successes / seconds, total.count[ZERO], total.count[UNIQUE], total.count[OTHER],
                              100.0 * (attempts - total.count[OK]) / attempts, burned, burned * 1000.0 / Math.max(1, successes)));
+        record(String.format("  WAL %.0f B per appended event | table after the window: %d rows, %.0f B/row total (heap %.0f B/row) | PostgreSQL CPU %.1f µs per appended event",
+                             walBytes / (double) Math.max(1, successes), rowsAfter, tableBytes / (double) rowsAfter, heapBytes / (double) rowsAfter, serverCpu / (double) Math.max(1, successes)));
         record(String.format("  wall per attempt %.1f µs (= %d writers x %.1f s / attempts) | client CPU: writer threads %.1f µs/attempt, whole JVM %.1f µs/attempt | "
                                      + "PostgreSQL container CPU %.1f µs/attempt (%.2f cores) | machine busy %.0f%% of %d CPUs",
                              WRITERS * wallNanos / 1000.0 / attempts, WRITERS, wallNanos / 1e9, total.cpuNanos / 1000.0 / attempts, jvmCpu / 1000.0 / attempts,
@@ -256,7 +277,9 @@ class ContendedAppendThroughputSpikeIT {
                                  (total.begin[o] + total.lookup[o] + total.append[o] + total.end[o]) / 1000.0 / n));
         }
         record("  " + sampler.summary());
-        statements(pg);
+        double execMs = statements(pg);
+        record(String.format("  server CPU vs recorded execution: container CPU %.1f µs/attempt, pg_stat_statements total exec (completed statements only) %.1f µs/attempt, "
+                                     + "difference %.1f µs/attempt", serverCpu / (double) attempts, execMs * 1000 / attempts, serverCpu / (double) attempts - execMs * 1000 / attempts));
         if (firstOther.get() != null) record("  first other error: " + firstOther.get());
     }
 
@@ -302,7 +325,19 @@ class ContendedAppendThroughputSpikeIT {
         }
     }
 
-    private static void statements(Pg pg) throws SQLException {
+    private static Encoding encodingOf(Arm arm) {
+        return switch (arm) {
+            case B_BINARY -> Encoding.BINARY_ARRAYS;
+            case B_JSONB_ONE -> Encoding.JSONB_ONE;
+            case B_SCALAR_1 -> Encoding.SCALAR_1;
+            case B_NO_HEAD -> Encoding.NO_HEAD;
+            default -> throw new IllegalArgumentException(arm.name());
+        };
+    }
+
+    /** Records the top writer statements; returns the total execution time of all writer statements, ms. */
+    private static double statements(Pg pg) throws SQLException {
+        double totalExec = SpikePostgres.queryLong(pg.observer, "SELECT round(sum(s.total_exec_time) * 1000)::bigint FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = 'writer'") / 1000.0;
         try (var s = pg.observer.createStatement();
              var rs = s.executeQuery("SELECT s.query, s.calls, s.rows, s.plans, s.total_plan_time, s.total_exec_time, s.shared_blks_hit + s.shared_blks_read, s.shared_blks_dirtied "
                                              + "FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = 'writer' ORDER BY s.calls DESC LIMIT 6")) {
@@ -315,6 +350,7 @@ class ContendedAppendThroughputSpikeIT {
                                      oneLine.substring(0, Math.min(110, oneLine.length()))));
             }
         }
+        return totalExec;
     }
 
     /** {busy jiffies, total jiffies} of the whole machine (the Docker VM, shared with the container). */
@@ -331,7 +367,7 @@ class ContendedAppendThroughputSpikeIT {
     }
 
     /** CPU the PostgreSQL container has used, µs, from its cgroup (v2 {@code cpu.stat}, else v1 {@code cpuacct.usage}). */
-    private static long containerCpuMicros(Pg pg) {
+    static long containerCpuMicros(Pg pg) {
         try {
             var r = pg.container.execInContainer("sh", "-c", "cat /sys/fs/cgroup/cpu.stat 2>/dev/null || cat /sys/fs/cgroup/cpuacct/cpuacct.usage");
             for (var line : r.getStdout().split("\n")) {

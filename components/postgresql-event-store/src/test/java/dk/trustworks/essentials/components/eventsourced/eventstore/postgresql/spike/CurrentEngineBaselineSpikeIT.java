@@ -559,6 +559,11 @@ class CurrentEngineBaselineSpikeIT {
         EventStoreSubscriptionManager                                                 manager;
 
         private Stack(String jdbcUrl, String role) {
+            this(jdbcUrl, role, JSONColumnType.JSONB);
+        }
+
+        /** {@code jsonColumnType} is used for the payload and the metadata column of every event table this stack creates. */
+        private Stack(String jdbcUrl, String role, JSONColumnType jsonColumnType) {
             var config = new HikariConfig();
             config.setJdbcUrl(jdbcUrl);
             config.setUsername(role);
@@ -573,7 +578,7 @@ class CurrentEngineBaselineSpikeIT {
                                                                                       .setUnitOfWorkFactory(unitOfWorkFactory)
                                                                                       .setEventMapper(new BaselineEventMapper())
                                                                                       .setAggregateEventStreamConfigurationFactory(SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(
-                                                                                              EssentialsJSONEventSerializers.create(), IdentifierColumnType.TEXT, JSONColumnType.JSONB))
+                                                                                              EssentialsJSONEventSerializers.create(), IdentifierColumnType.TEXT, jsonColumnType))
                                                                                       .setSchemaOwnership(SchemaOwnership.COMPONENT)
                                                                                       .build();
             var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory, SchemaOwnership.COMPONENT);
@@ -590,6 +595,14 @@ class CurrentEngineBaselineSpikeIT {
 
         static Stack writer(Pg pg, String role) {
             return new Stack(pg.container.getJdbcUrl(), role);
+        }
+
+        static Stack writer(Pg pg, String role, JSONColumnType jsonColumnType) {
+            return new Stack(pg.container.getJdbcUrl(), role, jsonColumnType);
+        }
+
+        static Stack writer(Pg pg, String role, String jdbcUrl, JSONColumnType jsonColumnType) {
+            return new Stack(jdbcUrl, role, jsonColumnType);
         }
 
         static Stack writer(Pg pg, String role, String jdbcUrl) {
