@@ -6,7 +6,7 @@ detach, catch-up and the resume point. Its gate is that a model checks invariant
 code exists. The model exists to find design flaws before any is written, so this document reports findings, not
 decisions.
 
-Date: 2026-11-11.
+Date: 2026-11-11. Extended the same day to several events per transaction (§2, §4, §6).
 
 ## 1. How to run it
 
@@ -34,11 +34,16 @@ No TLA+ tools were available offline on the machine, so there is no TLA+ specifi
 
 ## 2. What is modelled
 
-**Writers.** Each writer appends one event to one aggregate, in three atomic steps: take an xid
+**Writers.** Each writer is one transaction appending one or more events, in atomic steps: take an xid
 (`pg_current_xact_id()`); insert, which derives `event_order` from committed state (the highest committed order of the
 aggregate plus one) and takes the next `global_order` from the sequence, as §5.1's single statement does; then commit
-or, for writers marked abortable, abort. The unique constraint on `(aggregate_id, event_order)` is checked at commit: a
-writer whose order was committed by another writer in the meantime aborts instead. Aborted writers and sequence jumps
+or, for writers marked abortable, abort. A writer of *k* events (added 2026-11-11, §4) inserts them in *k* separate
+steps, each taking its own `global_order`, so other writers' values can fall between them, as they can between the rows
+of one §5.1 statement under concurrent `nextval` calls; the events of one aggregate get consecutive event orders (the
+first from committed state, each later one from its predecessor, as `ok.v + n` does), and all of them commit or abort
+together. A writer may also put its last event on a second aggregate (a unit of work touching two aggregates, §5.2).
+The unique constraint on `(aggregate_id, event_order)` is checked at commit: a writer any of whose orders was committed
+by another writer in the meantime aborts instead, with all its events. Aborted writers and sequence jumps
 (`seq += 2`, §4.8) leave values that never appear. Writers keep running across a crash of the engine, because they may
 be other processes. A long writer (§4.6) is simply a writer that commits late; exhaustive search covers every such
 interleaving.
@@ -83,7 +88,7 @@ Handling:
 detached from their durable resume points. The restarted reader starts at the head with one *initial candidate*
 `(head, running set)` and an unknown watermark; no subscription may attach until that candidate retires (finding F4).
 
-**Not modelled** (abstracted away): more than one event per writer; several aggregate types (one reader); tenants;
+**Not modelled** (abstracted away): several aggregate types (one reader); tenants;
 wake-up tiers and timing (the probe interval, backstop); the per-database catch-up permit (I15); fencing and exclusive
 ownership (I5); `resetFrom` and the reposition epoch (I6); the old engine and hand-over (I8); the adaptive fallback of
 §10.1; a `CONTIGUOUS` projection's own content (the fold is the multiset of applied orders, which is what exactly-once
@@ -117,8 +122,11 @@ that fails on one event must neither lose nor double-apply any other event of th
 ## 4. Configurations and bounds
 
 Common bounds unless stated: tail read `LIMIT 2`, buffer 2, page 2, catch-up page 1, at most one crash, one
-event per writer, two aggregates (A, B), two event types. The configurations run with the hole re-read of finding F1
-(`holeRereadOnProbe = true`); the run "as written" turns it off. Results of the run on 2026-11-11 (JDK 25, one thread; the whole class takes about 7.5 minutes with the defaults):
+event per writer, two aggregates (A, B), two event types. The `multi*` configurations (added 2026-11-11) give some
+writers two or three events in one transaction. The configurations run with the hole re-read of finding F1
+(`holeRereadOnProbe = true`); the run "as written" turns it off. Results of the run on 2026-11-11 (JDK 25, one thread; the whole class took about 7.5 minutes with the defaults
+before the `multi*` configurations, and 17 minutes with them, 40 tests). The configurations that existed before
+reproduce the same state counts with the multi-event writer code:
 
 | Configuration | Writers | Subscriptions | Other | Exploration | Result |
 |---|---|---|---|---|---|
@@ -131,7 +139,13 @@ event per writer, two aggregates (A, B), two event types. The configurations run
 | `core`, random walks | | | | seeds 1-200 000, 60 steps each, then writers finish and drain | no violation |
 | `pages`, random walks | | | | seeds 1-200 000 | no violation |
 | `large`, random walks | five writers (two abortable, one failing once) | `FRESH` periodic, `CONTIGUOUS` in-tx (type 0), `FRESH` in-tx | buffer 1, two crashes, two jumps | seeds 1-200 000, 11.6 M steps | no violation |
+| `multi-two-aggregates` | A then B in one transaction (abortable), B (type 1) | `FRESH` periodic (all), `CONTIGUOUS` in-tx (type 0) | no jumps | exhausted: 73 837 states, depth 32 | all hold |
+| `multi-pages` | A#n, A#n+1 (first event's handler fails once), B#n, B#n+1 | `CONTIGUOUS` in-tx (all), `FRESH` in-tx (all) | no jumps | exhausted: 406 176 states, depth 52 | all hold |
+| `multi` | A#n, A#n+1 (abortable), B, A type 1 | `FRESH` periodic (all), `CONTIGUOUS` in-tx (type 0) | no jumps; cap raised to 10 M for this one | exhausted: 9 067 626 states, 31.8 M transitions, depth 43, about 3 minutes | all hold |
+| `multi-wide`, random walks | A#n, A#n+1 (abortable), B#n, B#n+1, A | `FRESH` periodic (all), `CONTIGUOUS` in-tx (all) | no jumps | seeds 1-200 000, 8.8 M steps (exhaustive search hits the 5 M cap at depth 20 with no violation) | no violation |
+| `multi-large`, random walks | five writers: three events (abortable), two (failing once), two on A then B, two (abortable), one | `FRESH` periodic, `CONTIGUOUS` in-tx (type 0), `FRESH` in-tx | buffer 1, two crashes, two jumps | seeds 1-200 000, 11.9 M steps | no violation |
 | `core` **as written** (no hole re-read) | as `core` | as `core` | | bounded at the state cap (5 000 000 states, every state to depth 19) | **I2 fails** (finding F1); nothing else fails |
+| `multi` **as written** | as `multi` | as `multi` | | bounded at the state cap (5 000 000 states, depth 28) | **I2 fails**, F1's shape again (§6); nothing else fails |
 
 Breadth-first search explores every state at depth *d* before any at *d* + 1, so a bounded run has checked every
 interleaving up to the depth before the one it stopped in.
@@ -163,7 +177,13 @@ configuration named, breadth first, up to the state cap, recording the shortest 
 | `PAGE_FALLBACK_PARTIAL_COMMIT` | a failing page commits the events before the failure, then replays the page per event (§8.3) | `pages` | I12 (the I14 case) |
 | `BACKPRESSURE` | a full buffer blocks the reader instead of detaching the subscription (§6) | `core` | I9, I1 |
 
-Every mutant run stopped at its cap of 1 000 000 states except `CACHED_STAT_ACTIVITY` (49 712 states) and
+The same sixteen mutants were also run on the multi-event base `multi` (`PAGE_FALLBACK_PARTIAL_COMMIT` on `multi-pages`,
+exhausted at 421 614 states; the others bounded at 1 M states, depth 15-21), and every one is caught there too.
+Compared with the table above: `VALUE_BEFORE_XID` also fails I1 and I12, `X_BEFORE_S` also I3 and I12,
+`EMPTY_TAIL_NO_RUNNING_SET` also I1 and I12; `CACHED_STAT_ACTIVITY` is caught on `multi` within the 1 M cap (I13 only),
+which it was not on `core`; the rest fail the same invariants as on their original base.
+
+Every mutant run on the original bases stopped at its cap of 1 000 000 states except `CACHED_STAT_ACTIVITY` (49 712 states) and
 `WATERMARK_BEFORE_HOLE_READ` (25 870 states), which were exhausted on `small`. On `core`, the cached running set is
 caught only beyond the 1 M cap, because the stale set must survive a whole probe; hence the smaller base. So each
 invariant of the gate is caught by at least one mutant: I1 by `ATTACH_AFTER_BRIDGE_READ` and `BACKPRESSURE`; I2 by
@@ -289,6 +309,29 @@ The mutant `BACKPRESSURE` (a full buffer blocks the reader) fails I9, as expecte
 through the reader. Every writer has finished and nothing moves again. §6's rule that a slow subscription must detach
 rather than block the reader is load-bearing for `CONTIGUOUS` correctness, not only for latency.
 
+### Several events per transaction: no new finding
+
+Extending the writers to several events per transaction (§2) found nothing new. `multi`, `multi-two-aggregates` and
+`multi-pages` were explored to exhaustion and `multi-wide` and `multi-large` sampled, with F1's hole re-read and the
+rules of F2-F5: every invariant holds, including I2 when one writer's two events of A straddle another writer's value,
+when they leave two holes that one candidate covers, when the writer aborts and both holes are permanent, and when a
+page's failing event shares a transaction with the next event of its aggregate. Without the hole re-read, `multi`
+fails I2 exactly as F1 describes, with both of the late writer's events arriving after A#2:
+
+```
+w0.xid, w0.insert, w0.insert2   w0 holds A#0 @ g1 and A#1 @ g2, uncommitted
+w1.xid, w1.insert, w1.commit    B#0 @ g3 committed
+w2.xid                          w2 (aggregate A) takes its xid
+reader.probe.snapshot           the probe's snapshot sees g3 only
+w0.commit                       A#0, A#1 committed together (after the snapshot)
+w2.insert, w2.commit            A#2 @ g4, derived from A#1
+s0.attach                       (drain) A#2 is read above the cursor; A#0, A#1 arrive from the hole read  -> I2
+```
+
+The argument behind F1's change carries over unchanged: within one transaction the identity values grow with the
+event order, and a later transaction on the same aggregate can only insert after this one has committed, so any
+snapshot that sees A#n+1 also sees A#n.
+
 ### Confirmations
 
 The other mutants confirm parts of the design rather than find new problems: xid before value (§4.3) and `event_order`
@@ -316,5 +359,5 @@ is caught there.
   in §4).
 - **Implementation detail the design has not fixed**: threads (the model's subscription steps are atomic), the shape of
   the catch-up permit, fencing, resets, the hand-over from the old engine.
-- **Several events per transaction**, which interleave their sequence values with other writers' and give one writer
-  several holes; and several aggregate types per JVM.
+- **Several aggregate types per JVM.** (Several events per transaction, listed here first, are modelled since
+  2026-11-11, §4; the bounds are two or three events per writer.)

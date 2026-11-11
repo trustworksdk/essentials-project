@@ -39,6 +39,7 @@ class SubscriptionStateMachineModelTest {
 
     static final int MAX_STATES = Integer.getInteger("spike.model.maxStates", 5_000_000);
     static final int SEEDS      = Integer.getInteger("spike.model.seeds", 200_000);
+    static final int MULTI_MAX_STATES  = 10_000_000;
     static final int MUTANT_MAX_STATES = Integer.getInteger("spike.model.mutantMaxStates", 1_000_000);
 
     static final int T0 = 0b01, ALL = 0b11;
@@ -118,6 +119,109 @@ class SubscriptionStateMachineModelTest {
         c.maxJumps = 2;
         c.bufferCap = 1;
         return c;
+    }
+
+    /**
+     * Several events per transaction: w0 appends A#n, A#n+1 in one transaction (abortable, so it can leave two holes),
+     * w1 one B event whose value can fall between w0's two, w2 one A event (type 1) that must follow w0's; the CONTIGUOUS subscription takes type 0 only (filtered catch-up).
+     */
+    static Config multi() {
+        Config c = new Config("multi")
+                .writer(WriterSpec.of(0, 0).events(2).abortable())
+                .writer(WriterSpec.of(1, 0))
+                .writer(WriterSpec.of(0, 1))
+                .sub(Mode.FRESH, Progress.PERIODIC, ALL)
+                .sub(Mode.CONTIGUOUS, Progress.IN_TX, T0);
+        c.maxJumps = 0;
+        return c;
+    }
+
+    /** As multi(), but w1 also appends two events (B#n, B#n+1), so two transactions interleave their values. Bounded. */
+    static Config multiWide() {
+        Config c = new Config("multi-wide")
+                .writer(WriterSpec.of(0, 0).events(2).abortable())
+                .writer(WriterSpec.of(1, 0).events(2))
+                .writer(WriterSpec.of(0, 0))
+                .sub(Mode.FRESH, Progress.PERIODIC, ALL)
+                .sub(Mode.CONTIGUOUS, Progress.IN_TX, ALL);
+        c.maxJumps = 0;
+        return c;
+    }
+
+    /** One unit of work touching two aggregates (§5.2): w0 appends A#n then B#m (abortable); w1 appends B of another type. */
+    static Config multiTwoAggregates() {
+        Config c = new Config("multi-two-aggregates")
+                .writer(WriterSpec.of(0, 0).events(2).lastEventOn(1).abortable())
+                .writer(WriterSpec.of(1, 1))
+                .sub(Mode.FRESH, Progress.PERIODIC, ALL)
+                .sub(Mode.CONTIGUOUS, Progress.IN_TX, T0);
+        c.maxJumps = 0;
+        return c;
+    }
+
+    /** Pages over multi-event writers: the failing event sits in a two-event transaction. */
+    static Config multiPages() {
+        Config c = new Config("multi-pages")
+                .writer(WriterSpec.of(0, 0).events(2).failing(1))
+                .writer(WriterSpec.of(1, 0).events(2))
+                .sub(Mode.CONTIGUOUS, Progress.IN_TX, ALL)
+                .sub(Mode.FRESH, Progress.IN_TX, ALL);
+        c.maxJumps = 0;
+        return c;
+    }
+
+    /** Random walks only: four multi-event writers (up to three events), two aggregates, three subscriptions. */
+    static Config multiLarge() {
+        Config c = new Config("multi-large")
+                .writer(WriterSpec.of(0, 0).events(3).abortable())
+                .writer(WriterSpec.of(1, 1).events(2).failing(1))
+                .writer(WriterSpec.of(0, 1).events(2).lastEventOn(1))
+                .writer(WriterSpec.of(1, 0).events(2).abortable())
+                .writer(WriterSpec.of(0, 0))
+                .sub(Mode.FRESH, Progress.PERIODIC, ALL)
+                .sub(Mode.CONTIGUOUS, Progress.IN_TX, T0)
+                .sub(Mode.FRESH, Progress.IN_TX, ALL);
+        c.maxCrashes = 2;
+        c.maxJumps = 2;
+        c.bufferCap = 1;
+        return c;
+    }
+
+    @Test
+    void exhaustive_multi_event_writers_all_invariants_hold() {
+        for (Config c : List.of(multiTwoAggregates(), multiPages(), multi())) {
+            var r = ModelExplorer.bfs(c, Math.max(MAX_STATES, MULTI_MAX_STATES), true); // multi() exhausts at about 9.1 M states
+            print(r);
+            assertThat(r.firstViolationByInvariant()).as(r.headline()).isEmpty();
+        }
+    }
+
+    @Test
+    void random_walks_multi_event_writers_all_invariants_hold() {
+        for (Config c : List.of(multiWide(), multiLarge())) {
+            var r = ModelExplorer.randomWalks(c, 1, SEEDS, 60);
+            System.out.println("[P0.5] " + r.headline());
+            r.firstViolationByInvariant().values().forEach(t -> System.out.println("[P0.5] " + t));
+            assertThat(r.firstViolationByInvariant()).as(r.headline()).isEmpty();
+        }
+    }
+
+    /** As written (no hole re-read), multi-event writers break I2 too: F1 is not specific to one event per writer. */
+    @Test
+    void design_as_written_multi_event_writers_break_per_aggregate_order() {
+        var r = ModelExplorer.bfs(designAsWritten(multi()), MAX_STATES, false);
+        print(r);
+        assertThat(r.firstViolationByInvariant()).containsOnlyKeys("I2");
+    }
+
+    /** Every mutant, on the multi-event base; reported, asserted caught. */
+    @ParameterizedTest
+    @EnumSource(Mutant.class)
+    void every_mutant_is_caught_with_multi_event_writers(Mutant m) {
+        Config base = m == Mutant.PAGE_FALLBACK_PARTIAL_COMMIT ? multiPages() : multi();
+        var r = ModelExplorer.bfs(base.with(m), MUTANT_MAX_STATES, false);
+        print(r);
+        assertThat(r.firstViolationByInvariant()).as(r.headline()).isNotEmpty();
     }
 
     static Config designAsWritten(Config c) {

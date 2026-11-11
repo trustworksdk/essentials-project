@@ -76,18 +76,49 @@ final class SubscriptionModel {
         BACKPRESSURE
     }
 
-    record WriterSpec(int agg, int type, boolean mayAbort, int failures) {
+    /** Most events one writer (one transaction) may insert; event ids are {@code writer * MAX_EVENTS + k}. */
+    static final int MAX_EVENTS = 4;
+
+    /**
+     * One writer is one transaction. It inserts {@code events} events, each in its own step with its own value from the
+     * shared sequence (other writers' values can interleave), all committing or aborting together. Every event goes to
+     * {@code agg}, except the last when {@code agg2 >= 0} (two aggregates in one unit of work, §5.2). {@code failures}
+     * applies to the writer's first event only.
+     */
+    record WriterSpec(int agg, int type, boolean mayAbort, int failures, int events, int agg2) {
         static WriterSpec of(int agg, int type) {
-            return new WriterSpec(agg, type, false, 0);
+            return new WriterSpec(agg, type, false, 0, 1, -1);
         }
 
         WriterSpec abortable() {
-            return new WriterSpec(agg, type, true, failures);
+            return new WriterSpec(agg, type, true, failures, events, agg2);
         }
 
-        /** The handler of an in-transaction subscriber throws on this event's first {@code n} attempts. */
+        /** The handler of an in-transaction subscriber throws on this writer's first event's first {@code n} attempts. */
         WriterSpec failing(int n) {
-            return new WriterSpec(agg, type, mayAbort, n);
+            return new WriterSpec(agg, type, mayAbort, n, events, agg2);
+        }
+
+        /** The writer inserts {@code n} events in one transaction. */
+        WriterSpec events(int n) {
+            if (n < 1 || n > MAX_EVENTS) throw new IllegalArgumentException("events must be 1.." + MAX_EVENTS);
+            return new WriterSpec(agg, type, mayAbort, failures, n, agg2);
+        }
+
+        /** The writer's last event goes to aggregate {@code other}. */
+        WriterSpec lastEventOn(int other) {
+            if (events < 2) throw new IllegalArgumentException("lastEventOn needs events >= 2");
+            return new WriterSpec(agg, type, mayAbort, failures, events, other);
+        }
+
+        int aggOf(int k) {
+            return agg2 >= 0 && k == events - 1 ? agg2 : agg;
+        }
+
+        @Override
+        public String toString() {
+            return "W(" + (char) ('A' + agg) + (agg2 >= 0 ? "+" + (char) ('A' + agg2) : "") + ",type=" + type + (events > 1 ? ",events=" + events : "") +
+                    (mayAbort ? ",abortable" : "") + (failures > 0 ? ",failing=" + failures : "") + ")";
         }
     }
 
@@ -235,8 +266,9 @@ final class SubscriptionModel {
     static final class State {
         final Config c;
         int seq = 1, nextXid = 1, crashes, jumps;
-        int[] wPhase, wXid, wG, wEo;
-        TreeMap<Integer, Integer> committed = new TreeMap<>(); // global_order -> writer
+        int[] wPhase, wXid, wIns;  // per writer; wIns = events inserted so far
+        int[] wG, wEo;             // per event id (writer * MAX_EVENTS + k)
+        TreeMap<Integer, Integer> committed = new TreeMap<>(); // global_order -> event id
         // tail reader (one per aggregate type per JVM)
         int              cursor, wm;
         boolean          initialized = true;
@@ -256,11 +288,12 @@ final class SubscriptionModel {
             int n = c.writers.size();
             wPhase = new int[n];
             wXid = new int[n];
-            wG = new int[n];
-            wEo = new int[n];
+            wIns = new int[n];
+            wG = new int[n * MAX_EVENTS];
+            wEo = new int[n * MAX_EVENTS];
             Arrays.fill(wEo, -1);
             subs = new Sub[c.subs.size()];
-            for (int i = 0; i < subs.length; i++) subs[i] = new Sub(n, c.aggregates);
+            for (int i = 0; i < subs.length; i++) subs[i] = new Sub(n * MAX_EVENTS, c.aggregates);
         }
 
         State(State o) {
@@ -271,6 +304,7 @@ final class SubscriptionModel {
             jumps = o.jumps;
             wPhase = o.wPhase.clone();
             wXid = o.wXid.clone();
+            wIns = o.wIns.clone();
             wG = o.wG.clone();
             wEo = o.wEo.clone();
             committed = new TreeMap<>(o.committed);
@@ -295,7 +329,11 @@ final class SubscriptionModel {
             if (key != null) return key;
             var b = new StringBuilder(256);
             b.append(seq).append(',').append(nextXid).append(',').append(crashes).append(',').append(jumps).append('|');
-            for (int w = 0; w < wPhase.length; w++) b.append(wPhase[w]).append(':').append(wXid[w]).append(':').append(wG[w]).append(':').append(wEo[w]).append(';');
+            for (int w = 0; w < wPhase.length; w++) {
+                b.append(wPhase[w]).append(':').append(wXid[w]);
+                for (int k = 0; k < c.writers.get(w).events(); k++) b.append(':').append(wG[w * MAX_EVENTS + k]).append(':').append(wEo[w * MAX_EVENTS + k]);
+                b.append(';');
+            }
             b.append('|').append(committed.keySet()).append('|').append(cursor).append(',').append(wm).append(',').append(initialized)
              .append(holes).append(pendingHoles).append(holeReadPending).append(',').append(stashX).append(',').append(cachedX).append(stashed).append(stashTail).append(stashLate);
             for (int[] cd : cands) b.append('(').append(cd[0]).append(',').append(cd[1]).append(',').append(cd[2]).append(')');
@@ -322,18 +360,24 @@ final class SubscriptionModel {
 
         /** The unfinished writer holding global_order g, or -1. */
         int holder(int g) {
-            for (int w = 0; w < wPhase.length; w++) if (wG[w] == g && wPhase[w] < W_COMMITTED) return w;
+            for (int w = 0; w < wPhase.length; w++) {
+                if (wPhase[w] >= W_COMMITTED) continue;
+                for (int k = 0; k < c.writers.get(w).events(); k++) if (wG[w * MAX_EVENTS + k] == g) return w;
+            }
             return -1;
         }
 
-        int typeOf(int g) {
-            Integer w = committed.get(g);
-            return w == null ? -1 : c.writers.get(w).type();
+        WriterSpec writerOfEvent(int e) {
+            return c.writers.get(e / MAX_EVENTS);
+        }
+
+        int aggOfEvent(int e) {
+            return writerOfEvent(e).aggOf(e % MAX_EVENTS);
         }
 
         boolean matches(int sub, int g) {
-            Integer w = committed.get(g);
-            return w != null && c.subs.get(sub).matches(c.writers.get(w).type());
+            Integer e = committed.get(g);
+            return e != null && c.subs.get(sub).matches(writerOfEvent(e).type());
         }
 
         String summary() {
@@ -349,8 +393,11 @@ final class SubscriptionModel {
                     case W_COMMITTED -> "C";
                     default -> "A";
                 });
-                if (wG[w] > 0) b.append("@g").append(wG[w]);
-                if (wEo[w] >= 0) b.append("=").append((char) ('A' + spec.agg())).append('#').append(wEo[w]);
+                for (int k = 0; k < spec.events(); k++) {
+                    int e = w * MAX_EVENTS + k;
+                    if (wG[e] > 0) b.append(k == 0 ? "@g" : ",g").append(wG[e]);
+                    if (wEo[e] >= 0) b.append("=").append((char) ('A' + spec.aggOf(k))).append('#').append(wEo[e]);
+                }
                 if (wXid[w] > 0) b.append("/x").append(wXid[w]);
             }
             b.append("] committed=").append(committed.keySet());
@@ -404,7 +451,7 @@ final class SubscriptionModel {
                 final int ww = w;
                 switch (s.wPhase[w]) {
                     case W_NEW -> out.add(new Action("w" + w + "." + step1Label(c), t -> writerStep1(t, ww)));
-                    case W_STEP1 -> out.add(new Action("w" + w + "." + step2Label(c), t -> writerStep2(t, ww)));
+                    case W_STEP1 -> out.add(new Action("w" + w + "." + step2Label(c) + (s.wIns[w] > 0 ? String.valueOf(s.wIns[w] + 1) : ""), t -> writerStep2(t, ww)));
                     case W_INSERTED -> {
                         out.add(new Action("w" + w + ".commit", t -> writerCommit(t, ww)));
                         if (c.writers.get(w).mayAbort()) out.add(new Action("w" + w + ".abort", t -> t.wPhase[ww] = W_ABORTED));
@@ -453,50 +500,65 @@ final class SubscriptionModel {
 
     private static int headEo(State s, int agg) {
         int max = -1;
-        for (int g : s.committed.keySet()) {
-            int w = s.committed.get(g);
-            if (s.c.writers.get(w).agg() == agg) max = Math.max(max, s.wEo[w]);
-        }
+        for (int e : s.committed.values()) if (s.aggOfEvent(e) == agg) max = Math.max(max, s.wEo[e]);
         return max;
     }
 
+    /** A writer's xid (the mutants take the first event's value here instead of, or as well as, the xid). */
     private static void writerStep1(State s, int w) {
+        int e0 = w * MAX_EVENTS;
         if (s.c.has(Mutant.VALUE_BEFORE_XID)) {
-            s.wG[w] = s.seq++;
+            s.wG[e0] = s.seq++;
         } else if (s.c.has(Mutant.VALUE_BEFORE_EVENT_ORDER)) {
             s.wXid[w] = s.nextXid++;
-            s.wG[w] = s.seq++;
+            s.wG[e0] = s.seq++;
         } else {
             s.wXid[w] = s.nextXid++;
         }
         s.wPhase[w] = W_STEP1;
     }
 
+    /**
+     * One insert: the writer's next event. The first event of an aggregate derives its event_order from committed
+     * state (§5.1); a later one of the same aggregate in the same transaction follows its own previous one, as the
+     * statement's {@code ok.v + n} does. Each event takes its own identity value, so one transaction's values need not
+     * be consecutive. The mutants apply to the first event.
+     */
     private static void writerStep2(State s, int w) {
-        int agg = s.c.writers.get(w).agg();
-        if (s.c.has(Mutant.VALUE_BEFORE_XID)) {
+        WriterSpec spec = s.c.writers.get(w);
+        int k = s.wIns[w];
+        int e = w * MAX_EVENTS + k;
+        int agg = spec.aggOf(k);
+        int eo = headEo(s, agg) + 1;
+        for (int j = 0; j < k; j++) if (spec.aggOf(j) == agg) eo = Math.max(eo, s.wEo[w * MAX_EVENTS + j] + 1);
+        if (k == 0 && s.c.has(Mutant.VALUE_BEFORE_XID)) {
             s.wXid[w] = s.nextXid++;
-            s.wEo[w] = headEo(s, agg) + 1;
-        } else if (s.c.has(Mutant.VALUE_BEFORE_EVENT_ORDER)) {
-            s.wEo[w] = headEo(s, agg) + 1;
+            s.wEo[e] = eo;
+        } else if (k == 0 && s.c.has(Mutant.VALUE_BEFORE_EVENT_ORDER)) {
+            s.wEo[e] = eo;
         } else {
             // §5.1: event_order derived from committed state, then the identity value, in one statement
-            s.wEo[w] = headEo(s, agg) + 1;
-            s.wG[w] = s.seq++;
+            s.wEo[e] = eo;
+            s.wG[e] = s.seq++;
         }
-        s.wPhase[w] = W_INSERTED;
+        s.wIns[w] = k + 1;
+        if (s.wIns[w] == spec.events()) s.wPhase[w] = W_INSERTED;
     }
 
+    /** Commits all of a writer's events, or aborts all of them on a unique (aggregate_id, event_order) violation. */
     private static void writerCommit(State s, int w) {
-        int agg = s.c.writers.get(w).agg();
-        for (int v : s.committed.values()) {
-            if (s.c.writers.get(v).agg() == agg && s.wEo[v] == s.wEo[w]) {
-                s.wPhase[w] = W_ABORTED; // unique (aggregate_id, event_order) violation
-                return;
+        WriterSpec spec = s.c.writers.get(w);
+        for (int k = 0; k < spec.events(); k++) {
+            int e = w * MAX_EVENTS + k;
+            for (int v : s.committed.values()) {
+                if (s.aggOfEvent(v) == spec.aggOf(k) && s.wEo[v] == s.wEo[e]) {
+                    s.wPhase[w] = W_ABORTED;
+                    return;
+                }
             }
         }
         s.wPhase[w] = W_COMMITTED;
-        s.committed.put(s.wG[w], w);
+        for (int k = 0; k < spec.events(); k++) s.committed.put(s.wG[w * MAX_EVENTS + k], w * MAX_EVENTS + k);
     }
 
     private static boolean backpressureBlocked(State s) {
@@ -622,7 +684,7 @@ final class SubscriptionModel {
         }
         for (int i = 0; i < s.subs.length; i++) {
             Sub old = s.subs[i];
-            Sub n = new Sub(s.wPhase.length, s.c.aggregates);
+            Sub n = new Sub(s.wPhase.length * MAX_EVENTS, s.c.aggregates);
             n.rp = old.rp;
             n.proj = old.proj;
             n.handled = old.handled;
@@ -704,12 +766,12 @@ final class SubscriptionModel {
         if (s.c.subs.get(i).mode() == Mode.CONTIGUOUS && g > s.wm)
             s.transitionViolations.add("I12: s" + i + " (CONTIGUOUS) delivered g" + g + " above watermark " + s.wm);
         if (sub.deliveredInc.add(g)) {
-            int w = s.committed.get(g);
-            int agg = s.c.writers.get(w).agg();
-            if (s.wEo[w] < sub.maxEo[agg])
-                s.transitionViolations.add("I2: s" + i + " first-delivered " + (char) ('A' + agg) + "#" + s.wEo[w] + " (g" + g + ") after " +
+            int e = s.committed.get(g);
+            int agg = s.aggOfEvent(e);
+            if (s.wEo[e] < sub.maxEo[agg])
+                s.transitionViolations.add("I2: s" + i + " first-delivered " + (char) ('A' + agg) + "#" + s.wEo[e] + " (g" + g + ") after " +
                                            (char) ('A' + agg) + "#" + sub.maxEo[agg]);
-            sub.maxEo[agg] = Math.max(sub.maxEo[agg], s.wEo[w]);
+            sub.maxEo[agg] = Math.max(sub.maxEo[agg], s.wEo[e]);
         }
     }
 
@@ -815,7 +877,7 @@ final class SubscriptionModel {
         int poisonIdx = -1;
         for (int k = 0; k < page.size(); k++) {
             int w = s.committed.get(page.get(k));
-            if (sub.attempts[w] < s.c.writers.get(w).failures()) {
+            if (sub.attempts[w] < failuresOf(s, w)) {
                 poisonIdx = k;
                 break;
             }
@@ -837,6 +899,11 @@ final class SubscriptionModel {
             sub.inflightDeadLetter = true;
         }
         // else: per-event transaction rolled back, redelivered later
+    }
+
+    /** Event id e's handler failures: a writer's failures apply to its first event only. */
+    private static int failuresOf(State s, int e) {
+        return e % MAX_EVENTS == 0 ? s.writerOfEvent(e).failures() : 0;
     }
 
     private static void pageCommit(State s, int i) {
