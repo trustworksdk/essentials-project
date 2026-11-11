@@ -35,6 +35,10 @@ No Essentials dependency found here · nothing to initialise
 This repository does not use Trustworks Essentials yet. Run /essentials:init to
 scaffold a new project, or just ask an Essentials question — the essentials-docs
 skill answers from the bundled docs without needing a project.
+
+New to event sourcing or CQRS? The words this plugin uses — event, command,
+decider, projection, aggregate, slice, bounded context — are explained at
+https://github.com/trustworksdk/essentials-project/blob/main/docs/concepts.md
 ```
 
 Then print the `━━━ SKILLS THAT FIRE ON THEIR OWN ━━━` and `━━━ CREATING AND UPDATING A PROJECT ━━━`
@@ -284,6 +288,8 @@ or auditing a slice, seeing the whole map, and reviewing a change.
   /essentials:doctor      ← a command stopped on a missing tool
   Just ask                ← both skills load themselves: a question routes to
                             the docs, a change request routes to the slice
+  New to event sourcing?  ← the words above, explained: docs/concepts.md
+                            https://github.com/trustworksdk/essentials-project/blob/main/docs/concepts.md
 ```
 
 Adapt the header line to what detection actually found. Name the language only if a build file

@@ -1,6 +1,10 @@
 # Essentials - LLM Reference
 
 > **Navigation Index**: Entry point to module-specific documentation. For implementation details, see linked module docs.
+>
+> **Explaining the ideas to someone new** (event, command, decider, projection, aggregate, slice, CQRS, bounded
+> context, the plugin's terms): [docs/concepts.md](https://github.com/trustworksdk/essentials-project/blob/main/docs/concepts.md) is the plain-language glossary. It defines
+> words and links back here for every API; use it for meanings, these docs for signatures.
 
 ## TOC
 - [Quick Facts](#quick-facts)

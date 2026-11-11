@@ -74,6 +74,10 @@ machines, contradictions in the instructions, and how much text each command and
   class name, and moving the class would leave every stored event of that type unreadable.
 - `/essentials:review` lists every gate `slice-source.py` covers when the script cannot run (gates 8 and 11(c)
   went missing).
+- `/essentials:intro` points newcomers at the new plain-language glossary, `docs/concepts.md` in the Essentials
+  repository. It explains event, command, decider, projection, aggregate, slice, CQRS, bounded context and the
+  plugin's own terms (slice law, write styles, S1-S11, ESS ids). `LLM.md` links it too, so the bundled
+  `references/llm/LLM.md` carries the link.
 - Contradictions fixed: one language-detection rule; `essentials-change` tells an Essentials project that is not
   on the slice law so instead of staying silent; § 5.4 finds a new event's view consumers through `who-reacts`;
   the translation skill names DurableQueues and the Inbox correctly.

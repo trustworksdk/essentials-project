@@ -58,6 +58,11 @@ Essentials is a set of Java 25+ building blocks designed to help you write **str
 - Add **integration modules** for framework-specific serialization and persistence of **semantic types**
 - Use **components** for distributed systems requiring event sourcing, queues, and coordination
 
+**New to event sourcing or CQRS?** [docs/concepts.md](docs/concepts.md) explains the vocabulary — event,
+command, decider, projection, aggregate, slice, and the components underneath — and links each word to the
+doc that owns its API. [docs/event-sourcing-vs-crud/](docs/event-sourcing-vs-crud/) shows the same ideas as
+an animated, side-by-side walkthrough.
+
 ---
 ## License
 
@@ -977,6 +982,7 @@ that changes `essentials-plugin/` without it.
 ## Resources
 
 - **GitHub:** [https://github.com/trustworksdk/essentials-project](https://github.com/trustworksdk/essentials-project)
+- **Concepts and glossary:** [docs/concepts.md](docs/concepts.md)
 - **Components Documentation:** [components/README.md](components/README.md)
 - **LLM Reference:** [LLM/LLM.md](LLM/LLM.md)
 - **Each module contains detailed README.md** with usage examples

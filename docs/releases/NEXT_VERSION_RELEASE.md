@@ -749,7 +749,7 @@ the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plug
   translation webhook fails closed and gets a per-event path. The Maven wrapper verifies its checksum, Spring
   Modulith is gone and the dev password is dev-profile only. The slice scripts no longer double every slice in
   a Claude Code worktree or crash on non-UTF-8 input. Commands and skills lose contradictions and load much
-  less text. To check an existing project: run `/essentials:upgrade --check`. `/essentials:upgrade` now shows how many fixes it will offer before the first one. It can commit each fix on its own branch, and it writes the findings you skip to a backlog file you choose. `/essentials:slice-check` ends by naming the command that owns each open finding, and prints a ready-to-paste `slice-check-accepted.yaml` entry for a finding you decide to keep. Gate 7 (one event variant per file) is now a script check, and `--fix-source` no longer offers to move a nested event variant, which would rename its stored class name and leave existing events unreadable.
+  less text. To check an existing project: run `/essentials:upgrade --check`. `/essentials:upgrade` now shows how many fixes it will offer before the first one. It can commit each fix on its own branch, and it writes the findings you skip to a backlog file you choose. `/essentials:slice-check` ends by naming the command that owns each open finding, and prints a ready-to-paste `slice-check-accepted.yaml` entry for a finding you decide to keep. Gate 7 (one event variant per file) is now a script check, and `--fix-source` no longer offers to move a nested event variant, which would rename its stored class name and leave existing events unreadable. `/essentials:intro` points newcomers to the new glossary, [`docs/concepts.md`](../concepts.md) (§6).
 - `0.60.1-11` - the LLM docs describe when the starters register the tracing and queue metrics interceptors, and
   their opt-out switches (§1.1.6).
 - `0.60.1-3` - the LLM docs show `Money`'s `amount` as a JSON number, the form it is written in, and say a quoted
@@ -887,6 +887,15 @@ Not published; listed because they are the reference for how to use the framewor
 
 ## 6. Documentation
 
+- **New: [`docs/concepts.md`](../concepts.md), a concepts page and glossary for newcomers** to Essentials, CQRS and
+  event sourcing. It explains event, handler and outbox, eventual consistency, event store (aggregate, stream,
+  `AggregateType`, `EventOrder` vs `GlobalEventOrder`), the three event processor kinds, command, decider,
+  projection, aggregate and slice. It also covers CQRS, the building blocks underneath (UnitOfWork,
+  DurableQueues, Inbox/Outbox, FencedLock, semantic types, optimistic concurrency), bounded contexts, and the
+  plugin's terms (slice law, write styles, `slice.yaml`, S1-S11, ESS ids). Each term links to the doc that owns
+  its API. It follows the same order as the animated
+  [`docs/event-sourcing-vs-crud/`](../event-sourcing-vs-crud/) walkthrough, which is now linked too. The README,
+  `LLM/LLM.md` and `/essentials:intro` point to it.
 - **Renaming or moving an event class leaves stored events unreadable** (new trap `ESS-138`, new section
   `LLM-postgresql-event-store.md` § Renaming or moving an event class). A typed event is stored under its binary
   class name (`FQCN:com.acme.orders.events.OrderEvent$OrderPlaced` in `event_type`, and the same name in a queued
