@@ -337,7 +337,7 @@ judgement, and the move is trivial once that is settled.)
 every type in the file is top-level, so one file per type keeps each class name. On `split: renames`
 a variant is nested (`OrderEvent$OrderPlaced`), and moving it out renames it: the event store records
 each event under its class name (the finding's `types[].binaryName`) and deserializes by it, so every
-stored event of that type stops loading. Report that finding with both names and do not offer the
+stored event of that type stops loading (`ESS-138`). Report that finding with both names and do not offer the
 move; keeping old events readable is a design decision for the team, not a file move.
 
 Anything else is reported, not fixed: a

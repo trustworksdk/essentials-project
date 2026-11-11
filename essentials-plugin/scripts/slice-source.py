@@ -2915,7 +2915,7 @@ def _check_event_files(project, findings):
         if nested:
             hint = ("one variant per file (§R3) — but splitting renames a stored event type: "
                     + ", ".join(f"{_binary_name(td)} → {f.package + '.' if f.package else ''}{td.name}" for td in nested)
-                    + ". Events already stored under the old name stop deserializing; keeping them readable is a "
+                    + ". Events already stored under the old name stop deserializing (ESS-138); keeping them readable is a "
                       "design decision, not a file move")
         else:
             hint = "one variant per file (§R3); every type is top-level, so a file per type keeps each class name"

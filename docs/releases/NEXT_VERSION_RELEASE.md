@@ -887,6 +887,12 @@ Not published; listed because they are the reference for how to use the framewor
 
 ## 6. Documentation
 
+- **Renaming or moving an event class leaves stored events unreadable** (new trap `ESS-138`, new section
+  `LLM-postgresql-event-store.md` § Renaming or moving an event class). A typed event is stored under its binary
+  class name (`FQCN:com.acme.orders.events.OrderEvent$OrderPlaced` in `event_type`, and the same name in a queued
+  message's `message_payload_type`), and nothing maps an old name to a new one. A rename, a package move, or moving
+  a nested event type to its own file makes every stored event of that type fail with `LoadingClassFailedException`.
+  Keep the name, or rewrite the stored values in the same release.
 - The LLM docs describe elastic pump connections, and their `InboxConfig.builder()` examples compile: that builder's
   methods take no `set` prefix (`inboxName`, `redeliveryPolicy`, ...), unlike `OutboxConfigBuilder`'s.
 - The LLM docs and the `types-jackson3` README show `Money` as `{"amount":99.99,"currency":"USD"}`, with the amount a

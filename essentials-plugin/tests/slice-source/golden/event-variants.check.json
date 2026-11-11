@@ -56,7 +56,7 @@
       "file": "src/main/java/com/example/ev/payments/events/PaymentEvent.java",
       "line": 9,
       "message": "2 event types in one file: PaymentTaken (line 5, nested in PaymentEvent); PaymentRefunded (line 9, nested in PaymentEvent)",
-      "hint": "one variant per file (\u00a7R3) \u2014 but splitting renames a stored event type: com.example.ev.payments.events.PaymentEvent$PaymentTaken \u2192 com.example.ev.payments.events.PaymentTaken, com.example.ev.payments.events.PaymentEvent$PaymentRefunded \u2192 com.example.ev.payments.events.PaymentRefunded. Events already stored under the old name stop deserializing; keeping them readable is a design decision, not a file move",
+      "hint": "one variant per file (\u00a7R3) \u2014 but splitting renames a stored event type: com.example.ev.payments.events.PaymentEvent$PaymentTaken \u2192 com.example.ev.payments.events.PaymentTaken, com.example.ev.payments.events.PaymentEvent$PaymentRefunded \u2192 com.example.ev.payments.events.PaymentRefunded. Events already stored under the old name stop deserializing (ESS-138); keeping them readable is a design decision, not a file move",
       "split": "renames",
       "types": [
         {
@@ -84,7 +84,7 @@
       "file": "src/main/kotlin/com/example/ev/billing/events/InvoiceEvent.kt",
       "line": 6,
       "message": "2 event types in one file: InvoiceIssued (line 5, nested in InvoiceEvent); InvoiceVoided (line 6, nested in InvoiceEvent)",
-      "hint": "one variant per file (\u00a7R3) \u2014 but splitting renames a stored event type: com.example.ev.billing.events.InvoiceEvent$InvoiceIssued \u2192 com.example.ev.billing.events.InvoiceIssued, com.example.ev.billing.events.InvoiceEvent$InvoiceVoided \u2192 com.example.ev.billing.events.InvoiceVoided. Events already stored under the old name stop deserializing; keeping them readable is a design decision, not a file move",
+      "hint": "one variant per file (\u00a7R3) \u2014 but splitting renames a stored event type: com.example.ev.billing.events.InvoiceEvent$InvoiceIssued \u2192 com.example.ev.billing.events.InvoiceIssued, com.example.ev.billing.events.InvoiceEvent$InvoiceVoided \u2192 com.example.ev.billing.events.InvoiceVoided. Events already stored under the old name stop deserializing (ESS-138); keeping them readable is a design decision, not a file move",
       "split": "renames",
       "types": [
         {

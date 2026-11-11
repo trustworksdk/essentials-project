@@ -293,6 +293,26 @@ List<OrderEvent> events = EventStreamEvolver.extractEventsAsList(
     stream.eventList(), OrderEvent.class);
 ```
 
+### Renaming or moving an event class
+
+A typed event is stored under its Java class name: the `event_type` column holds `FQCN:` followed by
+`Class.getName()`, the binary name, so a type nested in its sealed parent is stored as
+`com.acme.orders.events.OrderEvent$OrderPlaced`. Reading the event back loads that class by name
+(`EventType.toJavaClass`), and nothing maps an old name to a new one. A queued message carrying the event
+(an `Inbox`, a `DurableQueues` queue) records the same name in `message_payload_type`.
+
+So renaming an event class, moving it to another package, or moving a nested type out to a top-level file
+(or the reverse) changes the stored name. Every event already stored under the old name then fails with
+`LoadingClassFailedException: Failed to load class '…'` when its aggregate is loaded or a subscription
+reaches it.
+
+- Treat the binary name of a persisted event type as stored data, like its JSON property names.
+- Splitting a file of top-level Kotlin classes into one file per class in the same package keeps every
+  name. That move is safe.
+- To change a name anyway, rewrite the stored values in the same release, before the new code reads them:
+  `event_type` in each event stream table that holds the type, and `message_payload_type` for queued
+  messages that are still pending or dead-lettered. Rehearse it on a copy of real data.
+
 ### PersistedEvent API
 
 Interface: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent`
