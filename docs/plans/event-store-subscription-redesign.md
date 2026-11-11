@@ -502,6 +502,12 @@ fails on the unique index after `nextval`, exactly as today, and leaves one hole
 rare: with 8 writers on 10 aggregates about half of all conflicts were of this kind, and §5.1 burned 248-270
 identity values per 1 000 successful appends against today's 463-465 — half, not none.
 
+*Note 2026-11-11:* the "half" depends on the client, not only on the statement. With raw pgjdbc and a fast lookup
+the same statement burned 289-299 per 1 000; adding only a longer gap between the writer's lookup and its append
+brought it to 216-225 (~70 µs lookup phase) and 181-184 (~180 µs), by turning would-be unique violations into
+zero-row conflicts. Encoding, the engine's exact row and the tenant index did not move it.
+[`event-store-phase0-append.md`](event-store-phase0-append.md) §8.3.
+
 For aggregates known to be hot, offer an opt-in `pg_advisory_xact_lock(<hash of table, aggregate id>)`, **sent as
 its own statement before the append**. It serialises writers of that one aggregate until commit, which is what
 Marten's `FOR UPDATE` on the stream row does, and the append that follows starts with a snapshot that includes the

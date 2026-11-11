@@ -612,7 +612,151 @@ holes 285-300 against 287-305). The xid check found the xid assigned before the 
 
 - Large payloads (covered for `json`/`jsonb`/`bytea` by the other doc), large tables (index locality of v7, page
   splits, autovacuum), `fsync=on`, a separate database host, PostgreSQL majors other than 17.5.
-- Head-table appends to existing streams uncontended (only creation was timed uncontended), and the head table under
-  many aggregates with little contention.
-- Combinations of options (for example, head table + no `UNIQUE(event_id)` + `uuid` + narrow row).
+- Head-table appends to existing streams uncontended (only creation was timed uncontended): now measured, §8.2. The
+  head table under many aggregates with little contention: still not measured.
+- Combinations of options (for example, head table + no `UNIQUE(event_id)` + `uuid` + narrow row): now measured, §8.
+- Why BASE here burns more values than §6's B (§7.2): now explained, §8.3.
 - A `(event_type, global_order)` index and partitioning, from §13.3.
+
+## 8. Combined options
+
+Date: 2026-11-11. Findings, not decisions. Same spike, set-up and caveats as §7 (`fsync=off`, PostgreSQL 17.5,
+client and database on one 8-CPU VM, fresh container per run, fresh table per arm and round, rotated order
+uncontended, palindrome order contended, 20 s windows, two runs, so four contended windows and four uncontended rounds
+per arm). Results inside the spread count as no difference.
+
+**Code.** `TableDesignOptionsSpikeIT` gained:
+- **COMBO_ALL**: guarded-`UPDATE` head table in the append statement, no `UNIQUE(event_id)`, `uuid` (v4) event,
+  causation and correlation ids, interned `smallint` event type (and `smallint` revision), `json` payload and
+  metadata, columns in alignment order (`global_order`, `event_order`, `timestamp`, the three `uuid`s, the two
+  `smallint`s, then `aggregate_id`, payload, metadata, tenant). Only `UNIQUE(aggregate_id, event_order)`.
+- **COMBO_ALL_BYTEA**: the same with `bytea` payload and metadata.
+- **COMBO_ALL_NO_HEAD**: the same without a head table, with §5.1's `xid`/`head` CTE statement instead.
+- **COMBO_ALL_SCALAR**: COMBO_ALL, but a one-event append binds scalar parameters with no `unnest` (§6's `SCALAR_1`);
+  multi-event appends as COMBO_ALL.
+- An **existing-stream** uncontended shape (gap a): 1 000 streams are created first (untimed), then each unit of work
+  appends 1 or 10 events to the next stream with its correct expected order (no lookup); 1 000 iterations after 50
+  warm-up.
+- Contended-only **BASE variants** (gap b), each adding one difference to §6's B arm on the engine's table:
+  `BASE_TEXT_ARRAYS` (`createArrayOf("text", …)` as §6's B text arrays), `BASE_ENGINE_PAYLOAD` (the exact row the
+  engine writes for the same `ProductAddedToOrder`, captured from the engine at the start of each run: payload,
+  metadata, type, causation and correlation ids), `BASE_TENANT_INDEX` (the engine's extra index on `tenant`),
+  `BASE_LOOKUP_DELAY` (a 50 µs busy-wait between the lookup and the append), `BASE_LOOKUP_SLEEP` (a 50 µs
+  `parkNanos` there instead, which took ~120 µs) and `BASE_ENGINE_LIKE` (text arrays + engine row + tenant index +
+  busy-wait).
+- The contended record now also has the JVM's CPU per attempt, how busy the machine was, and the client time per
+  attempt split into lookup (including any delay) and append statement, per outcome.
+
+The existing arms' SQL is unchanged. Command (19 min 21 s; raw output from line 284 of `p0-7-table-design.txt`):
+
+```bash
+mvn -o verify -pl components/postgresql-event-store -DskipUTs \
+    -Dit.test=TableDesignOptionsSpikeIT -Dfailsafe.failIfNoSpecifiedTests=false \
+    -Dspike.run=true -Dfailsafe.forkCount=1 -DskipDependencyCheck=true \
+    -Dspike.design.arms=BASE,HEAD_GUARDED_UPDATE,HEAD_FOR_UPDATE,COMBO_ALL,COMBO_ALL_BYTEA,COMBO_ALL_NO_HEAD,COMBO_ALL_SCALAR,BASE_TEXT_ARRAYS,BASE_ENGINE_PAYLOAD,BASE_TENANT_INDEX,BASE_LOOKUP_DELAY,BASE_LOOKUP_SLEEP,BASE_ENGINE_LIKE
+# knob: -Dspike.design.lookupDelayMicros (50)
+```
+
+**Correctness, all 13 arms, both runs.** A stale expected order returned zero rows and took no global-order value; the
+3-event append after it continued the stream; a 1-event append in its own transaction (COMBO_ALL_SCALAR's scalar
+statement) wrote one row; the xid trigger found an xid before the first global order in both, and the control plain
+`INSERT … VALUES` found none. After every contended window every aggregate's orders were contiguous from 0, every
+head row equalled `max(event_order)`, and no error other than unique violations occurred.
+
+### 8.1 Contended appends
+
+8 writers, 10 aggregates, 20 s; values per window, run 1's two / run 2's two (ranges where they hardly vary).
+
+| Arm | Appended/s (thousands) | Zero-row / unique-violation (share of attempts) | Burned per 1 000 | PostgreSQL CPU µs/attempt | Recorded exec µs/attempt | WAL B/appended |
+|---|---|---|---|---|---|---|
+| BASE | 28.5, 26.3 / 25.4, 26.1 | 12-13% / 20% | 289-299 | 92.7-98.9 | 22.6-24.9 | 1178-1357 |
+| head, guarded `UPDATE` | 24.9, 21.4 / 20.0, 21.2 | 32-33% / 0 | 0 | 97.2-117.5 | 40.8-48.9 | 1043-1048 |
+| head, `FOR UPDATE` | 16.7, 16.7 / 16.7, 16.5 | 34% / 0 | 0 | 126.0-127.4 | 66.3-68.6 | 1122-1124 |
+| COMBO_ALL | 22.6, 22.1 / 21.9, 21.7 | 32% / 0 | 0 | 102.8-106.4 | 36.2-39.3 | 701-703 |
+| COMBO_ALL_BYTEA | 21.9, 21.9 / 21.9, 22.0 | 32% / 0 | 0 | 103.7-104.9 | 35.9-37.6 | 702 |
+| COMBO_ALL_NO_HEAD | 23.4, 26.3 / 27.3, 26.9 | 13% / 19% | 276-279 | 92.5-103.1 | 19.2-20.7 | 720-721 |
+| COMBO_ALL_SCALAR | 23.6, 23.4 / 23.2, 23.9 | 31-32% / 0 | 0 | 94.4-96.9 | 31.1-32.0 | 699-702 |
+
+- **The combination keeps the head table's zero burned values** in all twelve head-table combo windows, at
+  21.7-23.9 thousand appends/s against BASE's 25.4-28.5 (COMBO_ALL ~15% below BASE, COMBO_ALL_SCALAR ~10% below)
+  and against the plain head table's 20.0-24.9 in the same run (no difference outside the noise between COMBO_ALL
+  and the plain guarded `UPDATE`; COMBO_ALL_SCALAR is higher than COMBO_ALL in all four paired windows, by
+  1.0-2.2 thousand, with ~5-8 µs less recorded execution per attempt).
+- **The head table is most of the combination's throughput cost.** Without it (COMBO_ALL_NO_HEAD) the same columns
+  and indexes give 23.4-27.3 thousand, within BASE's spread, and burn 276-279 per 1 000 (BASE 289-299).
+- **WAL per appended event**: 699-721 B for every combo against 1043-1357 for the text/`jsonb` arms, about −40%.
+- `bytea` against `json` in the combination: no difference under contention.
+
+### 8.2 Uncontended (ranges over four rounds)
+
+p50 ms / server execution µs per unit of work. "New" creates a stream (as §7.1); "existing" appends to one (gap a).
+
+| Arm | New, 1 event | New, 10 | New, 100 | Existing, 1 event | Existing, 10 | WAL B/event (new 1 / new 100 / existing 1) | B/row at 100 (heap) | Read 100 events p50 / exec |
+|---|---|---|---|---|---|---|---|---|
+| BASE | 0.124-0.135 / 13.1-16.7 | 0.186-0.202 / 62-69 | 0.723-0.742 / 497-517 | 0.129-0.141 / 14.8-18.2 | 0.184-0.195 / 62-66 | 905-909 / 893-894 / 918-926 | 745-747 (546) | 0.182-0.195 / 126-139 |
+| head, guarded `UPDATE` | 0.128-0.133 / 16.0-18.4 | 0.187-0.204 / 64-72 | 0.721-0.818 / 493-579 | 0.126-0.139 / 16.9-18.3 | 0.186-0.196 / 65-69 | 1183-1187 / 896-897 / 1055-1059 | 750-754 (546) | 0.182-0.187 / 125-132 |
+| head, `FOR UPDATE` | 0.127-0.130 / 15.9-17.7 | 0.187-0.203 / 64-71 | 0.627-0.722 / 480-497 | **0.166-0.194 / 21.2-27.5** | **0.224-0.246 / 68-72** | 1183-1191 / 895-897 / 1110-1115 | 749-752 (546) | 0.152-0.185 / 128-136 |
+| COMBO_ALL | 0.126 (one round 0.042) / 10.4-15.2 | 0.169-0.190 / 52-59 | 0.594-0.602 / 371-382 | 0.125-0.139 / 15.0-17.4 | 0.173-0.182 / 52-54 | 853-865 / 554-556 / 709-716 | 430-433 (304) | 0.113-0.114 / 66-69 |
+| COMBO_ALL_BYTEA | 0.122-0.139 / 13.6-17.6 | 0.169-0.176 / 49-52 | 0.453-0.557 / 325-349 | 0.134-0.145 / 18.8-21.1 | 0.171-0.194 / 51-58 | 849-857 / 555-556 / 709-728 | 431-434 (304) | 0.097-0.114 / 64-72 |
+| COMBO_ALL_NO_HEAD | 0.124-0.136 / 11.5-14.6 | 0.174-0.186 / 49-54 | 0.568-0.580 / 356-362 | 0.124-0.138 / 12.8-14.9 | 0.164-0.184 / 49-54 | 571-576 / 550-553 / 576-592 | 426-428 (304) | 0.112-0.116 / 65-69 |
+| COMBO_ALL_SCALAR | 0.119-0.128 / 11.0-12.3 | 0.173-0.186 / 51-57 | 0.594-0.606 / 369-376 | 0.120-0.132 / 11.0-13.2 | 0.174-0.184 (one round 0.086) / 44-53 | 849-857 / 554-555 / 709-717 | 432-433 (304) | 0.114-0.117 / 66-71 |
+
+(The two bracketed single-round p50s are outliers of run 1 round 1 that we cannot explain; the other three rounds
+agree with each other.)
+
+- **Gap (a), existing streams.** The guarded-`UPDATE` head costs the same as BASE on an existing stream (1 event
+  0.126-0.139 against 0.129-0.141 ms, 10 events 0.186-0.196 against 0.184-0.195), with ~130 B more WAL per one-event
+  append (the head row's update). `SELECT … FOR UPDATE` first costs one round trip more: 1 event 0.166-0.194 ms
+  (+~0.04 ms, +5-10 µs execution) and 10 events 0.224-0.246 ms. COMBO_ALL and COMBO_ALL_SCALAR on an existing stream
+  are at or below BASE at 1 event (0.125-0.139 and 0.120-0.132 ms; scalar execution 11-13 µs against 15-18) and
+  ~6% faster at 10 events (0.173-0.182 ms).
+- **100-event appends**: COMBO_ALL 0.594-0.602 ms against BASE 0.723-0.742 (−18%, execution −26%),
+  COMBO_ALL_BYTEA 0.453-0.557, NO_HEAD 0.568-0.580. Most of it is no `UNIQUE(event_id)` plus `json` (§7.3 measured
+  each alone).
+- **Size**: heap 304 B per row against 546 (−44%), table plus indexes 430-434 against 745-747 B per row (−42%),
+  WAL per event at 100 events 554-556 against 893-894 B (−38%).
+- **Reads** of 100 events: 0.097-0.117 ms against 0.182-0.195 (≈ −38%), the `json`/`bytea` effect of §7.3.
+
+### 8.3 Gap (b): why BASE burns ~290 values per 1 000 here and §6's B burned 222-262
+
+A value is burned only by a unique-violation conflict: the racer's statement snapshot was taken before the winner
+committed, so it passed the `head` check, drew a global order and then failed on `UNIQUE(aggregate_id,
+event_order)`. A winner that committed before the racer's statement started produces a zero-row conflict and burns
+nothing. The split therefore depends on how long the gap between a writer's lookup and its append is, relative to
+the statement itself.
+
+| BASE variant (same table and statement) | Appended/s (thousands) | Zero-row / unique (share) | Burned per 1 000 | PostgreSQL CPU µs/attempt | JVM CPU µs/attempt | Machine busy | Client lookup / append µs (success) |
+|---|---|---|---|---|---|---|---|
+| BASE | 25.4-28.5 | 12-13% / 20% | 289-299 | 92.7-98.9 | 36.5-45.3 | 74-79% | 49-61 / 75-83 |
+| text arrays | 24.5-26.0 | 13% / 19% | 281-283 | 96.7-100.1 | 45.2-47.7 | 72-74% | 60-64 / 81-85 |
+| engine's row | 24.7-27.0 | 13% / 20% | 291-294 | 94.9-100.2 | 42.8-46.4 | 73-75% | 56-63 / 79-86 |
+| tenant index | 24.2-26.5 | 12-13% / 19-20% | 286-297 | 95.0-102.6 | 42.8-47.2 | 72-74% | 59-65 / 80-87 |
+| 50 µs busy-wait after lookup | 36.7-37.6 | 24% / 14% | 219-225 | 54.5-56.6 | 69.4-70.3 | 97% | 71-72 / 43-45 |
+| 50 µs `parkNanos` after lookup (~120 µs taken) | 15.4-15.6 | 25% / 11-12% | 181-184 | 113.8-115.9 | 67.7-68.4 | 59-61% | 180-182 / 91-93 |
+| engine-like (all four but the park) | 35.9-37.0 | 24-25% / 13-14% | 216-219 | 54.4-56.8 | 70.8-72.3 | 96-97% | 71-72 / 44-47 |
+
+- **Ruled out**: text-array encoding (281-283, at most ~10 fewer than BASE), the engine's exact row (291-294) and
+  the tenant index (286-297). None moves the ratio outside or much beyond BASE's spread.
+- **What explains it: the gap between lookup and append.** Lengthening only that gap moves the ratio from 289-299
+  down to 219-225 (busy-wait, lookup phase ~72 µs) and 181-184 (park, ~180 µs), by turning unique-violation
+  conflicts into zero-row ones (20% → 14% → 11-12% of attempts, zero-row 12% → 24-25%). §6's B arm spent 79-107 µs
+  per attempt in the engine's lookup (`loadLastPersistedEventRelatedTo` through JDBI: `SELECT *` and event
+  deserialisation) against 49-61 µs here, and burned 222-262 — between the busy-wait and BASE, as this predicts.
+  The "half of today's holes" for the §5.1 statement is therefore not a fixed property of the statement: it depends
+  on the client's lookup-to-append latency.
+- **A side finding we cannot fully explain**: the busy-wait arms ran at 36-38 thousand appends/s (BASE 25-29) with
+  about 55 µs of PostgreSQL CPU per attempt instead of 93-99, and the append statement itself took 43-47 µs of client
+  time instead of 75-83, with the machine 96-97% busy. The parked variant, which leaves CPUs idle, did the opposite
+  (114-116 µs per attempt). The most likely reading is that on this VM the cost of CPUs going idle and being woken
+  (scheduler and virtualisation wake-up latency, charged partly to the database container) is a large part of the
+  per-attempt server CPU, and spinning client threads keep the CPUs from idling. That would also bear on §6.2's
+  unattributed server CPU. Not verified with a profiler; it makes absolute CPU-per-attempt numbers on this machine
+  sensitive to how busy the client keeps the CPUs.
+
+### 8.4 Not measured
+
+- The combination under many aggregates with little contention, large tables (v7 index locality), large payloads,
+  `fsync=on`, a separate database host.
+- A busy-wait or park variant of the head-table arms (the head table's throughput relative to BASE may also depend on
+  the machine's idle behaviour above).
+- A profiler on the VM to confirm the idle/wake-up reading of 8.3.
