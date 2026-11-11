@@ -239,7 +239,10 @@ class ContendedAppendThroughputSpikeIT {
         long wallNanos = System.nanoTime() - wall0;
         stop.set(true);
         samplerThread.join();
-        if (discard) return;
+        if (discard) {
+            dropTable(pg, cfg);
+            return;
+        }
         long jvmCpu   = osBean.getProcessCpuTime() - jvmCpu0;
         long[] machine1 = machineCpu();
         long serverCpu = containerCpuMicros(pg) - server0;
@@ -281,6 +284,15 @@ class ContendedAppendThroughputSpikeIT {
         record(String.format("  server CPU vs recorded execution: container CPU %.1f µs/attempt, pg_stat_statements total exec (completed statements only) %.1f µs/attempt, "
                                      + "difference %.1f µs/attempt", serverCpu / (double) attempts, execMs * 1000 / attempts, serverCpu / (double) attempts - execMs * 1000 / attempts));
         if (firstOther.get() != null) record("  first other error: " + firstOther.get());
+        dropTable(pg, cfg);
+    }
+
+    /** A 20 s window leaves ~0.5 GB behind; dropped so a long palindrome run does not fill the Docker VM's disk. */
+    private static void dropTable(Pg pg, SeparateTablePerAggregateEventStreamConfiguration cfg) throws SQLException {
+        try (var s = pg.observer.createStatement()) {
+            s.execute("DROP TABLE " + cfg.eventStreamTableName);
+            s.execute("CHECKPOINT");
+        }
     }
 
     /** Samples where the writer backends are, from pg_stat_activity. */
