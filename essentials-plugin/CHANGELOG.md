@@ -62,6 +62,11 @@ machines, contradictions in the instructions, and how much text each command and
   findings in slice source) can be written to a backlog file at a path you choose. Each entry names the
   command that fixes it later. When the closing `verify` fails, the run first checks whether the project
   already failed before it started, and only then bisects the fix commits to the one to revert.
+- `/essentials:slice-check` ends its report by naming the command that owns each open finding: `--fix-manifests`,
+  `/essentials:slice-enrich`, `/essentials:upgrade`, `--fix-source`, or a change request through
+  `essentials-change`. When you decide to live with a finding, it prints the `slice-check-accepted.yaml` entry
+  to paste, with your reason and review date; it still never writes that file. `--fix-manifests` now refuses a
+  dirty working tree, as the reconciliation procedure always required.
 - `/essentials:review` lists every gate `slice-source.py` covers when the script cannot run (gates 8 and 11(c)
   went missing).
 - Contradictions fixed: one language-detection rule; `essentials-change` tells an Essentials project that is not

@@ -27,8 +27,10 @@ is audited.
 | `--adopt-tier` | One field, one time: writes `tier` into manifests that have none. Never overwrites one. `/essentials:slice-enrich` covers `tier` too, with the other absent human-owned fields |
 | `--fix-source` | Additionally *proposes* structural source fixes. Each is shown as a diff and applied only on explicit per-fix confirmation. |
 
-`--fix-source` **refuses to run on a dirty working tree** (`git status --porcelain` non-empty) so
-every applied change is trivially revertable. Say so and stop; do not offer to stash.
+`--fix-source` and `--fix-manifests` **refuse to run on a dirty working tree** (`git status --porcelain`
+non-empty) so every applied change is trivially revertable — for manifests the diff is the only review
+they get (`manifest-reconciliation.md` §6). Say so and stop; do not offer to stash. `--adopt-tier` alone
+writes one field and is not refused.
 
 ## Step 1 — Load the law
 
@@ -241,6 +243,36 @@ variants, and that the fix is a handler or an `@IgnoresEventTypes` entry, whiche
 Three real findings stated plainly beat thirty padded ones. If a gate passes cleanly, say so in one
 line rather than enumerating what did not fail.
 
+**Close with the routes.** Every finding left open — the default run's, and the ones a repair mode
+skipped or could not fix — is owned by exactly one command or decision. Group the open findings by
+route, one line per route with its count and ids, so the reader knows what to run next and that
+nothing is orphaned:
+
+| Finding | Route |
+|---|---|
+| Gate 1(a) quoting, a derived field out of date (`11(b)`, `11(c)`, `6 endpoint route`, `6 undeclared mapping`, `6 discriminator`), a missing manifest or `CLAUDE.md` | `--fix-manifests` |
+| A human-owned field absent (`tier`, `flow`, `scenarios`, `summary`, `invariants`) | `/essentials:slice-enrich` (`--adopt-tier` for `tier` alone) |
+| Gate 12, a stale project copy of the rules pointer or the lint gate | `/essentials:upgrade` |
+| A god-file split, a misplaced event variant, a `_shared/` `State`+`Evolver` with one consumer | `--fix-source` (Step 4) |
+| Any other code finding — a boundary import, a wiring gap, a dual write, a lane or routing defect, a view with no test | the user's change, through `essentials-change` (say it as a change request — "move the `Order` import out of `PlaceOrderDecider`", "add a test for `views/order_summary`"), never a repair this command performs |
+| A write-style migration (gate 14) | a design decision; report and stop (Step 4) |
+
+**Findings the team decides to live with.** When the user says a finding is deliberate, print — never
+write — the entry they would add to `slice-check-accepted.yaml` at the project root (Step 1.5), one per
+finding, ready to paste:
+
+```yaml
+- gate: "<the finding's full gate, e.g. 8(a) slice import>"   # quoted: gates carry parentheses
+  match: <the narrowest token that names only this finding — the type or file name, not a directory>
+  reason: <the user's words; an entry without a reason is a 0 acceptance record finding>
+  accepted: <today, YYYY-MM-DD>
+  review-by: <a date the user names; suggest three months out>
+```
+
+Use the full gate rather than its number: `"8"` would accept every gate-8 finding whose file or message
+contains the `match`, not only this one. Ask for the reason and the `review-by` date rather than
+inventing either: an acceptance is the team's decision, and this command never writes the file.
+
 ## Step 4 — Repair (only if asked)
 
 **`--adopt-tier`.** A one-time backfill for manifests that have no `tier`.
@@ -300,7 +332,8 @@ Only these three fixes are in scope — a god-file split, moving a misplaced eve
 moving a prematurely-shared `State`+`Evolver` out of `use_cases/_shared/` back into its single
 consuming slice. (Promotion *into* `_shared/` is never an automated fix: it needs the three-consumer
 judgement, and the move is trivial once that is settled.) Anything else is reported, not fixed: a
-structural refactor applied wrongly is worse than the violation it fixes.
+structural refactor applied wrongly is worse than the violation it fixes. When the loop ends, close
+with the routes (Step 3) for every finding still open, the skipped ones included.
 
 **Migrating a BC between any two write styles is explicitly out of scope for `--fix-source`.** Moving
 decision logic between per-slice deciders, an aggregate, and a state-stored entity rewrites the BC's
