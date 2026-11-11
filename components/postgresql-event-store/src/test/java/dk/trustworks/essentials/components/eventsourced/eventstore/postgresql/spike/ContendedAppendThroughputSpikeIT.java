@@ -68,6 +68,8 @@ class ContendedAppendThroughputSpikeIT {
     private static final int     WRITERS    = Integer.getInteger("spike.contention.writers", 8);
     private static final int     AGGREGATES = Integer.getInteger("spike.contention.aggregates", 10);
     private static final boolean JFR        = Boolean.getBoolean("spike.contention.jfr");
+    /** P0.6: an arm written {@code ARM@SPIN} busy-waits this long between lookup and append, as {@link UnattributedCpuSpikeIT}'s SPIN mode. */
+    private static final long    SPIN_NANOS = Long.getLong("spike.contention.spinMicros", 50) * 1000;
 
     enum Arm {
         A_ENGINE("A engine"),
@@ -134,19 +136,20 @@ class ContendedAppendThroughputSpikeIT {
                 var order = new ArrayList<>(arms);
                 Collections.rotate(order, run - 1);
                 for (var spec : order) {
-                    var parts = spec.split(":");
+                    var spin  = spec.endsWith("@SPIN");
+                    var parts = spec.replace("@SPIN", "").split(":");
                     var arm   = Arm.valueOf(parts[0]);
                     var jt    = parts.length > 1 ? JSONColumnType.valueOf(parts[1]) : JSONColumnType.JSONB;
-                    var label = arm.label + " [" + jt.name().toLowerCase(Locale.ROOT) + "]";
-                    window(pg, writers.get(jt), arm, label, Duration.ofSeconds(2), run, true);
-                    window(pg, writers.get(jt), arm, label, Duration.ofSeconds(SECONDS), run, false);
+                    var label = arm.label + " [" + jt.name().toLowerCase(Locale.ROOT) + "]" + (spin ? " @SPIN" : "");
+                    window(pg, writers.get(jt), arm, label, Duration.ofSeconds(2), run, true, spin);
+                    window(pg, writers.get(jt), arm, label, Duration.ofSeconds(SECONDS), run, false, spin);
                 }
                 for (var x : writers.values()) x.stack.close();
             }
         }
     }
 
-    private void window(Pg pg, Writer w, Arm arm, String label, Duration duration, int run, boolean discard) throws Exception {
+    private void window(Pg pg, Writer w, Arm arm, String label, Duration duration, int run, boolean discard, boolean spin) throws Exception {
         var type = w.freshType("ct" + run);
         var cfg  = w.config(type);
         var aggregates = new ArrayList<OrderId>();
@@ -192,6 +195,10 @@ class ContendedAppendThroughputSpikeIT {
                         w.stack.unitOfWorkFactory.usingUnitOfWork(uow -> {
                             stamps[0] = System.nanoTime();
                             long last = w.stack.eventStore.loadLastPersistedEventRelatedTo(type, id).orElseThrow().eventOrder().longValue();
+                            if (spin) {
+                                long until = System.nanoTime() + SPIN_NANOS;
+                                while (System.nanoTime() < until) Thread.onSpinWait();
+                            }
                             stamps[1] = System.nanoTime();
                             var events = List.<Object>of(new OrderEvent.ProductAddedToOrder(id, ProductId.random(), 1));
                             try {

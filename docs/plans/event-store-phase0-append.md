@@ -302,7 +302,9 @@ values per 1 000 appends.
   +50-70 µs (204-226 against 154-158 µs), which with 8 writers is the 30%.
 - **C points the same way.** C runs A's own statements, yet costs ~9 µs more server CPU per attempt than A
   (78-83 against 69-70) and is ~10% slower (30.6-32.9 thousand per second), with its lookup slowed in proportion
-  (63-67 µs). Why raw pgjdbc costs the server more than JDBI for the same SQL was not isolated. Across all four arms
+  (63-67 µs). Why raw pgjdbc costs the server more than JDBI for the same SQL was not isolated. *(2026-11-11, P0.6: it is not
+  the driver. Arms A and C send identical wire messages on the same connection, and the gap reverses when CPUs are kept
+  busy. It is the idle and wake-up effect of §9; see [`event-store-phase0-jdbc.md`](event-store-phase0-jdbc.md) §2-§3.)* Across all four arms
   the per-attempt server CPU and the lookup's wall time rise together, which is the pattern a CPU-bound, shared
   machine produces; it is a correlation, not a proof that nothing else contributes.
 

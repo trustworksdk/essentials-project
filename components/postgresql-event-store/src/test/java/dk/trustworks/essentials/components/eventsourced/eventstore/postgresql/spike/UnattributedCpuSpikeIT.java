@@ -74,9 +74,9 @@ class UnattributedCpuSpikeIT {
     private static final long    SPIN_NANOS = Long.getLong("spike.cpu.spinMicros", 50) * 1000;
     private static final boolean PERF       = Boolean.getBoolean("spike.cpu.perf");
     private static final String  PG_CPUS    = System.getProperty("spike.cpu.pgCpus", "");
-    private static final String  PAYLOAD    = "{\"orderId\":\"%s\",\"productId\":\"%s\",\"quantity\":1,\"note\":\"spike payload of roughly the engine's size\"}";
-    private static final String  METADATA   = "{\"trace\":\"%s\"}";
-    private static final String  TYPE       = "FQCN:dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderEvent$ProductAddedToOrder";
+    static final String  PAYLOAD    = "{\"orderId\":\"%s\",\"productId\":\"%s\",\"quantity\":1,\"note\":\"spike payload of roughly the engine's size\"}";
+    static final String  METADATA   = "{\"trace\":\"%s\"}";
+    static final String  TYPE       = "FQCN:dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderEvent$ProductAddedToOrder";
     private static final String  COLS       = "aggregate_id, event_order, event_id, caused_by_event_id, correlation_id, event_type, event_revision, timestamp, event_payload, event_metadata, tenant";
     private static final String  VALS       = "?::text, %s, ?::text, ?::text, ?::text, ?::text, ?::text, ?::timestamptz, ?::jsonb, ?::jsonb, ?::text";
 
@@ -85,7 +85,7 @@ class UnattributedCpuSpikeIT {
     enum Mode {NORMAL, SPIN, BURNER}
 
     /** Where the expected order goes in the statement's parameters: {@code GUARD_FIRST} = agg, exp, exp, then the row; {@code GUARD_LAST} = the row (order = exp + 1), then agg, exp. */
-    private static String sql(Arm arm, String t) {
+    static String sql(Arm arm, String t) {
         var head = "WITH xid  AS MATERIALIZED (SELECT pg_current_xact_id() AS x),\n" +
                 "     head AS MATERIALIZED (SELECT coalesce(max(event_order), -1) AS v FROM " + t + " WHERE aggregate_id = ?::text),\n" +
                 "     ok   AS (SELECT head.v FROM head, xid WHERE ?::bigint IS NULL OR head.v = ?::bigint)\n";
@@ -104,7 +104,7 @@ class UnattributedCpuSpikeIT {
         };
     }
 
-    private static boolean guardFirst(Arm arm) {
+    static boolean guardFirst(Arm arm) {
         return arm == Arm.B_NO_XID || arm == Arm.B || arm == Arm.B_RET1 || arm == Arm.B_COMMIT0;
     }
 
