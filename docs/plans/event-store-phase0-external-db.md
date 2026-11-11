@@ -9,6 +9,34 @@ on another machine, and how to read the results.
 
 The target machine is an old Clevo laptop: Ubuntu, 30 GB RAM, a 4-core Intel i7, `fsync=on`.
 
+## Running with the script
+
+`scripts/run-phase0-spikes.sh` runs the commands of §6 and keeps what §7 asks for. It checks the prerequisites (JDK
+25-27, Maven, Docker or a reachable server), moves an existing `target/spike-results/` aside so runs never mix, builds
+the module once, runs each suite sequentially with its own log (a failing suite does not stop the rest), and collects
+everything into `phase0-results/<timestamp>-<host>-<mode>/` plus a `.tar.gz` of it: the spike result files, the logs,
+the spikes' failsafe reports, `machine.txt` (client), `server.txt` (external mode: version, settings and a 200 ×
+`SELECT 1` round-trip measurement when `psql` is installed, host CPU and disks through ssh) and a `SUMMARY.md`.
+
+```bash
+# Testcontainers on this machine (needs Docker)
+scripts/run-phase0-spikes.sh --container
+
+# the dedicated server; the password comes from SPIKE_PASSWORD or a prompt, never the command line
+export SPIKE_PASSWORD=...
+scripts/run-phase0-spikes.sh --external jdbc:postgresql://dbhost:5432/postgres --user bench \
+    --server-cpu-command "ssh bench@dbhost cat /proc/stat"
+
+# selected suites, extra spike properties after --, and a look at the Maven commands first
+scripts/run-phase0-spikes.sh --external jdbc:postgresql://dbhost:5432/postgres --user bench \
+    --suite xid,contention --dry-run -- -Dspike.contention.seconds=20
+```
+
+The suites are `xid`, `table-design`, `contention`, `append`, `baseline`, `cpu`, `jdbc` and `probe` (the default
+runs all of them in §6's priority order); a suite can name one test method, as in `jdbc#protocol_trace`. Run
+`scripts/run-phase0-spikes.sh --help` for every option. The rest of this document is what the script does by hand,
+and what to set up on the server before it can.
+
 ## 1. How the spikes reach an external server
 
 The spikes are in `components/postgresql-event-store/src/test/java/.../postgresql/spike/`. They are still tagged

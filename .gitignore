@@ -46,6 +46,8 @@ CLAUDE.local.md
 .mcp.json
 .devcontainer/scripts/local-init.sh
 .claude/reports
+# scripts/run-phase0-spikes.sh writes each run here, plus a .tar.gz of it to copy back.
+/phase0-results/
 # >>> devcontainer-stack (managed) >>>
 # scripts/perf-host.sh writes its runs here. Results are worth keeping, but somewhere durable
 # rather than in the repository — each run is logs plus raw JSON.
