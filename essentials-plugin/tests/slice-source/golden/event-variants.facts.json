@@ -1,0 +1,251 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/slice-source/cases/event-variants",
+  "manifestsRead": true,
+  "sourceFiles": 6,
+  "bcs": [
+    {
+      "name": "billing",
+      "path": "src/main/*/com/example/ev/billing",
+      "dirs": [
+        "src/main/kotlin/com/example/ev/billing"
+      ],
+      "languages": [
+        "kotlin"
+      ],
+      "slices": [
+        "billing.void_invoice"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "undetermined"
+      }
+    },
+    {
+      "name": "orders",
+      "path": "src/main/*/com/example/ev/orders",
+      "dirs": [
+        "src/main/kotlin/com/example/ev/orders"
+      ],
+      "languages": [
+        "kotlin"
+      ],
+      "slices": [
+        "orders.place_order"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "undetermined"
+      }
+    },
+    {
+      "name": "payments",
+      "path": "src/main/*/com/example/ev/payments",
+      "dirs": [
+        "src/main/java/com/example/ev/payments"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "payments.take_payment"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "undetermined"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "payments.take_payment",
+      "idSource": "manifest",
+      "bc": "payments",
+      "bcPath": "src/main/*/com/example/ev/payments",
+      "dir": "src/main/java/com/example/ev/payments/use_cases/take_payment",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/ev/payments/use_cases/take_payment/slice.yaml",
+      "language": null,
+      "package": null,
+      "files": [],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "billing.void_invoice",
+      "idSource": "manifest",
+      "bc": "billing",
+      "bcPath": "src/main/*/com/example/ev/billing",
+      "dir": "src/main/kotlin/com/example/ev/billing/use_cases/void_invoice",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/kotlin/com/example/ev/billing/use_cases/void_invoice/slice.yaml",
+      "language": null,
+      "package": null,
+      "files": [],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.place_order",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/ev/orders",
+      "dir": "src/main/kotlin/com/example/ev/orders/use_cases/place_order",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/kotlin/com/example/ev/orders/use_cases/place_order/slice.yaml",
+      "language": null,
+      "package": null,
+      "files": [],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    }
+  ],
+  "messages": [
+    {
+      "name": "OrderDelivered",
+      "type": "event",
+      "bc": "orders",
+      "found": true,
+      "identity": null,
+      "fields": [],
+      "declaredIn": "src/main/kotlin/com/example/ev/orders/events/Shipping.kt",
+      "line": 6,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "OrderPlaced",
+      "type": "event",
+      "bc": "orders",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "id: String"
+      ],
+      "declaredIn": "src/main/kotlin/com/example/ev/orders/events/OrderPlaced.kt",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "OrderShipped",
+      "type": "event",
+      "bc": "orders",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "id: String"
+      ],
+      "declaredIn": "src/main/kotlin/com/example/ev/orders/events/Shipping.kt",
+      "line": 4,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "PaymentFailed",
+      "type": "event",
+      "bc": "payments",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "id: String"
+      ],
+      "declaredIn": "src/main/java/com/example/ev/payments/events/PaymentFailed.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "PlaceOrder",
+      "type": "command",
+      "bc": "orders",
+      "found": false,
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "line": null,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "ShippingLabel",
+      "type": "event",
+      "bc": "orders",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "text: String"
+      ],
+      "declaredIn": "src/main/kotlin/com/example/ev/orders/events/Shipping.kt",
+      "line": 11,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "TakePayment",
+      "type": "command",
+      "bc": "payments",
+      "found": false,
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "line": null,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "VoidInvoice",
+      "type": "command",
+      "bc": "billing",
+      "found": false,
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "line": null,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": [],
+  "tests": {
+    "roots": [],
+    "classes": []
+  }
+}

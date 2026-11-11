@@ -3,8 +3,8 @@ name: slice-check
 description: >-
   Audit an existing Trustworks Essentials project against the slice-design law — layout, manifests,
   anti-god-class rules, wiring, processor handler shapes and boundary violations; manifest parsing,
-  schema and sole-ownership checks run in scripts/slice-lint.py, the boundary-import gate 8 and the
-  source facts behind gates 6, 11, 14 and 15 in scripts/slice-source.py. Read-only by default: --fix-manifests regenerates orientation artifacts, --adopt-tier backfills an absent tier,
+  schema and sole-ownership checks run in scripts/slice-lint.py, the boundary-import gate 8, the
+  one-variant-per-file gate 7 and the source facts behind gates 6, 11, 14 and 15 in scripts/slice-source.py. Read-only by default: --fix-manifests regenerates orientation artifacts, --adopt-tier backfills an absent tier,
   --fix-source proposes source fixes one at a time.
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion]
@@ -80,8 +80,8 @@ context. Run slice-lint over the whole project even then, because ids and owners
 project-wide sets.
 
 **`slice-lint.py` is gates 1, 3 and 4 in their entirety, plus gate 14's one manifest-only clause**
-(`14 tier`, a write style written into `tier`). **`slice-source.py` is gate 8 in its entirety and the
-syntactic half of gates 6, 11 and 14**: the findings whose `gate` starts `6 `, `8(`, `11(b)`, `11(c)`
+(`14 tier`, a write style written into `tier`). **`slice-source.py` is gates 7 and 8 in their entirety and the
+syntactic half of gates 6, 11 and 14**: the findings whose `gate` starts `6 `, `7 `, `8(`, `11(b)`, `11(c)`
 or `14 `. It reads the Java and Kotlin sources with comments and strings stripped, resolves types
 through imports, Kotlin `import … as` aliases, typealiases and fully-qualified names, and reports under
 `unparsed` what it could not read. Every finding carries an `impact` (Step 3). Two more top-level
@@ -114,7 +114,7 @@ Exit codes decide what the report may claim:
 | slice-source | 0 or 1, with `--fail-on` | `--fail-on blocking\|should-fix\|advisory` sets the lowest severity that exits 1; the default, `advisory`, is any finding. Accepted findings never count | run it here with the default. A project's CI may pass `--fail-on blocking`; findings below the threshold are still in the JSON at exit 0, and are still findings |
 | slice-lint | 0 or 1, with `notes` | a manifest stamped with a newer `1.x` than the schema copy carries keys the copy does not define. `subscribesTo`, `handles`, `table` and `kind` on a projection are never notes: they are gate 1(b) findings at every stamp | not findings: list them once under the report's notes, with `/essentials:upgrade` as the way to have them checked (`manifest-guide.md` §3) |
 | slice-lint | 2 | could not run (no `pyyaml`, unreadable schema: no JSON), or ran without `jsonschema` (or with one older than 4.0: "too old … needs jsonschema 4.0 or newer") and found nothing (JSON with `schemaValidated: false`). A non-UTF-8 `slice.yaml` is not exit 2: it is a Blocking 1(a) parse finding | no JSON: gates 1, 3, 4 and `14 tier` **not run**. `schemaValidated: false`: gate 1(b) **not run**, the rest passed. Either at the top, with the install line. Never pass `--allow-skip-schema` here: it turns a parse-only run into exit 0 |
-| slice-source | 2 | could not run (no `pyyaml`, bad root) | gate 8 and the script's halves of gates 6, 11 and 14 **not run**, at the top, and gates 15(a) and 19 have no `writeSites` to start from |
+| slice-source | 2 | could not run (no `pyyaml`, bad root) | gates 7 and 8 and the script's halves of gates 6, 11 and 14 **not run**, at the top, and gates 15(a) and 19 have no `writeSites` to start from |
 | slice-source | 3 | incomplete: nothing found, but `unparsed` or `unverified` is non-empty | list every `unparsed` file and every `unverified` check as **not checked**, never as passed |
 
 Consequences to honour:
@@ -196,7 +196,7 @@ reasons and all three must be named, because silence is indistinguishable from a
 |---|---|
 | **Lane** | gate 10 on the service-entity lane — no versioned read model exists to double-apply into; every lane-dependent gate on a BC gate 14 rates Blocking for two write styles or entities with event store |
 | **Subject absent** | gate 18 on a project with no Spring Data repository anywhere. This is a 100% skip and, unreported, looks exactly like a clean pass |
-| **Input missing** | gates 2, 5–19 for a slice whose manifest did not parse; gates 1, 3, 4 when the linter could not run; gate 8 and the script halves of 6, 11 and 14 when `slice-source.py` could not run, and each `unparsed` file and `unverified` check it lists. A project with no test tree is **not** missing input: it has no tests, so every view slice has none (Should-fix) |
+| **Input missing** | gates 2, 5–19 for a slice whose manifest did not parse; gates 1, 3, 4 when the linter could not run; gates 7 and 8 and the script halves of 6, 11 and 14 when `slice-source.py` could not run, and each `unparsed` file and `unverified` check it lists. A project with no test tree is **not** missing input: it has no tests, so every view slice has none (Should-fix) |
 
 A gate that never ran is not a finding *or* a pass, and collapsing it into either is the one
 reporting error that costs a reader their trust in the whole report.
@@ -331,7 +331,16 @@ guessing at the author's intent.
 Only these three fixes are in scope — a god-file split, moving a misplaced event variant, and
 moving a prematurely-shared `State`+`Evolver` out of `use_cases/_shared/` back into its single
 consuming slice. (Promotion *into* `_shared/` is never an automated fix: it needs the three-consumer
-judgement, and the move is trivial once that is settled.) Anything else is reported, not fixed: a
+judgement, and the move is trivial once that is settled.)
+
+**An event variant moves only when its `7 variants per file` finding says `split: rename-free`** —
+every type in the file is top-level, so one file per type keeps each class name. On `split: renames`
+a variant is nested (`OrderEvent$OrderPlaced`), and moving it out renames it: the event store records
+each event under its class name (the finding's `types[].binaryName`) and deserializes by it, so every
+stored event of that type stops loading. Report that finding with both names and do not offer the
+move; keeping old events readable is a design decision for the team, not a file move.
+
+Anything else is reported, not fixed: a
 structural refactor applied wrongly is worse than the violation it fixes. When the loop ends, close
 with the routes (Step 3) for every finding still open, the skipped ones included.
 

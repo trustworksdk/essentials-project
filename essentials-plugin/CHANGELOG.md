@@ -67,6 +67,11 @@ machines, contradictions in the instructions, and how much text each command and
   `essentials-change`. When you decide to live with a finding, it prints the `slice-check-accepted.yaml` entry
   to paste, with your reason and review date; it still never writes that file. `--fix-manifests` now refuses a
   dirty working tree, as the reconciliation procedure always required.
+- Gate 7 (one event variant per file, §R3) is now checked by `slice-source.py` instead of by eye: a file in
+  `events/` with two or more event types is a Blocking `7 variants per file` finding, listing each type and
+  whether it is nested. `--fix-source` splits such a file only when every type is top-level. A nested variant
+  (`OrderEvent$OrderPlaced`) is reported and never moved, because the event store saved each event under that
+  class name, and moving the class would leave every stored event of that type unreadable.
 - `/essentials:review` lists every gate `slice-source.py` covers when the script cannot run (gates 8 and 11(c)
   went missing).
 - Contradictions fixed: one language-detection rule; `essentials-change` tells an Essentials project that is not

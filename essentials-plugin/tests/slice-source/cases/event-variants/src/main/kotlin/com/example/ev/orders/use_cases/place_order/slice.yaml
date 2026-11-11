@@ -1,0 +1,13 @@
+schemaVersion: "1.3"
+slice: orders.place_order
+kind: command
+bc: orders
+owner: orders-team
+status: live
+summary: Fixture slice for gate 7.
+generator: essentials
+language: kotlin
+handles: [PlaceOrder]
+writes: []
+tests:
+  unit: { present: false }

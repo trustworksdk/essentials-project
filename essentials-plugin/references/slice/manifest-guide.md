@@ -454,7 +454,7 @@ the command in the project README. Wire one of them up, because nothing in a Mav
 reads `slice.yaml` and an unparseable manifest is otherwise invisible rather than loud.
 
 Whether the manifests still describe the *code* is a separate check, over the Java and Kotlin sources:
-`uv run --script <plugin>/scripts/slice-source.py . --check` (gates 6, 11(b) and 14's signal rows,
+`uv run --script <plugin>/scripts/slice-source.py . --check` (gates 6, 7, 11(b) and 14's signal rows,
 exit 3 when some source could not be read). It stays in the plugin and is not copied into projects.
 
 ## 4. `supersedes` — the versioned view twin

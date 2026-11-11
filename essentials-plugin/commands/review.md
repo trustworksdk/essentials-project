@@ -212,9 +212,9 @@ and the same two over `BASE_TREE` into `lint.base.json` / `source.base.json`.
 |---|---|---|
 | `slice-lint.py` | 0, 1 | gates 1, 3 and 4 ran — except that `schemaValidated: false` in its JSON means gate 1(b) did not: **Not run: ESS-G1b** (findings win the exit code over a skipped validation) |
 | | 2 | No JSON (no `pyyaml`, unreadable schema): **Not run: ESS-G1, ESS-G3, ESS-G4**, naming the missing dependency. JSON with `schemaValidated: false` (no `jsonschema`): **Not run: ESS-G1b**, and the rest ran clean. Never read the manifests yourself instead: an unvalidated manifest set reported as clean is the failure gate 1 exists to prevent |
-| `slice-source.py` | 0, 1 | gate 8, gate 6's mapping and raw-id checks, gates 11(b), 11(c) and 14 ran, and `writeSites` is there for gates 15(a) and 19 to start from (slice-check.md Step 1.5) |
+| `slice-source.py` | 0, 1 | gates 7 and 8, gate 6's mapping and raw-id checks, gates 11(b), 11(c) and 14 ran, and `writeSites` is there for gates 15(a) and 19 to start from (slice-check.md Step 1.5) |
 | | 3 | incomplete, not a pass: each `unverified` entry for an in-scope slice goes under **Not run** with its reason; `unparsed` files likewise |
-| | 2 | **Not run: ESS-G6, ESS-G8, ESS-G11b, ESS-G11c, ESS-G14**, and gates 15(a) and 19 have no `writeSites` to start from — the same set slice-check.md Step 1.5 lists |
+| | 2 | **Not run: ESS-G6, ESS-G7, ESS-G8, ESS-G11b, ESS-G11c, ESS-G14**, and gates 15(a) and 19 have no `writeSites` to start from — the same set slice-check.md Step 1.5 lists |
 
 Both scripts put the id on each finding (`id`); it is the `gate` label's number and clause —
 `"4(b) sole owner"` → `ESS-G4b`, `"3 uniqueness"` → `ESS-G3`. A manifest slice-lint could not parse
@@ -307,7 +307,7 @@ in-scope gate (§ Notes on gates 2, 4, 6, 10 and 13, § Gates 5, 15, 17 and 18 p
 lane detection with § Gate applicability by lane whenever a lane-dependent gate is in scope, with the lane `slice-source.py` detected for each bounded
 context deciding which gates apply and how (its gate applicability table).
 
-- Gates 1, 3 and 4 are `slice-lint.py`'s; gate 8, gate 6's request-mapping and raw-id checks, gates 11(b)
+- Gates 1, 3 and 4 are `slice-lint.py`'s; gates 7 and 8, gate 6's request-mapping and raw-id checks, gates 11(b)
   and 11(c) and gate 14 are `slice-source.py`'s, and so are the `writeSites` gates 15(a) and 19 start
   from. Take them from Step 3; do not run them again by eye. What remains of gate 6 (the no-adapter
   rule, a view mapping reading a repository the slice does not own) is judgement.

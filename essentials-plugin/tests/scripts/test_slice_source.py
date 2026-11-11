@@ -151,8 +151,9 @@ class ExitCodes(unittest.TestCase):
         "boundaries": (0, 1),
         "boundaries-kotlin": (0, 1),
         "write-sites": (0, 1),
-        "unhandled-variants": (0, 0),  # facts, not findings
+        "unhandled-variants": (0, 1),  # facts; the one finding is gate 7 (LetterEvent.kt holds two variants)
         "acceptance": (0, 1),  # an expired record and malformed entries leave Should-fix findings
+        "event-variants": (0, 1),  # gate 7: two events files with nested variants, one with top-level ones
     }
 
     def test_case_exit_codes(self):
@@ -325,6 +326,24 @@ class Rules(unittest.TestCase):
         self.assertNotIn("payment_gateway", " ".join(f["file"] for f in self.check["raw-ids"]["findings"]),
                          "a translation webhook carries the external system's ids")
 
+    def test_event_variants_per_file(self):
+        """Gate 7: a file in events/ with two or more concrete event types. A nested variant cannot be split out
+        without renaming the class name the event store recorded, so its finding says `renames`."""
+        found = sorted((f["file"].rsplit("/", 1)[-1], f["split"], tuple(t["name"] for t in f["types"]))
+                       for f in self.check["event-variants"]["findings"])
+        self.assertEqual(found, [
+            ("InvoiceEvent.kt", "renames", ("InvoiceIssued", "InvoiceVoided")),        # companion object not counted
+            ("PaymentEvent.java", "renames", ("PaymentTaken", "PaymentRefunded")),     # sealed sub-parent not counted
+            ("Shipping.kt", "rename-free", ("OrderShipped", "OrderDelivered")),       # helper class not counted
+        ])
+        self.assertEqual({(f["gate"], f["id"], f["severity"]) for f in self.check["event-variants"]["findings"]},
+                         {("7 variants per file", "ESS-G7", "Blocking")})
+        taken = next(t for f in self.check["event-variants"]["findings"] for t in f["types"]
+                     if t["name"] == "PaymentTaken")
+        self.assertEqual((taken["binaryName"], taken["afterSplit"]),
+                         ("com.example.ev.payments.events.PaymentEvent$PaymentTaken",
+                          "com.example.ev.payments.events.PaymentTaken"))
+
     def test_lane_signal_rows(self):
         c = self.check["java-lanes"]
         self.assertEqual(sorted((f["gate"], f["file"].split("/")[-1])
@@ -401,7 +420,7 @@ class Rules(unittest.TestCase):
             for f in c["findings"] + c["unverified"]:
                 with self.subTest(case=case, gate=f["gate"]):
                     self.assertEqual(f["id"], ss.gate_id(f["gate"]))
-                    self.assertRegex(f["id"], r"^ESS-G(0|6|8[abcd]|11[bc]|14)$")
+                    self.assertRegex(f["id"], r"^ESS-G(0|6|7|8[abcd]|11[bc]|14)$")
 
     def test_every_finding_carries_an_impact(self):
         for case, c in self.check.items():

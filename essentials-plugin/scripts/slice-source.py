@@ -174,7 +174,7 @@ FAIL_ON = {"blocking": 0, "should-fix": 1, "advisory": 2}
 IMPACT = {
     "0 acceptance record": "documentation",
     "6 command mappings": "coupling", "6 endpoint route": "documentation", "6 discriminator": "documentation",
-    "6 undeclared mapping": "documentation", "6 raw id": "coupling",
+    "6 undeclared mapping": "documentation", "6 raw id": "coupling", "7 variants per file": "coupling",
     "8(d) command in domain": "coupling",
     "11(b) handled events": "documentation", "11(c) undeclared write": "documentation",
     "14 two write styles": "wrong-next-caller", "14 entities with event store": "wrong-next-caller",
@@ -2473,6 +2473,7 @@ def check_json(project, today):
         _check_endpoints(project, s, facts, findings, unverified, endpoint_table)
         _check_raw_ids(project, s, findings)
     _check_boundaries(project, findings)
+    _check_event_files(project, findings)
     sites = write_sites(project)
     _check_undeclared_writes(sites, findings)
     lanes = []
@@ -2867,6 +2868,64 @@ def _check_lane(project, bc_obj, lane, findings):
                     f"declares lane: {d['lane']}, but the only write-style signal in '{bc}' is "
                     f"{described[detected]()}",
                     "`lane` is machine-derived; `--fix-manifests` repairs it"))
+
+
+# --------------------------------------------------------------------------------------------------
+# gate 7 (§R3, one event variant per file)
+# --------------------------------------------------------------------------------------------------
+
+def _binary_name(td):
+    """The name the event store records for td (`Class.getName()`): package, then each enclosing type, `$`-joined."""
+    chain, t = [], td
+    while t is not None:
+        chain.append(t.name)
+        t = t.outer
+    name = "$".join(reversed(chain))
+    return f"{td.file.package}.{name}" if td.file.package else name
+
+
+def _check_event_files(project, findings):
+    """An `events/` file declaring two or more concrete event types. An event type is a concrete type whose
+    supertypes reach a type declared in an `events/` directory of the same bounded context — a helper class or a
+    companion in the file is not one. Each finding carries `split`: `rename-free` when every type is top-level, so
+    one file per type keeps every class name; `renames` when one is nested, because moving it out changes the name
+    the event store recorded for every stored event of that type (`OrderEvent$OrderPlaced` → `OrderPlaced`)."""
+    audited = {b.key for b in project.bcs}  # where() answers against every BC; --bc narrows what is reported
+
+    def in_events(name, bc):
+        return any(project.where(d.file.path).part == "events" and project.where(d.file.path).bc is bc
+                   for d in project.types_by_name.get(name, []))
+
+    for f in project.files:
+        if f.error is not None:
+            continue
+        w = project.where(f.path)
+        if w.bc is None or w.part != "events" or w.excluded or w.bc.key not in audited:
+            continue
+        events = [td for td in f.types
+                  if td.concrete and "companion" not in td.mods
+                  and any(in_events(s, w.bc) for s in all_supers(project, td))]
+        if len(events) < 2:
+            continue
+        events.sort(key=lambda td: td.line)
+        nested = [td for td in events if td.outer is not None]
+        split = "renames" if nested else "rename-free"
+        listed = "; ".join(f"{td.name} (line {td.line}, {'nested in ' + td.outer.name if td.outer else 'top-level'})"
+                           for td in events)
+        if nested:
+            hint = ("one variant per file (§R3) — but splitting renames a stored event type: "
+                    + ", ".join(f"{_binary_name(td)} → {f.package + '.' if f.package else ''}{td.name}" for td in nested)
+                    + ". Events already stored under the old name stop deserializing; keeping them readable is a "
+                      "design decision, not a file move")
+        else:
+            hint = "one variant per file (§R3); every type is top-level, so a file per type keeps each class name"
+        out = finding("Blocking", "7 variants per file", None, f.rel, events[1].line,
+                      f"{len(events)} event types in one file: {listed}", hint)
+        out["split"] = split
+        out["types"] = [{"name": td.name, "line": td.line, "nested": td.outer is not None,
+                         "binaryName": _binary_name(td),
+                         "afterSplit": f"{f.package}.{td.name}" if f.package else td.name} for td in events]
+        findings.append(out)
 
 
 # --------------------------------------------------------------------------------------------------
