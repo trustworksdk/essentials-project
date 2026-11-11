@@ -123,13 +123,10 @@ class ContendedAppendThroughputSpikeIT {
         record("");
         record("=== CONTENTION | " + Instant.now() + " | runs " + RUNS + " | CPUs " + Runtime.getRuntime().availableProcessors() + " | " + WRITERS + " writers, " + AGGREGATES
                        + " aggregates, " + SECONDS + " s per arm after a 2 s warm-up on a throwaway table, fresh table per arm, arm order rotates per run, arms " + arms
-                       + ", pg_stat_statements.track_planning=on, pg_stat_activity sampled every ~2 ms" + (JFR ? ", JFR on" : ""));
+                       + ", pg_stat_statements.track_planning=on, pg_stat_activity sampled every ~2 ms" + (JFR ? ", JFR on" : "") + (SpikeServer.external() ? " | " + SpikeServer.target("") : ""));
         for (int run = 1; run <= RUNS; run++) {
             try (var pg = Pg.start()) {
-                try (var s = pg.observer.createStatement()) {
-                    s.execute("ALTER SYSTEM SET pg_stat_statements.track_planning = on");
-                    s.execute("SELECT pg_reload_conf()");
-                }
+                pg.server.enableTrackPlanning(pg.observer);
                 var writers = new EnumMap<JSONColumnType, Writer>(JSONColumnType.class);
                 writers.put(JSONColumnType.JSONB, new Writer(Stack.writer(pg, "writer", JSONColumnType.JSONB)));
                 writers.put(JSONColumnType.JSON, new Writer(Stack.writer(pg, "writer", JSONColumnType.JSON)));
@@ -252,7 +249,7 @@ class ContendedAppendThroughputSpikeIT {
         }
         long jvmCpu   = osBean.getProcessCpuTime() - jvmCpu0;
         long[] machine1 = machineCpu();
-        long serverCpu = containerCpuMicros(pg) - server0;
+        double serverCpu = SpikeServer.cpuDelta(server0, containerCpuMicros(pg));
         if (jfr != null) {
             jfr.stop();
             var file = Path.of("target", "spike-results", "p0-4-contention-run" + run + "-" + arm.name() + ".jfr");
@@ -317,8 +314,8 @@ class ContendedAppendThroughputSpikeIT {
 
         @Override
         public void run() {
-            try (var c = DriverManager.getConnection(pg.container.getJdbcUrl(), "observer", "observer");
-                 var s = c.prepareStatement("SELECT state, coalesce(wait_event_type, 'CPU'), coalesce(wait_event, '-') FROM pg_stat_activity WHERE usename = 'writer'")) {
+            try (var c = DriverManager.getConnection(pg.server.getJdbcUrl(), pg.server.getUsername(), pg.server.getPassword());
+                 var s = c.prepareStatement("SELECT state, coalesce(wait_event_type, 'CPU'), coalesce(wait_event, '-') FROM pg_stat_activity WHERE usename = '" + pg.server.role("writer") + "'")) {
                 while (!stop.get()) {
                     try (var rs = s.executeQuery()) {
                         while (rs.next()) {
@@ -356,10 +353,10 @@ class ContendedAppendThroughputSpikeIT {
 
     /** Records the top writer statements; returns the total execution time of all writer statements, ms. */
     private static double statements(Pg pg) throws SQLException {
-        double totalExec = SpikePostgres.queryLong(pg.observer, "SELECT round(sum(s.total_exec_time) * 1000)::bigint FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = 'writer'") / 1000.0;
+        double totalExec = SpikePostgres.queryLong(pg.observer, "SELECT round(sum(s.total_exec_time) * 1000)::bigint FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = '" + pg.server.role("writer") + "'") / 1000.0;
         try (var s = pg.observer.createStatement();
              var rs = s.executeQuery("SELECT s.query, s.calls, s.rows, s.plans, s.total_plan_time, s.total_exec_time, s.shared_blks_hit + s.shared_blks_read, s.shared_blks_dirtied "
-                                             + "FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = 'writer' ORDER BY s.calls DESC LIMIT 6")) {
+                                             + "FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = '" + pg.server.role("writer") + "' ORDER BY s.calls DESC LIMIT 6")) {
             while (rs.next()) {
                 long calls = rs.getLong(2);
                 var oneLine = rs.getString(1).replaceAll("\\s+", " ");
@@ -385,18 +382,13 @@ class ContendedAppendThroughputSpikeIT {
         }
     }
 
-    /** CPU the PostgreSQL container has used, µs, from its cgroup (v2 {@code cpu.stat}, else v1 {@code cpuacct.usage}). */
+    /**
+     * CPU the PostgreSQL server has used, µs: the container's cgroup (v2 {@code cpu.stat}, else v1 {@code cpuacct.usage}),
+     * or on an external server {@code -Dspike.serverCpuCommand}'s reading, else -1; take differences with
+     * {@link SpikeServer#cpuDelta(long, long)}, which is NaN when either reading is -1.
+     */
     static long containerCpuMicros(Pg pg) {
-        try {
-            var r = pg.container.execInContainer("sh", "-c", "cat /sys/fs/cgroup/cpu.stat 2>/dev/null || cat /sys/fs/cgroup/cpuacct/cpuacct.usage");
-            for (var line : r.getStdout().split("\n")) {
-                if (line.startsWith("usage_usec")) return Long.parseLong(line.split("\\s+")[1]);
-                if (line.matches("\\d+")) return Long.parseLong(line) / 1000;
-            }
-        } catch (Exception e) {
-            // fall through
-        }
-        return 0;
+        return pg.server.cpuMicros();
     }
 
     private static final class ZeroRows extends RuntimeException {

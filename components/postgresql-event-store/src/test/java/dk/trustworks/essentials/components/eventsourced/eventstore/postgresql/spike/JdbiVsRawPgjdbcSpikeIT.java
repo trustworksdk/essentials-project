@@ -240,7 +240,7 @@ class JdbiVsRawPgjdbcSpikeIT {
         record("");
         record("=== P0.6 STATEMENTS | " + Instant.now() + " | runs " + RUNS + " | " + CALLS + " measured calls per (statement, library, pass) after " + CALLS / 10
                        + " warm-up calls | passes = libraries " + System.getProperty("spike.jdbc.libs", "JDBI,RAW") + " as a palindrome, rotated by one per run, statements " + System.getProperty("spike.jdbc.stmts", "all") + " | one thread, one pooled connection (Hikari defaults) | pgjdbc "
-                       + org.postgresql.Driver.getVersion() + " | postgres:17.5 fsync=off | client and database on one 8-CPU VM");
+                       + org.postgresql.Driver.getVersion() + SpikeServer.target(" | postgres:17.5 fsync=off | client and database on one 8-CPU VM"));
         for (int run = 1; run <= RUNS; run++) {
             try (var pg = Pg.start(); var ds = pool(pg)) {
                 var jdbi  = Jdbi.create(ds).installPlugin(new PostgresPlugin());
@@ -308,7 +308,7 @@ class JdbiVsRawPgjdbcSpikeIT {
         String pgss = "";
         try (var s = pg.observer.createStatement();
              var rs = s.executeQuery("SELECT s.calls, s.plans, s.total_exec_time, s.total_plan_time FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid "
-                                             + "WHERE r.rolname = 'writer' AND s.query NOT ILIKE 'BEGIN%' AND s.query NOT ILIKE 'COMMIT%' ORDER BY s.calls DESC LIMIT 1")) {
+                                             + "WHERE r.rolname = '" + pg.server.role("writer") + "' AND s.query NOT ILIKE 'BEGIN%' AND s.query NOT ILIKE 'COMMIT%' ORDER BY s.calls DESC LIMIT 1")) {
             if (rs.next()) pgss = String.format("server: calls %d, plans %d, exec %.1f µs/call", rs.getLong(1), rs.getLong(2), rs.getDouble(3) * 1000 / Math.max(1, rs.getLong(1)));
         }
         record(String.format("STMT run %d | %-20s | %-4s | p50 %6.1f µs, p90 %6.1f, p99 %6.1f, mean %6.1f | client thread CPU %6.1f µs/call | %s",
@@ -330,7 +330,7 @@ class JdbiVsRawPgjdbcSpikeIT {
         record("");
         record("=== P0.6 CONTENDED | " + Instant.now() + " | runs " + RUNS + " | " + THREADS + " threads, " + AGGREGATES_CONTENDED + " aggregates, " + SECONDS
                        + " s per window after a 2 s warm-up, fresh table per window (dropped after), palindrome order " + palindrome + " (run 2 rotated by one) | Hikari defaults, "
-                       + "one connection per thread held for the window | postgres:17.5 fsync=off | client and database on one 8-CPU VM");
+                       + "one connection per thread held for the window" + SpikeServer.target(" | postgres:17.5 fsync=off | client and database on one 8-CPU VM"));
         for (int run = 1; run <= RUNS; run++) {
             var order = new ArrayList<>(palindrome);
             Collections.rotate(order, run - 1);
@@ -423,13 +423,13 @@ class JdbiVsRawPgjdbcSpikeIT {
         threads.forEach(Thread::start);
         for (var t : threads) t.join();
         double seconds = (System.nanoTime() - wall0) / 1e9;
-        long serverCpu = ContendedAppendThroughputSpikeIT.containerCpuMicros(pg) - server0;
+        double serverCpu = SpikeServer.cpuDelta(server0, ContendedAppendThroughputSpikeIT.containerCpuMicros(pg));
         long[] m1 = machine();
         long jvm = jvmCpu() - jvm0;
         for (var c : clients) c.close();
         long rows1 = SpikePostgres.queryLong(pg.observer, "SELECT count(*) FROM " + table);
         double exec = discard ? 0 : SpikePostgres.queryLong(pg.observer, "SELECT coalesce(round(sum(s.total_exec_time) * 1000), 0)::bigint FROM pg_stat_statements s "
-                + "JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = 'writer'");
+                + "JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = '" + pg.server.role("writer") + "'");
         try (var s = pg.observer.createStatement()) {
             s.execute("DROP TABLE " + table);
             s.execute("CHECKPOINT");
@@ -459,9 +459,9 @@ class JdbiVsRawPgjdbcSpikeIT {
 
     private static HikariDataSource pool(Pg pg) {
         var config = new HikariConfig();
-        config.setJdbcUrl(pg.container.getJdbcUrl());
-        config.setUsername("writer");
-        config.setPassword("writer");
+        config.setJdbcUrl(pg.server.getJdbcUrl());
+        config.setUsername(pg.server.role("writer"));
+        config.setPassword(pg.server.password("writer"));
         config.setPoolName("p06-" + UUID.randomUUID().toString().substring(0, 4));
         return new HikariDataSource(config);
     }

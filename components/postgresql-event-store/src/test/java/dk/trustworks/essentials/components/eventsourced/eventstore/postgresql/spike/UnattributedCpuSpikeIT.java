@@ -120,16 +120,23 @@ class UnattributedCpuSpikeIT {
         record("");
         record("=== UNATTRIBUTED CPU | " + Instant.now() + " | runs " + RUNS + " | " + WRITERS + " writers, " + AGGREGATES + " aggregates, " + SECONDS
                        + " s per window after a 2 s warm-up, fresh table per window (dropped after), palindrome order " + palindrome + " (run 2 rotated by one) | " + IMAGE
-                       + " fsync=off | pg cpuset '" + PG_CPUS + "' | JVM affinity " + affinity() + " | perf " + PERF);
+                       + " fsync=off | pg cpuset '" + PG_CPUS + "' | JVM affinity " + affinity() + " | perf " + PERF
+                       + (SpikeServer.external() ? " | " + SpikeServer.target("") + " | external: fsync, cpuset, BURNER and perf do not apply; backend /proc counters read NaN; "
+                               + "machine busy, ctxt, intr and IPIs are the CLIENT machine's" : ""));
         for (int run = 1; run <= RUNS; run++) {
             var order = new ArrayList<>(palindrome);
             Collections.rotate(order, run - 1);
-            try (var pg = Pg.start(); var perf = PERF ? Perf.start() : null) {
+            try (var pg = Pg.start(); var perf = PERF && !SpikeServer.external() ? Perf.start() : null) {
                 int n = 0;
                 for (var spec : order) {
                     var parts = spec.split("@");
                     var arm   = Arm.valueOf(parts[0]);
                     var mode  = parts.length > 1 ? Mode.valueOf(parts[1]) : Mode.NORMAL;
+                    if (mode == Mode.BURNER && pg.server.container == null) {
+                        record("run " + run + " | " + arm + " @BURNER skipped: the burner is a sidecar container on the database's Docker host, not available on an external server");
+                        n++;
+                        continue;
+                    }
                     GenericContainer<?> burner = mode == Mode.BURNER ? burner() : null;
                     try {
                         window(pg, null, arm, mode, "r" + run + "w" + n + "warm", Duration.ofSeconds(2), run, true);
@@ -164,7 +171,7 @@ class UnattributedCpuSpikeIT {
                           UNIQUE (aggregate_id, event_order),
                           UNIQUE (event_id)
                       )""".formatted(t));
-            s.execute("GRANT ALL ON " + t + " TO writer");
+            s.execute("GRANT ALL ON " + t + " TO " + pg.server.role("writer"));
         }
         var aggregates = new ArrayList<String>();
         try (var c = writer(pg); var ps = c.prepareStatement(sql(Arm.A_VALUES, t))) {
@@ -193,7 +200,7 @@ class UnattributedCpuSpikeIT {
         long rows0 = rowCount(pg, t);
         if (!discard) resetStatements(pg);
         var backends0 = backends(pg, pids);
-        var cg0       = cgroup(pg);
+        var cg0       = pg.server.cpuUserSystemMicros();
         var stat0     = procStat();
         var ipi0      = ipis();
         long jvm0     = jvmCpuNanos();
@@ -267,7 +274,7 @@ class UnattributedCpuSpikeIT {
         long jvm1     = jvmCpuNanos();
         var ipi1      = ipis();
         var stat1     = procStat();
-        var cg1       = cgroup(pg);
+        var cg1       = pg.server.cpuUserSystemMicros();
         var backends1 = backends(pg, pids);
         for (var c : connections) c.close();
         String perfSummary = perfRun != null ? perfRun.finish() : null;
@@ -286,14 +293,14 @@ class UnattributedCpuSpikeIT {
         for (int i = 0; i < 8; i++) jiffies += d[i];
         double busy = jiffies == 0 ? 0 : 1 - (d[3] + d[4]) / (double) jiffies;
         double sysShare = jiffies == 0 ? 0 : (d[2] + d[5] + d[6]) / (double) jiffies;
-        long[] b = new long[backends0.length];
-        for (int i = 0; i < b.length; i++) b[i] = backends1[i] - backends0[i];
+        double[] b = delta(backends0, backends1, 5);
+        double[] cg = delta(cg0, cg1, 3);
         record(String.format("run %d | %-9s @%-6s | appended/s %7.0f | attempts/s %7.0f | zero %4.1f%% unique %4.1f%% other %d | wall µs/att %5.1f (lookup %5.1f, append %5.1f, end %5.1f) | "
                                      + "PG cgroup µs/att %6.1f (user %5.1f, sys %5.1f) | backends on-CPU µs/att %5.1f, runq wait %5.1f, slices %.2f, vcsw %.2f, ivcsw %.3f | recorded exec µs/att %5.1f | "
                                      + "JVM CPU µs/att %5.1f | machine busy %4.1f%% (sys+irq %4.1f%%) | ctxt/att %.2f, intr/att %.2f, resched IPI/att %.3f, call IPI/att %.3f%s",
                              run, arm, mode, appended / seconds, a / seconds, 100 * zero.get() / a, 100 * unique.get() / a, other.get(),
                              WRITERS * seconds * 1e6 / a, lookupNanos.get() / a / 1000, appendNanos.get() / a / 1000, endNanos.get() / a / 1000,
-                             (cg1[0] - cg0[0]) / a, (cg1[1] - cg0[1]) / a, (cg1[2] - cg0[2]) / a,
+                             cg[0] / a, cg[1] / a, cg[2] / a,
                              b[0] / a / 1000, b[1] / a / 1000, b[2] / a, b[3] / a, b[4] / a, exec / a,
                              (jvm1 - jvm0) / a / 1000, 100 * busy, 100 * sysShare, d[8] / a, d[9] / a, (ipi1[0] - ipi0[0]) / a, (ipi1[1] - ipi0[1]) / a,
                              firstOther.get() == null ? "" : " | first other: " + firstOther.get()));
@@ -327,11 +334,19 @@ class UnattributedCpuSpikeIT {
 
     // ------------------------------------------------------------------ measurement helpers
 
-    /** Per backend pid summed: {on-CPU ns, run-queue wait ns, timeslices, voluntary switches, involuntary switches}. */
+    /** {@code after - before} per element; all NaN when either is null (not available on an external server). */
+    private static double[] delta(long[] before, long[] after, int length) {
+        var d = new double[length];
+        for (int i = 0; i < length; i++) d[i] = before == null || after == null ? Double.NaN : after[i] - before[i];
+        return d;
+    }
+
+    /** Per backend pid summed: {on-CPU ns, run-queue wait ns, timeslices, voluntary switches, involuntary switches}; null on an external server. */
     private static long[] backends(Pg pg, List<Long> pids) throws Exception {
+        if (pg.server.container == null) return null;
         var script = new StringBuilder();
         for (var pid : pids) script.append("cat /proc/").append(pid).append("/schedstat; grep ctxt_switches /proc/").append(pid).append("/status;");
-        var out = pg.container.execInContainer("sh", "-c", script.toString()).getStdout();
+        var out = pg.server.container.execInContainer("sh", "-c", script.toString()).getStdout();
         long[] r = new long[5];
         for (var line : out.split("\n")) {
             var f = line.trim().split("\\s+");
@@ -341,22 +356,6 @@ class UnattributedCpuSpikeIT {
                 r[2] += Long.parseLong(f[2]);
             } else if (line.startsWith("voluntary_ctxt_switches")) r[3] += Long.parseLong(f[1]);
             else if (line.startsWith("nonvoluntary_ctxt_switches")) r[4] += Long.parseLong(f[1]);
-        }
-        return r;
-    }
-
-    /** The PostgreSQL container's cgroup CPU: {usage, user, system} µs. */
-    private static long[] cgroup(Pg pg) throws Exception {
-        long[] r = new long[3];
-        for (var line : pg.container.execInContainer("cat", "/sys/fs/cgroup/cpu.stat").getStdout().split("\n")) {
-            var f = line.split("\\s+");
-            switch (f[0]) {
-                case "usage_usec" -> r[0] = Long.parseLong(f[1]);
-                case "user_usec" -> r[1] = Long.parseLong(f[1]);
-                case "system_usec" -> r[2] = Long.parseLong(f[1]);
-                default -> {
-                }
-            }
         }
         return r;
     }
@@ -410,11 +409,11 @@ class UnattributedCpuSpikeIT {
 
     /** {@code pg_stat_statements}' total execution time of the writer role's statements, µs. */
     private static double recordedExecMicros(Pg pg) throws SQLException {
-        return SpikePostgres.queryLong(pg.observer, "SELECT coalesce(round(sum(s.total_exec_time) * 1000), 0)::bigint FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = 'writer'");
+        return SpikePostgres.queryLong(pg.observer, "SELECT coalesce(round(sum(s.total_exec_time) * 1000), 0)::bigint FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = '" + pg.server.role("writer") + "'");
     }
 
     private static Connection writer(Pg pg) throws SQLException {
-        var c = DriverManager.getConnection(pg.container.getJdbcUrl(), "writer", "writer");
+        var c = DriverManager.getConnection(pg.server.getJdbcUrl(), pg.server.role("writer"), pg.server.password("writer"));
         c.setAutoCommit(false);
         return c;
     }
@@ -447,21 +446,30 @@ class UnattributedCpuSpikeIT {
     // ------------------------------------------------------------------ containers
 
     static final class Pg implements AutoCloseable {
-        final PostgreSQLContainer container;
-        final Connection          observer;
+        final SpikeServer server;
+        final Connection  observer;
 
-        private Pg(PostgreSQLContainer container) throws SQLException {
-            this.container = container;
-            this.observer = DriverManager.getConnection(container.getJdbcUrl(), "observer", "observer");
+        private Pg(SpikeServer server) throws SQLException {
+            this.server = server;
+            this.observer = DriverManager.getConnection(server.getJdbcUrl(), server.getUsername(), server.getPassword());
         }
 
         static Pg start() throws SQLException {
+            if (SpikeServer.external()) {
+                // fsync is whatever the server runs with (recorded in the header); the container path insists on off
+                var pg = new Pg(SpikeServer.external("cpu", "observer", true));
+                try (var s = pg.observer.createStatement()) {
+                    s.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements");
+                }
+                pg.server.createRole(pg.observer, "writer");
+                return pg;
+            }
             var container = new PostgreSQLContainer(IMAGE).withDatabaseName("cpu").withUsername("observer").withPassword("observer")
                                                           .withCommand("postgres", "-c", "fsync=off", "-c", "shared_preload_libraries=pg_stat_statements",
                                                                        "-c", "pg_stat_statements.max=10000");
             if (!PG_CPUS.isBlank()) container.withCreateContainerCmdModifier(cmd -> cmd.getHostConfig().withCpusetCpus(PG_CPUS));
             container.start();
-            var pg = new Pg(container);
+            var pg = new Pg(SpikeServer.of(container));
             try (var s = pg.observer.createStatement()) {
                 s.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements");
                 s.execute("CREATE ROLE writer LOGIN SUPERUSER PASSWORD 'writer'");
@@ -476,7 +484,7 @@ class UnattributedCpuSpikeIT {
         @Override
         public void close() throws Exception {
             observer.close();
-            container.stop();
+            server.close();
         }
     }
 

@@ -322,9 +322,9 @@ class CurrentEngineBaselineSpikeIT {
                             new Case("5 aggregates x 10 events per unit of work", 5, 10, false, 500));
         header("APPEND", "single thread, one unit of work per iteration, new aggregates, 50 warm-up iterations per case; round trips counted in a separate 100-iteration pass through a counting TCP proxy");
         for (int run = 1; run <= RUNS; run++) {
-            try (var pg = Pg.start(); var proxy = new RoundTripCountingProxy(pg.container.getHost(), pg.container.getMappedPort(5432))) {
+            try (var pg = Pg.start(); var proxy = new RoundTripCountingProxy(pg.server.host(), pg.server.port())) {
                 var writer  = Stack.writer(pg, "writer");
-                var proxied = Stack.writer(pg, "writer", "jdbc:postgresql://127.0.0.1:" + proxy.port() + "/baseline");
+                var proxied = Stack.writer(pg, "writer", pg.server.viaProxy(proxy.port()));
                 record("APPEND run " + run + " | pgjdbc " + org.postgresql.Driver.getVersion() + ", reWriteBatchedInserts=" + pg.driverProperty("reWriteBatchedInserts")
                                + ", prepareThreshold=" + pg.driverProperty("prepareThreshold"));
                 for (var c : cases) {
@@ -417,7 +417,7 @@ class CurrentEngineBaselineSpikeIT {
 
     private static void header(String shape, String setup) {
         record("");
-        record("=== " + shape + " | " + Instant.now() + " | image " + IMAGE + " | runs " + RUNS + " | CPUs " + Runtime.getRuntime().availableProcessors()
+        record("=== " + shape + " | " + Instant.now() + " | " + SpikeServer.target("image " + IMAGE) + " | runs " + RUNS + " | CPUs " + Runtime.getRuntime().availableProcessors()
                        + " | max heap " + (Runtime.getRuntime().maxMemory() >> 20) + " MB | " + setup);
     }
 
@@ -465,21 +465,39 @@ class CurrentEngineBaselineSpikeIT {
 
     /** One container, the observer connection and the measurement helpers. */
     static final class Pg implements AutoCloseable {
-        final PostgreSQLContainer container;
-        final Connection          observer;
-        String                    lsnAtReset;
+        /** The container or the external server ({@code -Dspike.jdbcUrl}); see {@link SpikeServer}. */
+        final SpikeServer server;
+        final Connection  observer;
+        String            lsnAtReset;
 
-        private Pg(PostgreSQLContainer container) throws SQLException {
-            this.container = container;
-            this.observer = DriverManager.getConnection(container.getJdbcUrl(), OBSERVER, OBSERVER);
+        private Pg(SpikeServer server) throws SQLException {
+            this.server = server;
+            this.observer = DriverManager.getConnection(server.getJdbcUrl(), server.getUsername(), server.getPassword());
+        }
+
+        String jdbcUrl() {
+            return server.getJdbcUrl();
+        }
+
+        /** Restricts a pg_stat_statements query (alias {@code s}) to this run's database on an external server; nothing in a container. */
+        String thisDatabase() {
+            return server.container != null ? "" : " AND s.dbid = (SELECT oid FROM pg_database WHERE datname = current_database())";
         }
 
         static Pg start() throws SQLException {
+            if (SpikeServer.external()) {
+                var pg = new Pg(SpikeServer.external("baseline", OBSERVER, true));
+                try (var s = pg.observer.createStatement()) {
+                    s.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements");
+                }
+                for (var role : List.of("writer", "reader", "reader2")) pg.server.createRole(pg.observer, role);
+                return pg;
+            }
             var container = new PostgreSQLContainer(IMAGE).withDatabaseName("baseline").withUsername(OBSERVER).withPassword(OBSERVER)
                                                           .withCommand("postgres", "-c", "fsync=off", "-c", "shared_preload_libraries=pg_stat_statements",
                                                                        "-c", "pg_stat_statements.max=10000", "-c", "pg_stat_statements.track_utility=on");
             container.start();
-            var pg = new Pg(container);
+            var pg = new Pg(SpikeServer.of(container));
             try (var s = pg.observer.createStatement()) {
                 s.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements");
                 for (var role : List.of("writer", "reader", "reader2")) s.execute("CREATE ROLE " + role + " LOGIN SUPERUSER PASSWORD '" + role + "'");
@@ -488,7 +506,7 @@ class CurrentEngineBaselineSpikeIT {
         }
 
         String driverProperty(String name) throws SQLException {
-            for (var p : new org.postgresql.Driver().getPropertyInfo(container.getJdbcUrl(), new Properties())) {
+            for (var p : new org.postgresql.Driver().getPropertyInfo(jdbcUrl(), new Properties())) {
                 if (p.name.equals(name)) return p.value;
             }
             return "?";
@@ -517,8 +535,8 @@ class CurrentEngineBaselineSpikeIT {
             var rows = new ArrayList<Row>();
             try (var s = observer.createStatement();
                  var rs = s.executeQuery("SELECT r.rolname, s.query, s.calls, s.rows, s.wal_bytes::bigint, s.total_exec_time FROM pg_stat_statements s " +
-                                                 "JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname <> '" + OBSERVER + "' ORDER BY s.calls DESC")) {
-                while (rs.next()) rows.add(new Row(rs.getString(1), rs.getString(2), rs.getLong(3), rs.getLong(4), rs.getLong(5), rs.getDouble(6)));
+                                                 "JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname <> '" + server.role(OBSERVER) + "'" + thisDatabase() + " ORDER BY s.calls DESC")) {
+                while (rs.next()) rows.add(new Row(server.logical(rs.getString(1)), rs.getString(2), rs.getLong(3), rs.getLong(4), rs.getLong(5), rs.getDouble(6)));
             }
             long total = 0, nonUtility = 0, transactionControl = 0, tIns = 0, tDel = 0, pIns = 0;
             var  byRole = new TreeMap<String, Long>();
@@ -547,7 +565,7 @@ class CurrentEngineBaselineSpikeIT {
         @Override
         public void close() throws Exception {
             observer.close();
-            container.stop();
+            server.close();
         }
     }
 
@@ -558,16 +576,16 @@ class CurrentEngineBaselineSpikeIT {
         final PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
         EventStoreSubscriptionManager                                                 manager;
 
-        private Stack(String jdbcUrl, String role) {
-            this(jdbcUrl, role, JSONColumnType.JSONB);
+        private Stack(String jdbcUrl, String role, String password) {
+            this(jdbcUrl, role, password, JSONColumnType.JSONB);
         }
 
         /** {@code jsonColumnType} is used for the payload and the metadata column of every event table this stack creates. */
-        private Stack(String jdbcUrl, String role, JSONColumnType jsonColumnType) {
+        private Stack(String jdbcUrl, String role, String password, JSONColumnType jsonColumnType) {
             var config = new HikariConfig();
             config.setJdbcUrl(jdbcUrl);
             config.setUsername(role);
-            config.setPassword(role);
+            config.setPassword(password);
             config.setPoolName(role + "-" + UUID.randomUUID().toString().substring(0, 4));
             dataSource = new HikariDataSource(config);
             var jdbi = Jdbi.create(dataSource);
@@ -594,23 +612,23 @@ class CurrentEngineBaselineSpikeIT {
         private final Jdbi jdbi;
 
         static Stack writer(Pg pg, String role) {
-            return new Stack(pg.container.getJdbcUrl(), role);
+            return new Stack(pg.jdbcUrl(), pg.server.role(role), pg.server.password(role));
         }
 
         static Stack writer(Pg pg, String role, JSONColumnType jsonColumnType) {
-            return new Stack(pg.container.getJdbcUrl(), role, jsonColumnType);
+            return new Stack(pg.jdbcUrl(), pg.server.role(role), pg.server.password(role), jsonColumnType);
         }
 
         static Stack writer(Pg pg, String role, String jdbcUrl, JSONColumnType jsonColumnType) {
-            return new Stack(jdbcUrl, role, jsonColumnType);
+            return new Stack(jdbcUrl, pg.server.role(role), pg.server.password(role), jsonColumnType);
         }
 
         static Stack writer(Pg pg, String role, String jdbcUrl) {
-            return new Stack(jdbcUrl, role);
+            return new Stack(jdbcUrl, pg.server.role(role), pg.server.password(role));
         }
 
         static Stack reader(Pg pg, String role, String instanceId) {
-            var stack = new Stack(pg.container.getJdbcUrl(), role);
+            var stack = new Stack(pg.jdbcUrl(), pg.server.role(role), pg.server.password(role));
             var lockManager = PostgresqlFencedLockManager.builder()
                                                          .setJdbi(stack.jdbi)
                                                          .setUnitOfWorkFactory(stack.unitOfWorkFactory)

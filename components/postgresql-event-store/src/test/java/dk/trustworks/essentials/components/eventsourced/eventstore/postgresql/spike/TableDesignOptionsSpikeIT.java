@@ -511,7 +511,7 @@ class TableDesignOptionsSpikeIT {
     }
 
     private static Connection writer(Pg pg) throws SQLException {
-        var c = DriverManager.getConnection(pg.container.getJdbcUrl(), "writer", "writer");
+        var c = DriverManager.getConnection(pg.server.getJdbcUrl(), pg.server.role("writer"), pg.server.password("writer"));
         c.setAutoCommit(false);
         return c;
     }
@@ -522,7 +522,7 @@ class TableDesignOptionsSpikeIT {
     void table_design_options() throws Exception {
         record("");
         record("=== TABLE DESIGN | " + Instant.now() + " | runs " + RUNS + ", uncontended rounds " + ROUNDS + ", contended " + SECONDS + " s, CPUs " + Runtime.getRuntime().availableProcessors()
-                       + " | arms " + DESIGNS + " | postgres:17.5 fsync=off, client and database share one VM");
+                       + " | arms " + DESIGNS + SpikeServer.target(" | postgres:17.5 fsync=off, client and database share one VM"));
         for (int run = 1; run <= RUNS; run++) {
             try (var pg = Pg.start()) {
                 record("RUN " + run + " | server " + SpikePostgres.serverVersion(pg.observer) + " | pgjdbc " + org.postgresql.Driver.getVersion());
@@ -716,7 +716,7 @@ class TableDesignOptionsSpikeIT {
 
     private static double execMillis(Pg pg) throws SQLException {
         return SpikePostgres.queryLong(pg.observer, "SELECT coalesce(round(sum(s.total_exec_time) * 1000), 0)::bigint FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid "
-                + "WHERE r.rolname = 'writer' AND s.query !~* '^\\s*(begin|commit|rollback|set |show )'") / 1000.0;
+                + "WHERE r.rolname = '" + pg.server.role("writer") + "' AND s.query !~* '^\\s*(begin|commit|rollback|set |show )'") / 1000.0;
     }
 
     private void contended(Pg pg, Table t, Duration duration, int run, boolean discard) throws Exception {
@@ -799,7 +799,7 @@ class TableDesignOptionsSpikeIT {
             t.drop(pg);
             return;
         }
-        long cpu = ContendedAppendThroughputSpikeIT.containerCpuMicros(pg) - cpu0;
+        double cpu = SpikeServer.cpuDelta(cpu0, ContendedAppendThroughputSpikeIT.containerCpuMicros(pg));
         long jvm = osBean.getProcessCpuTime() - jvm0;
         long[] machine1 = machineCpu();
         long appended = SpikePostgres.queryLong(pg.observer, "SELECT count(*) FROM " + t.t) - rows0;

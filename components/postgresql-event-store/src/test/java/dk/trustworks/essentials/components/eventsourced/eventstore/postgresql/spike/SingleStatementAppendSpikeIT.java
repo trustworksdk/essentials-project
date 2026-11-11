@@ -225,12 +225,12 @@ class SingleStatementAppendSpikeIT {
                 + "arm order rotates per round; fresh table per (round, case, arm); 50 warm-up iterations per table; round trips counted in a separate "
                 + "100-iteration pass through a counting TCP proxy");
         for (int run = 1; run <= RUNS; run++) {
-            try (var pg = Pg.start(); var proxy = new RoundTripCountingProxy(pg.container.getHost(), pg.container.getMappedPort(5432))) {
+            try (var pg = Pg.start(); var proxy = new RoundTripCountingProxy(pg.server.host(), pg.server.port())) {
                 var directs  = new LinkedHashMap<JSONColumnType, Writer>();
                 var proxieds = new LinkedHashMap<JSONColumnType, Writer>();
                 for (var jt : APPEND_JSON_TYPES) {
                     directs.put(jt, new Writer(Stack.writer(pg, "writer", jt)));
-                    proxieds.put(jt, new Writer(Stack.writer(pg, "writer", "jdbc:postgresql://127.0.0.1:" + proxy.port() + "/baseline", jt)));
+                    proxieds.put(jt, new Writer(Stack.writer(pg, "writer", pg.server.viaProxy(proxy.port()), jt)));
                 }
                 var entries = new ArrayList<Map.Entry<Arm, JSONColumnType>>();
                 for (var a : APPEND_ARMS) for (var jt : APPEND_JSON_TYPES) entries.add(Map.entry(a, jt));
@@ -876,7 +876,7 @@ class SingleStatementAppendSpikeIT {
             var top = new ArrayList<String>();
             try (var s = pg.observer.createStatement();
                  var rs = s.executeQuery("SELECT s.query, s.calls, s.rows, s.wal_bytes::bigint, s.total_exec_time FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid " +
-                                                 "WHERE r.rolname = 'writer' ORDER BY s.calls DESC")) {
+                                                 "WHERE r.rolname = '" + pg.server.role("writer") + "' ORDER BY s.calls DESC")) {
                 while (rs.next()) {
                     var q = rs.getString(1).trim().toLowerCase(Locale.ROOT);
                     long calls = rs.getLong(2);
@@ -909,7 +909,7 @@ class SingleStatementAppendSpikeIT {
     private static void header(String shape, String setup) {
         record("");
         record("=== " + shape + " | " + Instant.now() + " | runs " + RUNS + " | CPUs " + Runtime.getRuntime().availableProcessors()
-                       + " | max heap " + (Runtime.getRuntime().maxMemory() >> 20) + " MB | " + setup);
+                       + " | max heap " + (Runtime.getRuntime().maxMemory() >> 20) + " MB | " + setup + (SpikeServer.external() ? " | " + SpikeServer.target("") : ""));
     }
 
     private static void record(String line) {

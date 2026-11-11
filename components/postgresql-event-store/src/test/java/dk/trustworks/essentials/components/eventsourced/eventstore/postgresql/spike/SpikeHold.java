@@ -16,8 +16,6 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spike;
 
-import org.testcontainers.postgresql.PostgreSQLContainer;
-
 import java.sql.*;
 
 /**
@@ -51,7 +49,7 @@ final class SpikeHold implements AutoCloseable {
         }
     }
 
-    static SpikeHold arm(PostgreSQLContainer postgres) throws SQLException {
+    static SpikeHold arm(SpikeServer postgres) throws SQLException {
         var holder = DriverManager.getConnection(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
         try (var statement = holder.createStatement()) {
             statement.execute("SELECT pg_advisory_lock(" + LOCK_KEY + ")");

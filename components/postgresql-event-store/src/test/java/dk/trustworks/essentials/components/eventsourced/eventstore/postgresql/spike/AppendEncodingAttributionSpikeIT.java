@@ -81,16 +81,18 @@ class AppendEncodingAttributionSpikeIT {
     void attribution() throws Exception {
         record("");
         record("=== ENCODING | " + Instant.now() + " | CPUs " + Runtime.getRuntime().availableProcessors() + " | " + ITERATIONS + " units of work per (variant, size, round), 300 warm-up, "
-                       + "single writer, tables pre-filled with 10 aggregates x 2 000 events, fsync=off");
+                       + "single writer, tables pre-filled with 10 aggregates x 2 000 events, fsync=off"
+                       + (SpikeServer.external() ? " | " + SpikeServer.target("") : ""));
         try (var pg = Pg.start()) {
-            try (var s = pg.observer.createStatement()) {
-                s.execute("ALTER SYSTEM SET pg_stat_statements.track_planning = on");
-                s.execute("SELECT pg_reload_conf()");
-                s.execute("CREATE ROLE explainer LOGIN SUPERUSER PASSWORD 'explainer'");
+            // the auto_explain plans are read from the server log, which only a container hands back
+            boolean plans = pg.server.container != null;
+            pg.server.enableTrackPlanning(pg.observer);
+            if (plans) try (var s = pg.observer.createStatement()) {
+                pg.server.createRole(pg.observer, "explainer");
                 for (var setting : List.of("session_preload_libraries = 'auto_explain'", "auto_explain.log_min_duration = 0", "auto_explain.log_analyze = on",
                                            "auto_explain.log_buffers = on", "auto_explain.log_verbose = on", "auto_explain.log_nested_statements = on",
                                            "plan_cache_mode = force_generic_plan")) {
-                    s.execute("ALTER ROLE explainer SET " + setting);
+                    s.execute("ALTER ROLE " + pg.server.role("explainer") + " SET " + setting);
                 }
             }
             var w     = new Writer(Stack.writer(pg, "writer"));
@@ -109,6 +111,12 @@ class AppendEncodingAttributionSpikeIT {
                 }
             }
 
+            if (!plans) {
+                record("PLAN | not available on an external server: the auto_explain plans are read from the server log, which only the container path can read");
+                wJson.stack.close();
+                w.stack.close();
+                return;
+            }
             var exJsonb = new Writer(Stack.writer(pg, "explainer"));
             var exJson  = new Writer(Stack.writer(pg, "explainer", JSONColumnType.JSON));
             for (int events : List.of(1, 10)) {
@@ -117,10 +125,10 @@ class AppendEncodingAttributionSpikeIT {
                     var ex   = v.json() == JSONColumnType.JSON ? exJson : exJsonb;
                     var type = prefilled(ex, "ex");
                     var cfg  = ex.config(type);
-                    var logsBefore = pg.container.getLogs().length();
+                    var logsBefore = pg.server.container.getLogs().length();
                     var ids = aggregates(ex, type);
                     for (int i = 0; i < 50; i++) unitOfWork(ex, type, cfg, v, ids.get(i % ids.size()), events);
-                    var logs = pg.container.getLogs().substring(logsBefore);
+                    var logs = pg.server.container.getLogs().substring(logsBefore);
                     record("PLAN | " + v.label() + " | " + events + " event(s) | last auto_explain plan of the append statement:");
                     lastPlanOf(logs, "INSERT INTO " + cfg.eventStreamTableName).forEach(l -> record("    " + l));
                 }
@@ -247,13 +255,13 @@ class AppendEncodingAttributionSpikeIT {
             unitOfWork(w, type, cfg, v, ids.get(i % ids.size()), events);
             wall.add(System.nanoTime() - t0);
         }
-        long cpu = ContendedAppendThroughputSpikeIT.containerCpuMicros(pg) - cpu0;
+        double cpu = SpikeServer.cpuDelta(cpu0, ContendedAppendThroughputSpikeIT.containerCpuMicros(pg));
         // the append statement(s): every writer statement that inserts into this table
         double execMs = 0, planMs = 0, blocks = 0, totalMs = 0;
         long   calls = 0, plans = 0;
         try (var s = pg.observer.createStatement();
              var rs = s.executeQuery("SELECT s.query, s.calls, s.plans, s.total_plan_time, s.total_exec_time, s.shared_blks_hit + s.shared_blks_read FROM pg_stat_statements s "
-                                             + "JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = 'writer'")) {
+                                             + "JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = '" + pg.server.role("writer") + "'")) {
             while (rs.next()) {
                 totalMs += rs.getDouble(5);
                 if (!rs.getString(1).contains("INSERT INTO " + cfg.eventStreamTableName)) continue;

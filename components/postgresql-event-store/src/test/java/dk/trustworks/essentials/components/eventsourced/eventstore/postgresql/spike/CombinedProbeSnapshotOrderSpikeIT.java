@@ -22,7 +22,6 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.*;
-import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.sql.*;
 import java.time.Duration;
@@ -76,7 +75,7 @@ class CombinedProbeSnapshotOrderSpikeIT {
 
     /** A writer that took its xid, inserted one row and holds its transaction open. */
     record OpenWriter(Connection connection, String xid, long globalOrder) implements AutoCloseable {
-        static OpenWriter begin(PostgreSQLContainer postgres) throws SQLException {
+        static OpenWriter begin(SpikeServer postgres) throws SQLException {
             var connection = connect(postgres);
             connection.setAutoCommit(false);
             var xid = queryString(connection, "SELECT pg_current_xact_id()::xid::text");

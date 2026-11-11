@@ -35,31 +35,53 @@ final class SpikePostgres {
 
     static final String TABLE = "spike_events";
 
-    private static final Map<String, PostgreSQLContainer> containers = new LinkedHashMap<>();
+    private static final Map<String, SpikeServer> containers = new LinkedHashMap<>();
 
     private SpikePostgres() {
     }
 
+    /**
+     * The images to run against; on an external server ({@code -Dspike.jdbcUrl}) just that one server, labelled
+     * {@link SpikeServer#EXTERNAL_LABEL}: one run covers one major, so compare majors by running again against another.
+     */
     static List<String> images() {
+        if (SpikeServer.external()) {
+            System.out.println("SPIKE | external server: " + SpikeServer.target("") + " | -Dspike.pg.images is ignored, one major per run");
+            return List.of(SpikeServer.EXTERNAL_LABEL);
+        }
         return Arrays.stream(System.getProperty("spike.pg.images", DEFAULT_IMAGES).split(","))
                      .map(String::trim)
                      .filter(s -> !s.isEmpty())
                      .toList();
     }
 
-    static synchronized PostgreSQLContainer container(String image) {
+    /** The server for an entry of {@link #images()}: a started container, or a fresh database on the external server. */
+    static synchronized SpikeServer container(String image) {
         return containers.computeIfAbsent(image, i -> {
+            if (SpikeServer.external()) {
+                try {
+                    return SpikeServer.external("probe", "spike", false);
+                } catch (SQLException e) {
+                    throw new IllegalStateException(e);
+                }
+            }
             var container = new PostgreSQLContainer(i)
                     .withDatabaseName("spike")
                     .withUsername("spike")
                     .withPassword("spike");
             container.start();
-            return container;
+            return SpikeServer.of(container);
         });
     }
 
     static synchronized void stopAll() {
-        containers.values().forEach(PostgreSQLContainer::stop);
+        for (var server : containers.values()) {
+            try {
+                server.close();
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        }
         containers.clear();
     }
 
@@ -93,7 +115,7 @@ final class SpikePostgres {
     }
 
     /** A connection in the given protocol mode; autocommit on, a 60 s statement timeout as a backstop. */
-    static Connection connect(PostgreSQLContainer postgres, Protocol protocol) throws SQLException {
+    static Connection connect(SpikeServer postgres, Protocol protocol) throws SQLException {
         var url = postgres.getJdbcUrl();
         url = url + (url.contains("?") ? "&" : "?") + protocol.urlParameter;
         var connection = DriverManager.getConnection(url, postgres.getUsername(), postgres.getPassword());
@@ -107,7 +129,7 @@ final class SpikePostgres {
     }
 
     /** A plain connection (default pgjdbc settings) for setup and observation. */
-    static Connection connect(PostgreSQLContainer postgres) throws SQLException {
+    static Connection connect(SpikeServer postgres) throws SQLException {
         return connect(postgres, Protocol.EXTENDED_UNNAMED);
     }
 
