@@ -158,9 +158,8 @@ A's figures reproduce P0.0 (466 per 1 000). Every burned value was a unique-viol
   writers of an aggregate until commit: in this deliberately hot shape throughput fell to a third of A's
   (11.5-11.9 against 34.5-34.7 thousand appends per second, with `fsync=off`).
 - **B's throughput under contention is ~30% below A's** (23.6-24.6 against 34.5-34.7 thousand appends per second;
-  attempts likewise). Not investigated; a plausible cause is that B's attempts that lose spend longer — the zero-row
-  path still runs the `head` scan and the losing insert waits on the winner — but this was not measured. Uncontended
-  appends (§2.1) show no such cost, so it is a property of the hot-aggregate case, which the opt-in lock exists for.
+  attempts likewise). Investigated in §5: the gap is real, not a counting artefact, and comes from B's statement
+  costing more server CPU per append than A's insert, not from lock waits, planning or the client.
 
 ## 3. Verdict
 
@@ -193,7 +192,140 @@ What that means for §5:
 - Other PostgreSQL majors (only 17.5), UUID-typed ids, and a configuration with tenants.
 - Production durability (`fsync=on`): commit latency would dominate the small cases even more, shrinking the relative
   differences at 1 and 10 events.
-- The cause of B's lower throughput under contention.
+- Which part of B's statement (array literals, `unnest`, casts, the `head` scan, the CTEs) costs the extra server CPU
+  found in §5; no `EXPLAIN (ANALYZE, BUFFERS)` was taken.
 - The A/B from worktrees outside `/workspace` that §17 asks for; both arms ran in the same JVM and tree, alternating,
   which is the comparison that matters here since no engine code differs.
 - Concurrent uncontended appenders (§17's steady and concurrent-writers shapes) with B.
+
+## 5. Contention throughput
+
+Date: 2026-11-11. Follow-up to §2.2: why does B append about 30% fewer events per second than A when 8 writers
+contend for 10 aggregates?
+
+**Code and command.** `ContendedAppendThroughputSpikeIT` (same `spike` package, same gating) runs §2.2's shape and
+adds what §2.2 did not measure: client wall time per attempt split into begin, last-order lookup, append and
+commit/rollback, per outcome; the writer threads' CPU time and the JVM's; the PostgreSQL container's CPU (cgroup
+`cpu.stat`) and the machine's busy fraction (`/proc/stat`; the devcontainer and the database share the same 8-CPU
+Docker VM); a `pg_stat_activity` sample of the writer backends every ~2 ms (state and wait event); and
+`pg_stat_statements` with `track_planning` on. Two new arms: **C** (today's two statements through raw pgjdbc, as in
+§2.1) and **B + `ON CONFLICT (aggregate_id, event_order) DO NOTHING`** (a lost race returns zero rows instead of
+raising a unique violation; `SingleStatementAppendSpikeIT.Lock.ON_CONFLICT_DO_NOTHING`). Arms ran in the palindrome
+order B, A, C, B+OC, B+OC, C, A, B, so every arm has the same mean position in the container's life; two runs, each
+on a fresh container, 20 s per window after a 2 s warm-up on a throwaway table, fresh table per window, `fsync=off`,
+`-Dfailsafe.forkCount=1`, nothing else building. Raw output: `target/spike-results/p0-4-contention.txt`.
+
+```bash
+mvn -o verify -pl components/postgresql-event-store -DskipUTs \
+    -Dit.test=ContendedAppendThroughputSpikeIT -Dfailsafe.failIfNoSpecifiedTests=false \
+    -Dspike.run=true -Dfailsafe.forkCount=1 -DskipDependencyCheck=true \
+    -Dspike.contention.runs=2 -Dspike.contention.seconds=20 \
+    -Dspike.contention.arms=B_SINGLE,A_ENGINE,C_RAW,B_ON_CONFLICT,B_ON_CONFLICT,C_RAW,A_ENGINE,B_SINGLE
+```
+
+### 5.1 The measurement was sound
+
+- **Both arms count the same thing**: rows written in the window (table row count after minus before) per second,
+  i.e. successful appends. Attempts are counted the same way too, and both are about 30% lower for B.
+- **Both arms do the same work per attempt**: one unit of work, the engine's `loadLastPersistedEventRelatedTo`
+  (the same statement, the same JDBI mapping), one append with that expected order, commit or rollback; a failed
+  attempt is not retried, the loop simply picks the next random aggregate. The only differences are the append itself
+  and how a conflict surfaces: A throws `OptimisticAppendToStreamException` (built with the long message after
+  catching the unique violation), B throws a stackless exception on zero rows or gets the raw unique violation.
+- **The conflict rates are close**: 31.5-31.7% of attempts in A, 33.4-34.1% in B. Fewer successes per attempt
+  explain at most 3 points of the 30% gap.
+- **Arm order is not the cause.** §2.2's rotation happened to run A before B in both runs. With the palindrome order,
+  A and B each ran first and last in a container and their figures did not move with position (A 34.7-35.5 thousand
+  appends per second whether first or last). A smoke run with 3 s windows did show a large first-window effect
+  (the first window of a fresh container ran ~30% faster than every later one, whatever the arm), so short windows
+  are not usable for this comparison; at 20 s it does not show.
+
+So the gap is real. Per window (successful appends per second; wall time per attempt = 8 writers × 20 s ÷ attempts):
+
+| Run | Arm | Appended/s | Attempts/s | Conflict rate | Wall µs/attempt | Client CPU µs/attempt | PostgreSQL CPU µs/attempt | Machine busy | Lookup µs (successes) | Append µs (successes) | Append exec µs/completed call | Lock-wait share of backend samples |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | B | 26 020 | 39 260 | 33.7% | 204 | 55 | 94 | 79% | 78 | 71 | 19.7 | 2.2% |
+| 1 | A | 34 727 | 50 787 | 31.6% | 158 | 56 | 70 | 89% | 52 | 52 | 14.3 | 2.7% |
+| 1 | C | 31 608 | 45 956 | 31.2% | 174 | 52 | 79 | 83% | 66 | 49 | 15.0 | 2.3% |
+| 1 | B + ON CONFLICT | 13 954 | 21 446 | 34.9% | 373 | 93 | 154 | 69% | 153 | 135 | 45.8 | 2.2% |
+| 1 | B + ON CONFLICT | 14 837 | 22 649 | 34.5% | 353 | 90 | 142 | 68% | 149 | 119 | 36.3 | 2.1% |
+| 1 | C | 30 649 | 44 576 | 31.2% | 180 | 54 | 83 | 84% | 67 | 51 | 16.2 | 2.4% |
+| 1 | A | 35 548 | 51 825 | 31.4% | 154 | 54 | 69 | 90% | 51 | 50 | 14.2 | 2.8% |
+| 1 | B | 24 419 | 36 770 | 33.6% | 218 | 55 | 104 | 80% | 76 | 80 | 25.6 | 2.7% |
+| 2 | B | 24 017 | 36 049 | 33.4% | 222 | 59 | 99 | 78% | 84 | 75 | 20.5 | 2.3% |
+| 2 | B | 23 270 | 35 330 | 34.1% | 226 | 60 | 103 | 78% | 87 | 82 | 22.8 | 2.3% |
+| 2 | A | 35 176 | 51 489 | 31.7% | 155 | 55 | 69 | 90% | 51 | 52 | 14.2 | 2.8% |
+| 2 | C | 32 308 | 46 826 | 31.0% | 171 | 51 | 78 | 84% | 64 | 48 | 14.6 | 2.5% |
+| 2 | B + ON CONFLICT | 14 964 | 22 822 | 34.4% | 351 | 89 | 143 | 68% | 147 | 119 | 37.3 | 2.2% |
+| 2 | B + ON CONFLICT | 17 510 | 26 620 | 34.2% | 301 | 77 | 126 | 71% | 125 | 101 | 32.7 | 2.3% |
+| 2 | C | 32 875 | 47 597 | 30.9% | 168 | 50 | 78 | 83% | 63 | 47 | 14.6 | 2.5% |
+| 2 | A | 35 546 | 51 893 | 31.5% | 154 | 54 | 69 | 90% | 52 | 51 | 13.9 | 2.7% |
+
+(Append exec is `pg_stat_statements`' mean over completed calls: it includes B's zero-row calls but no statement that
+failed with a unique violation, which `pg_stat_statements` does not record. Lock-wait share = samples with
+`wait_event_type = Lock` (`transactionid`) over all writer-backend samples.)
+
+B reproduces §2.2: 23.3-26.0 against 34.7-35.5 thousand appends per second, 241-268 against 458-464 burned identity
+values per 1 000 appends.
+
+### 5.2 What it is not
+
+- **Not lock waits.** Backends waiting on a `transactionid` lock (an insert waiting for the in-flight competitor
+  that owns the conflicting index entry) are 2.2-2.8% of writer-backend samples in every arm, B no higher than A —
+  about 5-6 µs per attempt. The longer append time of B's unique-violation attempts (161-172 µs against A's
+  115-120 µs) is the same in proportion as its successful ones, not a longer wait.
+- **Not planning.** Every append statement was planned 70-96 times per window, i.e. about once per connection
+  until pgjdbc's `prepareThreshold` and the server's plan cache settle on the generic plan, then never again; plan
+  time is a rounding error.
+- **Not the client.** The writer threads' own CPU per attempt is the same in A and B (54-56 against 55-60 µs), so
+  array building, `createArrayOf`, serialization and exception construction (including A's long OCC message) do not
+  explain it; A even does a little more (its exception path). The JVM's total CPU tracks the writer threads (no GC or
+  background cost hiding outside them).
+- **Not the conflict mix.** The conflict rate differs by 2-3 points; the outcome-specific timings show every
+  outcome of B slower, not a shift towards a slower outcome.
+
+### 5.3 What it is: more server CPU per append, on a machine that shares its CPUs
+
+- **B's append statement costs the server more.** Mean execution per completed call is 19.7-25.6 µs for B against
+  13.9-14.3 µs for A's insert (1.4-1.8 times), with more buffer accesses per call (12.9-13.0 against 11.1) — the
+  `head` index scan, eight text arrays parsed and cast, `unnest`, the CTEs. The PostgreSQL container's CPU per
+  attempt is 94-104 µs for B against 69-70 µs for A (+25-35 µs, more than the execution difference alone; the rest
+  is not attributed - rollbacks of the zero-row attempts, background processes and the failed statements that
+  `pg_stat_statements` does not see are all in it).
+- **On this machine every round trip of the attempt pays for it.** The database and the client share one 8-CPU VM
+  that is 78-90% busy. B's extra server work lengthens every round trip of every attempt, not just its own: the
+  lookup, which is the identical statement with the identical 6.3-6.9 µs server execution in every arm, takes
+  76-87 µs of client wall time in B against 51-52 µs in A, and the backends spend correspondingly longer
+  "idle in transaction" waiting for a client that is itself waiting for a reply. Wall time per attempt ends up
+  +50-70 µs (204-226 against 154-158 µs), which with 8 writers is the 30%.
+- **C points the same way.** C runs A's own statements, yet costs ~9 µs more server CPU per attempt than A
+  (78-83 against 69-70) and is ~10% slower (30.6-32.9 thousand per second), with its lookup slowed in proportion
+  (63-67 µs). Why raw pgjdbc costs the server more than JDBI for the same SQL was not isolated. Across all four arms
+  the per-attempt server CPU and the lookup's wall time rise together, which is the pattern a CPU-bound, shared
+  machine produces; it is a correlation, not a proof that nothing else contributes.
+
+This is consistent with §2.1: uncontended single appends with an expected order tie on latency, because one round
+trip's few microseconds of extra execution are lost in the noise of a 0.13 ms unit of work; under a saturated
+machine the extra CPU becomes throughput.
+
+### 5.4 Fix variant: `ON CONFLICT DO NOTHING` is worse
+
+B with `ON CONFLICT (aggregate_id, event_order) DO NOTHING` removes the unique-violation error path (every conflict
+is a zero-row result) but still burns an identity value per lost race (242-263 per 1 000 appends, the same as B,
+since `nextval` runs before the speculative insert is resolved) and roughly halves throughput again: 14.0-17.5
+thousand appends per second, append execution 32.7-45.8 µs per call (speculative insertion), container CPU
+126-154 µs per attempt. Its client CPU per attempt was also higher (77-93 µs) with the same Java code as B; that was
+not explained. It is not a fix and is not taken further. No variant that closes the gap was found in the time
+spent; a cheaper encoding of the event columns (binary arrays, or one `jsonb`/composite array instead of eight text
+arrays) is the obvious next candidate, untested.
+
+### 5.5 Consequence for §5 of the redesign
+
+The P0.4 verdict does not change: it was decided on latency, round trips and holes, all of which stand. What this
+adds: under a CPU-bound hot-aggregate workload, B costs about 1.5 times A's server execution per one-event append,
+and on a machine where client and database share CPUs that cost about 30% of throughput. It was measured with
+`fsync=off` and with the database on the client's machine; with durable commits and a separate database host the
+fixed commit cost per attempt grows and the shared-CPU amplification goes away, so the gap should shrink, but that
+was not measured. For §5.4's decision on replacing the current engine's `PreparedBatch`, the server CPU per
+small append is a cost to weigh against the halved holes, and the statement's per-call cost (array encoding,
+`head` scan) is worth reducing before the new engine adopts it.

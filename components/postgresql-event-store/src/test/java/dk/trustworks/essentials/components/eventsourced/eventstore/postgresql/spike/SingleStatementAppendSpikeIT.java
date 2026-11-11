@@ -84,9 +84,13 @@ class SingleStatementAppendSpikeIT {
         }
     }
 
-    /** How the B arm guards against the §5.3 race. */
+    /**
+     * How the B arm guards against the §5.3 race. {@code ON_CONFLICT_DO_NOTHING} is not a lock: it is plain B with
+     * {@code ON CONFLICT (aggregate_id, event_order) DO NOTHING}, so a lost race returns zero rows instead of raising a
+     * unique violation (used by {@link ContendedAppendThroughputSpikeIT}).
+     */
     enum Lock {
-        NONE, CTE, STATEMENT
+        NONE, CTE, STATEMENT, ON_CONFLICT_DO_NOTHING
     }
 
     record Case(String label, int aggregates, int eventsPerAggregate, boolean expectedOrder, int iterations) {
@@ -443,7 +447,7 @@ class SingleStatementAppendSpikeIT {
 
         // -------------------------------------------------------------- arm C: today's statements, raw pgjdbc
 
-        private void rawBatch(EventStoreUnitOfWork uow, SeparateTablePerAggregateEventStreamConfiguration cfg, Append append) throws SQLException {
+        void rawBatch(EventStoreUnitOfWork uow, SeparateTablePerAggregateEventStreamConfiguration cfg, Append append) throws SQLException {
             var sql        = batchSql.computeIfAbsent(cfg, Writer::batchStatements);
             var connection = uow.handle().getConnection();
             var columns    = cfg.eventStreamTableColumnNames;
@@ -627,7 +631,8 @@ class SingleStatementAppendSpikeIT {
             var plain = "WITH xid  AS MATERIALIZED (SELECT pg_current_xact_id() AS x),\n" + body.formatted("");
             var cte = "WITH lck  AS MATERIALIZED (SELECT pg_advisory_xact_lock(hashtextextended(?, 0)) AS l),\n" +
                     "     xid  AS MATERIALIZED (SELECT pg_current_xact_id() AS x FROM lck),\n" + body.formatted(", lck");
-            return Map.of(Lock.NONE, plain, Lock.STATEMENT, plain, Lock.CTE, cte);
+            var onConflict = plain.replace("RETURNING ", "ON CONFLICT (" + c.aggregateIdColumn + ", " + c.eventOrderColumn + ") DO NOTHING\nRETURNING ");
+            return Map.of(Lock.NONE, plain, Lock.STATEMENT, plain, Lock.CTE, cte, Lock.ON_CONFLICT_DO_NOTHING, onConflict);
         }
     }
 
