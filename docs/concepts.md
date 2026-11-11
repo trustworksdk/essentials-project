@@ -328,7 +328,10 @@ adds a feature to one.
    [LLM-kotlin-eventsourcing.md](../LLM/LLM-kotlin-eventsourcing.md) for Kotlin.
 4. **Before production:** [LLM-traps.md](../LLM/LLM-traps.md), the list of things that compile and then
    fail.
-5. **Build a project with Claude Code:** install the plugin ([README](../README.md#claude-code-plugin)),
+5. **Modelling guidance** (aggregate design, bounded contexts, choosing an event processor, uniqueness, anti-patterns):
+   the plugin's [design guide](../essentials-plugin/references/design/essentials-design.md). It is plain
+   Markdown and readable without Claude Code.
+6. **Build a project with Claude Code:** install the plugin ([README](../README.md#claude-code-plugin)),
    then run `/essentials:init`.
-6. **Runnable code:** [`examples/`](../examples/), for example
+7. **Runnable code:** [`examples/`](../examples/), for example
    [essentials-spring-examples](../examples/essentials-spring-examples/README.md).

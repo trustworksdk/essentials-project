@@ -896,6 +896,16 @@ Not published; listed because they are the reference for how to use the framewor
   its API. It follows the same order as the animated
   [`docs/event-sourcing-vs-crud/`](../event-sourcing-vs-crud/) walkthrough, which is now linked too. The README,
   `LLM/LLM.md` and `/essentials:intro` point to it.
+- **[`docs/README.md`](../README.md), the index of `docs/`, gains a Start here section** (the concepts page and
+  the walkthrough) and points to the README, the LLM docs, the traps index (troubleshooting), the components
+  README and `examples/`.
+- **README:** Quick Start Path 2 no longer stops at injecting `EventStore`. A new step 4 links a complete service
+  in each write style: aggregate (Java), decider (Java), decider (Kotlin), and the plugin. It says where
+  `${essentials.version}` comes from and that `Amount`, `CurrencyCode` and `Percentage` ship with `types`.
+  Resources now link the docs index, the traps index (troubleshooting) and `examples/`. The duplicate
+  `kotlin-eventsourcing` in the use-case table is gone.
+- **`LLM/LLM.md`** explains what the event store's guarantees mean for a handler, and names a starting write style
+  (a decider) ahead of the full Pattern Selection table.
 - **Renaming or moving an event class leaves stored events unreadable** (new trap `ESS-138`, new section
   `LLM-postgresql-event-store.md` § Renaming or moving an event class). A typed event is stored under its binary
   class name (`FQCN:com.acme.orders.events.OrderEvent$OrderPlaced` in `event_type`, and the same name in a queued

@@ -78,6 +78,12 @@ machines, contradictions in the instructions, and how much text each command and
   repository. It explains event, command, decider, projection, aggregate, slice, CQRS, bounded context and the
   plugin's own terms (slice law, write styles, S1-S11, ESS ids). `LLM.md` links it too, so the bundled
   `references/llm/LLM.md` carries the link.
+- `/essentials:init`'s final report suggests the easiest first step: describe a feature in plain words and let
+  `essentials-change` scaffold the slice, then a first sequence (a command slice, a view slice over what it
+  records, run, call both endpoints). Before, it named only `/essentials:add-slice`, which asks for a slice kind
+  and a bounded context before a newcomer knows what those are.
+- `LLM.md` says what the event store's guarantees mean for a handler (views lag the append, delivery is at least
+  once, so handlers must be idempotent) and names a starting write style: a decider, as the plugin scaffolds.
 - Contradictions fixed: one language-detection rule; `essentials-change` tells an Essentials project that is not
   on the slice law so instead of staying silent; § 5.4 finds a new event's view consumers through `who-reacts`;
   the translation skill names DurableQueues and the Inbox correctly.

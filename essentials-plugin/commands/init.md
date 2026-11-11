@@ -650,9 +650,15 @@ the essentials-docs skill. Just ask Essentials questions normally and Claude wil
 Slice rules are active: .claude/rules/essentials-slices.md loads every session (directory
 vocabulary, the four slice kinds, the boundary rule). The full law lives in the plugin.
 
-Add your first slice:
-  /essentials:add-slice              # elicits kind, bounded context, and names
+Add your first feature — the easiest way is to describe it in plain words:
+  "Let a customer place an order with lines and a total"
+                                     # essentials-change classifies it and scaffolds the slice
+  /essentials:add-slice              # or choose kind, bounded context, and names yourself
   /essentials:slice-check            # audit slices against the law
+
+A good first sequence: a command slice (place an order), a view slice that lists
+what it recorded, ./dev.sh backend, then call the command's endpoint and the view's.
+New to the words? https://github.com/trustworksdk/essentials-project/blob/main/docs/concepts.md
 ```
 
 With `--report`, write the report now (§ Preset and report), `--status rendered`.

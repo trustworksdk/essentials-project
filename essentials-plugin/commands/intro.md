@@ -288,7 +288,7 @@ or auditing a slice, seeing the whole map, and reviewing a change.
   /essentials:doctor      ← a command stopped on a missing tool
   Just ask                ← both skills load themselves: a question routes to
                             the docs, a change request routes to the slice
-  New to event sourcing?  ← the words above, explained: docs/concepts.md
+  New to event sourcing?  ← event, slice, lane, §R5, S1-S11, ESS id explained:
                             https://github.com/trustworksdk/essentials-project/blob/main/docs/concepts.md
 ```
 
