@@ -223,6 +223,8 @@ mvn -o verify -pl components/postgresql-event-store -DskipUTs \
     -Dspike.contention.arms=B_SINGLE,A_ENGINE,C_RAW,B_ON_CONFLICT,B_ON_CONFLICT,C_RAW,A_ENGINE,B_SINGLE
 ```
 
+> **Caveat (2026-11-11, §9):** about half of the per-attempt PostgreSQL CPU on this VM is the cost of CPUs going idle and being woken up, and the slower arm pays more of it. Read the absolute CPU figures and the size of the A-vs-B gap below with §9 in mind.
+
 ### 5.1 The measurement was sound
 
 - **Both arms count the same thing**: rows written in the window (table row count after minus before) per second,
@@ -408,6 +410,8 @@ of the writer role's statements over attempts; it does not include statements th
   event dearer than `json` at these sizes) and with the other doc.
 
 ### 6.2 Where B's extra server cost goes
+
+> **Caveat (2026-11-11, §9):** the "CPU not in recorded exec" excess of B over A disappears when the VM's CPUs are kept from idling. It is the idle and wake-up effect of §9 amplifying a few µs of extra executor work, not a cost outside the statement.
 
 - **Inside the executor** (checkpoint `auto_explain`, one event, generic plan): A's insert 13-14 µs, B text arrays
   29-30 µs, B binary arrays 21-22 µs, B one `jsonb` 23 µs, B scalar 27 µs, B without head 26 µs; the `head` CTE is
@@ -620,6 +624,8 @@ holes 285-300 against 287-305). The xid check found the xid assigned before the 
 
 ## 8. Combined options
 
+> **Caveat (2026-11-11, §9):** 8.3's idle/wake-up reading is confirmed in §9. Absolute CPU per attempt here depends on how often the CPUs go idle.
+
 Date: 2026-11-11. Findings, not decisions. Same spike, set-up and caveats as §7 (`fsync=off`, PostgreSQL 17.5,
 client and database on one 8-CPU VM, fresh container per run, fresh table per arm and round, rotated order
 uncontended, palindrome order contended, 20 s windows, two runs, so four contended windows and four uncontended rounds
@@ -760,3 +766,203 @@ the statement itself.
 - A busy-wait or park variant of the head-table arms (the head table's throughput relative to BASE may also depend on
   the machine's idle behaviour above).
 - A profiler on the VM to confirm the idle/wake-up reading of 8.3.
+
+## 9. Unattributed CPU and the machine
+
+Date: 2026-11-11. Findings, not decisions. Two questions were left open. §6.2: every form of B carries about 15-20 µs
+more PostgreSQL CPU per attempt *outside* recorded execution than A. §8.3: a client that busy-waits between lookup
+and append cuts PostgreSQL CPU per attempt from 93-99 to about 55 µs, and one that parks raises it to 114-116 µs.
+The working hypothesis was that, on this Docker VM, the cost of CPUs going idle and being woken up is a large part
+of per-attempt server CPU.
+
+**Short answer.** The hypothesis holds. About half of the PostgreSQL CPU per contended attempt on this machine is
+idle and wake-up cost. When no CPU is allowed to go idle, the "outside execution" CPU falls from 59-74 µs to
+32-37 µs per attempt, and B's excess outside execution over A disappears. What is left of the A-vs-B difference is
+about the size of the recorded execution difference (+2-4 µs). None of the four B-only suspects carries the cost by
+itself.
+
+### 9.1 Set-up
+
+**Code.** `UnattributedCpuSpikeIT` (same `spike` package, `@Tag("spike")`, `-Dspike.run=true`) uses raw pgjdbc and
+the engine-shaped table. It runs 8 writers on 10 aggregates. Every arm uses the same lookup
+(`SELECT coalesce(max(event_order), -1) … WHERE aggregate_id = ?`), the same parameters with the same types and
+casts, and the same client code. Only the append statement and the client mode differ.
+
+Statement arms:
+- `A_VALUES`: `INSERT … VALUES … RETURNING global_order`.
+- `A_SELECT`: the same written as `INSERT … SELECT`.
+- `B_NO_CTE`: `A_SELECT` plus the head check as a scalar sub-select in `WHERE`. It has no CTE and no `xid`.
+- `B_NO_XID`: the `head`/`ok` CTEs without the `pg_current_xact_id()` CTE.
+- `B`: §6's `SCALAR_1` statement, with the `xid`, `head` and `ok` CTEs and two `RETURNING` columns.
+- `B_RET1`: `B` with one `RETURNING` column.
+- `B_COMMIT0`: `B`, but a zero-row result is committed instead of rolled back.
+
+Client modes:
+- `NORMAL`.
+- `SPIN`: a 50 µs busy-wait between lookup and append, as in §8.3.
+- `BURNER`: the client is unchanged, but a privileged sidecar runs 8 spinning shells at `SCHED_IDLE` in a cgroup
+  with `cpu.idle=1`, so no CPU ever executes WFI.
+
+Each window records:
+- appends and attempts per second, and the outcome mix;
+- the PostgreSQL container's cgroup CPU, split into user and system;
+- the writer backends' `/proc/<pid>/schedstat`: on-CPU time and run-queue wait;
+- `pg_stat_statements`' recorded execution;
+- `/proc/stat` busy fraction, context switches and interrupts;
+- arm64 IPIs from `/proc/interrupts` (`IPI1`, "function call", is how a remote wake-up reaches another CPU here).
+
+Run settings: 20 s windows after a 2 s warm-up on a throwaway table, a fresh table per window that is dropped
+afterwards, palindrome order (run 2 rotated by one), two runs on fresh containers, PostgreSQL 17.5 with `fsync=off`,
+`-Dfailsafe.forkCount=1`, and nothing else building. The root fs was at 84% and `docker system df` showed no
+containers and no dangling images, so nothing was pruned. Raw output is in `target/spike-results/p0-9-cpu.txt`,
+with perf reports in `target/spike-results/p0-9-perf/`.
+
+**perf worked**, with limits:
+- It runs from a privileged `alpine` sidecar with `--pid=host` and `perf` 7.1.5, which sees the whole VM, the JVM
+  included.
+- The VM has no hardware PMU (`cycles` is not supported), so profiles are `cpu-clock` samples at 997 Hz.
+- Kernel symbols resolve, but PostgreSQL's own symbols did not (no `--symfs`), so user-space time is attributed only
+  to the `postgres` binary as a whole.
+- Interrupts are disabled around a wake-up, so a sample taken inside one lands on the instruction that re-enables
+  them. The time spent waking another CPU therefore shows as `__wake_up_sync_key`.
+
+```bash
+M="mvn -o verify -pl components/postgresql-event-store -DskipUTs -Dit.test=UnattributedCpuSpikeIT \
+   -Dfailsafe.failIfNoSpecifiedTests=false -Dspike.run=true -Dfailsafe.forkCount=1 -DskipDependencyCheck=true \
+   -Dspike.cpu.runs=2 -Dspike.cpu.seconds=20"
+$M -Dspike.cpu.arms=A_VALUES,B,A_VALUES@BURNER,B@BURNER,A_VALUES@SPIN,B@SPIN                 # 9.2
+$M -Dspike.cpu.arms=A_VALUES,A_SELECT,B_NO_CTE,B_NO_XID,B,B_RET1,B_COMMIT0                    # 9.3
+taskset -c 0-3 $M -Dspike.cpu.pgCpus=4-7 -Dspike.cpu.arms=A_VALUES,B,A_VALUES@SPIN,B@SPIN     # 9.4
+$M -Dspike.cpu.runs=1 -Dspike.cpu.perf=true -Dspike.cpu.arms=A_VALUES,B,A_VALUES@SPIN,B@SPIN  # 9.2 profile
+```
+
+### 9.2 Idle and wake-up: A and B with and without idle CPUs
+
+The figures are ranges over four windows per cell. "Outside" means PostgreSQL CPU minus recorded execution. Call
+IPIs are the VM-wide function-call IPIs per attempt.
+
+| Arm @ mode | Appended/s (thousands) | PostgreSQL CPU µs/attempt (user / system) | Recorded exec µs/attempt | Outside µs/attempt | Call IPIs/attempt | Machine busy |
+|---|---|---|---|---|---|---|
+| A @ NORMAL | 29.6-34.2 | 75.7-85.1 (43-48 / 32-38) | 16.6-16.9 | 59.1-68.2 | 1.46-2.04 | 75-79% |
+| B @ NORMAL | 26.0-27.4 | 91.0-95.4 (54-56 / 37-40) | 20.5-21.0 | 70.5-74.4 | 2.09-2.36 | 73-74% |
+| A @ SPIN | 40.2-41.1 | 46.9-48.3 (31-32 / 16-17) | 11.9-12.3 | 35.0-36.0 | 0.13-0.14 | 97-98% |
+| B @ SPIN | 40.0-40.3 | 48.8-49.3 (34 / 15) | 15.0-15.2 | 33.8-34.2 | 0.12 | 98% |
+| A @ BURNER | 11.3-13.8 | 46.8-48.9 (29-30 / 17-19) | 14.3-14.6 | 32.4-34.4 | 0.01-0.07 | 96-100% |
+| B @ BURNER | 12.1-13.3 | 51.3-52.5 (34 / 17-19) | 17.3-18.1 | 34.0-34.4 | 0.01-0.02 | 99% |
+
+(A @ NORMAL's 75.7 µs and 34.2 thousand/s are the first window of run 1; the other three are 83.5-85.1 µs and
+29.6-30.1 thousand/s.)
+
+- **Removing idle halves the CPU outside execution, in both ways tried.** Spinning the client and a never-idle
+  burner each cut it from 59-74 µs to 32-36 µs per attempt. The burner leaves the client's behaviour unchanged.
+  System time falls from 32-40 µs to 15-19 µs, and wake-up IPIs from 1.5-2.4 to 0.01-0.14 per attempt.
+- **User time falls too**, from 43-56 µs to 29-34 µs. The same statements cost less user CPU when the CPU never went
+  to sleep. Cold caches and TLBs after the vCPU halts are the likely reason, but that was not measured: the VM has
+  no PMU.
+- **The burner is not a usable throughput set-up.** Even at `SCHED_IDLE` it delays the writers' wake-ups: run-queue
+  wait was 240-276 µs per attempt against 44-50 µs in `NORMAL`, and throughput was 11-14 thousand per second. Its
+  value is that it keeps the client's behaviour and the conflict mix close to `NORMAL`, and still shows the same CPU
+  per attempt as `SPIN`.
+- **The A-vs-B gap outside execution survives only when CPUs go idle.**
+  - `NORMAL`: B's outside execution is +6-12 µs above A in paired windows (+6-21 µs across §9.3's windows).
+  - `SPIN`: B is 1-2 µs *below* A.
+  - `BURNER`: B and A are equal within 0-2 µs.
+  - In `SPIN` and `BURNER`, B's whole CPU excess over A (+1-5 µs) is about its recorded execution excess (+3-4 µs).
+  - Under `SPIN`, B and A also append at the same rate (40.0-40.3 against 40.2-41.1 thousand per second). Spinning
+    changes the conflict mix, though: B has 25.6% zero-row results, A 36.5% unique violations. So this throughput
+    tie is not like-for-like.
+
+**perf profile** (one run, µs per attempt from sample share × 8 CPUs × 20 s ÷ attempts; the windows match §9.2's
+figures):
+
+| Arm @ mode | `postgres` binary (user) | kernel, `postgres` processes | of which `__wake_up_sync_key` | `finish_task_switch` | libc |
+|---|---|---|---|---|---|
+| A @ NORMAL | 34.6-35.9 | 34.4-36.3 | 8.2-8.7 | 3.8-4.0 | 7.9-8.6 |
+| B @ NORMAL | 40.4-43.1 | 35.8-38.9 | 9.0-10.3 | 3.8-3.9 | 9.6-10.3 |
+| A @ SPIN | 25.3-25.8 | 17.1 | 0.7 | 1.7 | 5.1-5.2 |
+| B @ SPIN | 26.8-27.7 | 15.2-15.8 | 0.7 | 1.6-1.7 | 5.1-5.3 |
+
+- In `NORMAL`, waking a sleeping CPU (`__wake_up_sync_key` plus `finish_task_switch`) costs a backend about
+  12-14 µs per attempt; in `SPIN` it costs about 2.5 µs. The rest of the kernel time drops by about half as well.
+- **Where B's excess in `NORMAL` sits.** It is in user space (+5-8 µs in the `postgres` binary, +1-2 µs in libc),
+  not in the kernel. A and B have the same kernel time in both modes. In `SPIN`, B's user-space excess shrinks to
+  1-2 µs. The likely reading is that B's few extra µs of executor work become 1.5-2 times as expensive on a CPU
+  that keeps going to sleep. That would explain §6.2: the "outside execution" excess was never outside the
+  statement. Recorded execution time itself is inflated less than total CPU, and the inflation is not proportional
+  to it.
+
+### 9.3 The B-only suspects, one at a time
+
+`NORMAL` mode, two runs, four windows per arm (run 1's two / run 2's two).
+
+| Arm | Appended/s (thousands) | PostgreSQL CPU µs/attempt | Recorded exec µs/attempt | Outside µs/attempt | Zero-row / unique |
+|---|---|---|---|---|---|
+| `A_VALUES` | 31.9, 27.1 / 27.1, 28.1 | 79.2, 89.6 / 89.9, 87.6 | 16.8-17.6 | 62.4-72.3 | 0 / 30.4-30.7% |
+| `A_SELECT` | 31.7, 28.7 / 28.6, 25.0 | 80.0, 86.3 / 86.7, 98.7 | 16.4-19.5 | 63.6-79.2 | 0 / 30.4-30.7% |
+| `B_NO_CTE` | 26.8, 24.6 / 26.5, 23.5 | 92.1, 98.5 / 94.1, 103.8 | 20.2-22.8 | 71.9-81.0 | 13.2-13.3% / 18.5-18.6% |
+| `B_NO_XID` | 26.1, 23.7 / 24.1, 24.4 | 94.5, 100.6 / 99.4, 100.8 | 20.8-22.5 | 73.7-79.1 | 13.1-13.3% / 18.5-18.7% |
+| `B` | 22.3, 24.0 / 23.9, 23.2 | 107.9, 99.8 / 100.6, 102.6 | 21.5-24.7 | 78.1-83.2 | 13.0-13.3% / 18.6-18.8% |
+| `B_RET1` | 21.8, 23.0 / 24.5, 24.9 | 108.0, 102.6 / 99.3, 98.0 | 21.5-23.2 | 76.5-84.8 | 13.1-13.2% / 18.7% |
+| `B_COMMIT0` | 22.9, 23.1 / 24.4, 23.0 | 103.6, 102.8 / 99.0, 103.1 | 21.3-22.5 | 77.7-81.4 | 13.1-13.2% / 18.6-18.8% |
+
+This run drifted within each container: windows got slower over time, and `A_SELECT`'s last window is the slowest
+`A_SELECT`. The ranges are therefore wide. Read the table by its steps:
+
+- **`INSERT … VALUES` → `INSERT … SELECT`: no difference** (62-72 against 64-79 µs outside execution, overlapping).
+- **Adding the head check (`A_SELECT` → `B_NO_CTE`): the one step that moves.** It adds +4 µs recorded execution and
+  roughly +8 µs PostgreSQL CPU per attempt. It also changes the conflict mix from 30.5% unique violations to 13%
+  zero-row plus 18.6% unique, and lowers throughput. More wake-up IPIs per attempt follow (2.3-2.6 against 1.7-2.2).
+- **Inlined sub-select against CTEs (`B_NO_CTE` → `B_NO_XID`): no difference outside the spread.**
+- **`pg_current_xact_id()` (`B_NO_XID` → `B`): not separable from the noise.** In the paired windows B's outside
+  execution is −1 to +2.4 µs from `B_NO_XID`'s in three pairs and +9.5 µs in one (run 1's first B window, the
+  slowest of the run).
+- **One `RETURNING` column (`B_RET1`): no difference.**
+- **Committing zero-row conflicts instead of rolling them back (`B_COMMIT0`): no difference.**
+
+So no single B-only suspect carries an excess outside execution. The head check is a few µs of real executor work.
+On this machine that work, and the change it makes to the conflict mix, is amplified by the idle and wake-up effect
+of §9.2. With the CPUs kept busy, what is left is about the recorded execution difference. `log_parser_stats`,
+`log_planner_stats` and `log_executor_stats` were not used. Once perf placed the excess in executor-side user time
+under idle, they would only have repeated the recorded-execution split, at the cost of logging every statement.
+
+### 9.4 Pinning client and database to separate CPU sets
+
+The JVM ran under `taskset -c 0-3` and the PostgreSQL container with `--cpuset-cpus=4-7`, in two runs.
+
+| Arm @ mode | Appended/s (thousands) | PostgreSQL CPU µs/attempt (user / system) | Recorded exec | Outside | Call IPIs/attempt |
+|---|---|---|---|---|---|
+| A @ NORMAL | 20.0-21.7 | 101.9-111.7 (51-58 / 50-54) | 17.2-19.9 | 84.7-91.8 | 3.62-3.65 |
+| B @ NORMAL | 20.3-20.9 | 107.5-111.0 (58-59 / 50-52) | 21.3-22.4 | 86.2-88.6 | 3.67-3.71 |
+| A @ SPIN | 15.9-16.4 | 105.1-108.8 | 17.2-17.9 | 87.9-90.9 | 3.91-3.96 |
+| B @ SPIN | 15.9-16.1 | 110.2-111.8 | 20.8-21.6 | 89.4-90.2 | 3.83-3.87 |
+
+- **Pinning makes everything worse, not cleaner.** Every round trip now crosses CPU sets, so every wake-up is
+  remote: 3.6-4.0 call IPIs per attempt against 1.5-2.4 unpinned. PostgreSQL CPU per attempt rises to 102-112 µs,
+  and throughput falls to 16-22 thousand per second.
+- Spinning the client no longer helps, because it keeps only the client's CPUs busy. The database's four CPUs still
+  go idle between requests.
+- In this set-up A and B append at the same rate (20.0-21.7 against 20.3-20.9 thousand per second), and B's outside
+  execution is no higher than A's (86-89 against 85-92 µs). This is consistent with §9.2: when the idle and wake-up
+  cost dominates both arms equally, B's few µs of extra execution disappear into it.
+
+### 9.5 What this means for the earlier numbers
+
+- **Absolute CPU per attempt on this machine is not a property of the statement.** About half of it depends on
+  whether the CPUs go idle between requests. It moved from 47 to 112 µs per attempt for the same `A_VALUES`
+  statement across the modes above. Earlier figures (§5, §6, §8) are comparable *within* one table, since the client
+  shape was the same, but not as absolute costs. Ratios between arms are inflated whenever the arms differ in
+  throughput: the slower arm leaves the CPUs idle more often, and pays more per attempt for it.
+- **§6.2's unattributed 15-20 µs is mostly this effect, not anything B does outside execution.** It vanishes with
+  idle removed (§9.2), and no B-only suspect carries it (§9.3). §5's "30% fewer appends per second" was measured on
+  the same machine and was amplified by the same effect. On a database host whose CPUs do not halt between requests,
+  the gap should be closer to the recorded execution difference (+3-5 µs per one-event append) than to §5's
+  +25-35 µs. That was not measured on such a host.
+- **§8.3's busy-wait result is explained.** The busy-wait kept the CPUs from halting, so it cut both server CPU and
+  wake-up cost. It also stretched the lookup-to-append gap, which changed the conflict mix (§8.3's own finding). The
+  parked variant left more CPUs idle and paid more.
+- **Still open.**
+  - Why user-space time grows when CPUs idle: cache/TLB or the host's frequency handling, which needs a PMU this VM
+    does not have.
+  - The size of the effect on a real database host, or with `fsync=on`.
+  - Why the burner slows wake-ups even at `SCHED_IDLE`.
+  - PostgreSQL user-space symbols were not resolved, so the excess cannot be named inside the executor.
