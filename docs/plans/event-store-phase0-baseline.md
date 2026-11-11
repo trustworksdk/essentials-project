@@ -171,6 +171,14 @@ proxy does not affect the latency figures. Driver: pgjdbc 42.7.14 with its defau
   trip**: pgjdbc sends the whole batch before a single sync. 1, 10 and 100 events cost the same three round trips:
   `BEGIN` with the last-event-order lookup, the insert batch, `COMMIT`.
 - Giving the expected event order removes the lookup: one round trip and one statement fewer, p50 0.19 → 0.14 ms.
+- *Note 2026-11-11.* Every case above appends to **new** aggregates, so the last-event-order lookup finds no row.
+  On an aggregate that already has events, the lookup returns a row. JDBI then reads ahead on pgjdbc's one-row
+  portal (`setFetchSize(1)` inside a transaction), which takes a second `Execute` round trip. One event without an
+  expected order then costs **4** round trips, not 3, and so does an explicit lookup followed by an append with
+  that order. The proxy counted correctly: P0.6's `round_trip_reconciliation` runs the counting proxy and the
+  pgjdbc wire trace on the same units of work, and they agree on all four shapes (new aggregate 3 / 2, existing
+  aggregate 4 / 4). See [`event-store-phase0-jdbc.md`](event-store-phase0-jdbc.md) §4. The OCC-contended shape
+  below appends to existing aggregates, but its round trips were not counted.
 - Several aggregates per unit of work cost two round trips per aggregate (lookup, batch) plus the commit.
 - WAL is about 950-990 B per event in every case; batching does not change it.
 - The p99 of the 100-event case (3.17 vs 1.90 ms) differs between runs; noise.
@@ -211,7 +219,8 @@ out for 120 s and records as rows (§2.4). Absolute rates are inflated by `fsync
 - **Round trips on the write path are fewer than §2.2 feared.** The `PreparedBatch` is already a single round trip
   however many events it holds, so the single-statement append (§5.1) cannot save round trips for one aggregate;
   for one aggregate its gain must come from the removed last-event-order lookup (one round trip, about 0.05 ms or
-  25% of a one-event append here) and from statement count and execution time, and for several aggregates from
+  25% of a one-event append here, for a new aggregate; two round trips for an aggregate that already has events,
+  see the 2026-11-11 note in §2.5) and from statement count and execution time, and for several aggregates from
   sending them in one round trip instead of two each (11 round trips for 5 aggregates today). P0.4 should be judged
   on that basis, and on holes.
 - **Holes under contention are large**: 466 burned identity values per 1 000 successful appends with 8 writers on

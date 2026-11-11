@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.sp
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spike.CurrentEngineBaselineSpikeIT.Stack;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spike.SingleStatementAppendSpikeIT.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
@@ -44,7 +45,8 @@ import java.util.logging.Logger;
  * <p>
  * {@link #protocol_trace()} records the pgjdbc wire messages (JUL {@code org.postgresql} at FINEST) of one warmed-up unit
  * of work of {@link ContendedAppendThroughputSpikeIT}'s arm A (engine, JDBI) and arm C (raw pgjdbc), on the same pool,
- * so the two can be diffed message by message.
+ * so the two can be diffed message by message. {@link #round_trip_reconciliation()} counts round trips through P0.0's
+ * {@link RoundTripCountingProxy} and in the wire trace on the same units of work, for P0.0's and P0.6's shapes.
  * <p>
  * {@link #statements()} runs the same statements through JDBI and through raw pgjdbc, on one Hikari pool with default
  * settings (as the engine's spike stacks), the same SQL text, the same parameter types and the same row mapping:
@@ -576,6 +578,155 @@ class JdbiVsRawPgjdbcSpikeIT {
             }
             w.stack.close();
         }
+    }
+
+    /**
+     * Reconciles two round-trip counts that disagreed: P0.0's {@link RoundTripCountingProxy} reported 3 round trips for
+     * "append 1 event, no expected order", while {@link #protocol_trace()} shows 4 for a unit of work with the last-event
+     * lookup. Every unit of work here runs through the proxy AND with the pgjdbc wire trace (JUL {@code org.postgresql} at
+     * FINEST, this thread only) at the same time, so both counts belong to the same bytes. The trace's count uses the
+     * proxy's definition: a client flight is a run of frontend messages after the client last received something.
+     * <p>
+     * Shapes: P0.0's two one-event cases exactly as {@code CurrentEngineBaselineSpikeIT.Stack#appendInOneUnitOfWork}
+     * runs them (a NEW aggregate, so the engine's own lookup finds no row; or the expected order given, so no lookup),
+     * P0.6's traced shape (explicit {@code loadLastPersistedEventRelatedTo} on an EXISTING aggregate, then the append with
+     * that order), and the engine's own lookup on an existing aggregate (no expected order given).
+     */
+    @Test
+    void round_trip_reconciliation() throws Exception {
+        int  iterations = Integer.getInteger("spike.jdbc.reconcileIterations", 50);
+        var  logger     = Logger.getLogger("org.postgresql");
+        var  testThread = Thread.currentThread().threadId();
+        var  messages   = Collections.synchronizedList(new ArrayList<String>());
+        var handler = new Handler() {
+            @Override
+            public void publish(LogRecord r) {
+                if (r.getLongThreadID() != testThread) return;
+                var m = r.getMessage();
+                if (m == null) return;
+                if (r.getParameters() != null) m = java.text.MessageFormat.format(m, r.getParameters());
+                var t = m.trim();
+                if (t.startsWith("FE=>") || t.startsWith("<=BE")) messages.add(t);
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        record("");
+        record("=== ROUND-TRIP RECONCILIATION | " + Instant.now() + " | " + SpikeServer.target("Testcontainers") + " | pgjdbc " + org.postgresql.Driver.getVersion()
+                       + " | " + iterations + " traced units of work per shape, after 20 warm-up units; proxy flights and trace flights counted on the same unit of work");
+        try (var pg = Pg.start(); var proxy = new RoundTripCountingProxy(pg.server.host(), pg.server.port())) {
+            var stack = Stack.writer(pg, "writer", pg.server.viaProxy(proxy.port()));
+            var w     = new Writer(stack);
+            var type  = w.freshType("rtrec");
+            var existing = OrderId.random();
+            stack.unitOfWorkFactory.usingUnitOfWork(uow -> stack.eventStore.appendToStream(type, existing, Optional.empty(),
+                                                                                             List.of(new OrderEvent.OrderAdded(existing, CustomerId.random(), 1))));
+            // let Hikari fill the pool, so no connection set-up lands in a measured window
+            var until = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+            while (stack.dataSource.getHikariPoolMXBean().getTotalConnections() < stack.dataSource.getMaximumPoolSize() && System.nanoTime() < until) Thread.sleep(50);
+            Thread.sleep(200);
+
+            record Shape(String label, Runnable unitOfWork) {
+            }
+            var shapes = List.of(
+                    new Shape("P0.0 '1 event, no expected order': NEW aggregate, engine lookup finds no row",
+                              () -> stack.unitOfWorkFactory.usingUnitOfWork(uow -> {
+                                  var id = OrderId.random();
+                                  stack.eventStore.appendToStream(type, id, Optional.empty(), List.of(new OrderEvent.OrderAdded(id, CustomerId.random(), 1)));
+                              })),
+                    new Shape("P0.0 '1 event, expected order given': NEW aggregate, no lookup",
+                              () -> stack.unitOfWorkFactory.usingUnitOfWork(uow -> {
+                                  var id = OrderId.random();
+                                  stack.eventStore.appendToStream(type, id, Optional.of(EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED.longValue()),
+                                                                  List.of(new OrderEvent.OrderAdded(id, CustomerId.random(), 1)));
+                              })),
+                    new Shape("P0.6 protocol_trace arm A: EXISTING aggregate, explicit lookup finds a row, append with that order",
+                              () -> stack.unitOfWorkFactory.usingUnitOfWork(uow -> {
+                                  long last = stack.eventStore.loadLastPersistedEventRelatedTo(type, existing).orElseThrow().eventOrder().longValue();
+                                  stack.eventStore.appendToStream(type, existing, Optional.of(last), List.of(new OrderEvent.ProductAddedToOrder(existing, ProductId.random(), 1)));
+                              })),
+                    new Shape("EXISTING aggregate, no expected order: engine lookup finds a row",
+                              () -> stack.unitOfWorkFactory.usingUnitOfWork(uow -> stack.eventStore.appendToStream(type, existing, Optional.empty(),
+                                                                                                                  List.of(new OrderEvent.ProductAddedToOrder(existing, ProductId.random(), 1))))));
+            for (var shape : shapes) {
+                for (int i = 0; i < 20; i++) shape.unitOfWork().run();
+                long          proxyTotal = 0, traceTotal = 0, disagreements = 0;
+                List<String>  example    = List.of();
+                logger.setLevel(Level.FINEST);
+                logger.addHandler(handler);
+                try {
+                    for (int i = 0; i < iterations; i++) {
+                        messages.clear();
+                        proxy.reset();
+                        shape.unitOfWork().run();
+                        long proxyFlights = proxy.flights();
+                        List<String> trace;
+                        synchronized (messages) {
+                            trace = new ArrayList<>(messages);
+                        }
+                        long traceFlights = traceFlights(trace);
+                        proxyTotal += proxyFlights;
+                        traceTotal += traceFlights;
+                        if (proxyFlights != traceFlights) disagreements++;
+                        if (i == 0) example = trace;
+                    }
+                } finally {
+                    logger.removeHandler(handler);
+                    logger.setLevel(Level.OFF);
+                }
+                record(String.format("RT-RECONCILE | %-100s | proxy flights per UoW %.2f | trace flights per UoW %.2f | UoWs where they differ %d of %d",
+                                     shape.label(), (double) proxyTotal / iterations, (double) traceTotal / iterations, disagreements, iterations));
+                record("  flights of the first traced UoW: " + flightsSummary(example));
+            }
+            stack.close();
+        }
+    }
+
+    /** Client flights in a pgjdbc trace: each run of {@code FE=>} messages that follows a {@code <=BE} message (or starts the trace). */
+    static long traceFlights(List<String> trace) {
+        long    flights  = 0;
+        boolean lastFrom = false; // true = last message was from the client
+        for (var m : trace) {
+            if (m.startsWith("FE=>")) {
+                if (!lastFrom) flights++;
+                lastFrom = true;
+            } else {
+                lastFrom = false;
+            }
+        }
+        return flights;
+    }
+
+    /** The trace as flights: "[1] FE Parse Bind Execute Sync | BE ParseComplete ... ; [2] ...", message names only. */
+    static String flightsSummary(List<String> trace) {
+        var     sb       = new StringBuilder();
+        boolean lastFrom = false;
+        int     flight   = 0;
+        String  side     = "";
+        for (var m : trace) {
+            boolean fe   = m.startsWith("FE=>");
+            var     name = m.substring(4).trim();
+            int     cut  = name.indexOf('(');
+            if (cut > 0) name = name.substring(0, cut);
+            cut = name.indexOf(' ');
+            if (cut > 0) name = name.substring(0, cut);
+            if (fe && !lastFrom) {
+                sb.append(flight == 0 ? "" : " ; ").append('[').append(++flight).append("] FE");
+                side = "FE";
+            } else if (!fe && !side.equals("BE")) {
+                sb.append(" | BE");
+                side = "BE";
+            }
+            sb.append(' ').append(name);
+            lastFrom = fe;
+        }
+        return sb.toString();
     }
 
     private static void record(String line) {

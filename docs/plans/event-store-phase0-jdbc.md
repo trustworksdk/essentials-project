@@ -195,7 +195,25 @@ statement in both libraries and is listed once.
   and the other single-row reads in `SeparateTablePerAggregateTypePersistenceStrategy` that set `setFetchSize(1)`
   (`loadEvent`, the `MAX`/`MIN` order reads) combine it with JDBI's read-ahead. Inside a transaction, each costs one extra round trip; on this
   machine that is about 40 µs. The trace therefore shows four round trips for a unit of work with the lookup.
-  P0.0's proxy counted three for that shape; that discrepancy was not reconciled.
+
+  *Reconciled 2026-11-11.* P0.0's proxy counted three because P0.0 measured a different shape, not because it
+  miscounted. P0.0's append cases use a **new** aggregate each time, so the lookup finds no row: pgjdbc gets
+  `CommandStatus` instead of `DataRow` + `PortalSuspended`, and there is nothing to read ahead. The trace above uses
+  an **existing** aggregate, whose lookup returns a row. `round_trip_reconciliation` (same class, results in
+  `p0-6-jdbc.txt`, lines `RT-RECONCILE`) runs each shape through the counting proxy and with the wire trace on the
+  same unit of work, 50 units per shape. Proxy and trace agreed on every unit of work (0 of 50 differ in each shape):
+
+  | Shape | Proxy flights | Trace flights |
+  |---|---|---|
+  | P0.0 "1 event, no expected order": new aggregate, the engine's lookup finds no row | 3.00 | 3.00 |
+  | P0.0 "1 event, expected order given": new aggregate, no lookup | 2.00 | 2.00 |
+  | P0.6 trace: existing aggregate, explicit `loadLastPersistedEventRelatedTo`, append with that order | 4.00 | 4.00 |
+  | Existing aggregate, no expected order: the engine's own lookup finds a row | 4.00 | 4.00 |
+
+  The proxy is correct, so P0.0's and P0.4's round-trip numbers stand for the shapes they ran. Those shapes are
+  appends to new aggregates. Appending to an aggregate that already has events costs one round trip more whenever
+  the lookup runs. That is the OCC-contended shape and the usual command-handler case. Single run, Testcontainers
+  PostgreSQL 17.5, pgjdbc 42.7.14.
 
 ## 5. Contended, per unit of work
 

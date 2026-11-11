@@ -33,7 +33,9 @@ scripts/run-phase0-spikes.sh --external jdbc:postgresql://dbhost:5432/postgres -
 ```
 
 The suites are `xid`, `table-design`, `contention`, `append`, `baseline`, `cpu`, `jdbc` and `probe` (the default
-runs all of them in §6's priority order); a suite can name one test method, as in `jdbc#protocol_trace`. Run
+runs all of them in §6's priority order); a suite can name one test method, as in `jdbc#protocol_trace`. Since 2026-11-11 `jdbc` also runs
+`round_trip_reconciliation` (counting proxy and pgjdbc wire trace on the same units of work; `RT-RECONCILE` lines in
+`p0-6-jdbc.txt`), which needs no extra setup on the server. Run
 `scripts/run-phase0-spikes.sh --help` for every option. The rest of this document is what the script does by hand,
 and what to set up on the server before it can.
 

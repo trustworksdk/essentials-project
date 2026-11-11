@@ -53,7 +53,7 @@
 #                                  append        SingleStatementAppendSpikeIT,AppendEncodingAttributionSpikeIT  P0.4
 #                                  baseline      CurrentEngineBaselineSpikeIT                            P0.0
 #                                  cpu           UnattributedCpuSpikeIT                                  P0.9
-#                                  jdbc          JdbiVsRawPgjdbcSpikeIT                                  P0.6
+#                                  jdbc          JdbiVsRawPgjdbcSpikeIT                                  P0.6 (+ round_trip_reconciliation)
 #                                  probe         CombinedProbeSnapshotOrderSpikeIT                       P0.2
 #                                "default" is that order (external-db doc §6); "all" is the same set in
 #                                phase-number order.
