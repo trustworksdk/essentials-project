@@ -968,3 +968,224 @@ The JVM ran under `taskset -c 0-3` and the PostgreSQL container with `--cpuset-c
   - The size of the effect on a real database host, or with `fsync=on`.
   - Why the burner slows wake-ups even at `SCHED_IDLE`.
   - PostgreSQL user-space symbols were not resolved, so the excess cannot be named inside the executor.
+
+## 10. Wake-up notification cost (P0.10)
+
+Date: 2026-11-12. Findings, not decisions. The question is what the tier-1 wake-up of the redesign's §11 costs the
+append path. §11 as written has the appending unit of work issue one `pg_notify('essentials_eventstore', '<table>')`
+per table per commit, inside the transaction. The shard-owned queue already measured that this hurts: a notifying
+commit takes PostgreSQL's cluster-wide NOTIFY lock (`pg_locks` object, classid 1262, objid 0) and holds it through
+its WAL flush, so notifying commits run one at a time and lose group commit. In the trading demo backends waited on
+that lock for 17.5-22.2 % of all active time and 35.8-38.9 % at peaks, and waking after commit cut the loaded queue's
+p50 from 5.3-8.7 ms to 2.8-3.2 ms and its p99 from up to 70 ms to 4.8-7.2 ms
+([`durable-queue-measurements.md`](../design/durable-queue-measurements.md) §3.14; the design and its rules are in
+[`durable-queue-shard-owned.md`](../design/durable-queue-shard-owned.md), "Tier 1 — `LISTEN`/`NOTIFY`"). This spike
+asks the same question of the event store's append.
+
+**Short answer.** Notifying inside the append transaction caps the whole database's notifying commits at about one
+WAL flush each, one after another. With `fsync=on`, 8 and 20 writers appended 57-63 % and 76-77 % less than without a
+notification (8.3-9.3 against 21.5-22.3 thousand per second, and 9.3-9.4 against 39.4-40.1 thousand), commit p50 went
+from 0.26-0.36 ms to 0.73-2.0 ms, and 80-93 % of the writers' active time was spent waiting for the NOTIFY lock.
+Waking after commit through one coalescing notifier per JVM (the queue's pattern) cost nothing measurable in
+throughput or commit latency in any shape, and added about 0.1-0.2 ms (p50) to the wake-up. Sending the notification
+after commit but from each writer separately, without coalescing, is not enough: it still serialises on the lock, and
+at 20 writers with `fsync=off` it was as slow as notifying inside the transaction.
+
+### 10.1 Setup
+
+**Code.** `WakeupNotifyCostSpikeIT` in the same `spike` package (`@Tag("spike")`, `-Dspike.run=true`), with
+`NotifyTapSocketFactory` beside it. It reuses P0.0's container, roles and engine wiring
+(`CurrentEngineBaselineSpikeIT.Pg` / `Stack`, which gained `Pg.start(boolean fsync)`) and P0.4's `Writer` for fresh
+tables. Raw output, including one `CSV` line per window, goes to `target/spike-results/p0-10-notify.txt`. Through the
+script: `scripts/run-phase0-spikes.sh --container --suite notify`.
+
+```bash
+mvn -o verify -pl components/postgresql-event-store -DskipUTs -Dit.test=WakeupNotifyCostSpikeIT \
+    -Dfailsafe.failIfNoSpecifiedTests=false -Dspike.run=true -Dfailsafe.forkCount=1 -DskipDependencyCheck=true
+```
+
+Knobs: `-Dspike.notify.shapes` (default `1,8,20,8@10`), `-Dspike.notify.arms`, `-Dspike.notify.seconds` (default 8),
+`-Dspike.notify.fsync` (default `off,on`; ignored on an external server, which runs one pass with its own settings),
+`-Dspike.notify.listener` (`block`, the default, or `poll`, see 10.4).
+
+**Append shape.** The current engine's append (`PostgresqlEventStore.appendToStream` in an
+`EventStoreManagedUnitOfWorkFactory` unit of work, JDBI `PreparedBatch`) on tables created by
+`SeparateTablePerAggregateTypePersistenceStrategy`, one event per unit of work. "New aggregates": each unit of work
+appends to a new aggregate with expected order `NO_EVENTS_PREVIOUSLY_PERSISTED`. "8 on 10": 8 writers on 10
+pre-created aggregates, each unit of work reads the last event order and appends after it, as in §5; a conflict rolls
+back and sends nothing. Not the §5.1 single-statement append: the notification cost is in the commit, not in the
+statement, so the engine's append is the simpler baseline. Hikari pool 24.
+
+**Arms.**
+- `NONE`: no notification.
+- `IN_TX`: `SELECT pg_notify(?, ?)` on the unit of work's connection after the append, before commit (§11 as written).
+  This is one more statement and round trip inside the transaction. The new engine could fold it into the append
+  statement and save the round trip, but not the lock, which is taken at commit.
+- `AFTER_COMMIT`: after the commit returns, the writer queues the payload on one per-JVM notifier. Its thread sends
+  whatever accumulated while its previous send was in flight as one `SELECT pg_notify(?, key) FROM unnest(?::text[])`
+  in autocommit, on its own connection and role (`notifier`). This is a copy of the queue's `ShardWakeupNotifier`
+  send loop. Identical payloads coalesce, so one table gives one key per batch.
+- `AFTER_COMMIT_DIRECT`: after the commit returns, each writer sends its own `pg_notify` as a separate autocommit
+  statement on a pooled connection, without coalescing. It separates "outside the append transaction" from
+  "coalesced".
+
+**Listener and wake latency.** One `LISTEN essentials_eventstore` connection drains notifications in every arm, with
+pgjdbc's `getNotifications(50)` (as the queue's `ShardWakeupListener` does), and counts what it receives. About every
+5 ms one successful append is tagged: its payload is `<table>|s<n>` instead of `<table>`. Wake latency is the time from
+that append's commit returning in the writer to the tagged notification's bytes arriving on the listener's socket.
+The socket is tapped (`NotifyTapSocketFactory`, a pgjdbc `socketFactory` that frames the server's messages), because
+pgjdbc's own API could not be used for this (10.4). For `IN_TX` the notification can arrive before the writer has
+seen its commit return, so its figure is close to zero by construction: it is the floor, not a cost.
+
+**Run.** Per shape, the arms in a palindrome (`NONE, IN_TX, AFTER_COMMIT, AFTER_COMMIT_DIRECT` and back), each window
+8 s on a fresh table after a 1 s warm-up on the same table, the table dropped and a `CHECKPOINT` taken after each.
+`pg_stat_activity` sampled every ~2 ms for the writer and notifier roles, `pg_locks` every ~20 ms for waiters on the
+NOTIFY lock. Two passes, each on a fresh PostgreSQL 17.5 container: `fsync=off` (Testcontainers' default, as every
+earlier spike) and `fsync=on`. `synchronous_commit=on`, `wal_sync_method=fdatasync`, `full_page_writes=on` in both.
+8-CPU arm64 Docker VM, client and database on it, `-Dfailsafe.forkCount=1`, nothing else building, 10 min 22 s in all.
+Every notification sent was received in every window.
+
+**`fsync` caveat.** The NOTIFY lock is held through the commit's WAL flush, so its cost scales with the flush time.
+With `fsync=off` the flush is a `write()` to the page cache, and the in-container result *understates* `IN_TX`'s
+cost. The `fsync=on` pass flushes to the VM's virtual disk, which is fast: one writer's commit took 0.09-0.13 ms
+(p50) against 0.04-0.05 ms with `fsync=off`, so a flush costs about 50-80 µs here. A real disk without a write cache
+that can be trusted takes far longer per flush, so `IN_TX`'s ceiling there is lower still. The dedicated machine
+(`event-store-phase0-external-db.md`) is the real test.
+
+### 10.2 Results
+
+Ranges over the two windows of each cell. Commit = the time from the end of the unit of work's body to the commit
+returning. Lock = the share of the writers' active backend-samples waiting on `Lock:object` (the NOTIFY lock, as
+`pg_locks` confirmed). WALWrite = `LWLock:WALWrite`, waiting for another backend's WAL flush, which is what group commit
+looks like. Wake = wake latency p50 / p99 over all samples of both windows' ranges.
+
+**`fsync=on`:**
+
+| Shape | Arm | Appends/s (thousands) | Unit of work p50 / p99 (ms) | Commit p50 / p99 (ms) | Lock | WALWrite | PostgreSQL CPU µs/append | Wake p50 / p99 (ms) |
+|---|---|---|---|---|---|---|---|---|
+| 1 writer | NONE | 5.2-6.2 | 0.15-0.20 / 0.26-0.27 | 0.09-0.11 / 0.15-0.16 | 0 | 0 | 62-74 | - |
+| | IN_TX | 4.1-4.5 | 0.21-0.24 / 0.33-0.34 | 0.12-0.14 / 0.18 | 0 | 0 | 105-120 | 0.013-0.014 / 0.03 |
+| | AFTER_COMMIT | 4.7 | 0.21 / 0.33 | 0.12 / 0.20-0.21 | 0 | 0 | 127-128 | 0.087 / 0.13-0.14 |
+| | AFTER_COMMIT_DIRECT | 4.2-4.3 | 0.21 / 0.27 | 0.13 / 0.17 | 0 | 0 | 111 | 0.066 / 0.09 |
+| 8 writers | NONE | 21.5-22.3 | 0.36-0.37 / 0.47-0.49 | 0.26-0.27 / 0.35-0.37 | 0 | 65 % | 101-104 | - |
+| | IN_TX | 8.3-9.3 | 0.85-0.87 / 1.02-1.59 | 0.73-0.75 / 0.88-1.41 | 80-81 % | 0 | 141-151 | 0.013-0.014 / 0.04-0.05 |
+| | AFTER_COMMIT | 10.8 / 21.8 (see below) | 0.37-0.48 / 0.51-6.1 | 0.27-0.35 / 0.39-5.1 | 0 | 66-70 % | 120-168 | 0.10-0.18 / 0.21-6.0 |
+| | AFTER_COMMIT_DIRECT | 18.3-18.4 | 0.36 / 0.52-0.53 | 0.26 / 0.39-0.40 | 0.7-0.8 % | 57 % | 143 | 0.073 / 0.17 |
+| 20 writers | NONE | 39.4-40.1 | 0.48 / 0.83-0.86 | 0.36 / 0.61-0.63 | 0 | 74-75 % | 85 | - |
+| | IN_TX | 9.3-9.4 | 2.12-2.14 / 2.32-2.35 | 2.00-2.01 / 2.20-2.22 | 93 % | 0 | 142-143 | 0.013 / 0.04 |
+| | AFTER_COMMIT | 38.1-38.6 | 0.50-0.51 / 0.90-0.91 | 0.37-0.38 / 0.67-0.69 | 0 | 75 % | 92-94 | 0.14 / 0.35-0.38 |
+| | AFTER_COMMIT_DIRECT | 29.5 | 0.47 / 0.80-0.81 | 0.35 / 0.62-0.63 | 21-23 % | 50-51 % | 123-124 | 0.18-0.19 / 0.58 |
+| 8 on 10 | NONE | 12.0-12.1 | 0.42-0.43 / 0.62-0.64 | 0.25 / 0.38-0.40 | 0 | 33-34 % | 211-212 | - |
+| | IN_TX | 6.7 | 0.77-0.78 / 1.05-1.13 | 0.53-0.54 / 0.80-0.86 | 44-45 % | 0 | 324-325 | 0.016-0.018 / 0.09-0.10 |
+| | AFTER_COMMIT | 12.1 | 0.42 / 0.62-0.63 | 0.25 / 0.39-0.40 | 0 | 33-35 % | 231 | 0.10 / 0.23 |
+| | AFTER_COMMIT_DIRECT | 11.0-11.2 | 0.43 / 0.64 | 0.25 / 0.39-0.40 | 0.2 % | 32 % | 243-245 | 0.072-0.073 / 0.16 |
+
+One `AFTER_COMMIT` window at 8 writers (the first) ran at 10.8 thousand per second with a commit p99 of 5.1 ms and a
+wake p99 of 6.0 ms. Its palindrome twin ran at 21.8 thousand with 0.39 ms and 0.21 ms, like `NONE`. The slow window's
+writers spent 70 % in `LWLock:WALWrite` and nothing on the NOTIFY lock, so it looks like a VM stall during WAL flushing
+rather than an effect of the notifier; it was not investigated further.
+
+**`fsync=off`:**
+
+| Shape | Arm | Appends/s (thousands) | Unit of work p50 / p99 (ms) | Commit p50 / p99 (ms) | Lock | WALWrite | PostgreSQL CPU µs/append | Wake p50 / p99 (ms) |
+|---|---|---|---|---|---|---|---|---|
+| 1 writer | NONE | 7.1-7.6 | 0.13 / 0.17-0.22 | 0.044-0.045 / 0.05-0.07 | 0 | 0 | 68-71 | - |
+| | IN_TX | 5.0-5.3 | 0.19 / 0.22-0.31 | 0.053-0.056 / 0.06-0.10 | 0 | 0 | 116-125 | 0.020 / 0.03-0.05 |
+| | AFTER_COMMIT | 6.5-6.6 | 0.14 / 0.22-0.24 | 0.047-0.048 / 0.08 | 0 | 0 | 132-134 | 0.094-0.097 / 0.14-0.18 |
+| | AFTER_COMMIT_DIRECT | 5.2 | 0.14 / 0.17-0.18 | 0.044-0.046 / 0.06 | 0 | 0 | 115-117 | 0.072-0.073 / 0.09-0.10 |
+| 8 writers | NONE | 40.0-48.3 | 0.17-0.19 / 0.35 | 0.053-0.066 / 0.17-0.18 | 0 | 7-11 % | 70-79 | - |
+| | IN_TX | 27.7-27.9 | 0.28 / 0.47-0.48 | 0.091 / 0.26 | 23-24 % | 0 | 117-118 | 0.010-0.011 / 0.11 |
+| | AFTER_COMMIT | 53.1-62.4 | 0.11-0.15 / 0.33 | 0.032-0.048 / 0.16-0.17 | 0 | 9-10 % | 62-70 | 0.11-0.12 / 0.29-0.33 |
+| | AFTER_COMMIT_DIRECT | 28.9 | 0.19 / 0.33 | 0.065 / 0.17 | 7 % | 4 % | 115 | 0.090-0.091 / 0.23 |
+| 20 writers | NONE | 67.4-67.7 | 0.26 / 0.99 | 0.12 / 0.39-0.42 | 0 | 18-19 % | 63 | - |
+| | IN_TX | 24.5-26.5 | 0.74-0.80 / 1.07-1.27 | 0.55-0.59 / 0.84-0.98 | 83-84 % | 0 | 126-132 | 0.010-0.013 / 0.10-0.15 |
+| | AFTER_COMMIT | 62.2-65.2 | 0.27-0.28 / 0.94-1.04 | 0.13 / 0.39-0.44 | 0 | 19-20 % | 67-69 | 0.16-0.18 / 0.50-0.58 |
+| | AFTER_COMMIT_DIRECT | 26.3-27.1 | 0.20-0.21 / 0.42-0.46 | 0.07 / 0.23-0.25 | 80 % | 0.6-0.7 % | 129-132 | 0.54-0.55 / 0.86-0.90 |
+| 8 on 10 | NONE | 34.1-34.2 | 0.10 / 0.40-0.42 | 0.018 / 0.12-0.13 | 0 | 1.3 % | 103 | - |
+| | IN_TX | 13.2-14.8 | 0.36-0.39 / 0.59-0.60 | 0.068-0.076 / 0.20 | 3-4 % | 0 | 203-223 | 0.016-0.020 / 0.11-0.13 |
+| | AFTER_COMMIT | 32.7-34.0 | 0.12 / 0.37-0.40 | 0.019-0.020 / 0.11-0.12 | 0 | 1.6-1.7 % | 112-116 | 0.10 / 1.1-1.4 |
+| | AFTER_COMMIT_DIRECT | 14.1-17.7 | 0.24-0.32 / 0.50-0.64 | 0.045-0.066 / 0.18-0.19 | 1 % | 1-1.4 % | 180-211 | 0.08-0.09 / 0.24-0.55 |
+
+**Notifications sent and received.** Every notification sent was received, in every window. `IN_TX` and
+`AFTER_COMMIT_DIRECT` send one per successful append. `AFTER_COMMIT` sent 0.16-0.30 batches per append at 8 and 20
+writers with `fsync=off`, 0.29-0.48 with `fsync=on`, 0.49 and 0.69-0.70 for 8 on 10, and one per append with one
+writer (nothing to coalesce). Batches were one key each, apart from the tagged samples: every append went to the same
+table.
+
+### 10.3 Findings
+
+- **Inside the transaction, notifying commits serialise, and group commit is lost.** At 20 writers with `fsync=on`
+  `IN_TX` ran at 9.3-9.4 thousand appends per second, the same as at 8 writers (8.3-9.3): about 107 µs per commit, one
+  after another, which is a WAL flush plus the commit's own work. The writers' wait profile changes from
+  `LWLock:WALWrite` (65-75 %, waiting for a group flush to finish) to `Lock:object` (80-93 %, waiting for the NOTIFY
+  lock), and `pg_locks` showed 5.4 (8 writers) and 17.4 (20 writers) backends waiting on that lock on average, in
+  practically every sample. This is the queue's §3.14 mechanism, reproduced on the append path.
+- **The cost grows with concurrency and with the flush time.** With `fsync=off` the lock is held for a shorter flush,
+  so `IN_TX` lost 30-43 % at 8 writers and 61-64 % at 20, against 57-63 % and 76-77 % with `fsync=on`. The `fsync=off`
+  numbers are the optimistic bound; on a disk with real flush latency the ceiling is lower again.
+- **At one writer `IN_TX` costs the extra round trip and some CPU, not the lock.** 25-35 % fewer appends with
+  `fsync=off`, 13-34 % with `fsync=on`, and no lock wait. That part is what folding the notify into the append
+  statement would save; the lock is not.
+- **Contended aggregates make it worse in a second way.** For 8 writers on 10 aggregates with `fsync=off`, `IN_TX`
+  waited little on the NOTIFY lock (3-4 %) but 19 % on `Lock:transactionid`: the extra statement inside the
+  transaction keeps the inserted row's uniqueness check pending longer, so conflicting writers wait for it. Appends
+  fell 57-61 %. With `fsync=on` the lock dominates again (44-45 %), and appends fell 44-45 %.
+- **After commit, coalesced, costs nothing measurable.** `AFTER_COMMIT` matched `NONE` within the window-to-window
+  spread at every shape with `fsync=on` (21.8 against 21.5-22.3, 38.1-38.6 against 39.4-40.1, and 12.1 against
+  12.0-12.1 thousand per second, commit p50/p99 equal), apart from the one slow window above. With `fsync=off` it was
+  3-8 % below `NONE` at 20 writers and 0-4 % on contended aggregates, and above it at 8 writers (53-62 against 40-48
+  thousand per second), which is the VM's idle and wake-up effect (§9) more than anything the notifier does. The
+  notifier's backend never waited on the NOTIFY lock: it is the only notifying session, so the lock is always free.
+  At one writer it cost 7-15 % with `fsync=off` and 10-24 % with `fsync=on`, from the notifier's own statement per
+  append competing for the CPU and the WAL (nothing to coalesce at one writer).
+- **After commit but per writer is not enough.** `AFTER_COMMIT_DIRECT` takes the append transaction off the lock,
+  but every writer's own notify transaction still takes it and still flushes (`pg_notify` assigns an xid, so its
+  commit writes and flushes WAL). At 20 writers with `fsync=off` it waited 80 % on the lock and appended 60 % less
+  than `NONE`, as slow as `IN_TX`; with `fsync=on` it lost 14-18 % at 8 writers and 25-26 % at 20, with 21-23 % lock
+  waits. Coalescing is what removes the cost, not merely moving the notify out of the transaction.
+- **Wake latency after commit is about 0.1-0.2 ms more.** Commit returned to notification on the listener's socket:
+  `AFTER_COMMIT` p50 0.09-0.18 ms and p99 0.13-0.58 ms in every window but the slow one above (and 1.1-1.4 ms p99 for
+  8 on 10 with `fsync=off`), against 0.01-0.02 ms for `IN_TX`, whose notification leaves at commit. That is one
+  hand-off to the notifier thread plus one statement. It is the same order as the queue's tier 1 (1.76 ms p50 end to
+  end including the read, shard-owned design, "Tier 3").
+- **A crash between commit and notify loses the hint.** As in the queue: the event is committed, but no other JVM is
+  woken; their tier-0 backstop (§11, the backstop interval) finds it. Tier 2, the same-JVM wake-up, is unaffected:
+  it never involves the database.
+
+### 10.4 Side finding: pgjdbc's `getNotifications` under continuous traffic
+
+The first smoke runs measured wake latency when `getNotifications(50)` returned, and got p50 values of 170-500 ms in
+1 s windows, roughly uniform over the window. pgjdbc 42.7.14's `QueryExecutorImpl.processNotifies(timeout)` sets the
+timeout to −1 after the first notification and keeps reading while `hasMessagePending()` is true. While notifications
+keep arriving it does not return, and then hands out everything at once: in the full run the listener got 75 114
+notifications in 2 reads over an 8 s window (`IN_TX`, 20 writers, `fsync=on`), and 1-350 reads per 8 s window at
+any load, including one writer at about 5 thousand notifications per second. Measured through pgjdbc's API, wake latency was 0.3-2.0 s
+p50 in every notifying window. A `poll` variant (`SELECT 1` on the listener connection, then the no-argument
+`getNotifications()`) did no better. The server's notify interrupt loops while new signals keep arriving and does not
+flush before `ReadyForQuery`, so the `SELECT 1` did not return until the traffic paused (5 reads in 2 s). The
+notifications themselves reach the socket promptly: the tap sees them within 0.01-0.2 ms.
+
+The queue's `ShardWakeupListener` drains with `getNotifications(200)`, so the same holds for it: under a continuous
+stream of notifications, its wake-ups are delivered only when the stream pauses. At the queue's rates and with its
+coalescing that may never have shown, and its backstop sweep bounds the damage. This spike did not test the queue, and
+did not look for a pgjdbc setting or API that avoids it. Any tier-1 listener built on pgjdbc's `getNotifications`
+needs a test under sustained notification traffic.
+
+### 10.5 How this relates to the queue's §3.14
+
+The mechanism is the same, and the append path shows it in isolation. The queue measured it end to end, in the
+trading demo (lock wait 17.5-22.2 % of active time, 35.8-38.9 % at peaks) and in a loaded-cost IT (p50 halved, p99 from
+up to 70 ms to about 6 ms). Here, with only appending writers and nothing else in the database, the lock took 80-93 %
+of the writers' active time at 8 and 20 writers with `fsync=on`, and throughput fell to one commit per flush. The fix
+the queue adopted — write without `pg_notify`, wake in memory for the same JVM, and send a coalesced batch after
+commit for other JVMs — removed the cost on the append path too. The extra arm adds one thing the queue did not
+measure: moving the notify out of the transaction without coalescing keeps most of the cost.
+
+### 10.6 Not measured
+
+- A real disk with `fsync=on` (the dedicated machine): the most informative pass, and the one this VM cannot give.
+- Several tables per commit, several JVMs notifying at once (each with its own notifier, so the lock is contended
+  again, once per batch), and other notifying traffic in the same cluster (the lock is cluster-wide).
+- The notify folded into the §5.1 append statement (saves `IN_TX`'s round trip, not its lock).
+- A listener that delivers notifications as they arrive (10.4), and the queue's listener under sustained traffic.
+- PostgreSQL 18 and later. Whether a newer major shortens the lock's hold was not checked.
