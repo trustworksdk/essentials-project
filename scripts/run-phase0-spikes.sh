@@ -50,6 +50,8 @@
 #                                  xid           AppendXidBeforeIdentitySpikeIT                          P0.1
 #                                  table-design  TableDesignOptionsSpikeIT                               P0.7
 #                                  contention    ContendedAppendThroughputSpikeIT                        P0.4
+#                                  notify        WakeupNotifyCostSpikeIT                                 P0.10 (one pass with
+#                                                the server's fsync; a container runs fsync=off and fsync=on)
 #                                  append        SingleStatementAppendSpikeIT,AppendEncodingAttributionSpikeIT  P0.4
 #                                  baseline      CurrentEngineBaselineSpikeIT                            P0.0
 #                                  cpu           UnattributedCpuSpikeIT                                  P0.9
@@ -83,7 +85,7 @@ OUT=""
 BUILD=1
 DRY_RUN=0
 
-usage() { sed -n '17,70p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '17,72p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_error() { printf '%s\nRun with --help for usage.\n' "$*" >&2; exit 2; }
 
 # The command line as typed, for machine.txt, with any password value replaced. Built before
@@ -146,6 +148,7 @@ suite_classes() {
     table-design) echo "TableDesignOptionsSpikeIT" ;;
     cpu)          echo "UnattributedCpuSpikeIT" ;;
     jdbc)         echo "JdbiVsRawPgjdbcSpikeIT" ;;
+    notify)       echo "WakeupNotifyCostSpikeIT" ;;
     *)            return 1 ;;
   esac
 }
@@ -160,10 +163,11 @@ suite_results() {
     table-design) echo "p0-7-*" ;;
     cpu)          echo "p0-9-*" ;;
     jdbc)         echo "p0-6-*" ;;
+    notify)       echo "p0-10-*" ;;
   esac
 }
-DEFAULT_SUITES="xid table-design contention append baseline cpu jdbc probe"
-ALL_SUITES="baseline xid probe append contention table-design cpu jdbc"
+DEFAULT_SUITES="xid table-design contention notify append baseline cpu jdbc probe"
+ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify"
 
 (( ${#SUITE_SPECS[@]} )) || SUITE_SPECS=(default)
 SUITES=()

@@ -32,8 +32,8 @@ scripts/run-phase0-spikes.sh --external jdbc:postgresql://dbhost:5432/postgres -
     --suite xid,contention --dry-run -- -Dspike.contention.seconds=20
 ```
 
-The suites are `xid`, `table-design`, `contention`, `append`, `baseline`, `cpu`, `jdbc` and `probe` (the default
-runs all of them in §6's priority order); a suite can name one test method, as in `jdbc#protocol_trace`. Since 2026-11-11 `jdbc` also runs
+The suites are `xid`, `table-design`, `contention`, `notify`, `append`, `baseline`, `cpu`, `jdbc` and `probe` (the
+default runs all of them in §6's priority order); a suite can name one test method, as in `jdbc#protocol_trace`. Since 2026-11-11 `jdbc` also runs
 `round_trip_reconciliation` (counting proxy and pgjdbc wire trace on the same units of work; `RT-RECONCILE` lines in
 `p0-6-jdbc.txt`), which needs no extra setup on the server. Run
 `scripts/run-phase0-spikes.sh --help` for every option. The rest of this document is what the script does by hand,
@@ -373,6 +373,11 @@ CPU, negligible against 20 s windows. For PostgreSQL's CPU alone, point the comm
    - `run ContendedAppendThroughputSpikeIT`
    - `run SingleStatementAppendSpikeIT`
    - `run AppendEncodingAttributionSpikeIT` (no auto_explain plans externally, see §1)
+   - `run WakeupNotifyCostSpikeIT` (P0.10, suite `notify`, about 6 minutes against one server): what a
+     wake-up `pg_notify` costs the append, inside the transaction against after commit. Of every spike this is the
+     one the container cannot answer: a notifying commit holds PostgreSQL's NOTIFY lock through its WAL flush, and
+     the flush is what `fsync=on` on a real disk makes long. On an external server it runs one pass with the server's
+     own settings (the container runs `fsync=off` and `fsync=on`); results in `p0-10-notify.txt`, append doc §10.
 2. **P0.0 baseline of the current engine.** The statement mix and WAL per event are machine-independent and should
    match; the latencies and the burst catch-up will not. `run CurrentEngineBaselineSpikeIT`
 3. **Unattributed CPU (P0.9).** Does the idle and wake-up cost exist on real hardware? Compare server CPU per attempt

@@ -485,6 +485,14 @@ class CurrentEngineBaselineSpikeIT {
         }
 
         static Pg start() throws SQLException {
+            return start(false);
+        }
+
+        /**
+         * As {@link #start()}; {@code fsync} starts the container with {@code fsync=on} instead of {@code fsync=off} (P0.10).
+         * Ignored on an external server, which keeps its own setting.
+         */
+        static Pg start(boolean fsync) throws SQLException {
             if (SpikeServer.external()) {
                 var pg = new Pg(SpikeServer.external("baseline", OBSERVER, true));
                 try (var s = pg.observer.createStatement()) {
@@ -494,7 +502,7 @@ class CurrentEngineBaselineSpikeIT {
                 return pg;
             }
             var container = new PostgreSQLContainer(IMAGE).withDatabaseName("baseline").withUsername(OBSERVER).withPassword(OBSERVER)
-                                                          .withCommand("postgres", "-c", "fsync=off", "-c", "shared_preload_libraries=pg_stat_statements",
+                                                          .withCommand("postgres", "-c", fsync ? "fsync=on" : "fsync=off", "-c", "shared_preload_libraries=pg_stat_statements",
                                                                        "-c", "pg_stat_statements.max=10000", "-c", "pg_stat_statements.track_utility=on");
             container.start();
             var pg = new Pg(SpikeServer.of(container));
