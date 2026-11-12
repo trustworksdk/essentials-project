@@ -54,6 +54,8 @@
 #                                                the server's fsync; a container runs fsync=off and fsync=on)
 #                                  tail          TailHoleReReadSpikeIT                                   P0.11 (bulk-loads two
 #                                                2 M-row tables, ~4 GB of disk on the server)
+#                                  probe-cost    ProbeRunningSetCostSpikeIT                              P0.12 (opens up to 400
+#                                                connections: max_connections must allow it)
 #                                  append        SingleStatementAppendSpikeIT,AppendEncodingAttributionSpikeIT  P0.4
 #                                  baseline      CurrentEngineBaselineSpikeIT                            P0.0
 #                                  cpu           UnattributedCpuSpikeIT                                  P0.9
@@ -87,7 +89,7 @@ OUT=""
 BUILD=1
 DRY_RUN=0
 
-usage() { sed -n '17,74p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '17,76p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_error() { printf '%s\nRun with --help for usage.\n' "$*" >&2; exit 2; }
 
 # The command line as typed, for machine.txt, with any password value replaced. Built before
@@ -152,6 +154,7 @@ suite_classes() {
     jdbc)         echo "JdbiVsRawPgjdbcSpikeIT" ;;
     notify)       echo "WakeupNotifyCostSpikeIT" ;;
     tail)         echo "TailHoleReReadSpikeIT" ;;
+    probe-cost)   echo "ProbeRunningSetCostSpikeIT" ;;
     *)            return 1 ;;
   esac
 }
@@ -168,10 +171,11 @@ suite_results() {
     jdbc)         echo "p0-6-*" ;;
     notify)       echo "p0-10-*" ;;
     tail)         echo "p0-11-*" ;;
+    probe-cost)   echo "p0-12-*" ;;
   esac
 }
-DEFAULT_SUITES="xid table-design contention notify tail append baseline cpu jdbc probe"
-ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail"
+DEFAULT_SUITES="xid table-design contention notify tail probe-cost append baseline cpu jdbc probe"
+ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost"
 
 (( ${#SUITE_SPECS[@]} )) || SUITE_SPECS=(default)
 SUITES=()

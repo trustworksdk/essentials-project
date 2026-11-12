@@ -32,7 +32,7 @@ scripts/run-phase0-spikes.sh --external jdbc:postgresql://dbhost:5432/postgres -
     --suite xid,contention --dry-run -- -Dspike.contention.seconds=20
 ```
 
-The suites are `xid`, `table-design`, `contention`, `notify`, `tail`, `append`, `baseline`, `cpu`, `jdbc` and `probe` (the
+The suites are `xid`, `table-design`, `contention`, `notify`, `tail`, `probe-cost`, `append`, `baseline`, `cpu`, `jdbc` and `probe` (the
 default runs all of them in §6's priority order); a suite can name one test method, as in `jdbc#protocol_trace`. Since 2026-11-11 `jdbc` also runs
 `round_trip_reconciliation` (counting proxy and pgjdbc wire trace on the same units of work; `RT-RECONCILE` lines in
 `p0-6-jdbc.txt`), which needs no extra setup on the server. Run
@@ -383,6 +383,12 @@ CPU, negligible against 20 s windows. For PostgreSQL's CPU alone, point the comm
      caching. It bulk-loads two 2-million-row tables (about 4 GB of disk and WAL on the server; dropped afterwards,
      `-Dspike.tail.rows` to shrink) and needs `pg_stat_statements` preloaded. The plan shapes should not depend on the
      machine; the latencies will. Results in `p0-11-tail-holes.txt` and `p0-11-tail-plans.txt`, append doc §11.
+   - `run ProbeRunningSetCostSpikeIT` (P0.12, suite `probe-cost`): what the combined probe's `pg_stat_activity`
+     read costs at 10, 100 and 400 open connections, idle and with 20 % of them appending, and what probing every
+     1 ms (one reader) or every 10 ms (one reader per 10 connections) does to the appends. It opens up to 400
+     connections, so the server's `max_connections` must allow that plus what is already connected (levels that do
+     not fit are skipped and say so); it cannot vary `max_connections` itself (the container runs 50, 500 and 2 000).
+     Needs `pg_stat_statements` preloaded. Results in `p0-12-probe-cost.txt`, append doc §12.
 2. **P0.0 baseline of the current engine.** The statement mix and WAL per event are machine-independent and should
    match; the latencies and the burst catch-up will not. `run CurrentEngineBaselineSpikeIT`
 3. **Unattributed CPU (P0.9).** Does the idle and wake-up cost exist on real hardware? Compare server CPU per attempt
