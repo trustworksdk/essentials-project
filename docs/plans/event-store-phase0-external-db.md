@@ -32,7 +32,7 @@ scripts/run-phase0-spikes.sh --external jdbc:postgresql://dbhost:5432/postgres -
     --suite xid,contention --dry-run -- -Dspike.contention.seconds=20
 ```
 
-The suites are `xid`, `table-design`, `contention`, `notify`, `tail`, `probe-cost`, `append`, `baseline`, `cpu`, `jdbc` and `probe` (the
+The suites are `xid`, `table-design`, `contention`, `notify`, `tail`, `probe-cost`, `progress`, `append`, `baseline`, `cpu`, `jdbc` and `probe` (the
 default runs all of them in §6's priority order); a suite can name one test method, as in `jdbc#protocol_trace`. Since 2026-11-11 `jdbc` also runs
 `round_trip_reconciliation` (counting proxy and pgjdbc wire trace on the same units of work; `RT-RECONCILE` lines in
 `p0-6-jdbc.txt`), which needs no extra setup on the server. Run
@@ -389,6 +389,13 @@ CPU, negligible against 20 s windows. For PostgreSQL's CPU alone, point the comm
      connections, so the server's `max_connections` must allow that plus what is already connected (levels that do
      not fit are skipped and say so); it cannot vary `max_connections` itself (the container runs 50, 500 and 2 000).
      Needs `pg_stat_statements` preloaded. Results in `p0-12-probe-cost.txt`, append doc §12.
+   - `run ProjectionProgressSpikeIT` (P0.13, suite `progress`): a view projection writing one row per event from a
+     200 000-event table, with the resume point saved per event, per page (10, 100, 500 events, row by row, as a JDBC
+     batch or as one set-based statement), periodically every second (today's model), and with the per-event fallback
+     after a failing event, at 1 and 4 concurrent projections. One pass with the server's own `fsync` (the container
+     runs `fsync=off` and `fsync=on`); WAL per event comes from `pg_stat_wal`, which is cluster-wide, so other traffic
+     on the server inflates it. The commit latency is what changes most with a real disk. Results in
+     `p0-13-progress.txt`, append doc §13.
 2. **P0.0 baseline of the current engine.** The statement mix and WAL per event are machine-independent and should
    match; the latencies and the burst catch-up will not. `run CurrentEngineBaselineSpikeIT`
 3. **Unattributed CPU (P0.9).** Does the idle and wake-up cost exist on real hardware? Compare server CPU per attempt
