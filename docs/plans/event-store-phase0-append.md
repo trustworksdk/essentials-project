@@ -1189,3 +1189,199 @@ measure: moving the notify out of the transaction without coalescing keeps most 
 - The notify folded into the §5.1 append statement (saves `IN_TX`'s round trip, not its lock).
 - A listener that delivers notifications as they arrive (10.4), and the queue's listener under sustained traffic.
 - PostgreSQL 18 and later. Whether a newer major shortens the lock's hold was not checked.
+
+## 11. Re-reading the outstanding holes in the tail statement (P0.11)
+
+Date: 2026-11-12. Findings, not decisions. P0.5's finding F1 (redesign §4.2, proposed revision) has the tail
+statement re-read the outstanding holes, so that a late commit is published before anything above it and `FRESH`
+keeps per-aggregate order: `WHERE global_order > :cursor OR global_order = ANY(:holes)`, with ranges after a sequence
+jump, rows returned in `global_order`. §19 risk 13 asked whether the planner keeps both halves as index scans and what
+the statement costs with many holes, or with a long writer holding an old hole while the cursor moves on.
+
+**Short answer.** The `OR` form is only safe as a *custom* plan. Under a generic plan (a named server-side statement
+after its five custom plans, or `plan_cache_mode=force_generic_plan`) PostgreSQL walks the primary key from the lowest
+`global_order` with the whole predicate as a filter, reading every row below the cursor: 300 ms per probe on the
+2-million-row table here, against 10 µs for today's tail read. Under the default `plan_cache_mode=auto` the server
+chose that plan by itself on a 300 000-row table with 1 000 holes (smoke run); on the 2-million-row table it stayed
+custom in this run, so whether it flips depends on table size and hole count, not on anything the engine controls.
+Adding a jump range with `OR global_order BETWEEN lo AND hi` makes even the custom plan take that path (280-300 ms).
+Writing the same read as one statement with `UNION ALL` — the tail read as one branch, `global_order = ANY(:holes)` as
+another — gives index scans in every plan mode, the custom plan's cost when no hole is outstanding, and the same
+server time as the `OR` form at every hole count. Ranges as a further `UNION ALL` branch over `unnest` are correct but
+cross PostgreSQL's JIT threshold through a poor row estimate (5-8 ms custom, 80-95 ms generic, on the engine's
+layout). Cost grows with the number of holes, not with how far below the cursor they lie: about 10 µs of server time
+up to 10 holes, about 20 µs at 100 and about 120 µs at 1 000, plus about 170 µs of planning per probe at 1 000 holes
+when the plan is custom.
+
+### 11.1 Setup
+
+**Code.** `TailHoleReReadSpikeIT` in the `spike` package (`@Tag("spike")`, `-Dspike.run=true`, external-server
+capable through `SpikeServer`). Raw output: `target/spike-results/p0-11-tail-holes.txt` (`PLAN` and `CSV` lines, one
+per plan and per timed cell) and `p0-11-tail-plans.txt` (plan shapes, full `EXPLAIN` text for a subset). Through the
+script: `scripts/run-phase0-spikes.sh --container --suite tail`.
+
+```bash
+mvn -o verify -pl components/postgresql-event-store -DskipUTs -Dit.test=TailHoleReReadSpikeIT \
+    -Dfailsafe.failIfNoSpecifiedTests=false -Dspike.run=true -Dfailsafe.forkCount=1 -DskipDependencyCheck=true
+```
+
+Knobs: `-Dspike.tail.rows` (default 2 000 000), `-Dspike.tail.designs` (`BASE,COMBO`), `-Dspike.tail.variants`,
+`-Dspike.tail.protocols`, `-Dspike.tail.iterations` (200), `-Dspike.tail.limit` (page size, 1 000),
+`-Dspike.tail.slowMillis` (50), `-Dspike.tail.timeoutMillis` (5 000), `-Dspike.tail.image` (`postgres:17.5`).
+
+**Tables.** Two tables, each bulk-loaded with 2 million rows: `BASE`, the engine's current layout (`text` ids,
+`jsonb` payload and metadata, `UNIQUE (aggregate_id, event_order)` and `UNIQUE (event_id)`; 822 MB, 1 056 MB with
+indexes), and `COMBO`, the combined option of §8 (fixed-width columns first, `uuid` ids, `smallint` type, `json`
+payload, no `UNIQUE (event_id)`; 473 / 594 MB). Payload about 120 bytes of JSON. The primary key on `global_order` is
+43 MB in both. Head 3 000 000; a sequence jump of one million values 150 000 rows below the head (`[1 850 001,
+2 850 000]` holds no rows); 2 000 rows deleted to make holes, then `VACUUM (ANALYZE)`: a *near* pool of 1 000 values
+spaced 3 apart from 200 below the head, and a *far* pool of 1 000 from 100 000 below the head (a long writer holding an
+old value while the cursor moved 100 000 on). Every hole in the measurement is still a hole (no row), which is what an
+outstanding hole normally is; a late commit adds one row to the result.
+
+**Cases.** Holes outstanding 0, 1, 10, 100, 1 000, from the near or the far pool (the nearest first); cursor 0, 1 or
+100 rows below the head, so each probe reads that many new rows. Nothing is written while measuring. Page `LIMIT`
+1 000.
+
+**Variants.** Every variant carries §4.10's running-set sub-select (`(SELECT array_agg(backend_xid::text) FROM
+pg_stat_activity WHERE backend_xid IS NOT NULL) AS running`) and returns every event column.
+
+- `A`: `WHERE global_order > ? ORDER BY global_order LIMIT ?`, today's design. The baseline; it does not re-read holes.
+- `B`: `WHERE (global_order > ? OR global_order = ANY(?)) ORDER BY global_order LIMIT ?` (F1 as written).
+- `C`: `B` plus `OR global_order BETWEEN ? AND ?`, the jump as one range (always the one-million-value jump here).
+- `C_UNNEST`: `WHERE (global_order > ? OR EXISTS (SELECT 1 FROM unnest(?::bigint[], ?::bigint[]) r(lo, hi) WHERE
+  global_order BETWEEN r.lo AND r.hi))`, holes and the jump as an array of ranges.
+- `D`: `SELECT u.*, <running> FROM ((SELECT … WHERE global_order > ? ORDER BY global_order LIMIT ?) UNION ALL (SELECT …
+  WHERE global_order = ANY(?))) u ORDER BY u.global_order`. One statement, one snapshot; the holes do not count
+  against the page `LIMIT`.
+- `D_RANGES`: `D` plus a third branch `SELECT x.* FROM unnest(?::bigint[], ?::bigint[]) r(lo, hi) CROSS JOIN LATERAL
+  (SELECT … WHERE global_order BETWEEN r.lo AND r.hi) x` for the jump.
+- `E`: two statements, `A` and then, if holes are outstanding, `SELECT … WHERE global_order = ANY(?) ORDER BY
+  global_order`. For the round-trip comparison only: two snapshots, so it does not meet the model's constraint (a row
+  committed between them is missed by the first and may be returned by the second after rows above it).
+
+**Plan shapes.** For 13 cases per table (every hole configuration with one new row, plus 0 and 100 new rows with no
+holes and with 1 000 far holes), each statement was `PREPARE`d at SQL level and run as `EXPLAIN (ANALYZE, BUFFERS)
+EXECUTE` under `force_custom_plan` (the plan the simple protocol and pgjdbc's unnamed statements get), under
+`force_generic_plan`, under `auto` after five executions with the same parameters, and under `auto` after five
+executions with no holes and no jump (`AUTO_DRIFT`); `pg_prepared_statements.generic_plans` before and after says which
+plan the `EXPLAIN` used. A (statement, mode) pair slower than 50 ms twice in a row was not explained again.
+
+**Timings.** Each case and variant on three pgjdbc connections: `prepareThreshold=0` (extended protocol, unnamed
+statement: a parse, a custom plan and a bind every time), `prepareThreshold=1` under `auto` (named server-side
+statement) and `prepareThreshold=1` under `force_generic_plan`. Fresh connection per cell, six warm-up probes, then
+200 timed probes reading every column of every row; client p50 / p99; server execution and planning time, buffers and
+rows per probe from `pg_stat_statements` (reset per cell, `track_planning=on`). A cell whose first probe took over
+50 ms was timed for two probes only, and after two such cells the (variant, protocol) pair was skipped.
+
+**Sanity.** Before measuring, every variant on every protocol (including the simple protocol) was given ten absent
+holes plus two values that exist, with 100 new rows: every variant except `A` returned the two late rows and the 100
+new rows, in `global_order` for `B`, `C`, `C_UNNEST`, `D` and `D_RANGES` (and `A` the 100 new rows). `E` returned the
+same set across its two statements, the late rows last.
+
+**Machine.** PostgreSQL 17.5 in a container on the 8-CPU arm64 Docker VM, `fsync=off`, `shared_buffers=1GB` (both
+tables fit; every buffer access was a hit), `jit=on`, `random_page_cost=4`, other settings default, pgjdbc 42.7.14,
+client on the same VM (§9 applies: absolute latencies are the VM's). One run, 3 min 55 s including the bulk loads.
+
+### 11.2 Plan shapes
+
+Identical on both tables, at every hole count and position unless noted.
+
+| Variant | Custom plan | Generic plan | `auto` (own params / after no-hole history) |
+|---|---|---|---|
+| A | `Limit > Index Scan (Index Cond > $1)` | same | same |
+| B | `Limit > Sort > Bitmap Heap Scan > BitmapOr > 2 × Bitmap Index Scan` — both halves index conditions | **`Limit > Index Scan` with the whole predicate as `Filter`, 1 997 999 rows removed, 110 731 buffers, ~300 ms** | custom in this run (2 M rows); **generic, 610-625 ms, at 1 000 holes on a 300 000-row table** in the smoke run |
+| C | **`Limit > Index Scan` with `Filter`, ~280-310 ms** | same | same |
+| C_UNNEST | **`Limit > Index Scan` with `Filter` and a `SubPlan` over `unnest` per row, ~430-510 ms** | same | same |
+| D | `Merge Append` of `Limit > Index Scan (> $1)` and `Sort > Index Scan (= ANY)`; with 100 new rows `Sort > Append` of the same two scans | same index scans | same |
+| D_RANGES | `D` plus `Nested Loop (Function Scan on unnest > Index Scan BETWEEN)` — index conditions throughout; BASE: JIT compiled (cost 130 000 > `jit_above_cost`), **5-8 ms** | same shape, JIT with inlining and optimisation, **80-95 ms** | as custom |
+| E | `Limit > Index Scan` and `Index Scan (= ANY)` | same | same |
+
+Why `B` generic and `C` fail: an `OR` cannot be an index condition of one ordered index scan, so the planner chooses
+between a `BitmapOr` plus a sort and walking the primary key in order with the predicate as a filter, stopping at the
+`LIMIT`. The walk is cheap when it expects the `LIMIT`'s rows early. A generic plan estimates `global_order > $1` at a
+third of the table (666 000 rows), and the jump's `BETWEEN` is estimated at about 19 500 rows from the histogram (the
+range is empty, but the statistics do not know); either way the planner expects 1 000 matches long before the end and
+picks the walk. The matches are all at the far end of the index, so the walk reads the whole table. The custom plan of
+`B` knows the cursor is near the head and that the hole array has *n* elements, so it uses the `BitmapOr`. `D` never
+has the choice: each branch is a separate index scan with its own index condition, and a generic estimate only changes
+the cost, not the shape. `D_RANGES`' range branch is estimated at 222 000 rows (custom, BASE) or 2.2 million (generic)
+for an empty range; the plan stays right, but the estimated cost crosses `jit_above_cost` (100 000) and, generic, the
+inlining and optimisation thresholds (500 000), and the JIT compile is the whole cost (`JIT: … Emission 7.1 ms`).
+COMBO's custom estimate stayed under the threshold.
+
+**The generic-plan trap, precisely.** pgjdbc's default `prepareThreshold=5` makes the engine's tail statement a named
+server-side statement from its fifth execution, and the server then compares the generic plan's estimated cost with
+the average of the custom plans so far. The custom cost of `B` grows with the length of the hole array (7 876 at
+1 000 holes on 2 M rows, ~13 with none), the generic estimate does not depend on it, and it grows with the table
+(18 717 on 2 M rows, much less on 300 000). Once the average custom cost exceeds the generic estimate, the server uses
+the generic plan, and from then on every probe reads the whole table below the cursor, holes or not. That happened in
+the smoke run at 1 000 holes and 300 000 rows; with a no-hole history (`AUTO_DRIFT`) it did not, so the trap waits for
+a burst of holes (a long writer, a rollback storm) and then stays. Nothing in the result reveals it except latency.
+
+### 11.3 Cost
+
+Server execution time per probe (µs, `pg_stat_statements`), client p50 (µs) in brackets, BASE, one new row per probe.
+Unnamed = `prepareThreshold=0` (custom plan, parse and plan every probe); generic = named statement under
+`force_generic_plan`. `auto` behaved as custom throughout in this run and lay between the two on the client.
+
+| Variant / holes | 0 | 1 near | 10 near | 100 near | 1 000 near | 1 far | 10 far | 100 far | 1 000 far |
+|---|---|---|---|---|---|---|---|---|---|
+| A unnamed | 10 (224) | 9 (204) | 9 (207) | 10 (226) | 9 (209) | 9 (202) | 9 (207) | 9 (213) | 9 (202) |
+| A generic | 8 (35) | 8 (32) | 8 (34) | 11 (57) | 7 (31) | 8 (32) | 7 (31) | 8 (32) | 7 (32) |
+| B unnamed | 15 (257) | 14 (197) | 16 (249) | 27 (304) | 120 (500) | 16 (249) | 16 (247) | 24 (274) | 119 (492) |
+| B generic | 299 883 | skipped | | | | | | | |
+| D unnamed | 14 (333) | 14 (310) | 14 (310) | 26 (358) | 121 (546) | 14 (306) | 14 (306) | 25 (331) | 119 (547) |
+| D generic | 12 (74) | 9 (36) | 11 (36) | 22 (82) | 121 (195) | 10 (37) | 10 (36) | 21 (51) | 119 (194) |
+| E generic (2 statements) | 9 (38) | 11 (105) | 14 (114) | 22 (117) | 122 (245) | 10 (102) | 12 (106) | 21 (116) | 121 (245) |
+| D_RANGES unnamed | 5 181 (5 771) | 5 147 | 5 204 | 5 227 | 5 298 | 5 123 | 5 154 | 5 150 | 5 244 (5 989) |
+| C, C_UNNEST, any | 282 909 / 429 455 (custom); skipped after two | | | | | | | | |
+
+- **Hole count, not position, sets the cost.** About 0.11 µs of execution per hole (one index probe each in a
+  `= ANY` scan): +1-5 µs at 10, +12-16 µs at 100, +110 µs at 1 000, the same near or far. A hole 100 000 below the
+  cursor costs the same as one just below it, because it is an index lookup by value, not a range. Buffers per probe
+  8 → 11 (10 holes) → 35 (1 000 near) or 19 (1 000 far).
+- **Planning dominates the custom form at many holes.** With the unnamed statement, planning a 1 000-element array
+  cost 168-197 µs per probe on top of the 120 µs execution (`total_plan_time`), and the client paid ~490-550 µs p50.
+  The generic `D` paid no planning: 194 µs p50 at 1 000 holes, 36 µs at up to 10.
+- **`D` against `B`.** Same execution time at every hole count (within 1-5 µs); `D`'s custom form costs ~45-110 µs more
+  on the client than `B`'s unnamed (a larger statement to parse and plan), and `D` generic is cheaper than any `B` that
+  is safe. With no holes `D` generic costs what `A` generic costs within the noise (9-12 against 7-8 µs execution,
+  36-74 against 32-35 µs p50).
+- **`E`** has the same server time as `D` and costs one round trip more on the client whenever a hole is outstanding
+  (about +35-80 µs p50 here, 102-117 against 36-82 µs at 1-100 holes), and it does not meet the one-snapshot constraint.
+- **New rows.** With 100 new rows every variant adds the same ~110-120 µs (BASE) or ~60-70 µs (COMBO) of execution
+  for reading and returning them; the hole cost adds on top unchanged. With 0 new rows and no hole row found, the
+  statement returns no row, so the running-set sub-select is never evaluated (execution 1-3 µs at up to 10 holes): the
+  P0.2 caveat, and why §4.10's final shape must return the set once regardless.
+- **COMBO** shows the same shapes and the same per-hole cost; its new-row cost is about half BASE's (narrower rows),
+  and its custom `D_RANGES` stayed under the JIT threshold (14-23 µs execution up to 100 holes, 120-136 µs at 1 000).
+
+### 11.4 Findings
+
+- **F1's `OR` form is a generic-plan hazard.** It is index-only as a custom plan, and a full walk of the primary key as
+  a generic plan. The default `plan_cache_mode=auto` can switch to the generic plan by itself when many holes are
+  outstanding, and stays there. Protecting the `OR` form needs a custom plan on every execution (`prepareThreshold=0`
+  for that statement, or `plan_cache_mode=force_custom_plan` on the reader's connection), which costs ~170 µs of
+  planning per probe at 1 000 holes and ~160-300 µs p50 on the client against a generic `D`.
+- **The jump must not be an `OR` range.** Even the custom plan walks the index once a `BETWEEN` joins the `OR`.
+- **`UNION ALL` (`D`) keeps index scans in every plan mode, for one statement and one snapshot.** Rows come back in
+  `global_order` through the outer `ORDER BY` (a `Merge Append` of two ordered inputs, or a sort of at most page size
+  plus the holes found), and the holes do not count against the page `LIMIT`, so a burst of late commits cannot crowd
+  out the tail. It is the cheapest correct form at every hole count measured, with a generic plan.
+- **Ranges need their own branch, and the JIT kept away from it.** The `LATERAL` range branch has the right plan but
+  a row estimate large enough to trigger JIT on every execution (5-8 ms custom, 80-95 ms generic). `jit=off` on the
+  reader's connection, or the ranges read only on the probe after a jump is first seen (a jump is resolved by its first
+  candidate's retirement, so it is outstanding for one or a few probes), would avoid it; neither was measured.
+- **1 000 outstanding holes cost about 0.12 ms of server time per probe.** Linear in the count. No cap is needed for
+  cost at these numbers; a cap would anyway have to stop the cursor rather than drop holes, or F1's guarantee is lost.
+
+### 11.5 Not measured
+
+- More than 1 000 holes, a hole array long enough to change the plan of `D` (no sign of it at 1 000), and where the
+  `auto` switch of `B` happens as a function of table size and hole count.
+- `jit=off`, `plan_cache_mode=force_custom_plan` or a higher `jit_above_cost` for `D_RANGES`; a range branch that is
+  not `LATERAL` (`UNION ALL` of one `BETWEEN` per range, statement text varying with the range count).
+- The running set returned once (a `UNION ALL` row of its own) instead of per row; holes that turn into late commits in
+  numbers; concurrent appends during the probe; other PostgreSQL majors (only 17.5); a dedicated machine.
+- Tables larger than 2 million rows. The trap's cost grows with the rows below the cursor; `D`'s does not.
