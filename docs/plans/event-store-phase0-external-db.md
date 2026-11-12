@@ -195,6 +195,117 @@ sudo ufw allow OpenSSH
 sudo ufw enable
 ```
 
+### Alternative: PostgreSQL in Docker Compose
+
+Added 2026-11-12. Instead of the Ubuntu package (§2 and the sections above), PostgreSQL can run from the official
+`postgres` image under Docker Compose on the same machine. The image ships `pg_stat_statements` and `auto_explain`, so
+nothing extra is installed. The settings of §3 become `-c` flags on the server command, because the image has no
+`conf.d` to drop a file into:
+
+```yaml
+# compose.yaml on the database machine
+services:
+  pg:
+    image: postgres:17.5            # the version the container path runs
+    container_name: spike-pg
+    network_mode: host              # no Docker NAT or userland proxy in every round trip; listens on the host's 5432
+    shm_size: 1g                    # Docker's default /dev/shm is 64 MB
+    environment:
+      POSTGRES_USER: bench          # created as a superuser, which the spikes need
+      POSTGRES_PASSWORD: choose-one
+      POSTGRES_DB: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    command:
+      - postgres
+      - -c
+      - listen_addresses=*
+      - -c
+      - max_connections=200
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.max=10000
+      - -c
+      - pg_stat_statements.track=top
+      - -c
+      - pg_stat_statements.track_utility=on
+      - -c
+      - pg_stat_statements.track_planning=off
+      - -c
+      - track_io_timing=on
+      - -c
+      - track_activity_query_size=4096
+      - -c
+      - shared_buffers=8GB
+      - -c
+      - effective_cache_size=22GB
+      - -c
+      - work_mem=32MB
+      - -c
+      - maintenance_work_mem=1GB
+      - -c
+      - huge_pages=try
+      - -c
+      - fsync=on
+      - -c
+      - synchronous_commit=on
+      - -c
+      - full_page_writes=on
+      - -c
+      - wal_compression=off
+      - -c
+      - wal_level=replica
+      - -c
+      - wal_buffers=64MB
+      - -c
+      - max_wal_size=16GB
+      - -c
+      - min_wal_size=2GB
+      - -c
+      - checkpoint_timeout=30min
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - jit=off
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - log_checkpoints=on
+      - -c
+      - log_autovacuum_min_duration=0
+volumes:
+  pgdata:
+```
+
+```bash
+docker compose up -d
+docker exec spike-pg psql -U bench -c "SHOW shared_preload_libraries" -c "SHOW fsync" -c "SHOW shared_buffers"
+```
+
+Notes:
+
+- **Access.** No `pg_hba.conf` edit is needed: when `POSTGRES_PASSWORD` is set, the image's `pg_hba.conf` accepts
+  password logins from any address. Restrict reachability with the host firewall instead (the `ufw` rules above apply
+  unchanged with host networking).
+- **The role.** `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` are applied only when the data volume is
+  initialised. With an existing `pgdata` volume, create the role by hand
+  (`docker exec spike-pg psql -U <existing superuser> -c "CREATE ROLE bench LOGIN SUPERUSER PASSWORD '…'"`). The `-c`
+  flags apply on every start.
+- **Networking.** `network_mode: host` keeps Docker's port forwarding out of the measured round trips. Publishing the
+  port (`ports: ["5432:5432"]`) works too, but adds a NAT or proxy hop to every round trip; record which was used.
+- **Server CPU.** The process runs in the container's cgroup on the host. Two choices for `--server-cpu-command`:
+  - The whole host: `ssh <host-user>@dbhost cat /proc/stat`. Includes `dockerd`, `containerd` and everything else on
+    the machine.
+  - PostgreSQL alone, which matches what the container path measures (the container's `cpu.stat`). With Docker's
+    default systemd cgroup driver on Ubuntu the container's cgroup is
+    `/sys/fs/cgroup/system.slice/docker-<full container id>.scope`:
+    `ssh <host-user>@dbhost 'cat /sys/fs/cgroup/system.slice/docker-$(docker inspect -f "{{.Id}}" spike-pg).scope/cpu.stat'`.
+    The host user must be allowed to run `docker` (member of the `docker` group). Check the command by hand once;
+    `SpikeServer` reports "FAILING: check the command" in the run header if its output cannot be parsed.
+
+  `<host-user>` is the Ubuntu login on the database machine, not the database role. Set up key-based ssh first.
+
 ## 4. Preparing the laptop
 
 A laptop is a poor benchmark host by default. Before a run:
