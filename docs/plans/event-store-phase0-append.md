@@ -1578,3 +1578,140 @@ Appends per second, thousands, both palindrome windows (append p99 ms in bracket
 - Probe intervals other than 1 and 10 ms, adaptive back-off, and fewer readers than JVMs (one reader per cluster, or
   a reader that shares its running set).
 - Connections that are active but do not write (read traffic), and more than 400 connections.
+
+## 13. Projection progress: per event, per page and periodic (P0.13)
+
+Date: 2026-11-12. Findings, not decisions. Redesign §8.1-§8.3 propose saving a `CONTIGUOUS` view projection's resume
+point in the handler's own transaction, one transaction per page of events, with a per-event fallback when an event in
+the page fails. §17 asks for projection throughput against the periodic save of today's engine, and the phase-4 gate
+asks for "projection throughput above the periodic-save baseline".
+
+**Short answer.** On the VM, a page per transaction is 1.8-2.0 times today's periodic model when the handler issues
+one statement per event, as existing handlers do (PAGE_10/PAGE_100: 15.9-18.3 thousand events/s against 9.0 for
+PERIODIC, one projection), and 10-13 times when the page's writes go to the server as one batch or one set-based
+statement (95-119 thousand). Saving the resume point per event in the handler's transaction costs a third against
+PERIODIC (6.1 thousand) and is the slowest shape measured. Row by row, the page size stops mattering above about 100:
+one round trip per event is then the floor. The per-event fallback costs 23 % at one failing event in 1 000 (14.0
+thousand), but with one in 100 every page fails and is replayed, and throughput falls below one transaction per event
+(4.6 thousand). `fsync=on` doubled the commit latency on the VM (45 to 106 µs p50) and slowed the per-event arms by
+13-27 %; it did not slow the page arms. Every run's view and resume rows matched what had been committed.
+
+### 13.1 Setup
+
+Throwaway `ProjectionProgressSpikeIT` (`spike` package, runs only with `-Dspike.run=true`; script suite `progress`).
+PostgreSQL 17.5 container, `shared_buffers=256MB`, `max_wal_size=4GB`, `synchronous_commit=on`, one pass with
+`fsync=off` (every arm) and one with `fsync=on` (a subset), 8-CPU Docker VM, client in the same VM, in-tree,
+`-Dfailsafe.forkCount=1`. One full run (375 s), after an earlier attempt that a harness bug (a dead-letter key shared
+between projections) stopped part-way; the 20 arms it had completed were within 7 % of these.
+
+- **Events.** 200 000 rows in today's event-table shape, over 20 000 aggregates interleaved (each aggregate every
+  20 000th global order), payload about 200 bytes of JSON. `VACUUM (ANALYZE)` after loading.
+- **View.** One table per projection, `aggregate_id text PRIMARY KEY` plus a count, the last global order, the last
+  event type, the payload (`jsonb`) and a timestamp. Every aggregate's row exists before a run (fresh table each run),
+  so every write is `INSERT ... ON CONFLICT (aggregate_id) DO UPDATE`, i.e. an update.
+- **Resume point.** Today's `durable_subscriptions` shape (`fillfactor = 50`), written with §8.2's statement and §9's
+  fence assertion: `UPDATE ... SET resume_from_and_including_global_eventorder = ?, last_updated = now() WHERE
+  aggregate_type = ? AND subscriber_id = ? AND reposition_epoch = ? AND EXISTS (SELECT 1 FROM leases WHERE lease_name
+  = ? AND owner = ? AND fence = ?)`. Zero rows fails the run. PERIODIC uses the same statement, so the arms differ only
+  in where it runs.
+- **Reading.** Each projection reads the event table in pages of 500 in autocommit on its own connection (0.002 round
+  trips per event, the same in every arm), pgjdbc defaults (`prepareThreshold=5`).
+- **Arms.** `PER_EVENT`: a transaction per event with the upsert and the resume-point update. `PERIODIC`: today's
+  model: a transaction per event with the upsert only, the resume point saved every 1 000 ms (today's
+  `snapshotResumePointsEvery` default) on a second connection. `PAGE_N` (10, 100, 500): a transaction per page, one
+  upsert statement per event, then one resume-point update. `PAGE_N_BATCH`: the page's upserts as one JDBC batch.
+  `PAGE_N_SET`: one statement over `unnest` arrays, pre-aggregated per aggregate id (`DISTINCT ON`, `count(*) OVER`).
+  `FALLBACK_K`: `PAGE_100` where every event whose global order is a multiple of K fails permanently: the page rolls
+  back, is replayed one event per transaction, the failing event fails again and is dead-lettered (dead-letter insert
+  and resume-point update in one transaction), and page mode resumes with the next page.
+- **Runs.** 1 and 4 concurrent projections (own view table, resume row and lease row each); each run until its
+  projections have read all 200 000 events or for 10 s. A `CHECKPOINT` before each run, two discarded warm-up runs per
+  pass, and `PER_EVENT` repeated at the end of each pass as a drift check.
+- **Measured.** Events/s (sum over projections), client transactions per event (commits and rollbacks, reads
+  excluded), round trips per event, WAL bytes and full-page images per event (`pg_stat_wal`), server CPU per event
+  (container cgroup), commit latency (`Connection.commit()`), HOT share of the view and resume-row updates
+  (`pg_stat_user_tables`), and after each run a check that the view's counts equal the events committed less those
+  dead-lettered and the resume row is one past the last committed event.
+
+### 13.2 Results, `fsync=off`
+
+| Arm | Events/s, 1 projection | Events/s, 4 | Tx/event | Round trips/event | WAL B/event | Server CPU µs/event (1) | Commit p50/p99 µs (1) | View HOT % |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| PER_EVENT | 6 067 | 18 848 | 1.000 | 3.00 | 652 | 84 | 45 / 67 | 73 |
+| PERIODIC (today) | 9 001 | 27 739 | 1.000 | 2.00 | 546 | 58 | 43 / 67 | 82 |
+| PAGE_10 | 15 938 | 49 193 | 0.100 | 1.20 | 459 | 31 | 47 / 57 | 86 |
+| PAGE_100 | 18 284 | 57 106 | 0.010 | 1.02 | 514 | 27 | 50 / 67 | 33 |
+| PAGE_500 | 17 700 | 56 701 | 0.002 | 1.01 | 557 | 30 | 60 / 93 | 7 |
+| PAGE_100_BATCH | 95 744 | 319 322 | 0.010 | 0.032 | 509 | 9.3 | 50 / 66 | 36 |
+| PAGE_500_BATCH | 94 379 | 318 124 | 0.002 | 0.008 | 555 | 10.1 | 61 / 78 | 7 |
+| PAGE_100_SET | 118 601 | 293 124 | 0.010 | 0.032 | 509 | 7.3 | 50 / 62 | 36 |
+| PAGE_500_SET | 117 175 | 350 252 | 0.002 | 0.008 | 555 | 8.2 | 61 / 94 | 7 |
+| FALLBACK_1000 | 14 040 | 44 153 | 0.111 | 1.32 | 588 | 36 | 46 / 60 | 30 |
+| FALLBACK_100 | 4 589 | 14 369 | 1.020 | 4.01 | 1 205 | 111 | 46 / 55 | 34 |
+
+The batch and set arms read all 200 000 events (800 000 with 4 projections) in 1.7-2.7 s, so their rates include the
+run's start and are less precise than the 10 s arms. Drift: `PER_EVENT` at the end of the pass ran 5 945 events/s
+against 6 067 at the start (-2 %). The resume-row update was HOT in every run.
+
+### 13.3 Results, `fsync=on`
+
+| Arm | Events/s, 1 | Events/s, 4 | Commit p50/p99 µs (1) | Commit p50/p99 µs (4) | Server CPU µs/event (1) |
+|---|---:|---:|---:|---:|---:|
+| PER_EVENT | 5 299 | 13 507 | 106 / 181 | 191 / 255 | 78 |
+| PERIODIC (today) | 6 604 | 17 623 | 115 / 146 | 151 / 290 | 54 |
+| PAGE_10 | 24 950 | 53 179 | 107 / 151 | 161 / 266 | 22 |
+| PAGE_100 | 37 633 | 72 479 | 118 / 166 | 177 / 314 | 17 |
+| PAGE_500_SET | 116 986 | 373 766 | 159 / 242 | 456 / 2 063 | 8.1 |
+| FALLBACK_1000 | 23 811 | 47 895 | 87 / 145 | 171 / 266 | 24 |
+
+Drift: `PER_EVENT` at the end of the pass ran 5 735 events/s against 5 299 at the start (+8 %). WAL per event matched
+the `fsync=off` pass within a few per cent.
+
+### 13.4 Findings
+
+- **Progress in the handler's transaction is cheap only per page.** Per event it adds one statement to every
+  transaction: 3 round trips per event instead of PERIODIC's 2, +106 bytes of WAL per event, +45 % server CPU, and
+  a third of the throughput (6.1 against 9.0 thousand events/s; 18.8 against 27.7 with 4 projections). Per page the
+  resume-point update is amortised to nothing (0.01 statements per event at 100).
+- **For an existing handler the page is worth about 2x, and the limit is one round trip per event.** Row by row,
+  PAGE_10 already gets most of it (15.9 thousand, 1.8x PERIODIC); PAGE_100 18.3 thousand, PAGE_500 no more. At about
+  1.0 round trip per event the client-server round trip, not the commit, is the cost. With 4 projections every row
+  arm scaled by 3.0-3.2x, so the shared server was not the limit at that load.
+- **A handler that hands the page's writes over at once gets 10-13x.** A JDBC batch (pgjdbc pipelines it) or one
+  set-based statement: 95-119 thousand events/s, 7-10 µs of server CPU per event against PERIODIC's 58. That needs a
+  handler shape that sees the page; the per-event `@MessageHandler` cannot.
+- **Bigger pages made more WAL, not less, through lost HOT updates.** View updates were 86 % HOT at 10 events per page,
+  33-36 % at 100 and 7 % at 500 (pre-filled view at the default `fillfactor`): within one long transaction a page's
+  dead versions cannot be pruned, so the next update of a row on a full page is not HOT and writes the primary-key
+  index too. WAL per event: 459 bytes at PAGE_10, 514 at 100, 557 at 500. Throughput did not show it here; a view with
+  more indexes would.
+- **The fallback's cost is the failure rate times the page size.** At one failing event in 1 000, PAGE_100 lost 23 %
+  (14.0 against 18.3 thousand events/s), 0.111 transactions per event, and 99 rolled-back writes per failure. That is
+  the worst position: the failing global orders are multiples of 100, so each failed at the end of its page; a random
+  position would roll back about half as much. At one in 100 every page failed, rolled back and was replayed: 4.6
+  thousand events/s, 1.02 transactions and 4 round trips per event, twice the WAL of PER_EVENT. Throughput fell below
+  PER_EVENT's and to half of PERIODIC's. §8.3 as written ("after the failing event is handled or dead-lettered, page
+  mode resumes") pays the whole page again for every failure, however often failures come.
+- **`fsync=on` hurts the per-event arms and helps nothing else on the VM.** Commit p50 went from about 45 to about 106
+  µs (4 projections: 150-190 µs), the per-event arms lost 13 % (PER_EVENT) and 27 % (PERIODIC) at one projection and
+  28-36 % at four. The page arms ran faster than in the `fsync=off` pass (PAGE_100: 37.6 against 18.3 thousand). That
+  is not explained: the pass ran second in the same JVM with its own warm-up, and its drift check moved +8 %. Take the
+  `fsync=on` page rows as "not slowed", not as a gain. The VM's flush is cheap (about 60 µs); on a disk with a
+  millisecond flush the per-event arms are bounded at about 1 000 commits per second per connection and the page
+  arms are not, so the ratio between them grows.
+- **Correctness held in every run**: the view's counts, the resume rows and the dead letters matched what had been
+  committed, with progress in the transaction (every arm but PERIODIC) and with the periodic save after its final save.
+  PERIODIC's replay window after a crash is up to one interval: about 9 000 events at one projection here.
+
+### 13.5 Caveats and not measured
+
+- One Docker VM, client and server sharing its 8 CPUs; one run, one round per arm, arms in a fixed order. The `fsync=on`
+  page-arm gain above is unexplained. The dedicated machine is open, as for every P0 spike.
+- Round trips are within the VM (tens of µs). Across a network every row arm pays more per event and PERIODIC and
+  PER_EVENT pay most: the gap between row-by-row page mode and per-event mode grows with latency.
+- The handler is one upsert. A handler that reads before it writes, writes several tables, or does work in the JVM
+  changes the ratios; the per-event overhead measured here is what the page removes.
+- Not measured: `ViewEventProcessor`'s existing batched mode (`getDirectHandlingBatchSize()` > 1), which takes a
+  savepoint per event inside the batch's unit of work, so it adds round trips per event that this spike's PAGE_N does
+  not have; a failure placed at random in the page; adaptive page sizing after a failure; views with secondary indexes
+  or a lower `fillfactor`; concurrent appends while projecting; more than 4 projections; other majors.
