@@ -1385,3 +1385,196 @@ Unnamed = `prepareThreshold=0` (custom plan, parse and plan every probe); generi
 - The running set returned once (a `UNION ALL` row of its own) instead of per row; holes that turn into late commits in
   numbers; concurrent appends during the probe; other PostgreSQL majors (only 17.5); a dedicated machine.
 - Tables larger than 2 million rows. The trap's cost grows with the rows below the cursor; `D`'s does not.
+
+## 12. Cost of the probe's `pg_stat_activity` read as connections grow (P0.12)
+
+Date: 2026-11-12. Findings, not decisions. The combined probe of redesign §4.10 reads the running set with
+`(SELECT array_agg(backend_xid::text) FROM pg_stat_activity WHERE backend_xid IS NOT NULL)`. Reading
+`pg_stat_activity` builds a row for every live backend in the cluster, so its cost depends on how many connections
+the cluster has, not on how many of them write. Many JVMs, each with a Hikari pool, can mean 100-500 connections, and
+§6 and §7.3 have every JVM probe its own tail every few tens of milliseconds while a hole is outstanding.
+
+**Short answer.** The read costs about 0.55 µs of server execution per live backend: 10-17 µs at 10 connections,
+about 60 µs at 100, about 240 µs at 400. `max_connections` itself adds only about 8 µs per 1 000 slots. Most of the
+cost is building the view's rows, not the per-transaction copy of the status array: `pg_stat_get_backend_idset()`,
+which does the same copy and builds no rows, costs 36-39 µs at 400. The full combined probe costs the tail read plus
+that amount, and on this machine the client pays about 130 µs (10 connections) to 370 µs (400) per probe more than for
+the same tail read without the sub-select. While appends run, the read gets much more expensive, and at 400
+connections it hurts the appends. With 80 writers and 40 probers each probing every 10 ms, the combined probe halved
+appends per second against the same probers running the tail read alone: 25-26 thousand against 49-52 thousand per
+second. Append p99 went from 11 ms to 55-64 ms, and each probe took 13-15 ms. At 100 connections the effect was
+3-5 %, and at 10 connections it was within the noise. In core PostgreSQL the only cheaper source of `backend_xid` is
+calling `pg_stat_get_activity(NULL)` directly, without the view's joins. It returns the same data and costs about
+70-110 µs less per call at 10-100 connections, but nearly the same at 400. `stats_fetch_consistency` makes no
+difference.
+
+### 12.1 Setup
+
+**Code.** `ProbeRunningSetCostSpikeIT` in the `spike` package (`@Tag("spike")`, `-Dspike.run=true`, external-server
+capable through `SpikeServer`). Raw output: `target/spike-results/p0-12-probe-cost.txt` (`CSV-COST` and `CSV-APPEND`
+lines). Through the script: `scripts/run-phase0-spikes.sh --container --suite probe-cost`.
+
+```bash
+mvn -o verify -pl components/postgresql-event-store -DskipUTs -Dit.test=ProbeRunningSetCostSpikeIT \
+    -Dfailsafe.failIfNoSpecifiedTests=false -Dspike.run=true -Dfailsafe.forkCount=1 -DskipDependencyCheck=true
+```
+
+Knobs: `-Dspike.probecost.levels` (`10,100,400`), `.iterations` (2 000), `.activeIterations` (1 000),
+`.windowSeconds` (6), `.writerShare` (0.2), `.rows` (preload, 100 000), `.appends` (`true`), `.image`
+(`postgres:17.5`).
+
+**Servers.** PostgreSQL 17.5 containers with `fsync=off`, `shared_buffers=256MB`, `jit=on`,
+`track_activity_query_size=1024`, `stats_fetch_consistency=cache` (the default) and `pg_stat_statements` preloaded.
+The main container runs `max_connections=500`. Two more, at `max_connections=50` (10 connections) and `2000` (10 and
+400 connections), separate the slot count from the live-backend count. Each runs on the 8-CPU arm64 Docker VM with
+the client on the same VM, so §9 applies: the absolute CPU and latency figures belong to this VM.
+
+**Connections.** At each level, *n* client connections are open, counting the observer and the measuring connection.
+Each has run `SELECT 1` and is idle. `pg_stat_activity` showed *n* + 5 rows (the background processes).
+
+**Table and statements.** An engine-shaped event table (§11's `BASE` layout) with 100 000 rows and ten deleted values
+below the head as holes. Each statement carries a comment tag, so `pg_stat_statements` can attribute it. pgjdbc
+defaults apply, so after five executions a statement runs as a named server-side statement.
+- `SUB_ROWS`: `SELECT backend_xid FROM pg_stat_activity WHERE backend_xid IS NOT NULL`
+- `SUB_AGG`: the probe's exact sub-select, `SELECT array_agg(backend_xid::text) FROM pg_stat_activity WHERE
+  backend_xid IS NOT NULL`
+- `SRF_AGG`: the same over `pg_stat_get_activity(NULL)`, the function behind the view, without the view's joins to
+  `pg_database` and `pg_authid`. It returns the same `backend_xid` from the same per-transaction status snapshot.
+- `IDSET`: `SELECT count(pg_stat_get_backend_pid(i)) FROM pg_stat_get_backend_idset() i`. It does the same status
+  copy and builds no rows. It has no xid, so it is a cost reference only. No `pg_stat_get_backend_*` function returns
+  `backend_xid`.
+- `XIP`: `pg_snapshot_xip(pg_current_snapshot())`. Rejected for correctness by redesign §4.4; measured as a cost
+  reference only.
+- `LOCKS`: the granted `transactionid` `ExclusiveLock`s from `pg_locks`. A cost reference only.
+- `SUB_AGG` under `stats_fetch_consistency` `none` and `snapshot`.
+- `TXN_CLEAR_SUB_AGG`: inside an explicit transaction, `SELECT pg_stat_clear_snapshot()` then `SUB_AGG`, then commit
+  (P0.2's condition for a probe that must run in a transaction).
+- `TXN_CACHED_SUB_AGG`: repeated `SUB_AGG` inside one transaction, which reuses the cached status (unsafe per P0.2).
+- `PROBE_D0` / `PROBE_D10`: P0.11's `UNION ALL` form of the combined probe (tail read plus hole read by `= ANY`) with
+  the running-set column, with 0 and 10 holes. `TAIL_D0` / `TAIL_D10` are the same statements without the running set.
+- `SELECT1`: the round-trip floor.
+
+A probe's cursor is always one below the highest row it read last, so every probe returns at least one row and the
+sub-select is evaluated (P0.2's caveat).
+
+**Cost cells.** Each statement ran 50 times as warm-up, then 2 000 times back to back on one connection. Recorded
+per call: client p50/p99, server execution (`pg_stat_statements`, reset per cell) and server CPU (container cgroup,
+minus the idle rate measured over 2 s before the level). In *active* cells, 20 % of the connections were writers
+appending one event per autocommit transaction as fast as they could (2, 20 and 80 writers), and server CPU is not
+separable.
+
+**Append windows.** With the same writers running, at each level: no prober (`NONE`); one prober every 1 ms
+(`TAIL_1MS`, `PROBE_1MS`); and *N* = connections / 10 probers, each every 10 ms with staggered phases, as if every JVM
+had a pool of 10 and one reader (`TAIL_N_10MS`, `PROBE_N_10MS`). Every prober reads the new rows since its cursor
+(page 1 000) plus the ten holes. `TAIL_*` is the control without the running set. Each arm ran a 6 s window after 1 s
+of settling, in palindrome order (two windows per arm). One run took 5 min.
+
+### 12.2 Cost per call, idle connections
+
+Server execution µs per call (`pg_stat_statements`), with client p50 µs in brackets. `max_connections=500` unless
+noted.
+
+| Statement | 10 conn (mc 50) | 10 conn | 10 conn (mc 2 000) | 100 conn | 400 conn | 400 conn (mc 2 000) |
+|---|---|---|---|---|---|---|
+| `SELECT1` | 0.3 (49) | 0.4 (53) | 0.4 (49) | 0.4 (48) | 0.4 (47) | 0.4 (47) |
+| `SUB_ROWS` | 9 (163) | 19 (178) | 26 (185) | 58 (210) | 244 (401) | 229 (383) |
+| `SUB_AGG` (probe's form) | 10 (170) | 17 (141) | 26 (192) | 60 (224) | 238 (373) | 231 (394) |
+| `SRF_AGG` | 10 (72) | 11 (74) | 15 (79) | 59 (122) | 238 (304) | 231 (296) |
+| `IDSET` (no xid) | 2.5 (56) | 3.6 (56) | 8 (65) | 11 (66) | 36 (90) | 39 (95) |
+| `XIP` (rejected, §4.4) | 0.7 (55) | 0.6 (53) | 0.6 (56) | 0.7 (56) | 0.6 (54) | 0.7 (57) |
+| `LOCKS` | 18 (87) | 115 (179) | 259 (326) | 124 (197) | 122 (187) | 259 (325) |
+| `SUB_AGG`, fetch `none` / `snapshot` | 10 / 10 | 18 / 18 | 26 / 25 | 62 / 60 | 239 / 240 | 231 / 234 |
+| `TXN_CLEAR_SUB_AGG` (2 statements) | 11 (265) | 19 (271) | 27 (286) | 60 (312) | 244 (497) | 233 (487) |
+| `TXN_CACHED_SUB_AGG` | 9 (167) | 9 (165) | 9 (166) | 55 (213) | 226 (385) | 217 (379) |
+| `TAIL_D10` | 4 (117) | 4 (106) | 3 (72) | 4 (112) | 4 (112) | 4 (117) |
+| `PROBE_D10` | 14 (249) | 15 (242) | 20 (256) | 73 (340) | 249 (482) | 232 (471) |
+| `PROBE_D0` | 13 (247) | 14 (242) | 18 (252) | 63 (295) | 249 (483) | 235 (474) |
+
+Server CPU per call, idle rate subtracted, µs (`SELECT1` 18-26 is the floor of a round trip on this VM):
+
+| Statement | 10 conn | 100 conn | 400 conn (mc 500) | 400 conn (mc 2 000) |
+|---|---|---|---|---|
+| `SUB_AGG` | 140-167 | 199 | 301 | 367 |
+| `SRF_AGG` | 49-54 | 99 | 225 | 272 |
+| `TAIL_D10` → `PROBE_D10` | 71-88 → 216-226 | 86 → 306 | 67 → 370 | 87 → 438 |
+
+The level-400 figures at `max_connections=500` are low by an unknown amount. That level followed the level-100
+append windows, and the idle rate measured before it was 188 ms/s (autovacuum and checkpoint after the writes),
+against 7-24 ms/s elsewhere. The `max_connections=2000` column has a clean idle rate (8 ms/s).
+
+### 12.3 Cost while 20 % of the connections append
+
+Server execution µs per call, with client p50 / p99 µs in brackets (`max_connections=500`).
+
+| Statement | 10 conn, 2 writers | 100 conn, 20 writers | 400 conn, 80 writers |
+|---|---|---|---|
+| `SUB_AGG` | 13 (197 / 284) | 89 (236 / 478) | 633 (870 / 2 741) |
+| `SRF_AGG` | 14 (92 / 121) | 86 (115 / 242) | 660 (709 / 2 789) |
+| `XIP` | 0.7 (55 / 82) | 1.7 (21 / 52) | 10 (81 / 290) |
+| `TAIL_D10` | 8 (133 / 187), 5 rows | 24 (104 / 600), 10 rows | 218 (223 / 6 414), 46 rows |
+| `PROBE_D10` | 27 (290 / 449), 9 rows | 187 (437 / 1 077), 38 rows | 3 362 (3 249 / 19 562), 299 rows |
+
+The running-set read costs 2.5-3 times as much as when the same connections are idle. The full probe at 400
+connections costs far more than tail plus sub-select. Its rows per probe also grow because each probe takes longer (a
+slower probe has more new rows to read), but 300 rows cost the tail read about 0.3 ms, not 3 ms.
+
+### 12.4 Effect on appends
+
+Appends per second, thousands, both palindrome windows (append p99 ms in brackets, probe p50 ms after the slash).
+
+| Connections (writers) | `NONE` | `TAIL_1MS` | `PROBE_1MS` | `TAIL_N_10MS` | `PROBE_N_10MS` |
+|---|---|---|---|---|---|
+| 10 (2), *N* = 1 | 23.8, 21.0 (0.14, 0.25) | 24.6, 23.7 / 0.17 | 24.5, 24.6 / 0.37 | 22.5, 23.6 / 0.42 | 20.8, 23.3 / 0.66-0.72 |
+| 100 (20), *N* = 10 | 86.9, 87.3 (0.66-0.72) | 85.7, 82.3 / 0.38 | 83.5, 78.3 / 0.78-0.85 | 73.0, 75.5 (0.95-0.99) / 1.9 | 71.5, 71.1 (0.97-1.01) / 2.8-2.9 |
+| 400 (80), *N* = 40 | 81.9, 74.2 (7.2) | 74.6, 78.4 / 0.54-0.63 | 74.1, 70.1 / 3.1-3.6 | 49.4, 52.2 (11.3) / 3.5 | **26.2, 25.1 (55-64)** / 13-16 |
+
+- **At 10 connections nothing measurable happens.** The arms vary by as much as `NONE`'s two windows (21.0-23.8
+  thousand).
+- **At 100 connections the running set costs 3-5 % of appends** against the same probers without it. The probers
+  themselves cost more: ten tail readers each reading about 700 rows every 10 ms cost 13-16 %.
+- **At 400 connections, 40 probing readers halve the appends.** Against the tail-only control, appends fall from 49-52
+  thousand to 25-26 thousand per second, and append p99 rises from 11 ms to 55-64 ms. Append p50 *falls* (0.15-0.25
+  against 0.71-0.77 ms), so appends split into a fast majority and a stalled tail. Server CPU rose from 6.0-6.1 to 7.0
+  cores while doing less work, and the probers reached only 2.3-2.5 thousand of their 4 thousand probes per second.
+  The cause was not attributed: no wait events were sampled. The candidates are contention between the status read and
+  the writers' commits (each backend's xid is looked up while the snapshot is built) and plain CPU saturation of the
+  8-CPU VM.
+- **One reader probing every 1 ms** cost 0-7 % at 100 and 400 connections. At 400 that reader could not keep up
+  (243-265 probes per second at 3.1-3.6 ms each).
+
+### 12.5 Findings
+
+- **Cost scales with live backends, about 0.55 µs of execution per backend per read, and with nothing the engine
+  controls.** It is the same idle or with xids in the set, near or far, with 0 or 10 holes. Slots that are not in use
+  add about 8 µs per 1 000. A cluster of 400 connections pays about 0.24 ms of execution and, on this VM, 0.3-0.37 ms
+  of server CPU per probe.
+- **Cluster-wide cost is readers × connections.** Both grow with the number of JVMs. With *J* JVMs, each with a pool
+  of *p* connections and one tail reader per aggregate type *T*, probing every *i* ms while holes are outstanding,
+  the cluster reads *J·T·1000/i* times per second a status table of *J·p* rows. That is quadratic in *J*. At *J* = 40,
+  *p* = 10, *T* = 1 and *i* = 10, that is 4 000 reads per second of 400 rows. Here those reads, together with the tail
+  reads, took the VM from 52 to 25 thousand appends per second. Under write load holes are nearly always outstanding,
+  so §4.10's "plain tail read when no candidate is outstanding" does not remove the cost when it matters.
+- **Calling the function directly is the cheaper form, and only at low connection counts.** `pg_stat_get_activity(NULL)`
+  instead of the view gives the same `backend_xid` from the same per-transaction snapshot. That keeps P0.2's
+  autocommit / `pg_stat_clear_snapshot()` conditions, and it needs the same `pg_read_all_stats` visibility. It saves
+  70-110 µs of client latency and about 90 µs of server CPU per call at 10-100 connections, outside recorded
+  execution (unattributed). At 400 the execution cost dominates and both cost about 230-240 µs. No in-core function
+  returns `backend_xid` without building the whole activity row; `IDSET` shows that the copy alone would be about 6x
+  cheaper.
+- **`stats_fetch_consistency` does not matter.** It governs cumulative statistics, not backend status, and all three
+  settings measured the same. `pg_stat_clear_snapshot()` inside a transaction costs one more statement (about +90-130
+  µs p50 here) and the same execution. The cached second read inside a transaction is cheaper only at 10 connections
+  (9 against 17-26 µs), and it is unsafe (P0.2).
+- **`pg_snapshot_xip` costs about 1 µs whatever the connection count** (10 µs under the heaviest load), against
+  0.24-0.63 ms. Redesign §4.4 still rejects it for correctness; the number shows what that correctness costs.
+  `pg_locks` scales with `max_connections` (18 / 115 / 259 µs at 50 / 500 / 2 000) and is no alternative.
+
+### 12.6 Not measured
+
+- Wait events during the 400-connection windows, so the cause of the append collapse is open: lock contention
+  against commits, or CPU saturation of the VM.
+- A dedicated database host, `fsync=on`, other majors (only 17.5), and `track_activity_query_size` other than 1 024.
+- Where the view's extra ~90 µs outside execution goes. `track_planning` was off and no `EXPLAIN` was taken.
+- Probe intervals other than 1 and 10 ms, adaptive back-off, and fewer readers than JVMs (one reader per cluster, or
+  a reader that shares its running set).
+- Connections that are active but do not write (read traffic), and more than 400 connections.
