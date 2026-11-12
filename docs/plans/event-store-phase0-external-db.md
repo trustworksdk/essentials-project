@@ -459,3 +459,38 @@ On the laptop expect:
 
 When a ratio between arms is the same on both machines, it is a property of the statements. When it differs, the
 difference is the machine, and the laptop's figure is the one closer to a production database host.
+
+## 9. Runs against the dedicated server
+
+### 2026-11-12: read-side suites over Wi-Fi (`20261112-171749-Mac-external`)
+
+Suites `notify`, `tail`, `probe-cost` and `progress` at commit `0dd5609aa`, all passed (58 minutes). Client: Apple M3
+Max laptop, JDK 25.0.2. Server: PostgreSQL 17.11 in rootless Docker Compose on the Ubuntu machine, `fsync=on`,
+`synchronous_commit=on`, `wal_sync_method=fdatasync`, `shared_buffers=8GB`, `max_connections=200`, `jit=off`. No
+server CPU command and no host facts were recorded, so every server CPU column reads `NaN`.
+
+**This run is bound by the network, not by the server.** The client was on Wi-Fi: ping 4.8 / 60.9 / 117.0 ms
+min/avg/max, 48 ms deviation. A `SELECT 1` cost 6.9 ms at p50 and every single-statement figure sits on that floor
+(commit p50 7.6 ms with one writer). Rootless Docker's user-space port proxy adds another hop. So absolute
+throughput and client latencies from this run must not be used, and ratios between arms that differ in round trips
+are inflated. What still holds is anything measured inside the server (plans, `pg_stat_statements` execution time,
+WAL bytes, round trips per event) and the direction of ratios between arms with the same number of round trips.
+
+What the run confirms or changes, compared with the VM:
+
+| Item | This run | VM | Reading |
+|---|---|---|---|
+| P0.10, `pg_notify` inside the transaction | appends −30 % (1 writer), −34 % (8), −37-40 % (20), −15-17 % (8 on 10 aggregates) | −58-77 % with `fsync=on` | Same direction. Smaller here because each writer spends most of its time waiting on the network, not on the NOTIFY lock. Not a contradiction; the size needs a wired run. |
+| P0.10, after commit coalesced per JVM | −1-5 % against no notify | about equal | Confirmed. |
+| P0.10, after commit per writer | −29-34 % | −10-26 % | One extra round trip per append, which costs 7 ms here. A network effect. |
+| P0.10, wake latency | p50 6.6-9.4 ms commit to listener socket | 0.09-0.18 ms | About one network delay. Not comparable. |
+| P0.11, plans | `B` generic and `C` in every mode walk the primary key (~330-380 ms per call on 2 M rows); `D` (`UNION ALL`) uses index scans in every mode, 0.04-0.49 ms execution up to 1 000 holes | same shapes; `B` generic ~300 ms, `D` 9-121 µs | Confirmed on real hardware with `jit=off`. `D`'s execution is 2-4x the VM's. |
+| P0.12, server execution of the sub-select | `SUB_AGG` 46 µs at 16 backends, 174 µs at 106: about 1.4 µs per backend (probe 75 → 186 µs: 1.2 µs) | about 0.55 µs per backend | The slope is 2-2.5x the VM's on this server. Server CPU unknown, so not explained. |
+| P0.12, appends with probers | 100 connections, 20 writers: no prober 1 727/s; 10 tail-only probers every 10 ms −10-13 %; 10 combined probers −14 % | 73-75.5 against 71-71.5 thousand (−3-5 %) | The probe costs about 2-4 points more than the tail read alone, as on the VM. The 400-connection level, where the VM halved appends, did not run: `max_connections=200` limited the levels to 10 and 100. |
+| P0.13, page against periodic | 4 projections: PAGE_100 451 against PERIODIC 230 events/s (2.0x); PAGE_500_SET 20 700 (90x) | 2x; 10-13x | The row-by-row ratio holds. The batch and set-based ratios grow with round-trip time, because they save round trips. |
+| P0.13, per event and fallback | PER_EVENT −31 % against PERIODIC; one failure in 1 000 −21 % against PAGE_100; one in 100 below PER_EVENT | −33 %; −23 %; below PER_EVENT | Confirmed. |
+
+Still needed from this machine: a wired run (or the client on the server host, `--external
+jdbc:postgresql://127.0.0.1:5432/postgres`, accepting that the client then shares the server's CPU), the server CPU
+and disk facts from §7, the 400-connection level of `probe-cost` (needs `max_connections` of at least 500), and the
+write-side suites (`xid`, `table-design`, `contention`, `append`, `baseline`, `cpu`, `jdbc`, `probe`).
