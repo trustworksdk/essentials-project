@@ -733,6 +733,61 @@ Idle (`ShardOwnedMultiQueueCostIT`, `ShardOwnedOrderedIdleCostIT`), three rounds
 Idle cost is level across queues. On 0.60.1, `ShardOwnedOrderedIdleCostIT`'s own gate failed once (282 statements
 against a bound of 243); the branch stayed well inside it in every round.
 
+### 3.17 Tier 1 under sustained notification traffic: pgjdbc holds the notifications back
+
+Measured **2026-11-12**. Findings only; nothing in the engine has changed.
+
+**The cause, in pgjdbc 42.7.14** (the version the build resolves). `PGConnection.getNotifications(timeout)` calls
+`QueryExecutorImpl.processNotifies(int)`, which blocks with the timeout only for the first message. After each
+notification it sets the timeout to -1 and loops while `PGStream.hasMessagePending()` is true. That method returns true
+when bytes are already buffered. Otherwise, unless it is inside a one-second cool-down that starts after a failed peek,
+it peeks the socket with a 1 ms `SO_TIMEOUT`. Nothing the loop has read is returned until a peek comes up empty, and it
+holds the connection's lock throughout. So `ShardWakeupListener` (`getNotifications(200)`) receives nothing while
+notifications keep arriving less than about a millisecond apart, and that lasts for as long as the stream stays that
+dense. Nothing bounds the loop by time or by count, and no connection property shortens it.
+
+**On the queue.** `ShardWakeupListenerDrainIT` (benchmark-gated). The producing runtime serves nothing, so every wake-up
+goes through its `ShardWakeupNotifier`. The consuming runtime, in the same JVM, stands in for another process. Eight
+producer threads enqueue one message per transaction at a steady rate, with 8 shards. Latency runs from `enqueue`
+returning (the commit) to the handler. Each arm runs 10 s measured after a 2 s warm-up. The listener's connection is
+wrapped so every `getNotifications` call is counted and timed. Three arms: Tier 1 with the backstop and both sweep
+intervals at 10 s, which shows a late wake-up at full size; Tier 1 at the defaults (500 ms backstop); and a control at
+the defaults whose listener reads every notification and hands none on, which is the backstop-only path. One run per
+shape; the 3 000/s arms ran in a second invocation.
+
+| Offered | Arm | p50 (ms) | p90 (ms) | p99 (ms) | max (ms) | notifications | non-empty returns | largest return |
+|---|---|---|---|---|---|---|---|---|
+| 200/s | Tier 1, 10 s backstop | 1.86 | 2.46 | 3.22 | 5.80 | 2 400 | 2 352 | 3 |
+| 200/s | Tier 1, defaults | 1.94 | 2.54 | 3.35 | 4.98 | 2 400 | 2 383 | 4 |
+| 200/s | backstop only | 245.9 | 449.0 | 495.4 | 501.6 | 2 400 | 2 359 | 4 |
+| 1 000/s | Tier 1, 10 s backstop | 12.7 | 74.8 | 204.0 | 284.9 | 12 000 | 1 197 | 194 |
+| 1 000/s | Tier 1, defaults | 5.45 | 26.6 | 76.3 | 113.7 | 12 000 | 1 683 | 97 |
+| 1 000/s | backstop only | 271.7 | 476.2 | 767.5 | 985.6 | 12 000 | 242 | 371 |
+| 3 000/s | Tier 1, 10 s backstop | 3 147 | 28 391 | 42 197 | 42 974 | 35 995 | **25** | **8 191** |
+| 3 000/s | Tier 1, defaults | 375.2 | 1 070 | 2 305 | 2 868 | 36 000 | 16 | 3 694 |
+| 3 000/s | backstop only | 399.4 | 1 186 | 1 950 | 2 345 | 36 000 | 24 | 3 582 |
+
+The notifier sends one key per shard per batch, so notifications here equal keys sent. Batches per run were 98-100 % of
+keys sent: almost every batch carried a single key.
+
+- **It reproduces, and it depends on the rate.** At 200/s notifications arrive about 5 ms apart, the peek comes up empty
+  and Tier 1 is as good as §3.2's figures: one return per notification. At 1 000/s ten notifications are returned per
+  call on average and up to 194 at once, and p99 rises 60-fold. At 3 000/s the listener returned 25 times in about
+  12 s, once with 8 191 notifications. The longest single call took 2.7 s.
+- **At 3 000/s Tier 1 does nothing.** At the defaults its latency matches the backstop-only control (p50 375 against
+  399 ms), so owners are woken by their 500 ms backstop, not by the notification. With the backstop at 10 s, a queue
+  that relies on Tier 1 for cross-process delivery fell seconds behind (p50 3.1 s). Its 42 s p99 is above the backstop
+  too, so the consuming owners were probably also short of capacity in that arm; treat the tail as an upper bound and
+  not as the driver's share alone.
+- **The call-duration columns the test prints include the idle wait** (up to 200 ms) before the first notification, so
+  read them only at the high rates. The returns column and the largest-return column are the clean signals.
+- **Which path is affected:** wake-ups that cross a process (the notifier) and in-transaction `enqueue(Connection)`
+  notifications. Owners in the same process are woken in memory and never see this. The channel is global, so the
+  density that counts is the sum over every producing process and every queue on the database, not one queue's rate.
+
+Reproduce: `mvn verify -pl components/postgresql-queue-shard-owned -DskipUTs -Dit.test=ShardWakeupListenerDrainIT
+-Dfailsafe.failIfNoSpecifiedTests=false -Dbenchmark.run=true [-Ddrain.rates=200,1000,3000]`.
+
 ## 4. Environment
 
 | | |
