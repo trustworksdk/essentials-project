@@ -494,3 +494,86 @@ Still needed from this machine: a wired run (or the client on the server host, `
 jdbc:postgresql://127.0.0.1:5432/postgres`, accepting that the client then shares the server's CPU), the server CPU
 and disk facts from §7, the 400-connection level of `probe-cost` (needs `max_connections` of at least 500), and the
 write-side suites (`xid`, `table-design`, `contention`, `append`, `baseline`, `cpu`, `jdbc`, `probe`).
+
+### 2026-11-13: every suite, client on the server host (`20261113-153049-lac-N85-N87-HJ-HJ1-HK1-external`)
+
+All twelve suites at commit `153b850b3`, all passed (about 2 h 50 min). The client JVM ran on the database host itself
+and connected over `127.0.0.1` (ping 0.026 / 0.041 / 0.054 ms), so the network is out of every figure. Machine: Intel
+i7-7700HQ, 4 cores / 8 threads, 30 GB, Ubuntu with kernel 7.0, governor `powersave`, Temurin 25.0.5. Server:
+PostgreSQL 17.5 in Docker Compose, `fsync=on`, `synchronous_commit=on`, `wal_sync_method=fdatasync`,
+`shared_buffers=8GB`, `max_connections=500`, `jit=off`. The run needed `-Ddocker.skip=true` (the module's
+docker-maven-plugin builds a CDC test image during `verify`); `scripts/run-phase0-spikes.sh` now adds it in external
+mode.
+
+Three things limit how the run reads:
+
+- **Client and server share the 8 CPUs.** Cells that are CPU-bound (P0.0 burst catch-up, P0.6 contended tail read at
+  82-85 % busy) are capped by the shared machine. The contended append suites are not: their `pg_stat_activity`
+  samples are `LWLock:WALWrite` 8.6-17.8 %, `Lock:transactionid` 4.6-9.3 %, `IO:WalSync` 4.0-4.8 % and `CPU` only
+  1.2-3.9 %, with the machine 24-62 % busy.
+- **No server CPU.** No server CPU command was set, so every server CPU column is `NaN` and P0.9's question (server
+  CPU per attempt minus recorded execution, §8) is still open. On a shared host a whole-machine `/proc/stat` would
+  count the client too; the PostgreSQL container's cgroup v2 `cpu.stat` does not, and `SpikeServer` accepts it as
+  `--server-cpu-command "cat /sys/fs/cgroup/<the container's scope>/cpu.stat"`.
+- **The commit flush ran at two speeds.** In the fast phase a one-writer commit took about 1.1-1.6 ms and the
+  contended suites appended about 1 900-2 350 events/s. In a slow phase every arm fell to about 660-780/s, commit
+  time per attempt rose to about 4.6-4.9 ms and server execution at low load roughly doubled. It covers most of P0.7's
+  contended windows (66 of 80), P0.7 run 2's uncontended rounds, the first two windows of P0.4 contention run 1, most
+  of P0.9, and the opening of P0.6's contended run 1. Candidates are a checkpoint, the SSD's flush behaviour or
+  thermal and frequency scaling under `powersave`; none is verified, and `pg_test_fsync` and the disk facts of §7 were
+  not recorded. Every ratio below compares arms within the same phase.
+
+Server execution is about 2.5-4x the VM's everywhere (P0.6, P0.7, P0.9, P0.11, encoding), today's statements
+included, so it is this machine's speed and not a property of any one statement.
+
+**Correctness.** No check failed: P0.1's xid-before-identity held in 24 of 24 cases with all 8 controls null; P0.7's
+40 correctness lines and 80 windows were clean (no non-contiguous order, head equals max, 0 burned values in the head
+arms); P0.2 found no violation and its controls still detect the broken orders; P0.0's concurrent writers delivered
+everything without duplicates; P0.13's checks and P0.11's sanity lines were all `ok`. Only 17.5 was run, so P0.1 and
+P0.2 on 16 and 18 still need another server.
+
+**What holds unchanged.** Everything that does not depend on the machine matches the VM: round trips per unit of work
+(P0.0 3 / 2 / 3 / 3 / 11; P0.4; P0.6's reconciliation 3 / 2 / 4 / 4 with proxy and trace equal in 50 of 50),
+statements per event (P0.0 steady 68.9-69.1 and 10.6), WAL bytes per event (P0.0 948-1 056 B; P0.7 BASE 892-895 down
+to COMBO 551-563 B, within a few bytes of the VM in every option), P0.0's idle statement rate and its polling-bound
+latency (p50 48.5-52.9 ms), P0.11's plan shapes, and the jsonb-over-json conversion cost (0.73 µs per event).
+
+What changes, compared with the VM:
+
+| Item | This run | VM | Reading |
+|---|---|---|---|
+| P0.4, contended B against A | Fast phase, run 2: A 1 945, C 2 036, B 1 909, B + `ON CONFLICT DO NOTHING` 1 961 appended/s (B/A 0.98) | B −30 % against A; `ON CONFLICT` about half | **The gap disappears**, as §8 and append §5.5 predicted: with a real flush every arm commits once per attempt and waits on the WAL. `ON CONFLICT` is no longer worse. |
+| P0.4, values burned per 1 000 appended | A 590-626, B 524-538, `ON CONFLICT` 549-553; zero-row results about 6 % of attempts | A 458-465, B 241-270 | **B no longer halves the holes**; it saves 12-15 %. With slow commits an overlapping append almost never sees a committed competitor, so most conflicts end in a unique violation either way. The window that matters is the competitor's commit, which extends append §8.3. |
+| P0.4, advisory lock as a separate statement | 0 burned; 1 687-1 872/s against A 1 950-1 971 | 0 burned; a third of A's throughput | Zero holes holds; its cost falls to −5-14 %. As first CTE it still does nothing (514-520 burned). |
+| P0.4, uncontended B against A | 100 events 4.19-4.25 against 6.00-6.45 ms (−30-35 %); 5 aggregates −37-44 %; 10 events −7-9 % even with expected order; 1 event a tie | −35 %; about half; tie | Holds. Every 1-event latency (1.3-1.7 ms) sits on the commit flush. |
+| P0.7, contended throughput per option | All arms within 659-778/s in the slow phase; one fast window each: BASE 2 224, guarded 2 350, `FOR UPDATE` 2 183, COMBO_ALL 2 314 | guarded −8-18 %, `FOR UPDATE` −30 %, COMBO_ALL −15 % against BASE | **The VM's ranking is gone**: under the flush the options converge. One fast window per arm is too little to rank them on a CPU-bound host. |
+| P0.7, burned per 1 000 without a head table | 560-589; the 50 µs delay after the lookup changes nothing | 276-305; the delay cut it to 219-225 and gained 35 % | Same mechanism as P0.4: commit time, not the lookup-to-append gap, sets the conflict window. |
+| P0.7, uncontended | Server execution for 100 events BASE 1 412-1 424 µs down to COMBO_ALL_BYTEA 893-910; reading 100 events json/bytea 0.27-0.38 against BASE 0.43-0.53 ms | 490-496 down to 325-349; 0.12 against 0.18 ms | Ranking and direction hold; absolute about 2.8x. |
+| P0.9, B against A | Fast phase: A 2 260-2 391, B 2 164-2 273/s (−8 % to +2 %). Recorded execution A 62.9-71.3, B 77.8-85.8 µs | NORMAL A 29.6-34.2k, B 26.0-27.4k; execution 16.6-16.9 against 20.5-21.0 µs | **The VM's NORMAL gap does not reproduce**, as append §9's idle explanation predicted. B's execution excess keeps the VM's 1.2x ratio, so that part is the statement's. |
+| P0.6, contended raw pgjdbc against JDBI | lookup + insert: raw +13-15 % (NORMAL), +12-14 % (SPIN); lookup + B: +10-14 %, +9-12 % | NORMAL JDBI 3-10 % ahead or a tie; SPIN raw +11-20 % | **The SPIN verdict holds and the NORMAL flip disappears**, confirming it was the VM's idle effect. |
+| P0.6, uncontended | Same ranking; JDBI's read-ahead lookup round trip costs about +95-105 µs (VM about +40); client CPU per call JDBI minus raw +15-34 µs (VM +6-8) | | Direction holds; the overheads scale with the slower CPU. JDBI's `LOOKUP_NO_FETCH_SIZE` and `findFirst` arms did not run, so the fetch-size fix is not re-tested. |
+| P0.0, OCC contended (8 writers, 10 aggregates) | 38 409-38 426 appended in 20 s; 619-620 values burned per 1 000 appends | 593 740-657 312; 466 | Commit-bound, 15x lower. More burned values for the same reason as P0.4. "Every lost race burns one value" holds. |
+| P0.0, concurrent writers | late deliveries 11 / 4 (p50 3.9 / 3.1 ms) | 2 / 1 (1.2-2.5 ms) | Slower commits widen the window in which commits land out of order. Transient gaps exceed holes by exactly the late count. |
+| P0.10, `pg_notify` inside the transaction | 8 writers −75 % against `NONE` (247-258 against 1 015-1 039/s), 20 writers −90 %, 8 on 10 aggregates −64 %; writers in `Lock:object` 86-95 % of samples | −57-63 %, −76-77 %, −44-45 % | **Back and larger than the VM.** `IN_TX` is pinned near 250/s at every writer count: notifying commits serialise and lose group commit, which costs more when the flush is real. The Wi-Fi run's −30-40 % was hidden by the network. |
+| P0.10, after commit | Coalesced per JVM −4 % to +1 %; one notify per writer −2 % to +2 % | about equal; −10-26 % | Coalesced confirmed free. Per writer is also free here: the extra statement hides behind the flush-bound commit. |
+| P0.10, wake latency | Commit returned to listener socket: after commit p50 0.40-0.94 ms, inside the transaction 0.015-0.040 ms; through pgjdbc 1.14-2.18 ms | 0.09-0.18 ms | After commit adds 0.4-0.9 ms, against 0.1-0.2 on the VM; the notifier hand-off competes for the shared CPUs. |
+| P0.11, `D` (`UNION ALL`) execution | 36-46 µs up to 10 holes, 53-82 at 100, 280-318 at 1 000; today's tail read `A` 25-39 µs; `B` generic and `C` walk the primary key (289-406 ms) | 9-12, ~120 µs; `B` generic ~300 ms | Plans confirmed a second time. `D`/`A` is 1.1-1.2 up to 10 holes; the absolute 3-4x is the machine. |
+| P0.12, per-backend slope | `SUB_AGG` 36.6 / 134.8 / 561.0 µs at 16 / 106 / 406 backends: 1.34 µs per backend | about 0.55 µs | Same as the Wi-Fi run (1.4), so a property of this host, not of the network. |
+| P0.12, appends with probers | 100 connections, 20 writers: 10 tail-only probers −8 %, 10 combined probers −27 %. 400 connections, 80 writers (first time on this server): `NONE` 14 963-15 169/s, 40 tail-only probers −51 %, 40 combined probers −80 % (2 925-3 215/s), append p99 96-104 ms | 100: −3-5 % against tail-only; 400: −49 % against tail-only, p99 55-64 ms | **The collapse reproduces and is deeper.** Append p50 rises here (4.8 → 20 ms) where it fell on the VM. No wait sampling ran at that level, so it is not attributed. |
+| P0.13, page against periodic | 4 projections `PAGE_100` 17 502 against `PERIODIC` 2 239 events/s (7.8x), `PAGE_500_SET` 105 052 (47x); 1 projection 8.6x | 2x / 10-13x (`fsync=off`); 4.1x / 5.7x (`fsync=on`) | The ratio grows with the price of a flush, because the page saves flushes. |
+| P0.13, per event and fallback | `PER_EVENT` against `PERIODIC` −0.1 % (4 projections), −3.8 % (1); one failure in 1 000 −44 % against `PAGE_100`; one in 100 below `PER_EVENT` | −33 % (`fsync=off`), −20-23 % (`fsync=on`); −23 %; below `PER_EVENT` | **The per-event penalty disappears** (both commit once per event and wait on the flush); the fallback penalty doubles. This revises the Wi-Fi run's "−31 %, confirmed". |
+
+Unexplained or inconsistent, to keep in mind:
+
+- P0.10 at one writer: the two `NONE` windows disagree (479 and 206/s, commit p50 1.2 and 5.4 ms), so the
+  one-writer `IN_TX` cost lies anywhere between −2 % and −57 %.
+- Commit p50 was 5-7 ms in P0.10 but 1.0-1.5 ms in P0.13's per-event arm on the same server.
+- P0.0's second burst run wrote 479 760 B of WAL during catch-up against 1 064 B in the first, probably autovacuum
+  after the 100 000-row append.
+- The headers of `p0-9-cpu.txt` and `p0-4-encoding.txt` say `fsync=off`; that label is hard-coded, and the server
+  facts on the same line say `fsync=on`.
+- The server reports 17.5 here, while the 2026-11-12 entry above records 17.11 for the same machine.
+
+Still needed from this machine: the server CPU through the container's cgroup `cpu.stat` (above), which reopens P0.9
+and attributes P0.12's 400-connection collapse; `pg_test_fsync` and the disk facts of §7, with the slow phase
+explained or avoided (governor `performance`, a checkpoint before each suite); and P0.1 and P0.2 on 16 and 18.

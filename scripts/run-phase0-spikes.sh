@@ -258,7 +258,9 @@ fi
 MVN_COMMON=(-DskipDependencyCheck=true)
 SPIKE_ARGS=(-Dspike.run=true -Dfailsafe.forkCount=1 -DskipUTs -Dfailsafe.failIfNoSpecifiedTests=false)
 if [[ "$MODE" == external ]]; then
-  SPIKE_ARGS+=("-Dspike.jdbcUrl=$JDBC_URL" "-Dspike.user=$DB_USER")
+  # docker.skip: the module's docker-maven-plugin builds the CDC tests' wal2json image at pre-integration-test,
+  # which needs Docker even though no spike uses it. A client machine without Docker access failed every suite.
+  SPIKE_ARGS+=("-Dspike.jdbcUrl=$JDBC_URL" "-Dspike.user=$DB_USER" -Ddocker.skip=true)
   [[ -n "$SERVER_CPU_COMMAND" ]] && SPIKE_ARGS+=("-Dspike.serverCpuCommand=$SERVER_CPU_COMMAND")
 fi
 BUILD_CMD=("${MVN_CMD[@]}" -q install -DskipTests "${MVN_COMMON[@]}" -pl "$MODULE" -am ${EXTRA_MVN[@]+"${EXTRA_MVN[@]}"})
