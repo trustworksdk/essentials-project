@@ -206,7 +206,7 @@ nothing extra is installed. The settings of §3 become `-c` flags on the server 
 # compose.yaml on the database machine
 services:
   pg:
-    image: postgres:17.5            # the version the container path runs
+    image: postgres:17.12           # the latest 17; for the 18 run use the latest 18 tag
     container_name: spike-pg
     network_mode: host              # no Docker NAT or userland proxy in every round trip; listens on the host's 5432
     shm_size: 1g                    # Docker's default /dev/shm is 64 MB
@@ -221,7 +221,7 @@ services:
       - -c
       - listen_addresses=*
       - -c
-      - max_connections=200
+      - max_connections=500           # P0.12's 400-connection level needs at least 500
       - -c
       - shared_preload_libraries=pg_stat_statements
       - -c
@@ -572,8 +572,11 @@ Unexplained or inconsistent, to keep in mind:
   after the 100 000-row append.
 - The headers of `p0-9-cpu.txt` and `p0-4-encoding.txt` say `fsync=off`; that label is hard-coded, and the server
   facts on the same line say `fsync=on`.
-- The server reports 17.5 here, while the 2026-11-12 entry above records 17.11 for the same machine.
+- The server reports 17.5 here, while the 2026-11-12 entry above records 17.11 for the same machine. The compose file
+  above pinned `postgres:17.5`, the image the container path runs; it now pins the latest 17, `postgres:17.12`, and
+  the next run should be on that.
 
 Still needed from this machine: the server CPU through the container's cgroup `cpu.stat` (above), which reopens P0.9
 and attributes P0.12's 400-connection collapse; `pg_test_fsync` and the disk facts of §7, with the slow phase
-explained or avoided (governor `performance`, a checkpoint before each suite); and P0.1 and P0.2 on 16 and 18.
+explained or avoided (governor `performance`, a checkpoint before each suite); a rerun on the latest 17 (17.12); and
+a full run on 18 (its latest minor), which also covers P0.1 and P0.2 on 18. P0.1 and P0.2 on 16 need a 16 server.
