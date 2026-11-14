@@ -58,6 +58,8 @@
 #                                                connections: max_connections must allow it)
 #                                  progress      ProjectionProgressSpikeIT                               P0.13 (one pass with
 #                                                the server's fsync; a container runs fsync=off and fsync=on)
+#                                  listen        AlternativeClientSpikeIT                                P0.17 (a): pgjdbc
+#                                                listener arms against a Vert.x PgSubscriber, 100-3 000 notifications/s
 #                                  append        SingleStatementAppendSpikeIT,AppendEncodingAttributionSpikeIT  P0.4
 #                                  baseline      CurrentEngineBaselineSpikeIT                            P0.0
 #                                  cpu           UnattributedCpuSpikeIT                                  P0.9
@@ -91,7 +93,7 @@ OUT=""
 BUILD=1
 DRY_RUN=0
 
-usage() { sed -n '17,78p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '17,80p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_error() { printf '%s\nRun with --help for usage.\n' "$*" >&2; exit 2; }
 
 # The command line as typed, for machine.txt, with any password value replaced. Built before
@@ -158,6 +160,7 @@ suite_classes() {
     tail)         echo "TailHoleReReadSpikeIT" ;;
     probe-cost)   echo "ProbeRunningSetCostSpikeIT" ;;
     progress)     echo "ProjectionProgressSpikeIT" ;;
+    listen)       echo "AlternativeClientSpikeIT" ;;
     *)            return 1 ;;
   esac
 }
@@ -176,10 +179,11 @@ suite_results() {
     tail)         echo "p0-11-*" ;;
     probe-cost)   echo "p0-12-*" ;;
     progress)     echo "p0-13-*" ;;
+    listen)       echo "p0-17-*" ;;
   esac
 }
-DEFAULT_SUITES="xid table-design contention notify tail probe-cost progress append baseline cpu jdbc probe"
-ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress"
+DEFAULT_SUITES="xid table-design contention notify tail probe-cost progress listen append baseline cpu jdbc probe"
+ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress listen"
 
 (( ${#SUITE_SPECS[@]} )) || SUITE_SPECS=(default)
 SUITES=()

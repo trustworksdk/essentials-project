@@ -112,6 +112,13 @@
              histograms. Declared as a property here to keep every version in one place; there is no
              dependencyManagement entry because nothing else in the reactor depends on it. -->
         <hdrhistogram.version>2.2.2</hdrhistogram.version>
+        <!-- Used only at test scope by components/postgresql-event-store's phase-0 spike P0.17
+             (AlternativeClientSpikeIT: a Vert.x LISTEN client measured against pgjdbc's notification drain).
+             No dependencyManagement entry because nothing else in the reactor depends on it, and the Spring Boot
+             BOM does not manage Vert.x. Vert.x 5 runs on Netty 4.2, which the Spring Boot BOM manages
+             (4.2.19.Final at spring-boot 4.1.2, the same Netty vertx-dependencies 5.2.2 names), so Netty
+             resolves through Spring Boot. -->
+        <vertx.version>5.2.2</vertx.version>
         <!-- Covers log4j-to-slf4j and log4j-api together; both are managed in dependencyManagement below. -->
         <log4j.version>2.26.1</log4j.version>
         <junit-bom.version>6.0.3</junit-bom.version>
