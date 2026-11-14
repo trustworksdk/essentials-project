@@ -554,7 +554,7 @@ What changes, compared with the VM:
 | P0.6, uncontended | Same ranking; JDBI's read-ahead lookup round trip costs about +95-105 µs (VM about +40); client CPU per call JDBI minus raw +15-34 µs (VM +6-8) | | Direction holds; the overheads scale with the slower CPU. JDBI's `LOOKUP_NO_FETCH_SIZE` and `findFirst` arms did not run, so the fetch-size fix is not re-tested. |
 | P0.0, OCC contended (8 writers, 10 aggregates) | 38 409-38 426 appended in 20 s; 619-620 values burned per 1 000 appends | 593 740-657 312; 466 | Commit-bound, 15x lower. More burned values for the same reason as P0.4. "Every lost race burns one value" holds. |
 | P0.0, concurrent writers | late deliveries 11 / 4 (p50 3.9 / 3.1 ms) | 2 / 1 (1.2-2.5 ms) | Slower commits widen the window in which commits land out of order. Transient gaps exceed holes by exactly the late count. |
-| P0.10, `pg_notify` inside the transaction | 8 writers −75 % against `NONE` (247-258 against 1 015-1 039/s), 20 writers −90 %, 8 on 10 aggregates −64 %; writers in `Lock:object` 86-95 % of samples | −57-63 %, −76-77 %, −44-45 % | **Back and larger than the VM.** `IN_TX` is pinned near 250/s at every writer count: notifying commits serialise and lose group commit, which costs more when the flush is real. The Wi-Fi run's −30-40 % was hidden by the network. |
+| P0.10, `pg_notify` inside the transaction | 8 writers −75 % against `NONE` (247-258 against 1 015-1 039/s), 20 writers −90 %, 8 on 10 aggregates −64 %; writers in `Lock:object` 86-95 % of samples | −57-63 %, −76-77 %, −44-45 % | **Back and larger than the VM** (but this suite ran entirely in the slow phase, commit p50 about 7 ms; the 2026-11-14 run below supersedes every P0.10 row). `IN_TX` is pinned near 250/s at every writer count: notifying commits serialise and lose group commit, which costs more when the flush is real. The Wi-Fi run's −30-40 % was hidden by the network. |
 | P0.10, after commit | Coalesced per JVM −4 % to +1 %; one notify per writer −2 % to +2 % | about equal; −10-26 % | Coalesced confirmed free. Per writer is also free here: the extra statement hides behind the flush-bound commit. |
 | P0.10, wake latency | Commit returned to listener socket: after commit p50 0.40-0.94 ms, inside the transaction 0.015-0.040 ms; through pgjdbc 1.14-2.18 ms | 0.09-0.18 ms | After commit adds 0.4-0.9 ms, against 0.1-0.2 on the VM; the notifier hand-off competes for the shared CPUs. |
 | P0.11, `D` (`UNION ALL`) execution | 36-46 µs up to 10 holes, 53-82 at 100, 280-318 at 1 000; today's tail read `A` 25-39 µs; `B` generic and `C` walk the primary key (289-406 ms) | 9-12, ~120 µs; `B` generic ~300 ms | Plans confirmed a second time. `D`/`A` is 1.1-1.2 up to 10 holes; the absolute 3-4x is the machine. |
@@ -580,3 +580,39 @@ Still needed from this machine: the server CPU through the container's cgroup `c
 and attributes P0.12's 400-connection collapse; `pg_test_fsync` and the disk facts of §7, with the slow phase
 explained or avoided (governor `performance`, a checkpoint before each suite); a rerun on the latest 17 (17.12); and
 a full run on 18 (its latest minor), which also covers P0.1 and P0.2 on 18. P0.1 and P0.2 on 16 need a 16 server.
+
+### 2026-11-14: every suite on 17.12, governor `performance`, server CPU (`20261114-102942-lac-N85-N87-HJ-HJ1-HK1-external`)
+
+Same machine and setup as the 2026-11-13 run, with three changes: PostgreSQL 17.12, the CPU governor set to
+`performance`, and server CPU read from the PostgreSQL container's cgroup v2 `cpu.stat` (rootless Docker, so under
+`user.slice/.../docker-<id>.scope`), which counts every PostgreSQL process and nothing of the client. All twelve
+suites passed (client at commit `153b850b3`, `-- -Ddocker.skip=true`). No correctness check failed in P0.0, P0.7 or
+P0.13; P0.1, P0.2 and P0.11 passed their tests.
+
+**The slow flush phase did not come back.** Every window of P0.9, P0.7 contended, P0.4 contention and P0.6 contended
+ran fast (about 1 800-2 600 appended/s). The governor is the likely cause on 2026-11-13, not proven: there is no
+`powersave` run on 17.12 and still no `pg_test_fsync`. **The 2026-11-13 P0.10 suite ran entirely in that slow phase**
+(`NONE` commit p50 about 7 ms against 1.25 ms here), so its P0.10 rows are replaced by the ones below. Server
+execution did not drop under `performance` (P0.7 100 events BASE 1 374-1 496 µs), so the 2.5-4x factor against the
+VM is the machine itself.
+
+| Item | 2026-11-14 (17.12, `performance`) | 2026-11-13 (17.5, `powersave`) | Reading |
+|---|---|---|---|
+| P0.9, PostgreSQL CPU per attempt (cgroup) | A 338-354 µs (user 219-235, sys 117-120); B 380-390 µs (user 262-270, sys 116-120) | not recorded | New. |
+| P0.9, CPU outside recorded execution | A 274-290 µs, B 301-310 µs, the same under NORMAL and SPIN (recorded execution A 63-64, B 79-80) | VM: 59-74 NORMAL, 32-37 without idle | **It does not shrink to a few µs, and spinning changes nothing**, so append §9's idle explanation does not apply on this host. `pg_stat_statements` records no execution for COMMIT, so the gap includes the commit with its WAL flush, the group-commit wake-ups and the socket I/O; that fits the identical 117-120 µs of system CPU in every arm. P0.12's `SELECT 1` costs 40-52 µs of server CPU for about 1 µs of execution, so at about three round trips per attempt a per-round-trip floor explains roughly half the gap. The background processes are in the cgroup too and were not separated. |
+| P0.9 and P0.4, B's extra cost | P0.9: cgroup +26-50 µs, all user CPU, against +15-17 µs recorded execution; B 2-4 % slower. P0.4: cgroup B 534-548 against A 441-463 µs, execution 108-110 against 71-77 | execution +15 µs | B's extra server CPU is 2-3x its execution difference, not about equal as append §9 estimated. |
+| P0.4, contended | A 1 787-1 876, C 1 967-1 984, B 1 917-1 931, `ON CONFLICT` 1 869-1 989 appended/s; burned per 1 000 A 616-629, B 521-531; separate advisory lock 0 burned at −3 to −5 % | same within 5 %; lock −5 to −14 % | Confirmed: the arms converge and B saves only 12-15 % of the burned values. The lock's cost was overstated by a slower window. |
+| P0.7, contended ranking | BASE 2 164-2 314; HEAD_GUARDED 2 209-2 439; HEAD_FOR_UPDATE 2 078-2 209; COMBO_ALL 2 341-2 485; COMBO_ALL_SCALAR 2 370-2 577; COMBO_ALL_BYTEA 2 291-2 495. Head arms 309-381 µs server CPU per attempt against BASE 410-432 | one fast window per arm | **Rankable now: the head table costs no throughput with durable commits**, and COMBO_ALL (+8 %) and COMBO_ALL_SCALAR (+12 %) beat BASE in every window while using less server CPU. |
+| P0.6, contended raw against JDBI | raw +6-16 %; JDBI costs +39-70 µs more server CPU per attempt for +2-6 µs more execution | raw +9-15 % | Holds; the extra server CPU fits JDBI's extra round trip. |
+| P0.10, `pg_notify` inside the transaction | 8 writers −76 to −79 %, 20 writers −81 to −83 %, 8 on 10 aggregates −34 to −47 %, 1 writer −1 to −9 %; ceiling about 1 000-1 160/s at every writer count | ceiling about 250/s (slow phase) | The penalty holds and the serialised-flush reading holds; the ceiling is set by the flush speed. |
+| P0.10, after commit | Coalesced per JVM: 8 writers −10 to −12 %, 20 writers about even. One notify per writer: 8 writers −32 to −38 %, 20 writers −15 to −23 % | about free (slow phase) | **Changed verdict.** With fast commits a notify per writer is not free, and coalescing costs about 10 % at 8 writers. Coalesced remains the cheapest delivery. |
+| P0.10, wake latency through pgjdbc | p50 3.4-15.9 ms after commit, 19-301 ms for `IN_TX` at 8 or more writers; on the wire 0.02-1.06 ms | 1.14-2.18 ms | Much worse at about 4 700 appends/s. Probably the listener JVM starved on the shared CPUs; not attributed. |
+| P0.12, 400 connections | `NONE` 15 323-15 400/s; 40 tail-only probers −52 %; 40 combined probers −80 %; server CPU 4.3-4.4 cores rising to 6.0 with combined probers; probe execution 19.8-20.6 ms | −51 %; −80 % | Reproduces. **The probe saturates the server's CPU**: about 6 of 8 hardware threads, with the client needing the rest. Per-backend slope 1.41 µs (`SUB_AGG` 35.9 / 139.2 / 585.7 µs at 16 / 106 / 406 backends). |
+| P0.13, `PER_EVENT` against `PERIODIC` | 4 projections −1.1 %; 1 projection −10.5 % (one window each); `PAGE_500_SET` 45.6x | −0.1 %; −3.8 % | Holds for 4 projections. |
+| P0.0 | OCC 616-625 burned per 1 000 appended; late deliveries 5 / 18; burst run 2 again about 490 000 B of WAL | 619-620; 11 / 4; 479 760 B | Holds. The burst WAL is systematic, likely autovacuum after the 100 000-row append. |
+
+Still open: how the roughly 280 µs outside recorded execution splits between the commit flush, the protocol and the
+background processes (needs per-backend CPU, which reads `NaN` on an external server, or the commit timed
+separately); whether the governor caused the slow phase (a `powersave` run on 17.12 and `pg_test_fsync`); the
+client/server split of P0.12's collapse and P0.10's pgjdbc latency (needs a separate client host on a wire); a full
+run on 18; and P0.1 and P0.2 on 16.
