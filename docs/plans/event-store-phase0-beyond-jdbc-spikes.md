@@ -196,3 +196,7 @@ identical 117-120 µs of system CPU per attempt is the number the request-path h
 - **COPY.** Not used in the repo; useful for imports and table migration only, not on phase 2's path.
 - **A full custom driver for the append path.** Ruled out by the UnitOfWork constraint above, whatever it measures.
 - **`SCHED_BATCH`, bcrypt, HTTP, JWT.** Outside PostgreSQL.
+
+## Parked on 2026-11-14
+
+After review, phase 0 keeps P0.14, P0.16 and P0.17 part (a). P0.15 (group commit for engine-owned writes) and P0.17 part (b) (request-path pipelining through an alternative client) are parked: PostgreSQL already groups concurrent commits and appends cannot use a batcher, and pipelining needs a wire client of our own for a gain P0.14 can mostly show with pgjdbc. Both are revisited only if P0.14 shows round trips still dominate. The repository was an inspiration, not a design to adopt.
