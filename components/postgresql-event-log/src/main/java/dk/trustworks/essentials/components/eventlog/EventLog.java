@@ -45,10 +45,17 @@ public final class EventLog {
     private final EventLogSchema.AggregateTypeDdlExecutor             ddl;
     private final EventTypeRegistry                                   eventTypes;
     private final ConcurrentHashMap<String, RegisteredAggregateType>  aggregateTypes = new ConcurrentHashMap<>();
+    private final EventLogSettings                                    settings;
+    private final EventLogObserver                                    observer;
+    private final ProgressStore                                       progressStore;
+    private final List<FreshSubscription>                             subscriptions  = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile boolean                                          started;
 
-    EventLog(DataSource dataSource, SchemaOwnership schemaOwnership, EventLogSchema.AggregateTypeDdlExecutor ddl) {
+    EventLog(DataSource dataSource, SchemaOwnership schemaOwnership, EventLogSchema.AggregateTypeDdlExecutor ddl, EventLogSettings settings, EventLogObserver observer) {
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
+        this.settings = requireNonNull(settings, "No settings provided");
+        this.observer = requireNonNull(observer, "No observer provided");
+        this.progressStore = new ProgressStore(dataSource);
         this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
         this.ddl = requireNonNull(ddl, "No ddl provided");
         this.eventTypes = new EventTypeRegistry(dataSource);
@@ -78,10 +85,52 @@ public final class EventLog {
     }
 
     /**
-     * Nothing to stop yet; the subscription's reader arrives in a later unit.
+     * Stop every subscription (each saves its resume point once more). Idempotent.
      */
     public void stop() {
+        for (var subscription : subscriptions) {
+            subscription.stop();
+        }
+        subscriptions.clear();
         started = false;
+    }
+
+    /**
+     * @return the subscription settings
+     */
+    public EventLogSettings settings() {
+        return settings;
+    }
+
+    /**
+     * Start the phase-2 subscription (design §1.2): {@code FRESH}, periodic progress, non-exclusive, one handler,
+     * backstop wake-up only. <b>Temporary</b>: the phase-8 subscription API replaces it.
+     * <p>
+     * Progress is kept per {@code (subscriber, aggregateType, instanceName)}; two JVMs started with the same instance
+     * name overwrite each other's progress (no lease in phase 2). A new subscription starts at {@code startFrom}; an
+     * existing one resumes from its stored point.
+     *
+     * @param startFrom the first {@code global_order} a new subscription receives; 1 for everything
+     * @return the running subscription
+     */
+    public FreshSubscription subscribe(String subscriber, String aggregateType, String instanceName, long startFrom, FreshSubscription.Handler handler) throws SQLException {
+        return subscribe(new FreshSubscription.SubscriptionSpec(new ProgressStore.Key(subscriber, aggregateType, instanceName), startFrom, handler, TestSeams.NONE));
+    }
+
+    /**
+     * With test seams: package-private, for the invariant ITs
+     */
+    FreshSubscription subscribe(FreshSubscription.SubscriptionSpec spec) throws SQLException {
+        requireStarted();
+        var aggregateType = spec.key().aggregateType();
+        var type          = registered(aggregateType);
+        var relation      = spec.seams().readTable() != null ? spec.seams().readTable() : type.tables.eventTable();
+        var reader        = new TailReader(aggregateType, dataSource, EventLogStorage.TailStatements.of(relation), settings, rs -> read(aggregateType, rs), observer,
+                                           spec.seams());
+        var subscription  = new FreshSubscription(spec, reader, progressStore, settings, observer);
+        subscription.start();
+        subscriptions.add(subscription);
+        return subscription;
     }
 
     /**

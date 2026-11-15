@@ -29,12 +29,13 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *     <li>{@link SchemaOwnership#HARNESS}: the engine executes no DDL; pass the {@link EventLogSchemaContributor}
  *     registered with the harness, through which aggregate types' tables are created.</li>
  * </ul>
- * Subscription settings arrive with the subscription (later units of phase 2).
  */
 public final class EventLogBuilder {
     private DataSource                dataSource;
     private SchemaOwnership           schemaOwnership = SchemaOwnership.COMPONENT;
     private EventLogSchemaContributor schemaContributor;
+    private EventLogSettings          settings        = EventLogSettings.defaults();
+    private EventLogObserver          observer        = EventLogObserver.NONE;
 
     EventLogBuilder() {
     }
@@ -65,12 +66,28 @@ public final class EventLogBuilder {
         return this;
     }
 
+    /**
+     * @param settings subscription settings; {@link EventLogSettings#defaults()} if not set
+     */
+    public EventLogBuilder setSettings(EventLogSettings settings) {
+        this.settings = requireNonNull(settings, "No settings provided");
+        return this;
+    }
+
+    /**
+     * @param observer metrics and diagnostics callbacks; {@link EventLogObserver#NONE} if not set
+     */
+    public EventLogBuilder setObserver(EventLogObserver observer) {
+        this.observer = requireNonNull(observer, "No observer provided");
+        return this;
+    }
+
     public EventLog build() {
         requireNonNull(dataSource, "No dataSource provided");
         var ddl = switch (schemaOwnership) {
             case COMPONENT -> EventLogSchema.lockedAggregateTypeDdl(dataSource);
             case HARNESS -> requireNonNull(schemaContributor, "SchemaOwnership.HARNESS requires the EventLogSchemaContributor registered with the harness").aggregateTypeDdl();
         };
-        return new EventLog(dataSource, schemaOwnership, ddl);
+        return new EventLog(dataSource, schemaOwnership, ddl, settings, observer);
     }
 }

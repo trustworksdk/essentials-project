@@ -34,8 +34,10 @@ import static org.awaitility.Awaitility.await;
  * A {@code BEFORE INSERT} trigger holds the first event row of an append - its {@code global_order} already drawn, as
  * identity defaults are evaluated before BEFORE triggers - until the test releases it. Meanwhile another connection
  * reads the writer's {@code backend_xid}: non-null means a watermark would see the writer. Each of the three head paths
- * runs under the simple protocol, the extended protocol with unnamed statements, and named statements on the generic
- * plan, with default planner settings and with nested loops off and join collapsing disabled.
+ * runs under the simple protocol, the extended protocol with unnamed statements, named statements on the generic plan,
+ * and named statements in {@code plan_cache_mode = auto} after enough executions for the plan cache to consider a generic
+ * plan (pgjdbc {@code prepareThreshold=1}), with default planner settings and with nested loops off and join collapsing
+ * disabled; and as the {@code LATERAL} rewrite with {@code unnest} outer.
  * <p>
  * Must-fail variant: in the head-table paths the head row is written before the event insert, so the xid is taken
  * first even without the explicit {@code pg_current_xact_id()} step (P0.7's finding, asserted by
@@ -51,7 +53,9 @@ class EventLogAppendXidWindowIT extends AbstractEventLogIT {
     enum Protocol {
         SIMPLE("preferQueryMode=simple", null),
         EXTENDED_UNNAMED("prepareThreshold=0", null),
-        NAMED_GENERIC_PLAN("prepareThreshold=1", "force_generic_plan");
+        NAMED_GENERIC_PLAN("prepareThreshold=1", "force_generic_plan"),
+        /** Named statements in plan_cache_mode auto, run often enough first that the plan cache may switch to generic */
+        NAMED_AUTO("prepareThreshold=1", null);
 
         final String urlParameter;
         final String planCacheMode;
@@ -111,6 +115,9 @@ class EventLogAppendXidWindowIT extends AbstractEventLogIT {
     void the_engine_append_takes_the_xid_before_the_first_global_order(Protocol protocol, Path path, Planner planner) throws Exception {
         appendCommitted(eventLog, AppendRequest.afterEventOrder("Orders", "existing", -1, events("E", 1)));
         try (var writer = writer(protocol, planner)) {
+            if (protocol == Protocol.NAMED_AUTO) {
+                warmUp(writer, path);
+            }
             var request = switch (path) {
                 case GUARDED_UPDATE -> AppendRequest.afterEventOrder("Orders", "existing", 0, events("E", 3));
                 case NEW_STREAM -> AppendRequest.afterEventOrder("Orders", "fresh", -1, events("E", 3));
@@ -162,6 +169,60 @@ class EventLogAppendXidWindowIT extends AbstractEventLogIT {
             var xid = heldBackendXid(writer, () -> statement.executeQuery().close());
             assertThat(xid).as("P0.7: the head write assigns the xid before the event insert draws a value").isNotNull();
         }
+    }
+
+    /**
+     * Six committed appends of the path's shape on the writer, so the server-prepared statement has passed the plan
+     * cache's five custom plans before the held append (plan_cache_mode auto)
+     */
+    private void warmUp(Connection writer, Path path) throws SQLException {
+        if (path == Path.GUARDED_UPDATE) {
+            appendCommitted(eventLog, AppendRequest.afterEventOrder("Orders", "warm", -1, events("E", 1)));
+        }
+        for (var i = 0; i < 6; i++) {
+            var request = switch (path) {
+                case GUARDED_UPDATE -> AppendRequest.afterEventOrder("Orders", "warm", i, events("E", 1));
+                case NEW_STREAM -> AppendRequest.afterEventOrder("Orders", "warm-" + i, -1, events("E", 1));
+                case NO_EXPECTED_ORDER -> AppendRequest.withoutExpectedOrder("Orders", "warm", events("E", 1));
+            };
+            eventLog.append(writer, request);
+            writer.commit();
+        }
+    }
+
+    /**
+     * The guarded-update append rewritten so {@code unnest} is the outer relation and the head CTE is joined
+     * {@code LATERAL} inside it (P0.1's join-order variant): the first row still waits for the head CTE, so the xid is
+     * still taken before the first {@code global_order}.
+     */
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Planner.class)
+    void the_lateral_rewrite_with_unnest_outer_still_takes_the_xid_first(Planner planner) throws Exception {
+        appendCommitted(eventLog, AppendRequest.afterEventOrder("Orders", "existing", -1, events("E", 1)));
+        var original = EventLogStorage.TableStatements.of(tables).appendAfter();
+        var lateral = original.replace("FROM h CROSS JOIN unnest(", "FROM unnest(")
+                              .replace("metadata, n)\n", "metadata, n)\n    CROSS JOIN LATERAL (SELECT h.v FROM h) h\n");
+        assertThat(lateral).contains("CROSS JOIN LATERAL").doesNotContain("FROM h CROSS JOIN");
+        try (var writer = writer(Protocol.EXTENDED_UNNAMED, planner); var statement = writer.prepareStatement(lateral)) {
+            var p = 1;
+            statement.setLong(p++, 1);
+            statement.setString(p++, "existing");
+            statement.setLong(p++, 0);
+            statement.setLong(p++, 1);
+            statement.setString(p++, "existing");
+            statement.setString(p++, HOLD);
+            statement.setArray(p++, writer.createArrayOf("uuid", new UUID[]{UUID.randomUUID()}));
+            statement.setArray(p++, writer.createArrayOf("uuid", new UUID[]{null}));
+            statement.setArray(p++, writer.createArrayOf("uuid", new UUID[]{null}));
+            statement.setArray(p++, writer.createArrayOf("int2", new Short[]{1}));
+            statement.setArray(p++, writer.createArrayOf("int2", new Short[]{1}));
+            statement.setArray(p++, writer.createArrayOf("text", new String[]{"2026-11-15T10:00:00Z"}));
+            statement.setArray(p++, writer.createArrayOf("text", new String[]{"{}"}));
+            statement.setArray(p, writer.createArrayOf("text", new String[]{"{}"}));
+            var xid = heldBackendXid(writer, () -> statement.executeQuery().close());
+            assertThat(xid).as("LATERAL rewrite, %s", planner).isNotNull();
+        }
+        assertHeadsConsistent(tables);
     }
 
     private Connection writer(Protocol protocol, Planner planner) throws SQLException {

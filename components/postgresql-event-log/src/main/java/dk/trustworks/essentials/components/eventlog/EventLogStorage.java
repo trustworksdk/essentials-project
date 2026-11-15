@@ -36,6 +36,71 @@ final class EventLogStorage {
     private static final String EVENT_COLUMNS = "global_order, event_order, event_id, caused_by_event_id, correlation_id, event_type, event_revision, " +
             "timestamp, event_payload::text, event_metadata::text, tenant, aggregate_id";
 
+    /** {@link #EVENT_COLUMNS}' types as nulls, for the running-set row of the combined probe */
+    private static final String NULL_EVENT_COLUMNS = "NULL::bigint, NULL::bigint, NULL::uuid, NULL::uuid, NULL::uuid, NULL::smallint, NULL::smallint, " +
+            "NULL::timestamptz, NULL::text, NULL::text, NULL::text, NULL::text";
+
+    /**
+     * The running-writer set: every non-null {@code backend_xid}, read from the function behind {@code pg_stat_activity}
+     * (P0.12). In the combined probe it is evaluated during execution, after the statement's snapshot (P0.2, I11)
+     */
+    static final String RUNNING_SET = "ARRAY(SELECT backend_xid::text FROM pg_stat_get_activity(NULL) WHERE backend_xid IS NOT NULL)";
+
+    /** Column index of the running set in the combined probe; columns 1-12 are {@link #EVENT_COLUMNS} */
+    static final int RUNNING_COLUMN = 13;
+
+    // ---- progress (design §2.5, §3.4) ----
+    static final String PROGRESS_START =
+            "WITH old AS (SELECT consistency_mode, progress_model FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?)\n" +
+                    "INSERT INTO " + PROGRESS_TABLE + " AS p (subscriber, aggregate_type, instance_name, exclusive, consistency_mode, progress_model, resume_from)\n" +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)\n" +
+                    "ON CONFLICT (subscriber, aggregate_type, instance_name) DO UPDATE\n" +
+                    "    SET consistency_mode = EXCLUDED.consistency_mode, progress_model = EXCLUDED.progress_model, exclusive = EXCLUDED.exclusive, updated_at = now()\n" +
+                    "RETURNING p.resume_from, p.reset_epoch, (SELECT count(*) FROM old) > 0, (SELECT consistency_mode FROM old), (SELECT progress_model FROM old)";
+    static final String PROGRESS_SAVE =
+            "UPDATE " + PROGRESS_TABLE + " SET resume_from = ?, updated_at = now()\n" +
+                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND reset_epoch = ? AND (?::bigint IS NULL OR lease_fence = ?::bigint)";
+    static final String PROGRESS_READ =
+            "SELECT resume_from, reset_epoch, consistency_mode, progress_model FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";
+
+    /**
+     * The tail reader's statements over one relation - the aggregate type's event table, or a test's stand-in.
+     * Parameters: {@code head} none; {@code plainTail} cursor, limit; {@code probe} cursor, limit, {@code bigint[]} holes;
+     * {@code probeWithRanges} as {@code probe} plus {@code bigint[]} range lows and highs; {@code holeRead} holes, lows,
+     * highs; {@code runningSet} none. {@code probe*} return {@link #RUNNING_COLUMN} columns, the running set on one row
+     * whose {@code global_order} is null, sorted last - present even when no event row is (§4.10).
+     */
+    record TailStatements(String head, String plainTail, String probe, String probeWithRanges, String holeRead, String runningSet,
+                          String probeWithoutHoleReread) {
+        static TailStatements of(String relation) {
+            var tail   = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] AS running FROM " + relation + " WHERE global_order > ? ORDER BY global_order LIMIT ?)";
+            var holes  = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] FROM " + relation + " WHERE global_order = ANY(?::bigint[]))";
+            var ranges = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] FROM " + relation + " e JOIN unnest(?::bigint[], ?::bigint[]) AS r(lo, hi) ON e.global_order BETWEEN r.lo AND r.hi)";
+            var running = "(SELECT " + NULL_EVENT_COLUMNS + ", " + RUNNING_SET + ")";
+            var order  = ") u ORDER BY u.global_order NULLS LAST";
+            return new TailStatements(
+                    "SELECT (SELECT coalesce(max(global_order), 0) FROM " + relation + "), " + RUNNING_SET,
+                    "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? ORDER BY global_order LIMIT ?",
+                    "SELECT * FROM (\n" + tail + "\nUNION ALL\n" + holes + "\nUNION ALL\n" + running + "\n" + order,
+                    "SELECT * FROM (\n" + tail + "\nUNION ALL\n" + holes + "\nUNION ALL\n" + ranges + "\nUNION ALL\n" + running + "\n" + order,
+                    "SELECT * FROM (\n" + holes + "\nUNION ALL\n" + ranges + "\n) u ORDER BY u.global_order",
+                    "SELECT " + RUNNING_SET,
+                    "SELECT * FROM (\n" + tail + "\nUNION ALL\n" + running + "\n" + order);
+        }
+
+        /** Every statement with its name, for the generic-plan check */
+        java.util.Map<String, String> all() {
+            var all = new java.util.LinkedHashMap<String, String>();
+            all.put("head", head);
+            all.put("plainTail", plainTail);
+            all.put("probe", probe);
+            all.put("probeWithRanges", probeWithRanges);
+            all.put("holeRead", holeRead);
+            all.put("runningSet", runningSet);
+            return all;
+        }
+    }
+
     private EventLogStorage() {
     }
 

@@ -10,4 +10,6 @@ not change. Nothing depends on this module yet; it is unreleased phase-2 work on
 - Appends run on the caller's `Connection` and never commit. Every append statement takes `pg_current_xact_id()` first (I4, decision 4) — do not remove the `xid` CTE because the head write happens to assign one too. `EventLogAppendXidWindowIT` guards it.
 - Event types are interned in their own committed transaction on the engine's `DataSource`, cached only after commit (decision 2).
 - Start-up refuses a database where `backend_xid` of another backend is invisible, and an event table whose `global_order` identity cache is not 1.
+- Subscriptions (phase 2): `TailReader` (one connection, one thread; cursor, holes, candidates, watermark F2, restart F4), `FreshSubscription` (FRESH, periodic progress, non-exclusive, backstop only), `ProgressStore` (`el_progress`, reset-epoch CAS, no lease). The tail statement re-reads holes as a `UNION ALL` branch, never `OR` (generic plans walk the primary key); `EventLogGenericPlanIT` checks every reader statement's generic plan.
+- Phase-0 mutants live in `WatermarkMutant`, settable only through package-private `TestSeams`; every invariant IT (I1-I3, I11) has a `must_fail_*` test per mutant. Never add a public way to set them.
 - Tests: `*IT` use `EssentialsTestContainers.postgres()` (static container); unit tests `*Test`.
