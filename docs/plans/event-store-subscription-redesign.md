@@ -71,8 +71,9 @@ Related documents:
    progress in the handler's transaction, engine-owned leases), not an implementation of
    `EventStoreSubscriptionManager` and not shaped by the existing processors. The engine has **its own
    tables**, free to use the layouts phase 0 measured, and an application moves to it **once, one way**, by
-   copying its events and importing its resume points (§12, decided 2026-11-15). Whether appends and stream
-   loads also get an `EventStore` adapter for the aggregate repositories is open (§19).
+   copying its events and importing its resume points (§12, decided 2026-11-15). Appends and stream loads
+   also get an `EventStore` adapter, for those methods only, so the aggregate repositories run unchanged; its
+   polling and subscription methods throw (§19 item 19, decided 2026-11-15).
 10. **Investigate before building.** Four claims carry the design and none is proven yet: that the
     single-statement append takes its xid before the identity value, that the combined probe reads
     running writers after its snapshot, that `backend_xid` is visible on the managed PostgreSQL services
@@ -231,7 +232,7 @@ Section numbers on the left refer to `marten-event-store-design.md`, removed on 
 
 | Marten idea | Marten § | Applied in | Change from Marten |
 |---|---|---|---|
-| Check the expected version **before** `nextval`, so a writer that loses the race consumes no sequence value | 3.1, 4.1 | §5 | No streams table: the check reads `max(event_order)` from the existing unique index |
+| Check the expected version **before** `nextval`, so a writer that loses the race consumes no sequence value | 3.1, 4.1 | §5 | First planned without a streams table, the check reading `max(event_order)` from the existing unique index. Decided 2026-11-15 (§19 item 23): the engine uses P0.7's stream head table, whose guarded `UPDATE` makes the check |
 | One round trip per appended stream, column arrays as parameters | 3.1, 11.1 | §5 | A set-based `INSERT … SELECT FROM unnest(…)` instead of a PL/pgSQL loop, and a plain statement instead of a function |
 | Map concurrency violations by constraint name, never by parsing the error detail | 3.4 | §5 | Already done today (`isOptimisticConcurrencyViolation`); kept |
 | Every high-water reading is one SQL statement, so one snapshot | 4.3 | §4.10 | Applied to the tail read plus running-writers probe |
@@ -257,7 +258,7 @@ Section numbers on the left refer to `marten-event-store-design.md`, removed on 
 | **The optional cap that forces a skip** after a longer time | Event rows are never deleted, so an unretired candidate costs one list entry, not data (§4.6) |
 | **Advisory-lock leadership per shard** | Balances poorly ("first node grabs everything"), and an advisory lock cannot be asserted inside a write. Lease rows with fences can (§9) |
 | **Rich append: client-side `nextval` pre-fetch** | Doubles the round trips and burns sequence values on every failed save |
-| **A `streams` table with a version row per stream** | Would add an update per append and a schema change that makes the switch between engines one-way. The `max(event_order)` read on the existing unique index gives the same pre-`nextval` check. An opt-in transaction-scoped advisory lock covers Marten's `FOR UPDATE` use case for hot streams (§5.3). *Revised 2026-11-15:* the move to the new engine is one-way and the engine has its own tables (§12.4), so the schema-change reason no longer holds; P0.7's stream head table is a candidate layout (§5.3, §13.3), not decided |
+| **A `streams` table with a version row per stream** | Would add an update per append and a schema change that makes the switch between engines one-way. The `max(event_order)` read on the existing unique index gives the same pre-`nextval` check. An opt-in transaction-scoped advisory lock covers Marten's `FOR UPDATE` use case for hot streams (§5.3). *Revised 2026-11-15:* the move to the new engine is one-way and the engine has its own tables (§12.4), so the schema-change reason no longer holds. Decided 2026-11-15 (§19 item 23): the engine adopts P0.7's stream head table (§5.3, §13.3), which P0.7 measured with zero lost-race holes in one statement. This row therefore records why the table was first rejected; it is now taken |
 | **Tenant partitioning with a sequence per tenant** | Loses global order within an aggregate type, which `GlobalEventOrder` promises |
 | **Coarse tag-version rows for consistency across streams (DCB)** | Out of scope; a hot tag becomes a write hotspot |
 
@@ -576,7 +577,7 @@ RETURNING global_order, event_order;
   insert, where the identity default calls `nextval`. That is the reasoning; spike P0.1 has to prove it,
   including under a plan that puts `unnest` on the outer side of the join.
 - Interceptors, `PersistableEventEnricher`s, serialisation and the `PersistedEvent` result stay client-side,
-  above the engine, as today (in an `EventStore` adapter if one is built; open, §19). One difference (P0.4): without an expected order the event order is
+  above the engine, as today (in the `EventStore` adapter for append and stream load, §19 item 19). One difference (P0.4): without an expected order the event order is
   only known after the insert, so the `PersistableEventMapper` and enrichers get a provisional order and the
   `PersistedEvent` is built from `RETURNING event_order`.
 
@@ -617,7 +618,7 @@ table, so it is outside "the same rows" of §5.4 and §12.4. Findings, not a dec
 [phase-0 record, P0.7](../archive/event-store-redesign-phase0.md#p07-table-design-options). No cheaper parameter encoding brought §5.1's
 contended throughput up to today's engine; the extra server CPU is not Bind-time array parsing (same doc, §6).
 *Note 2026-11-15:* the new engine now has its own tables and the move to it is one-way (§12.4), so a stream head
-table is no longer ruled out by the schema; whether the engine adopts it is open (§19).
+table is no longer ruled out by the schema. Decided 2026-11-15 (§19 item 23): the engine adopts it.
 
 ### 5.4 Relationship to the current engine
 
@@ -1062,14 +1063,17 @@ schema; see §18, "Decisions 2026-11-15: a new subscription model".
 
 | Module | Depends on | Contents |
 |---|---|---|
-| engine (working name `postgresql-event-log`) | `shared`, pgjdbc, slf4j, micrometer (optional) | Append, stream load, tail reader, watermark, consistency modes, catch-up, wake-up, leases, progress table, parked events. Raw JDBC, no JDBI, no Reactor, no Jackson. Payloads are opaque to it, as in the queue |
-| integration | engine, foundation; `postgresql-event-store` only if an `EventStore` adapter is built (§19) | The new subscription API (§12.3) and the processors built on it, serialisation, interceptors, enrichers, causation, the unit-of-work integration, page-handler invocation, the migration tooling (§12.4). Possibly an `EventStore` adapter for appends and stream loads, nothing subscription-side |
+| engine (`components/postgresql-event-log`) | `foundation` (the schema harness's `EssentialsSchemaContributor`/`SchemaOwnership` and `PostgresqlUtil` live there, as for `components/postgresql-queue-shard-owned`), pgjdbc, slf4j, micrometer (optional) | Append, stream load, tail reader, watermark, consistency modes, catch-up, wake-up, leases, progress table, parked events. Raw JDBC, no JDBI, no Reactor, no Jackson. Payloads are opaque to it, as in the queue |
+| integration | engine, foundation, `postgresql-event-store` (for the `EventStore` adapter, §19 item 19) | The new subscription API (§12.3) and the processors built on it, serialisation, interceptors, enrichers, causation, the unit-of-work integration, page-handler invocation, the migration tooling (§12.4). The `EventStore` adapter for appends and stream loads, nothing subscription-side |
 | starter | integration | Spring wiring, properties, health, admin API mapping, schema contributors (event tables, progress table, parked events, the opt-in event-type index) |
+
+Naming, decided 2026-11-15: the engine module is `components/postgresql-event-log`, its package
+`dk.trustworks.essentials.components.eventlog`, and its tables are prefixed `el_`.
 
 The engine's write API takes a caller's `java.sql.Connection`, as `ShardOwnedQueue.enqueue(Connection, …)`
 does, and commits nothing. The integration module takes the connection from the caller's unit of work, so
 appends join the caller's transaction exactly as now. Delivery inside that commit (today's in-transaction
-subscribers) stays available; its API follows from the open question on appends (§19). The same applies to
+subscribers) stays available; its API follows from the `EventStore` adapter decided for appends (§19 item 19). The same applies to
 the resume-point update of §8: the engine issues it on the connection of the handler's unit of work.
 
 All of the engine's DDL (its event tables, the progress table, wherever parked events are stored, and the
@@ -1100,13 +1104,13 @@ What the API has to express, each from a section of this plan:
 
 Its exact types are phase-8 design work and are not fixed here.
 
-What is left of an adapter: whether the aggregate repositories, the Kotlin decider support and other code that
-appends and loads streams through `EventStore`/`ConfigurableEventStore` get an adapter onto the engine's append and
-stream load, or move to a new append API, is **not decided** (§19). If an adapter is built, it covers appends,
+What is left of an adapter (decided 2026-11-15, §19 item 19): the aggregate repositories, the Kotlin decider
+support and other code that appends and loads streams through `EventStore`/`ConfigurableEventStore` get an
+`EventStore` adapter onto the engine's append and stream load, and run unchanged. The adapter covers appends,
 `fetchStream`, `loadEvent(s)`, `loadEventsByGlobalOrder`, `findHighest/LowestGlobalEventOrderPersisted`, causation
-lookup, interceptors, projectors and the local event bus. It does not implement anything subscription-side:
-`pollEvents`/`unboundedPollForEvents`, `SubscriberAcknowledgement`, `forgetGapMiddlesAwaitedInMemory` and the
-`EventStreamGapHandler` wiring have no counterpart.
+lookup, interceptors, projectors and the local event bus. It implements nothing subscription-side: its polling and
+subscription methods (`pollEvents`/`unboundedPollForEvents` among them) throw, and `SubscriberAcknowledgement`,
+`forgetGapMiddlesAwaitedInMemory` and the `EventStreamGapHandler` wiring have no counterpart.
 
 CDC: the new engine does not implement it. If §17 shows the shared reader and Tier 1 wake-up meet CDC's latency and
 load numbers, CDC remains with the old engine for users who need it for audit trails or replica offload. Otherwise
@@ -1171,7 +1175,7 @@ table layout (§13.3) > library overhead. Phase 0 must confirm this before any l
 ### 13.2 Why the engine should use raw pgjdbc anyway
 
 Not for speed, until that is measured, but for capabilities JDBI hides or makes awkward, and for a
-dependency footprint matching the queue's (`shared` plus pgjdbc):
+dependency footprint matching the queue's (`foundation` plus pgjdbc):
 
 | Capability | Use |
 |---|---|
@@ -1211,7 +1215,10 @@ the code.
 
 Each is justified by its own measurement, and none is needed for §4–§12. Since 2026-11-15 the new engine
 has its own tables and applications move to it with a copy (§12.4), so these are candidates for the engine's
-table layout, not opt-ins limited to tables created later; which of them the engine adopts is open (§19).
+table layout, not opt-ins limited to tables created later. Decided 2026-11-15 (§19 item 23): the engine adopts
+P0.7's full combination, a stream head table (§5.3), no `UNIQUE(event_id)` with a plain index on `event_id`, `uuid`
+ids, event types interned as `smallint`, and `json` payload and metadata. The table below keeps the options as first
+weighed; the note after it has what phase 0 measured.
 
 | Option | Expected effect | Cost, risk |
 |---|---|---|
@@ -1246,8 +1253,8 @@ latency path and Marten shows two cheap wins. Today `StatefulAggregateRepository
 it: two round trips, each its own statement.
 
 Decided 2026-11-15: these items are built against the new engine's stream load (§12) only. The existing
-aggregate repositories and `PostgresqlEventStore` are not changed. Whether repositories reach the new engine's
-stream load through an `EventStore` adapter or through a new API is open (§19).
+aggregate repositories and `PostgresqlEventStore` are not changed. Repositories reach the new engine's stream load
+through the `EventStore` adapter for append and stream load (§19 item 19, decided 2026-11-15).
 
 | Item | What | Notes |
 |---|---|---|
@@ -1296,7 +1303,7 @@ nothing pass on broken code (history §9.13).
 | I1 | No loss: every committed event reaches every active subscription at least once, in both modes | Concurrent-writer ITs with random commit order and rollbacks. A long-transaction IT that commits after 5 minutes. A sequence-jump IT |
 | I2 | Per-aggregate order: within one subscription incarnation, A#n is first delivered before A#n+1 | The §4.5 scenario as an IT against the engine (must pass) and against a per-row-xid cursor (must fail). Run with the server-side `event_order` of §5.1. Also P0.5's F1 shape (proposed revision, §4.2): A#n commits late into a hole, A#n+1 follows, a long writer elsewhere keeps the candidate from retiring; must fail against a reader that delivers late commits only from the hole read, and with a transaction of several events |
 | I3 | A resume point never passes an order that could still be delivered | Crash injected between delivery and handling, and between a candidate's retirement and its hole read |
-| I4 | xid before value: no writer holds a `global_order` while its xid is null — for the single-statement append, under every join order | `BEFORE INSERT` trigger holding the window open, after `ShardOwnedWatermarkXidWindowIT`; repeated with planner settings that force `unnest` outer (P0.1) |
+| I4 | xid before value: no writer holds a `global_order` while its xid is null — for §5.1's single-statement append, under every join order, and for the head-table append adopted in §19 item 23, which keeps an explicit `pg_current_xact_id()` step first (decided 2026-11-15) | `BEFORE INSERT` trigger holding the window open, after `ShardOwnedWatermarkXidWindowIT`; repeated with planner settings that force `unnest` outer (P0.1); repeated against the head-table append, and must fail against a variant without the `pg_current_xact_id()` step |
 | I5 | Fencing: a stale owner's resume-point write — and, with progress in the handler's transaction, its output — never lands after the new owner's | Pause the old owner (a debugger-style hook), let its lease expire, claim on another node, release, assert the progress row and the projection. Also with the stale write waiting on the new owner's row lock |
 | I6 | Reset wins: a reset survives a concurrent save, periodic or in the handler's transaction | A reset racing a periodic save and racing a page commit, against the progress row's reset epoch (S6's scenarios, restated for the new API) |
 | I7 | Progress: with no running writers, a committed event is delivered within the backstop interval with every notification lost | Listener killed, `NOTIFY` disabled |
@@ -1387,7 +1394,7 @@ part of the design from now on.
 | P0.5 F1 with P0.11's form | The tail statement re-reads outstanding holes as a `UNION ALL` branch and publishes them ahead of the new rows. Never the `OR global_order = ANY(:holes)` form: under a generic plan it walks the primary key. |
 | P0.5 F2, F4, F5, F6 | The watermark is `min(cursor, lowest unresolved hole − 1)` and moves only after the hole read is published; a restarted reader starts at the head with one initial candidate and an unknown watermark; a detaching subscription resumes at §4.7's formula; a slow subscription detaches and never blocks the reader. |
 | P0.5 F3 | A subscription attaches once its catch-up reaches the watermark, then bridge-reads up to the reader's cursor. Phase 2 measures how often a `CONTIGUOUS` subscription attaches, overflows and detaches behind a long writer. |
-| P0.10 | Tier-1 wake-up: `pg_notify` after commit, coalesced per JVM, never inside the appending transaction. A notify lost to a crash between commit and notify only delays the wake-up to tier 2's poll. |
+| P0.10 | Tier-1 wake-up: `pg_notify` after commit, coalesced per JVM, never inside the appending transaction. A notify lost to a crash between commit and notify only delays the wake-up to tier 0's backstop poll (§11). |
 | P0.12 | The probe reads `pg_stat_get_activity(NULL)`, and its rate is not a fixed per-JVM interval: it backs off with the probe's measured cost and re-probes only after a wake-up. Tuned in phase 2 against P0.12's 400-connection case. |
 | P0.13 | The resume point is saved per page. After a failed page the subscription continues with smaller pages and grows back after pages that commit; the new subscription API's handler receives the page and can write it set-based (first decided as an opt-in beside `@MessageHandler`; restated after the decisions below); the default page size is about 100. |
 | P0.16 | The tail reader's read statements run under `force_generic_plan`, but only statements whose generic plan is checked in CI (index-only, no primary-key walk); all woken aggregate types are read in one pgjdbc flush. Phase 2 measures the pooled-connection case. |
@@ -1405,7 +1412,7 @@ what the new engine offers instead of the current subscription model.
 
 | Decision | Replaces | What it means for phases 1 onward |
 |---|---|---|
-| A new subscription API, designed from the engine's needs: page handlers, `FRESH`/`CONTIGUOUS`, progress in the handler's transaction, engine-owned leases | An adapter implementing `EventStoreSubscriptionManager`; the subscription builders, `EventProcessor`/`ViewEventProcessor` and `@MessageHandler` as the shape to fit; Reactor (`pollEvents`, `Flux`, `SubscriberAcknowledgement`) | Phase 8 designs the API and the processors on it (§12.3). Whether appends and stream loads get an `EventStore` adapter is a separate, open question (§19); nothing subscription-side goes into one. |
+| A new subscription API, designed from the engine's needs: page handlers, `FRESH`/`CONTIGUOUS`, progress in the handler's transaction, engine-owned leases | An adapter implementing `EventStoreSubscriptionManager`; the subscription builders, `EventProcessor`/`ViewEventProcessor` and `@MessageHandler` as the shape to fit; Reactor (`pollEvents`, `Flux`, `SubscriberAcknowledgement`) | Phase 8 designs the API and the processors on it (§12.3). Appends and stream loads get an `EventStore` adapter, decided separately the same day (§19 item 19); nothing subscription-side goes into it. |
 | A progress table owned by the engine: resume point (§4.7), reset epoch, lease and fence columns, whatever an open page needs | Resume points in `durable_subscriptions` | Built from phase 2 (§8.2). Its exact columns are open (§19). A one-time import of old resume points on first start is optional (§12.4). |
 | Own tables, and a one-way move with a copy and import step | Running on the current engine's tables and resume points; switching both ways; mixed old and new nodes in a rolling deploy; the open-gap hand-over from `transient_subscriber_gaps` | The engine may use the layouts phase 0 measured (§13.3, P0.7). Phase 9 builds and verifies the migration (§12.4, I8). Risk 9 restated. |
 | An error model designed around pages: a failed page shrinks to isolate the failing event, which is retried and then parked for that subscription with its error; later events of its aggregate wait behind it and the other aggregates continue; retry, backoff and shrinking are engine settings | `SubscriptionErrorPolicy`, `FailFast`, redelivery and dead-lettering "exactly as today", per event | §8.3 restated; I14 restated. The parked-event store and the per-aggregate order behind a parked event are open (§19). |
@@ -1430,13 +1437,13 @@ Taken with the project lead, one at a time, the same day; each settles a §19 it
 | Phase | Content | Gate |
 |---|---|---|
 | 1 | Dropped 2026-11-15: the current engine is not changed. The fence (§9) is built in phase 7 | — |
-| 2 | Engine: own schema (§12.4), append (§5, shaped by P0.1/P0.4), stream load, tail reader with watermark and the combined probe (shaped by P0.2), progress table (§8.2), one `FRESH` subscription, backstop wake-up only | I1–I4, I10, I11 pass. Statements per event at or below the P0.0 baseline |
-| 3 | Shared reader, attach/detach, catch-up | I9 passes. Idle statements flat in the number of subscriptions |
+| 2 | Engine: own schema (§12.4), append (§5, shaped by P0.1/P0.4), stream load, tail reader with watermark and the combined probe (shaped by P0.2), progress table (§8.2), one `FRESH` subscription, backstop wake-up only. Design: [phase-2 design](event-store-engine-phase2.md) | I1–I4, I10, I11 pass. Statements per event at or below the P0.0 baseline, measured with one subscription per aggregate type against today's engine with one subscription (decided 2026-11-15); the 10-subscription comparison is phase 3's gate |
+| 3 | Shared reader, attach/detach, catch-up | I9 passes. Idle statements flat in the number of subscriptions. Statements per event at or below the P0.0 baseline with 10 subscriptions (decided 2026-11-15) |
 | 4 | `CONTIGUOUS` mode; progress in the handler's transaction, page per transaction; a failed page shrinks and the failing event is parked (§7, §8) | I12, I14 pass. Projection throughput above the periodic-save baseline; `CONTIGUOUS` latency within one probe interval of `FRESH` with no long writer |
 | 5 | Filtered catch-up, adaptive fallback, per-database read cap, opt-in event-type index (§10) | I13, I15 pass. Rare-type catch-up and restart-storm shapes beat the baseline |
 | 6 | Wake-up tiers 1 and 2 (§11) | I7 passes. Latency compared with S1 and CDC |
 | 7 | Engine leases on the progress row, batched renewal, exclusive subscriptions fenced (§9); no `FencedLockManager` | I5, I6 and I16 pass. Multi-JVM takeover ITs |
-| 8 | The new subscription API, the view-projection and event-processor processors built on it, parked events and the admin API (§12.3); the decision on an `EventStore` adapter for appends and stream loads (§19) | New ITs for the API and processors pass, I14 among them; if an adapter is built, the existing repository ITs pass against it |
+| 8 | The new subscription API, the view-projection and event-processor processors built on it, parked events and the admin API (§12.3); the `EventStore` adapter for appends and stream loads (§19 item 19) | New ITs for the API and processors pass, I14 among them; the existing repository ITs pass against the adapter |
 | 9 | One-way migration: copy of events per aggregate type, optional import of resume points, cut-over, and its verification (§12.4) | I8 passes. A copy of the trading demo's data verifies equal and the demo resumes on the new engine without loss |
 | 10 | Starter, documentation, LLM docs, admin UI, release notes | Trading demo runs on the new engine at or above baseline |
 
@@ -1453,7 +1460,7 @@ aggregate repositories are not changed.
 
 ### Later
 
-Table-layout options (§13.3), EF-2 units on the shared reader, direct local hand-off, CDC on the new
+EF-2 units on the shared reader, direct local hand-off, CDC on the new
 engine, exactly-once database state in `FRESH` mode (§8.4), one lease shared by several subscriptions (EF-2
 units) and blue/green projection rebuilds — each with its own measurement.
 
@@ -1501,11 +1508,12 @@ units) and blue/green projection rebuilds — each with its own measurement.
    append on the new engine there is no way back short of a restore. An imported resume point that ignores the
    subscriber's open transient gaps skips events (§12.4, I8). Old-engine appends do not take the xid first, so the
    copy must not run its final pass while any old-engine writer is running.
-10. **Naming.** `postgresql-event-log` is a working name only.
+10. **Naming** (decided 2026-11-15). The engine module is `components/postgresql-event-log`, its package
+    `dk.trustworks.essentials.components.eventlog`, and its tables are prefixed `el_` (§12.2).
 11. **Release line.** The engine, its subscription API and its starter are new modules, so they can ship in a
-    minor as an opt-in, as the queue did; nothing in the current engine or its interfaces changes. If an
-    `EventStore` adapter is built for appends and stream loads (open question 19), it implements the current
-    interface without changing it. Removing the gap SPI from the old engine is a separate decision for the next
+    minor as an opt-in, as the queue did; nothing in the current engine or its interfaces changes. The
+    `EventStore` adapter for appends and stream loads (item 19) implements the current interface without changing
+    it. Removing the gap SPI from the old engine is a separate decision for the next
     major.
 12. **Interaction with the shard-owned queue's own pending fixes.** The watermark code should be shared
     rather than copied, if the queue's version is stable by then. Its defects so far have been in exactly
@@ -1599,7 +1607,7 @@ units) and blue/green projection rebuilds — each with its own measurement.
 |---|---|---|---|
 | D1 | Delivery consistency defaults: `CONTIGUOUS` for view projections, `FRESH` for event processors and everything else; overridable per subscription | 2026-11-10 | Revisit if risk 4 materialises |
 | D2 | The Marten findings are folded into this plan rather than kept as a separate design | 2026-11-10 | `marten-event-store-design.md` stayed as the reference for Marten itself until it was removed on 2026-11-15 (git history keeps it) |
-| D3 | The new engine has its own subscription API; no adapter implements `EventStoreSubscriptionManager`, and nothing Reactor-based is in it | 2026-11-15 | §12.3. An `EventStore` adapter for appends and stream loads is still open (§19, item 19) |
+| D3 | The new engine has its own subscription API; no adapter implements `EventStoreSubscriptionManager`, and nothing Reactor-based is in it | 2026-11-15 | §12.3. An `EventStore` adapter for appends and stream loads only was decided separately the same day (§19, item 19) |
 | D4 | Subscription progress lives in a progress table the engine owns, not in `durable_subscriptions` | 2026-11-15 | §8.2. Importing old resume points once is optional |
 | D5 | The engine has its own tables; an application moves once, one way, with a copy and import step; no shared tables, no switching back, no mixed nodes | 2026-11-15 | §12.4. Replaces the coexistence plan; risk 9 and I8 restated |
 | D6 | Errors are handled per page: a failed page shrinks, the failing event is retried and then parked per subscription, the rest continue | 2026-11-15 | §8.3. Replaces `SubscriptionErrorPolicy`/`FailFast`/redelivery semantics |
