@@ -349,7 +349,8 @@ Each of these is load-bearing. Each was learned on the queue and must carry over
 2. **`backend_xid` must be fully visible.** The queue's start-up probe forces a real xid on a second
    connection and requires the first to see it (`ShardOwnedSchema.verifyWatermarkPrerequisites`).
    Reuse the same probe. Stock PostgreSQL passes it for an ordinary role. A managed service may not, and
-   then the engine must refuse to start rather than lose events. Spike P0.3 checks the services users run.
+   then the engine must refuse to start rather than lose events, and the application stays on the current engine.
+   P0.3 is not a gate (decided 2026-11-15): the probe at start-up decides per database.
 3. **Identity sequences with `CACHE 1`.** Values must be handed out in wall-clock order. That is the
    identity default, but the engine must verify it at start-up, because an operator can change it.
 4. **Appends from outside the engine.** A raw SQL `INSERT` into an event table that skips step 1 breaks
@@ -1360,7 +1361,7 @@ document (§21) before phase 2 starts.
 | P0.0 | What does the current engine cost? | Baseline of §17's shapes on the current engine; statements per poll and per delivered event from `pg_stat_statements` | Numbers recorded | — |
 | P0.1 | Does the single-statement append (§5.1) take its xid before the identity value, under every join order? | Throwaway IT in the xid-window pattern, with planner settings forcing each join order and both protocols (simple, extended/prepared) | The IT holds for every plan, and fails against a variant without the `xid` CTE | Keep the set-based insert, send `SELECT pg_current_xact_id()` ahead of it in the same round trip (§13.2). Costs a statement, not correctness |
 | P0.2 | Does the combined probe (§4.10) read running writers after its snapshot? | Throwaway IT holding a writer between value and commit; simple and extended protocol; with and without a server-side prepared plan | The probe never retires a candidate the held writer belongs to, and the IT fails against a two-statement version with the reads reversed | Two statements, `S` then `X`, as originally planned. Costs a round trip while holes are outstanding |
-| P0.3 | Is `backend_xid` fully visible on the managed services users run? | Run the queue's `verifyWatermarkPrerequisites` probe as an ordinary application role on RDS PostgreSQL, Aurora PostgreSQL, Azure Database for PostgreSQL Flexible Server and Cloud SQL | Passes on each, or the failing services are named and accepted as unsupported | **Design decision point.** If a service users depend on fails, stop and decide whether a degraded mode is needed before phase 2 |
+| P0.3 | Is `backend_xid` fully visible on the managed services users run? | Run the queue's `verifyWatermarkPrerequisites` probe as an ordinary application role on RDS PostgreSQL, Aurora PostgreSQL, Azure Database for PostgreSQL Flexible Server and Cloud SQL | Passes on each, or the failing services are named and accepted as unsupported | Decided 2026-11-15, not a gate: the engine refuses to start where the probe fails and that database keeps the current engine; no degraded mode. Runs when access exists, to list supported services |
 | P0.4 | Is the single-statement append faster than today's `PreparedBatch`? | §17's append and contended-aggregates shapes, both statements on the current tables | Lower latency or fewer round trips at 1, 10 and 100 events, and fewer holes under contention, outside the noise | Keep the batch shape in the engine (with the xid statement first); drop §5.4 |
 | P0.5 | Does the state machine hold? | Model of reader, candidates, watermark, both modes, attach/detach and resume point (TLA+ or deterministic simulation) | Model checks I1–I3, I12 and I13 | Fix the design before code |
 | P0.6 | Is JDBI's overhead material? | Same statement through JDBI and raw pgjdbc | Measured | Informs only §13.2; the engine uses raw pgjdbc for its capabilities either way |
@@ -1392,8 +1393,9 @@ part of the design from now on.
 | P0.16 | The tail reader's read statements run under `force_generic_plan`, but only statements whose generic plan is checked in CI (index-only, no primary-key walk); all woken aggregate types are read in one pgjdbc flush. Phase 2 measures the pooled-connection case. |
 
 Not put to a decision because the spike settled it: P0.14 (engine-owned transactions go out as one explicit
-`BEGIN … COMMIT` flush), P0.17 (a) (pgjdbc's `PINNED_PEEK` drain, no second driver), P0.6 (raw pgjdbc). Still open:
-P0.3 on managed services.
+`BEGIN … COMMIT` flush), P0.17 (a) (pgjdbc's `PINNED_PEEK` drain, no second driver), P0.6 (raw pgjdbc). P0.3 is not a gate (decided 2026-11-15, the
+same day): access to the managed services will not come soon, so the engine runs the prerequisite probe at start-up
+and refuses to start where it fails, and such a database keeps the current engine. No degraded mode is built.
 
 ### Decisions 2026-11-15: a new subscription model
 
@@ -1461,7 +1463,8 @@ units) and blue/green projection rebuilds — each with its own measurement.
 
 1. **`backend_xid` on managed PostgreSQL.** If a provider restricts `pg_stat_activity`, the engine
    cannot run there. The probe turns that into a start-up failure, but it is a real adoption limit.
-   P0.3 settles it before any engine code.
+   Accepted (2026-11-15): where the probe fails, the application uses the current engine; P0.3 runs when access to
+   the services exists and only adds a list of supported services.
 2. **Evaluation order inside one statement.** §5.1 and §4.10 both rely on PostgreSQL evaluating parts of a
    statement in an order the SQL standard does not promise. Both have a fallback that costs one statement,
    and both are spikes (P0.1, P0.2). A future PostgreSQL version could change the behaviour, so the

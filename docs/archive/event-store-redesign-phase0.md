@@ -1502,7 +1502,8 @@ marked unusable or were replaced.
 
 ## Open items
 
-- **P0.3, managed services.** No RDS, Aurora, Azure or Cloud SQL access. Nothing may be released as supported on a
+- **P0.3, managed services.** No longer a gate (decided 2026-11-15): the engine refuses to start where the probe
+  fails, and such a database keeps the current engine. No RDS, Aurora, Azure or Cloud SQL access. Nothing may be released as supported on a
   managed service until P0.3 passes for it; still unchecked on Supabase: a role without `pg_read_all_stats` and the
   transaction pooler.
 - **The slow flush phase's cause.** Next: `pg_test_fsync`, `iostat -x` during a run, and the SSD's temperature.
