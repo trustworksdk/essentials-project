@@ -741,3 +741,31 @@ rollback-on-zero-row-conflict under one flush still needs its own correctness te
 **P0.1 and P0.2 on 16 dropped (2026-11-15).** Both ran on 16.15 in the VM containers on 2026-11-10 and held, and on
 this server on 17.5, 17.12 and 18.7. They check PostgreSQL's ordering rules, not timing, so a 16 server here would
 add nothing but a rebuild; the earlier "still open" entries for them are closed.
+
+### 2026-11-15: P0.16, owned read connections (`20261115-162730-lac-N85-N87-HJ-HJ1-HK1-external`)
+
+PostgreSQL 18.7, same setup, suite `owned` at commit `0cfca18d`, default size (2 000 000 rows). Passed in 17 minutes;
+no result mismatches; every statement uses an index-only plan under `auto`, `force_custom_plan` and
+`force_generic_plan`.
+
+| Statement | `A_POOL` (Hikari, prepare per call) | `B_AUTO` (owned, prepared at connect) | `B_GENERIC` (owned, `force_generic_plan`) | `C_AUTO` (minimal wire client) |
+|---|---|---|---|---|
+| `TAIL_1`, server CPU / p50 | 109 µs / 190 µs | 111 µs / 194 µs | 50 µs / 124 µs | 105 µs / 175 µs |
+| `PROBE_10`, server CPU / p50 | 303 µs / 412 µs | 284 µs / 393 µs | 116 µs / 198 µs | 281 µs / 370 µs |
+| Planning per call | 46-146 µs, 1 plan | 48-137 µs, 1 plan | 0, no plan | 46-136 µs, 1 plan |
+
+- **Owned gate passes on 5 of 5 tail reads** (`B_GENERIC` against `A_POOL`: 57-189 µs server CPU saved, p50 −24 to
+  −56 %). **But the whole saving is the generic plan, not the owned connection**: `B_AUTO` costs the same as
+  `A_POOL`, because under `auto` PostgreSQL keeps re-planning these statements (1.00 plans per call). The pool arm was
+  not run with `force_generic_plan`, so whether a pooled connection gets the same saving is not measured; it should,
+  as long as the server-side prepared statement survives on the pooled connection.
+- **The wire client does not count**: within −11 to +5 % of pgjdbc in server CPU in the same mode (needs 20 %).
+- **Several types per wake in one flush passes**: at 10 types one pgjdbc multi-statement flush costs 625 µs server
+  CPU per wake against 1 470 µs one connection per type (−58 %), at 50 types 2 971 against 8 769 µs (−66 %), and it
+  stays one round trip (no mid-flush Sync). Latency is slightly higher than the parallel per-type reads (p50 834
+  against 730 µs at 10 types, 3.3 against 2.8 ms at 50), since the per-type arm reads in parallel on 10-50
+  connections. A Sync per read on the wire client costs about 50 % more server CPU than one Sync at the end.
+
+Reading: phase 2's tail reader should run its read statements under `force_generic_plan` (index-only plans checked
+here; P0.11's `OR = ANY` hole re-read is the known case where a generic plan is wrong) and read all woken types in one
+flush. Owning the connection is not needed for the CPU saving; no second client.

@@ -1,6 +1,6 @@
 # Event store redesign: phase 0 in one page
 
-Status as of 2026-11-15. Numbers are from the dedicated server (Intel i7-7700HQ laptop, 4 cores / 8 threads,
+Status as of 2026-11-15, P0.16 included. Numbers are from the dedicated server (Intel i7-7700HQ laptop, 4 cores / 8 threads,
 client on the same host over loopback, `fsync=on`; PostgreSQL 17.5 on 2026-11-13, 17.12 on 2026-11-14, 18.7 on
 2026-11-15) unless marked **VM** (the earlier 8-CPU Docker VM, `fsync=off`, client and server sharing the VM).
 
@@ -36,7 +36,7 @@ managed PostgreSQL service until P0.3 passes for that service.
 | P0.13 | Resume point in the handler transaction | Pages beat the periodic save: `PAGE_100` 7.8x with 4 projections (2026-11-13), set-based `PAGE_500_SET` 45.6-49.8x. The per-event penalty disappears; one failure in 1 000 costs −44 % against `PAGE_100`. Proposed: the fallback backs off the page size. | Single windows. Open: `ViewEventProcessor`'s savepoint batch mode, views with secondary indexes. |
 | P0.14 | One flush for engine-owned transactions | **Passes at 8 writers** for 10 events (+31 %), 5 aggregates (+17 %) and the page (+20 %); fails for a single event (−7 %) but gains +49 % at 20. Saves 42-137 µs of server CPU per removed round trip. Use explicit `BEGIN … COMMIT` (`D_EXPLICIT`, on pgjdbc). | An autocommit batch is not atomic past about 64 KB (255 of 399 rows committed). Wire client arm C not built. The five-aggregate rollback still needs a correctness test. |
 | P0.15 | Group commit for engine-owned writes | **Parked** 2026-11-14. | Revisit only if round trips still dominate after P0.14. |
-| P0.16 | Owned, pre-prepared read connections | **Built 2026-11-15 (suite `owned`), not yet run on the server.** VM smoke only: an owned connection with a generic plan halves probe server CPU against a borrowed pooled one (planning that no longer runs); a minimal wire client saves a further 9-13 %, under the 20 % bar; ten types woken in one flush cost 69 µs against 293 µs one by one. | Smoke numbers are not findings. Arm C has no TLS. |
+| P0.16 | Owned, pre-prepared read connections | **Run 2026-11-15 on 18.7: use `force_generic_plan` and one flush per wake.** An owned connection under a generic plan saves 57-189 µs server CPU per tail read (p50 −24 to −56 %), but owning the connection alone saves nothing: under `auto` PostgreSQL re-plans every call. Reading 10 woken types in one pgjdbc flush costs −58 % server CPU (−66 % at 50), one round trip. The minimal wire client is within −11 to +5 % of pgjdbc. | The pool with a generic plan was not measured. Generic plans are safe only for statements whose plans were checked (not P0.11's `OR = ANY`). |
 | P0.17 (a) | Faster notification listener? | **pgjdbc only.** At 3 000/s, `PINNED_PEEK`'s p99 is 0.60-0.72 ms against Vert.x's 0.60-0.66 ms; the stock drain lags up to 1.4 s inside pgjdbc. | `QUERY_POLL` is a borderline fallback (2.10-2.17 ms p99 in the 20-writer burst). |
 | P0.17 (b) | Request-path pipelining | **Parked** 2026-11-14: it needs a wire client of our own. | — |
 
@@ -71,7 +71,7 @@ replaced.
   and background processes. This needs per-backend CPU or a separately timed commit.
 - **A separate wired client host**, to split client from server in P0.12's collapse and in P0.10's pgjdbc wake
   latency. The listener on a separate host is also unmeasured for P0.17 (a).
-- **P0.16**: built, waiting for its run on the dedicated server (`--suite owned`).
+- **P0.16 follow-up**: measure a pooled connection under `force_generic_plan`.
 - **P0.14 follow-ups**: a correctness test for the five-aggregate rollback on a zero-row conflict. The "B within
   10 % of C" clause was not evaluated because C was not built.
 - **P0.3**: the managed services.
