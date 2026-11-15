@@ -54,7 +54,8 @@ Related documents:
    point is written in the handler's own transaction, a page of events per transaction, with a
    compare-and-set on the reset epoch and the owner's fence, on the engine's own progress row (§8). Marten's
    progress model, combined with this proposal's fencing. A page that fails shrinks until the failing event is
-   isolated; that event is parked for the subscription with its error and the rest continue (§8.3).
+   isolated; that event is parked for the subscription with its error, later events of its aggregate wait behind
+  it, and every other aggregate continues (§8.3).
 6. **Own exclusive subscriptions through engine leases**: lease and fence columns on the progress row, renewed
    with server time, many subscriptions per JVM in one statement, and every resume-point write asserting the
    fence in the same statement on the same row (§9). No `FencedLockManager`. The current engine is not changed
@@ -236,7 +237,7 @@ Section numbers on the left refer to `marten-event-store-design.md`, removed on 
 | Every high-water reading is one SQL statement, so one snapshot | 4.3 | §4.10 | Applied to the tail read plus running-writers probe |
 | Never read past a high-water mark | 4.3 | §7 (`CONTIGUOUS`) | Optional per subscription instead of the only behaviour |
 | Progress committed as a compare-and-set in the same transaction as the output | 6.2 | §8 | The compare-and-set is on the reposition epoch and the owner's fence |
-| A page of events per transaction | 6.2, 7 | §8 | A page that fails shrinks until the failing event is isolated; that event is parked for the subscription and the rest continue (§8.3) |
+| A page of events per transaction | 6.2, 7 | §8 | A page that fails shrinks until the failing event is isolated; that event is parked for the subscription, its aggregate waits behind it and the others continue (§8.3) |
 | Push the event-type filter into SQL; advance progress to the high-water mark on sparse pages | 6.1 | §10 | Only for catch-up reads; the shared tail read stays unfiltered |
 | Skip-ahead and windowed fallback when a filtered read times out | 6.1 | §10 | — |
 | Cap concurrent event loads per database, separately from the pool | 6.1 | §10 | — |
@@ -811,15 +812,17 @@ event inside it, one resume-point update at the end.
 
 - **A failing page shrinks** (decided 2026-11-15). If any event in the page throws, the page's transaction
   rolls back and the subscription retries with smaller pages (bisecting, or stepping down as P0.13
-  proposes) until the failing event is in a page of its own, while the pages around it commit. The failing
+  proposes; stepping down was decided, §19 item 21) until the failing event is in a page of its own, while the pages around it commit. The failing
   event is retried with backoff and, when its retries are used up, **parked** for that subscription with
-  its error; the subscription moves on. Page size then grows back after pages that commit (P0.13's
+  its error. Later events of the same aggregate are parked behind it, in order, until it is retried or
+  discarded; every other aggregate continues (decided 2026-11-15, §19 item 18, as processors hold an aggregate behind
+  its dead letter today). Page size then grows back after pages that commit (P0.13's
   revision below). Retry count, backoff and the shrink policy are engine settings per subscription.
   This is not today's `SubscriptionErrorPolicy`, `FailFast` or redelivery/dead-letter model, and it does
   not inherit the current queue consumer's built-in list of permanent errors.
-- Parked events are visible and actionable through the admin API (retry, discard). Where they are stored,
-  how they count in the resume point, and whether later events of the same aggregate are held behind a
-  parked one (per-aggregate order against availability) are open (§19).
+- Parked events are visible and actionable through the admin API (retry, discard). A parked row references
+  the event by aggregate type and `global_order`, without a copy; the resume point moves past a parked event, and
+  the parked rows are what remains to be delivered for their aggregates (§19 item 18).
 - The page size is bounded by count and by time (the page closes when the buffer is empty), so a quiet
   system does not hold events back to fill a page.
 - In `FRESH` mode the resume point written is §4.7's formula, not the page's highest order.
@@ -1403,8 +1406,22 @@ what the new engine offers instead of the current subscription model.
 | A new subscription API, designed from the engine's needs: page handlers, `FRESH`/`CONTIGUOUS`, progress in the handler's transaction, engine-owned leases | An adapter implementing `EventStoreSubscriptionManager`; the subscription builders, `EventProcessor`/`ViewEventProcessor` and `@MessageHandler` as the shape to fit; Reactor (`pollEvents`, `Flux`, `SubscriberAcknowledgement`) | Phase 8 designs the API and the processors on it (§12.3). Whether appends and stream loads get an `EventStore` adapter is a separate, open question (§19); nothing subscription-side goes into one. |
 | A progress table owned by the engine: resume point (§4.7), reset epoch, lease and fence columns, whatever an open page needs | Resume points in `durable_subscriptions` | Built from phase 2 (§8.2). Its exact columns are open (§19). A one-time import of old resume points on first start is optional (§12.4). |
 | Own tables, and a one-way move with a copy and import step | Running on the current engine's tables and resume points; switching both ways; mixed old and new nodes in a rolling deploy; the open-gap hand-over from `transient_subscriber_gaps` | The engine may use the layouts phase 0 measured (§13.3, P0.7). Phase 9 builds and verifies the migration (§12.4, I8). Risk 9 restated. |
-| An error model designed around pages: a failed page shrinks to isolate the failing event, which is retried and then parked for that subscription with its error; the rest continue; retry, backoff and shrinking are engine settings | `SubscriptionErrorPolicy`, `FailFast`, redelivery and dead-lettering "exactly as today", per event | §8.3 restated; I14 restated. The parked-event store and the per-aggregate order behind a parked event are open (§19). |
+| An error model designed around pages: a failed page shrinks to isolate the failing event, which is retried and then parked for that subscription with its error; later events of its aggregate wait behind it and the other aggregates continue; retry, backoff and shrinking are engine settings | `SubscriptionErrorPolicy`, `FailFast`, redelivery and dead-lettering "exactly as today", per event | §8.3 restated; I14 restated. The parked-event store and the per-aggregate order behind a parked event are open (§19). |
 | Engine leases: lease and fence columns on the progress row, renewed with `now()`, many per JVM in one pass; every progress write asserts the fence in the same statement on the same row | `FencedLock`/`FencedLockManager`, and the `owner_fence` column on `durable_subscriptions` | Phase 7 (§9). I5 restated, I16 added. Lease timings and fence uniqueness across a deleted row are open (§19). |
+
+### Decisions 2026-11-15: the open items of the new model
+
+Taken with the project lead, one at a time, the same day; each settles a §19 item, where the details are.
+
+| Item | Decision |
+|---|---|
+| §19 item 18, parked events | Later events of the parked event's aggregate wait behind it for that subscription; every other aggregate continues |
+| §19 item 19, appends | An `EventStore` adapter for append and stream load only; aggregates and deciders run unchanged |
+| §19 item 23, table layout | P0.7's full combination: head table, no `UNIQUE(event_id)`, `uuid` ids, interned event types, `json` payload |
+| §19 item 17, progress table | Fences from one sequence; mode and progress model stored and checked; no open-page state; non-exclusive subscriptions get a row per instance |
+| §19 item 21, errors | 3 retries with doubling backoff, step-down shrinking, no built-in permanent-error list, an explicit exception to park at once |
+| §19 item 22, leases | 15 s lease, 4 s renewal, local stop after 7 s without a successful renewal; safety rests on the fence |
+| §19 item 20, migration | Online bulk copy, then the final delta under a short stop for appends; phase 9 starts by measuring it |
 
 ### Phases 1 onward
 
@@ -1528,34 +1545,48 @@ units) and blue/green projection rebuilds — each with its own measurement.
     revisions in §4.10 and §7.3. Still open: the cause of the collapse (lock contention against commits, or saturation
     of the 8-CPU VM; no wait events were sampled), the dedicated machine, and a probe schedule whose cluster-wide cost
     does not grow with the square of the deployment.
-17. **The progress table's columns** (open, 2026-11-15). Resume point, reset epoch, lease owner, lease expiry and
-    fence are given (§8.2, §9); what an open page needs, whether consistency mode and progress model are stored on
-    the row, how it is keyed for non-exclusive subscriptions run on several JVMs, and whether fences are drawn from a
-    sequence so that they never repeat, even after an operator deletes and recreates a row (§9), are not designed.
-18. **The parked-event store** (open, 2026-11-15). Where a parked event is kept (a table referencing the event by
-    aggregate type and `global_order`, or a copy), how parked events relate to the resume point, the admin
-    operations to retry or discard one, and above all whether later events of the same aggregate continue past a
-    parked event (availability, but per-aggregate order is broken for that subscription) or are held behind it
-    (order kept, but one bad event stalls its aggregate). §8.3 says the rest continue; for events of the same
-    aggregate that is not yet decided.
-19. **Appends and stream loads: an `EventStore` adapter or a new API** (open, 2026-11-15). The aggregate
-    repositories, the Kotlin decider support, `EventStoreEventBus` and in-transaction delivery append and load
-    streams through `EventStore`/`ConfigurableEventStore` today. Whether they get an adapter onto the engine (append
-    and stream-load methods only, §12.3), or move to a new append API, decides how much of an application must change
-    when it moves, and where interceptors, enrichers and `OptimisticAppendToStreamException` live.
-20. **The migration copy** (open, 2026-11-15). Its throughput on large tables, whether it can run online with only
-    the final delta under a stop, how it handles a target layout that differs from the source (§13.3: interned event
-    types, `uuid` ids, a stream head table to populate, a payload column type that must keep the bytes), and the
-    verification tooling of §12.4. Not measured; no spike is planned yet.
-21. **Error settings and their defaults** (open, 2026-11-15). Retry count, backoff, the shrink policy (bisecting or
-    P0.13's stepping down) and whether any exception type is parked at once without retries. The current queue
-    consumer's built-in permanent-error list is not inherited; whether the new engine has one is undecided.
-22. **Lease timings** (open, 2026-11-15). Lease duration, renewal interval and the owner's local stop deadline, and
-    how they relate to `statement_timeout` and to a renewal pass delayed by a slow database. All are server time
-    (§9), but the stop deadline is measured on the JVM and has to allow for that.
-23. **Which phase-0 table layouts the engine adopts** (open, 2026-11-15). With its own tables (§12.4) the engine
-    may use a stream head table (§5.3), no `UNIQUE(event_id)`, `uuid` ids or interned event types (§13.3). Each has
-    a measured gain in P0.7 and a cost to `findEvent(EventId)`, SQL readability or the migration copy.
+17. **The progress table's columns** (decided 2026-11-15). Besides resume point, reset epoch, lease owner, lease
+    expiry and fence (§8.2, §9): fence tokens are drawn from one database sequence, so a token never repeats, even
+    after an operator deletes and recreates a row; the consistency mode and progress model are stored on the row and
+    checked at start, so a redeploy that changes them is logged rather than resumed silently under other semantics;
+    nothing is stored for an open page (in-transaction progress commits with the page, periodic progress saves only
+    completed positions). Non-exclusive subscriptions get one row per instance, keyed
+    `(subscriber, aggregate type, instance name)` with a stable instance name from configuration, so each JVM resumes
+    from its own progress (today all JVMs overwrite one shared row); rows of retired instances are listed in the
+    admin API and can be deleted. The exact DDL is drafted in phase 2.
+18. **The parked-event store** (decided 2026-11-15). Later events of the parked event's aggregate are held behind it,
+    in order, for that subscription, until an operator retries or discards the head; every other aggregate continues.
+    That is what `EventProcessor`/`ViewEventProcessor` do today behind a dead letter, without a durable queue in between;
+    today's whole-subscription stop and silent skip both go. A parked row references the event by aggregate type and
+    `global_order`, without a copy. Admin operations: list, retry, discard (§12.3).
+19. **Appends and stream loads** (decided 2026-11-15). An `EventStore` adapter implementing only the append and
+    stream-load methods on the engine, so aggregate repositories, the Kotlin decider support, interceptors, enrichers
+    and `OptimisticAppendToStreamException` work unchanged; every polling and subscription method of `EventStore`
+    throws. An application that moves changes its subscriptions, not its command side.
+20. **The migration copy** (decided 2026-11-15). Online: a bulk copy while the application runs (`COPY` through
+    pgjdbc's `CopyManager`) into the new layout (§13.3, item 23), keeping every event's `GlobalEventOrder` and its
+    payload bytes, then a short stop for appends while the final delta is copied, verified (event counts, last event
+    order per aggregate, checksums) and cut over, with resume points imported as §12.4 describes. Its throughput is not
+    measured: phase 9 starts with a spike measuring copy rate and the length of the stop on a large table.
+21. **Error settings and their defaults** (decided 2026-11-15). Every failure that is not an I/O failure is retried a
+    configurable number of times (default 3, backoff doubling from 100 ms, capped); I/O failures are retried
+    indefinitely, as today. A failing page shrinks by stepping down as P0.13 measured (halving until one event, growing
+    back after pages that commit). There is no built-in list of permanent errors (the queue consumer's list, which
+    dead-letters `IllegalArgumentException` from `FailFast` on first delivery, is not inherited); a handler parks an
+    event at once only by throwing a dedicated exception. The values are engine settings, tuned in phase 4.
+22. **Lease timings** (decided 2026-11-15). Lease 15 s and renewal every 4 s, today's `FencedLock` defaults, so
+    failover time does not change; expiry is judged by the database (`now()`). The owner stops delivering on its own
+    7 s (lease minus two renewal intervals) after the start of its last successful renewal, measured with the JVM's
+    monotonic clock, and renewal statements run with a `statement_timeout` below the renewal interval. All three are
+    settings, tuned in phase 7's takeover ITs. The monotonic clock does not drift meaningfully, but it does not count
+    while a VM or host is suspended, so the local deadline is best effort: it limits side effects outside the database.
+    Safety rests on the fence that every progress write (and, with in-transaction progress, the handler's output)
+    asserts on the same row; a former owner that resumes after a suspend commits nothing.
+23. **Which phase-0 table layouts the engine adopts** (decided 2026-11-15). The full combination P0.7 measured as
+    `COMBO_ALL`: a stream head table with a guarded `UPDATE` (no lost-race holes), no `UNIQUE(event_id)` (a plain
+    index serves lookups by event id), `uuid` event, causation and correlation ids, event types interned as
+    `smallint`, and `json` payload and metadata with the bytes unchanged. Ad-hoc SQL needs a join or a view for
+    event-type names, and the migration copy (item 20) maps ids and types.
 
 ---
 
