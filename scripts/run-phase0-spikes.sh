@@ -60,6 +60,8 @@
 #                                                the server's fsync; a container runs fsync=off and fsync=on)
 #                                  listen        AlternativeClientSpikeIT                                P0.17 (a): pgjdbc
 #                                                listener arms against a Vert.x PgSubscriber, 100-3 000 notifications/s
+#                                  pipeline      OneFlushTransactionSpikeIT                              P0.14: engine-owned
+#                                                transactions, statements then commit() against one flush (pgjdbc only)
 #                                  append        SingleStatementAppendSpikeIT,AppendEncodingAttributionSpikeIT  P0.4
 #                                  baseline      CurrentEngineBaselineSpikeIT                            P0.0
 #                                  cpu           UnattributedCpuSpikeIT                                  P0.9
@@ -161,6 +163,7 @@ suite_classes() {
     probe-cost)   echo "ProbeRunningSetCostSpikeIT" ;;
     progress)     echo "ProjectionProgressSpikeIT" ;;
     listen)       echo "AlternativeClientSpikeIT" ;;
+    pipeline)     echo "OneFlushTransactionSpikeIT" ;;
     *)            return 1 ;;
   esac
 }
@@ -180,10 +183,11 @@ suite_results() {
     probe-cost)   echo "p0-12-*" ;;
     progress)     echo "p0-13-*" ;;
     listen)       echo "p0-17-*" ;;
+    pipeline)     echo "p0-14-*" ;;
   esac
 }
-DEFAULT_SUITES="xid table-design contention notify tail probe-cost progress listen append baseline cpu jdbc probe"
-ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress listen"
+DEFAULT_SUITES="xid table-design contention notify tail probe-cost progress listen pipeline append baseline cpu jdbc probe"
+ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline listen"
 
 (( ${#SUITE_SPECS[@]} )) || SUITE_SPECS=(default)
 SUITES=()
