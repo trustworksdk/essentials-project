@@ -701,3 +701,39 @@ at 10 / 100 / 400 connections (17.12: 35.9 / 139.2 / 585.7), `PROBE_D0` 52.0 / 1
 −54 %, 40 combined probers −83 to −84 % (2 421-2 527/s), the server again at 6.0 cores. So the 17 % lower absolute
 throughput under combined probers reproduces on 18.7, while the probe's own execution does not grow; the extra cost
 is not in the probe statement. P0.12's reading holds on 18.
+
+### 2026-11-15: P0.14, engine-owned transactions in one flush (`20261115-145547-lac-N85-N87-HJ-HJ1-HK1-external`)
+
+PostgreSQL 18.7, same setup as the 18.7 run above, suite `pipeline` at commit `ba88825a`, 1, 8 and 20 writers. Two
+palindrome windows per cell agree within a few percent; no slow phase (one writer, one event: p50 1.36-1.43 ms).
+Appended (or pages) per second, mean of the two windows, and PostgreSQL CPU per unit from the cgroup:
+
+| Shape, writers | `A_TX` (today: statements, then `commit()`) | `B_BATCH` | `B_MULTI` | `D_EXPLICIT` (`BEGIN … COMMIT` in one flush) |
+|---|---|---|---|---|
+| 1 event, 1 | 703/s, 294 µs | 720/s, 226 µs | 718/s, 235 µs | 713/s, 240 µs |
+| 1 event, 8 | 4 728/s, 320 µs | 4 378/s, 269 µs | 4 394/s, 279 µs | 4 404/s, 279 µs |
+| 1 event, 20 | 6 769/s, 366 µs | 10 155/s, 272 µs | 10 210/s, 276 µs | 10 062/s, 284 µs |
+| 10 events, 8 | 2 824/s, 649 µs | 3 676/s, 535 µs | 3 698/s, 548 µs | 3 636/s, 543 µs |
+| 10 events, 20 | 4 641/s, 760 µs | 5 907/s, 633 µs | 5 863/s, 639 µs | 5 875/s, 636 µs |
+| 5 aggregates, 8 | 2 671/s, 870 µs | 3 113/s, 752 µs | 2 901/s, 863 µs | 3 052/s, 786 µs |
+| 5 aggregates, 20 | 3 937/s, 1 041 µs | 5 068/s, 891 µs | 4 805/s, 962 µs | 4 910/s, 949 µs |
+| Page of 100, 8 | 1 494/s, 2 126 µs | not applicable | 1 794/s, 1 852 µs | 1 793/s, 1 871 µs |
+| Page of 100, 20 | 1 872/s, 2 651 µs | not applicable | 2 262/s, 2 391 µs | 2 294/s, 2 397 µs |
+
+- **Gate at 8 writers: passes for 10 events (+31 %), 5 aggregates (+17 %) and the page (+20 %), fails for 1 event
+  (−7 %).** Server CPU saved per removed round trip is 42-137 µs everywhere, above the 35 µs threshold; the single
+  event fails only on throughput. At 20 writers the single event gains +49 % and its p50 drops from 3.0 to 1.9 ms,
+  so the 8-writer dip is a group-commit effect of that writer count, not a cost of the flush.
+- **`D_EXPLICIT` is as fast as the autocommit forms** in every cell (within the window spread), and it is the only
+  one-flush form that stays one transaction at any size: with 400 statements, the last a duplicate key, `B_BATCH`
+  and `B_MULTI` left 255 of 399 rows committed, because pgjdbc syncs mid-flush at about 64 KB of pending replies and
+  autocommit commits what came before. At 5 statements both stayed atomic. Its only extra cost is a `ROLLBACK`
+  round trip on the error path.
+- **A stale fence or epoch commits nothing in every arm**, the view and resume point stay unchanged, and the
+  connection stays usable.
+- Round trips per unit: 2 → 1 for appends, 3 → 1 for the page.
+
+Reading: for transactions the engine owns, send the statements and the commit in one flush as an explicit
+`BEGIN … COMMIT` (`D_EXPLICIT`), never as an autocommit batch. The arms that need a wire client of our own (C) were
+not built, so the row's "B within 10 % of C" clause is not evaluated; the five-aggregate append's
+rollback-on-zero-row-conflict under one flush still needs its own correctness test.
