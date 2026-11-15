@@ -692,3 +692,12 @@ same; the only material differences are a cheaper tail read (P0.6) and cheaper e
 Still open: the cause of the slow phase (`pg_test_fsync` and `iostat -x` during a run, and the SSD's temperature),
 P0.12's probe execution on 18 (rerun the `probe-cost` suite at `4cc73d2cc` or later), P0.1 and P0.2 on 16, and a
 separate wired client host.
+
+**P0.12 on 18.7, rerun with the statement tag fixed** (`20261115-141405-lac-N85-N87-HJ-HJ1-HK1-external`, commit
+`ebe63b70`). Execution figures are back and match 17.12 within about 10 %: `SUB_AGG` 38.5 / 153.5 / 589.4 µs per call
+at 10 / 100 / 400 connections (17.12: 35.9 / 139.2 / 585.7), `PROBE_D0` 52.0 / 161.3 / 614.5 µs (50.0 / 154.9 /
+616.0), and under 40 combined probers at 400 connections the probe executes in 18.5-19.7 ms at p50 25.1-26.1 ms
+(17.12: 19.8-20.6 ms, 26.1-27.1 ms). Appends at 400 connections: `NONE` 14 650-15 408/s, 40 tail-only probers −52 to
+−54 %, 40 combined probers −83 to −84 % (2 421-2 527/s), the server again at 6.0 cores. So the 17 % lower absolute
+throughput under combined probers reproduces on 18.7, while the probe's own execution does not grow; the extra cost
+is not in the probe statement. P0.12's reading holds on 18.
