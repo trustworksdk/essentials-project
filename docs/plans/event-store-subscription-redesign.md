@@ -1160,9 +1160,12 @@ latency path and Marten shows two cheap wins. Today `StatefulAggregateRepository
 (`AggregateSnapshotRepository.loadSnapshot`) and then calls `eventStore.fetchStream` for the events after
 it: two round trips, each its own statement.
 
+Decided 2026-11-15: these items are built against the new engine's stream load (§12) only. The existing
+aggregate repositories and `PostgresqlEventStore` are not changed.
+
 | Item | What | Notes |
 |---|---|---|
-| C1 — one round trip | Snapshot and tail events in one pgjdbc batch | Works on the current engine too. When the snapshot is written asynchronously (`AsyncAggregateSnapshotRepository`, `DurableAsyncAggregateSnapshotRepository`), wrap the batch in `REPEATABLE READ READ ONLY` so snapshot and tail come from one MVCC snapshot. Correctness does not depend on it today, because the tail is read after the snapshot's event order, but it removes a class of "snapshot newer than the events I read" surprises |
+| C1 — one round trip | Snapshot and tail events in one pgjdbc batch | New engine only (decided 2026-11-15). When the snapshot is written asynchronously (`AsyncAggregateSnapshotRepository`, `DurableAsyncAggregateSnapshotRepository`), wrap the batch in `REPEATABLE READ READ ONLY` so snapshot and tail come from one MVCC snapshot. Correctness does not depend on it today, because the tail is read after the snapshot's event order, but it removes a class of "snapshot newer than the events I read" surprises |
 | C2 — node-local aggregate cache | An optional LRU per aggregate type, entries taken out atomically on load and written back only after a successful commit | A cache hit reads only events after the cached event order. The optimistic-concurrency check (§5.1) is never skipped. Opt-in, because a mutated cached aggregate after a failed command must never be written back |
 | C3 — reuse the command's aggregate for the inline snapshot | When a snapshot is written in the same unit of work, use the aggregate instance the command already holds | Saves a reload |
 
@@ -1322,6 +1325,9 @@ P0.3 on managed services.
 | 10 | Starter, documentation, LLM docs, admin UI, release notes | Trading demo runs on the new engine at or above baseline |
 
 ### Command-side track (independent of the phases above)
+
+New engine only (decided 2026-11-15): built against the new engine's stream load, from phase 2 on; the existing
+aggregate repositories are not changed.
 
 | Phase | Content | Gate |
 |---|---|---|
