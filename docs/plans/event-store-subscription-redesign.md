@@ -53,7 +53,7 @@ Related documents:
    compare-and-set on the reposition epoch and the owner's fence (§8). Marten's progress model, combined
    with this proposal's fencing.
 6. **Fence every resume-point write** with the exclusive owner's fence token in the same statement (§9).
-   This is a correctness fix that also applies to the current engine, so it ships first.
+   Built with the new engine's exclusive subscriptions; the current engine is not changed (decided 2026-11-15).
 7. **Catch up cheaply.** Push event-type filters into SQL for subscriptions that are behind, advance
    progress to the watermark rather than to the last matching row, and cap concurrent catch-up reads per
    database (§10). Under the old gap handler, filtering in SQL created fake gaps; under the watermark it is safe.
@@ -598,7 +598,8 @@ rows. It could also replace the current engine's `PreparedBatch`. P0.4 measured 
 the lost-race holes the current gap handler has to wait 120 s for (not all of them, see §5.3), about a third less
 latency for appends of 100 events, half the latency and 2 instead of 6 or 11 round trips for five aggregates in one
 unit of work, and one round trip fewer whenever no expected order is given; nothing for appends of 1-10 events with
-an expected order, where it ties. That remains a separate decision.
+an expected order, where it ties. Decided 2026-11-15: the current engine is not changed, so the single-statement
+append is built in the new engine only.
 
 ---
 
@@ -827,9 +828,49 @@ Proposal:
   (shard-owned §8.6). This is Marten's "monitored lock" with an assertable fence.
 - All lease time is server time (`now()`), never the JVM's clock.
 
+> **Revision (2026-11-15, decided).** The fence is a column on the resume-point row, not `EXISTS` against the
+> fenced-lock table. The `EXISTS` form fences only when the lock manager is
+> `PostgresqlFencedLockManager` in the same database, and it leaves a race: when a stale `UPDATE` waits for the new
+> owner's row lock, PostgreSQL re-checks the `WHERE` against the new row version but evaluates a sub-select on another
+> table with the old snapshot. The fence is an `owner_fence BIGINT` column on the resume-point row (nullable, added with
+> `ADD COLUMN IF NOT EXISTS`). An exclusive subscription that acquires its lock claims the row and reads the resume point
+> it starts from in one statement, `UPDATE … SET owner_fence = :token WHERE … AND (owner_fence IS NULL OR owner_fence <= :token)
+> RETURNING …`, and every save of that resume point adds
+> `AND owner_fence = :token`. The condition is on the row being written, so the re-check is exact, it works with any lock
+> manager, and a save costs no extra statement. Non-exclusive subscriptions and administrative resets write without a fence (a reset refuses the
+> owner's older saves through the reposition epoch). With progress in the handler's transaction (§8) the same
+> condition fences the handler's output. Built in phase 7; I5's test keeps the unfenced shape as its must-fail variant.
+> A version of this was built in the current engine on 2026-11-15 and reverted the same day: the current engine is not
+> changed (commit `d2c3e3b51`, in no branch, has the code and its IT).
+>
+> How the fence behaves when things go wrong:
+>
+> - **Node crash.** The lock times out and another node acquires it with a higher token and claims the row. The crashed
+>   node never writes again; restarted, it acquires a new token. Nothing needs cleaning up: the next claim passes over the
+>   old value.
+> - **The owner loses its connection.** The lock manager cannot confirm the lock and releases it locally after the
+>   timeout; another node acquires and claims. When the old node's connection returns, its pending periodic save, or its
+>   final save on the way out, updates no row. The repository reads the stored fence once, logs one warning that the lock
+>   has moved, and marks the snapshot superseded, so it is not retried.
+> - **Connection loss with no takeover yet.** `owner_fence` is still the owner's token, so its saves land, which is right:
+>   nobody else is processing.
+> - **Graceful handover.** If the old owner's final save commits before the new owner's claim, it lands; otherwise it is
+>   refused and the new owner starts a little earlier, which is a replay within at-least-once, never a stale overwrite.
+> - **A claim delayed past a newer owner's** (A acquires token 5 and pauses, B acquires 6 and claims, A's claim arrives).
+>   Refused by `owner_fence <= :token`; A logs the refusal and does not subscribe. This is why the claim compares and does
+>   not simply overwrite.
+> - **A save whose commit outcome is unknown.** Unchanged: the resume point is not marked persisted and the next save
+>   retries it under the same fence.
+> - **Coexistence with the old engine (§12.4).** An old-engine node neither claims nor fences. While it holds the lock, a
+>   former new-engine owner still matches the old `owner_fence`; fencing is complete once no old-engine node runs the
+>   subscription.
+> - **The fenced-lock table is reset or a lock row deleted.** Tokens restart below the stored `owner_fence`, so every claim
+>   is refused and the subscription stays stopped with an error that says to clear `owner_fence` on the row. It does not
+>   heal itself, because doing so would reopen the stale write.
+
 Many exclusive subscriptions per JVM could later share lease rows, as the queue's units do instead of
-one lock per subscriber. That belongs in a later phase; the fence on the write comes first, because it is
-a correctness fix that also applies to the current engine.
+one lock per subscriber. That belongs in a later phase. The fence on the write comes with the new engine's
+exclusive subscriptions (phase 7); the current engine is not changed (decided 2026-11-15).
 
 ---
 
@@ -947,9 +988,8 @@ the `EventStorePollingOptimizer` SPI.
 | Precedent | — | The shard-owned queue: engine, adapter, starter |
 | Cost | Lower up front | Higher. The adapter surface is large (§12.3) |
 
-Recommendation: **a new engine**, built the way the queue was. Two pieces are deliberately usable by the
-current engine too: fenced resume-point writes (§9, phase 1) and, if P0.4 shows it pays, the
-single-statement append (§5.4).
+Recommendation: **a new engine**, built the way the queue was. The current engine is not changed (decided
+2026-11-15): fenced resume-point writes (§9) and the single-statement append (§5.4) are built in the new engine only.
 
 ### 12.2 Module shape
 
@@ -1270,7 +1310,7 @@ P0.3 on managed services.
 
 | Phase | Content | Gate |
 |---|---|---|
-| 1 | **Fenced resume-point writes in the current engine** (§9) | I5 fails before, passes after. Useful whatever happens next |
+| 1 | Dropped 2026-11-15: the current engine is not changed. The fence (§9) is built in phase 7 | — |
 | 2 | Engine: append (§5, shaped by P0.1/P0.4), stream load, tail reader with watermark and the combined probe (shaped by P0.2), one `FRESH` subscription, backstop wake-up only | I1–I4, I10, I11 pass. Statements per event at or below the P0.0 baseline |
 | 3 | Shared reader, attach/detach, catch-up | I9 passes. Idle statements flat in the number of subscriptions |
 | 4 | `CONTIGUOUS` mode; progress in the handler's transaction, page per transaction with per-event fallback (§7, §8) | I12, I14 pass. Projection throughput above the periodic-save baseline; `CONTIGUOUS` latency within one probe interval of `FRESH` with no long writer |
@@ -1293,8 +1333,7 @@ P0.3 on managed services.
 
 Table-layout options (§13.3), EF-2 units on the shared reader, direct local hand-off, CDC on the new
 engine, exactly-once database state in `FRESH` mode (§8.4), shared lease rows for many exclusive
-subscriptions, blue/green projection rebuilds, and the single-statement append in the current engine
-(§5.4) — each with its own measurement.
+subscriptions and blue/green projection rebuilds — each with its own measurement.
 
 ---
 
