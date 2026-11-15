@@ -99,8 +99,10 @@ class ProbeRunningSetCostSpikeIT {
      * {@code setting} is a {@code SET} run on the measuring connection first, reset after.
      */
     record Stmt(String label, Kind kind, String sql, int holes, String setting, boolean active) {
+        // The tag trails the statement: PostgreSQL 18's pg_stat_statements drops a leading comment from the stored
+        // query text, so a leading tag matched nothing there and every execution figure read 0 or NaN.
         String tagged() {
-            return "/*p012 " + label + "*/ " + sql;
+            return sql + " /*p012 " + label + "*/";
         }
     }
 
@@ -390,7 +392,7 @@ class ProbeRunningSetCostSpikeIT {
                 case TXN_CLEAR -> {
                     prober = null;
                     ps = c.prepareStatement(stmt.tagged());
-                    clear = c.prepareStatement("/*p012 " + stmt.label + "*/ SELECT pg_stat_clear_snapshot()");
+                    clear = c.prepareStatement("SELECT pg_stat_clear_snapshot() /*p012 " + stmt.label + "*/");
                     c.setAutoCommit(false);
                 }
                 case TXN_CACHED -> {
