@@ -616,3 +616,38 @@ background processes (needs per-backend CPU, which reads `NaN` on an external se
 separately); whether the governor caused the slow phase (a `powersave` run on 17.12 and `pg_test_fsync`); the
 client/server split of P0.12's collapse and P0.10's pgjdbc latency (needs a separate client host on a wire); a full
 run on 18; and P0.1 and P0.2 on 16.
+
+### 2026-11-15: P0.17 (a), pushed notifications against pgjdbc's drain (`20261115-082241-lac-N85-N87-HJ-HJ1-HK1-external`)
+
+Same machine and setup as the 2026-11-14 run (PostgreSQL 17.12, governor `performance`, server CPU from the
+container's cgroup), suite `listen` only, at commit `fe5433ab`, with `-Dspike.listen.writers=8,20
+-Dspike.listen.rates=200,1000,3000,burst2000`. Producers, listener and server share the host. Each cell ran two
+windows in palindrome order; the table gives the mean p50 and the worse window's p99, in ms from the commit's return
+to the listener callback. All 64 windows received exactly what was sent, with no duplicates.
+
+| Writers, rate | `STOCK` p50 / p99 | `PINNED_PEEK` p50 / p99 | `QUERY_POLL` p50 / p99 | Vert.x `PgSubscriber` p50 / p99 |
+|---|---|---|---|---|
+| 8, 200/s | 1.73 / 1.97 | 0.62 / 0.79 | 1.16 / 1.91 | 0.65 / 0.82 |
+| 8, 1 000/s | 4.23 / 22.2 | 0.29 / 0.57 | 0.83 / 1.65 | 0.32 / 0.46 |
+| 8, 3 000/s | 144 / 661 | 0.30 / 0.62 | 0.83 / 1.56 | 0.29 / 0.60 |
+| 8, burst 2 000 | 45.4 / 389 | 0.36 / 0.73 | 0.54 / 1.92 | 0.36 / 0.70 |
+| 20, 200/s | 1.64 / 3.15 | 0.50 / 0.77 | 1.18 / 1.93 | 0.54 / 0.74 |
+| 20, 1 000/s | 3.91 / 38.3 | 0.29 / 0.48 | 0.85 / 1.62 | 0.29 / 0.49 |
+| 20, 3 000/s | 151 / 1 367 | 0.29 / 0.72 | 0.83 / 1.56 | 0.28 / 0.66 |
+| 20, burst 2 000 | 13.4 / 131 | 0.47 / 0.96 | 0.85 / 2.10 | 0.46 / 0.85 |
+
+- **Gate: pgjdbc only, at both writer counts.** `PINNED_PEEK`'s worse p99 at 3 000/s is 0.62 ms (8 writers) and
+  0.72 ms (20 writers), well under 2 ms. Vert.x is within about 0.1 ms of it everywhere, at the same listener client
+  CPU (6-16 µs per notification at 2 000-3 000/s for both), so a second driver buys nothing for wake-ups.
+- **The stock drain's lag is in pgjdbc, not on the wire.** For `STOCK` the notification reaches the listener's socket
+  at p99 0.45-0.87 ms in every cell, but the callback waits up to 1.4 s at 3 000/s. This confirms
+  `pgjdbc-notification-drain-options.md`; at 200/s the stock drain is still acceptable (p99 2-3 ms).
+- **`QUERY_POLL` as the fallback is borderline.** It meets the gate at 3 000/s (p99 1.56 ms) but reaches 2.10 ms in
+  the 20-writer burst, and it costs about 4x `PINNED_PEEK`'s listener CPU at 200/s (245 against 44-62 µs per
+  notification) plus more server CPU (554-581 against 432-468 µs per notification, producers' commits included).
+- PostgreSQL CPU per notification, the producers' commits included, is the same for every listener at 1 000/s and
+  above (149-221 µs), so the listener's choice does not load the server except through `QUERY_POLL`'s query.
+
+Not measured: Vert.x's wire timestamp (the tap socket is pgjdbc's, so Vert.x shows 0 there), the minimal LISTEN-only
+reader the P0.17 row lists (`PINNED_PEEK` and Vert.x already answer the question), producers going through the
+engine's own append, and a listener on a separate host on a wire.
