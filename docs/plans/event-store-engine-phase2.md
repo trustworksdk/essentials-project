@@ -416,3 +416,51 @@ for one of these, the decision below applies.
 | 5 | Module and package name | `components/postgresql-event-log`, package `dk.trustworks.essentials.components.eventlog`, tables prefixed `el_` |
 
 The plan inconsistencies found while drafting this design were corrected in the plan the same day.
+
+## 6. Results (2026-11-15)
+
+Measured by `spike/EventLogGateSpikeIT` (`scripts/run-phase0-spikes.sh --suite p2-gate`) and today's engine by
+`CurrentEngineBaselineSpikeIT` (`--suite p2-gate-old`), on the development VM: PostgreSQL 18.4 in a container with
+`fsync=off`. Server CPU and absolute probe costs still need the dedicated server; the VM's probe costs (245-440 µs per
+probe at 10 connections, against 17 µs in a tight loop) look like cold, low-rate effects.
+
+### 6.1 Gate: statements per delivered event, one subscription
+
+Reader statements per delivered event, at 10 and 100 events per second:
+
+| Engine | 10 ev/s | 100 ev/s | Idle | Writer statements per event |
+|---|---|---|---|---|
+| Today's engine (P0.0 shape) | 6.74-6.85 | 1.03-1.04 | 1.5 statements/s | 3.0 |
+| New engine, 100 ms backstop (p50 about 50 ms, today's latency) | 1.06 | 0.107 | 9.6 statements/s | 2.00 |
+| New engine, default 1 s backstop (p50 about 505 ms) | 0.200 | 0.029 | 1.00 statement/s | 2.00 |
+
+**The gate passes.** With ten subscriptions (not gated in phase 2) the per-delivery figures stay the same
+(new 1.076 / 0.108 at 100 ms, old 6.79-6.91 / 1.04), but idle cost grows with the number of subscriptions: 9.9
+statements/s at 1 s and 98/s at 100 ms, against today's 15/s. Phase 3's shared reader is what flattens it. Phase 2 also
+holds one pooled connection per subscription, so the pool must be larger than the number of subscriptions.
+
+### 6.2 Decision 1: the `event_id` index
+
+| Events per append | WAL bytes per event, with index | Without | Execution per append (indicative) |
+|---|---|---|---|
+| 1 | 1 012 | 922 | 15-16 µs vs 15 µs |
+| 10 | 700 | 609 | 55 µs vs 47.5 µs |
+| 100 | 684 | 590 | 390-460 µs vs 318-362 µs |
+
+The index costs about 92 bytes of WAL per event and 15-20 % execution time at ten or more events per append, about
+three quarters of P0.7's `UNIQUE(event_id)` saving of 110-130 bytes. **Outcome: the index stays, with no opt-out for
+now.** Event-id lookup (§12.3's adapter, causation chains) needs it, and the rest of P0.7's layout saving is untouched.
+An opt-out is a schema-contributor setting that can be added later without a migration if a user needs the WAL back.
+
+### 6.3 Probe back-off
+
+The unit-B rule (wait = probe cost × 100, floored at the backstop) assumed one reader. At 400 connections with 40
+readers, the 1 s floor alone let the probes take 6.4 % of one core, and cost × 100 without the floor 28.9 %. The rule is
+now `cost × 100 × max(1, backends / 10)`, still between the backstop floor and `probeBackoffMax`. The backend count comes
+from the probe's existing `pg_stat_get_activity` scan, so it costs no extra statement. Remeasured, the probes take
+0.04-0.10 % of one core at 10 connections, 0.38-0.42 % at 100 and 0.82-0.91 % at 400.
+
+The cost is latency while a candidate is outstanding and nothing new arrives: about 9 s at 400 connections on the VM,
+where a probe costs about 2.5 ms. At P0.12's server cost (0.55-1.4 µs per backend) the same rule waits about 1-2 s. Above
+roughly 400 connections `probeBackoffMax` (10 s) caps the wait and the 1 % budget is exceeded. Both figures need the
+dedicated-server run before the default is final; phase 3's shared reader lowers the number of probing readers per JVM.

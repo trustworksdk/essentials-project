@@ -69,8 +69,14 @@
 #                                  cpu           UnattributedCpuSpikeIT                                  P0.9
 #                                  jdbc          JdbiVsRawPgjdbcSpikeIT                                  P0.6 (+ round_trip_reconciliation)
 #                                  probe         CombinedProbeSnapshotOrderSpikeIT                       P0.2
+#                                  p2-gate       EventLogGateSpikeIT (postgresql-event-log)              phase 2 unit C: the new
+#                                                engine's statements per delivery and per idle poll (1 and 10 subscriptions),
+#                                                the event_id index's append cost, the probe back-off at 10/100/400
+#                                                connections (opens up to 400: max_connections must allow ~410)
+#                                  p2-gate-old   CurrentEngineBaselineSpikeIT#steady+idle with 1 and 10 subscriptions,
+#                                                postgres:18.4 in a container: the old engine's side of the phase-2 gate
 #                                "default" is the priority order of the original runs; "all" is the same set in
-#                                phase-number order.
+#                                phase-number order, then the phase-2 suites.
 #   --mvn-arg <arg>              one extra Maven argument, repeatable; everything after "--" is the same
 #   --out <dir>                  results directory (default phase0-results/<timestamp>-<host>-<mode>/)
 #   --no-build                   skip the one-off install of the module and its upstream modules
@@ -80,7 +86,8 @@
 # Exit codes: 0 every suite passed, 1 a suite failed (the rest still ran), 2 usage error,
 # 3 prerequisite missing, 4 build failed, 130 interrupted (what ran is still collected).
 #
-# Reads and builds the repository; moves components/postgresql-event-store/target/spike-results
+# Reads and builds the repository; moves each suite module's target/spike-results (postgresql-event-store,
+# postgresql-event-log)
 # aside and writes only under the results directory.
 
 set -euo pipefail
@@ -97,7 +104,7 @@ OUT=""
 BUILD=1
 DRY_RUN=0
 
-usage() { sed -n '17,84p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '17,91p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_error() { printf '%s\nRun with --help for usage.\n' "$*" >&2; exit 2; }
 
 # The command line as typed, for machine.txt, with any password value replaced. Built before
@@ -167,6 +174,8 @@ suite_classes() {
     listen)       echo "AlternativeClientSpikeIT" ;;
     pipeline)     echo "OneFlushTransactionSpikeIT" ;;
     owned)        echo "OwnedReadConnectionSpikeIT" ;;
+    p2-gate)      echo "EventLogGateSpikeIT" ;;
+    p2-gate-old)  echo "CurrentEngineBaselineSpikeIT#steady+idle" ;;
     *)            return 1 ;;
   esac
 }
@@ -188,10 +197,25 @@ suite_results() {
     listen)       echo "p0-17-*" ;;
     pipeline)     echo "p0-14-*" ;;
     owned)        echo "p0-16-*" ;;
+    p2-gate)      echo "p2-c-*" ;;
+    p2-gate-old)  echo "p0-0-*" ;;
+  esac
+}
+# The module a suite's classes live in.
+suite_module() {
+  case "$1" in
+    p2-gate) echo "components/postgresql-event-log" ;;
+    *)       echo "components/postgresql-event-store" ;;
+  esac
+}
+# Spike properties a suite always runs with (before the user's extra arguments, which may override them).
+suite_args() {
+  case "$1" in
+    p2-gate-old) echo "-Dspike.baseline.steady.subscriptions=1,10 -Dspike.baseline.idle.subscriptions=1,10 -Dspike.baseline.image=postgres:18.4" ;;
   esac
 }
 DEFAULT_SUITES="xid table-design contention notify tail probe-cost progress listen pipeline owned append baseline cpu jdbc probe"
-ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline owned listen"
+ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline owned listen p2-gate p2-gate-old"
 
 (( ${#SUITE_SPECS[@]} )) || SUITE_SPECS=(default)
 SUITES=()
@@ -212,7 +236,10 @@ done
 it_test_for() {
   local name="${1%%#*}" method="" classes="" c
   [[ "$1" == *#* ]] && method="#${1#*#}"
-  for c in $(suite_classes "$name"); do classes+="${classes:+,}$c$method"; done
+  # a class entry that names its own methods (Class#a+b) keeps them
+  for c in $(suite_classes "$name"); do
+    if [[ "$c" == *#* ]]; then classes+="${classes:+,}$c"; else classes+="${classes:+,}$c$method"; fi
+  done
   echo "$classes"
 }
 
@@ -221,7 +248,11 @@ it_test_for() {
 cd "$(dirname "$0")/.."
 REPO="$PWD"
 MODULE="components/postgresql-event-store"
-SPIKE_RESULTS="$REPO/$MODULE/target/spike-results"
+MODULES="$MODULE"
+for spec in "${SUITES[@]}"; do
+  m="$(suite_module "${spec%%#*}")"
+  [[ " $MODULES " == *" $m "* ]] || MODULES+=" $m"
+done
 STAMP="$(date +%Y%m%d-%H%M%S)"
 HOST="$(uname -n | cut -d. -f1 | tr -c 'A-Za-z0-9-\n' '-')"
 OUT="${OUT:-$REPO/phase0-results/$STAMP-$HOST-$MODE}"
@@ -277,10 +308,12 @@ if [[ "$MODE" == external ]]; then
   SPIKE_ARGS+=("-Dspike.jdbcUrl=$JDBC_URL" "-Dspike.user=$DB_USER")
   [[ -n "$SERVER_CPU_COMMAND" ]] && SPIKE_ARGS+=("-Dspike.serverCpuCommand=$SERVER_CPU_COMMAND")
 fi
-BUILD_CMD=("${MVN_CMD[@]}" -q install -DskipTests "${MVN_COMMON[@]}" -pl "$MODULE" -am ${EXTRA_MVN[@]+"${EXTRA_MVN[@]}"})
+BUILD_CMD=("${MVN_CMD[@]}" -q install -DskipTests "${MVN_COMMON[@]}" -pl "${MODULES// /,}" -am ${EXTRA_MVN[@]+"${EXTRA_MVN[@]}"})
 
 suite_cmd() {   # the command array for one suite, into SUITE_CMD; the password is appended only when run
-  SUITE_CMD=("${MVN_CMD[@]}" verify -pl "$MODULE" "${MVN_COMMON[@]}" "${SPIKE_ARGS[@]}"
+  local args
+  read -r -a args <<<"$(suite_args "${1%%#*}")"
+  SUITE_CMD=("${MVN_CMD[@]}" verify -pl "$(suite_module "${1%%#*}")" "${MVN_COMMON[@]}" "${SPIKE_ARGS[@]}" ${args[@]+"${args[@]}"}
              "-Dit.test=$(it_test_for "$1")" ${EXTRA_MVN[@]+"${EXTRA_MVN[@]}"})
 }
 print_cmd() {
@@ -380,11 +413,14 @@ fi
 mkdir -p "$OUT/logs"
 
 # The spikes append to their result files, so earlier runs (the VM's, say) would mix with this one.
-if [[ -d "$SPIKE_RESULTS" ]]; then
-  ASIDE="$SPIKE_RESULTS.before-$STAMP"
-  mv "$SPIKE_RESULTS" "$ASIDE"
-  echo "  moved earlier spike results aside to ${ASIDE#"$REPO"/}"
-fi
+for m in $MODULES; do
+  SPIKE_RESULTS="$REPO/$m/target/spike-results"
+  if [[ -d "$SPIKE_RESULTS" ]]; then
+    ASIDE="$SPIKE_RESULTS.before-$STAMP"
+    mv "$SPIKE_RESULTS" "$ASIDE"
+    echo "  moved earlier spike results aside to ${ASIDE#"$REPO"/}"
+  fi
+done
 
 # ---- machine facts, written before the run so they exist even if it is interrupted
 {
@@ -496,7 +532,7 @@ fi
 # ---- build
 STATUS_BUILD="skipped"
 if (( BUILD )); then
-  say "Building $MODULE and its upstream modules"
+  say "Building $MODULES and their upstream modules"
   started=$SECONDS
   if "${BUILD_CMD[@]}" > "$OUT/logs/build.log" 2>&1; then
     STATUS_BUILD="ok in $(( SECONDS - started )) s"
@@ -546,10 +582,12 @@ for spec in "${SUITES[@]}"; do
 
   # Failsafe reports of this suite's classes; the next suite's run does not remove them, but a
   # later rerun of the same class would overwrite them.
-  if [[ -d "$REPO/$MODULE/target/failsafe-reports" ]]; then
+  suite_dir="$REPO/$(suite_module "$name")/target/failsafe-reports"
+  if [[ -d "$suite_dir" ]]; then
     mkdir -p "$OUT/failsafe-reports"
     for c in $(suite_classes "$name"); do
-      for f in "$REPO/$MODULE/target/failsafe-reports/"*"$c"*; do
+      c="${c%%#*}"
+      for f in "$suite_dir/"*"$c"*; do
         [[ -e "$f" ]] && cp "$f" "$OUT/failsafe-reports/"
       done
     done
@@ -559,10 +597,13 @@ trap - INT
 
 # ---------------------------------------------------------------- collect
 
-if [[ -d "$SPIKE_RESULTS" ]]; then
-  mkdir -p "$OUT/spike-results"
-  cp -R "$SPIKE_RESULTS/." "$OUT/spike-results/"
-fi
+for m in $MODULES; do
+  SPIKE_RESULTS="$REPO/$m/target/spike-results"
+  if [[ -d "$SPIKE_RESULTS" ]]; then
+    mkdir -p "$OUT/spike-results"
+    cp -R "$SPIKE_RESULTS/." "$OUT/spike-results/"
+  fi
+done
 
 {
   echo "# Phase-0 spike run $STAMP on $HOST ($MODE)"

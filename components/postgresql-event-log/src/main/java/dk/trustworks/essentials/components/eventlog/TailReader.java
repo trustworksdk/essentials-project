@@ -83,6 +83,7 @@ final class TailReader implements AutoCloseable {
     private long                                  finalUpTo;
     private boolean                               lastReadContiguous;
     private long                                  lastReadNanos;
+    private int                                   lastBackends = 1;
 
     TailReader(String aggregateType, DataSource dataSource, EventLogStorage.TailStatements statements, EventLogSettings settings, RowMapper mapper,
                EventLogObserver observer, TestSeams seams) {
@@ -391,6 +392,13 @@ final class TailReader implements AutoCloseable {
     }
 
     /**
+     * @return the number of backends the last running-set read saw (cluster-wide, every database)
+     */
+    int lastBackends() {
+        return lastBackends;
+    }
+
+    /**
      * Copies of the state, published at the end of every read, so another thread (tests, diagnostics) can look
      */
     private volatile State state = new State(List.of(), new TreeSet<>(), new TreeMap<>(), 0, null);
@@ -426,14 +434,21 @@ final class TailReader implements AutoCloseable {
         return statement;
     }
 
-    private static Set<String> xids(Array array) throws SQLException {
+    /**
+     * @param array {@link EventLogStorage#RUNNING_SET}: the backend count, then the running xids
+     */
+    private Set<String> xids(Array array) throws SQLException {
         if (array == null) {
             return Set.of();
         }
         var values = (Object[]) array.getArray();
-        var set    = new HashSet<String>(values.length * 2);
-        for (var value : values) {
-            set.add((String) value);
+        if (values.length == 0) {
+            return Set.of();
+        }
+        lastBackends = Integer.parseInt((String) values[0]);
+        var set = new HashSet<String>(values.length * 2);
+        for (var i = 1; i < values.length; i++) {
+            set.add((String) values[i]);
         }
         return set;
     }

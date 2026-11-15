@@ -70,6 +70,14 @@ class CurrentEngineBaselineSpikeIT {
     private static final AggregateType ORDERS         = AggregateType.of("Orders");
     private static final String        EVENTS_TABLE   = "orders_events";
     private static final String        OBSERVER       = "observer";
+    /** Subscription counts of the steady shape, comma-separated (phase 2's gate compares 1 against the new engine). */
+    private static final List<Integer> STEADY_SUBSCRIPTIONS = counts(System.getProperty("spike.baseline.steady.subscriptions", "10"));
+    /** When set, the idle shape runs only non-exclusive, one-JVM configurations with these subscription counts. */
+    private static final String        IDLE_SUBSCRIPTIONS   = System.getProperty("spike.baseline.idle.subscriptions", "").trim();
+
+    private static List<Integer> counts(String list) {
+        return Arrays.stream(list.split(",")).map(String::trim).filter(v -> !v.isEmpty()).map(Integer::valueOf).toList();
+    }
 
     // ------------------------------------------------------------------ shapes
 
@@ -80,8 +88,11 @@ class CurrentEngineBaselineSpikeIT {
                 return subscriptions + (exclusive ? " exclusive" : " non-exclusive") + " subscription(s) x " + jvms + " JVM(s)";
             }
         }
-        var configs = List.of(new Config(1, 1, false), new Config(10, 1, false), new Config(50, 1, false),
+        List<Config> configs = List.of(new Config(1, 1, false), new Config(10, 1, false), new Config(50, 1, false),
                               new Config(10, 1, true), new Config(10, 2, true));
+        if (!IDLE_SUBSCRIPTIONS.isEmpty()) {
+            configs = counts(IDLE_SUBSCRIPTIONS).stream().map(n -> new Config(n, 1, false)).toList();
+        }
         var warmUp = scaled(Duration.ofSeconds(45));
         var window = scaled(Duration.ofSeconds(60));
         header("IDLE", "warm-up " + warmUp.toSeconds() + " s after catch-up, window " + window.toSeconds() + " s, 100 seeded events, no writes in the window");
@@ -129,9 +140,10 @@ class CurrentEngineBaselineSpikeIT {
     void steady() throws Exception {
         var warmUp = scaled(Duration.ofSeconds(10));
         var window = scaled(Duration.ofSeconds(60));
-        header("STEADY", "10 non-exclusive subscriptions, one writer appending one OrderAdded per unit of work to a new aggregate (no expected order), warm-up "
+        header("STEADY", STEADY_SUBSCRIPTIONS + " non-exclusive subscription(s), one writer appending one OrderAdded per unit of work to a new aggregate (no expected order), warm-up "
                 + warmUp.toSeconds() + " s, window " + window.toSeconds() + " s");
         for (int run = 1; run <= RUNS; run++) {
+            for (int subscriptions : STEADY_SUBSCRIPTIONS) {
             for (int rate : new int[]{10, 100}) {
                 try (var pg = Pg.start()) {
                     var writer    = Stack.writer(pg, "writer");
@@ -140,7 +152,7 @@ class CurrentEngineBaselineSpikeIT {
                     var measuring = new AtomicBoolean(false);
                     var latencies = new ConcurrentLinkedQueue<Long>();
                     var delivered = new AtomicLong();
-                    for (int i = 0; i < 10; i++) {
+                    for (int i = 0; i < subscriptions; i++) {
                         reader.manager.subscribeToAggregateEventsAsynchronously(SubscriberId.of("sub-" + i), ORDERS, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER, Optional.empty(), e -> {
                             long now = System.nanoTime();
                             var at = committed.get(e.aggregateId().toString());
@@ -164,19 +176,20 @@ class CurrentEngineBaselineSpikeIT {
                     measuring.set(true);
                     Thread.sleep(window.toMillis());
                     measuring.set(false);
-                    var summary = pg.summarise("steady run " + run + ": " + rate + " events/s", window, appended.get(), 0);
+                    var summary = pg.summarise("steady run " + run + ": " + subscriptions + " subscription(s), " + rate + " events/s", window, appended.get(), 0);
                     scheduler.shutdown();
                     scheduler.awaitTermination(10, TimeUnit.SECONDS);
-                    await(Duration.ofSeconds(30), () -> delivered.get() >= appended.get() * 10);
+                    await(Duration.ofSeconds(30), () -> delivered.get() >= appended.get() * subscriptions);
                     var l = Latencies.of(latencies);
                     long events = appended.get();
-                    record(String.format("STEADY run %d | %3d ev/s | appended %d, deliveries %d | latency p50 %.1f ms p99 %.1f ms max %.1f ms | statements per appended event: total %.1f, writer %.1f, reader %.1f | reader statements per delivery %.2f | WAL per event %.0f B",
-                                         run, rate, events, delivered.get(), l.p50(), l.p99(), l.max(), (double) summary.total / events,
-                                         (double) summary.byRole("writer") / events, (double) summary.byRole("reader") / events, (double) summary.byRole("reader") / (events * 10),
+                    record(String.format("STEADY run %d | %2d subscription(s) | %3d ev/s | appended %d, deliveries %d | latency p50 %.1f ms p99 %.1f ms max %.1f ms | statements per appended event: total %.1f, writer %.1f, reader %.1f | reader statements per delivery %.2f | WAL per event %.0f B",
+                                         run, subscriptions, rate, events, delivered.get(), l.p50(), l.p99(), l.max(), (double) summary.total / events,
+                                         (double) summary.byRole("writer") / events, (double) summary.byRole("reader") / events, (double) summary.byRole("reader") / (events * subscriptions),
                                          (double) summary.walBytes / events));
                     reader.close();
                     writer.close();
                 }
+            }
             }
         }
     }

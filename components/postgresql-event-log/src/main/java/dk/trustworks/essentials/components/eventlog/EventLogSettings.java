@@ -28,7 +28,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                             not count against it
  * @param probeBackoffMin      least time between two re-probes while a candidate is outstanding and nothing new was
  *                             read; never below {@code backstopInterval}'s role as the only wake-up, see
- *                             {@link #probeWait(long)}
+ *                             {@link #probeWait(long, int)}
  * @param probeBackoffMax      most time between two such re-probes, however expensive the probe was
  * @param progressSaveInterval least time between two periodic resume-point saves of one subscription; zero saves
  *                             after every handled event
@@ -46,10 +46,20 @@ public record EventLogSettings(Duration backstopInterval,
                                int holeRangeThreshold,
                                boolean genericPlans) {
     /**
-     * A probe may take at most about 1 % of the reader's time while it waits for a candidate to retire (P0.12: the
-     * running-set read costs about 0.55 µs per live backend, much more under write load)
+     * The probes of the whole cluster may take at most about 1 % of one core while candidates are outstanding: one
+     * reader's probe costs at most 1 % of its wait ({@code wait >= cost * 100}), divided by the number of readers that
+     * probe the same server (P0.12: the running-set read costs about 0.55-1.4 µs per live backend, much more under
+     * write load, and every reader of every JVM pays it)
      */
     static final int PROBE_COST_MULTIPLIER = 100;
+
+    /**
+     * How many backends the back-off assumes per probing reader when it estimates the cluster's readers from the
+     * backend count: P0.12's topology, a JVM with a pool of 10 and one tail reader. Phase-2 unit C measured that
+     * {@code cost * 100} alone (no backstop floor) let 40 readers at 400 connections take 29 % of a core, and the 1 s
+     * backstop floor alone 6.4 %; scaled by {@code backends / 10} it stays under 1 %.
+     */
+    static final int BACKENDS_PER_READER = 10;
 
     public EventLogSettings {
         requirePositive(backstopInterval, "backstopInterval");
@@ -102,13 +112,19 @@ public record EventLogSettings(Duration backstopInterval,
 
     /**
      * How long to wait before re-probing while a candidate is outstanding and the last probe read nothing new (P0.12
-     * decision: back off with the probe's measured cost; with backstop wake-up only, never sooner than the backstop).
+     * decision: back off with the probe's measured cost; with backstop wake-up only, never sooner than the backstop):
+     * {@code cost * 100 * max(1, backends / 10)}, between {@code max(backstopInterval, probeBackoffMin)} and
+     * {@code probeBackoffMax}. The second factor estimates how many readers probe the same server, so the cluster's
+     * probes, not each reader's, stay near 1 % of one core ({@link #BACKENDS_PER_READER}). Beyond what
+     * {@code probeBackoffMax} allows (about 400 backends at a 2.5 ms probe and a 10 s maximum) the budget is exceeded.
      *
      * @param lastProbeNanos what the last probe statement took
+     * @param backends       how many backends the last running-set read saw
      */
-    Duration probeWait(long lastProbeNanos) {
-        var floor = probeBackoffMin.compareTo(backstopInterval) > 0 ? probeBackoffMin : backstopInterval;
-        var cost  = Duration.ofNanos(Math.multiplyExact(Math.max(0, lastProbeNanos), (long) PROBE_COST_MULTIPLIER));
+    Duration probeWait(long lastProbeNanos, int backends) {
+        var floor   = probeBackoffMin.compareTo(backstopInterval) > 0 ? probeBackoffMin : backstopInterval;
+        var readers = Math.max(1L, backends / BACKENDS_PER_READER);
+        var cost    = Duration.ofNanos(Math.multiplyExact(Math.multiplyExact(Math.max(0, lastProbeNanos), (long) PROBE_COST_MULTIPLIER), readers));
         if (cost.compareTo(floor) < 0) {
             return floor;
         }

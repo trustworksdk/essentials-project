@@ -42,9 +42,14 @@ final class EventLogStorage {
 
     /**
      * The running-writer set: every non-null {@code backend_xid}, read from the function behind {@code pg_stat_activity}
-     * (P0.12). In the combined probe it is evaluated during execution, after the statement's snapshot (P0.2, I11)
+     * (P0.12). In the combined probe it is evaluated during execution, after the statement's snapshot (P0.2, I11).
+     * <p>
+     * Element 1 of the array is not an xid but the number of backends the same scan saw, which the probe back-off
+     * scales with ({@link EventLogSettings#probeWait(long, int)}); the xids follow it. One scan, so the count costs
+     * nothing extra.
      */
-    static final String RUNNING_SET = "ARRAY(SELECT backend_xid::text FROM pg_stat_get_activity(NULL) WHERE backend_xid IS NOT NULL)";
+    static final String RUNNING_SET = "(SELECT ARRAY[count(*)::text] || coalesce(array_agg(backend_xid::text) FILTER (WHERE backend_xid IS NOT NULL), '{}'::text[]) " +
+            "FROM pg_stat_get_activity(NULL))";
 
     /** Column index of the running set in the combined probe; columns 1-12 are {@link #EVENT_COLUMNS} */
     static final int RUNNING_COLUMN = 13;

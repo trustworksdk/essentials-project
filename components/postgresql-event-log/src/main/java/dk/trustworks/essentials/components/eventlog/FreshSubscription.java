@@ -221,7 +221,7 @@ public final class FreshSubscription {
                 if (!delivered) {
                     park(settings.backstopInterval());
                 } else if (!reader.readAgainNow(batch.size())) {
-                    park(reader.hasOutstandingCandidates() ? settings.probeWait(reader.lastReadNanos()) : settings.backstopInterval());
+                    park(reader.hasOutstandingCandidates() ? settings.probeWait(reader.lastReadNanos(), reader.lastBackends()) : settings.backstopInterval());
                 }
             } catch (InterruptedException e) {
                 return;
