@@ -62,6 +62,8 @@
 #                                                listener arms against a Vert.x PgSubscriber, 100-3 000 notifications/s
 #                                  pipeline      OneFlushTransactionSpikeIT                              P0.14: engine-owned
 #                                                transactions, statements then commit() against one flush (pgjdbc only)
+#                                  owned         OwnedReadConnectionSpikeIT                              P0.16: owned read
+#                                                connections, plan_cache_mode, several tail reads in one flush (2 M rows)
 #                                  append        SingleStatementAppendSpikeIT,AppendEncodingAttributionSpikeIT  P0.4
 #                                  baseline      CurrentEngineBaselineSpikeIT                            P0.0
 #                                  cpu           UnattributedCpuSpikeIT                                  P0.9
@@ -95,7 +97,7 @@ OUT=""
 BUILD=1
 DRY_RUN=0
 
-usage() { sed -n '17,80p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '17,84p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_error() { printf '%s\nRun with --help for usage.\n' "$*" >&2; exit 2; }
 
 # The command line as typed, for machine.txt, with any password value replaced. Built before
@@ -164,6 +166,7 @@ suite_classes() {
     progress)     echo "ProjectionProgressSpikeIT" ;;
     listen)       echo "AlternativeClientSpikeIT" ;;
     pipeline)     echo "OneFlushTransactionSpikeIT" ;;
+    owned)        echo "OwnedReadConnectionSpikeIT" ;;
     *)            return 1 ;;
   esac
 }
@@ -184,10 +187,11 @@ suite_results() {
     progress)     echo "p0-13-*" ;;
     listen)       echo "p0-17-*" ;;
     pipeline)     echo "p0-14-*" ;;
+    owned)        echo "p0-16-*" ;;
   esac
 }
-DEFAULT_SUITES="xid table-design contention notify tail probe-cost progress listen pipeline append baseline cpu jdbc probe"
-ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline listen"
+DEFAULT_SUITES="xid table-design contention notify tail probe-cost progress listen pipeline owned append baseline cpu jdbc probe"
+ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline owned listen"
 
 (( ${#SUITE_SPECS[@]} )) || SUITE_SPECS=(default)
 SUITES=()
