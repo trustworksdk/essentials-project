@@ -16,7 +16,7 @@
 package dk.trustworks.essentials.components.eventlog;
 
 /**
- * Deliberately broken variants of the tail reader and the phase-2 subscription, after the phase-0 model's mutants
+ * Deliberately broken variants of the tail reader and the subscription, after the phase-0 model's mutants
  * ({@code SubscriptionStateMachineModelTest}, plan §21 P0.5). <b>Test-only</b>: settable only through the
  * package-private {@link TestSeams}, so the invariant ITs can prove they catch each one. Normal use never sets any.
  */
@@ -27,7 +27,10 @@ enum WatermarkMutant {
     CACHED_STAT_ACTIVITY,
     /** An empty combined probe is taken to mean nobody is running (§4.10) */
     EMPTY_TAIL_WITHOUT_RUNNING_SET,
-    /** The watermark ignores holes whose candidate retired but whose hole read has not been published (F2) */
+    /**
+     * The watermark ignores holes whose candidate retired but whose hole read has not been published (F2). In phase 3
+     * the loop also offers that watermark to the attached inboxes before the hole read's rows
+     */
     WATERMARK_BEFORE_HOLE_READ,
     /** A restarted reader takes everything at or below the head as final, with no initial candidate (F4) */
     RESTARTED_READER_AT_HEAD,
@@ -38,5 +41,20 @@ enum WatermarkMutant {
     /** The resume point is the reader's cursor + 1 instead of §4.7's formula */
     RESUME_AT_CURSOR,
     /** The tail statement does not re-read outstanding holes; late commits arrive only from the hole read (F1) */
-    NO_HOLE_REREAD
+    NO_HOLE_REREAD,
+
+    // ---- phase 3 (design §5); the ITs that must catch them are phase 3's unit B ----
+
+    /** A row already handled is handled again: no handled-set check (§3.2, §3.4 overlap) */
+    NO_DEDUPE,
+    /** The subscription attaches and drains without bridging {@code (P, C]} (§3.4) */
+    ATTACH_WITHOUT_BRIDGE,
+    /** Bridge pages do not re-read the attach holes below their lower bound (§3.4, I2) */
+    BRIDGE_WITHOUT_HOLE_REREAD,
+    /** A detached subscription resumes at its received watermark, ignoring the unhandled rows of its batch (F5, §3.6) */
+    DETACH_RESUMES_AT_WATERMARK,
+    /** The resume point is computed from the reader's live watermark instead of the received one (§3.2, I3) */
+    RESUME_FROM_READER_WATERMARK,
+    /** A reader restart leaves the attached subscriptions attached (§2.4, F4) */
+    KEEP_ATTACHED_ON_READER_RESTART
 }

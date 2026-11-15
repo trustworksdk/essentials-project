@@ -16,11 +16,12 @@
 package dk.trustworks.essentials.components.eventlog;
 
 import java.time.Duration;
+import java.util.Set;
 
 /**
- * Callbacks for metrics and diagnostics of the tail reader and the phase-2 subscription (design §1.2). Every method has
- * a no-op default; implementations must be fast and must not throw - they run on the reader's thread. A Micrometer
- * binding is a later step.
+ * Callbacks for metrics and diagnostics of the tail reader and the subscriptions (design §1.2, phase 3 §1.1). Every
+ * method has a no-op default; implementations must be fast and must not throw - they run on the reader loop's thread
+ * or a subscription's delivery thread. A Micrometer binding is a later step.
  */
 public interface EventLogObserver {
     EventLogObserver NONE = new EventLogObserver() {
@@ -59,5 +60,51 @@ public interface EventLogObserver {
      * A reader or handler failed; the subscription retries.
      */
     default void onError(String subscriber, String aggregateType, Throwable error) {
+    }
+
+    /**
+     * A subscription's inbox was attached to its aggregate type's reader (phase 3 §3.4). Reader loop thread.
+     *
+     * @param cursor    the reader's cursor {@code C}: the bridge reads up to it
+     * @param watermark the reader's watermark {@code W}
+     */
+    default void onAttach(String subscriber, String aggregateType, long cursor, long watermark) {
+    }
+
+    /**
+     * A subscription detached (phase 3 §3.6) and catches up from {@code resumeFrom}. Delivery thread.
+     *
+     * @param reason {@code OVERFLOW}, {@code READER_RESTART}, {@code RESET} or {@code STOPPED}
+     */
+    default void onDetach(String subscriber, String aggregateType, String reason, long resumeFrom) {
+    }
+
+    /**
+     * One catch-up or bridge statement finished (phase 3 §3.3, §3.4). Delivery thread.
+     *
+     * @param bridge {@code true} for a bridge page
+     * @param rows   rows returned
+     */
+    default void onCatchUpRead(String subscriber, String aggregateType, boolean bridge, long nanos, int rows) {
+    }
+
+    /**
+     * An attached subscription took a batch from its inbox. Delivery thread.
+     *
+     * @param rows        rows in the batch
+     * @param inboxEvents events still in the inbox after the take: the inbox depth
+     */
+    default void onBatchTaken(String subscriber, String aggregateType, int rows, int inboxEvents) {
+    }
+
+    /**
+     * A subscription started or stopped waiting because its aggregate type's watermark is unknown (F4, phase 3
+     * decision 2): after a reader (re)start while a writer holds a value below the head. Delivery thread.
+     *
+     * @param waiting {@code true} when the wait starts, {@code false} when it ends
+     * @param heldBy  the {@code backend_xid}s of the reader's initial candidate - the writers the wait is for; empty
+     *                when the reader has not started yet, or when the wait ends
+     */
+    default void onWaitingForWatermark(String subscriber, String aggregateType, boolean waiting, Set<String> heldBy) {
     }
 }

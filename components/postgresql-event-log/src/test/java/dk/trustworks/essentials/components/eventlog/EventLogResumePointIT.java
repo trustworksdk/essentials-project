@@ -18,12 +18,10 @@ package dk.trustworks.essentials.components.eventlog;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
-import org.postgresql.PGConnection;
 
 import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -94,22 +92,23 @@ class EventLogResumePointIT extends AbstractSubscriptionIT {
     /**
      * The retiring probe is held inside its scan (after its snapshot) while the hole's writer commits, so the probe
      * cannot see the late row, yet its running set no longer holds the writer: the candidate retires and only the hole
-     * read can deliver the row. A save runs in that window, then the subscription crashes.
+     * read can deliver the row. The loop is held in that window until the subscription has worked through (and saved)
+     * everything it received, then the subscription crashes. Phase 3: the save runs on the subscription's own thread,
+     * and the mutant offers the moved watermark to the inbox before the hole read; the shared loop is released after
+     * the crash so the next incarnation has a reader.
      */
     private Set<Long> crashBetweenRetirementAndHoleRead(WatermarkMutant... mutants) throws Exception {
         var r1          = new Recorder();
-        var self        = new AtomicReference<FreshSubscription>();
         var crashWindow = new CountDownLatch(1);
+        var release     = new CountDownLatch(1);
         var hooks = new TestSeams.Hooks() {
             @Override
             public void beforeHoleRead(Collection<Long> holes) throws Exception {
-                self.get().saveProgressNow();
                 crashWindow.countDown();
-                new CountDownLatch(1).await();
+                release.await();
             }
         };
         var s1 = subscribe("sub", r1, new TestSeams(Set.of(mutants), hooks, HELD));
-        self.set(s1);
         awaitDelivered(r1, commitAppend("pre", 1));
         var held = openAppend("held", 1);
         awaitDelivered(r1, commitAppend("above", 1));
@@ -120,7 +119,9 @@ class EventLogResumePointIT extends AbstractSubscriptionIT {
         held.commit();
         releaseScan(holder);
         assertThat(crashWindow.await(30, TimeUnit.SECONDS)).as("the candidate retired and the hole read is next").isTrue();
+        awaitTrue(s1::isIdle);
         crash(s1);
+        release.countDown();
         return lostAfterRestart(r1);
     }
 
@@ -144,10 +145,12 @@ class EventLogResumePointIT extends AbstractSubscriptionIT {
         awaitTrue(() -> unchecked(() -> savedResumeFrom("sub")) == held.globalOrder());
         crash(s1);
         // Restarted while the writer still runs: the initial candidate covers the head, the watermark is unknown
+        // Phase 3: the subscription waits for the watermark and reads nothing; the mutant catches up above it
         var r2 = new Recorder();
         var s2 = subscribe("sub", r2, mutants);
-        awaitDelivered(r2, above, above + 1);
+        awaitTrue(s2::isIdle);
         awaitReads(3);
+        awaitTrue(s2::isIdle);
         crash(s2);
         held.commit();
         var handled = new HashSet<StoredEvent>(r1.handled);
@@ -156,8 +159,7 @@ class EventLogResumePointIT extends AbstractSubscriptionIT {
     }
 
     private void crash(FreshSubscription subscription) throws SQLException {
-        var pid = subscription.reader().connection().unwrap(PGConnection.class).getBackendPID();
-        execute("SELECT pg_terminate_backend(" + pid + ")");
+        terminateReaderBackend();
         subscription.crash();
     }
 

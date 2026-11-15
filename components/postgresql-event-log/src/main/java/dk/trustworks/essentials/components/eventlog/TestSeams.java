@@ -18,13 +18,17 @@ package dk.trustworks.essentials.components.eventlog;
 import java.util.*;
 
 /**
- * <b>Test-only</b> seams of the tail reader and the phase-2 subscription: the phase-0 mutants the invariant ITs must
- * be seen to catch, hooks into the reader's single thread at the two points the invariants care about, and a read
+ * <b>Test-only</b> seams of the tail reader and the subscription: the mutants the invariant ITs must be seen to catch,
+ * hooks into the reader loop's thread and the delivery thread at the points the invariants care about, and a read
  * source in place of the event table (a view that holds a scan open, for the hold-inside-scan proofs). Package-private;
  * {@link #NONE} in normal use.
+ * <p>
+ * The tail reader of an aggregate type is shared (phase 3 §2.1): its mutants, reader hooks and read source are those of
+ * the subscription that made the type active (the first one to start); the subscription mutants and delivery-thread
+ * hooks are each subscription's own.
  *
  * @param mutants        broken variants to switch on
- * @param hooks          callbacks on the reader's thread
+ * @param hooks          callbacks on the reader loop's and the delivery thread
  * @param readTable      a relation to read instead of the aggregate type's event table, or {@code null}
  */
 record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
@@ -52,6 +56,29 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
 
         /** After a candidate retired and before its hole read is sent; {@code holes} are the values to re-read */
         default void beforeHoleRead(Collection<Long> holes) throws Exception {
+        }
+
+        /** Reader loop thread: a read finished and its rows are not yet offered to any inbox (phase 3 §2.2) */
+        default void afterReadBeforePublish(String aggregateType, List<StoredEvent> rows) throws Exception {
+        }
+
+        /**
+         * Reader loop thread, at the quiescent point: the subscription's inbox was just attached with cursor {@code C}
+         * and watermark {@code W}. The attaching subscription's hook
+         */
+        default void onAttach(String subscriber, long cursor, long watermark) throws Exception {
+        }
+
+        /** Delivery thread: the catch-up reached the watermark and the attach request is about to be sent */
+        default void beforeAttachRequest(String subscriber) throws Exception {
+        }
+
+        /** Delivery thread: between two bridge pages; {@code lowerBound} is the next page's (exclusive) lower bound */
+        default void betweenBridgePages(String subscriber, long lowerBound) throws Exception {
+        }
+
+        /** Delivery thread: the subscription detached and catches up from {@code resumeFrom} */
+        default void onDetach(String subscriber, String reason, long resumeFrom) throws Exception {
         }
     }
 }

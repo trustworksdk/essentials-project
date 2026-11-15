@@ -47,8 +47,8 @@ class EventLogCombinedProbeIT extends AbstractSubscriptionIT {
         var xid  = currentXid(held.connection());
         awaitDelivered(recorder, commitAppend("above", 1));
         awaitReads(10);
-        assertThat(subscription.reader().state().candidates()).anySatisfy(c -> assertThat(c.runningXids()).contains(xid));
-        assertThat(subscription.reader().state().holes()).contains(held.globalOrder());
+        assertThat(eventLog.reader(TYPE).state().candidates()).anySatisfy(c -> assertThat(c.runningXids()).contains(xid));
+        assertThat(eventLog.reader(TYPE).state().holes()).contains(held.globalOrder());
         held.commit();
         awaitDelivered(recorder, held.globalOrder());
     }
@@ -128,7 +128,7 @@ class EventLogCombinedProbeIT extends AbstractSubscriptionIT {
         queryLong(w2, "SELECT pg_current_xact_id()::text::bigint");
         var xid = currentXid(w2);
         releaseScan(holder);
-        await().atMost(WAIT).untilAsserted(() -> assertThat(subscription.reader().state().candidates())
+        await().atMost(WAIT).untilAsserted(() -> assertThat(eventLog.reader(TYPE).state().candidates())
                 .anySatisfy(c -> assertThat(c.runningXids()).contains(xid)));
         w2.rollback();
         w1.rollback();

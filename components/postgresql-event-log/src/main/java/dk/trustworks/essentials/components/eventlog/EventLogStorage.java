@@ -74,15 +74,23 @@ final class EventLogStorage {
      * {@code probeWithRanges} as {@code probe} plus {@code bigint[]} range lows and highs; {@code holeRead} holes, lows,
      * highs; {@code runningSet} none. {@code probe*} return {@link #RUNNING_COLUMN} columns, the running set on one row
      * whose {@code global_order} is null, sorted last - present even when no event row is (§4.10).
+     * <p>
+     * Phase 3's subscription statements, run on pooled connections: {@code rangeRead} lower (exclusive), upper
+     * (inclusive), limit - the catch-up page; {@code bridgePage} as {@code rangeRead} plus {@code bigint[]} attach holes
+     * at or below the lower bound; {@code bridgePageWithRanges} plus {@code bigint[]} range lows and highs. The bridge
+     * re-reads holes by {@code UNION ALL}, never {@code OR} (P0.11), and reads no running set.
      */
     record TailStatements(String head, String plainTail, String probe, String probeWithRanges, String holeRead, String runningSet,
-                          String probeWithoutHoleReread) {
+                          String probeWithoutHoleReread, String rangeRead, String bridgePage, String bridgePageWithRanges) {
         static TailStatements of(String relation) {
             var tail   = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] AS running FROM " + relation + " WHERE global_order > ? ORDER BY global_order LIMIT ?)";
             var holes  = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] FROM " + relation + " WHERE global_order = ANY(?::bigint[]))";
             var ranges = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] FROM " + relation + " e JOIN unnest(?::bigint[], ?::bigint[]) AS r(lo, hi) ON e.global_order BETWEEN r.lo AND r.hi)";
             var running = "(SELECT " + NULL_EVENT_COLUMNS + ", " + RUNNING_SET + ")";
             var order  = ") u ORDER BY u.global_order NULLS LAST";
+            var range        = "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? AND global_order <= ? ORDER BY global_order LIMIT ?";
+            var bridgeHoles  = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order = ANY(?::bigint[]))";
+            var bridgeRanges = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " e JOIN unnest(?::bigint[], ?::bigint[]) AS r(lo, hi) ON e.global_order BETWEEN r.lo AND r.hi)";
             return new TailStatements(
                     "SELECT (SELECT coalesce(max(global_order), 0) FROM " + relation + "), " + RUNNING_SET,
                     "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? ORDER BY global_order LIMIT ?",
@@ -90,7 +98,10 @@ final class EventLogStorage {
                     "SELECT * FROM (\n" + tail + "\nUNION ALL\n" + holes + "\nUNION ALL\n" + ranges + "\nUNION ALL\n" + running + "\n" + order,
                     "SELECT * FROM (\n" + holes + "\nUNION ALL\n" + ranges + "\n) u ORDER BY u.global_order",
                     "SELECT " + RUNNING_SET,
-                    "SELECT * FROM (\n" + tail + "\nUNION ALL\n" + running + "\n" + order);
+                    "SELECT * FROM (\n" + tail + "\nUNION ALL\n" + running + "\n" + order,
+                    range,
+                    "SELECT * FROM (\n(" + range + ")\nUNION ALL\n" + bridgeHoles + "\n) u ORDER BY u.global_order",
+                    "SELECT * FROM (\n(" + range + ")\nUNION ALL\n" + bridgeHoles + "\nUNION ALL\n" + bridgeRanges + "\n) u ORDER BY u.global_order");
         }
 
         /** Every statement with its name, for the generic-plan check */
@@ -102,6 +113,9 @@ final class EventLogStorage {
             all.put("probeWithRanges", probeWithRanges);
             all.put("holeRead", holeRead);
             all.put("runningSet", runningSet);
+            all.put("rangeRead", rangeRead);
+            all.put("bridgePage", bridgePage);
+            all.put("bridgePageWithRanges", bridgePageWithRanges);
             return all;
         }
     }

@@ -48,6 +48,7 @@ public final class EventLog {
     private final EventLogSettings                                    settings;
     private final EventLogObserver                                    observer;
     private final ProgressStore                                       progressStore;
+    private final ReaderLoop                                          readerLoop;
     private final List<FreshSubscription>                             subscriptions  = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile boolean                                          started;
 
@@ -56,6 +57,7 @@ public final class EventLog {
         this.settings = requireNonNull(settings, "No settings provided");
         this.observer = requireNonNull(observer, "No observer provided");
         this.progressStore = new ProgressStore(dataSource);
+        this.readerLoop = new ReaderLoop(dataSource, settings, observer);
         this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
         this.ddl = requireNonNull(ddl, "No ddl provided");
         this.eventTypes = new EventTypeRegistry(dataSource);
@@ -92,6 +94,13 @@ public final class EventLog {
             subscription.stop();
         }
         subscriptions.clear();
+        try {
+            if (!readerLoop.awaitStopped(java.time.Duration.ofSeconds(30))) {
+                log.warn("The reader loop did not end within 30 s of the last subscription's stop");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         started = false;
     }
 
@@ -125,12 +134,24 @@ public final class EventLog {
         var aggregateType = spec.key().aggregateType();
         var type          = registered(aggregateType);
         var relation      = spec.seams().readTable() != null ? spec.seams().readTable() : type.tables.eventTable();
-        var reader        = new TailReader(aggregateType, dataSource, EventLogStorage.TailStatements.of(relation), settings, rs -> read(aggregateType, rs), observer,
-                                           spec.seams());
-        var subscription  = new FreshSubscription(spec, reader, progressStore, settings, observer);
+        var subscription  = new FreshSubscription(spec, readerLoop, EventLogStorage.TailStatements.of(relation), rs -> read(aggregateType, rs), progressStore, settings,
+                                                  observer);
         subscription.start();
         subscriptions.add(subscription);
         return subscription;
+    }
+
+    /**
+     * The tail reader of {@code aggregateType}, for tests: {@code null} while the type has no subscription or its reader
+     * restarts. Only {@link TailReader#state()} may be called from outside the reader loop's thread.
+     */
+    TailReader reader(String aggregateType) {
+        return readerLoop.reader(aggregateType);
+    }
+
+    /** The shared reader loop, for tests */
+    ReaderLoop readerLoop() {
+        return readerLoop;
     }
 
     /**

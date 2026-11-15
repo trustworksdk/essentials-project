@@ -37,6 +37,10 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * @param genericPlans         run the tail reader's statements under {@code plan_cache_mode = force_generic_plan} with
  *                             server-side prepared statements, except those whose generic plan is not index-only
  *                             (P0.16; {@code EventLogGenericPlanIT} checks them). {@code false} plans every read custom
+ * @param subscriptionBufferSize most events a subscription's inbox holds before the next batch overflows it and the
+ *                             subscription detaches (phase 3 §2.3); at least {@code tailPageSize}. An empty inbox
+ *                             accepts any batch
+ * @param catchUpPageSize      most rows one catch-up or bridge statement returns (phase 3 §3.3, §3.4)
  */
 public record EventLogSettings(Duration backstopInterval,
                                int tailPageSize,
@@ -44,7 +48,9 @@ public record EventLogSettings(Duration backstopInterval,
                                Duration probeBackoffMax,
                                Duration progressSaveInterval,
                                int holeRangeThreshold,
-                               boolean genericPlans) {
+                               boolean genericPlans,
+                               int subscriptionBufferSize,
+                               int catchUpPageSize) {
     /**
      * The probes of the whole cluster may take at most about 1 % of one core while candidates are outstanding: one
      * reader's probe costs at most 1 % of its wait ({@code wait >= cost * 100}), divided by the number of readers that
@@ -70,6 +76,8 @@ public record EventLogSettings(Duration backstopInterval,
         requireNonNull(progressSaveInterval, "No progressSaveInterval provided");
         requireTrue(!progressSaveInterval.isNegative(), "progressSaveInterval must not be negative");
         requireTrue(holeRangeThreshold > 0, "holeRangeThreshold must be > 0");
+        requireTrue(subscriptionBufferSize >= tailPageSize, "subscriptionBufferSize must be >= tailPageSize");
+        requireTrue(catchUpPageSize > 0, "catchUpPageSize must be > 0");
     }
 
     private static void requirePositive(Duration duration, String name) {
@@ -79,35 +87,43 @@ public record EventLogSettings(Duration backstopInterval,
 
     /**
      * Backstop 1 s, page 100 (P0.13), re-probe between 1 s and 10 s, save every second, ranges above 1 000 values,
-     * generic plans on
+     * generic plans on, inbox 1 000 events, catch-up page 500
      */
     public static EventLogSettings defaults() {
-        return new EventLogSettings(Duration.ofSeconds(1), 100, Duration.ofSeconds(1), Duration.ofSeconds(10), Duration.ofSeconds(1), 1_000, true);
+        return new EventLogSettings(Duration.ofSeconds(1), 100, Duration.ofSeconds(1), Duration.ofSeconds(10), Duration.ofSeconds(1), 1_000, true, 1_000, 500);
     }
 
     public EventLogSettings withBackstopInterval(Duration backstopInterval) {
         var min = probeBackoffMin.compareTo(backstopInterval) > 0 ? probeBackoffMin : backstopInterval;
-        return new EventLogSettings(backstopInterval, tailPageSize, min, probeBackoffMax.compareTo(min) < 0 ? min : probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans);
+        return new EventLogSettings(backstopInterval, tailPageSize, min, probeBackoffMax.compareTo(min) < 0 ? min : probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize);
     }
 
     public EventLogSettings withTailPageSize(int tailPageSize) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize);
     }
 
     public EventLogSettings withProbeBackoff(Duration min, Duration max) {
-        return new EventLogSettings(backstopInterval, tailPageSize, min, max, progressSaveInterval, holeRangeThreshold, genericPlans);
+        return new EventLogSettings(backstopInterval, tailPageSize, min, max, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize);
     }
 
     public EventLogSettings withProgressSaveInterval(Duration progressSaveInterval) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize);
     }
 
     public EventLogSettings withHoleRangeThreshold(int holeRangeThreshold) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize);
     }
 
     public EventLogSettings withGenericPlans(boolean genericPlans) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize);
+    }
+
+    public EventLogSettings withSubscriptionBufferSize(int subscriptionBufferSize) {
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize);
+    }
+
+    public EventLogSettings withCatchUpPageSize(int catchUpPageSize) {
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize);
     }
 
     /**

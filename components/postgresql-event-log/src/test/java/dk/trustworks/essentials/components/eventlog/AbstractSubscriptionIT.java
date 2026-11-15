@@ -53,6 +53,7 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
     static final class ReadCounter implements EventLogObserver {
         final AtomicLong reads = new AtomicLong();
         final AtomicLong holeReads = new AtomicLong();
+        final AtomicLong detaches  = new AtomicLong();
         volatile int lastCandidates;
         volatile int lastHoles;
 
@@ -66,6 +67,11 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         @Override
         public void onHoleRead(String aggregateType, int resolvedHoles, int lateRows) {
             holeReads.incrementAndGet();
+        }
+
+        @Override
+        public void onDetach(String subscriber, String aggregateType, String reason, long resumeFrom) {
+            detaches.incrementAndGet();
         }
     }
 
@@ -132,6 +138,15 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
 
     FreshSubscription subscribe(String name, Recorder recorder, WatermarkMutant... mutants) throws SQLException {
         return subscribe(name, recorder, new TestSeams(Set.of(mutants), TestSeams.Hooks.NONE, null));
+    }
+
+    /** Terminates the backend of the shared reader loop's connection, if it has one: the next read fails (§2.4) */
+    void terminateReaderBackend() throws SQLException {
+        var connection = eventLog.readerLoop().connection();
+        if (connection != null) {
+            var pid = connection.unwrap(org.postgresql.PGConnection.class).getBackendPID();
+            execute("SELECT pg_terminate_backend(" + pid + ")");
+        }
     }
 
     /** A writer whose transaction stays open: it holds an xid and its global_orders until committed or rolled back */

@@ -18,18 +18,20 @@ package dk.trustworks.essentials.components.eventlog;
 import org.postgresql.PGStatement;
 import org.slf4j.*;
 
-import javax.sql.DataSource;
 import java.sql.*;
 import java.time.Duration;
 import java.util.*;
+import java.util.function.LongConsumer;
 
 import static dk.trustworks.essentials.components.eventlog.EventLogStorage.RUNNING_COLUMN;
 import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The tail reader of one aggregate type (plan §4, §6; design §3.3). Owns one connection for its lifetime and is
- * touched by one thread only: cursor, hole set, candidates and watermark are plain fields.
+ * The tail reader state machine of one aggregate type (plan §4, §6; design §3.3, phase 3 §1.1). Runs on the
+ * {@link ReaderLoop}'s connection, which it is handed and does not own, and is touched by the loop's thread only:
+ * cursor, hole set, candidates and watermark are plain fields (an assertion checks the owner thread under {@code -ea}).
+ * A reader restart discards the instance and starts a new one.
  * <ul>
  *     <li><b>Cursor</b>: the highest {@code global_order} read. Every gap below it is a <b>hole</b> - a single value,
  *     or a range when a sequence jump left more than {@link EventLogSettings#holeRangeThreshold()} values.</li>
@@ -43,10 +45,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     every hole at or below it: those are re-read once ({@code holeRead}, §4.2) and the rows published before the
  *     watermark moves past them (F2).</li>
  *     <li><b>Watermark</b> (F2): {@code min(cursor, lowest unresolved hole - 1)}.</li>
- *     <li><b>Start</b> (F4): the reader starts at {@code resumeFrom - 1}, which the progress formula guarantees final,
- *     and reads the head and the running set in one statement. If any writer is running, an <b>initial candidate</b>
- *     {@code (head, running set)} covers every gap the reader then finds up to the head, and the watermark is unknown
- *     until it retires. With no writer running, gaps up to the head are final at once.</li>
+ *     <li><b>Start</b> (F4, phase 3 §2.4): the reader starts at the head, read with the running set in one statement.
+ *     If any writer is running, an <b>initial candidate</b> {@code (head, running set)} makes the watermark unknown
+ *     until it retires, since a writer may still commit below the head. With no writer running the watermark is the
+ *     head at once.</li>
  * </ul>
  */
 final class TailReader implements AutoCloseable {
@@ -64,14 +66,15 @@ final class TailReader implements AutoCloseable {
     }
 
     private final String                          aggregateType;
-    private final DataSource                      dataSource;
+    private final Connection                      connection;
     private final EventLogStorage.TailStatements  statements;
     private final EventLogSettings                settings;
     private final RowMapper                       mapper;
     private final EventLogObserver                observer;
     private final TestSeams                       seams;
+    private final LongConsumer                    watermarkBeforeHoleRead;
 
-    private Connection                            connection;
+    private Thread                                owner;
     private final Map<String, PreparedStatement>  prepared   = new HashMap<>();
     private long                                  cursor;
     private final TreeSet<Long>                   holes      = new TreeSet<>();
@@ -85,10 +88,16 @@ final class TailReader implements AutoCloseable {
     private long                                  lastReadNanos;
     private int                                   lastBackends = 1;
 
-    TailReader(String aggregateType, DataSource dataSource, EventLogStorage.TailStatements statements, EventLogSettings settings, RowMapper mapper,
-               EventLogObserver observer, TestSeams seams) {
+    /**
+     * @param connection              the reader loop's connection; the loop sets its session and closes it
+     * @param watermarkBeforeHoleRead {@link WatermarkMutant#WATERMARK_BEFORE_HOLE_READ} only: offers the watermark to
+     *                                the attached inboxes before the hole read
+     */
+    TailReader(String aggregateType, Connection connection, EventLogStorage.TailStatements statements, EventLogSettings settings, RowMapper mapper,
+               EventLogObserver observer, TestSeams seams, LongConsumer watermarkBeforeHoleRead) {
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
-        this.dataSource = requireNonNull(dataSource, "No dataSource provided");
+        this.connection = requireNonNull(connection, "No connection provided");
+        this.watermarkBeforeHoleRead = requireNonNull(watermarkBeforeHoleRead, "No watermarkBeforeHoleRead provided");
         this.statements = requireNonNull(statements, "No statements provided");
         this.settings = requireNonNull(settings, "No settings provided");
         this.mapper = requireNonNull(mapper, "No mapper provided");
@@ -97,21 +106,11 @@ final class TailReader implements AutoCloseable {
     }
 
     /**
-     * (Re)start at {@code resumeFrom}: every value below it must be final - as a resume point saved by §4.7's formula
-     * guarantees. Opens the reader's connection and forgets all earlier state.
+     * Start at the head (F4, phase 3 §2.4): one statement reads {@code max(global_order)} and the running set. Runs once,
+     * on the loop's thread, which becomes the owner.
      */
-    void start(long resumeFrom) throws SQLException {
-        close();
-        connection = dataSource.getConnection();
-        try (var statement = connection.createStatement()) {
-            statement.execute("SET jit = off");
-            if (settings.genericPlans()) {
-                statement.execute("SET plan_cache_mode = force_generic_plan");
-            }
-        }
-        // The probe must run in autocommit (P0.2); the mutant keeps one transaction across probes
-        connection.setAutoCommit(!seams.has(CACHED_STAT_ACTIVITY));
-        cursor = resumeFrom - 1;
+    void startAtHead() throws SQLException {
+        owner = Thread.currentThread();
         holes.clear();
         ranges.clear();
         pending.clear();
@@ -126,6 +125,7 @@ final class TailReader implements AutoCloseable {
             head = resultSet.getLong(1);
             running = xids(resultSet.getArray(2));
         }
+        cursor = head;
         if (seams.has(RESTARTED_READER_AT_HEAD) || running.isEmpty()) {
             // No writer can still commit at or below the head: every gap up to it is final
             initialized = true;
@@ -136,7 +136,7 @@ final class TailReader implements AutoCloseable {
             candidates.add(new Candidate(head, running, true, System.nanoTime()));
         }
         publishState();
-        log.debug("[{}] Tail reader starts after {} (head {}, {} running writers)", aggregateType, cursor, head, running.size());
+        log.debug("[{}] Tail reader starts at the head {} ({} running writers)", aggregateType, head, running.size());
     }
 
     /**
@@ -144,6 +144,7 @@ final class TailReader implements AutoCloseable {
      * {@code global_order} order, late commits included; each row is returned once.
      */
     List<StoredEvent> poll() throws Exception {
+        assert ownedByCurrentThread();
         var combined = !candidates.isEmpty() || !lastReadContiguous || !holes.isEmpty() || !ranges.isEmpty();
         var rows     = new ArrayList<StoredEvent>();
         Set<String> running = null;
@@ -279,6 +280,13 @@ final class TailReader implements AutoCloseable {
             return;
         }
         var values = new ArrayList<Long>(pending);
+        if (seams.has(WATERMARK_BEFORE_HOLE_READ)) {
+            publishState();
+            var early = watermark();
+            if (early != null) {
+                watermarkBeforeHoleRead.accept(early);
+            }
+        }
         seams.hooks().beforeHoleRead(values);
         var statement = statement("holeRead", statements.holeRead());
         statement.setArray(1, connection.createArrayOf("bigint", pending.toArray(Long[]::new)));
@@ -349,6 +357,7 @@ final class TailReader implements AutoCloseable {
      * restart's initial candidate is outstanding (F4)
      */
     Long watermark() {
+        assert ownedByCurrentThread();
         if (!initialized) {
             return seams.has(CATCH_UP_ABOVE_WATERMARK) ? cursor : null;
         }
@@ -372,7 +381,26 @@ final class TailReader implements AutoCloseable {
     }
 
     long cursor() {
+        assert ownedByCurrentThread();
         return cursor;
+    }
+
+    /** The reply to an attach at the loop's quiescent point: the unresolved holes and ranges, all above the watermark */
+    SortedSet<Long> holes() {
+        assert ownedByCurrentThread();
+        return Collections.unmodifiableSortedSet(new TreeSet<>(holes));
+    }
+
+    SortedMap<Long, Long> ranges() {
+        assert ownedByCurrentThread();
+        return Collections.unmodifiableSortedMap(new TreeMap<>(ranges));
+    }
+
+    private boolean ownedByCurrentThread() {
+        if (owner != null && owner != Thread.currentThread()) {
+            throw new AssertionError("Tail reader of " + aggregateType + " touched by " + Thread.currentThread() + "; it belongs to " + owner);
+        }
+        return true;
     }
 
     /**
@@ -453,6 +481,7 @@ final class TailReader implements AutoCloseable {
         return set;
     }
 
+    /** Close the prepared statements; the connection is the loop's */
     @Override
     public void close() {
         for (var statement : prepared.values()) {
@@ -463,33 +492,5 @@ final class TailReader implements AutoCloseable {
             }
         }
         prepared.clear();
-        if (connection == null) {
-            return;
-        }
-        try {
-            if (!connection.isClosed()) {
-                if (!connection.getAutoCommit()) {
-                    connection.rollback();
-                    connection.setAutoCommit(true);
-                }
-                try (var statement = connection.createStatement()) {
-                    statement.execute("RESET plan_cache_mode");
-                    statement.execute("RESET jit");
-                }
-            }
-        } catch (SQLException e) {
-            log.debug("[{}] Resetting the tail reader's connection failed", aggregateType, e);
-        }
-        try {
-            connection.close();
-        } catch (SQLException e) {
-            log.debug("[{}] Closing the tail reader's connection failed", aggregateType, e);
-        }
-        connection = null;
-    }
-
-    /** The reader's connection, for tests that terminate its backend */
-    Connection connection() {
-        return connection;
     }
 }

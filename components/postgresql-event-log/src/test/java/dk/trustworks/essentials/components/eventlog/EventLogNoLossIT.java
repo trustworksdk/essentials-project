@@ -33,7 +33,7 @@ import static org.awaitility.Awaitility.await;
  * <p>
  * Concurrent writers with random commit order and rollbacks, a writer held open while others commit (5 s by default,
  * the plan's five minutes with the opt-in {@code -Dbenchmark.run=true}, the repository's switch for long suites), a sequence jump of a million values, and a
- * reader restarted while a writer holds a value below the head. Must-fail variants (P0.5 mutants): the empty tail
+ * reader restarted (its backend terminated) while a writer holds a value below the head. Must-fail variants (P0.5 mutants): the empty tail
  * taken to mean nobody runs, a restarted reader that takes the head as final (F4), and a writer that draws its value
  * before its xid - the raw insert of P0.1's control, which the engine's append never is (I4).
  */
@@ -115,13 +115,13 @@ class EventLogNoLossIT extends AbstractSubscriptionIT {
         assertThat(after).isEqualTo(held.globalOrder() + 1_000_001);
         awaitDelivered(recorder, after);
         await().atMost(WAIT).untilAsserted(() -> {
-            var state = subscription.reader().state();
+            var state = eventLog.reader(TYPE).state();
             assertThat(state.ranges()).hasSize(1);
             assertThat(state.holes()).isEmpty();
         });
         held.commit();
         awaitDelivered(recorder, held.globalOrder());
-        await().atMost(WAIT).until(() -> subscription.reader().state().ranges().isEmpty() && subscription.reader().state().candidates().isEmpty());
+        await().atMost(WAIT).until(() -> eventLog.reader(TYPE).state().ranges().isEmpty() && eventLog.reader(TYPE).state().candidates().isEmpty());
         assertThat(recorder.delivered).hasSize(3);
     }
 
@@ -136,23 +136,26 @@ class EventLogNoLossIT extends AbstractSubscriptionIT {
     }
 
     /**
-     * @return whether the second incarnation delivered the value the writer held across the restart
+     * Phase 3 §2.4: the reader's backend is terminated while a writer holds a value below the head; the restarted reader
+     * starts at the head, the attached subscription detaches and the held value reaches it through catch-up once the
+     * restart's initial candidate retires.
+     *
+     * @return whether the subscription delivered the value the writer held across the restart
      */
     private boolean restartWhileAWriterHoldsAValueBelowTheHead(WatermarkMutant... mutants) throws Exception {
-        var first = new Recorder();
-        var s1    = subscribe("sub", first);
-        awaitDelivered(first, commitAppend("pre", 1));
+        var recorder = new Recorder();
+        subscribe("sub", recorder, mutants);
+        awaitDelivered(recorder, commitAppend("pre", 1));
         var held  = openAppend("held", 1);
         var above = commitAppend("above", 2);
-        awaitDelivered(first, above, above + 1);
+        awaitDelivered(recorder, above, above + 1);
         await().atMost(WAIT).until(() -> savedResumeFrom("sub") == held.globalOrder());
-        s1.crash();
-
-        var second = new Recorder();
-        subscribe("sub", second, mutants);
-        awaitDelivered(second, above, above + 1);
+        var detaches = reads.detaches.get();
+        terminateReaderBackend();
+        await().atMost(WAIT).until(() -> reads.detaches.get() > detaches && eventLog.reader(TYPE) != null);
+        awaitReads(3);
         held.commit();
-        return deliveredWithin(second, held.globalOrder());
+        return deliveredWithin(recorder, held.globalOrder());
     }
 
     @Test
