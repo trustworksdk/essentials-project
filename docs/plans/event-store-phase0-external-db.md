@@ -590,7 +590,7 @@ suites passed (client at commit `153b850b3`, `-- -Ddocker.skip=true`). No correc
 P0.13; P0.1, P0.2 and P0.11 passed their tests.
 
 **The slow flush phase did not come back.** Every window of P0.9, P0.7 contended, P0.4 contention and P0.6 contended
-ran fast (about 1 800-2 600 appended/s). The governor is the likely cause on 2026-11-13, not proven: there is no
+ran fast (about 1 800-2 600 appended/s). The governor is the likely cause on 2026-11-13, not proven (revised on 2026-11-15: it is not, the phase recurred under `performance`): there is no
 `powersave` run on 17.12 and still no `pg_test_fsync`. **The 2026-11-13 P0.10 suite ran entirely in that slow phase**
 (`NONE` commit p50 about 7 ms against 1.25 ms here), so its P0.10 rows are replaced by the ones below. Server
 execution did not drop under `performance` (P0.7 100 events BASE 1 374-1 496 µs), so the 2.5-4x factor against the
@@ -651,3 +651,44 @@ to the listener callback. All 64 windows received exactly what was sent, with no
 Not measured: Vert.x's wire timestamp (the tap socket is pgjdbc's, so Vert.x shows 0 there), the minimal LISTEN-only
 reader the P0.17 row lists (`PINNED_PEEK` and Vert.x already answer the question), producers going through the
 engine's own append, and a listener on a separate host on a wire.
+
+### 2026-11-15: every suite on 18.7 (`20261115-094438-lac-N85-N87-HJ-HJ1-HK1-external`)
+
+Same machine and setup as the 2026-11-14 run: identical server settings, governor `performance`, server CPU from the
+container's cgroup, client at commit `a9f9f3bb`. Only the server changed, to PostgreSQL 18.7 (Debian image, so 18's
+defaults apply where the settings line does not name them, among them `io_method=worker` and, on a freshly
+initialised cluster, data checksums). All thirteen suites passed, `listen` included. Compared with the 17.12 runs
+(2026-11-14, and 2026-11-15 for P0.17 (a)):
+
+| Item | 18.7 | 17.12 | Reading |
+|---|---|---|---|
+| Correctness | P0.0 missing 0, duplicates 0, holes = rollbacks; P0.7 stale rows 0 in all 20 arms; P0.4 and encoding sanity ok; P0.13 checks ok; P0.17 (a) received = sent, 0 duplicates in all 64 windows | same | Holds. |
+| P0.1, P0.2 | 24 of 24 xid non-null, controls null; P0.2 controls still detect the broken order, race hunts 0 violations, `pg_stat_clear_snapshot()` fixes the `pg_stat_activity` trap | same | **Pass on 18.** |
+| P0.11, plans | All 728 plans identical in kind, shape and buffers; the only text differences are 18's `Index Searches` and `Disabled: true` lines | — | **The generic-plan trap is identical on 18**: `AUTO` stays custom for B, only forced `GENERIC` walks the primary key. Hole re-reads 5-10 % slower, within this host's spread. |
+| P0.9, PostgreSQL CPU per attempt | A 343-359 µs, B 387-405 µs; recorded execution A 63-65, B 79-80; outside execution A 280-295, B 308-326, the same under NORMAL and SPIN | A 338-354, B 380-390; outside A 274-290, B 301-310 | Same. The gap does not depend on the major version. |
+| P0.4 contention | A 1 756-1 947, C 1 923-1 928, B 1 829-1 910, `ON CONFLICT` 1 880-1 960 appended/s; burned per 1 000 A 614-620, B 523-530 | A 1 787-1 876, C 1 967-1 984, B 1 917-1 931; A 616-629, B 521-531 | Same; B saves 14-16 % of burned values. |
+| P0.4 encoding | Executor conversion jsonb 0.888, json 0.420, text 0.190 µs; B with one jsonb at 10 events 313 µs | 1.019, 0.473, 0.213; 263-265 µs | Conversion 11-13 % cheaper on 18; the B one-jsonb case is 18 % dearer, consistently. |
+| P0.7, contended | BASE 2 142-2 265; HEAD_GUARDED 2 286-2 396; HEAD_FOR_UPDATE 2 082-2 189; COMBO_ALL 2 263-2 353; COMBO_ALL_SCALAR 2 425-2 541; COMBO_ALL_BYTEA 2 368-2 451 | as on 2026-11-14 | Ranking holds. COMBO_ALL +4 % over BASE against +8 %; server CPU 2-3 % higher in every arm. |
+| P0.6 | Raw +10-15 % over JDBI contended; JDBI +20-60 µs server CPU per attempt; tail read 5 181-5 522 reads/s, execution 555-579 µs | raw +6-16 %; 4 811-5 117 reads/s, 653-670 µs | Holds. **The tail read is about 15 % cheaper on 18.** |
+| P0.10 | In-transaction notify 8 writers −75/−76 %, 20 writers −84/−85 %; ceiling 1 002-1 133/s; after commit coalesced about −10 %, per writer −32 % (8) and −13 % (20); pgjdbc wake p50 2.3-19.8 ms after commit, wire 0.02-1.09 ms | −76 to −79 %, −81 to −83 %; 1 003-1 164/s; similar | Same. |
+| P0.12, 400 connections | `NONE` 14 743-15 239/s; 40 tail-only probers −51/−53 %; 40 combined probers −84/−83 % (2 426-2 584/s); server CPU 4.2-4.3 cores rising to 6.0 | 15 323-15 400/s; −52/−53 %; −81/−80 % (2 958-3 099/s) | Same shape; combined probers 17 % lower in absolute throughput. **No probe execution figures**: 18's `pg_stat_statements` drops the spike's leading comment tag, fixed in `4cc73d2cc`. |
+| P0.13 | 4 projections `PER_EVENT` +5.7 % over `PERIODIC`; 1 projection −7.7 %; `PAGE_500_SET` 49.8x | −1.1 %; −10.5 %; 45.6x | Same within single-window noise. |
+| P0.17 (a), p99 at 3 000/s | 8 writers: `STOCK` 1 255, `PINNED_PEEK` 0.60, `QUERY_POLL` 1.59, Vert.x 0.61 ms; 20 writers 1 481, 0.69, 1.57, 0.61 ms; 20-writer burst `QUERY_POLL` 2.17 ms | 661, 0.62, 1.56, 0.60; 1 367, 0.72, 1.56, 0.66; 2.10 | **Gate holds: pgjdbc only.** |
+
+**The slow flush phase came back, with the governor at `performance`.** P0.0's uncontended appends ran about 3x slower
+(1 event p50 4.85-6.25 ms against 1.39-1.54), P0.0's first OCC run reached only about a third of its attempts, and
+P0.4's append suite ran slow from the start of its second run through its contended section (about 10:17-10:27 UTC;
+1 event p50 6.2-6.4 ms against 1.3-1.4, contended 657-716 appended/s against about 1 900). Those P0.4 append rows
+are not usable; the contention suite's figures above are the valid ones. Suites before and after were fast. Shorter
+commit stalls also showed elsewhere: commit p99 of 7-18 ms in six P0.13 arms (one on 17.12), append p99 7.0-8.6 ms in
+6 of 10 P0.12 windows at 10 connections (2.1-2.5 ms on 17.12) and commit p99 about 5 ms with one P0.10 writer. **So
+the governor did not cause the slow phase**, which revises the 2026-11-14 reading; the cause is more likely in the
+laptop's storage (write cache, thermal throttling or SSD housekeeping) than in PostgreSQL, since 17.5 showed it too.
+Whether 18's `io_method` or checksums add to the stalls is not separable from this run.
+
+Reading: **18.7 changes no phase-0 decision.** Every plan, correctness check and ranking that drove a decision is the
+same; the only material differences are a cheaper tail read (P0.6) and cheaper executor conversion (P0.4 encoding).
+
+Still open: the cause of the slow phase (`pg_test_fsync` and `iostat -x` during a run, and the SSD's temperature),
+P0.12's probe execution on 18 (rerun the `probe-cost` suite at `4cc73d2cc` or later), P0.1 and P0.2 on 16, and a
+separate wired client host.
