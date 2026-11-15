@@ -11,10 +11,11 @@ side. The single-statement append (§5.1) is kept as written: its xid is always 
 16, 17 and 18. The combined probe (§4.10) is kept, provided it runs in autocommit or after `pg_stat_clear_snapshot()`.
 The engine stays on raw pgjdbc with no second driver: JDBI costs only a few µs, and pgjdbc's `PINNED_PEEK` drain
 delivers notifications as fast as Vert.x. Transactions the engine owns can be sent as one explicit `BEGIN … COMMIT`
-flush through pgjdbc (P0.14), never as an autocommit batch. Everything the model and the read-side spikes found is
-recorded as "proposed revision, not decided": P0.5's F1-F6, the `UNION ALL` hole re-read, the after-commit coalesced
-notify, reading `pg_stat_get_activity(NULL)` directly, and the page-size back-off. These have to be accepted, changed
-or rejected before phase 2. PostgreSQL 18.7 changes no phase-0 decision. Nothing may be released as supported on a
+flush through pgjdbc (P0.14), never as an autocommit batch. Everything the model and the read-side spikes proposed was
+decided on 2026-11-15 as recommended: P0.5's F1-F6 (with the `UNION ALL` hole re-read), the after-commit coalesced
+notify, reading `pg_stat_get_activity(NULL)` with a cost-based probe rate, per-page resume points with a backing-off
+fallback and an opt-in page handler, and generic plans plus one flush per wake for the tail reader. They are listed
+in the redesign's "Phase 0 decisions" section. PostgreSQL 18.7 changes no phase-0 decision. Nothing may be released as supported on a
 managed PostgreSQL service until P0.3 passes for that service.
 
 ## Per spike
@@ -75,7 +76,7 @@ replaced.
 - **P0.14 follow-ups**: a correctness test for the five-aggregate rollback on a zero-row conflict. The "B within
   10 % of C" clause was not evaluated because C was not built.
 - **P0.3**: the managed services.
-- **Proposed revisions** (F1-F6, P0.10-P0.13) still to be accepted, changed or rejected before phase 2.
+- **Proposed revisions decided 2026-11-15**: F1-F6, P0.10, P0.12, P0.13 and P0.16 were accepted as recommended; see the redesign's "Phase 0 decisions" section.
 - **Closed 2026-11-15:** P0.1/P0.2 on PostgreSQL 16 was dropped. Both already held on 16.15 in the VM, and they test
   ordering rules, not timing.
 

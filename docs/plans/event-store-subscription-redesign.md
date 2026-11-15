@@ -265,7 +265,7 @@ When a candidate `(S, X)` retires, the reader issues **one** read of the holes i
 then permanent, for this reader and for good. Until the candidate retires, nothing is skipped; at worst
 something is delayed.
 
-> **Proposed revision (P0.5 F1, 2026-11-11, not decided).** The hole read after retirement must not be the only
+> **Revision (P0.5 F1, 2026-11-11; decided 2026-11-15).** The hole read after retirement must not be the only
 > way a late commit is delivered. As written it breaks per-aggregate order in `FRESH` (I2): A#n commits late into a
 > hole, A#n+1 is appended after it and read by the next probe above the cursor, and A#n arrives only when its candidate
 > retires, which a long writer elsewhere can postpone indefinitely. Proposed: the tail statement also re-reads the
@@ -277,7 +277,7 @@ something is delayed.
 > Cost: a larger tail statement while holes are outstanding, no extra statement (§19, risk 13).
 > [`event-store-phase0-model.md`](event-store-phase0-model.md) F1.
 
-> **Proposed revision (P0.11, 2026-11-12, not decided).** Re-read the holes in the same statement, but as a `UNION ALL`
+> **Revision (P0.11, 2026-11-12; decided 2026-11-15).** Re-read the holes in the same statement, but as a `UNION ALL`
 > branch rather than an `OR`: `(SELECT … WHERE global_order > :cursor ORDER BY global_order LIMIT :n) UNION ALL
 > (SELECT … WHERE global_order = ANY(:holes))`, ordered by `global_order` outside. As an `OR`, the predicate is two
 > index scans only in a custom plan; a generic plan (which `plan_cache_mode=auto` chose by itself with 1 000 holes
@@ -294,7 +294,7 @@ Retirement is tested by **set disjointness**, not numerically, because `backend_
 The **watermark** of a reader is (proposed revision F2 below) the cursor, lowered to just below the lowest hole
 that is not yet resolved. Every `global_order` at or below it is final: either read, or proven never to exist.
 
-> **Proposed revision (P0.5 F2, 2026-11-11, not decided).** The definition as first written, "the highest `S` of a
+> **Revision (P0.5 F2, 2026-11-11; decided 2026-11-15).** The definition as first written, "the highest `S` of a
 > retired candidate such that no older candidate is still outstanding", says nothing once the cursor has moved past the
 > last candidate's `S` with no new hole, and read literally lets the watermark advance at retirement, before the hole
 > read. The model's mutant of that loses events: a `CONTIGUOUS` page commits past the hole before the late commit is
@@ -303,7 +303,7 @@ that is not yet resolved. Every `global_order` at or below it is final: either r
 > retired **and** the hole read has returned and its rows have been published.
 > [`event-store-phase0-model.md`](event-store-phase0-model.md) F2.
 
-> **Proposed revision (P0.5 F4, 2026-11-11, not decided).** Where a restarted tail reader starts was not specified.
+> **Revision (P0.5 F4, 2026-11-11; decided 2026-11-15).** Where a restarted tail reader starts was not specified.
 > Starting at the head with the watermark at the head loses events (I13): a writer still holding a value below the
 > head is invisible to a catch-up that is let past it. Proposed: a restarted reader starts at the head with one
 > *initial candidate* `(head, running set)`, and its watermark is unknown until that candidate retires; until then no
@@ -377,7 +377,7 @@ than A#6. The per-aggregate order guarantee of this proposal rests on exactly th
 also what today's design relies on. The new append derives `event_order` from committed state on the
 server (§5.1), so the argument carries over. It must be written down as an invariant and tested (§16, I2).
 
-> **Proposed revision (P0.5 F1, 2026-11-11, not decided).** "Visible no later than A#6" is necessary for I2 but not
+> **Revision (P0.5 F1, 2026-11-11; decided 2026-11-15).** "Visible no later than A#6" is necessary for I2 but not
 > sufficient: the tail read never looks below its cursor, so A#5 committing late into a hole is visible but not
 > delivered until its candidate retires, after A#6 (§4.2). The argument holds for delivery only if the tail statement
 > also re-reads the outstanding holes, as proposed in §4.2. It holds unchanged for a transaction of several events,
@@ -422,7 +422,7 @@ events committed since the oldest unretired candidate, which is within the at-le
 This is compatible with the existing `durable_subscriptions` table: the value is still a
 `GlobalEventOrder`. The S6 reposition epoch is unchanged.
 
-> **Proposed revision (P0.5 F5, 2026-11-11, not decided).** The same formula also gives the catch-up position of a
+> **Revision (P0.5 F5, 2026-11-11; decided 2026-11-15).** The same formula also gives the catch-up position of a
 > subscription that detaches after an overflow (§6), with the event that did not fit counted as delivered but not
 > handled: `min(watermark + 1, lowest buffered order, the order that did not fit) − 1`. Resuming from the watermark
 > instead loses buffered, unhandled events (I13). An open page of an in-transaction subscription (§8.3) is left out of
@@ -474,12 +474,12 @@ second result set; the point is one statement. Whatever the shape, it must retur
 the tail read returns no rows: as written above, an empty tail never evaluates the sub-select, and an empty
 read would then reveal nothing about outstanding candidates.)
 
-> **Proposed revision (P0.11, 2026-11-12, not decided).** With F1's hole re-read (§4.2) the statement above becomes
+> **Revision (P0.11, 2026-11-12; decided 2026-11-15).** With F1's hole re-read (§4.2) the statement above becomes
 > `SELECT u.*, <running> FROM (<tail read> UNION ALL <read of the holes by = ANY>) u ORDER BY u.global_order`, not a
 > `WHERE … OR …`: only the `UNION ALL` form stays on index scans under a generic plan, which the engine gets by default
 > once pgjdbc server-prepares the statement. [`event-store-phase0-append.md`](event-store-phase0-append.md) §11.
 
-> **Proposed revision (P0.12, 2026-11-12, not decided).** Read the running set from `pg_stat_get_activity(NULL)`, the
+> **Revision (P0.12, 2026-11-12; decided 2026-11-15).** Read the running set from `pg_stat_get_activity(NULL)`, the
 > function behind the view, instead of `pg_stat_activity`. It returns the same `backend_xid` from the same
 > per-transaction status snapshot, so P0.2's conditions are unchanged. It saves 70-110 µs per probe at 10-100
 > connections (the view's joins), but not at 400. Either form costs about 0.55 µs of execution per live backend in the
@@ -640,7 +640,7 @@ flowchart LR
 - **An interrupted handler is not handled**, so the resume point does not move past it.
 - **Tenants** are filtered per subscription, after the shared read, as both paths do today.
 
-> **Proposed revision (P0.5 F3, 2026-11-11, not decided).** Attaching "within its buffer's distance of the tail"
+> **Revision (P0.5 F3, 2026-11-11; decided 2026-11-15).** Attaching "within its buffer's distance of the tail"
 > cannot happen while a long writer holds the watermark down: catch-up stops at the watermark (§10.1), the distance to
 > the reader's cursor stays above the buffer size, and a `FRESH` subscription that is behind gets nothing above the
 > hole until the writer ends, which defeats the point of the mode. Proposed: attach once the catch-up position has
@@ -650,14 +650,14 @@ flowchart LR
 > time. That is a cost, not a loss, and the model does not measure it: open question, §19 risk 14.
 > [`event-store-phase0-model.md`](event-store-phase0-model.md) F3.
 
-> **Proposed revision (P0.5 F5, 2026-11-11, not decided).** "Detaches and goes back to catch-up" did not say from
+> **Revision (P0.5 F5, 2026-11-11; decided 2026-11-15).** "Detaches and goes back to catch-up" did not say from
 > where. Resuming from the watermark loses events that were buffered but not yet handled (I13). Proposed: catch-up
 > resumes from §4.7's formula, `min(watermark + 1, lowest buffered order, the order that did not fit) − 1`; an open page
 > of an in-transaction subscription is left out of it and, if the page rolls back, its events go back into the buffer
 > (§8.3); and a `CONTIGUOUS` subscription drops anything at or below the last order it applied, because the catch-up
 > that follows overlaps what the open page committed. [`event-store-phase0-model.md`](event-store-phase0-model.md) F5.
 
-> **Proposed revision (P0.5 F6, 2026-11-11, not decided).** Detaching instead of blocking is load-bearing for
+> **Revision (P0.5 F6, 2026-11-11; decided 2026-11-15).** Detaching instead of blocking is load-bearing for
 > `CONTIGUOUS` correctness, not only for latency. With back-pressure, a `CONTIGUOUS` buffer full of events held back
 > above the watermark blocks the reader, and only the reader can advance the watermark that would release them: after
 > every writer has finished nothing moves again (I1 and I9 fail in the model). The rule must therefore stay even if a
@@ -695,7 +695,7 @@ watermark in its buffer and releases them as the watermark advances, so it costs
 Its buffer bound applies to held-back events too: a subscription that cannot hold them detaches and
 catches up, which reads only up to the watermark.
 
-> **Proposed revision (P0.5 F1 and F3, 2026-11-11, not decided).** The `FRESH` row first read "A late commit below
+> **Revision (P0.5 F1 and F3, 2026-11-11; decided 2026-11-15).** The `FRESH` row first read "A late commit below
 > the cursor arrives when its candidate retires, after higher orders". With that, "Per-aggregate order: Kept (§4.5)"
 > does not hold: the late A#n arrives after A#n+1 (§4.2). It holds in the model when the tail statement also re-reads
 > the outstanding holes, which is what the row now says; a late commit still arrives after higher orders of *other*
@@ -722,7 +722,7 @@ default; the probe is one cheap statement, §4.10). With no writer running, a ca
 first probe after the writers that held it finish, so in the common case `CONTIGUOUS` lags `FRESH` by one
 probe interval. §17 measures this.
 
-> **Proposed revision (P0.12, 2026-11-12, not decided).** The probe is not cheap at scale. Its running-set read costs
+> **Revision (P0.12, 2026-11-12; decided 2026-11-15).** The probe is not cheap at scale. Its running-set read costs
 > about 0.55 µs per live backend in the cluster, and every JVM's tail reader runs it every probe interval while holes
 > are outstanding, which under write load is nearly always. Cluster-wide cost therefore grows with JVMs × connections.
 > On the VM, 40 readers probing every 10 ms against 400 connections halved concurrent appends (49-52 thousand to 25-26
@@ -779,13 +779,13 @@ event inside it, one resume-point update at the end.
   system does not hold events back to fill a page.
 - In `FRESH` mode the resume point written is §4.7's formula, not the page's highest order.
 
-> **Proposed revision (P0.5 F5, 2026-11-11, not decided).** A subscription can detach (§6) while a page is open. The
+> **Revision (P0.5 F5, 2026-11-11; decided 2026-11-15).** A subscription can detach (§6) while a page is open. The
 > open page is left out of the detach position; if it rolls back, its events go back into the subscription's buffer
 > ahead of the catch-up, and if it commits, a `CONTIGUOUS` subscription drops every event at or below the last order it
 > applied, because the catch-up that follows overlaps what the page committed. That is what the model does, and it
 > holds I12 and I13 with it; no mutant without them was run. [`event-store-phase0-model.md`](event-store-phase0-model.md) F5.
 
-> **Proposed revision (P0.13, 2026-11-12, not decided).** Measured in [`event-store-phase0-append.md`](event-store-phase0-append.md)
+> **Revision (P0.13, 2026-11-12; decided 2026-11-15).** Measured in [`event-store-phase0-append.md`](event-store-phase0-append.md)
 > §13: a page per transaction is about 2x today's periodic save when the handler issues one statement per event (one
 > round trip per event is then the floor, and pages above about 100 events gain nothing) and 10-13x when the page's
 > writes reach the server at once. Two changes follow. (1) **The fallback backs off.** As written, a page that fails is
@@ -910,7 +910,7 @@ Rules carried over:
 - **A rolled-back writer's hole retires on the next probe.** Tier 1 notifies only on commit, so a
   rollback does not wake other JVMs; their probe interval (§7.3) covers it.
 
-> **Proposed revision (P0.10, 2026-11-12, not decided).** Tier 1 as written, `pg_notify` inside the appending
+> **Revision (P0.10, 2026-11-12; decided 2026-11-15).** Tier 1 as written, `pg_notify` inside the appending
 > transaction, contradicts what the shard-owned queue measured (`durable-queue-measurements.md` §3.14) and what P0.10
 > measured on the append path (`event-store-phase0-append.md` §10). A notifying commit takes PostgreSQL's cluster-wide
 > NOTIFY lock and holds it through its WAL flush, so notifying commits run one at a time: with `fsync=on`, 8 and 20
@@ -1246,6 +1246,26 @@ document (§21) before phase 2 starts.
 | P0.17 | Does a client that delivers notifications as they arrive, and pipelines many callers' independent statements on one connection, beat pgjdbc enough to justify a second driver, given that it can never join a caller's JDBC UnitOfWork? | Throwaway `AlternativeClientSpikeIT`, external server, the listener on a separate host if one is available. (a) Wake-up: producers as P0.10 (8 and 20 writers through the coalesced after-commit notifier) and the drain IT's 200, 1 000 and 3 000 notifications/s. Listeners: pgjdbc `getNotifications(200)` stock, `PINNED_PEEK`, `QUERY_POLL`; Vert.x `PgSubscriber`; a minimal LISTEN-only reader. Wake latency from the commit's return and from the wire (`NotifyTapSocketFactory`), p50/p99/max; listener client CPU; every notification counted. (b) Request-path pipelining is parked (2026-11-14): it needs a wire client of our own (TLS, auth, cancel, errors), and P0.14 shows most of its gain with pgjdbc. | (a) An alternative listener only if pgjdbc's best (`PINNED_PEEK`, or `QUERY_POLL` if reflection is rejected) misses p99 at or below 2 ms at 3 000 notifications/s and the alternative meets it. (b) Parked. | pgjdbc only. The listener follows `pgjdbc-notification-drain-options.md` §5 (`PINNED_PEEK`, `QUERY_POLL` as fallback); no second driver in phases 2 or 6 |
 
 P0.14-P0.17 (added 2026-11-14) come from the round-trip and protocol techniques of `java-raw-stohirov`; they apply only to connections and transactions the engine owns, never to an append inside the caller's UnitOfWork. Their background, the code they are based on and what they deliberately leave out are in [event-store-phase0-beyond-jdbc-spikes.md](event-store-phase0-beyond-jdbc-spikes.md). P0.17 (a) ran on 2026-11-15 on the dedicated server and passed the gate as pgjdbc only: `PINNED_PEEK`'s p99 at 3 000 notifications/s is 0.62-0.72 ms against Vert.x's 0.60-0.66 ms, while the stock drain reaches 0.66-1.37 s ([event-store-phase0-external-db.md](event-store-phase0-external-db.md) §9). P0.14 ran on 2026-11-15 on 18.7: one flush passes the gate at 8 writers for ten-event and five-aggregate appends and for the page (+17 to +31 %, 42-137 µs server CPU saved per removed round trip), fails for the single event at 8 writers (−7 %) but gains +49 % at 20; only the explicit `BEGIN … COMMIT` form stays atomic at every size, since pgjdbc's mid-flush sync at about 64 KB splits an autocommit batch. P0.16 ran on 2026-11-15 on 18.7: the tail reads' saving (57-189 µs server CPU per call) comes from `force_generic_plan`, not from owning the connection, since PostgreSQL re-plans these statements under `auto`; reading the woken types in one flush cuts server CPU per wake by 58-66 %; the minimal wire client does not count.
+
+### Phase 0 decisions (2026-11-15)
+
+Taken with the project lead after every spike except P0.3 had run on the dedicated server (summary:
+[event-store-phase0-summary.md](event-store-phase0-summary.md)). The revisions marked "decided 2026-11-15" above are
+part of the design from now on.
+
+| Decision | What it means for phases 1 onward |
+|---|---|
+| P0.5 F1 with P0.11's form | The tail statement re-reads outstanding holes as a `UNION ALL` branch and publishes them ahead of the new rows. Never the `OR global_order = ANY(:holes)` form: under a generic plan it walks the primary key. |
+| P0.5 F2, F4, F5, F6 | The watermark is `min(cursor, lowest unresolved hole − 1)` and moves only after the hole read is published; a restarted reader starts at the head with one initial candidate and an unknown watermark; a detaching subscription resumes at §4.7's formula; a slow subscription detaches and never blocks the reader. |
+| P0.5 F3 | A subscription attaches once its catch-up reaches the watermark, then bridge-reads up to the reader's cursor. Phase 2 measures how often a `CONTIGUOUS` subscription attaches, overflows and detaches behind a long writer. |
+| P0.10 | Tier-1 wake-up: `pg_notify` after commit, coalesced per JVM, never inside the appending transaction. A notify lost to a crash between commit and notify only delays the wake-up to tier 2's poll. |
+| P0.12 | The probe reads `pg_stat_get_activity(NULL)`, and its rate is not a fixed per-JVM interval: it backs off with the probe's measured cost and re-probes only after a wake-up. Tuned in phase 2 against P0.12's 400-connection case. |
+| P0.13 | The resume point is saved per page. After a failed page the subscription continues with smaller pages and grows back after pages that commit; an opt-in page-aware handler beside `@MessageHandler` receives the page and can write it set-based; the default page size is about 100. |
+| P0.16 | The tail reader's read statements run under `force_generic_plan`, but only statements whose generic plan is checked in CI (index-only, no primary-key walk); all woken aggregate types are read in one pgjdbc flush. Phase 2 measures the pooled-connection case. |
+
+Not put to a decision because the spike settled it: P0.14 (engine-owned transactions go out as one explicit
+`BEGIN … COMMIT` flush), P0.17 (a) (pgjdbc's `PINNED_PEEK` drain, no second driver), P0.6 (raw pgjdbc). Still open:
+P0.3 on managed services.
 
 ### Phases 1 onward
 
