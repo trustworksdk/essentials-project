@@ -690,7 +690,7 @@ Reading: **18.7 changes no phase-0 decision.** Every plan, correctness check and
 same; the only material differences are a cheaper tail read (P0.6) and cheaper executor conversion (P0.4 encoding).
 
 Still open: the cause of the slow phase (`pg_test_fsync` and `iostat -x` during a run, and the SSD's temperature),
-P0.12's probe execution on 18 (rerun the `probe-cost` suite at `4cc73d2cc` or later), P0.1 and P0.2 on 16, and a
+P0.12's probe execution on 18 (since rerun, below) and a
 separate wired client host.
 
 **P0.12 on 18.7, rerun with the statement tag fixed** (`20261115-141405-lac-N85-N87-HJ-HJ1-HK1-external`, commit
@@ -737,3 +737,7 @@ Reading: for transactions the engine owns, send the statements and the commit in
 `BEGIN … COMMIT` (`D_EXPLICIT`), never as an autocommit batch. The arms that need a wire client of our own (C) were
 not built, so the row's "B within 10 % of C" clause is not evaluated; the five-aggregate append's
 rollback-on-zero-row-conflict under one flush still needs its own correctness test.
+
+**P0.1 and P0.2 on 16 dropped (2026-11-15).** Both ran on 16.15 in the VM containers on 2026-11-10 and held, and on
+this server on 17.5, 17.12 and 18.7. They check PostgreSQL's ordering rules, not timing, so a 16 server here would
+add nothing but a rebuild; the earlier "still open" entries for them are closed.
