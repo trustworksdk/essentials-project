@@ -6,7 +6,9 @@ what we learned from Marten's event store (a reference description of it, `marte
 resume points and exclusive ownership — and the append path, because how events are written decides how
 many holes the reader has to deal with. It also covers building a new event store engine beside
 `PostgresqlEventStore`, the way the shard-owned queue was built beside `PostgresqlDurableQueues`, and
-what can be gained at the lower levels: statement shapes, raw JDBC and table design.
+what can be gained at the lower levels: statement shapes, raw JDBC and table design. Since 2026-11-15 the
+new engine has its own schema, its own subscription API, progress table, error model and leases, and an
+application moves to it once, one way (§18, "Decisions 2026-11-15: a new subscription model").
 
 **Focus of the revision:** performance, resource use and freshness, without weakening any ordering or
 delivery guarantee. Every idea taken from Marten is listed in §3.2 with where it is applied, and every idea
@@ -50,20 +52,26 @@ Related documents:
    projections, `FRESH` for event processors (§20, D1).
 5. **Commit progress with the output.** For handlers whose output lives in the same database, the resume
    point is written in the handler's own transaction, a page of events per transaction, with a
-   compare-and-set on the reposition epoch and the owner's fence (§8). Marten's progress model, combined
-   with this proposal's fencing.
-6. **Fence every resume-point write** with the exclusive owner's fence token in the same statement (§9).
-   Built with the new engine's exclusive subscriptions; the current engine is not changed (decided 2026-11-15).
+   compare-and-set on the reset epoch and the owner's fence, on the engine's own progress row (§8). Marten's
+   progress model, combined with this proposal's fencing. A page that fails shrinks until the failing event is
+   isolated; that event is parked for the subscription with its error and the rest continue (§8.3).
+6. **Own exclusive subscriptions through engine leases**: lease and fence columns on the progress row, renewed
+   with server time, many subscriptions per JVM in one statement, and every resume-point write asserting the
+   fence in the same statement on the same row (§9). No `FencedLockManager`. The current engine is not changed
+   (decided 2026-11-15).
 7. **Catch up cheaply.** Push event-type filters into SQL for subscriptions that are behind, advance
    progress to the watermark rather than to the last matching row, and cap concurrent catch-up reads per
    database (§10). Under the old gap handler, filtering in SQL created fake gaps; under the watermark it is safe.
 8. **Wake the reader with signals the way the queue does**: an application-issued, coalesced `NOTIFY`
    instead of a per-row trigger, a listener that blocks rather than polls, and a local wake-up when the
    append happened in the same JVM. Correctness never depends on any of them (§11).
-9. **Build it as a new engine beside the old one**, with an adapter that implements `EventStore` and
-   `EventStoreSubscriptionManager`, the same three-module shape as the shard-owned queue. Because the
-   watermark and the new append need no schema change, the new engine runs on the **existing tables and
-   existing resume points**, and switching between the engines works in both directions (§12).
+9. **Build it as a new engine beside the old one**, the same three-module shape as the shard-owned queue,
+   with **its own subscription API** designed from the engine's needs (page handlers, consistency modes,
+   progress in the handler's transaction, engine-owned leases), not an implementation of
+   `EventStoreSubscriptionManager` and not shaped by the existing processors. The engine has **its own
+   tables**, free to use the layouts phase 0 measured, and an application moves to it **once, one way**, by
+   copying its events and importing its resume points (§12, decided 2026-11-15). Whether appends and stream
+   loads also get an `EventStore` adapter for the aggregate repositories is open (§19).
 10. **Investigate before building.** Four claims carry the design and none is proven yet: that the
     single-statement append takes its xid before the identity value, that the combined probe reads
     running writers after its snapshot, that `backend_xid` is visible on the managed PostgreSQL services
@@ -98,22 +106,36 @@ Two corrections to ideas that came up while discussing this, each explained belo
 - At-least-once delivery. Handlers are idempotent, and a crash may redeliver.
 - Per-aggregate order: an aggregate's events reach a subscriber in `EventOrder` order.
 - `GlobalEventOrder` per aggregate type, as an independent space per table.
-- Durable resume points in `durable_subscriptions`, and `resetFrom` together with the S6 reposition epoch.
+- Durable resume points, and an operator reset that wins over any concurrent save (today `resetFrom` with
+  the S6 reposition epoch; in the new engine a reset epoch on its progress row, §8.2, §10.3).
 - Exclusive subscriptions: one consumer per subscriber id across the cluster.
-- In-transaction subscribers (`InTransactionEventProcessor`, `EventStoreEventBus`) that run inside the
-  appender's commit. They are outside this proposal and must keep working unchanged.
-- The persisted JSON wire format, which is frozen (root `CLAUDE.md`).
+- Delivery inside the appender's commit (today `InTransactionEventProcessor`, `EventStoreEventBus`). It is
+  outside the subscription engine; through which API the new engine offers it follows from the open
+  question on appends (§19).
+- The persisted JSON wire format, which is frozen (root `CLAUDE.md`). Events copied into the new engine's
+  tables keep their payload bytes (§12.4).
 - The optimistic-concurrency contract: `OptimisticAppendToStreamException` on a conflicting append, with
-  the same message content and the same `UNIQUE(aggregate_id, event_order)` backstop.
-- The error-policy contract: retries run synchronously on a per-subscription delivery thread.
+  the same message content, and a unique `(aggregate_id, event_order)` backstop.
+- A failing handler never loses an event silently: the event is retried or parked with its error, and
+  stays visible to an operator (§8.3).
 - Multi-tenancy, filtered in memory after the shared read. Catch-up reads may filter by tenant or event
   type in SQL (§10), because the watermark no longer depends on seeing every row.
+
+What is deliberately **not** kept (decided 2026-11-15): the current subscription API
+(`EventStoreSubscriptionManager`, the subscription builders, `pollEvents` and `SubscriberAcknowledgement`),
+the shape of `EventProcessor`/`ViewEventProcessor`, the `durable_subscriptions` table, the
+`SubscriptionErrorPolicy`/`FailFast`/redelivery semantics, and `FencedLock` ownership. Each is replaced by
+something designed for pages and engine leases (§8, §9, §12.3).
 
 ### Non-goals
 
 - Exactly-once *delivery* (side effects outside the database stay at-least-once in every mode).
 - Ordering across aggregate types.
 - Replacing in-transaction delivery.
+- Source compatibility with the current subscription API, its processors or its error policies. Handlers
+  move to the new API when their application moves to the new engine.
+- Running on the current engine's tables, running old and new engine nodes on the same data, or switching
+  back and forth. The move is one-way (§12.4).
 - Changing the delivery order of a late commit in `FRESH` mode. Today a late commit can arrive after
   higher global orders as a gap fill. In `FRESH` it still will, and that is within the contract.
 
@@ -214,14 +236,14 @@ Section numbers on the left refer to `marten-event-store-design.md`, removed on 
 | Every high-water reading is one SQL statement, so one snapshot | 4.3 | §4.10 | Applied to the tail read plus running-writers probe |
 | Never read past a high-water mark | 4.3 | §7 (`CONTIGUOUS`) | Optional per subscription instead of the only behaviour |
 | Progress committed as a compare-and-set in the same transaction as the output | 6.2 | §8 | The compare-and-set is on the reposition epoch and the owner's fence |
-| A page of events per transaction | 6.2, 7 | §8 | Falls back to one event per transaction when a page fails, so the error policy still applies per event |
+| A page of events per transaction | 6.2, 7 | §8 | A page that fails shrinks until the failing event is isolated; that event is parked for the subscription and the rest continue (§8.3) |
 | Push the event-type filter into SQL; advance progress to the high-water mark on sparse pages | 6.1 | §10 | Only for catch-up reads; the shared tail read stays unfiltered |
 | Skip-ahead and windowed fallback when a filtered read times out | 6.1 | §10 | — |
 | Cap concurrent event loads per database, separately from the pool | 6.1 | §10 | — |
-| A monitored lock: a node that may have lost ownership stops | 6.3 | §9 | Lease row with a fence instead of an advisory lock |
+| A monitored lock: a node that may have lost ownership stops | 6.3 | §9 | Lease and fence columns on the engine's progress row instead of an advisory lock |
 | Fetch version, snapshot and tail events in one batch; `REPEATABLE READ READ ONLY` when the snapshot is asynchronous | 5 | §14 | Separate track |
 | A node-local aggregate cache, entries taken out atomically and written back on commit, version always checked | 5 | §14 | Separate track |
-| Keep frequently updated rows unindexed on the updated column so updates stay HOT | 9, 11.21 | §8 | `durable_subscriptions.resume_from…` is not indexed today; keep it that way and document fillfactor |
+| Keep frequently updated rows unindexed on the updated column so updates stay HOT | 9, 11.21 | §8 | The resume-point and lease columns of the engine's progress row stay unindexed; document fillfactor |
 | Statement timeouts and prepared-statement measurements before assuming | 10 | §13 | — |
 
 ### 3.3 Marten: what is deliberately not taken
@@ -234,7 +256,7 @@ Section numbers on the left refer to `marten-event-store-design.md`, removed on 
 | **The optional cap that forces a skip** after a longer time | Event rows are never deleted, so an unretired candidate costs one list entry, not data (§4.6) |
 | **Advisory-lock leadership per shard** | Balances poorly ("first node grabs everything"), and an advisory lock cannot be asserted inside a write. Lease rows with fences can (§9) |
 | **Rich append: client-side `nextval` pre-fetch** | Doubles the round trips and burns sequence values on every failed save |
-| **A `streams` table with a version row per stream** | Would add an update per append and a schema change that makes the switch between engines one-way. The `max(event_order)` read on the existing unique index gives the same pre-`nextval` check. An opt-in transaction-scoped advisory lock covers Marten's `FOR UPDATE` use case for hot streams (§5.3) |
+| **A `streams` table with a version row per stream** | Would add an update per append and a schema change that makes the switch between engines one-way. The `max(event_order)` read on the existing unique index gives the same pre-`nextval` check. An opt-in transaction-scoped advisory lock covers Marten's `FOR UPDATE` use case for hot streams (§5.3). *Revised 2026-11-15:* the move to the new engine is one-way and the engine has its own tables (§12.4), so the schema-change reason no longer holds; P0.7's stream head table is a candidate layout (§5.3, §13.3), not decided |
 | **Tenant partitioning with a sequence per tenant** | Loses global order within an aggregate type, which `GlobalEventOrder` promises |
 | **Coarse tag-version rows for consistency across streams (DCB)** | Out of scope; a hot tag becomes a write hotspot |
 
@@ -419,8 +441,9 @@ events committed since the oldest unretired candidate, which is within the at-le
 `CONTIGUOUS` mode nothing above the watermark was handled, so with progress in the handler's transaction
 (§8) nothing is replayed at all.
 
-This is compatible with the existing `durable_subscriptions` table: the value is still a
-`GlobalEventOrder`. The S6 reposition epoch is unchanged.
+The value is a `GlobalEventOrder`, stored on the subscription's row in the engine's own progress table
+(§8.2), next to a reset epoch that does what S6's reposition epoch does today. It is not stored in
+`durable_subscriptions` (decided 2026-11-15).
 
 > **Revision (P0.5 F5, 2026-11-11; decided 2026-11-15).** The same formula also gives the catch-up position of a
 > subscription that detaches after an overflow (§6), with the event that did not fit counted as delivered but not
@@ -538,19 +561,20 @@ RETURNING global_order, event_order;
   `OptimisticAppendToStreamException` with today's message. No `global_order` was consumed, so no hole. This
   covers a conflict with an append that committed before the statement started; one with an append still in
   flight is §5.3's race, and P0.4 measured that as about half of all conflicts under contention.
-- **No round trip to find the last event order.** `head` is an index-only backward scan of the existing
+- **No round trip to find the last event order.** `head` is an index-only backward scan of the table's
   `UNIQUE(aggregate_id, event_order)` index, run on the server. `event_order` is still derived from
   committed state, so the ordering argument in §4.5 holds.
 - **One statement, one plan, whatever the number of events.** Payloads are bound as text arrays and cast
   to the configured column type, so the persisted bytes are what the serializer produced, and the wire
-  format is untouched. Column names come from the existing `EventStreamTableColumnNames`; the statement is
-  generated once per table, as today's insert SQL is.
+  format is untouched. Column names come from the engine's own table layout (§12.4, §13.3), which need not
+  match today's `EventStreamTableColumnNames`; the statement is generated once per table, as today's insert
+  SQL is.
 - **The xid is taken before the identity value.** Every output row of the join needs a row from `ok`,
   and `ok` scans the materialised `xid`, so `pg_current_xact_id()` has run before the first row reaches the
   insert, where the identity default calls `nextval`. That is the reasoning; spike P0.1 has to prove it,
   including under a plan that puts `unnest` on the outer side of the join.
-- Interceptors, `PersistableEventEnricher`s, serialisation and the `PersistedEvent` result stay in the
-  adapter, client-side, exactly as today. One difference (P0.4): without an expected order the event order is
+- Interceptors, `PersistableEventEnricher`s, serialisation and the `PersistedEvent` result stay client-side,
+  above the engine, as today (in an `EventStore` adapter if one is built; open, §19). One difference (P0.4): without an expected order the event order is
   only known after the insert, so the `PersistableEventMapper` and enrichers get a provisional order and the
   `PersistedEvent` is built from `RETURNING event_order`.
 
@@ -590,6 +614,8 @@ for the advisory lock; a `SELECT … FOR UPDATE` first also gave zero holes, at 
 table, so it is outside "the same rows" of §5.4 and §12.4. Findings, not a decision:
 [phase-0 record, P0.7](../archive/event-store-redesign-phase0.md#p07-table-design-options). No cheaper parameter encoding brought §5.1's
 contended throughput up to today's engine; the extra server CPU is not Bind-time array parsing (same doc, §6).
+*Note 2026-11-15:* the new engine now has its own tables and the move to it is one-way (§12.4), so a stream head
+table is no longer ruled out by the schema; whether the engine adopts it is open (§19).
 
 ### 5.4 Relationship to the current engine
 
@@ -634,7 +660,8 @@ flowchart LR
   correctness rule (proposed revision F6 below). The catch-up resumes from §4.7's formula (proposed revision
   F5 below).
 - **Delivery stays serial per subscription.** Each subscription has its own delivery thread. A virtual
-  thread is fine, but it must not be shared. Error-policy retries stay synchronous on that thread.
+  thread is fine, but it must not be shared. Retries, backoff and the shrinking of a failed page (§8.3) run
+  on that thread.
 - **The reader's dispatch decision is inline and single-threaded.** Cursor, candidate list, hole set and
   watermark are touched by one thread only. The queue's §9.23 is the cautionary tale: making that
   decision asynchronous produced a duplicate.
@@ -708,10 +735,10 @@ catches up, which reads only up to the watermark.
 
 Recorded as decision D1 (§20):
 
-- **View projections** (`ViewEventProcessor` and any subscriber that declares its output is in the same
-  database): `CONTIGUOUS`. Rebuild-safe, exactly-once state, no idempotency burden on the projection.
-- **Event processors and everything else**: `FRESH`. They run side effects outside the database, so they
-  are at-least-once whatever the mode, and gain nothing from waiting.
+- **View projections** (any subscription that declares its output is in the same database, §12.3):
+  `CONTIGUOUS`. Rebuild-safe, exactly-once state, no idempotency burden on the projection.
+- **Event processors and everything else** (subscriptions with side effects outside the database): `FRESH`.
+  They are at-least-once whatever the mode, and gain nothing from waiting.
 
 Each subscription can override its default. The admin API and the subscription metrics show the mode.
 
@@ -739,7 +766,7 @@ probe interval. §17 measures this.
 
 ### 8.1 Two ways to save a resume point
 
-| | Periodic (today's model, kept) | In the handler's transaction (new) |
+| | Periodic | In the handler's transaction |
 |---|---|---|
 | Who | Subscribers with output outside the database, or that opt out | Subscribers whose output is in the same database; the default for `CONTIGUOUS` |
 | How | Batched `UPDATE` on an interval, in its own transaction, fenced (§9) | The handler's unit of work also runs the resume-point `UPDATE`, fenced, before it commits |
@@ -748,24 +775,33 @@ probe interval. §17 measures this.
 
 ### 8.2 The statement
 
+Progress lives in a table the engine owns, designed for this model, not in the current engine's
+`durable_subscriptions` rows (decided 2026-11-15). One row per subscription and aggregate type holds the
+resume point (§4.7), the reset epoch, the lease and fence columns of §9 and whatever an open page needs. The
+exact columns are open (§19); the names below are illustrative.
+
 ```sql
-UPDATE durable_subscriptions
-   SET resume_from_and_including_global_eventorder = :resume_from,
-       last_updated = now()
- WHERE aggregate_type = :aggregate_type
-   AND subscriber_id  = :subscriber_id
-   AND reposition_epoch = :epoch
-   AND <fence assertion, §9, for exclusive subscriptions>
+UPDATE <progress table>
+   SET resume_from = :resume_from,
+       updated_at  = now()
+ WHERE subscription_id = :subscription_id
+   AND aggregate_type  = :aggregate_type
+   AND reset_epoch     = :epoch
+   AND lease_fence     = :fence          -- exclusive subscriptions only, §9
 ```
 
-- `reposition_epoch = :epoch` makes it a compare-and-set: a reset that happened since the page was read
+- `reset_epoch = :epoch` makes it a compare-and-set: a reset that happened since the page was read
   turns the update into zero rows, and the handler's whole transaction rolls back, output included. That
-  is the S6 behaviour made atomic with the output.
+  is what S6's reposition epoch does today, made atomic with the output.
+- The fence is a column of the row being written, so PostgreSQL's re-check of the `WHERE` after waiting
+  for a row lock sees the current owner's value (§9).
 - Zero rows is ambiguous (stale fence or superseding reset). The handler asks once, by primary key, which
   it was, as §9 describes.
-- `last_updated` uses the database's clock (history §9.11).
-- `resume_from_and_including_global_eventorder` must stay unindexed so the update is HOT. Document a
-  table fillfactor below 100 for deployments with many subscribers.
+- `updated_at` uses the database's clock (history §9.11).
+- The resume-point and lease columns must stay unindexed so the update is HOT. Document a table fillfactor
+  below 100 for deployments with many subscribers.
+- Importing the current engine's resume points into this table once, when an application first starts on
+  the new engine, is optional (§12.4).
 
 ### 8.3 A page per transaction
 
@@ -773,9 +809,17 @@ Marten projects a page of events per transaction, which is a large part of its t
 engine does the same for in-transaction progress: one unit of work per page, the handler invoked per
 event inside it, one resume-point update at the end.
 
-- If any event in the page throws, the page's transaction rolls back and the page is replayed **one event
-  per transaction**, so the redelivery policy, dead-lettering and `FailFast` behave exactly as today, per
-  event. After the failing event is handled or dead-lettered, page mode resumes.
+- **A failing page shrinks** (decided 2026-11-15). If any event in the page throws, the page's transaction
+  rolls back and the subscription retries with smaller pages (bisecting, or stepping down as P0.13
+  proposes) until the failing event is in a page of its own, while the pages around it commit. The failing
+  event is retried with backoff and, when its retries are used up, **parked** for that subscription with
+  its error; the subscription moves on. Page size then grows back after pages that commit (P0.13's
+  revision below). Retry count, backoff and the shrink policy are engine settings per subscription.
+  This is not today's `SubscriptionErrorPolicy`, `FailFast` or redelivery/dead-letter model, and it does
+  not inherit the current queue consumer's built-in list of permanent errors.
+- Parked events are visible and actionable through the admin API (retry, discard). Where they are stored,
+  how they count in the resume point, and whether later events of the same aggregate are held behind a
+  parked one (per-aggregate order against availability) are open (§19).
 - The page size is bounded by count and by time (the page closes when the buffer is empty), so a quiet
   system does not hold events back to fill a page.
 - In `FRESH` mode the resume point written is §4.7's formula, not the page's highest order.
@@ -792,18 +836,18 @@ event inside it, one resume-point update at the end.
 > replayed per event and page mode then resumes at full size, so every failure costs a whole page again: at one failing
 > event in 100, a 100-event page fails every time and throughput fell below one transaction per event. After a failed
 > page the subscription should continue with smaller pages (or per event) and grow back after pages that commit, so the
-> cost is bounded by the failure rate rather than multiplied by the page size. (2) **A page-aware handler shape**, as an
-> opt-in beside the per-event `@MessageHandler`, that receives the page and can write it as one batch or one set-based
-> statement; that is where the 10x is. Also: the default page size need not exceed about 100, since larger pages bought
+> cost is bounded by the failure rate rather than multiplied by the page size. (2) **A page-aware handler shape**: the
+> new subscription API (§12.3) hands the handler the page, which it can write as one batch or one set-based statement;
+> that is where the 10x is. A per-event handler is the row-by-row case on top of it. (First written, before the
+> 2026-11-15 decision on a new subscription API, as an opt-in beside the per-event `@MessageHandler`.) Also: the default page size need not exceed about 100, since larger pages bought
 > nothing row by row and made view updates lose HOT inside the longer transaction (more WAL per event).
 
 ### 8.4 Exactly-once in `FRESH` mode (later, optional)
 
 `FRESH` can only reach exactly-once database state if the resume point also records which orders above
-the watermark were already applied. That would be an additive `delivered_above_watermark bigint[]` column
-on `durable_subscriptions`, bounded by the in-flight window. It is listed as a later item, because
-`CONTIGUOUS` covers the subscribers that need exactly-once state, and a new column is a schema change
-that the old engine would have to tolerate.
+the watermark were already applied. That would be a `delivered_above_watermark bigint[]` column on the
+engine's progress row (§8.2), bounded by the in-flight window. It is listed as a later item, because
+`CONTIGUOUS` covers the subscribers that need exactly-once state.
 
 ---
 
@@ -815,62 +859,74 @@ Today an exclusive subscription holds a `FencedLock`. Its resume-point save
 or a partition — can still write the resume point after the new owner has taken over. The row then flaps
 between two values until one of them stops.
 
-Proposal:
+Proposal (decided 2026-11-15): the new engine owns exclusive subscriptions itself, through **lease and fence
+columns on the subscription's progress row** (§8.2). It has no `FencedLockManager` dependency.
 
-- Every resume-point `UPDATE`, periodic or in the handler's transaction, asserts the owner's fence in the
-  same statement (`AND EXISTS (… lock row with this owner and this fence …)`), as the queue's
-  acknowledgement delete does. With progress in the handler's transaction, this also fences the
-  projection's output: a stale owner's page rolls back as a whole.
+- **Claim.** A node claims a subscription whose lease is free or expired, and reads the resume point and reset
+  epoch it starts from, in one statement on that row: `UPDATE … SET lease_owner = :node, lease_fence = <next
+  fence>, lease_until = now() + :lease WHERE <key> AND (lease_owner IS NULL OR lease_until < now()) RETURNING
+  lease_fence, resume_from, reset_epoch`. The fence is assigned by the database and only ever increases, so a
+  claim that arrives late cannot install an older fence over a newer one. How fences stay unique when a row is
+  deleted and recreated is open (§19).
+- **Renewal.** All lease time is server time (`now()`), never the JVM's clock. A JVM renews every exclusive
+  subscription it owns in one statement per renewal pass (`… WHERE (key, lease_fence) IN (SELECT * FROM
+  unnest(:keys, :fences)) RETURNING key`); a subscription missing from the result has lost its lease and stops.
+- **Every progress write asserts the fence** — periodic or in the handler's transaction — in the same statement,
+  on the same row (`AND lease_fence = :fence`, §8.2). Because the condition is on the row being written, the
+  re-check PostgreSQL performs after waiting for another transaction's row lock sees the new owner's fence, so
+  the check is exact. With progress in the handler's transaction this also fences the projection's output: a
+  stale owner's page rolls back as a whole.
 - Zero rows updated is ambiguous: it means either a stale fence or a superseding reset. Ask once, by
   primary key, which of the two it was. Lost ownership stops the subscription. A superseding reset is
-  S6's case and is handled as now.
+  S6's case, restated for the reset epoch (§10.3): the save is dropped and delivery restarts from the reset point.
 - An owner that cannot confirm it is alive — it cannot reach the database to renew — stops delivering
-  (shard-owned §8.6). This is Marten's "monitored lock" with an assertable fence.
-- All lease time is server time (`now()`), never the JVM's clock.
+  before its lease can have expired on the server (shard-owned §8.6). This is Marten's "monitored lock" with an
+  assertable fence. Lease duration, renewal interval and the local stop deadline are engine settings (§19).
+- Non-exclusive subscriptions and administrative resets write without a fence; a reset refuses the owner's older
+  saves through the reset epoch.
 
-> **Revision (2026-11-15, decided).** The fence is a column on the resume-point row, not `EXISTS` against the
-> fenced-lock table. The `EXISTS` form fences only when the lock manager is
-> `PostgresqlFencedLockManager` in the same database, and it leaves a race: when a stale `UPDATE` waits for the new
-> owner's row lock, PostgreSQL re-checks the `WHERE` against the new row version but evaluates a sub-select on another
-> table with the old snapshot. The fence is an `owner_fence BIGINT` column on the resume-point row (nullable, added with
-> `ADD COLUMN IF NOT EXISTS`). An exclusive subscription that acquires its lock claims the row and reads the resume point
-> it starts from in one statement, `UPDATE … SET owner_fence = :token WHERE … AND (owner_fence IS NULL OR owner_fence <= :token)
-> RETURNING …`, and every save of that resume point adds
-> `AND owner_fence = :token`. The condition is on the row being written, so the re-check is exact, it works with any lock
-> manager, and a save costs no extra statement. Non-exclusive subscriptions and administrative resets write without a fence (a reset refuses the
-> owner's older saves through the reposition epoch). With progress in the handler's transaction (§8) the same
-> condition fences the handler's output. Built in phase 7; I5's test keeps the unfenced shape as its must-fail variant.
-> A version of this was built in the current engine on 2026-11-15 and reverted the same day: the current engine is not
-> changed (commit `d2c3e3b51`, in no branch, has the code and its IT).
+> **Revision (2026-11-15, decided; restated for engine leases the same day).** The fence is a column on the
+> resume-point row, not an `EXISTS` against a separate lock table. The `EXISTS` form, first proposed against the
+> fenced-lock table, fenced only when the lock manager was `PostgresqlFencedLockManager` in the same database, and it
+> left a race: when a stale `UPDATE` waits for the new owner's row lock, PostgreSQL re-checks the `WHERE` against the
+> new row version but evaluates a sub-select on another table with the old snapshot. A first version of the column
+> form kept `FencedLock` and added an `owner_fence` column to `durable_subscriptions`; it was built in the current
+> engine on 2026-11-15 and reverted the same day, since the current engine is not changed (commit `d2c3e3b51`, in no
+> branch, has the code and its IT). The new engine keeps the column form but puts lease and fence on its own progress
+> row (decided 2026-11-15, §18). Built in phase 7; I5's test keeps the unfenced shape as its must-fail variant.
 >
 > How the fence behaves when things go wrong:
 >
-> - **Node crash.** The lock times out and another node acquires it with a higher token and claims the row. The crashed
->   node never writes again; restarted, it acquires a new token. Nothing needs cleaning up: the next claim passes over the
->   old value.
-> - **The owner loses its connection.** The lock manager cannot confirm the lock and releases it locally after the
->   timeout; another node acquires and claims. When the old node's connection returns, its pending periodic save, or its
->   final save on the way out, updates no row. The repository reads the stored fence once, logs one warning that the lock
->   has moved, and marks the snapshot superseded, so it is not retried.
-> - **Connection loss with no takeover yet.** `owner_fence` is still the owner's token, so its saves land, which is right:
->   nobody else is processing.
-> - **Graceful handover.** If the old owner's final save commits before the new owner's claim, it lands; otherwise it is
->   refused and the new owner starts a little earlier, which is a replay within at-least-once, never a stale overwrite.
-> - **A claim delayed past a newer owner's** (A acquires token 5 and pauses, B acquires 6 and claims, A's claim arrives).
->   Refused by `owner_fence <= :token`; A logs the refusal and does not subscribe. This is why the claim compares and does
->   not simply overwrite.
-> - **A save whose commit outcome is unknown.** Unchanged: the resume point is not marked persisted and the next save
->   retries it under the same fence.
-> - **Coexistence with the old engine (§12.4).** An old-engine node neither claims nor fences. While it holds the lock, a
->   former new-engine owner still matches the old `owner_fence`; fencing is complete once no old-engine node runs the
->   subscription.
-> - **The fenced-lock table is reset or a lock row deleted.** Tokens restart below the stored `owner_fence`, so every claim
->   is refused and the subscription stays stopped with an error that says to clear `owner_fence` on the row. It does not
->   heal itself, because doing so would reopen the stale write.
+> - **Node crash.** The lease is no longer renewed and expires by server time; another node claims the row with the
+>   next fence. The crashed node never writes again; restarted, it claims like any other node. Nothing needs cleaning
+>   up: the claim passes over the expired lease.
+> - **The owner loses its connection.** It cannot renew, so it stops delivering at its local deadline, before the
+>   lease can expire on the server; another node claims once it has. When the old node's connection returns, its
+>   pending periodic save, or its final save on the way out, updates no row. It reads the stored fence once, logs one
+>   warning that ownership has moved, and marks the snapshot superseded, so it is not retried.
+> - **Connection loss with no takeover yet.** The row still carries the owner's fence, so its saves land, which is
+>   right: nobody else is processing.
+> - **Graceful handover.** The owner's final save also releases the lease, in the same statement, so the next claim
+>   need not wait for expiry. If that save fails, the lease expires instead and the new owner starts from the last
+>   save that landed: a replay within at-least-once, never a stale overwrite.
+> - **A claim delayed past a newer owner's** (A sends its claim and pauses, B claims, A's claim arrives). A's claim
+>   finds a lease that is held and not expired, updates no row, and A does not subscribe. The fence is assigned by the
+>   database, never by the claimant, so no ordering of claims can lower it.
+> - **A save whose commit outcome is unknown.** A periodic save is not marked persisted, and the next save retries it
+>   under the same fence. A page whose commit outcome is unknown is resolved by reading the progress row before the
+>   next page: its resume point says whether the page committed.
+> - **A renewal pass that partly fails.** Subscriptions whose lease was taken over are missing from the pass's result
+>   and stop; the rest continue. The renewal never extends a lease whose fence has changed.
+> - **An operator deletes or rewrites the progress row.** A deleted row makes every save and renewal of the owner
+>   update nothing, and the check by primary key finds no row: the subscription stops with an error rather than
+>   recreating the row, which would lose the resume point. A fence written back to a lower value must not be
+>   reachable through the admin API; if it happens anyway, the owner's saves fail and it stops, and the risk is that a
+>   stale owner's fence comes round again. Whether fences come from a sequence, so that they never repeat even across
+>   a deleted row, is open (§19).
 
-Many exclusive subscriptions per JVM could later share lease rows, as the queue's units do instead of
-one lock per subscriber. That belongs in a later phase. The fence on the write comes with the new engine's
-exclusive subscriptions (phase 7); the current engine is not changed (decided 2026-11-15).
+Batched renewal of many leases per JVM (above) comes with the new engine's exclusive subscriptions in phase 7.
+Sharing one lease between several subscriptions, as the queue's units do, belongs to EF-2 and a later phase. The
+current engine is not changed (decided 2026-11-15).
 
 ---
 
@@ -920,8 +976,10 @@ instead of exhausting the pool and starving the appenders. The shared tail reade
 
 ### 10.3 Rebuilds and resets
 
-`resetFrom` keeps its S6 semantics. A reset subscription detaches, catches up through §10.1 and attaches
-again. For a `CONTIGUOUS` view projection, a rebuild is: truncate the projection's tables and reset the
+A reset (the new API's counterpart of `resetFrom`) sets the resume point and increments the reset epoch on
+the subscription's progress row in one statement, so every save made under the old epoch, periodic or in a
+handler's transaction, updates nothing (§8.2): S6's guarantee, on the engine's own table. A reset
+subscription detaches, catches up through §10.1 and attaches again. For a `CONTIGUOUS` view projection, a rebuild is: truncate the projection's tables and reset the
 subscription, in one transaction, then catch up with progress in the handler's transaction; at every point
 the projection's state matches its resume point. Blue/green rebuilds into a second table, as Marten does
 with projection versions, are a later item.
@@ -970,8 +1028,8 @@ Rules carried over:
 > `getNotifications(timeout)` does not return while notifications keep arriving ([phase-0 record, P0.10](../archive/event-store-redesign-phase0.md#p010-wake-up-notification-cost)), so the
 > listener rule above needs a test under sustained notification traffic, not only a reconnect test.
 
-This delivers S2's goal — interruptible wake-up, with backstop and latency decoupled — without changing
-the `EventStorePollingOptimizer` SPI.
+This delivers S2's goal — interruptible wake-up, with backstop and latency decoupled — in the new engine.
+The new engine does not use the `EventStorePollingOptimizer` SPI; the current engine keeps it unchanged.
 
 ---
 
@@ -979,88 +1037,109 @@ the `EventStorePollingOptimizer` SPI.
 
 ### 12.1 Why a new engine rather than evolving `PostgresqlEventStore`
 
-| | Evolve in place | New engine + adapter |
+| | Evolve in place | New engine |
 |---|---|---|
 | Removing the gap machinery | Entangled. `GapFillsAwaitingAcknowledgement` and `AcknowledgementRegistrations` are shared with `CdcEventStore`, and `EventStreamGapHandler` is a public SPI | Free. The new engine never had it |
 | Shared reader and consistency modes | Fights the per-subscription `pollEvents` Flux contract | Native |
-| Side-by-side measurement | Feature flags inside one class | Two implementations of one interface, run against the same tables |
-| Risk to existing users | Every change ships to everyone | Opt-in, and reversible (§12.4) |
-| Precedent | — | The shard-owned queue: engine, adapter, starter |
-| Cost | Lower up front | Higher. The adapter surface is large (§12.3) |
+| Subscription model | Keeps `EventStoreSubscriptionManager`, its builders, `durable_subscriptions`, `FencedLock` and `SubscriptionErrorPolicy`, whose shapes caused much of today's cost | Designed from the engine's needs: page handlers, consistency modes, progress in the handler's transaction, engine leases, page-based error handling (§12.3) |
+| Table layout | Fixed: existing data must stay readable in place | The engine's own tables, free to use the layouts phase 0 measured (§13.3) |
+| Side-by-side measurement | Feature flags inside one class | Two engines measured on the same workload, each on its own tables |
+| Risk to existing users | Every change ships to everyone | Opt-in; an application moves once, one way, with a copy step (§12.4) |
+| Precedent | — | The shard-owned queue: engine, integration, starter |
+| Cost | Lower up front | Higher: a new subscription API and its processors, and migration tooling (§12.3, §12.4) |
 
 Recommendation: **a new engine**, built the way the queue was. The current engine is not changed (decided
 2026-11-15): fenced resume-point writes (§9) and the single-statement append (§5.4) are built in the new engine only.
+Also decided 2026-11-15, in the project lead's words "the new subscription model should not copy the old, it has
+many design issues": the new engine has its own subscription API, progress table, error model and leases, and its own
+schema; see §18, "Decisions 2026-11-15: a new subscription model".
 
 ### 12.2 Module shape
 
 | Module | Depends on | Contents |
 |---|---|---|
-| engine (working name `postgresql-event-log`) | `shared`, pgjdbc, slf4j, micrometer (optional) | Append, stream load, tail reader, watermark, consistency modes, catch-up, wake-up, leases, resume points. Raw JDBC, no JDBI, no Reactor, no Jackson. Payloads are opaque to it, as in the queue |
-| adapter | engine, `postgresql-event-store`, foundation | Implements `EventStore`/`ConfigurableEventStore` and `EventStoreSubscriptionManager` on top of the engine. Serialisation, interceptors, enrichers, in-memory projectors, the event bus, causation, the unit-of-work integration, page-per-transaction handler invocation |
-| starter | adapter | Spring wiring, properties, health, admin API mapping, schema contributors (including the opt-in event-type index) |
+| engine (working name `postgresql-event-log`) | `shared`, pgjdbc, slf4j, micrometer (optional) | Append, stream load, tail reader, watermark, consistency modes, catch-up, wake-up, leases, progress table, parked events. Raw JDBC, no JDBI, no Reactor, no Jackson. Payloads are opaque to it, as in the queue |
+| integration | engine, foundation; `postgresql-event-store` only if an `EventStore` adapter is built (§19) | The new subscription API (§12.3) and the processors built on it, serialisation, interceptors, enrichers, causation, the unit-of-work integration, page-handler invocation, the migration tooling (§12.4). Possibly an `EventStore` adapter for appends and stream loads, nothing subscription-side |
+| starter | integration | Spring wiring, properties, health, admin API mapping, schema contributors (event tables, progress table, parked events, the opt-in event-type index) |
 
 The engine's write API takes a caller's `java.sql.Connection`, as `ShardOwnedQueue.enqueue(Connection, …)`
-does, and commits nothing. The adapter takes the connection from the current `EventStoreUnitOfWork`
-(its JDBI handle exposes it), so appends join the caller's transaction exactly as now. In-transaction
-subscribers keep running inside that commit, through the adapter, unchanged. The same applies to the
-resume-point update of §8: the engine issues it on the connection of the handler's unit of work.
+does, and commits nothing. The integration module takes the connection from the caller's unit of work, so
+appends join the caller's transaction exactly as now. Delivery inside that commit (today's in-transaction
+subscribers) stays available; its API follows from the open question on appends (§19). The same applies to
+the resume-point update of §8: the engine issues it on the connection of the handler's unit of work.
 
-Any new DDL (the opt-in `(event_type, global_order)` index) goes through an `EssentialsSchemaContributor`
-and the caller's `SchemaOwnership`, as the root `CLAUDE.md` requires.
+All of the engine's DDL (its event tables, the progress table, wherever parked events are stored, and the
+opt-in `(event_type, global_order)` index) goes through an `EssentialsSchemaContributor` and the caller's
+`SchemaOwnership`, as the root `CLAUDE.md` requires.
 
-### 12.3 What the adapter must implement
+### 12.3 The new subscription API, and what is left of an adapter
 
-`EventStore` has around 50 abstract and default methods: `appendToStream` overloads, `fetchStream`,
-`loadEvent(s)`, `loadEventsByGlobalOrder`, `pollEvents`/`unboundedPollForEvents` (Flux),
-`findHighest/LowestGlobalEventOrderPersisted`, causation lookup, interceptors, projectors and the local
-event bus. Everything above it — `EventProcessor`, `ViewEventProcessor`, `InTransactionEventProcessor`,
-the aggregate repositories, the Kotlin decider support, the admin API — goes through these interfaces.
-Without a complete adapter, nobody can adopt the engine. **Expect the adapter to be the larger half of
-the work**, as it was for the queue.
+Decided 2026-11-15: the new engine gets its own subscription API, designed from what the engine does. There is
+**no adapter implementing `EventStoreSubscriptionManager`**, and the existing subscription builders,
+`EventProcessor`, `ViewEventProcessor` and the `@MessageHandler` dispatch do not shape it. No Reactor: no `Flux`,
+no `pollEvents`/`unboundedPollForEvents`, no `SubscriberAcknowledgement`.
 
-Some methods have no natural meaning in the new engine:
+What the API has to express, each from a section of this plan:
 
-- `pollEvents(…)` for a single caller. It can be served by attaching to the tail reader, or by a private
-  reader for callers outside the manager. Both must honour `SubscriberAcknowledgement`, which becomes
-  trivial: there are no gap fills to hold back.
-- `forgetGapMiddlesAwaitedInMemory`, and the `EventStreamGapHandler` wiring, become no-ops.
-- CDC. The new engine does not implement it. If §17 shows the shared reader and Tier 1 wake-up meet
-  CDC's latency and load numbers, CDC remains with the old engine for users who need it for audit trails
-  or replica offload. Otherwise CDC support is a later phase.
+- A subscription: aggregate type, subscription id, optional tenant and event-type filter (§10.1), consistency mode
+  (`FRESH` or `CONTIGUOUS`, §7), progress model (in the handler's transaction or periodic, §8.1), exclusive or not
+  (§9), and where it starts.
+- A **page handler** that receives a page of events and, for progress in the handler's transaction, the unit of
+  work the page commits in, so it can write the page set-based (§8.3, P0.13). A per-event handler is a convenience on
+  top of it.
+- Error settings: retries, backoff, how a failed page shrinks, when an event is parked (§8.3).
+- Processors for the two common cases, a view projection (output in the same database, `CONTIGUOUS` by default) and
+  an event processor (side effects outside the database, `FRESH` by default), built on that API (§7.2).
+- An admin surface: subscriptions with their mode, position, lag, lease owner and parked events; reset; retry or
+  discard a parked event. Mapped through the admin API's three places, as every admin operation is (root
+  `CLAUDE.md`).
 
-The consistency mode and the progress model are new subscription options. They are additive: the
-existing subscription builders keep their signatures, and the defaults of §7.2 apply when nothing is set.
+Its exact types are phase-8 design work and are not fixed here.
 
-### 12.4 Coexistence and migration on the same tables
+What is left of an adapter: whether the aggregate repositories, the Kotlin decider support and other code that
+appends and loads streams through `EventStore`/`ConfigurableEventStore` get an adapter onto the engine's append and
+stream load, or move to a new append API, is **not decided** (§19). If an adapter is built, it covers appends,
+`fetchStream`, `loadEvent(s)`, `loadEventsByGlobalOrder`, `findHighest/LowestGlobalEventOrderPersisted`, causation
+lookup, interceptors, projectors and the local event bus. It does not implement anything subscription-side:
+`pollEvents`/`unboundedPollForEvents`, `SubscriberAcknowledgement`, `forgetGapMiddlesAwaitedInMemory` and the
+`EventStreamGapHandler` wiring have no counterpart.
 
-*Note 2026-11-11:* phase 0 now also measures table layouts that would not run on the existing tables (a stream head
-table, no `UNIQUE(event_id)`, `uuid` event ids, a narrower row with interned event types, `json`/`bytea` payloads),
-because the new design may change the schema; some measured gains (zero holes with a head table, −26% execution for
-100-event appends without `UNIQUE(event_id)`) depend on leaving this section's premise. See
-[phase-0 record, P0.7](../archive/event-store-redesign-phase0.md#p07-table-design-options).
+CDC: the new engine does not implement it. If §17 shows the shared reader and Tier 1 wake-up meet CDC's latency and
+load numbers, CDC remains with the old engine for users who need it for audit trails or replica offload. Otherwise
+CDC support is a later phase.
 
-The watermark and the new append need no new column, and resume points remain `GlobalEventOrder` values.
-The new engine can therefore run on **the existing event-stream tables and the existing
-`durable_subscriptions` rows**:
+### 12.4 Moving an application to the new engine
 
-- Switching to the new engine is a configuration change. Switching back is another one.
-- **The one-time hand-over of open gaps.** When the new engine first takes over a subscriber, the old
-  engine may have open transient gaps below that subscriber's resume point: fills it was still waiting
-  for. The new engine reads that subscriber's `transient_subscriber_gaps` once at start, treats them as
-  holes under a candidate taken at start-up, and deletes them only after that candidate retires. Without
-  this, a late commit that was already outstanding at the switch would be lost.
-- **Mixed versions during a rolling deploy.** Exclusive subscriptions are safe if both engines use the
-  same lock names and fence semantics: one owner at a time, whichever engine it runs on. Non-exclusive
-  subscriptions are per instance and unaffected. Appends from both engines write identical rows; the old
-  engine's appends do not take the xid first, so **while any old-engine instance is still appending, the
-  new engine's readers must treat the type as unsafe for the watermark** and fall back to the old gap
-  handling, or the deploy must switch writers before readers. Which of the two is spike-level design work
-  in phase 9; it is listed as risk 9 (§19).
-- **Switching back.** The old engine resumes from the resume point. That is safe, because the new engine
-  never persists past an unretired candidate (§4.7).
+*Decided 2026-11-15:* the new engine has its own tables and an application moves to it **once, one way**, with a
+copy and import step. There is no running on the current engine's tables, no switching back and forth, and no
+mixing old-engine and new-engine nodes during a rolling deploy. The new engine's tables are therefore free to use the
+layouts phase 0 measured (§13.3, [phase-0 record, P0.7](../archive/event-store-redesign-phase0.md#p07-table-design-options):
+for example a stream head table, no `UNIQUE(event_id)`). This replaces the earlier plan to run on the existing
+tables and `durable_subscriptions` rows, with its open-gap hand-over from `transient_subscriber_gaps`, shared lock
+names, readers falling back to the old gap handling, and switching back.
 
-Table-layout changes (§13.3) are deliberately left out of this path. They would require a data migration
-and would make the switch one-way.
+The move, in outline:
+
+1. **Create the new engine's schema** through its schema contributors (§12.2).
+2. **Copy the events**, per aggregate type, preserving `global_order`, `aggregate_id`, `event_order`, `event_id`,
+   causation, correlation, event type and revision, timestamp, tenant and the payload and metadata bytes. The copy
+   does not re-serialise payloads: the wire format is frozen (root `CLAUDE.md`). After the copy, each table's
+   identity sequence is set above the highest copied `global_order`.
+3. **Import resume points** (optional): each subscription's resume point from `durable_subscriptions` becomes its
+   row in the new progress table. A subscriber may have open transient gaps below its old resume point whose fills
+   committed but were not yet delivered; the import must start such a subscriber at its lowest open gap, or it skips
+   those events. Without the import, subscriptions start where the new API says they start.
+4. **Cut over**: stop every old-engine node, copy what was appended since the bulk copy, start the application on
+   the new engine. No old-engine appender may run during the final copy, or a late commit below the copied maximum
+   is missed.
+
+What must be verified before the first append on the new engine: per aggregate type, the row count, the highest
+`global_order` and a checksum over `(global_order, aggregate_id, event_order, event_id)` and the payload bytes equal
+the source; each identity sequence is above the copied maximum; each imported resume point is at or below the old
+resume point and at or below the subscriber's lowest open gap. The copy leaves the old tables untouched, so until
+the first append on the new engine, aborting the move is a configuration change; after it, there is no way back
+short of a restore. How fast the copy runs, whether it can run online with only the final delta under a stop, and
+the tooling around it are open (§19).
 
 ---
 
@@ -1097,7 +1176,7 @@ dependency footprint matching the queue's (`shared` plus pgjdbc):
 | Several statements in one round trip | pgjdbc sends a batch of protocol messages with a single sync. Used for several aggregates in one unit of work (§5.2) and as the fallback if P0.1 or P0.2 fails |
 | `setFetchSize` with autocommit off | Streaming catch-up reads (§10.1) |
 | Control of `prepareThreshold` and statement reuse | One stable SQL text per statement shape, so server-side prepared plans are reused. Measure, as Marten did, before relying on it |
-| `CopyManager` | Bulk import and any future table migration |
+| `CopyManager` | The one-way copy of events into the new engine's tables (§12.4) |
 
 > **P0.6 (2026-11-11):** measured, see §21 and [phase-0 record, P0.6](../archive/event-store-redesign-phase0.md#p06-jdbi-against-raw-pgjdbc). JDBI costs a few µs of
 > client CPU per statement and nothing on the server, so the case for raw pgjdbc above remains one of capabilities, not
@@ -1118,6 +1197,7 @@ Statement shapes for the engine:
 - **Hole read on retirement:** `WHERE global_order = ANY(?)` for few holes, or a range read for wide ones.
 - **Filtered catch-up:** §10.1.
 - **Resume points:** §8.2, fenced; batched for the periodic model, one per page in the handler's transaction.
+- **Leases:** §9's claim, and one renewal statement per pass for every lease a JVM holds.
 
 Phase 0 counts the current engine's statements per poll and per delivered event with
 `pg_stat_statements`, so these shapes are compared against real numbers rather than against a reading of
@@ -1125,12 +1205,13 @@ the code.
 
 ### 13.3 Table design options
 
-All of these are opt-in, apply to **new tables only** unless stated, and are each justified by their own
-measurement. None is needed for §4–§12.
+Each is justified by its own measurement, and none is needed for §4–§12. Since 2026-11-15 the new engine
+has its own tables and applications move to it with a copy (§12.4), so these are candidates for the engine's
+table layout, not opt-ins limited to tables created later; which of them the engine adopts is open (§19).
 
 | Option | Expected effect | Cost, risk |
 |---|---|---|
-| **`(event_type, global_order)` index** (existing tables too, opt-in) | Index scans for filtered catch-up (§10.1) | One more btree per insert. Per aggregate type |
+| **`(event_type, global_order)` index** (opt-in) | Index scans for filtered catch-up (§10.1) | One more btree per insert. Per aggregate type |
 | **UUIDv7 event ids** (time-ordered) instead of random UUIDs | The `UNIQUE(event_id)` index becomes append-mostly instead of random inserts: fewer page splits, smaller index, less WAL. Probably the largest per-insert saving among these | Event ids become roughly time-ordered, which leaks timing. Existing tables keep random ids. `EventId` generation must stay a framework detail |
 | **Make `UNIQUE(event_id)` optional** | One btree less per insert | `findEvent(EventId)` needs it. Opt-out only for users who never look up by id |
 | **Payload as `json` or `bytea` instead of `jsonb`** | No binary conversion on write or read. `bytea`/`json` keep bytes exactly, whereas `jsonb` normalises — the CDC parity gotcha exists because of that | Users query `jsonb` payloads in SQL, and the admin UI reads them. The queue measured only ~3% WAL. Keep `jsonb` as the default. The `eventJsonColumnType` setting already exists |
@@ -1138,7 +1219,7 @@ measurement. None is needed for §4–§12.
 | **Column order by alignment** (fixed-width first, variable-width last) | A few bytes per row of padding saved | Only for new tables. Trivial |
 | **Insert-driven autovacuum tuning** (`autovacuum_vacuum_insert_scale_factor` per table) | Keeps the visibility map current on append-only tables, so the head probes (`max(event_order)` in §5.1, `max`/`min(global_order)`) stay index-only | A table-level setting. Document rather than force |
 | **Partitioning by `is_archived`** (Marten §8) or by `global_order` range | Smaller hot indexes; archiving | The unique constraints cannot be enforced across partitions unless they include the partition key, which breaks their meaning. Only as a later archival feature, if at all |
-| **Remove the gap tables** | Already follows from §4 | They stay until the old engine is retired |
+| **Remove the gap tables** | Already follows from §4 | The new engine has none; the old engine's stay with it |
 
 *Note 2026-11-11:* measured in [phase-0 record, P0.7](../archive/event-store-redesign-phase0.md#p07-table-design-options) on small tables with
 small payloads. Two findings differ from the expectations above: dropping `UNIQUE(event_id)` was the largest
@@ -1161,7 +1242,8 @@ latency path and Marten shows two cheap wins. Today `StatefulAggregateRepository
 it: two round trips, each its own statement.
 
 Decided 2026-11-15: these items are built against the new engine's stream load (§12) only. The existing
-aggregate repositories and `PostgresqlEventStore` are not changed.
+aggregate repositories and `PostgresqlEventStore` are not changed. Whether repositories reach the new engine's
+stream load through an `EventStore` adapter or through a new API is open (§19).
 
 | Item | What | Notes |
 |---|---|---|
@@ -1211,17 +1293,18 @@ nothing pass on broken code (history §9.13).
 | I2 | Per-aggregate order: within one subscription incarnation, A#n is first delivered before A#n+1 | The §4.5 scenario as an IT against the engine (must pass) and against a per-row-xid cursor (must fail). Run with the server-side `event_order` of §5.1. Also P0.5's F1 shape (proposed revision, §4.2): A#n commits late into a hole, A#n+1 follows, a long writer elsewhere keeps the candidate from retiring; must fail against a reader that delivers late commits only from the hole read, and with a transaction of several events |
 | I3 | A resume point never passes an order that could still be delivered | Crash injected between delivery and handling, and between a candidate's retirement and its hole read |
 | I4 | xid before value: no writer holds a `global_order` while its xid is null — for the single-statement append, under every join order | `BEFORE INSERT` trigger holding the window open, after `ShardOwnedWatermarkXidWindowIT`; repeated with planner settings that force `unnest` outer (P0.1) |
-| I5 | Fencing: a stale owner's resume-point write — and, with progress in the handler's transaction, its output — never lands after the new owner's | Pause the old owner (a debugger-style hook), take over, release, assert the row and the projection |
-| I6 | Reset wins: a `resetFrom` survives a concurrent save, periodic or in the handler's transaction | S6's existing ITs, run against the adapter; plus a reset racing a page commit |
+| I5 | Fencing: a stale owner's resume-point write — and, with progress in the handler's transaction, its output — never lands after the new owner's | Pause the old owner (a debugger-style hook), let its lease expire, claim on another node, release, assert the progress row and the projection. Also with the stale write waiting on the new owner's row lock |
+| I6 | Reset wins: a reset survives a concurrent save, periodic or in the handler's transaction | A reset racing a periodic save and racing a page commit, against the progress row's reset epoch (S6's scenarios, restated for the new API) |
 | I7 | Progress: with no running writers, a committed event is delivered within the backstop interval with every notification lost | Listener killed, `NOTIFY` disabled |
-| I8 | Hand-over: an open transient gap from the old engine is delivered after the switch | Old engine leaves a gap open, new engine takes over, the late transaction commits |
+| I8 | Migration: after the copy and import (§12.4), the new engine's tables hold every source event with the same `global_order`, `event_order`, `event_id` and payload bytes, and every imported subscription delivers each event at or above its old resume point, including events that filled one of its open transient gaps before the cut-over | Copy a source with holes, permanent gaps, a sequence jump and a subscriber with an open transient gap whose fill committed before the cut-over; compare per aggregate type and assert delivery. Must fail against an import that copies the old resume point unchanged |
 | I9 | A slow subscription never delays another | One handler blocked; the others' latency is unchanged |
 | I10 | A lost optimistic-concurrency check consumes no `global_order` | Two writers with a stale expected order; assert no hole and the right exception and message |
 | I11 | Combined probe: the running-writer set is read after the statement's snapshot | Writer held between taking its value and committing; the combined statement must never retire a candidate it belongs to (P0.2). Must fail against a version that reads `X` in an earlier statement |
 | I12 | `CONTIGUOUS` never delivers above the watermark, and with progress in the handler's transaction, a crash at any point leaves projection state equal to applying each event exactly once | Crash injection at every step of a page; compare the projection with a reference fold |
 | I13 | Filtered catch-up never skips a matching event that commits late | A long writer holds a matching event below the cursor while a filtered subscription catches up past it. Also a reader restarted while a writer holds a value below the head (P0.5 F4), and a detach after overflow (F5) |
-| I14 | Page fallback: a failing event in a page is handled under the per-event error policy, and no other event of the page is lost or applied twice | Throw on one event in a page, with redelivery and with dead-lettering |
+| I14 | Page failure: a failing event in a page is isolated by shrinking the page, retried and then parked with its error, and no other event of the page is lost or applied twice | Throw on one event in a page, once (succeeds on retry) and always (parked); compare the projection with a reference fold that skips the parked event |
 | I15 | Catch-up reads never exceed the per-database cap | 50 subscriptions behind at start-up; count concurrent catch-up statements |
+| I16 | Leases: an owner that cannot renew stops delivering before its lease can expire on the server, and a renewal pass never extends a lease whose fence has changed | Block the owner's connection and assert it stops before `lease_until`; renew many leases in one pass after one was taken over and assert only the others are extended |
 
 The watermark, the shared reader and the two modes together form a small state machine — reader,
 candidates, watermark, attached and detached subscriptions, held-back buffers, resume point — with writers
@@ -1302,26 +1385,40 @@ part of the design from now on.
 | P0.5 F3 | A subscription attaches once its catch-up reaches the watermark, then bridge-reads up to the reader's cursor. Phase 2 measures how often a `CONTIGUOUS` subscription attaches, overflows and detaches behind a long writer. |
 | P0.10 | Tier-1 wake-up: `pg_notify` after commit, coalesced per JVM, never inside the appending transaction. A notify lost to a crash between commit and notify only delays the wake-up to tier 2's poll. |
 | P0.12 | The probe reads `pg_stat_get_activity(NULL)`, and its rate is not a fixed per-JVM interval: it backs off with the probe's measured cost and re-probes only after a wake-up. Tuned in phase 2 against P0.12's 400-connection case. |
-| P0.13 | The resume point is saved per page. After a failed page the subscription continues with smaller pages and grows back after pages that commit; an opt-in page-aware handler beside `@MessageHandler` receives the page and can write it set-based; the default page size is about 100. |
+| P0.13 | The resume point is saved per page. After a failed page the subscription continues with smaller pages and grows back after pages that commit; the new subscription API's handler receives the page and can write it set-based (first decided as an opt-in beside `@MessageHandler`; restated after the decisions below); the default page size is about 100. |
 | P0.16 | The tail reader's read statements run under `force_generic_plan`, but only statements whose generic plan is checked in CI (index-only, no primary-key walk); all woken aggregate types are read in one pgjdbc flush. Phase 2 measures the pooled-connection case. |
 
 Not put to a decision because the spike settled it: P0.14 (engine-owned transactions go out as one explicit
 `BEGIN … COMMIT` flush), P0.17 (a) (pgjdbc's `PINNED_PEEK` drain, no second driver), P0.6 (raw pgjdbc). Still open:
 P0.3 on managed services.
 
+### Decisions 2026-11-15: a new subscription model
+
+Taken with the project lead the same day, after the phase-0 decisions: "the new subscription model should not copy
+the old, it has many design issues". The current engine stays unchanged (§5.4, §12.1); these decisions are about
+what the new engine offers instead of the current subscription model.
+
+| Decision | Replaces | What it means for phases 1 onward |
+|---|---|---|
+| A new subscription API, designed from the engine's needs: page handlers, `FRESH`/`CONTIGUOUS`, progress in the handler's transaction, engine-owned leases | An adapter implementing `EventStoreSubscriptionManager`; the subscription builders, `EventProcessor`/`ViewEventProcessor` and `@MessageHandler` as the shape to fit; Reactor (`pollEvents`, `Flux`, `SubscriberAcknowledgement`) | Phase 8 designs the API and the processors on it (§12.3). Whether appends and stream loads get an `EventStore` adapter is a separate, open question (§19); nothing subscription-side goes into one. |
+| A progress table owned by the engine: resume point (§4.7), reset epoch, lease and fence columns, whatever an open page needs | Resume points in `durable_subscriptions` | Built from phase 2 (§8.2). Its exact columns are open (§19). A one-time import of old resume points on first start is optional (§12.4). |
+| Own tables, and a one-way move with a copy and import step | Running on the current engine's tables and resume points; switching both ways; mixed old and new nodes in a rolling deploy; the open-gap hand-over from `transient_subscriber_gaps` | The engine may use the layouts phase 0 measured (§13.3, P0.7). Phase 9 builds and verifies the migration (§12.4, I8). Risk 9 restated. |
+| An error model designed around pages: a failed page shrinks to isolate the failing event, which is retried and then parked for that subscription with its error; the rest continue; retry, backoff and shrinking are engine settings | `SubscriptionErrorPolicy`, `FailFast`, redelivery and dead-lettering "exactly as today", per event | §8.3 restated; I14 restated. The parked-event store and the per-aggregate order behind a parked event are open (§19). |
+| Engine leases: lease and fence columns on the progress row, renewed with `now()`, many per JVM in one pass; every progress write asserts the fence in the same statement on the same row | `FencedLock`/`FencedLockManager`, and the `owner_fence` column on `durable_subscriptions` | Phase 7 (§9). I5 restated, I16 added. Lease timings and fence uniqueness across a deleted row are open (§19). |
+
 ### Phases 1 onward
 
 | Phase | Content | Gate |
 |---|---|---|
 | 1 | Dropped 2026-11-15: the current engine is not changed. The fence (§9) is built in phase 7 | — |
-| 2 | Engine: append (§5, shaped by P0.1/P0.4), stream load, tail reader with watermark and the combined probe (shaped by P0.2), one `FRESH` subscription, backstop wake-up only | I1–I4, I10, I11 pass. Statements per event at or below the P0.0 baseline |
+| 2 | Engine: own schema (§12.4), append (§5, shaped by P0.1/P0.4), stream load, tail reader with watermark and the combined probe (shaped by P0.2), progress table (§8.2), one `FRESH` subscription, backstop wake-up only | I1–I4, I10, I11 pass. Statements per event at or below the P0.0 baseline |
 | 3 | Shared reader, attach/detach, catch-up | I9 passes. Idle statements flat in the number of subscriptions |
-| 4 | `CONTIGUOUS` mode; progress in the handler's transaction, page per transaction with per-event fallback (§7, §8) | I12, I14 pass. Projection throughput above the periodic-save baseline; `CONTIGUOUS` latency within one probe interval of `FRESH` with no long writer |
+| 4 | `CONTIGUOUS` mode; progress in the handler's transaction, page per transaction; a failed page shrinks and the failing event is parked (§7, §8) | I12, I14 pass. Projection throughput above the periodic-save baseline; `CONTIGUOUS` latency within one probe interval of `FRESH` with no long writer |
 | 5 | Filtered catch-up, adaptive fallback, per-database read cap, opt-in event-type index (§10) | I13, I15 pass. Rare-type catch-up and restart-storm shapes beat the baseline |
 | 6 | Wake-up tiers 1 and 2 (§11) | I7 passes. Latency compared with S1 and CDC |
-| 7 | Leases and exclusive subscriptions, fenced (§9) | I5 and I6 pass. Multi-JVM takeover ITs |
-| 8 | Adapter: `EventStore`, subscription manager, processors, consistency and progress options, admin API | The existing processor and repository ITs pass against the adapter |
-| 9 | Coexistence: open-gap hand-over, switching in both directions, mixed rolling deploy including old-engine appenders (§12.4) | I8 passes. A switch back and forth under load loses nothing |
+| 7 | Engine leases on the progress row, batched renewal, exclusive subscriptions fenced (§9); no `FencedLockManager` | I5, I6 and I16 pass. Multi-JVM takeover ITs |
+| 8 | The new subscription API, the view-projection and event-processor processors built on it, parked events and the admin API (§12.3); the decision on an `EventStore` adapter for appends and stream loads (§19) | New ITs for the API and processors pass, I14 among them; if an adapter is built, the existing repository ITs pass against it |
+| 9 | One-way migration: copy of events per aggregate type, optional import of resume points, cut-over, and its verification (§12.4) | I8 passes. A copy of the trading demo's data verifies equal and the demo resumes on the new engine without loss |
 | 10 | Starter, documentation, LLM docs, admin UI, release notes | Trading demo runs on the new engine at or above baseline |
 
 ### Command-side track (independent of the phases above)
@@ -1331,15 +1428,15 @@ aggregate repositories are not changed.
 
 | Phase | Content | Gate |
 |---|---|---|
-| C1 | Snapshot plus tail in one round trip, `REPEATABLE READ READ ONLY` for asynchronous snapshots (§14) | Command latency below baseline; existing aggregate ITs pass |
+| C1 | Snapshot plus tail in one round trip, `REPEATABLE READ READ ONLY` for asynchronous snapshots (§14) | Command latency below baseline; aggregate ITs pass against the new engine's stream load |
 | C2 | Opt-in node-local aggregate cache | Concurrency ITs show no stale write-back; command latency gain outside the noise |
 | C3 | Reuse the command's aggregate for the inline snapshot | Measured saving |
 
 ### Later
 
 Table-layout options (§13.3), EF-2 units on the shared reader, direct local hand-off, CDC on the new
-engine, exactly-once database state in `FRESH` mode (§8.4), shared lease rows for many exclusive
-subscriptions and blue/green projection rebuilds — each with its own measurement.
+engine, exactly-once database state in `FRESH` mode (§8.4), one lease shared by several subscriptions (EF-2
+units) and blue/green projection rebuilds — each with its own measurement.
 
 ---
 
@@ -1358,13 +1455,17 @@ subscriptions and blue/green projection rebuilds — each with its own measureme
 4. **`CONTIGUOUS` as the view default.** It stalls view projections behind any long writer in the
    database. If the trading demo or users show that is common, the default can be revisited (D1); the
    metric of §4.6 makes it visible.
-5. **The adapter surface.** About 50 methods, Reactor-based polling contracts and a Spring
-   unit-of-work integration. This is most of the work, and most of the risk of subtle behaviour
-   differences. The existing ITs, run against the adapter, are the only realistic parity check.
+5. **The new subscription API and the cost of moving to it** (restated 2026-11-15). There is no
+   `EventStoreSubscriptionManager` adapter, so users of today's `EventProcessor`, `ViewEventProcessor` and
+   subscription builders port their handlers when their application moves, and the existing processor ITs do
+   not carry over as a parity check: the API needs its own tests, and the invariants of §16 are the reference.
+   How much porting the processors on the new API can absorb is phase-8 design work.
 6. **Page per transaction and handler expectations.** Some existing view handlers may assume one event per
    transaction (for example, reading their own writes through a different connection). The per-event
    fallback covers failures, not that assumption. Page mode may need to be opt-in for existing
-   `ViewEventProcessor`s and default only for new ones. Measured in P0.13 (2026-11-12, [phase-0 record](../archive/event-store-redesign-phase0.md#p013-projection-progress-per-event-per-page-and-periodic)): page mode
+   `ViewEventProcessor`s and default only for new ones. *Note 2026-11-15:* handlers move to the new API (§12.3)
+   rather than running unchanged, so the assumption has to be dealt with when a handler is ported, and page mode
+   can be the default. Measured in P0.13 (2026-11-12, [phase-0 record](../archive/event-store-redesign-phase0.md#p013-projection-progress-per-event-per-page-and-periodic)): page mode
    gave an unchanged row-by-row handler about 2x the periodic save on the VM, so keeping it opt-in for existing views
    forgoes about that much; the 10-13x needs a handler that writes the page at once, which is new API, not a setting.
    The fallback as written gets slower than one transaction per event when failures are frequent (proposed revision
@@ -1374,14 +1475,18 @@ subscriptions and blue/green projection rebuilds — each with its own measureme
    did not write. Detecting that reliably is an open question.
 8. **CDC's future.** If the new engine meets CDC's numbers, CDC becomes a niche feature with a heavy
    operational cost. Whether to keep developing it is a product decision for after phase 6.
-9. **Rolling deploy with old-engine appenders.** Old-engine appends do not take the xid first, so they can
-   be invisible to the new engine's watermark while holding a value (§12.4). Either writers switch before
-   readers, or the new engine detects old-engine writers and stays on conservative gap handling until they
-   are gone. To be designed in phase 9.
+9. **The one-way move** (restated 2026-11-15; first written as "rolling deploy with old-engine appenders",
+   which no longer arises because old and new nodes never share tables). The cut-over stops every old-engine
+   node, so an application has a window without appends, as long as the final delta copy takes. After the first
+   append on the new engine there is no way back short of a restore. An imported resume point that ignores the
+   subscriber's open transient gaps skips events (§12.4, I8). Old-engine appends do not take the xid first, so the
+   copy must not run its final pass while any old-engine writer is running.
 10. **Naming.** `postgresql-event-log` is a working name only.
-11. **Release line.** The adapter must implement the current `EventStore` interface without changing it,
-    so the engine can ship in a minor as an opt-in, as the queue did. The consistency mode and progress
-    options are additive. Removing the gap SPI from the old engine is a separate decision for the next major.
+11. **Release line.** The engine, its subscription API and its starter are new modules, so they can ship in a
+    minor as an opt-in, as the queue did; nothing in the current engine or its interfaces changes. If an
+    `EventStore` adapter is built for appends and stream loads (open question 19), it implements the current
+    interface without changing it. Removing the gap SPI from the old engine is a separate decision for the next
+    major.
 12. **Interaction with the shard-owned queue's own pending fixes.** The watermark code should be shared
     rather than copied, if the queue's version is stable by then. Its defects so far have been in exactly
     this kind of code, and more fixes are coming in the next release.
@@ -1423,6 +1528,34 @@ subscriptions and blue/green projection rebuilds — each with its own measureme
     revisions in §4.10 and §7.3. Still open: the cause of the collapse (lock contention against commits, or saturation
     of the 8-CPU VM; no wait events were sampled), the dedicated machine, and a probe schedule whose cluster-wide cost
     does not grow with the square of the deployment.
+17. **The progress table's columns** (open, 2026-11-15). Resume point, reset epoch, lease owner, lease expiry and
+    fence are given (§8.2, §9); what an open page needs, whether consistency mode and progress model are stored on
+    the row, how it is keyed for non-exclusive subscriptions run on several JVMs, and whether fences are drawn from a
+    sequence so that they never repeat, even after an operator deletes and recreates a row (§9), are not designed.
+18. **The parked-event store** (open, 2026-11-15). Where a parked event is kept (a table referencing the event by
+    aggregate type and `global_order`, or a copy), how parked events relate to the resume point, the admin
+    operations to retry or discard one, and above all whether later events of the same aggregate continue past a
+    parked event (availability, but per-aggregate order is broken for that subscription) or are held behind it
+    (order kept, but one bad event stalls its aggregate). §8.3 says the rest continue; for events of the same
+    aggregate that is not yet decided.
+19. **Appends and stream loads: an `EventStore` adapter or a new API** (open, 2026-11-15). The aggregate
+    repositories, the Kotlin decider support, `EventStoreEventBus` and in-transaction delivery append and load
+    streams through `EventStore`/`ConfigurableEventStore` today. Whether they get an adapter onto the engine (append
+    and stream-load methods only, §12.3), or move to a new append API, decides how much of an application must change
+    when it moves, and where interceptors, enrichers and `OptimisticAppendToStreamException` live.
+20. **The migration copy** (open, 2026-11-15). Its throughput on large tables, whether it can run online with only
+    the final delta under a stop, how it handles a target layout that differs from the source (§13.3: interned event
+    types, `uuid` ids, a stream head table to populate, a payload column type that must keep the bytes), and the
+    verification tooling of §12.4. Not measured; no spike is planned yet.
+21. **Error settings and their defaults** (open, 2026-11-15). Retry count, backoff, the shrink policy (bisecting or
+    P0.13's stepping down) and whether any exception type is parked at once without retries. The current queue
+    consumer's built-in permanent-error list is not inherited; whether the new engine has one is undecided.
+22. **Lease timings** (open, 2026-11-15). Lease duration, renewal interval and the owner's local stop deadline, and
+    how they relate to `statement_timeout` and to a renewal pass delayed by a slow database. All are server time
+    (§9), but the stop deadline is measured on the JVM and has to allow for that.
+23. **Which phase-0 table layouts the engine adopts** (open, 2026-11-15). With its own tables (§12.4) the engine
+    may use a stream head table (§5.3), no `UNIQUE(event_id)`, `uuid` ids or interned event types (§13.3). Each has
+    a measured gain in P0.7 and a cost to `findEvent(EventId)`, SQL readability or the migration copy.
 
 ---
 
@@ -1432,6 +1565,11 @@ subscriptions and blue/green projection rebuilds — each with its own measureme
 |---|---|---|---|
 | D1 | Delivery consistency defaults: `CONTIGUOUS` for view projections, `FRESH` for event processors and everything else; overridable per subscription | 2026-11-10 | Revisit if risk 4 materialises |
 | D2 | The Marten findings are folded into this plan rather than kept as a separate design | 2026-11-10 | `marten-event-store-design.md` stayed as the reference for Marten itself until it was removed on 2026-11-15 (git history keeps it) |
+| D3 | The new engine has its own subscription API; no adapter implements `EventStoreSubscriptionManager`, and nothing Reactor-based is in it | 2026-11-15 | §12.3. An `EventStore` adapter for appends and stream loads is still open (§19, item 19) |
+| D4 | Subscription progress lives in a progress table the engine owns, not in `durable_subscriptions` | 2026-11-15 | §8.2. Importing old resume points once is optional |
+| D5 | The engine has its own tables; an application moves once, one way, with a copy and import step; no shared tables, no switching back, no mixed nodes | 2026-11-15 | §12.4. Replaces the coexistence plan; risk 9 and I8 restated |
+| D6 | Errors are handled per page: a failed page shrinks, the failing event is retried and then parked per subscription, the rest continue | 2026-11-15 | §8.3. Replaces `SubscriptionErrorPolicy`/`FailFast`/redelivery semantics |
+| D7 | Exclusive subscriptions are owned through lease and fence columns on the progress row, renewed with `now()`, with every progress write asserting the fence on the same row; no `FencedLockManager` | 2026-11-15 | §9 |
 
 ---
 
@@ -1452,4 +1590,4 @@ To be filled in as each spike completes: date, setup, result, and which branch o
 | P0.10 | 2026-11-12 | **Measured; §11 tier 1 as written is contradicted.** Details: [phase-0 record, P0.10](../archive/event-store-redesign-phase0.md#p010-wake-up-notification-cost). Setup: throwaway `WakeupNotifyCostSpikeIT` (`spike` package, runs only with `-Dspike.run=true`; script suite `notify`), the engine's append (`PostgresqlEventStore.appendToStream`, one event per unit of work) on engine-created tables, PostgreSQL 17.5 in two containers (`fsync=off`, `fsync=on`), `synchronous_commit=on`, 8-CPU VM, palindrome windows of 8 s, fresh table per window. Arms: no notify; `pg_notify` inside the append transaction; after commit through one coalescing notifier per JVM (the queue's `ShardWakeupNotifier` loop); after commit per writer. One `LISTEN` connection; every notification sent was received; wake latency timed on the listener's socket. With `fsync=on`, appends per second for no notify / inside / after commit coalesced / after commit per writer: 1 writer 5.2-6.2 / 4.1-4.5 / 4.7 / 4.2-4.3 thousand; 8 writers 21.5-22.3 / 8.3-9.3 / 21.8 (one window 10.8, a WAL stall) / 18.3-18.4; 20 writers 39.4-40.1 / 9.3-9.4 / 38.1-38.6 / 29.5; 8 on 10 aggregates 12.0-12.1 / 6.7 / 12.1 / 11.0-11.2. Commit p50 at 20 writers 0.36 / 2.0 / 0.37 / 0.35 ms. Writers' active time on the NOTIFY lock (`Lock:object`, classid 1262) inside the transaction: 80-81 % at 8 writers, 93 % at 20, against `LWLock:WALWrite` (group commit) 65-75 % without a notify. With `fsync=off` the same pattern, smaller (inside: −30-43 % at 8 writers, −61-64 % at 20); per-writer after commit was as slow as inside at 20 writers (80 % on the lock). Wake latency, commit to the listener's socket: after commit coalesced p50 0.09-0.18 ms, p99 0.13-0.58 ms; inside the transaction about 0.01-0.02 ms. Side finding: pgjdbc 42.7.14's `getNotifications(timeout)` keeps reading while notifications arrive and returned 1-350 times per 8 s window, so wake-ups through it lagged 0.3-2.0 s (p50) under continuous traffic; the queue's `ShardWakeupListener` drains the same way. Caveat: the container's flush is fast (~50-80 µs), so it understates the in-transaction cost; the dedicated machine is the real test. | Nothing decided. Recorded as a proposed revision in §11 (tier 1 notifies after commit, coalesced per JVM, as the queue does; a crash between commit and send loses the hint and the backstop covers it; tier 2 unaffected) and as §19 risk 15 (several notifiers, other notifying traffic, and a listener that delivers under sustained traffic). |
 | P0.11 | 2026-11-12 | **Measured; F1's `OR` form is unsafe under a generic plan, a `UNION ALL` form is not.** Details: [phase-0 record, P0.11](../archive/event-store-redesign-phase0.md#p011-re-reading-holes-in-the-tail-statement). Setup: throwaway `TailHoleReReadSpikeIT` (`spike` package, runs only with `-Dspike.run=true`; script suite `tail`), PostgreSQL 17.5 container, `fsync=off`, `shared_buffers=1GB`, `jit=on`, 8-CPU VM; two 2-million-row tables (current layout 1.06 GB, §8's combined option 0.59 GB), head 3 000 000, a one-million-value jump 150 000 rows below the head, holes from a pool just below the cursor or 100 000 below it, 0/1/10/100/1 000 outstanding, 0/1/100 new rows per probe, page limit 1 000, every shape with the running-set sub-select. Plans: `B` (`> :cursor OR = ANY(:holes)`) is `BitmapOr` of two index scans as a custom plan and an ordered primary-key walk with the predicate as a filter as a generic plan (1 997 999 rows removed, ~300 ms); `auto` stayed custom on 2 M rows in this run but chose the generic plan at 1 000 holes on 300 000 rows (smoke run, 610-625 ms); `C` (`OR BETWEEN` for the jump) and `C_UNNEST` (`OR EXISTS` over `unnest` ranges) walk the index in every mode (~280-510 ms); `D` (`UNION ALL` of the tail read and `= ANY(:holes)`) is index scans in every mode; `D_RANGES` (plus a `LATERAL` branch over `unnest` ranges) has index scans but is JIT-compiled through its row estimate (5-8 ms custom on the current layout, 80-95 ms generic); `E` (two statements) index scans. Server execution per probe, current layout, one new row: today's tail 7-10 µs; `B` custom and `D` 9-16 µs up to 10 holes, 21-27 µs at 100, 119-121 µs at 1 000, near or far alike; a custom plan of a 1 000-element array adds 168-197 µs of planning. Client p50: `D` generic 36 µs (≤ 10 holes) to 195 µs (1 000), `B` unnamed 197-500 µs, `E` one round trip more than `D`. Sanity: every re-reading shape returned late commits and new rows in `global_order`. | Nothing decided. Proposed revisions in §4.2 and §4.10: the hole re-read as a `UNION ALL` branch of the tail statement, not an `OR`; a jump's ranges in a branch of their own. §19 risk 13 updated: open are a range branch that does not trip the JIT, more than 1 000 holes, other majors, the dedicated machine. |
 | P0.12 | 2026-11-12 | **Measured; the running-set read scales with the cluster's connections and, at 400 connections with many readers, halves appends.** Details: [phase-0 record, P0.12](../archive/event-store-redesign-phase0.md#p012-cost-of-the-probes-pg_stat_activity-read). Setup: throwaway `ProbeRunningSetCostSpikeIT` (`spike` package, runs only with `-Dspike.run=true`; script suite `probe-cost`), PostgreSQL 17.5 containers (`fsync=off`, `max_connections` 500, plus 50 and 2 000 for the slot count), 8-CPU VM, 10/100/400 open idle connections, 20 % of them appending in the active cells and windows; 2 000 back-to-back calls per cell, `pg_stat_statements` and cgroup CPU; 6 s palindrome append windows. Server execution per call of the probe's sub-select: 10-17 µs at 10 connections (10 / 17 / 26 at `max_connections` 50 / 500 / 2 000), 60 at 100, 231-238 at 400; client p50 141-192 / 224 / 373-394 µs against `SELECT 1`'s 47-53. Combined probe (P0.11's `UNION ALL` form) against the same tail read without the sub-select: 14-20 against 3-4 µs execution at 10, 63-73 at 100, 232-249 at 400; with 20 % appending 27 / 187 / 3 362 µs. `pg_stat_get_activity(NULL)` without the view: same execution, 70-110 µs lower client p50 at 10-100 connections, about 70-90 at 400. `pg_stat_get_backend_idset()` (copy only, no xid) 36-39 µs at 400; `pg_snapshot_xip` 0.6-10 µs at every level; `pg_locks` 18-259 µs, scaling with `max_connections`; `stats_fetch_consistency` none/cache/snapshot identical; `pg_stat_clear_snapshot()` in a transaction adds one statement. Appends per second, tail-only probers against combined probers: 100 connections (20 writers, 10 probers every 10 ms) 73-75.5 against 71-71.5 thousand; 400 connections (80 writers, 40 probers every 10 ms) 49-52 against 25-26 thousand, append p99 11 against 55-64 ms, probe p50 3.5 against 13-16 ms; one prober every 1 ms 0-7 %; 10 connections within the noise. Cause of the collapse not attributed. | Nothing decided. Proposed revisions in §4.10 (read `pg_stat_get_activity(NULL)` directly; the probe is cheap only for small clusters) and §7.3 (a fixed per-JVM probe interval makes cluster-wide cost grow with JVMs × connections). New §19 risk 16. |
-| P0.13 | 2026-11-12 | **Measured; a page per transaction beats the periodic save, by 2x for row-by-row handlers and 10-13x for handlers that write the page at once; the fallback as written collapses at high failure rates.** Details: [phase-0 record, P0.13](../archive/event-store-redesign-phase0.md#p013-projection-progress-per-event-per-page-and-periodic). Setup: throwaway `ProjectionProgressSpikeIT` (`spike` package, runs only with `-Dspike.run=true`; script suite `progress`), PostgreSQL 17.5 container, 8-CPU VM, client in the VM, one run, `fsync=off` and `fsync=on` passes, each run 10 s or 200 000 events per projection. One projection, `fsync=off`: PERIODIC (today) 9 000 events/s, 1 transaction and 2 round trips per event, 546 B WAL/event; PER_EVENT 6 100 (3 round trips, 652 B); PAGE_10 15 900, PAGE_100 18 300, PAGE_500 17 700 (one statement per event: ~1 round trip per event is the floor; 459-557 B, more at bigger pages because view updates stop being HOT inside a long transaction); PAGE_100/500 as a JDBC batch 94 000-96 000, as one set-based statement 117 000-119 000 (7-10 µs server CPU per event against 58). Four projections scaled all row arms by 3.0-3.2x. Fallback at PAGE_100: one failing event in 1 000 cost 23 % (14 000; 0.11 transactions per event); one in 100 made every page fail and replay: 4 600, below PER_EVENT. `fsync=on` doubled commit latency on the VM (45 to 106 µs p50) and cost the per-event arms 13-36 %; the page arms were not slowed (they ran faster, unexplained). View, resume rows and dead letters matched what had been committed in every run. | The phase-4 gate (page mode above the periodic-save baseline) is met on the VM, by about 2x without any handler change. Proposed revisions, not decided: §8.3 (the fallback backs off the page size after a failing page instead of returning straight to full pages; a page-aware handler shape for set-based writes) and risk 6. Still open: the dedicated machine, network latency, `ViewEventProcessor`'s savepoint-per-event batch mode, and views with secondary indexes. |
+| P0.13 | 2026-11-12 | **Measured; a page per transaction beats the periodic save, by 2x for row-by-row handlers and 10-13x for handlers that write the page at once; the fallback as written collapses at high failure rates.** Details: [phase-0 record, P0.13](../archive/event-store-redesign-phase0.md#p013-projection-progress-per-event-per-page-and-periodic). Setup: throwaway `ProjectionProgressSpikeIT` (`spike` package, runs only with `-Dspike.run=true`; script suite `progress`), PostgreSQL 17.5 container, 8-CPU VM, client in the VM, one run, `fsync=off` and `fsync=on` passes, each run 10 s or 200 000 events per projection. One projection, `fsync=off`: PERIODIC (today) 9 000 events/s, 1 transaction and 2 round trips per event, 546 B WAL/event; PER_EVENT 6 100 (3 round trips, 652 B); PAGE_10 15 900, PAGE_100 18 300, PAGE_500 17 700 (one statement per event: ~1 round trip per event is the floor; 459-557 B, more at bigger pages because view updates stop being HOT inside a long transaction); PAGE_100/500 as a JDBC batch 94 000-96 000, as one set-based statement 117 000-119 000 (7-10 µs server CPU per event against 58). Four projections scaled all row arms by 3.0-3.2x. Fallback at PAGE_100: one failing event in 1 000 cost 23 % (14 000; 0.11 transactions per event); one in 100 made every page fail and replay: 4 600, below PER_EVENT. `fsync=on` doubled commit latency on the VM (45 to 106 µs p50) and cost the per-event arms 13-36 %; the page arms were not slowed (they ran faster, unexplained). View, resume rows and dead letters matched what had been committed in every run. | The phase-4 gate (page mode above the periodic-save baseline) is met on the VM, by about 2x without any handler change. Proposed revisions, not decided: §8.3 (the fallback backs off the page size after a failing page instead of returning straight to full pages; a page-aware handler shape for set-based writes) and risk 6. Still open: the dedicated machine, network latency, `ViewEventProcessor`'s savepoint-per-event batch mode, and views with secondary indexes. *Note 2026-11-15:* the page-aware handler is now the new subscription API's handler shape rather than an opt-in beside `@MessageHandler`, and the per-event fallback is replaced by shrinking the page and parking the failing event (§8.3, §12.3); `ViewEventProcessor`'s batch mode no longer bears on the design. |
