@@ -30,7 +30,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 /**
- * Phase 0, §9 of {@code docs/plans/event-store-phase0-append.md}: where does the server CPU per contended append go
+ * Phase 0, "P0.9 Unattributed server CPU" in {@code docs/archive/event-store-redesign-phase0.md}: where does the server CPU per contended append go
  * that {@code pg_stat_statements} does not record, and is it the cost of CPUs going idle and being woken on this
  * Docker VM rather than anything the statements do?
  * <p>

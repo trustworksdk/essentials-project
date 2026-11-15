@@ -83,7 +83,7 @@ class SingleStatementAppendSpikeIT {
     static final Encoding APPEND_ENCODING_MULTI = Encoding.valueOf(System.getProperty("spike.append.encoding.multi", "BINARY_ARRAYS"));
 
     /**
-     * How the B statement's per-event values reach the server (encoding follow-up, {@code event-store-phase0-append.md} §6):
+     * How the B statement's per-event values reach the server (encoding follow-up, {@code docs/archive/event-store-redesign-phase0.md}, "P0.4 Single-statement append"):
      * <ul>
      *     <li>{@code TEXT_ARRAYS} - the §5.1 statement as P0.4 measured it: eight {@code createArrayOf("text", ...)} arrays,
      *     which pgjdbc sends as text array literals.</li>

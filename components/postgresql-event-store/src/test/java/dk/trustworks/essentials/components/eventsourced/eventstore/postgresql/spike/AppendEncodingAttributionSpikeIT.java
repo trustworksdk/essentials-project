@@ -35,7 +35,7 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Encoding follow-up to spike P0.4 ({@code docs/plans/event-store-phase0-append.md} §6): where does the single-statement
+ * Encoding follow-up to spike P0.4 ({@code docs/archive/event-store-redesign-phase0.md}, "P0.4 Single-statement append"): where does the single-statement
  * append's server time go, and what do the parameter encodings of {@link Encoding} change?
  * <ol>
  *     <li>Correctness: every encoding writes rows identical to the engine's.</li>

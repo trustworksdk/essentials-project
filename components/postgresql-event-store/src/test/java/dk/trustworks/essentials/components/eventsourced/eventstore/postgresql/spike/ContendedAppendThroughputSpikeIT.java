@@ -36,7 +36,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 /**
- * Follow-up to spike P0.4 ({@code docs/plans/event-store-phase0-append.md}, "Contention throughput"): why does the
+ * Follow-up to spike P0.4 ({@code docs/archive/event-store-redesign-phase0.md}, "P0.4 Single-statement append"): why does the
  * single-statement append (B) reach fewer appends per second than today's engine (A) when 8 writers contend for 10
  * aggregates?
  * <p>

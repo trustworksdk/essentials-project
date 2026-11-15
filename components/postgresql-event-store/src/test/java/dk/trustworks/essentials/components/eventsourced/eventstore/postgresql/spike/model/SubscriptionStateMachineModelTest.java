@@ -27,7 +27,7 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Phase-0 spike P0.5 (docs/plans/event-store-phase0-model.md). Runs only with {@code -Dspike.run=true}; no Docker.
+ * Phase-0 spike P0.5 (docs/archive/event-store-redesign-phase0.md). Runs only with {@code -Dspike.run=true}; no Docker.
  * <pre>
  * mvn -o test -pl components/postgresql-event-store -Dtest=SubscriptionStateMachineModelTest -Dspike.run=true -Dsurefire.failIfNoSpecifiedTests=false
  * </pre>

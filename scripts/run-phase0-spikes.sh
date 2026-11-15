@@ -21,8 +21,8 @@
 # WHY THIS EXISTS
 #   Every phase-0 spike so far ran against a Testcontainers PostgreSQL with fsync=off, on the same
 #   8-CPU arm64 Docker VM as the client. About half of PostgreSQL's CPU per attempt on that VM is
-#   idle and wake-up cost (event-store-phase0-append.md §9), so the absolute numbers, and possibly
-#   the ratios between arms, belong to that machine. docs/plans/event-store-phase0-external-db.md
+#   idle and wake-up cost (docs/archive/event-store-redesign-phase0.md, P0.9), so the absolute numbers, and possibly
+#   the ratios between arms, belong to that machine. "How the spikes were run" in that document
 #   describes rerunning them on real hardware. A result without the machine that produced it
 #   cannot be compared with anything, and the spikes append to their result files, so a second
 #   run silently mixes with the first. This script makes a run self-describing and keeps runs apart.
@@ -69,7 +69,7 @@
 #                                  cpu           UnattributedCpuSpikeIT                                  P0.9
 #                                  jdbc          JdbiVsRawPgjdbcSpikeIT                                  P0.6 (+ round_trip_reconciliation)
 #                                  probe         CombinedProbeSnapshotOrderSpikeIT                       P0.2
-#                                "default" is that order (external-db doc §6); "all" is the same set in
+#                                "default" is the priority order of the original runs; "all" is the same set in
 #                                phase-number order.
 #   --mvn-arg <arg>              one extra Maven argument, repeatable; everything after "--" is the same
 #   --out <dir>                  results directory (default phase0-results/<timestamp>-<host>-<mode>/)
@@ -349,14 +349,14 @@ else
   # A TCP connect first: it needs nothing installed and tells a firewall from a bad password.
   # shellcheck disable=SC2016  # $0 and $1 are expanded by the inner bash
   with_timeout 5 bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$DB_HOST" "$DB_PORT" 2>/dev/null \
-    || fail "Cannot open a TCP connection to $DB_HOST:$DB_PORT. Check listen_addresses, pg_hba.conf and the firewall (external-db doc §3)."
+    || fail "Cannot open a TCP connection to $DB_HOST:$DB_PORT. Check listen_addresses, pg_hba.conf and the firewall (docs/archive/event-store-redesign-phase0.md, "Server configuration")."
   echo "  server  $DB_HOST:$DB_PORT accepts TCP connections"
   if command -v psql >/dev/null 2>&1; then
     HAVE_PSQL=1
     is_super="$(PGPASSWORD="$DB_PASSWORD" PGCONNECT_TIMEOUT=10 psql -X -At -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
                 -c "SELECT rolsuper FROM pg_roles WHERE rolname = current_user" 2>&1)" \
       || fail "psql could not log in as $DB_USER on $DB_HOST:$DB_PORT/$DB_NAME: $is_super"
-    [[ "$is_super" == t ]] || fail "$DB_USER is not a superuser on $DB_HOST; the spikes need one (external-db doc §3, Access)."
+    [[ "$is_super" == t ]] || fail "$DB_USER is not a superuser on $DB_HOST; the spikes need one (docs/archive/event-store-redesign-phase0.md, "Server configuration")."
     echo "  server  login as $DB_USER works, superuser"
   else
     HAVE_PSQL=0
@@ -488,7 +488,7 @@ if [[ "$MODE" == external ]]; then
     else
       echo
       echo "No --server-ssh (or ssh-shaped --server-cpu-command): no host facts. Record the CPU, disk"
-      echo "(lsblk -d -o NAME,ROTA,MODEL,SIZE) and pg_test_fsync by hand (external-db doc §7)."
+      echo "(lsblk -d -o NAME,ROTA,MODEL,SIZE) and pg_test_fsync by hand (docs/archive/event-store-redesign-phase0.md, "Server configuration")."
     fi
   } > "$OUT/server.txt"
 fi
@@ -588,7 +588,7 @@ fi
     echo "| $spec | $(it_test_for "$spec" | sed 's/,/, /g') | $status | $took | $logcell | ${files:--} |"
   done
   echo
-  echo "Read the results with docs/plans/event-store-phase0-external-db.md §8."
+  echo "Read the results with docs/archive/event-store-redesign-phase0.md, "Reading the results"."
 } > "$OUT/SUMMARY.md"
 
 TARBALL="$OUT.tar.gz"

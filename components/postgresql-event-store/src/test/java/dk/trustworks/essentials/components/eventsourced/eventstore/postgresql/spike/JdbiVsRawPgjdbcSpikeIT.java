@@ -41,7 +41,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Spike P0.6 ({@code docs/plans/event-store-phase0-jdbc.md}): JDBI against raw pgjdbc for the same statements.
+ * Spike P0.6 ({@code docs/archive/event-store-redesign-phase0.md}, "P0.6 JDBI against raw pgjdbc"): JDBI against raw pgjdbc for the same statements.
  * <p>
  * {@link #protocol_trace()} records the pgjdbc wire messages (JUL {@code org.postgresql} at FINEST) of one warmed-up unit
  * of work of {@link ContendedAppendThroughputSpikeIT}'s arm A (engine, JDBI) and arm C (raw pgjdbc), on the same pool,

@@ -22,7 +22,7 @@ import java.util.function.Consumer;
 /**
  * Phase-0 spike P0.5: an explicit, deterministic state-machine model of the redesigned subscription engine
  * (docs/plans/event-store-subscription-redesign.md, sections 4, 6, 7, 8, 10.1 and 16). No engine code exists;
- * this model exists to find design flaws before any is written. See docs/plans/event-store-phase0-model.md.
+ * this model exists to find design flaws before any is written. See docs/archive/event-store-redesign-phase0.md, "P0.5 Model of the subscription state machine".
  * <p>
  * Every step is atomic. A {@link State} is a value: {@link #actions} lists the enabled steps, each applied to a
  * copy. Invariant checks run after every step ({@link #violations}); I1 (no loss) is checked by draining a copy to
@@ -36,7 +36,7 @@ final class SubscriptionModel {
 
     /**
      * When a detached subscription may attach to the tail reader. §6 says "within its buffer's distance of the
-     * tail"; AT_WATERMARK is the rule the model needs for liveness (see the model document, finding F3).
+     * tail"; AT_WATERMARK is the rule the model needs for liveness (see docs/archive/event-store-redesign-phase0.md, finding F3).
      */
     enum AttachRule {AT_WATERMARK, DISTANCE_TO_CURSOR}
 

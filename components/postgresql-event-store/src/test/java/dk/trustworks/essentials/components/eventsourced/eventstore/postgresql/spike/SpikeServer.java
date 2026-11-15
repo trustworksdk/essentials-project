@@ -27,7 +27,7 @@ import java.util.regex.Pattern;
 
 /**
  * The PostgreSQL server a phase-0 spike runs against: either a Testcontainers container (the default, unchanged
- * behaviour) or an external server given by system properties, see {@code docs/plans/event-store-phase0-external-db.md}.
+ * behaviour) or an external server given by system properties, see {@code docs/archive/event-store-redesign-phase0.md}, "How the spikes were run".
  * <ul>
  *     <li>{@code -Dspike.jdbcUrl=jdbc:postgresql://host:5432/postgres}: the external server. When set, no container is
  *     started. The database in the URL is only used to connect; every server this class hands out creates its own
@@ -106,7 +106,7 @@ final class SpikeServer implements AutoCloseable {
             if (!SpikePostgres.queryString(admin, "SELECT rolsuper::text FROM pg_roles WHERE rolname = current_user").equals("true")) {
                 throw new IllegalStateException("-Dspike.user '" + USER + "' is not a superuser on " + JDBC_URL + ". The spikes create per-run SUPERUSER roles (as every role is a "
                                                         + "superuser in the container), LOAD auto_explain, reset pg_stat_statements and need full pg_stat_activity visibility. "
-                                                        + "Create a benchmark superuser, see docs/plans/event-store-phase0-external-db.md.");
+                                                        + "Create a benchmark superuser, see docs/archive/event-store-redesign-phase0.md, section How the spikes were run.");
             }
             if (needsStatements) {
                 var preload = SpikePostgres.queryString(admin, "SELECT setting FROM pg_settings WHERE name = 'shared_preload_libraries'");
