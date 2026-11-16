@@ -58,6 +58,9 @@ import java.util.function.BooleanSupplier;
  * {@code pg_stat_statements} separates the write path from the read path; the observer is the container's own user and
  * is excluded. Results go to {@code target/spike-results/p0-0-baseline.txt}.
  * <p>
+ * Phase 5's gate baselines ({@code docs/plans/event-store-engine-phase5.md} §8.1, §8.2, suite {@code p5-gate-old}):
+ * {@link #rareTypeCatchUp()} and {@link #restartStorm()}, results {@code p5-old-rare.txt} and {@code p5-old-storm.txt}.
+ * <p>
  * Throwaway: runs only with {@code -Dspike.run=true}. Shapes can be selected with {@code -Dit.test=CurrentEngineBaselineSpikeIT#idle}.
  */
 @Tag("spike")
@@ -408,6 +411,167 @@ class CurrentEngineBaselineSpikeIT {
                              burned * 1000.0 / successes, (double) summary.total / attempts.get()));
     }
 
+    // ------------------------------------------------------------------ phase 5's gate (suite p5-gate-old)
+
+    private static final String P5_RARE      = "p5-old-rare.txt";
+    private static final String P5_STORM     = "p5-old-storm.txt";
+    private static final int    RARE_EVENTS  = Integer.getInteger("spike.gate.rareEvents", 1_000_000);
+    private static final int    STORM_EVENTS = Integer.getInteger("spike.gate.stormEvents", 100_000);
+    private static final String RARE_TYPE    = "type-00";
+
+    /**
+     * Phase 5 §8.1's baseline ({@code docs/plans/event-store-engine-phase5.md}): {@code RARE_EVENTS} events over 100
+     * named event types and a tenth as many aggregates, payload about 200 B, seeded by one {@code INSERT ... SELECT} that
+     * copies a row the engine wrote; the subscribed type is 1 % of them, spread uniformly. One non-exclusive subscription
+     * from the first order whose handler ignores every other type, timed until it has seen the head.
+     */
+    @Test
+    void rareTypeCatchUp() throws Exception {
+        recordTo(P5_RARE, "");
+        recordTo(P5_RARE, "=== RARE-TYPE CATCH-UP (today's engine) | " + Instant.now() + " | " + SpikeServer.target("image " + IMAGE) + " | CPUs " + Runtime.getRuntime().availableProcessors()
+                + " | " + RARE_EVENTS + " events, 100 types, " + RARE_EVENTS / 10 + " aggregates, subscribed type 1 %; starter wiring (batch 10, poll 100 ms); a fresh container per run");
+        for (int run = 1; run <= RUNS; run++) {
+            try (var pg = Pg.start()) {
+                var writer = Stack.writer(pg, "writer");
+                writer.appendNewOrder(1, Optional.empty());
+                long seedStart = System.nanoTime();
+                seedNamed(pg, RARE_EVENTS - 1, "CASE WHEN ((k + 1) * 1) / 100 > (k * 1) / 100 THEN '" + RARE_TYPE + "' ELSE 'type-' || lpad((1 + k % 99)::text, 2, '0') END");
+                double seedSeconds = (System.nanoTime() - seedStart) / 1e9;
+                long head     = SpikePostgres.queryLong(pg.observer, "SELECT max(global_order) FROM " + EVENTS_TABLE);
+                long matching = SpikePostgres.queryLong(pg.observer, "SELECT count(*) FROM " + EVENTS_TABLE + " WHERE event_type = '" + RARE_TYPE + "'");
+                writer.close();
+                pg.resetStatistics();
+                var reader   = Stack.reader(pg, "reader", "node1");
+                var handled  = new AtomicLong();
+                var lastSeen = new AtomicLong();
+                long started = System.nanoTime();
+                reader.manager.subscribeToAggregateEventsAsynchronously(SubscriberId.of("rare"), ORDERS, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER, Optional.empty(), e -> {
+                    if (RARE_TYPE.equals(e.event().getEventTypeOrNamePersistenceValue())) handled.incrementAndGet();
+                    lastSeen.accumulateAndGet(e.globalEventOrder().longValue(), Math::max);
+                });
+                await(Duration.ofMinutes(60), () -> lastSeen.get() >= head);
+                double seconds = (System.nanoTime() - started) / 1e9;
+                var    summary = pg.summarise("rare run " + run, Duration.ofNanos(System.nanoTime() - started), 0, head);
+                long   rows    = SpikePostgres.queryLong(pg.observer, "SELECT coalesce(sum(s.rows), 0)::bigint FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = '"
+                        + pg.server.role("reader") + "'" + pg.thisDatabase());
+                recordTo(P5_RARE, String.format("RARE-OLD run %d | head %d, matching %d, handled %d | seed %.0f s | CATCH-UP %.2f s | READER STATEMENTS %d (non-utility %d, BEGIN/COMMIT %d) | "
+                                                        + "ROWS TO CLIENT (reader role) %d (%.1f x matching)",
+                                                run, head, matching, handled.get(), seedSeconds, seconds, summary.byRole("reader"), summary.nonUtility, summary.transactionControl, rows,
+                                                rows / (double) Math.max(1, matching)));
+                reader.close();
+            }
+        }
+    }
+
+    /**
+     * Phase 5 §8.2's baseline: {@code STORM_EVENTS} seeded events (20 named types), 8 writers at 25 events/s each, after
+     * 10 s 50 non-exclusive subscriptions start from the first order; writers and subscriptions share ONE Hikari pool of
+     * 10 (the starter's single {@code DataSource}). A subscription is live once it delivers an event committed less than
+     * 1 s before. Measured until all 50 are live, plus 10 s.
+     */
+    @Test
+    void restartStorm() throws Exception {
+        recordTo(P5_STORM, "");
+        recordTo(P5_STORM, "=== RESTART STORM (today's engine) | " + Instant.now() + " | " + SpikeServer.target("image " + IMAGE) + " | CPUs " + Runtime.getRuntime().availableProcessors()
+                + " | " + STORM_EVENTS + " seeded events (20 types); 8 writers x 25 ev/s; 50 non-exclusive subscriptions from the first order; one pool of 10 for writers and subscriptions");
+        for (int run = 1; run <= RUNS; run++) {
+            try (var pg = Pg.start()) {
+                var acquire = new AtomicLong();
+                var window  = new AtomicBoolean();
+                var stack   = Stack.reader(pg, "writer", "node1", (poolName, stats) -> new com.zaxxer.hikari.metrics.IMetricsTracker() {
+                    @Override
+                    public void recordConnectionAcquiredNanos(long nanos) {
+                        if (window.get()) acquire.accumulateAndGet(nanos, Math::max);
+                    }
+                });
+                stack.appendNewOrder(1, Optional.empty());
+                seedNamed(pg, STORM_EVENTS - 1, "'type-' || lpad((k % 20)::text, 2, '0')");
+                var committed = new ConcurrentHashMap<String, Long>();
+                var during    = new AtomicBoolean();
+                var before    = new ConcurrentLinkedQueue<Long>();
+                var inStorm   = new ConcurrentLinkedQueue<Long>();
+                var writers   = Executors.newScheduledThreadPool(8);
+                for (int w = 0; w < 8; w++) {
+                    writers.scheduleAtFixedRate(() -> {
+                        boolean storm = during.get();
+                        long    t0    = System.nanoTime();
+                        var     id    = stack.appendNewOrder(1, Optional.empty());
+                        long    t1    = System.nanoTime();
+                        committed.put(id.toString(), t1);
+                        (storm ? inStorm : before).add(t1 - t0);
+                    }, w * 5L, 40, TimeUnit.MILLISECONDS);
+                }
+                Thread.sleep(scaled(Duration.ofSeconds(10)).toMillis());
+                var peakConnections = new AtomicLong();
+                var peakReads       = new AtomicLong();
+                var sampling        = new AtomicBoolean(true);
+                var sampler         = Thread.ofPlatform().start(() -> {
+                    var sql = "SELECT count(*), count(*) FILTER (WHERE state = 'active' AND query ILIKE '%" + EVENTS_TABLE + "%' AND query NOT ILIKE 'insert%') FROM pg_stat_activity "
+                            + "WHERE backend_type = 'client backend' AND usename <> '" + pg.server.role(OBSERVER) + "'";
+                    try (var st = pg.observer.prepareStatement(sql)) {
+                        while (sampling.get()) {
+                            try (var rs = st.executeQuery()) {
+                                rs.next();
+                                peakConnections.accumulateAndGet(rs.getLong(1), Math::max);
+                                peakReads.accumulateAndGet(rs.getLong(2), Math::max);
+                            }
+                            Thread.sleep(5);
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                });
+                pg.resetStatistics();
+                window.set(true);
+                during.set(true);
+                long started = System.nanoTime();
+                var  live    = new long[50];
+                for (int i = 0; i < 50; i++) {
+                    int index = i;
+                    stack.manager.subscribeToAggregateEventsAsynchronously(SubscriberId.of("storm-" + i), ORDERS, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER, Optional.empty(), e -> {
+                        if (live[index] != 0) return;
+                        var  at  = committed.get(e.aggregateId().toString());
+                        long now = System.nanoTime();
+                        if (at != null && now - at < 1_000_000_000L) live[index] = now;
+                    });
+                }
+                var allLive = await(Duration.ofMinutes(20), () -> Arrays.stream(live).allMatch(l -> l != 0));
+                long last   = Arrays.stream(live).max().orElseThrow();
+                Thread.sleep(scaled(Duration.ofSeconds(10)).toMillis());
+                during.set(false);
+                window.set(false);
+                sampling.set(false);
+                sampler.join();
+                writers.shutdown();
+                writers.awaitTermination(10, TimeUnit.SECONDS);
+                var summary = pg.summarise("storm run " + run, Duration.ofNanos(System.nanoTime() - started), inStorm.size(), 0);
+                var b = Latencies.of(before);
+                var d = Latencies.of(inStorm);
+                recordTo(P5_STORM, String.format("STORM-OLD run %d | APPEND before p50 %.2f p99 %.2f max %.1f ms | DURING p50 %.2f p99 %.2f max %.1f ms (%d appends) | ALL LIVE %s %.1f s | "
+                                                         + "PEAK CONNECTIONS %d | PEAK ACTIVE EVENT-TABLE READS %d (sampled) | largest getConnection wait %.1f ms | statements %d (non-utility %d)",
+                                                 run, b.p50(), b.p99(), b.max(), d.p50(), d.p99(), d.max(), inStorm.size(), allLive ? "" : "(NOT ALL)", (last - started) / 1e9,
+                                                 peakConnections.get(), peakReads.get(), acquire.get() / 1e6, summary.total, summary.nonUtility));
+                stack.close();
+            }
+        }
+    }
+
+    /** {@code count} more events after the template row the engine wrote, one {@code INSERT ... SELECT}; {@code eventType} is an SQL expression over {@code k} */
+    private static void seedNamed(Pg pg, int count, String eventType) throws SQLException {
+        int aggregates = Math.max(1, (count + 1) / 10);
+        try (var s = pg.observer.createStatement()) {
+            s.execute("INSERT INTO " + EVENTS_TABLE + " (aggregate_id, event_order, event_id, caused_by_event_id, correlation_id, event_type, event_revision, timestamp, event_payload, "
+                              + "event_metadata, tenant) SELECT 'agg-' || (k % " + aggregates + "), k / " + aggregates + ", gen_random_uuid()::text, t.caused_by_event_id, t.correlation_id, "
+                              + eventType + ", t.event_revision, now(), jsonb_build_object('orderId', 'agg-' || (k % " + aggregates + "), 'orderNumber', k, 'note', repeat('x', 120)), "
+                              + "t.event_metadata, t.tenant FROM generate_series(0, " + (count - 1) + ") k, (SELECT * FROM " + EVENTS_TABLE + " LIMIT 1) t");
+            s.execute("VACUUM ANALYZE " + EVENTS_TABLE);
+        }
+    }
+
+    private static void recordTo(String file, String line) {
+        SpikePostgres.record(file, line);
+    }
+
     // ------------------------------------------------------------------ support
 
     private static boolean hasCause(Throwable t, Class<? extends Throwable> type) {
@@ -603,7 +767,13 @@ class CurrentEngineBaselineSpikeIT {
 
         /** {@code jsonColumnType} is used for the payload and the metadata column of every event table this stack creates. */
         private Stack(String jdbcUrl, String role, String password, JSONColumnType jsonColumnType) {
+            this(jdbcUrl, role, password, jsonColumnType, null);
+        }
+
+        /** {@code metrics} (may be null) observes the pool, e.g. its connection-acquire waits (phase 5 §8.2) */
+        private Stack(String jdbcUrl, String role, String password, JSONColumnType jsonColumnType, com.zaxxer.hikari.metrics.MetricsTrackerFactory metrics) {
             var config = new HikariConfig();
+            if (metrics != null) config.setMetricsTrackerFactory(metrics);
             config.setJdbcUrl(jdbcUrl);
             config.setUsername(role);
             config.setPassword(password);
@@ -649,7 +819,11 @@ class CurrentEngineBaselineSpikeIT {
         }
 
         static Stack reader(Pg pg, String role, String instanceId) {
-            var stack = new Stack(pg.jdbcUrl(), pg.server.role(role), pg.server.password(role));
+            return reader(pg, role, instanceId, null);
+        }
+
+        static Stack reader(Pg pg, String role, String instanceId, com.zaxxer.hikari.metrics.MetricsTrackerFactory metrics) {
+            var stack = new Stack(pg.jdbcUrl(), pg.server.role(role), pg.server.password(role), JSONColumnType.JSONB, metrics);
             var lockManager = PostgresqlFencedLockManager.builder()
                                                          .setJdbi(stack.jdbi)
                                                          .setUnitOfWorkFactory(stack.unitOfWorkFactory)

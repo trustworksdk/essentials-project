@@ -20,6 +20,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -29,7 +31,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * watermark, bridges, and hands the gaps it found to the reader, which re-reads them until its initial candidate
  * retires. The held value commits only once both subscriptions are attached and have handed off (asserted with the
  * reader's watermark still unknown), so it can reach them only through the hand-off. Must-fail variants:
- * {@link WatermarkMutant#GAPS_NOT_HANDED_OFF} and {@link WatermarkMutant#HANDED_GAPS_RESOLVED_AT_ONCE}. Above
+ * {@link WatermarkMutant#GAPS_NOT_HANDED_OFF} and {@link WatermarkMutant#HANDED_GAPS_RESOLVED_AT_ONCE}; for the re-read
+ * after the hand-off (I2: a predecessor in a gap ahead of its successor already in the inbox),
+ * {@link WatermarkMutant#NO_REREAD_AFTER_HAND_OFF}. Above
  * {@link EventLogSettings#holeRangeThreshold()} gaps the subscription falls back to F4's wait.
  */
 class EventLogGapHandOffIT extends AbstractSubscriptionIT {
@@ -88,6 +92,75 @@ class EventLogGapHandOffIT extends AbstractSubscriptionIT {
         recorder.delivered.forEach(e -> counts.merge(e.globalOrder(), 1, Integer::sum));
         var duplicates = counts.entrySet().stream().filter(e -> e.getValue() > 1).map(Map.Entry::getKey).toList();
         return new Outcome(held.globalOrder(), counts.getOrDefault(held.globalOrder(), 0), duplicates, handedOff, resumeWhileHeld);
+    }
+
+    // ---- I2: the re-read after the hand-off takes a committed predecessor ahead of the inbox ----
+
+    @Test
+    void a_predecessor_that_commits_into_a_gap_before_the_hand_off_is_delivered_before_its_successor_in_the_inbox() throws Exception {
+        var outcome = predecessorCommittedBeforeTheHandOff();
+        assertThat(outcome.violations()).as("per-aggregate order violations").isEmpty();
+        assertThat(outcome.predecessorDeliveries()).as("deliveries of the predecessor").isEqualTo(1);
+        assertThat(outcome.successorDeliveries()).as("deliveries of the successor").isEqualTo(1);
+    }
+
+    @Test
+    void must_fail_without_the_re_read_after_the_hand_off_the_successor_overtakes_its_predecessor() throws Exception {
+        assertThat(predecessorCommittedBeforeTheHandOff(WatermarkMutant.NO_REREAD_AFTER_HAND_OFF).violations()).isNotEmpty();
+    }
+
+    private record OrderOutcome(List<String> violations, long predecessorDeliveries, long successorDeliveries) {
+    }
+
+    /**
+     * {@code tested} is the type's only subscription. Two writers hold values below the head: {@code other} (it keeps
+     * the restarted reader's initial candidate alive, so the reader keeps the handed-off gaps as holes) and the
+     * predecessor {@code g0} of aggregate {@code agg}. The reader restarts; {@code tested} attaches under the unknown
+     * watermark and bridges. Held at {@code beforeHandOff}, {@code g0} commits, its successor {@code g1} commits, and
+     * the reader reads {@code g1} into the inbox. Only then does the hand-off reach the loop
+     */
+    private OrderOutcome predecessorCommittedBeforeTheHandOff(WatermarkMutant... mutants) throws Exception {
+        var atHandOff = new CountDownLatch(1);
+        var proceed   = new CountDownLatch(1);
+        var first     = new AtomicBoolean(true);
+        var hooks = new TestSeams.Hooks() {
+            @Override
+            public void beforeHandOff(String subscriber, List<HandledSet.Gap> gaps) throws Exception {
+                if (first.compareAndSet(true, false)) {
+                    atHandOff.countDown();
+                    if (!proceed.await(WAIT.toSeconds(), TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("not released");
+                    }
+                }
+            }
+        };
+        var recorder = new Recorder();
+        var tested   = subscribe("tested", recorder, new TestSeams(Set.of(mutants), hooks, null));
+        awaitDelivered(recorder, commitAppend("pre", 1));
+        var other = openAppend("other", 1);
+        var g0    = openAppend("agg", 1);
+        var above = commitAppend("above", 1);
+        awaitDelivered(recorder, above);
+        terminateReaderBackend();
+        awaitTrue(() -> reads.detachReasons.contains(Inbox.CloseReason.READER_RESTART.name()) && eventLog.reader(TYPE) != null);
+
+        assertThat(atHandOff.await(WAIT.toSeconds(), TimeUnit.SECONDS)).as("the hand-off is reached").isTrue();
+        assertThat(tested.phase()).isEqualTo(Subscription.Phase.BRIDGING);
+        g0.commit();
+        var g1 = commitAppend("agg", 1);
+        awaitOffered(g1);
+        assertThat(recorder.deliveredOrder(g0.globalOrder()) || recorder.deliveredOrder(g1)).as("nothing delivered while held").isFalse();
+        assertThat(eventLog.reader(TYPE).state().watermark()).as("the initial candidate is alive").isNull();
+        proceed.countDown();
+
+        awaitDelivered(recorder, g1);
+        other.commit();
+        var tail = commitAppend("tail", 1);
+        awaitDelivered(recorder, g0.globalOrder(), tail);
+        var delivered = List.copyOf(recorder.delivered);
+        return new OrderOutcome(perAggregateOrderViolations(delivered),
+                                delivered.stream().filter(e -> e.globalOrder() == g0.globalOrder()).count(),
+                                delivered.stream().filter(e -> e.globalOrder() == g1).count());
     }
 
     // ---- fallback: more gaps than the threshold keep F4's wait ----

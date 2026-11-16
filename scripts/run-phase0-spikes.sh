@@ -78,6 +78,12 @@
 #                                                throughput (CONTIGUOUS in-transaction pages against FRESH + periodic), CONTIGUOUS
 #                                                against FRESH latency, churn behind 60 s and 300 s writers, statements per
 #                                                delivery with half the subscriptions in-transaction
+#                                  p5-gate       EventLogGateSpikeIT (postgresql-event-log)              phase 5 unit C: rare-type
+#                                                filtered catch-up with and without the type index (density sweep, index
+#                                                size, append cost), restart storm under the catch-up permits, FRESH
+#                                                after a reader restart behind a long writer
+#                                  p5-gate-old   CurrentEngineBaselineSpikeIT#rareTypeCatchUp+restartStorm: today's
+#                                                engine's side of the phase-5 gate, postgres:18.4 in a container
 #                                  p2-gate-old   CurrentEngineBaselineSpikeIT#steady+idle with 1 and 10 subscriptions,
 #                                                postgres:18.4 in a container: the old engine's side of the phase-2 gate
 #                                "default" is the priority order of the original runs; "all" is the same set in
@@ -181,6 +187,8 @@ suite_classes() {
     owned)        echo "OwnedReadConnectionSpikeIT" ;;
     p3-gate)      echo "EventLogGateSpikeIT#steady+idle+reattachChurn" ;;
     p4-gate)      echo "EventLogGateSpikeIT#projectionThroughput+contiguousLatency+longWriterChurn+mixedStatements" ;;
+    p5-gate)      echo "EventLogGateSpikeIT#rareTypeCatchUp+restartStorm+freshAfterRestart" ;;
+    p5-gate-old)  echo "CurrentEngineBaselineSpikeIT#rareTypeCatchUp+restartStorm" ;;
     p2-gate-old)  echo "CurrentEngineBaselineSpikeIT#steady+idle" ;;
     *)            return 1 ;;
   esac
@@ -205,24 +213,27 @@ suite_results() {
     owned)        echo "p0-16-*" ;;
     p3-gate)      echo "p3-c-*" ;;
     p4-gate)      echo "p4-c-*" ;;
+    p5-gate)      echo "p5-c-*" ;;
+    p5-gate-old)  echo "p5-old-*" ;;
     p2-gate-old)  echo "p0-0-*" ;;
   esac
 }
 # The module a suite's classes live in.
 suite_module() {
   case "$1" in
-    p3-gate|p4-gate) echo "components/postgresql-event-log" ;;
+    p3-gate|p4-gate|p5-gate) echo "components/postgresql-event-log" ;;
     *)       echo "components/postgresql-event-store" ;;
   esac
 }
 # Spike properties a suite always runs with (before the user's extra arguments, which may override them).
 suite_args() {
   case "$1" in
+    p5-gate-old) echo "-Dspike.baseline.image=postgres:18.4" ;;
     p2-gate-old) echo "-Dspike.baseline.steady.subscriptions=1,10 -Dspike.baseline.idle.subscriptions=1,10 -Dspike.baseline.image=postgres:18.4" ;;
   esac
 }
 DEFAULT_SUITES="xid table-design contention notify tail probe-cost progress listen pipeline owned append baseline cpu jdbc probe"
-ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline owned listen p2-gate-old p3-gate p4-gate"
+ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline owned listen p2-gate-old p3-gate p4-gate p5-gate-old p5-gate"
 
 (( ${#SUITE_SPECS[@]} )) || SUITE_SPECS=(default)
 SUITES=()

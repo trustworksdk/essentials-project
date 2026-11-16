@@ -76,6 +76,12 @@ import java.util.logging.Logger;
  * {@code -Dspike.gate.projections} ("1,4"), {@code -Dspike.gate.projectionArms} (all), {@code -Dspike.gate.latencyWriters}
  * ("1,4"). Suite {@code p3-gate} runs only {@link #steady()}, {@link #idle()} and {@link #reattachChurn()}.
  * <p>
+ * Phase 5, unit C of {@code docs/plans/event-store-engine-phase5.md} (§8), suite {@code p5-gate}: {@link #rareTypeCatchUp()}
+ * (§8.1, with the density sweep, index size and append cost), {@link #restartStorm()} (§8.2, catch-up permits from
+ * {@code -Dspike.gate.stormPermits}, "4,50,2,8") and {@link #freshAfterRestart()} (§8.3). Results
+ * {@code target/spike-results/p5-c-*.txt}. Knobs: {@code -Dspike.gate.rareEvents} (1000000), {@code -Dspike.gate.densities}
+ * ("1,5,25,50"), {@code -Dspike.gate.stormEvents} (100000).
+ * <p>
  * Phase 2's {@code eventIdIndex} and {@code probeBackoff} measurements (suite {@code p2-gate}, results in phase-2 §6)
  * were retired with this change: the probe topology (one reader per subscription) no longer exists. They are at commit
  * {@code 13184d080}.
@@ -773,6 +779,362 @@ class EventLogGateSpikeIT {
         }
     }
 
+    // ================================================================== phase 5, unit C (suite p5-gate)
+
+    private static final String        P5_RARE       = "p5-c-rare.txt";
+    private static final String        P5_STORM      = "p5-c-storm.txt";
+    private static final String        P5_RESTART    = "p5-c-restart.txt";
+    private static final int           RARE_EVENTS   = Integer.getInteger("spike.gate.rareEvents", 1_000_000);
+    private static final int           RARE_TYPES    = 100;
+    private static final List<Integer> DENSITIES     = ints(System.getProperty("spike.gate.densities", "1,5,25,50"));
+    private static final int           STORM_EVENTS  = Integer.getInteger("spike.gate.stormEvents", 100_000);
+    private static final List<Integer> STORM_PERMITS = ints(System.getProperty("spike.gate.stormPermits", "4,50,2,8"));
+    private static final String        RARE_TYPE     = typeName(0);
+
+    private static String typeName(int type) {
+        return String.format("type-%02d", type);
+    }
+
+    /** Exactly {@code density} % of the orders match, spread uniformly */
+    private static boolean matching(long k, int density) {
+        return (k + 1) * density / 100 > k * density / 100;
+    }
+
+    /** The arms of phase 5 §8.1 (the filtered read without the window needs a main-code switch: not measured) */
+    enum RareArm {
+        /** Reference: phase 4's path, {@code EventTypeFilter.all()}, the handler ignores the other types */
+        UNFILTERED,
+        FILTERED,
+        FILTERED_INDEX
+    }
+
+    /**
+     * Phase 5 §8.1: {@code RARE_EVENTS} seeded events on one aggregate type over 100 event types and a tenth as many
+     * aggregates, payload about 200 B; the subscribed type is {@code density} % of them. One FRESH subscription from 1 with
+     * an empty handler, timed until it attaches: with no writes the watermark is the head, so attaching means its catch-up
+     * passed the head. Then a density sweep with the index, and the append cost with and without the index.
+     */
+    @Test
+    void rareTypeCatchUp() throws Exception {
+        header(P5_RARE, "RARE-TYPE CATCH-UP", RARE_EVENTS + " seeded events, " + RARE_TYPES + " event types, " + RARE_EVENTS / 10 + " aggregates, payload about 200 B; arms "
+                + Arrays.toString(RareArm.values()) + " at 1 %, then FILTERED_INDEX at " + DENSITIES + " %; reader pool 4; a fresh container per arm");
+        for (int run = 1; run <= RUNS; run++) {
+            for (var arm : RareArm.values()) {
+                rareArm(run, arm, 1);
+            }
+            for (int density : DENSITIES) {
+                if (density != 1) rareArm(run, RareArm.FILTERED_INDEX, density);
+            }
+        }
+    }
+
+    private void rareArm(int run, RareArm arm, int density) throws Exception {
+        var indexed  = arm == RareArm.FILTERED_INDEX;
+        var settings = settings(1000);
+        try (var db = SpikeDb.start("rare_r" + run + "_" + arm.name().toLowerCase(Locale.ROOT) + "_d" + density, 100)) {
+            long   seedMillis;
+            String indexState = "no index";
+            String table;
+            try (var seed = new App(db, settings, 4)) {
+                table = seed.tables.eventTable();
+                long t0 = System.nanoTime();
+                seed(seed, RARE_EVENTS, k -> matching(k, density) ? RARE_TYPE : typeName(1 + (int) (k % (RARE_TYPES - 1))));
+                seedMillis = (System.nanoTime() - t0) / 1_000_000;
+                try (var c = db.connect("writer"); var s = c.createStatement()) {
+                    long build = 0;
+                    if (indexed) {
+                        long b0 = System.nanoTime();
+                        s.execute(EventLogSchemaContributor.eventTypeIndexStatements(seed.tables).getFirst());
+                        build = (System.nanoTime() - b0) / 1_000_000;
+                    }
+                    s.execute("VACUUM ANALYZE " + table);
+                    if (indexed) {
+                        var index = seed.tables.eventTypeIndex();
+                        indexState = String.format("index valid %s, %d MB (table %d MB), built in %.1f s",
+                                                   SpikeDb.queryString(c, "SELECT (i.indisvalid AND i.indisready)::text FROM pg_index i WHERE i.indexrelid = to_regclass('" + index + "')"),
+                                                   SpikeDb.queryLong(c, "SELECT pg_relation_size('" + index + "')") >> 20, SpikeDb.queryLong(c, "SELECT pg_relation_size('" + table + "')") >> 20,
+                                                   build / 1000.0);
+                    }
+                }
+            }
+            var armSettings = indexed ? settings.withEventTypeIndexed(Set.of(TYPE)) : settings;
+            try (var app = new App(db, armSettings, 4)) {
+                long head;
+                long expected;
+                try (var c = db.connect("writer")) {
+                    head = SpikeDb.queryLong(c, "SELECT max(global_order) FROM " + table);
+                    expected = SpikeDb.queryLong(c, "SELECT count(*) FROM " + table + " e JOIN el_event_types t ON t.id = e.event_type WHERE t.name = '" + RARE_TYPE + "'");
+                }
+                db.checkpoint();
+                db.resetStatistics();
+                app.observer.resetTotals();
+                var  handled = new AtomicLong();
+                long started = System.nanoTime();
+                if (arm == RareArm.UNFILTERED) {
+                    app.eventLog.subscribe("rare", TYPE, "node1", 1, e -> {
+                        if (RARE_TYPE.equals(e.eventType())) handled.incrementAndGet();
+                    });
+                } else {
+                    app.eventLog.subscribe("rare", TYPE, "node1", 1, EventTypeFilter.of(RARE_TYPE), e -> handled.incrementAndGet());
+                }
+                await(Duration.ofMinutes(30), () -> app.observer.firstAttach("rare") != 0);
+                double seconds = (app.observer.firstAttach("rare") - started) / 1e9;
+                var    s       = summarise(db, P5_RARE, "rare run " + run + ": " + arm + ", " + density + " %");
+                long   rows    = db.statements().stream().filter(st -> st.role().equals("reader")).mapToLong(SpikeDb.Statement::rows).sum();
+                var    o       = app.observer;
+                long   reads   = o.catchUpReads.get();
+                SpikeDb.record(P5_RARE, String.format("RARE run %d | %-14s | density %2d %% | head %d, matching %d, handled %d | seed %.0f s | %s | CATCH-UP %.2f s | catch-up statements %d "
+                                                              + "(filtered %d, index-served %d, skip-ahead %d), permits %d | ROWS TO CLIENT catch-up %d (%.3f x matching), all reader statements %d | "
+                                                              + "READER STATEMENTS %d (non-utility %d) | indexed-arm bound 1.05 x matching + statements = %.0f",
+                                                      run, arm, density, head, expected, handled.get(), seedMillis / 1000.0, indexState, seconds, reads, o.filteredReads.get(),
+                                                      o.indexReads.get(), o.permits.get() - reads, o.permits.get(), o.catchUpRowsAll.get(),
+                                                      o.catchUpRowsAll.get() / (double) Math.max(1, expected), rows, s.calls("reader"), s.nonUtility("reader"),
+                                                      1.05 * expected + reads));
+                if (density == 1 && arm != RareArm.UNFILTERED) {
+                    appendCost(db, app, run, indexed);
+                }
+            }
+        }
+    }
+
+    /** P0.4's append shape on the seeded table: single thread, new aggregates, a random one of the 100 types */
+    private static void appendCost(SpikeDb db, App app, int run, boolean indexed) throws SQLException {
+        for (int events : new int[]{1, 10}) {
+            int iterations = events == 1 ? 1000 : 300;
+            for (int i = 0; i < 50; i++) app.appendNewStream(UUID.randomUUID().toString(), events, false, typeName(ThreadLocalRandom.current().nextInt(RARE_TYPES)));
+            var latencies = new ArrayList<Long>();
+            for (int i = 0; i < iterations; i++) {
+                long t0 = System.nanoTime();
+                app.appendNewStream(UUID.randomUUID().toString(), events, false, typeName(ThreadLocalRandom.current().nextInt(RARE_TYPES)));
+                latencies.add(System.nanoTime() - t0);
+            }
+            var l = Latencies.of(latencies);
+            SpikeDb.record(P5_RARE, String.format("APPEND run %d | %-8s | %2d event(s) per unit of work | p50 %.2f ms p99 %.2f ms max %.2f ms", run, indexed ? "index" : "no index",
+                                                  events, l.p50(), l.p99(), l.max()));
+        }
+    }
+
+    /** Seeds {@code events} events over a tenth as many aggregates, 1 000 per transaction, then analyzes */
+    private static void seed(App app, int events, java.util.function.LongFunction<String> eventType) throws SQLException {
+        var padding    = "x".repeat(120);
+        int aggregates = Math.max(1, events / 10);
+        try (var c = app.writerPool.getConnection()) {
+            c.setAutoCommit(false);
+            var requests = new ArrayList<AppendRequest>(1000);
+            for (int k = 0; k < events; k++) {
+                var id = "agg-" + (k % aggregates);
+                requests.add(AppendRequest.withoutExpectedOrder(TYPE, id, List.of(new EventToAppend(UUID.randomUUID(), CAUSE, CORRELATION, eventType.apply(k), 1, Instant.now(),
+                                                                                                    "{\"orderId\":\"" + id + "\",\"orderNumber\":" + k + ",\"note\":\"" + padding + "\"}",
+                                                                                                    "{}"))));
+                if (requests.size() == 1000 || k == events - 1) {
+                    app.eventLog.append(c, requests);
+                    c.commit();
+                    requests.clear();
+                }
+            }
+            c.setAutoCommit(true);
+            try (var s = c.createStatement()) {
+                s.execute("ANALYZE");
+            }
+        }
+    }
+
+    /**
+     * Phase 5 §8.2: {@code STORM_EVENTS} seeded events (20 types), 8 writers at 25 events/s each (one event per unit of
+     * work), after 10 s 50 subscriptions start at once from 1: 25 FRESH periodic and 25 CONTIGUOUS in-transaction, half of
+     * each filtered to 2 of the 20 types. Engine and writers share ONE pool of 10 (one role). Measured until every
+     * subscription has attached, plus 10 s. A probe connection samples {@code pg_stat_activity} every 5 ms.
+     */
+    @Test
+    void restartStorm() throws Exception {
+        header(P5_STORM, "RESTART STORM", STORM_EVENTS + " seeded events (20 types); 8 writers x 25 ev/s; 50 subscriptions from 1 (25 FRESH periodic, 25 CONTIGUOUS in-transaction, "
+                + "half of each filtered to 2 types); one pool of 10 for engine and writers; catchUpPermits " + STORM_PERMITS + "; 10 s before, until all attached + 10 s");
+        for (int run = 1; run <= RUNS; run++) {
+            for (int permits : STORM_PERMITS) {
+                stormArm(run, permits);
+            }
+        }
+    }
+
+    private void stormArm(int run, int permits) throws Exception {
+        var settings = settings(1000).withCatchUpPermits(permits);
+        try (var db = SpikeDb.start("storm_r" + run + "_p" + permits, 100); var app = new App(db, settings, WRITER_POOL, true)) {
+            seed(app, STORM_EVENTS, k -> typeName((int) (k % 20)));
+            db.checkpoint();
+            var during    = new AtomicBoolean();
+            var before    = new ConcurrentLinkedQueue<Long>();
+            var inStorm   = new ConcurrentLinkedQueue<Long>();
+            var writers   = Executors.newScheduledThreadPool(8);
+            for (int w = 0; w < 8; w++) {
+                writers.scheduleAtFixedRate(() -> {
+                    try {
+                        boolean storm = during.get();
+                        long    t0    = System.nanoTime();
+                        app.appendNewStream(UUID.randomUUID().toString(), 1, false, typeName(ThreadLocalRandom.current().nextInt(20)));
+                        (storm ? inStorm : before).add(System.nanoTime() - t0);
+                    } catch (SQLException e) {
+                        throw new IllegalStateException(e);
+                    }
+                }, w * 5L, 40, TimeUnit.MILLISECONDS);
+            }
+            Thread.sleep(scaled(Duration.ofSeconds(10)).toMillis());
+            var sampler = new ActivitySampler(db, app.tables.eventTable());
+            db.resetStatistics();
+            app.observer.resetTotals();
+            app.writerWait.resetWindow();
+            app.readerWait.resetWindow();
+            during.set(true);
+            long started = System.nanoTime();
+            var  names   = new ArrayList<String>();
+            for (int i = 0; i < 50; i++) {
+                boolean fresh    = i < 25;
+                boolean filtered = i % 2 == 0;
+                var     name     = (fresh ? "fresh-" : "contiguous-") + i;
+                names.add(name);
+                var filter = filtered ? EventTypeFilter.of(typeName(0), typeName(1)) : EventTypeFilter.all();
+                if (fresh) {
+                    app.eventLog.subscribe(name, TYPE, "node1", 1, filter, e -> {
+                    });
+                } else {
+                    app.eventLog.subscribe(name, TYPE, "node1", 1, Subscription.ConsistencyMode.CONTIGUOUS, filter, (page, connection) -> {
+                    });
+                }
+            }
+            await(Duration.ofMinutes(20), () -> names.stream().allMatch(n -> app.observer.firstAttach(n) != 0));
+            long allLive = names.stream().mapToLong(app.observer::firstAttach).max().orElseThrow();
+            Thread.sleep(scaled(Duration.ofSeconds(10)).toMillis());
+            during.set(false);
+            sampler.close();
+            writers.shutdown();
+            writers.awaitTermination(10, TimeUnit.SECONDS);
+            var s = summarise(db, P5_STORM, "storm run " + run + ": permits " + permits);
+            var b = Latencies.of(before);
+            var d = Latencies.of(inStorm);
+            var o = app.observer;
+            SpikeDb.record(P5_STORM, String.format("STORM run %d | permits %2d | APPEND before p50 %.2f p99 %.2f max %.1f ms | DURING p50 %.2f p99 %.2f max %.1f ms (%d appends) | "
+                                                           + "ALL LIVE %.1f s | PEAK CONNECTIONS %d | PEAK ACTIVE EVENT-TABLE READS %d (sampled, tail read included) | PERMITS IN USE max %d "
+                                                           + "(%s cap) | largest permit wait %.1f ms | largest writer getConnection wait %.1f ms, engine %.1f ms | catch-up statements %d, "
+                                                           + "bridge statements %d, filtered reads %d | statements %d (non-utility %d) | samples %d",
+                                                   run, permits, b.p50(), b.p99(), b.max(), d.p50(), d.p99(), d.max(), inStorm.size(), (allLive - started) / 1e9,
+                                                   sampler.peakConnections(), sampler.peakReads(), o.maxInUse.get(), o.maxInUse.get() <= permits ? "within" : "ABOVE",
+                                                   o.maxPermitWait.get() / 1e6, app.writerWait.windowMaxMillis(), app.readerWait.windowMaxMillis(), o.catchUpReads.get(),
+                                                   o.bridgeReads.get(), o.filteredReads.get(), s.calls("writer") + s.calls("reader"),
+                                                   s.nonUtility("writer") + s.nonUtility("reader"), sampler.samples()));
+        }
+    }
+
+    /** Samples {@code pg_stat_activity} every 5 ms on its own connection: application backends, and active event-table reads */
+    private static final class ActivitySampler implements AutoCloseable {
+        private final AtomicLong    peakConnections = new AtomicLong();
+        private final AtomicLong    peakReads       = new AtomicLong();
+        private final AtomicLong    samples         = new AtomicLong();
+        private final AtomicBoolean running         = new AtomicBoolean(true);
+        private final Thread        thread;
+
+        ActivitySampler(SpikeDb db, String eventTable) {
+            var sql = "SELECT count(*), count(*) FILTER (WHERE state = 'active' AND query ILIKE '%" + eventTable + "%' AND query NOT ILIKE '%pg_current_xact_id%') "
+                    + "FROM pg_stat_activity WHERE backend_type = 'client backend' AND usename IN ('" + db.role("writer") + "', '" + db.role("reader") + "')";
+            thread = Thread.ofPlatform().name("activity-sampler").start(() -> {
+                // the observing role: excluded from the statement counts and from the sample itself
+                try (var st = db.observer.prepareStatement(sql)) {
+                    while (running.get()) {
+                        try (var rs = st.executeQuery()) {
+                            rs.next();
+                            peakConnections.accumulateAndGet(rs.getLong(1), Math::max);
+                            peakReads.accumulateAndGet(rs.getLong(2), Math::max);
+                            samples.incrementAndGet();
+                        }
+                        Thread.sleep(5);
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            });
+        }
+
+        long peakConnections() { return peakConnections.get(); }
+
+        long peakReads() { return peakReads.get(); }
+
+        long samples() { return samples.get(); }
+
+        @Override
+        public void close() throws InterruptedException {
+            running.set(false);
+            thread.join();
+        }
+    }
+
+    /**
+     * Phase 5 §8.3 (recorded, not gated): one FRESH subscription at 100 ev/s, live; a writer holds a value for 60 s; 10 s
+     * into it the reader restarts (every backend of the reader role is terminated, the loop's held connection among them).
+     * Records the time from the restart to the first delivery, the bridge statements and rows, and the gaps handed off.
+     */
+    @Test
+    void freshAfterRestart() throws Exception {
+        var hold = scaled(Duration.ofSeconds(60));
+        header(P5_RESTART, "FRESH AFTER A READER RESTART", "one FRESH subscription, writer 100 ev/s; a writer holds a value for " + hold.toSeconds()
+                + " s; the reader role's backends are terminated 10 s into it; backstop 1 000 ms; reader pool 4");
+        for (int run = 1; run <= RUNS; run++) {
+            try (var db = SpikeDb.start("restart_r" + run, 100); var app = new App(db, settings(1000), CHURN_POOL)) {
+                var o            = app.observer;
+                var restartedAt  = new AtomicLong(Long.MAX_VALUE);
+                var firstAfter   = new AtomicLong();
+                app.eventLog.subscribe("fresh", TYPE, "node1", 1, e -> {
+                    o.handled(e.globalOrder());
+                    long now = System.nanoTime();
+                    if (now > restartedAt.get()) firstAfter.compareAndSet(0, now);
+                });
+                var appended  = new AtomicLong();
+                var scheduler = Executors.newSingleThreadScheduledExecutor();
+                scheduler.scheduleAtFixedRate(() -> {
+                    try {
+                        app.appendNewStream(1, false);
+                        appended.incrementAndGet();
+                    } catch (SQLException e) {
+                        throw new IllegalStateException(e);
+                    }
+                }, 0, 10, TimeUnit.MILLISECONDS);
+                Thread.sleep(5_000);
+                try (var held = db.connect("writer")) {
+                    held.setAutoCommit(false);
+                    app.append(held, UUID.randomUUID().toString(), 1, false);
+                    long heldAt = System.nanoTime();
+                    Thread.sleep(scaled(Duration.ofSeconds(10)).toMillis());
+                    db.resetStatistics();
+                    o.resetTotals();
+                    long terminated;
+                    restartedAt.set(System.nanoTime());
+                    try (var s = db.observer.createStatement();
+                         var rs = s.executeQuery("SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename = '" + db.role("reader") + "'")) {
+                        rs.next();
+                        terminated = rs.getLong(1);
+                    }
+                    long remaining = hold.toNanos() - (System.nanoTime() - heldAt);
+                    Thread.sleep(Math.max(0, remaining / 1_000_000));
+                    long firstMs  = firstAfter.get() == 0 ? -1 : (firstAfter.get() - restartedAt.get()) / 1_000_000;
+                    long attaches = o.totalAttaches.get(), unknown = o.unknownAttaches.get(), handOffs = o.handOffs.get(), gaps = o.gapsHandedOff.get();
+                    long toReader = o.handOffsToReader.get(), bridges = o.bridgeReads.get(), bridgeRows = o.bridgeReadRows.get(), waits = o.watermarkWaits.get();
+                    var  detaches = new TreeMap<>(o.detachReasons);
+                    held.commit();
+                    Thread.sleep(scaled(Duration.ofSeconds(10)).toMillis());
+                    scheduler.shutdown();
+                    scheduler.awaitTermination(10, TimeUnit.SECONDS);
+                    long expected = appended.get() + 1;
+                    await(Duration.ofSeconds(60), () -> o.distinctHandled() >= expected);
+                    var c = o.churnSnapshot();
+                    SpikeDb.record(P5_RESTART, String.format("RESTART run %d | terminated %d backend(s) | FIRST DELIVERY AFTER RESTART %d ms | attaches %d (under an unknown watermark %d), "
+                                                                     + "detaches %s | watermark waits %d | HAND-OFFS %d (to the reader %d), GAPS HANDED OFF %d | bridge statements %d, "
+                                                                     + "BRIDGE ROWS %d | appended %d + 1 held, distinct handled %d, duplicates %d",
+                                                             run, terminated, firstMs, attaches, unknown, detaches, waits, handOffs, toReader, gaps, bridges, bridgeRows,
+                                                             appended.get(), c.distinct(), c.duplicates()));
+                    summarise(db, P5_RESTART, "restart run " + run);
+                }
+            }
+        }
+    }
+
+
     // ------------------------------------------------------------------ harness
 
     private static EventLogSettings settings(int backstopMillis) {
@@ -781,19 +1143,30 @@ class EventLogGateSpikeIT {
         return EventLogSettings.defaults().withProbeBackoff(backstop, Duration.ofSeconds(10)).withBackstopInterval(backstop);
     }
 
-    /** One application instance: a writer pool and an event log on a reader pool, as separate roles */
+    /**
+     * One application instance: a writer pool and an event log on a reader pool, as separate roles; or ({@code shared})
+     * one pool of the writer role for both, as an application with one {@code DataSource} runs (phase 5 §8.2)
+     */
     private static final class App implements AutoCloseable {
         final HikariDataSource    writerPool;
         final HikariDataSource    readerPool;
         final TimedDataSource     readerWait;
+        final TimedDataSource     writerWait;
         final EventLog            eventLog;
         final AggregateTypeTables tables;
         final Counters            observer = new Counters();
+        private final boolean     shared;
 
         App(SpikeDb db, EventLogSettings settings, int readerPoolSize) throws SQLException {
-            writerPool = db.pool("writer", WRITER_POOL);
-            readerPool = db.pool("reader", readerPoolSize);
+            this(db, settings, readerPoolSize, false);
+        }
+
+        App(SpikeDb db, EventLogSettings settings, int readerPoolSize, boolean shared) throws SQLException {
+            this.shared = shared;
+            writerPool = db.pool("writer", shared ? readerPoolSize : WRITER_POOL);
+            readerPool = shared ? writerPool : db.pool("reader", readerPoolSize);
             readerWait = new TimedDataSource(readerPool);
+            writerWait = new TimedDataSource(writerPool);
             eventLog = EventLog.builder().setDataSource(readerWait).setSettings(settings).setObserver(observer).build();
             eventLog.start();
             tables = eventLog.registerAggregateType(TYPE);
@@ -805,18 +1178,26 @@ class EventLogGateSpikeIT {
         }
 
         String appendNewStream(String id, int events, boolean expectedOrder) throws SQLException {
-            try (var c = writerPool.getConnection()) {
+            return appendNewStream(id, events, expectedOrder, EVENT_TYPE);
+        }
+
+        String appendNewStream(String id, int events, boolean expectedOrder, String eventType) throws SQLException {
+            try (var c = writerWait.getConnection()) {
                 c.setAutoCommit(false);
-                append(c, id, events, expectedOrder);
+                append(c, id, events, expectedOrder, eventType);
                 c.commit();
             }
             return id;
         }
 
         void append(Connection connection, String id, int count, boolean expectedOrder) throws SQLException {
+            append(connection, id, count, expectedOrder, EVENT_TYPE);
+        }
+
+        void append(Connection connection, String id, int count, boolean expectedOrder, String eventType) throws SQLException {
             var events = new ArrayList<EventToAppend>(count);
             for (int i = 0; i < count; i++) {
-                events.add(new EventToAppend(UUID.randomUUID(), CAUSE, CORRELATION, EVENT_TYPE, 1, Instant.now(),
+                events.add(new EventToAppend(UUID.randomUUID(), CAUSE, CORRELATION, eventType, 1, Instant.now(),
                                              "{\"orderId\":\"" + id + "\",\"orderingCustomerId\":\"" + UUID.randomUUID() + "\",\"orderNumber\":" + ThreadLocalRandom.current().nextLong(1_000_000) + "}",
                                              "{\"Key1\":\"Value1\",\"Key2\":\"Value2\"}"));
             }
@@ -827,7 +1208,7 @@ class EventLogGateSpikeIT {
         @Override
         public void close() {
             eventLog.stop();
-            readerPool.close();
+            if (!shared) readerPool.close();
             writerPool.close();
         }
     }
@@ -954,12 +1335,59 @@ class EventLogGateSpikeIT {
         final         AtomicLong        maxHoles       = new AtomicLong();
         final         AtomicLong        totalAttaches  = new AtomicLong();
         private final Map<String, Long> resumeFrom     = new ConcurrentHashMap<>();
+        // phase 5: every subscription, cleared by resetTotals()
+        final         AtomicLong        permits          = new AtomicLong();
+        final         AtomicLong        maxPermitWait    = new AtomicLong();
+        final         AtomicLong        maxInUse         = new AtomicLong();
+        final         AtomicLong        filteredReads    = new AtomicLong();
+        final         AtomicLong        indexReads       = new AtomicLong();
+        final         AtomicLong        catchUpRowsAll   = new AtomicLong();
+        final         AtomicLong        unknownAttaches  = new AtomicLong();
+        final         AtomicLong        handOffs         = new AtomicLong();
+        final         AtomicLong        handOffsToReader = new AtomicLong();
+        final         AtomicLong        gapsHandedOff    = new AtomicLong();
+        final         AtomicLong        watermarkWaits   = new AtomicLong();
+        final         Map<String, Long> detachReasons    = new ConcurrentHashMap<>();
+        private final Map<String, Long> firstAttach      = new ConcurrentHashMap<>();
 
         void resetTotals() {
             for (var c : List.of(pagesCommitted, pageEvents, pagesFailed, parkedHeads, parkedBlocked, catchUpReads, bridgeReads, bridgeReadRows, releasedRows, maxInbox,
-                                 maxHeldBack, maxHoles, totalAttaches)) {
+                                 maxHeldBack, maxHoles, totalAttaches, permits, maxPermitWait, maxInUse, filteredReads, indexReads, catchUpRowsAll, unknownAttaches,
+                                 handOffs, handOffsToReader, gapsHandedOff, watermarkWaits)) {
                 c.set(0);
             }
+            detachReasons.clear();
+            firstAttach.clear();
+        }
+
+        /** @return when the subscriber first attached since the last {@link #resetTotals()} ({@code System.nanoTime()}), 0 if not yet */
+        long firstAttach(String subscriber) {
+            return firstAttach.getOrDefault(subscriber, 0L);
+        }
+
+        @Override
+        public void onCatchUpPermit(String subscriber, String aggregateType, long waitNanos, int inUse) {
+            permits.incrementAndGet();
+            maxPermitWait.accumulateAndGet(waitNanos, Math::max);
+            maxInUse.accumulateAndGet(inUse, Math::max);
+        }
+
+        @Override
+        public void onFilteredRead(String subscriber, String aggregateType, long scannedOrders, int rows, long window, boolean usedIndex) {
+            filteredReads.incrementAndGet();
+            if (usedIndex) indexReads.incrementAndGet();
+        }
+
+        @Override
+        public void onGapsHandedOff(String subscriber, String aggregateType, int gaps, boolean toReader) {
+            handOffs.incrementAndGet();
+            if (toReader) handOffsToReader.incrementAndGet();
+            gapsHandedOff.addAndGet(gaps);
+        }
+
+        @Override
+        public void onWaitingForWatermark(String subscriber, String aggregateType, boolean waiting, Set<String> heldBy) {
+            if (waiting) watermarkWaits.incrementAndGet();
         }
 
         long resumeFrom(String subscriber) {
@@ -983,12 +1411,15 @@ class EventLogGateSpikeIT {
         public void onAttach(String subscriber, String aggregateType, long cursor, long watermark) {
             attaches.incrementAndGet();
             totalAttaches.incrementAndGet();
+            firstAttach.putIfAbsent(subscriber, System.nanoTime());
+            if (watermark == Long.MIN_VALUE) unknownAttaches.incrementAndGet();
         }
 
         @Override
         public void onDetach(String subscriber, String aggregateType, String reason, long resumeFrom) {
             finishPage();
             detaches.merge(reason, 1L, Long::sum);
+            detachReasons.merge(reason, 1L, Long::sum);
         }
 
         @Override
@@ -997,6 +1428,7 @@ class EventLogGateSpikeIT {
             pageKind = bridge ? "bridge" : "catch-up";
             pageRows = rows;
             pageHandled = 0;
+            catchUpRowsAll.addAndGet(rows);
             if (bridge) {
                 bridgeReads.incrementAndGet();
                 bridgeReadRows.addAndGet(rows);

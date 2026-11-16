@@ -481,3 +481,152 @@ recommended. The sections above already follow them.
 | 3 | Who builds the opt-in index | **The engine, in schema mode `create` only**, with the statement text kept in `EventLogSchemaContributor` (§5.2); other modes log the statement to run. A non-transactional change kind in the `foundation` harness can replace this later |
 | 4 | Windowed reads for unfiltered catch-up | **No.** Unfiltered catch-up keeps phase 3's paged range read |
 | 5 | Streaming reads (`setFetchSize`) | **Deferred** to the burst shape; not part of phase 5 |
+
+---
+
+## 11. Results (2026-11-16)
+
+Measured by `spike/EventLogGateSpikeIT` (`scripts/run-phase0-spikes.sh --suite p5-gate`: `rareTypeCatchUp`,
+`restartStorm`, `freshAfterRestart`) and, for today's engine, `CurrentEngineBaselineSpikeIT` (`--suite p5-gate-old`:
+`rareTypeCatchUp`, `restartStorm`) on the development VM: PostgreSQL 18.4 in a container with `fsync=off`, 8 CPUs shared
+by client and server, a fresh container per arm, two runs of every arm. Statements are `pg_stat_statements` calls by
+role, utility statements (`BEGIN`, `COMMIT`) included; the reader role covers everything the new engine runs on its
+`DataSource`. Every `getConnection()` on the engine's pool and on the writers' pool is timed. Results files
+`components/postgresql-event-log/target/spike-results/p5-c-rare.txt`, `p5-c-storm.txt`, `p5-c-restart.txt` and
+`components/postgresql-event-store/target/spike-results/p5-old-rare.txt`, `p5-old-storm.txt`. As in phases 2-4, absolute
+figures need the dedicated server; the statement and row counts do not depend on it. The shapes ran at full size (1 000 000
+and 100 000 events); nothing was scaled down. No main code changed for this unit.
+
+Harness notes. The catch-up permits are one semaphore per database per JVM, keyed by `current_database()` and the
+server's address, which is the same for every fresh container on this host; each arm therefore runs in a database of
+its own name, or the first arm's permit count would stick. Today's engine is seeded by one `INSERT … SELECT` that copies a
+row the engine wrote (named event types `type-NN`); the new engine through `EventLog.append`, 1 000 streams per
+transaction.
+
+### 11.1 Rare-type catch-up (§8.1)
+
+1 000 000 events on one aggregate type over 100 event types and 100 000 aggregates, payload about 200 B, the subscribed
+type 1 % (10 000 events) spread uniformly; one subscription from 1 with an empty handler, no writes. The new engine is
+timed from `subscribe` until it attaches (with no writes the watermark is the head, so attaching means its catch-up
+passed the head); today's engine until its handler has seen the head. Reader pool 4 for the new engine; today's engine
+with the starter wiring (batch 10, poll 100 ms, jittered optimizer, its own Hikari pool of 10). Runs 1-2:
+
+| Arm | Catch-up | Reader statements | Rows returned to the client | Catch-up statements (index-served) |
+|---|---|---|---|---|
+| Baseline: today's engine, handler ignores other types | 25.10-25.23 s | 375 126 (125 046 `BEGIN`/`COMMIT`) | 1 000 094-1 000 095 (100.0 × matching) | — |
+| Reference: phase-4 path, `EventTypeFilter.all()`, handler ignores other types | 1.15-1.24 s | 2 010 | 1 000 000 | 2 000 |
+| **Filtered, no index** | **0.22-0.23 s** | **28** | **10 000 (1.00 × matching)** | 20 (0) |
+| **Filtered, with the index** (valid checked) | **0.13-0.22 s** | **29** | **10 000 (1.00 × matching)** | 20 (20) |
+
+**The gate passes.** Both filtered arms catch up more than 100 times faster than the baseline and return a hundredth of
+its rows: exactly the matching rows, one 500-row page per statement. The indexed arm returns 10 000 rows against a bound
+of 1.05 × 10 000 + 20 = 10 520. The phase-4 path is itself 20 times faster than today's engine here (500-row pages instead
+of batches of 10 with a transaction each), and the filter takes another factor of 5.
+
+The index does not matter at 1 %: the first window (100 000 orders) holds 1 000 matching rows, so every page is full and
+the read never runs short, and the skip-ahead probe never ran. Its benefit is for types sparse enough that a window holds
+fewer than a page (below about 0.5 % at the default window), which this shape does not reach. The filtered read without
+the window (§8.1's second reference arm) needs a switch in main code and was not measured; a huge
+`withCatchUpScanWindow` is not equivalent, because the window only bounds a page that is short, and at 1 % every page is
+full well inside the default window anyway.
+
+**Density sweep**, with the index, runs 1-2:
+
+| Subscribed share | Catch-up | Catch-up statements | Served by the index | Rows (× matching) |
+|---|---|---|---|---|
+| 1 % | 0.13-0.22 s | 20 | 20 | 1.00 |
+| 5 % | 0.27-0.31 s | 100 | 100 | 1.00 |
+| 25 % | 0.47-0.51 s | 500 | 500 | 1.00 |
+| 50 % | 0.71-0.78 s | 1 000 | 1 | 1.00 |
+
+The density switch (`event_type + 0`, the primary-key walk) took over at 50 % after the first statement and stayed
+there; up to 25 % the type-index plan served every read. Catch-up time grows with the matching rows, not the scanned
+range: at every density the cost is one 500-row page per statement.
+
+**Recorded:** the index is 30 MB against a 300 MB table (1 000 000 rows), built `CONCURRENTLY` in 0.4 s. Append cost on
+the seeded table, single thread, new aggregates, a random one of the 100 types (P0.4's shape), runs 1-2:
+
+| Events per unit of work | No index p50 / p99 | With the index p50 / p99 |
+|---|---|---|
+| 1 | 0.15-0.16 / 0.19-0.24 ms | 0.15-0.16 / 0.22-0.25 ms |
+| 10 | 0.24-0.28 / 0.31-0.50 ms | 0.24-0.27 / 0.33-0.39 ms |
+
+The index's write cost is inside the noise on this VM.
+
+### 11.2 Restart storm (§8.2)
+
+100 000 seeded events (20 types, about 200 B), then 8 writers appending one event per unit of work at 25 ev/s each
+(200 ev/s); after 10 s, 50 subscriptions start at once from 1. New engine: 25 `FRESH` periodic and 25 `CONTIGUOUS`
+in-transaction, half of each filtered to 2 of the 20 types, engine and writers on ONE pool of 10 (one role); live =
+attached. Baseline: 50 non-exclusive subscriptions of today's engine, writers and subscriptions on one Hikari pool of 10;
+live = the handler received an event committed less than 1 s before. "During" runs from the start of the subscriptions
+until all are live plus 10 s. A probe connection sampled `pg_stat_activity` every 5 ms (all application roles; "reads" =
+active statements on the event table other than appends, the tail read included). Runs 1-2:
+
+| Arm | Append before p50 / p99 | Append during p50 / p99 / max | All live | Peak connections | Peak sampled reads | Largest permit wait | Largest writer `getConnection` | Statements in the window |
+|---|---|---|---|---|---|---|---|---|
+| Baseline: today's engine | 1.16-1.28 / 3.88-3.95 ms | 0.36-0.42 / **2.16-2.90** / 15.0-23.7 ms | 17.2-17.6 s | 10 | 6-7 | — | 26.0-32.2 ms | 2 065 930-2 067 800 |
+| **Permits 4** (default) | 0.83-0.88 / 2.63-2.93 ms | 0.81-0.83 / **3.91-4.52** / 9.9-16.8 ms | 1.0-1.7 s | 10 | 4 | 11.3-15.1 ms | 8.4-13.6 ms | 40 746-41 186 |
+| Permits 2 | 0.85-0.89 / 2.72-2.85 ms | 0.67-0.87 / 3.32-4.71 / 16.4-19.3 ms | 1.6 s | 10 | 2 | 20.7-22.3 ms | 10.5-10.9 ms | 41 104-41 136 |
+| Permits 8 | 0.75-0.86 / 2.44-2.87 ms | 0.87-0.88 / 4.96-5.15 / 13.0-16.2 ms | 0.9 s | 10 | 7 | 7.9-8.5 ms | 10.2-12.6 ms | 40 619-40 655 |
+| Uncapped reference (permits 50) | 0.81-0.88 / 2.33-2.37 ms | 0.87-0.92 / 6.61-7.32 / 19.4-21.2 ms | 0.9-1.0 s | 10 | 7-8 | 0 | 19.0-19.8 ms | 40 586-40 612 |
+
+Every new-engine arm: 5 650-5 651 catch-up statements, 525 of them filtered reads, no bridge statement; permits in use
+never above the cap (observer: 2, 4, 8; 24-25 uncapped), and the sampled reads never above it either (2 at cap 2, 4 at
+cap 4).
+
+**Verdict: peak connections pass (10 = 10) and statements in flight never exceeded the cap; append p99 during the storm
+fails as written**: 3.91-4.52 ms at the default cap against the baseline's 2.16-2.90 ms (p50 is higher too, 0.8 against
+0.4 ms). The cause is the shape of the window, not a defect: the new engine finishes the whole catch-up of 50 × 100 000
+rows in 1.0-1.7 s with 41 000 statements, so about a tenth of the window's appends (1-1.7 s of 11-12 s) run during an
+intense burst that saturates the shared CPUs and the pool (writer waits up to 8-14 ms), and the 99th percentile lands
+inside it.
+Today's engine spreads 2.07 million statements over 17 s at a lower intensity per millisecond, and its window
+(27 s) is longer. On the worst case the new engine is better: its largest append is 9.9-16.8 ms
+against 15.0-23.7 ms, and its largest writer `getConnection()` wait 8.4-13.6 ms against 26.0-32.2 ms. The cap works as
+designed: uncapped, p99 rises to 6.6-7.3 ms and the writer wait to 19-20 ms; capping at 4 costs 0.1-0.7 s of time to
+all-live. The baseline's "before" p99 (3.9 ms, above its own "during") includes its JIT warm-up, so before-against-during
+comparisons are not meaningful for it.
+
+No default was changed. Two ways to settle the row, for the maintainer: judge it on a fixed absolute window (the same
+number of seconds after the start for both engines) or on the maximum append and writer wait, where it passes; or, if
+p99 inside the burst is what matters, lower the default cap to 2 (3.32-4.71 ms, no better than 4 within the noise here)
+or pace catch-up pages, which trades time to all-live. The dedicated server, where client and server do not share CPUs,
+should be measured before deciding.
+
+### 11.3 `FRESH` after a reader restart behind a long writer (§8.3, recorded)
+
+One `FRESH` subscription at 100 ev/s, live; a writer appends one event and holds its transaction for 60 s; 10 s into it
+every backend of the reader role is terminated (`pg_terminate_backend`; 4 backends, the loop's held connection among
+them); backstop 1 s, reader pool 4. Runs 1-2:
+
+| First delivery after the restart | Detaches | Attaches under an unknown watermark | Hand-offs (to the reader) | Gaps handed off | Bridge statements / rows | Delivered |
+|---|---|---|---|---|---|---|
+| 2 061-2 079 ms | 1 (`READER_RESTART`) | 1 | 1 (1) | 1 | 2 / 302-303 | 7 502 + the held event, each once, no duplicate |
+
+Under F4's wait the subscription would have delivered nothing for the writer's remaining 50 s. With §6.3 it waits one
+backstop interval, attaches under the unknown watermark, bridges once (two pages: the 2 s of rows written meanwhile),
+and hands one gap to the reader as a hole of the initial candidate: the held value, which was delivered once when the
+writer committed. Time to first delivery is the backstop plus the reader restart plus one bridge, about 2 s.
+
+**Unit B's deviation:** a filtered bridge under an unknown watermark counts non-matching runs as gaps (it marks no
+covered range there, since a held value is not an attach hole), so sparse filters usually exceed `holeRangeThreshold` and
+fall back to F4's wait; this measurement used an unfiltered subscription.
+
+### 11.x Test gap: `NO_REREAD_AFTER_HAND_OFF`
+
+Unit B added one re-read of the handed-off gaps right after the hand-off reply (not listed in §6.3). Without it, a
+successor of a gap's event in the same aggregate, which the reader read before the hand-off reached the loop, is
+delivered ahead of that event (I2). Unit B shipped it without a must-fail test. `EventLogGapHandOffIT` now has one: the
+`beforeHandOff` hook holds the delivery thread while the predecessor commits into a gap and the reader offers the
+successor; with mutant `NO_REREAD_AFTER_HAND_OFF` the test fails with "agg#0 first delivered after #1", and without it
+the predecessor arrives first. The shape needs a second open writer below the head, so the initial candidate does not
+retire and the hand-off is not answered `FINAL`. The class passed eleven consecutive runs.
+
+### 11.4 Verdict
+
+Rare-type catch-up passes by two orders of magnitude (0.13-0.23 s against 25.1 s; 10 000 rows against 1 000 095; 28-29
+reader statements against 375 126). The restart storm passes on peak connections and on the cap, and fails as written on
+append p99 during the storm (3.9-4.5 ms against 2.2-2.9 ms), explained in 11.2 by the new engine compressing the catch-up
+into a 1-2 s burst on shared CPUs; it is better on the maximum append and the writer's connection wait. §8.3: first
+delivery about 2 s after a reader restart behind a 60 s writer, no loss, no duplicate. No main code changed.

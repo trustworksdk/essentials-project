@@ -136,5 +136,11 @@ enum WatermarkMutant {
      * The loop takes handed-off gaps as resolved at once: it neither holds nor re-reads them (§6.3, I1). On the type's
      * first subscription
      */
-    HANDED_GAPS_RESOLVED_AT_ONCE
+    HANDED_GAPS_RESOLVED_AT_ONCE,
+    /**
+     * After the loop's hand-off reply the subscription takes batches from its inbox without re-reading the gaps once
+     * more: a predecessor that committed into a gap before the hand-off reached the loop is delivered after a successor
+     * already in the inbox, or never if the initial candidate retired (§6.3, I2)
+     */
+    NO_REREAD_AFTER_HAND_OFF
 }

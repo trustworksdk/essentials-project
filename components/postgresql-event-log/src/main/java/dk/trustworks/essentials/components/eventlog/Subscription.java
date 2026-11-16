@@ -847,7 +847,8 @@ public final class Subscription {
             }
         }
         var typeIds = filtered ? resolveTypeIds() : null;
-        List<StoredEvent> rows = typeIds != null && typeIds.length == 0 ? List.of() : read(true, cursor, cursor, holes, ranges, typeIds);
+        List<StoredEvent> rows = typeIds != null && typeIds.length == 0 || seams.has(NO_REREAD_AFTER_HAND_OFF) ? List.of()
+                                                                                                         : read(true, cursor, cursor, holes, ranges, typeIds);
         var worked = work(rows);
         releasePermit(true);
         if (!worked) {
