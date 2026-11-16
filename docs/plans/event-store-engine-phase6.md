@@ -1,6 +1,6 @@
 # Event store redesign, phase 6: engine design
 
-**Status:** decided 2026-11-16 (§9); being built on `feature/event-store-engine-phase6`. When phase 6 is done, this file moves to `docs/archive/` or is folded
+**Status:** built 2026-11-16 on `feature/event-store-engine-phase6`; gate passed, with the §7.1 statements-per-event row accepted by the maintainer (§10.9). When phase 6 is done, this file moves to `docs/archive/` or is folded
 into the redesign's record (`docs/plans/README.md`).
 **Scope:** phase 6 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): wake-up tiers 1
 (cross-JVM, `NOTIFY` after commit, coalesced) and 2 (same JVM, commit callback) of §11 with its P0.10 revision, and the
@@ -694,3 +694,13 @@ No arm sampled a writer in `Lock:object`.
   figure (305-328 against 316-332 µs per wake) stands. `wokenProbeMin` stays 10 ms. No running set was read in any
   latency arm, as in §10.5.
 
+### 10.9 Decision on the statements-per-event row (2026-11-16)
+
+The maintainer accepted §7.1's reader-statements row as it stands: at 100 ev/s, wake-up delivers in about 1 ms at
+1.10 statements per delivered event. That is the same load as today's engine with notify-polling (S1, 1.05) at about
+1/50 of its latency. The row as written assumed that a woken read replaces a backstop read. At a steady commit pace it
+does not: each commit gets its own read, and each in-transaction subscription commits one page per event, which is about
+1.0 of the 1.10. Bringing the figure to the backstop arms' 0.02-0.11 needs a read interval near the backstop itself,
+which gives up the latency the phase exists for. `wokenReadMin` therefore stays 0 (off) by default, a setting for users
+who prefer fewer statements to lower latency. A re-measure with bursty commits, where a 5-10 ms interval should merge
+wakes, is left for the dedicated-server runs.
