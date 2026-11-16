@@ -83,12 +83,32 @@ final class ReaderLoop {
      * @param watermark {@code W}, the reader's watermark
      * @param holes     the unresolved holes, all in {@code (W, C]}
      * @param ranges    the unresolved ranges (low to high, inclusive), all in {@code (W, C]}
+     * @param unknownWatermark {@code true} if attached while the watermark is unknown (design phase 5 §6.3): {@code watermark}
+     *                  is then {@link Long#MIN_VALUE}, and the subscription hands its gaps off after the bridge
      */
-    record AttachReply(boolean accepted, long cursor, long watermark, SortedSet<Long> holes, SortedMap<Long, Long> ranges) {
+    record AttachReply(boolean accepted, long cursor, long watermark, SortedSet<Long> holes, SortedMap<Long, Long> ranges, boolean unknownWatermark) {
         static final AttachReply REFUSED = new AttachReply(false, 0, 0, Collections.emptySortedSet(), Collections.emptySortedMap());
+
+        AttachReply(boolean accepted, long cursor, long watermark, SortedSet<Long> holes, SortedMap<Long, Long> ranges) {
+            this(accepted, cursor, watermark, holes, ranges, false);
+        }
     }
 
-    private sealed interface Request permits Activate, Leave, Attach, Detach, Wake {
+    /** The answer to a hand-off (design phase 5 §6.3) */
+    enum HandOffReply {
+        /** The inbox is no longer attached (a reader restart closed it): nothing was handed off */
+        REFUSED,
+        /** The reader holds the gaps as holes of its restart's initial candidate */
+        HELD,
+        /** The initial candidate had retired: every handed gap is final */
+        FINAL
+    }
+
+    private sealed interface Request permits Activate, Leave, Attach, Detach, Wake, HandOff {
+    }
+
+    private record HandOff(ActiveType type, Inbox inbox, String subscriber, TestSeams.Hooks hooks, List<HandledSet.Gap> gaps, CompletableFuture<HandOffReply> reply)
+            implements Request {
     }
 
     private record Activate(ActiveType type) implements Request {
@@ -98,7 +118,8 @@ final class ReaderLoop {
     private record Leave(ActiveType type, Inbox inbox, boolean last) implements Request {
     }
 
-    private record Attach(ActiveType type, Inbox inbox, String subscriber, TestSeams.Hooks hooks, CompletableFuture<AttachReply> reply) implements Request {
+    private record Attach(ActiveType type, Inbox inbox, String subscriber, TestSeams.Hooks hooks, boolean unknownAllowed, CompletableFuture<AttachReply> reply)
+            implements Request {
     }
 
     private record Detach(ActiveType type, Inbox inbox) implements Request {
@@ -225,8 +246,26 @@ final class ReaderLoop {
      * Ask to attach {@code inbox} at the next quiescent point.
      */
     CompletableFuture<AttachReply> attach(ActiveType type, Inbox inbox, String subscriber, TestSeams.Hooks hooks) {
+        return attach(type, inbox, subscriber, hooks, false);
+    }
+
+    /**
+     * Ask to attach {@code inbox} at the next quiescent point; with {@code unknownAllowed} also while the watermark is
+     * unknown (design phase 5 §6.3, {@code attachUnknown}), the reply then saying so
+     */
+    CompletableFuture<AttachReply> attach(ActiveType type, Inbox inbox, String subscriber, TestSeams.Hooks hooks, boolean unknownAllowed) {
         var reply = new CompletableFuture<AttachReply>();
-        submit(new Attach(type, inbox, subscriber, hooks, reply));
+        submit(new Attach(type, inbox, subscriber, hooks, unknownAllowed, reply));
+        return reply;
+    }
+
+    /**
+     * Hand the gaps a bridge under the unknown watermark found to the reader, at the next quiescent point (design phase 5
+     * §6.3)
+     */
+    CompletableFuture<HandOffReply> handOff(ActiveType type, Inbox inbox, String subscriber, TestSeams.Hooks hooks, List<HandledSet.Gap> gaps) {
+        var reply = new CompletableFuture<HandOffReply>();
+        submit(new HandOff(type, inbox, subscriber, hooks, List.copyOf(gaps), reply));
         return reply;
     }
 
@@ -364,6 +403,7 @@ final class ReaderLoop {
                     }
                 }
                 case Attach attach -> attach(attach);
+                case HandOff handOff -> handOff(handOff);
                 case Detach detach -> detach.type().attached.remove(detach.inbox());
                 case Wake wake -> wake.type().nextDueNanos = System.nanoTime();
             }
@@ -377,19 +417,44 @@ final class ReaderLoop {
         if (watermark == null && reader != null && types.contains(type) && type.seams.has(ATTACH_WITH_UNKNOWN_WATERMARK)) {
             watermark = reader.cursor();
         }
-        if (watermark == null) {
+        var unknown = watermark == null && request.unknownAllowed() && reader != null && types.contains(type);
+        if (watermark == null && !unknown) {
             request.reply().complete(AttachReply.REFUSED);
             return;
         }
-        var cursor = reader.cursor();
+        long published = unknown ? Long.MIN_VALUE : watermark;
+        var  cursor    = reader.cursor();
         type.attached.add(request.inbox());
         try {
-            request.hooks().onAttach(request.subscriber(), cursor, watermark);
+            request.hooks().onAttach(request.subscriber(), cursor, published);
         } catch (Exception e) {
             log.warn("[{}] onAttach hook failed", type.aggregateType, e);
         }
-        observer.onAttach(request.subscriber(), type.aggregateType, cursor, watermark);
-        request.reply().complete(new AttachReply(true, cursor, watermark, reader.holes(), reader.ranges()));
+        observer.onAttach(request.subscriber(), type.aggregateType, cursor, published);
+        request.reply().complete(new AttachReply(true, cursor, published, reader.holes(), reader.ranges(), unknown));
+    }
+
+    /**
+     * Design phase 5 §6.3: the gaps become holes of the reader's initial candidate if it is outstanding; else they are
+     * final and the subscription's own re-read answers them. Refused if the inbox was detached meanwhile.
+     */
+    private void handOff(HandOff request) {
+        var type   = request.type();
+        var reader = type.reader;
+        if (reader == null || !types.contains(type) || !type.attached.contains(request.inbox())) {
+            request.reply().complete(HandOffReply.REFUSED);
+            return;
+        }
+        try {
+            request.hooks().onHandOff(type.aggregateType, request.gaps());
+        } catch (Exception e) {
+            log.warn("[{}] onHandOff hook failed", type.aggregateType, e);
+        }
+        var held = reader.handOff(request.gaps());
+        type.nextDueNanos = System.nanoTime();
+        observer.onGapsHandedOff(request.subscriber(), type.aggregateType, request.gaps().size(), held);
+        log.debug("[{}] {} handed off {} gaps ({})", type.aggregateType, request.subscriber(), request.gaps().size(), held ? "held" : "final");
+        request.reply().complete(held ? HandOffReply.HELD : HandOffReply.FINAL);
     }
 
     private void read(ActiveType type) throws Exception {

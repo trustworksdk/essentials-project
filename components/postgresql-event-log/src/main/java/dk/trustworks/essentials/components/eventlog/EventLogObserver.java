@@ -66,7 +66,8 @@ public interface EventLogObserver {
      * A subscription's inbox was attached to its aggregate type's reader (phase 3 §3.4). Reader loop thread.
      *
      * @param cursor    the reader's cursor {@code C}: the bridge reads up to it
-     * @param watermark the reader's watermark {@code W}
+     * @param watermark the reader's watermark {@code W}; {@link Long#MIN_VALUE} for a {@code FRESH} subscription attached
+     *                  while it is unknown, which hands its gaps off after the bridge (design phase 5 §6.3)
      */
     default void onAttach(String subscriber, String aggregateType, long cursor, long watermark) {
     }
@@ -74,7 +75,8 @@ public interface EventLogObserver {
     /**
      * A subscription detached (phase 3 §3.6) and catches up from {@code resumeFrom}. Delivery thread.
      *
-     * @param reason {@code OVERFLOW}, {@code READER_RESTART}, {@code RESET} or {@code STOPPED}
+     * @param reason {@code OVERFLOW}, {@code READER_RESTART}, {@code RESET}, {@code STOPPED}, {@code ERROR} or
+     *               {@code TOO_MANY_GAPS}
      */
     default void onDetach(String subscriber, String aggregateType, String reason, long resumeFrom) {
     }
@@ -169,5 +171,17 @@ public interface EventLogObserver {
      * @param usedIndex     whether the type index could serve it (the index is valid and the read is not dense)
      */
     default void onFilteredRead(String subscriber, String aggregateType, long scannedOrders, int rows, long window, boolean usedIndex) {
+    }
+
+    /**
+     * A {@code FRESH} subscription attached under an unknown watermark handed the gaps its bridge found below the reader's
+     * cursor to the reader (design phase 5 §6.3). Reader loop thread, at the quiescent point.
+     *
+     * @param gaps     single values and ranges handed off
+     * @param toReader {@code true} if the reader holds them as holes of its restart's initial candidate; {@code false} if
+     *                 that candidate had retired already, so every gap is final and the subscription's own re-read of them
+     *                 answers the hand-off
+     */
+    default void onGapsHandedOff(String subscriber, String aggregateType, int gaps, boolean toReader) {
     }
 }

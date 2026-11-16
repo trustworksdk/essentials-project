@@ -60,6 +60,10 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         final AtomicLong catchUpReads = new AtomicLong();
         final List<String> detachReasons = new CopyOnWriteArrayList<>();
         final List<Long>   saves         = new CopyOnWriteArrayList<>();
+        /** Attaches under an unknown watermark (phase 5 §6.3) */
+        final AtomicLong   unknownAttaches = new AtomicLong();
+        /** The subscribers that handed gaps off, once per hand-off (phase 5 §6.3) */
+        final List<String> handedOffBy   = new CopyOnWriteArrayList<>();
         volatile int lastCandidates;
         volatile int lastHoles;
 
@@ -74,6 +78,14 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         @Override
         public void onAttach(String subscriber, String aggregateType, long cursor, long watermark) {
             attaches.incrementAndGet();
+            if (watermark == Long.MIN_VALUE) {
+                unknownAttaches.incrementAndGet();
+            }
+        }
+
+        @Override
+        public void onGapsHandedOff(String subscriber, String aggregateType, int gaps, boolean toReader) {
+            handedOffBy.add(subscriber);
         }
 
         @Override

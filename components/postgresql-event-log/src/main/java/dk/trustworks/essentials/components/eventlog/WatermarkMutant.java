@@ -65,7 +65,10 @@ enum WatermarkMutant {
     DRAIN_BEFORE_BRIDGE,
     /**
      * The loop accepts an attach while the type's watermark is unknown, replying with its cursor as the watermark, and
-     * the subscription asks for one without waiting (§3.4 step 2, F4). On the type's first subscription
+     * the subscription asks for one without waiting (§3.4 step 2, F4). On the type's first subscription. Since phase 5
+     * §6.3 the correct engine also attaches under an unknown watermark, but only a {@code FRESH} subscription, only after
+     * one backstop interval, with the watermark still unknown and its gaps handed off; the mutant is an ordinary attach
+     * for either mode, at once, with nothing handed off
      */
     ATTACH_WITH_UNKNOWN_WATERMARK,
 
@@ -120,5 +123,18 @@ enum WatermarkMutant {
     /** Each {@code EventLog} has its own permits instead of one set per database (§4.2, I15). On the event log's settings seam */
     PERMIT_PER_EVENT_LOG,
     /** The permit is held until the rows read are applied, not released after the statement (§4.2, I15) */
-    PERMIT_HELD_THROUGH_PAGE
+    PERMIT_HELD_THROUGH_PAGE,
+
+    // ---- phase 5 unit B (design phase 5 §6.3, §7.1) ----
+
+    /**
+     * A {@code FRESH} subscription attached under an unknown watermark goes straight to attached after its bridge: it
+     * neither hands its gaps to the reader nor re-reads them once more (§6.3, I1)
+     */
+    GAPS_NOT_HANDED_OFF,
+    /**
+     * The loop takes handed-off gaps as resolved at once: it neither holds nor re-reads them (§6.3, I1). On the type's
+     * first subscription
+     */
+    HANDED_GAPS_RESOLVED_AT_ONCE
 }

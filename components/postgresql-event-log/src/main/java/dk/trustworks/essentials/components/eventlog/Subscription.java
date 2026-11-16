@@ -48,7 +48,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * subscription holds no connection except an open page's, and runs on its own virtual delivery thread:
  * <ol>
  *     <li><b>Catch-up</b> {@code (P, W]} below the reader's watermark {@code W}, paged, each read on a borrowed
- *     connection returned before any row is applied. While {@code W} is unknown (F4) it <b>waits for the watermark</b>.</li>
+ *     connection returned before any row is applied. While {@code W} is unknown (F4) it <b>waits for the watermark</b>;
+ *     {@code FRESH} only one backstop interval, then attaches under the unknown watermark, bridges and hands the gaps it
+ *     found to the reader (phase 5 §6.3), unless there are more than {@link EventLogSettings#holeRangeThreshold()}.</li>
  *     <li><b>Attach</b>: a request to the loop, answered at its quiescent point with the cursor {@code C}, the watermark
  *     and the unresolved holes in {@code (W, C]}.</li>
  *     <li><b>Bridge</b>: {@code FRESH} reads {@code (max(P, highest handled), C]} at once, each page re-reading the attach
@@ -190,6 +192,10 @@ public final class Subscription {
     private long                                 lastSaveNanos;
     private Long                                 repositionTo;
     private boolean                              waitReported;
+    /** {@code FRESH}: when the wait under an unknown watermark began (design phase 5 §6.3), else {@code null} */
+    private Long                                 unknownSinceNanos;
+    /** {@code FRESH}: a hand-off found too many gaps; wait for the watermark (F4) until it is known (§6.3) */
+    private boolean                              handOffFellBack;
     // FRESH
     private HandledSet                           handled;
     private long                                 highestHandled = -1;
@@ -482,6 +488,8 @@ public final class Subscription {
         }
         receivedPrefix = resumeFrom - 1;
         receivedWatermark = resumeFrom - 1;
+        unknownSinceNanos = null;
+        handOffFellBack = false;
         toPark.clear();
         pageCut = 0;
         failingOrder = -1;
@@ -561,8 +569,19 @@ public final class Subscription {
             var state     = type.state();
             var watermark = state == null ? null : state.watermark();
             if (watermark == null && (state == null || !seams.has(ATTACH_WITH_UNKNOWN_WATERMARK))) {
+                if (mayAttachUnknown(state)) {
+                    var reply = attachUnknown(version);
+                    if (reply != null) {
+                        return reply;
+                    }
+                    continue;
+                }
                 waitForWatermark(version, state);
                 continue;
+            }
+            if (watermark != null) {
+                unknownSinceNanos = null;
+                handOffFellBack = false;
             }
             phase = Phase.CATCHING_UP;
             if (filtered && watermark != null && handled.prefix() < watermark) {
@@ -618,10 +637,46 @@ public final class Subscription {
     }
 
     /**
+     * Design phase 5 §6.3: a {@code FRESH} subscription that has waited one backstop interval under an unknown watermark
+     * attaches anyway - unless its handled set already has more gaps than {@link EventLogSettings#holeRangeThreshold()},
+     * or a hand-off fell back since the watermark was last known
+     */
+    private boolean mayAttachUnknown(TailReader.State state) {
+        return state != null && unknownSinceNanos != null && !handOffFellBack
+                && System.nanoTime() - unknownSinceNanos >= settings.backstopInterval().toNanos()
+                && handled.gaps(settings.holeRangeThreshold()) != null;
+    }
+
+    /**
+     * {@code attachUnknown} (§6.3 step 1): attach while the watermark is unknown. The reply's watermark is
+     * {@link Long#MIN_VALUE}, so neither the bridge nor a batch raises {@code W_rcv} until a batch carries the known one.
+     *
+     * @return the accepted attach, or {@code null} if refused (the reader restarts); a reply with a known watermark is an
+     * ordinary attach
+     */
+    private ReaderLoop.AttachReply attachUnknown(long version) throws Exception {
+        var candidate = new Inbox(settings.subscriptionBufferSize(), false, filter, seams.has(INBOX_COUNTS_UNMATCHED));
+        inbox = candidate;
+        seams.hooks().beforeAttachRequest(key.subscriber());
+        phase = Phase.ATTACHING;
+        var reply = loop.attach(type, candidate, key.subscriber(), seams.hooks(), true).get();
+        if (reply.accepted()) {
+            endWait();
+            return reply;
+        }
+        inbox = null;
+        waitForWatermark(version, type.state());
+        return null;
+    }
+
+    /**
      * WaitingForWatermark (§3.1): read nothing until the type's watermark may have changed (F4, decision 2)
      */
     private void waitForWatermark(long version, TailReader.State state) throws Exception {
         phase = Phase.WAITING_FOR_WATERMARK;
+        if (state != null && state.watermark() == null && unknownSinceNanos == null) {
+            unknownSinceNanos = System.nanoTime();
+        }
         serveParkedRequests();
         if (!waitReported && (state == null || state.watermark() == null)) {
             waitReported = true;
@@ -636,6 +691,7 @@ public final class Subscription {
     }
 
     private void endWait() {
+        unknownSinceNanos = null;
         if (waitReported) {
             waitReported = false;
             observer.onWaitingForWatermark(key.subscriber(), key.aggregateType(), false, Set.of());
@@ -691,6 +747,9 @@ public final class Subscription {
             if (withGaps && !seams.has(BRIDGE_WITHOUT_HOLE_REREAD)) {
                 // The gaps are part of the hole branch: the mutant drops them with the attach holes
                 var gaps = handled.gaps(settings.holeRangeThreshold());
+                if (gaps == null && reply.unknownWatermark()) {
+                    return fallBackToWait();
+                }
                 if (gaps == null) {
                     // More gaps than the threshold since the bridge started: finish from P, as phase 3 does
                     withGaps = false;
@@ -728,8 +787,9 @@ public final class Subscription {
             if (!worked) {
                 return false;
             }
-            if (filtered && ceiling > lower) {
-                // §2.3: every order of (lower, ceiling] the page did not return is non-matching or an attach hole still re-read
+            if (filtered && ceiling > lower && !reply.unknownWatermark()) {
+                // §2.3 (not under an unknown watermark, phase 5 §6.3: a value held below the head is no attach hole, so
+                // the covered range would mark it handled; there every order not returned stays a gap and is handed off): every order of (lower, ceiling] the page did not return is non-matching or an attach hole still re-read
                 if (seams.has(FILTERED_BRIDGE_MARKS_HOLES)) {
                     handled.addRange(lower, ceiling, Collections.emptySortedSet(), Collections.emptySortedMap());
                 } else {
@@ -743,7 +803,70 @@ public final class Subscription {
             detach(inbox.closeReason());
             return false;
         }
+        return !reply.unknownWatermark() || handOff(cursor);
+    }
+
+    /**
+     * Design phase 5 §6.3 steps 3-4, after a bridge under the unknown watermark reached {@code C}: {@code P} is final
+     * below, so every order of {@code (P, C]} the bridge did not hand on is a gap - rolled back, non-matching, or held by
+     * a writer of the reader's initial candidate (I4). The gaps go to the reader, which re-reads them in every tail
+     * statement until that candidate retires; then one re-read here takes what committed into them before the hand-off
+     * reached the loop, ahead of every batch in the inbox (I2: a later event of the same aggregate may be in one). If
+     * the candidate retired already, that re-read is final and answers the hand-off. Above
+     * {@link EventLogSettings#holeRangeThreshold()} gaps: detach and wait for the watermark (F4).
+     *
+     * @return {@code true} to go on attached; {@code false} if detached, stopped or reset
+     */
+    private boolean handOff(long cursor) throws Exception {
+        var limit = settings.holeRangeThreshold();
+        var gaps  = handled.gaps(limit);
+        if (gaps != null && handled.highest() < cursor) {
+            gaps = new ArrayList<>(gaps);
+            gaps.add(new HandledSet.Gap(handled.highest() + 1, cursor));
+        }
+        if (gaps == null || gaps.size() > limit) {
+            return fallBackToWait();
+        }
+        if (gaps.isEmpty() || seams.has(GAPS_NOT_HANDED_OFF)) {
+            return true;
+        }
+        seams.hooks().beforeHandOff(key.subscriber(), gaps);
+        var answer = loop.handOff(type, inbox, key.subscriber(), seams.hooks(), gaps).get();
+        if (answer == ReaderLoop.HandOffReply.REFUSED) {
+            var reason = inbox.closeReason();
+            detach(reason == null ? Inbox.CloseReason.READER_RESTART : reason);
+            return false;
+        }
+        var holes  = new TreeSet<Long>();
+        var ranges = new TreeMap<Long, Long>();
+        for (var gap : gaps) {
+            if (gap.single()) {
+                holes.add(gap.low());
+            } else {
+                ranges.put(gap.low(), gap.high());
+            }
+        }
+        var typeIds = filtered ? resolveTypeIds() : null;
+        List<StoredEvent> rows = typeIds != null && typeIds.length == 0 ? List.of() : read(true, cursor, cursor, holes, ranges, typeIds);
+        var worked = work(rows);
+        releasePermit(true);
+        if (!worked) {
+            return false;
+        }
+        if (inbox.closeReason() != null) {
+            detach(inbox.closeReason());
+            return false;
+        }
         return true;
+    }
+
+    /** §6.3: too many gaps to hand off - detach and wait for the watermark (F4) until it is known */
+    private boolean fallBackToWait() throws Exception {
+        handOffFellBack = true;
+        log.debug("Subscription {} on {}: more than {} gaps under the unknown watermark; waiting for it instead", key.subscriber(), key.aggregateType(),
+                  settings.holeRangeThreshold());
+        detach(Inbox.CloseReason.TOO_MANY_GAPS);
+        return false;
     }
 
     /** @return whether the handled set has gaps, or more than the threshold */

@@ -235,9 +235,10 @@ class EventLogAttachIT extends AbstractSubscriptionIT {
     // ---- attach only with a known watermark (F4) ----
 
     @Test
-    void no_attach_until_the_initial_candidate_retires_and_the_held_value_is_delivered() throws Exception {
+    void no_attach_until_the_initial_candidate_retires_but_by_hand_off_and_the_held_value_is_delivered() throws Exception {
         var result = startWhileAWriterHoldsAValueBelowTheHead();
-        assertThat(result.attachesWhileHeld).isZero();
+        // Phase 5 §6.3: FRESH may attach under the unknown watermark only to hand its gaps off, never as an ordinary attach
+        assertThat(result.attachesWhileHeld).isEqualTo(result.unknownAttachesWhileHeld);
         assertThat(result.heldDelivered).isTrue();
     }
 
@@ -251,7 +252,7 @@ class EventLogAttachIT extends AbstractSubscriptionIT {
         assertThat(startWhileAWriterHoldsAValueBelowTheHead(WatermarkMutant.CATCH_UP_ABOVE_WATERMARK).heldDelivered).isFalse();
     }
 
-    private record HeldResult(long attachesWhileHeld, boolean heldDelivered) {
+    private record HeldResult(long attachesWhileHeld, long unknownAttachesWhileHeld, boolean heldDelivered) {
     }
 
     /**
@@ -266,10 +267,11 @@ class EventLogAttachIT extends AbstractSubscriptionIT {
         var tested   = subscribe("tested", recorder, mutants);
         awaitTrue(() -> tested.phase() == Subscription.Phase.WAITING_FOR_WATERMARK || tested.phase() == Subscription.Phase.ATTACHED);
         awaitReads(3);
-        var attaches = reads.attaches.get();
+        var attaches        = reads.attaches.get();
+        var unknownAttaches = reads.unknownAttaches.get();
         held.commit();
         awaitDelivered(recorder, commitAppend("tail", 1));
-        return new HeldResult(attaches, recorder.deliveredOrder(held.globalOrder()));
+        return new HeldResult(attaches, unknownAttaches, recorder.deliveredOrder(held.globalOrder()));
     }
 
     // ---- shared shape ----

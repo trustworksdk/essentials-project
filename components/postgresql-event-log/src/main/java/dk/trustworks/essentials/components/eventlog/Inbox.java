@@ -51,7 +51,12 @@ final class Inbox {
         /** The subscription stopped */
         STOPPED,
         /** A catch-up or bridge statement failed; the subscription catches up again after the backstop interval */
-        ERROR
+        ERROR,
+        /**
+         * {@code FRESH} attached under an unknown watermark found more gaps than {@link EventLogSettings#holeRangeThreshold()}
+         * to hand off: it waits for the watermark instead (design phase 5 §6.3)
+         */
+        TOO_MANY_GAPS
     }
 
     /** What {@link #offer(Batch)} did */

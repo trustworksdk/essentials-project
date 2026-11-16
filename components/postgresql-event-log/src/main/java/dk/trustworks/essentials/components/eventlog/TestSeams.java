@@ -135,5 +135,18 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         /** A catch-up permit was acquired ({@code true}) or released ({@code false}) */
         default void onPermit(String subscriber, boolean acquired) throws Exception {
         }
+
+        // ---- phase 5 unit B (§6.3, §7) ----
+
+        /** Delivery thread: the bridge under an unknown watermark reached {@code C}; {@code gaps} are about to be handed off */
+        default void beforeHandOff(String subscriber, List<HandledSet.Gap> gaps) throws Exception {
+        }
+
+        /**
+         * Reader loop thread, at the quiescent point: {@code gaps} were handed off and are about to be added to the reader's
+         * holes. The handing subscription's hook
+         */
+        default void onHandOff(String aggregateType, List<HandledSet.Gap> gaps) throws Exception {
+        }
     }
 }

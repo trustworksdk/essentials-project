@@ -306,6 +306,61 @@ final class TailReader implements AutoCloseable {
     }
 
     /**
+     * A {@code FRESH} subscription attached under the unknown watermark hands off the gaps its bridge found (design
+     * phase 5 §6.3): while the restart's initial candidate is outstanding, every gap at or below its head becomes an
+     * unresolved hole of that candidate - re-read by every tail statement (F1) and resolved only by the hole read after
+     * it retires (F2). Gaps above the head are already holes of this reader, or final. Holes and ranges stay disjoint,
+     * since several subscriptions may hand off overlapping gaps and a value re-read twice would be published twice.
+     *
+     * @return {@code false} if the initial candidate has retired: every gap at or below the head is final, and nothing
+     * is held
+     */
+    boolean handOff(List<HandledSet.Gap> gaps) {
+        assert ownedByCurrentThread();
+        var initial = candidates.stream().filter(Candidate::initial).findFirst();
+        if (initial.isEmpty()) {
+            return false;
+        }
+        if (seams.has(HANDED_GAPS_RESOLVED_AT_ONCE)) {
+            return true;
+        }
+        var head = initial.get().highestRead();
+        for (var gap : gaps) {
+            var high = Math.min(gap.high(), head);
+            if (gap.low() > high) {
+                continue;
+            }
+            if (high - gap.low() + 1 > settings.holeRangeThreshold()) {
+                addUnresolvedRange(gap.low(), high);
+            } else {
+                for (var value = gap.low(); value <= high; value++) {
+                    var range = ranges.floorEntry(value);
+                    if (range == null || range.getValue() < value) {
+                        holes.add(value);
+                    }
+                }
+            }
+        }
+        publishState();
+        return true;
+    }
+
+    private void addUnresolvedRange(long low, long high) {
+        var below = ranges.floorEntry(low);
+        if (below != null && below.getValue() >= low - 1) {
+            low = below.getKey();
+            high = Math.max(high, below.getValue());
+            ranges.remove(below.getKey());
+        }
+        for (var it = ranges.subMap(low, true, high + 1, true).entrySet().iterator(); it.hasNext(); ) {
+            high = Math.max(high, it.next().getValue());
+            it.remove();
+        }
+        holes.subSet(low, true, high, true).clear();
+        ranges.put(low, high);
+    }
+
+    /**
      * @return {@code true} if the gap became a hole; gaps at or below {@link #finalUpTo} are final
      */
     private boolean recordGap(long from, long to) {
