@@ -142,5 +142,26 @@ enum WatermarkMutant {
      * more: a predecessor that committed into a gap before the hand-off reached the loop is delivered after a successor
      * already in the inbox, or never if the initial candidate retired (§6.3, I2)
      */
-    NO_REREAD_AFTER_HAND_OFF
+    NO_REREAD_AFTER_HAND_OFF,
+
+    // ---- phase 6 unit A (design phase 6 §6.1, §6.2, §6.4); loop mutants act if any active type's first subscription sets them ----
+
+    /**
+     * The loop parks without a deadline while no candidate is outstanding, trusting wake-ups: with every wake lost, a
+     * committed event waits forever (§6.1, I7)
+     */
+    PARK_UNTIL_WOKEN,
+    /** A flush of several types reads the running set first, before every type's tail snapshot (§4.2, I11) */
+    RUNNING_SET_FIRST_IN_FLUSH,
+    /**
+     * A flush of several types reads a running set after each type's statement: every one after the first returns the
+     * first one's backend status, cached for the flush's implicit transaction (§4.2, I11, P0.2)
+     */
+    RUNNING_SET_PER_TYPE_IN_FLUSH,
+    /** A woken read that finds no row takes the type's cursor as final: holes and candidates at or below it go (§4.3) */
+    WAKE_ADVANCES_WATERMARK,
+    /** The loop clears a type's wake flag after its read instead of before it: a wake during the read is lost (§4.1) */
+    WAKE_CLEARED_AFTER_READ,
+    /** Every woken read that wants a running set reads one: no probe clock after a wake (§5) */
+    PROBE_ON_EVERY_WAKE
 }

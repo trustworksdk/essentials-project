@@ -103,6 +103,12 @@
         </dependency>
         <!-- spike/EventLogGateSpikeIT wires the engine to a pool, as an application would -->
         <dependency>
+            <!-- EventLogCommitCallbackIT runs the commit callback under foundation's JDBI unit of work (phase 6 §2.2) -->
+            <groupId>org.jdbi</groupId>
+            <artifactId>jdbi3-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>com.zaxxer</groupId>
             <artifactId>HikariCP</artifactId>
             <scope>test</scope>

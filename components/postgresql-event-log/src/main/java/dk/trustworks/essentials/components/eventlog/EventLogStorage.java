@@ -126,10 +126,15 @@ final class EventLogStorage {
      * ids, lower, upper - the first matching order, issued only while the type index is valid; {@code filteredBridgePage}
      * lower, upper, ids, limit, holes, ids; {@code filteredBridgePageWithRanges} plus range lows, highs, ids. Both bridge
      * branches carry the type predicate.
+     * <p>
+     * Phase 6's tail with re-read (§4.2), the shape a woken read and every statement of a multi-type flush use when holes
+     * are outstanding: {@code rereadTail} cursor, limit, {@code bigint[]} holes; {@code rereadTailWithRanges} plus range
+     * lows and highs. As {@code probe*} without the running-set branch: the flush reads one running set, last.
      */
     record TailStatements(String head, String plainTail, String probe, String probeWithRanges, String holeRead, String runningSet,
                           String probeWithoutHoleReread, String rangeRead, String bridgePage, String bridgePageWithRanges, String byOrders,
-                          String filteredRangeRead, String filteredRangeReadPk, String skipAheadProbe, String filteredBridgePage, String filteredBridgePageWithRanges) {
+                          String filteredRangeRead, String filteredRangeReadPk, String skipAheadProbe, String filteredBridgePage, String filteredBridgePageWithRanges,
+                          String rereadTail, String rereadTailWithRanges) {
         static TailStatements of(String relation) {
             var tail   = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] AS running FROM " + relation + " WHERE global_order > ? ORDER BY global_order LIMIT ?)";
             var holes  = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] FROM " + relation + " WHERE global_order = ANY(?::bigint[]))";
@@ -143,6 +148,7 @@ final class EventLogStorage {
             var filtered     = "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? AND global_order <= ?" + typed + " ORDER BY global_order LIMIT ?";
             var filteredPk   = "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? AND global_order <= ? AND event_type + 0 = ANY(?::smallint[]) ORDER BY global_order LIMIT ?";
             var fHoles       = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order = ANY(?::bigint[])" + typed + ")";
+            var rTail        = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? ORDER BY global_order LIMIT ?)";
             var fRanges      = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " e JOIN unnest(?::bigint[], ?::bigint[]) AS r(lo, hi) ON e.global_order BETWEEN r.lo AND r.hi WHERE e.event_type = ANY(?::smallint[]))";
             return new TailStatements(
                     "SELECT (SELECT coalesce(max(global_order), 0) FROM " + relation + "), " + RUNNING_SET,
@@ -160,7 +166,9 @@ final class EventLogStorage {
                     filteredPk,
                     "SELECT global_order FROM " + relation + " WHERE event_type = ANY(?::smallint[]) AND global_order > ? AND global_order <= ? ORDER BY global_order LIMIT 1",
                     "SELECT * FROM (\n(" + filtered + ")\nUNION ALL\n" + fHoles + "\n) u ORDER BY u.global_order",
-                    "SELECT * FROM (\n(" + filtered + ")\nUNION ALL\n" + fHoles + "\nUNION ALL\n" + fRanges + "\n) u ORDER BY u.global_order");
+                    "SELECT * FROM (\n(" + filtered + ")\nUNION ALL\n" + fHoles + "\nUNION ALL\n" + fRanges + "\n) u ORDER BY u.global_order",
+                    "SELECT * FROM (\n" + rTail + "\nUNION ALL\n" + bridgeHoles + "\n) u ORDER BY u.global_order",
+                    "SELECT * FROM (\n" + rTail + "\nUNION ALL\n" + bridgeHoles + "\nUNION ALL\n" + bridgeRanges + "\n) u ORDER BY u.global_order");
         }
 
         /** Every statement with its name, for the generic-plan check */
@@ -180,6 +188,8 @@ final class EventLogStorage {
             all.put("skipAheadProbe", skipAheadProbe);
             all.put("filteredBridgePage", filteredBridgePage);
             all.put("filteredBridgePageWithRanges", filteredBridgePageWithRanges);
+            all.put("rereadTail", rereadTail);
+            all.put("rereadTailWithRanges", rereadTailWithRanges);
             return all;
         }
     }

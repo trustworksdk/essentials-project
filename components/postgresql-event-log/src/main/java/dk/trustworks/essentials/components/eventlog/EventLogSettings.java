@@ -23,7 +23,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * Settings of the event log's subscriptions (design {@code docs/plans/event-store-engine-phase2.md} §1.2, §3.3, §3.4).
  *
  * @param backstopInterval     tier-0 wake-up: how long a caught-up tail reader parks before it reads again (plan §11).
- *                             Phase 2 has no other wake-up
+ *                             Wake-ups ({@link EventLog#afterCommit}) only shorten it (I7)
  * @param tailPageSize         most rows one tail read returns above the cursor; late commits re-read from holes do
  *                             not count against it
  * @param probeBackoffMin      least time between two re-probes while a candidate is outstanding and nothing new was
@@ -54,6 +54,8 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                             short page, quartered after a cancelled statement
  * @param catchUpScanWindowMax the largest such window
  * @param eventTypeIndexed     aggregate types that get the opt-in {@code (event_type, global_order)} index (phase 5 §5)
+ * @param wokenProbeMin        least time between two running-set reads of an aggregate type that was woken since its last
+ *                             one (phase 6 §5): the cost rule of {@link #probeWait(long, int)} without the backstop floor
  */
 public record EventLogSettings(Duration backstopInterval,
                                int tailPageSize,
@@ -71,7 +73,8 @@ public record EventLogSettings(Duration backstopInterval,
                                int catchUpPermits,
                                long catchUpScanWindow,
                                long catchUpScanWindowMax,
-                               java.util.Set<String> eventTypeIndexed) {
+                               java.util.Set<String> eventTypeIndexed,
+                               Duration wokenProbeMin) {
     /**
      * The probes of the whole cluster may take at most about 1 % of one core while candidates are outstanding: one
      * reader's probe costs at most 1 % of its wait ({@code wait >= cost * 100}), divided by the number of readers that
@@ -108,6 +111,7 @@ public record EventLogSettings(Duration backstopInterval,
         requireTrue(catchUpScanWindow >= catchUpPageSize, "catchUpScanWindow must be >= catchUpPageSize");
         requireTrue(catchUpScanWindowMax >= catchUpScanWindow, "catchUpScanWindowMax must be >= catchUpScanWindow");
         eventTypeIndexed = java.util.Set.copyOf(requireNonNull(eventTypeIndexed, "No eventTypeIndexed provided"));
+        requirePositive(wokenProbeMin, "wokenProbeMin");
     }
 
     private static void requirePositive(Duration duration, String name) {
@@ -119,68 +123,72 @@ public record EventLogSettings(Duration backstopInterval,
      * Backstop 1 s, page 100 (P0.13), re-probe between 1 s and 10 s, save every second, ranges above 1 000 values,
      * generic plans on, inbox 1 000 events, catch-up page 500, page transaction 100 events, 3 retries backing off from
      * 100 ms to at most 10 s; 4 catch-up permits, filtered scan window 100 000 orders growing to at most 10 000 000, no
-     * event-type index
+     * event-type index; a woken type probes at most every 10 ms
      */
     public static EventLogSettings defaults() {
         return new EventLogSettings(Duration.ofSeconds(1), 100, Duration.ofSeconds(1), Duration.ofSeconds(10), Duration.ofSeconds(1), 1_000, true, 1_000, 500, 100, 3, Duration.ofMillis(100), Duration.ofSeconds(10), 4, 100_000, 10_000_000,
-                                    java.util.Set.of());
+                                    java.util.Set.of(), Duration.ofMillis(10));
     }
 
     public EventLogSettings withBackstopInterval(Duration backstopInterval) {
         var min = probeBackoffMin.compareTo(backstopInterval) > 0 ? probeBackoffMin : backstopInterval;
-        return new EventLogSettings(backstopInterval, tailPageSize, min, probeBackoffMax.compareTo(min) < 0 ? min : probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, min, probeBackoffMax.compareTo(min) < 0 ? min : probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     public EventLogSettings withTailPageSize(int tailPageSize) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     public EventLogSettings withProbeBackoff(Duration min, Duration max) {
-        return new EventLogSettings(backstopInterval, tailPageSize, min, max, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, min, max, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     public EventLogSettings withProgressSaveInterval(Duration progressSaveInterval) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     public EventLogSettings withHoleRangeThreshold(int holeRangeThreshold) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     public EventLogSettings withGenericPlans(boolean genericPlans) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     public EventLogSettings withSubscriptionBufferSize(int subscriptionBufferSize) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     public EventLogSettings withCatchUpPageSize(int catchUpPageSize) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     public EventLogSettings withPageSize(int pageSize) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     public EventLogSettings withRetryAttempts(int retryAttempts) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     public EventLogSettings withRetryBackoff(Duration initial, Duration max) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, initial, max, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, initial, max, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     public EventLogSettings withCatchUpPermits(int catchUpPermits) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     public EventLogSettings withCatchUpScanWindow(long catchUpScanWindow, long catchUpScanWindowMax) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     public EventLogSettings withEventTypeIndexed(java.util.Set<String> eventTypeIndexed) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
+    }
+
+    public EventLogSettings withWokenProbeMin(Duration wokenProbeMin) {
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin);
     }
 
     /**
@@ -209,6 +217,21 @@ public record EventLogSettings(Duration backstopInterval,
         var floor   = probeBackoffMin.compareTo(backstopInterval) > 0 ? probeBackoffMin : backstopInterval;
         var readers = Math.max(1L, backends / BACKENDS_PER_READER);
         var cost    = Duration.ofNanos(Math.multiplyExact(Math.multiplyExact(Math.max(0, lastProbeNanos), (long) PROBE_COST_MULTIPLIER), readers));
+        if (cost.compareTo(floor) < 0) {
+            return floor;
+        }
+        return cost.compareTo(probeBackoffMax) > 0 ? probeBackoffMax : cost;
+    }
+
+    /**
+     * How long to wait between two running-set reads of a type woken since its last one (phase 6 §5, the probe clock):
+     * {@code cost * 100 * max(1, backends / 10)} as {@link #probeWait(long, int)}, but between {@link #wokenProbeMin()}
+     * and {@link #probeBackoffMax()} - no backstop floor, since wakes now arrive at the commit rate
+     */
+    Duration wokenProbeWait(long lastProbeNanos, int backends) {
+        var readers = Math.max(1L, backends / BACKENDS_PER_READER);
+        var cost    = Duration.ofNanos(Math.multiplyExact(Math.multiplyExact(Math.max(0, lastProbeNanos), (long) PROBE_COST_MULTIPLIER), readers));
+        var floor   = wokenProbeMin.compareTo(probeBackoffMax) > 0 ? probeBackoffMax : wokenProbeMin;
         if (cost.compareTo(floor) < 0) {
             return floor;
         }

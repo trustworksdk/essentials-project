@@ -463,6 +463,38 @@ public final class EventLog {
     }
 
     /**
+     * Tell the engine that a transaction which appended to {@code aggregateTypes} has committed (design phase 6 §2.2):
+     * each type active in this event log's reader is woken, so its subscriptions see the commit at once instead of
+     * within the backstop interval. Call it after {@code commit()} returns; with foundation's {@code UnitOfWork} the
+     * engine's commit callback does it. A hint, never a statement of fact: a call before the commit, or for a
+     * transaction that rolled back, costs one read; no call costs latency up to the backstop interval, never an event
+     * (I7). Never blocks and never throws for an unknown or inactive type. <b>Temporary</b>: phase 8's API absorbs it.
+     *
+     * @param aggregateTypes the aggregate types the committed transaction appended to
+     */
+    public void afterCommit(Collection<String> aggregateTypes) {
+        requireNonNull(aggregateTypes, "No aggregateTypes provided");
+        for (var aggregateType : aggregateTypes) {
+            if (aggregateType != null) {
+                readerLoop.wake(aggregateType);
+            }
+        }
+    }
+
+    /**
+     * {@link #afterCommit(Collection)} for the aggregate types of {@code committedRequests}, the requests the committed
+     * transaction appended. <b>Temporary</b>.
+     */
+    public void afterCommit(List<AppendRequest> committedRequests) {
+        requireNonNull(committedRequests, "No committedRequests provided");
+        for (var request : committedRequests) {
+            if (request != null) {
+                readerLoop.wake(request.aggregateType());
+            }
+        }
+    }
+
+    /**
      * Load a stream's events with {@code fromEventOrder <= event_order <= toEventOrder}, in event order, on the caller's
      * connection (design §3.2).
      */

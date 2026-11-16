@@ -56,6 +56,8 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         final AtomicLong detaches  = new AtomicLong();
         final AtomicLong attaches  = new AtomicLong();
         final AtomicLong rowsRead  = new AtomicLong();
+        /** Reads that read a running set: combined probes and flushes with one (phase 6 §5) */
+        final AtomicLong combinedReads = new AtomicLong();
         /** Catch-up, bridge and deferred-bridge statements of every subscription */
         final AtomicLong catchUpReads = new AtomicLong();
         final List<String> detachReasons = new CopyOnWriteArrayList<>();
@@ -72,6 +74,9 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
             lastCandidates = outstandingCandidates;
             lastHoles = outstandingHoles;
             rowsRead.addAndGet(rows);
+            if (combined) {
+                combinedReads.incrementAndGet();
+            }
             reads.incrementAndGet();
         }
 

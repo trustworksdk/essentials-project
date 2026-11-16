@@ -148,5 +148,19 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
          */
         default void onHandOff(String aggregateType, List<HandledSet.Gap> gaps) throws Exception {
         }
+
+        // ---- phase 6 unit A (§6): reader loop thread ----
+
+        /**
+         * The due types' statements are about to be sent: one combined or tail statement for a single type, one flush for
+         * several. {@code wantsRunningSet}: a running set is read with them. The hook of every due type's first
+         * subscription, once per distinct hook
+         */
+        default void beforeFlush(List<String> aggregateTypes, boolean wantsRunningSet) throws Exception {
+        }
+
+        /** The due types' statements returned; their results are not yet applied to any reader */
+        default void afterFlushBeforeApply(List<String> aggregateTypes) throws Exception {
+        }
     }
 }

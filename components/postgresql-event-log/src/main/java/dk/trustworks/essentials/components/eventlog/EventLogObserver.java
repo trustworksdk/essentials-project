@@ -184,4 +184,15 @@ public interface EventLogObserver {
      */
     default void onGapsHandedOff(String subscriber, String aggregateType, int gaps, boolean toReader) {
     }
+
+    /**
+     * The reader loop read its due types (design phase 6 §4.2): one statement for a single type, one pgjdbc flush for
+     * several, with at most one running set. Reader loop thread.
+     *
+     * @param aggregateTypes the types read, in flush order
+     * @param statements     statements sent (a running set counts as one)
+     * @param nanos          the statement's or the whole flush's wall-clock time
+     */
+    default void onFlush(java.util.List<String> aggregateTypes, int statements, long nanos) {
+    }
 }

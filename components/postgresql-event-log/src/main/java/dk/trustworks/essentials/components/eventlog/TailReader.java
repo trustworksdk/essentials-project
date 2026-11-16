@@ -39,7 +39,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     <b>combined probe</b>: tail above the cursor, outstanding holes re-read by {@code = ANY} and, while a range is
  *     outstanding, by a range join ({@code UNION ALL}, never {@code OR}: F1 with P0.11's form), and the running-writer
  *     set, read during execution after the statement's snapshot (§4.10, P0.2, P0.12) - also when no event row comes
- *     back. Otherwise the plain tail read.</li>
+ *     back. Otherwise the plain tail read. Since phase 6 the running set waits for the loop's probe clock: a read without
+ *     it re-reads outstanding holes ({@code rereadTail}); several due types are read in one flush of such statements
+ *     followed by one running set ({@link #execute(boolean)}, {@link #flushStatement()}, {@link #apply(Read, boolean)}).</li>
  *     <li>A probe creates a {@link Candidate} {@code (cursor, running set)} when a hole lies above every outstanding
  *     candidate, and retires each candidate whose set is disjoint from its running set. A retired candidate resolves
  *     every hole at or below it: those are re-read once ({@code holeRead}, §4.2) and the rows published before the
@@ -123,7 +125,9 @@ final class TailReader implements AutoCloseable {
         try (var resultSet = statement("head", statements.head()).executeQuery()) {
             resultSet.next();
             head = resultSet.getLong(1);
-            running = xids(resultSet.getArray(2));
+            var set = RunningSet.of(resultSet.getArray(2));
+            lastBackends = set.backends();
+            running = set.xids();
         }
         cursor = head;
         if (seams.has(RESTARTED_READER_AT_HEAD) || running.isEmpty()) {
@@ -140,30 +144,80 @@ final class TailReader implements AutoCloseable {
     }
 
     /**
-     * One read: the plain tail or the combined probe, then retirement and the hole read. Rows come back in
-     * {@code global_order} order, late commits included; each row is returned once.
+     * The raw result of one read, not yet applied to the reader (design phase 6 §4.2)
+     *
+     * @param rows     event rows in the order read, late commits included
+     * @param running  the running set read after the read's snapshot, or {@code null} if none was read
+     * @param nanos    what the statement (or the whole flush) took
+     * @param combined whether a running set was read
+     */
+    record Read(List<StoredEvent> rows, RunningSet running, long nanos, boolean combined) {
+    }
+
+    /**
+     * One running-set read ({@link EventLogStorage#RUNNING_SET})
+     *
+     * @param backends the number of backends the scan saw (cluster-wide)
+     * @param xids     the running {@code backend_xid}s
+     */
+    record RunningSet(int backends, Set<String> xids) {
+        static final RunningSet NONE = new RunningSet(1, Set.of());
+
+        static RunningSet of(Array array) throws SQLException {
+            if (array == null) {
+                return NONE;
+            }
+            var values = (Object[]) array.getArray();
+            if (values.length == 0) {
+                return NONE;
+            }
+            var set = new HashSet<String>(values.length * 2);
+            for (var i = 1; i < values.length; i++) {
+                set.add((String) values[i]);
+            }
+            return new RunningSet(Integer.parseInt((String) values[0]), set);
+        }
+    }
+
+    /**
+     * @return whether the next read should read the running set: a candidate or hole is outstanding, or the last read
+     * revealed a hole (the phase-2 condition for the combined probe)
+     */
+    boolean wantsRunningSet() {
+        return !candidates.isEmpty() || !lastReadContiguous || !holes.isEmpty() || !ranges.isEmpty();
+    }
+
+    /**
+     * One read of this type alone, then {@link #apply}. See {@link #execute(boolean)}.
      */
     List<StoredEvent> poll() throws Exception {
+        return apply(execute(true), false);
+    }
+
+    /**
+     * One read of this type alone (design phase 6 §9 decision 2): the combined probe if a running set is wanted and
+     * {@code runningSetAllowed} (the probe clock, §5), else the tail - with the hole re-read while holes are outstanding
+     * ({@code rereadTail}), so a late commit is read by every read whatever the probe does
+     */
+    Read execute(boolean runningSetAllowed) throws Exception {
         assert ownedByCurrentThread();
-        var combined = !candidates.isEmpty() || !lastReadContiguous || !holes.isEmpty() || !ranges.isEmpty();
+        var combined = runningSetAllowed && wantsRunningSet();
         var rows     = new ArrayList<StoredEvent>();
-        Set<String> running = null;
+        RunningSet running = null;
         var started  = System.nanoTime();
         seams.hooks().beforeRead(combined);
         if (!combined) {
-            var statement = statement("plainTail", statements.plainTail());
-            statement.setLong(1, cursor);
-            statement.setInt(2, settings.tailPageSize());
+            var statement = rereads() ? statement(ranges.isEmpty() ? "rereadTail" : "rereadTailWithRanges", flushStatement())
+                                      : statement("plainTail", statements.plainTail());
+            bindFlushStatement(statement, 1);
             try (var resultSet = statement.executeQuery()) {
-                while (resultSet.next()) {
-                    rows.add(mapper.map(resultSet));
-                }
+                readRows(resultSet, rows);
             }
         } else {
             if (seams.has(RUNNING_SET_BEFORE_TAIL_READ)) {
                 try (var resultSet = statement("runningSet", statements.runningSet()).executeQuery()) {
                     resultSet.next();
-                    running = xids(resultSet.getArray(1));
+                    running = RunningSet.of(resultSet.getArray(1));
                 }
                 seams.hooks().afterRunningSetRead();
             }
@@ -171,11 +225,76 @@ final class TailReader implements AutoCloseable {
             if (running == null) {
                 running = probed;
             }
+        }
+        return new Read(rows, running, System.nanoTime() - started, combined);
+    }
+
+    private boolean rereads() {
+        return !seams.has(NO_HOLE_REREAD) && (!holes.isEmpty() || !ranges.isEmpty());
+    }
+
+    /**
+     * @return this type's statement in a flush of several types (design phase 6 §4.2): the plain tail, or the tail with
+     * the hole re-read while holes are outstanding; never a running-set branch
+     */
+    String flushStatement() {
+        if (!rereads()) {
+            return statements.plainTail();
+        }
+        return ranges.isEmpty() ? statements.rereadTail() : statements.rereadTailWithRanges();
+    }
+
+    /**
+     * Bind {@link #flushStatement()}'s parameters from {@code index} on
+     *
+     * @return the index of the next statement's first parameter
+     */
+    int bindFlushStatement(PreparedStatement statement, int index) throws SQLException {
+        assert ownedByCurrentThread();
+        var rereads = rereads();
+        statement.setLong(index++, cursor);
+        statement.setInt(index++, settings.tailPageSize());
+        if (rereads) {
+            statement.setArray(index++, connection.createArrayOf("bigint", holes.toArray(Long[]::new)));
+            if (!ranges.isEmpty()) {
+                statement.setArray(index++, connection.createArrayOf("bigint", ranges.keySet().toArray(Long[]::new)));
+                statement.setArray(index++, connection.createArrayOf("bigint", ranges.values().toArray(Long[]::new)));
+            }
+        }
+        return index;
+    }
+
+    /** Map every row of a {@link #flushStatement()} result */
+    void readRows(ResultSet resultSet, List<StoredEvent> rows) throws SQLException {
+        while (resultSet.next()) {
+            rows.add(mapper.map(resultSet));
+        }
+    }
+
+    /** Reader loop: the hook before a read of this type inside a flush */
+    void beforeFlushRead(boolean combined) throws Exception {
+        seams.hooks().beforeRead(combined);
+    }
+
+    /**
+     * Apply one read: move the cursor, resolve re-read holes, record new holes, then - if a running set was read -
+     * retire candidates (with the hole read) and create one. Rows come back in {@code global_order} order, late commits
+     * included; each row is returned once.
+     *
+     * @param woken whether the read followed a wake ({@link WatermarkMutant#WAKE_ADVANCES_WATERMARK} only)
+     */
+    List<StoredEvent> apply(Read read, boolean woken) throws Exception {
+        assert ownedByCurrentThread();
+        var rows    = read.rows();
+        Set<String> running = null;
+        if (read.running() != null) {
+            lastBackends = read.running().backends();
+            running = read.running().xids();
             if (seams.has(EMPTY_TAIL_WITHOUT_RUNNING_SET) && rows.isEmpty()) {
                 running = Set.of();
             }
         }
-        lastReadNanos = System.nanoTime() - started;
+        lastReadNanos = read.nanos();
 
         var published = new ArrayList<StoredEvent>(rows.size());
         var newHole   = false;
@@ -192,6 +311,13 @@ final class TailReader implements AutoCloseable {
             }
         }
         lastReadContiguous = !newHole;
+        if (woken && rows.isEmpty() && seams.has(WAKE_ADVANCES_WATERMARK)) {
+            holes.clear();
+            ranges.clear();
+            candidates.clear();
+            initialized = true;
+            finalUpTo = Math.max(finalUpTo, cursor);
+        }
 
         if (running != null) {
             retire(running, published);
@@ -205,11 +331,11 @@ final class TailReader implements AutoCloseable {
         }
         published.sort(Comparator.comparingLong(StoredEvent::globalOrder));
         publishState();
-        observer.onRead(aggregateType, combined, lastReadNanos, rows.size(), holes.size() + ranges.size(), candidates.size(), oldestCandidateAge());
+        observer.onRead(aggregateType, read.combined(), read.nanos(), rows.size(), holes.size() + ranges.size(), candidates.size(), oldestCandidateAge());
         return published;
     }
 
-    private Set<String> probe(List<StoredEvent> rows) throws SQLException {
+    private RunningSet probe(List<StoredEvent> rows) throws SQLException {
         PreparedStatement statement;
         if (seams.has(NO_HOLE_REREAD)) {
             statement = statement("probeWithoutHoleReread", statements.probeWithoutHoleReread());
@@ -228,12 +354,12 @@ final class TailReader implements AutoCloseable {
             statement.setArray(4, connection.createArrayOf("bigint", ranges.keySet().toArray(Long[]::new)));
             statement.setArray(5, connection.createArrayOf("bigint", ranges.values().toArray(Long[]::new)));
         }
-        Set<String> running = null;
+        RunningSet running = null;
         try (var resultSet = statement.executeQuery()) {
             while (resultSet.next()) {
                 resultSet.getLong(1);
                 if (resultSet.wasNull()) {
-                    running = xids(resultSet.getArray(RUNNING_COLUMN));
+                    running = RunningSet.of(resultSet.getArray(RUNNING_COLUMN));
                 } else {
                     rows.add(mapper.map(resultSet));
                 }
@@ -515,25 +641,6 @@ final class TailReader implements AutoCloseable {
             prepared.put(name, statement);
         }
         return statement;
-    }
-
-    /**
-     * @param array {@link EventLogStorage#RUNNING_SET}: the backend count, then the running xids
-     */
-    private Set<String> xids(Array array) throws SQLException {
-        if (array == null) {
-            return Set.of();
-        }
-        var values = (Object[]) array.getArray();
-        if (values.length == 0) {
-            return Set.of();
-        }
-        lastBackends = Integer.parseInt((String) values[0]);
-        var set = new HashSet<String>(values.length * 2);
-        for (var i = 1; i < values.length; i++) {
-            set.add((String) values[i]);
-        }
-        return set;
     }
 
     /** Close the prepared statements; the connection is the loop's */

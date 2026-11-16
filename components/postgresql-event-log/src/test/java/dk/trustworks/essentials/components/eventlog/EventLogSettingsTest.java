@@ -50,4 +50,14 @@ class EventLogSettingsTest {
     void the_wait_is_capped_at_probe_backoff_max() {
         assertThat(ruleOnly.probeWait(TWO_MS, 2_000)).isEqualTo(Duration.ofSeconds(10));
     }
+
+    @Test
+    void after_a_wake_the_probe_wait_follows_the_cost_rule_without_the_backstop_floor() {
+        var defaults = EventLogSettings.defaults();
+        assertThat(defaults.wokenProbeMin()).isEqualTo(Duration.ofMillis(10));
+        assertThat(defaults.wokenProbeWait(0, 1)).isEqualTo(Duration.ofMillis(10));
+        assertThat(defaults.wokenProbeWait(TWO_MS, 1)).isEqualTo(Duration.ofMillis(200));
+        assertThat(defaults.wokenProbeWait(TWO_MS, 100)).isEqualTo(Duration.ofSeconds(2));
+        assertThat(defaults.wokenProbeWait(Duration.ofSeconds(1).toNanos(), 1)).isEqualTo(defaults.probeBackoffMax());
+    }
 }

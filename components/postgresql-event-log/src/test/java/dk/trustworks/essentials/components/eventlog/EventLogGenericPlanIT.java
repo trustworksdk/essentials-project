@@ -43,7 +43,7 @@ class EventLogGenericPlanIT extends AbstractEventLogIT {
     @Test
     void every_generic_reader_statement_reads_the_event_table_by_index_only() throws SQLException {
         var statements = EventLogStorage.TailStatements.of(tables.eventTable()).all();
-        assertThat(statements).containsKeys("head", "plainTail", "probe", "probeWithRanges", "holeRead", "runningSet");
+        assertThat(statements).containsKeys("head", "plainTail", "probe", "probeWithRanges", "holeRead", "runningSet", "rereadTail", "rereadTailWithRanges");
         for (var entry : statements.entrySet()) {
             if (TailReader.CUSTOM_PLAN_STATEMENTS.contains(entry.getKey())) {
                 continue;

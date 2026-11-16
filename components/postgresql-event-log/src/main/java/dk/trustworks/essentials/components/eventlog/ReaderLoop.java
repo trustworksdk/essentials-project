@@ -58,14 +58,16 @@ final class ReaderLoop {
     private final ConcurrentLinkedQueue<Request>     requests  = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean                      woken     = new AtomicBoolean();
     /** The current activation of each active aggregate type; guarded by {@code this} */
-    private final Map<String, ActiveType>            active    = new HashMap<>();
-    /** Guarded by {@code this} */
-    private Thread                                   thread;
+    private final Map<String, ActiveType>            active    = new ConcurrentHashMap<>();
+    /** Written under {@code this} */
+    private volatile Thread                          thread;
 
     // ---- loop thread only ----
     private final List<ActiveType>                   types     = new ArrayList<>();
     private Connection                               connection;
     private long                                     reconnectAtNanos;
+    /** Multi-type flush statements by text (phase 6 §4.2), least recently used first */
+    private final LinkedHashMap<String, PreparedStatement> flushes = new LinkedHashMap<>(16, 0.75f, true);
     /** The loop's connection, published for tests that terminate its backend */
     private volatile Connection                      published;
 
@@ -104,7 +106,7 @@ final class ReaderLoop {
         FINAL
     }
 
-    private sealed interface Request permits Activate, Leave, Attach, Detach, Wake, HandOff {
+    private sealed interface Request permits Activate, Leave, Attach, Detach, HandOff {
     }
 
     private record HandOff(ActiveType type, Inbox inbox, String subscriber, TestSeams.Hooks hooks, List<HandledSet.Gap> gaps, CompletableFuture<HandOffReply> reply)
@@ -125,9 +127,6 @@ final class ReaderLoop {
     private record Detach(ActiveType type, Inbox inbox) implements Request {
     }
 
-    private record Wake(ActiveType type) implements Request {
-    }
-
     /**
      * One activation of an aggregate type: from its first subscription's start to its last one's stop. The reader,
      * statements, mapper and seams are those of the activating subscription.
@@ -144,6 +143,8 @@ final class ReaderLoop {
         /** The last published reader state; survives a restart, since a watermark once read is final */
         private volatile TailReader.State    state;
         private final Object                 signal = new Object();
+        /** Set by a wake (phase 6 §4.1), taken by the loop before it reads; any thread */
+        private final AtomicBoolean          wake   = new AtomicBoolean();
         /** Bumped whenever the watermark may have changed; guarded by {@link #signal} */
         private long                         version;
 
@@ -151,6 +152,13 @@ final class ReaderLoop {
         private final List<Inbox>            attached = new ArrayList<>();
         private long                         nextDueNanos;
         private Long                         lastPublishedWatermark;
+        /** The probe clock (phase 6 §5): when the last running set was read, and what that read cost */
+        private long                         lastProbeNanos;
+        private long                         lastProbeCostNanos;
+        /** A wake arrived since the last running-set read: the probe waits {@link EventLogSettings#wokenProbeWait} */
+        private boolean                      wokenSinceProbe;
+        /** The read about to run follows a wake */
+        private boolean                      wokenRead;
 
         private ActiveType(String aggregateType, EventLogStorage.TailStatements statements, TailReader.RowMapper mapper, TestSeams seams) {
             this.aggregateType = aggregateType;
@@ -274,9 +282,27 @@ final class ReaderLoop {
         submit(new Detach(type, inbox));
     }
 
-    /** Read {@code type} now instead of at its next due time */
+    /**
+     * Read {@code type} now instead of at its next due time (phase 6 §4.1): set its wake flag and unpark the loop. Never
+     * blocks, never starts the loop, moves no reader state; any thread
+     */
     void wake(ActiveType type) {
-        submit(new Wake(type));
+        type.wake.set(true);
+        woken.set(true);
+        var t = thread;
+        if (t != null) {
+            LockSupport.unpark(t);
+        }
+    }
+
+    /**
+     * {@link #wake(ActiveType)} for {@code aggregateType} if it is active; nothing otherwise (tier 2, phase 6 §2.2)
+     */
+    void wake(String aggregateType) {
+        var type = active.get(aggregateType);
+        if (type != null) {
+            wake(type);
+        }
     }
 
     /** @return the current reader of {@code aggregateType}, {@code null} if the type is inactive or restarting; for tests */
@@ -353,19 +379,15 @@ final class ReaderLoop {
                 if (connection == null) {
                     next = reconnectAtNanos;
                 } else {
-                    for (var type : types) {
-                        if (connection == null) {
-                            break;
-                        }
-                        if (type.reader != null && now - type.nextDueNanos >= 0) {
-                            read(type);
-                        }
-                    }
+                    readDue(now);
                     for (var type : types) {
                         next = next - type.nextDueNanos > 0 ? type.nextDueNanos : next;
                     }
+                    if (connection != null && next - System.nanoTime() > 0 && parkUntilWoken()) {
+                        next = Long.MAX_VALUE;
+                    }
                 }
-                park(next - System.nanoTime());
+                park(next == Long.MAX_VALUE ? Long.MAX_VALUE : next - System.nanoTime());
             } catch (Exception e) {
                 restart(e);
             }
@@ -405,7 +427,6 @@ final class ReaderLoop {
                 case Attach attach -> attach(attach);
                 case HandOff handOff -> handOff(handOff);
                 case Detach detach -> detach.type().attached.remove(detach.inbox());
-                case Wake wake -> wake.type().nextDueNanos = System.nanoTime();
             }
         }
     }
@@ -457,20 +478,215 @@ final class ReaderLoop {
         request.reply().complete(held ? HandOffReply.HELD : HandOffReply.FINAL);
     }
 
-    private void read(ActiveType type) throws Exception {
+    /**
+     * Step 2 of the iteration (phase 6 §4): take every wake flag before reading, so a wake during the read causes
+     * another; then read the due types - one alone with the combined probe or the tail (§9 decision 2), two or more in
+     * one flush with at most one running set, read last (§4.2)
+     */
+    private void readDue(long now) throws Exception {
+        var clearAfterRead = types.stream().anyMatch(type -> type.seams.has(WAKE_CLEARED_AFTER_READ));
+        var due            = new ArrayList<ActiveType>();
+        for (var type : types) {
+            var woken = clearAfterRead ? type.wake.get() : type.wake.getAndSet(false);
+            if (woken) {
+                type.nextDueNanos = now;
+                type.wokenSinceProbe = true;
+            }
+            if (type.reader != null && now - type.nextDueNanos >= 0) {
+                type.wokenRead = woken;
+                due.add(type);
+            }
+        }
+        if (due.size() == 1 || due.size() > MAX_FLUSH_TYPES) {
+            for (var type : due) {
+                if (connection == null) {
+                    break;
+                }
+                readAlone(type);
+            }
+        } else if (!due.isEmpty()) {
+            flush(due);
+        }
+        if (clearAfterRead) {
+            for (var type : due) {
+                type.wake.set(false);
+            }
+        }
+    }
+
+    /** More due types than this are read one statement each, not in one flush: a guard against statement-cache churn */
+    static final int MAX_FLUSH_TYPES = 16;
+
+    private void readAlone(ActiveType type) throws Exception {
+        var reader  = type.reader;
+        var allowed = probeAllowed(type, System.nanoTime());
+        var names   = List.of(type.aggregateType);
+        type.seams.hooks().beforeFlush(names, allowed && reader.wantsRunningSet());
+        var read = reader.execute(allowed);
+        type.seams.hooks().afterFlushBeforeApply(names);
+        observer.onFlush(names, 1, read.nanos());
+        finish(type, read);
+    }
+
+    /**
+     * One pgjdbc flush (phase 6 §4.2): every due type's tail statement, then one {@code SELECT RUNNING_SET} if any of
+     * them wants a running set and its probe clock allows. Statements before one Sync share an implicit transaction,
+     * where PostgreSQL caches backend status (P0.2): so exactly one running set, read after every type's snapshot (I11)
+     */
+    private void flush(List<ActiveType> due) throws Exception {
+        var now     = System.nanoTime();
+        var running = false;
+        for (var type : due) {
+            running |= type.reader.wantsRunningSet() && probeAllowed(type, now);
+        }
+        var perType = running && due.stream().anyMatch(type -> type.seams.has(RUNNING_SET_PER_TYPE_IN_FLUSH));
+        var first   = running && !perType && due.stream().anyMatch(type -> type.seams.has(RUNNING_SET_FIRST_IN_FLUSH));
+        // Each part is a due type's index, or -1 for a running set
+        var parts = new ArrayList<Integer>();
+        var sql   = new StringBuilder();
+        if (first) {
+            parts.add(-1);
+        }
+        for (var k = 0; k < due.size(); k++) {
+            parts.add(k);
+            if (perType) {
+                parts.add(-1);
+            }
+        }
+        if (running && !first && !perType) {
+            parts.add(-1);
+        }
+        for (var part : parts) {
+            if (!sql.isEmpty()) {
+                sql.append(";\n");
+            }
+            sql.append(part < 0 ? due.getFirst().statements.runningSet() : due.get(part).reader.flushStatement());
+        }
+        var names = due.stream().map(type -> type.aggregateType).toList();
+        var hooks = new LinkedHashSet<TestSeams.Hooks>();
+        due.forEach(type -> hooks.add(type.seams.hooks()));
+        for (var hook : hooks) {
+            hook.beforeFlush(names, running);
+        }
+        for (var type : due) {
+            type.reader.beforeFlushRead(running);
+        }
+
+        var statement = flushStatement(sql.toString());
+        var index     = 1;
+        for (var type : due) {
+            index = type.reader.bindFlushStatement(statement, index);
+        }
+        var rows = new ArrayList<List<StoredEvent>>();
+        due.forEach(type -> rows.add(new ArrayList<>()));
+        var sets    = new TailReader.RunningSet[due.size()];
+        var started = System.nanoTime();
+        var result  = statement.execute();
+        var last    = -1;
+        for (var part : parts) {
+            if (!result) {
+                throw new IllegalStateException("A flush of " + names + " returned fewer results than statements");
+            }
+            try (var resultSet = statement.getResultSet()) {
+                if (part >= 0) {
+                    due.get(part).reader.readRows(resultSet, rows.get(part));
+                    last = part;
+                } else {
+                    resultSet.next();
+                    var set = TailReader.RunningSet.of(resultSet.getArray(1));
+                    for (var k = 0; k < due.size(); k++) {
+                        // per type: the set after its own statement; otherwise one set for every type
+                        if (!perType || k == last) {
+                            sets[k] = set;
+                        }
+                    }
+                }
+            }
+            result = statement.getMoreResults();
+        }
+        var nanos = System.nanoTime() - started;
+        for (var hook : hooks) {
+            hook.afterFlushBeforeApply(names);
+        }
+        observer.onFlush(names, parts.size(), nanos);
+        for (var k = 0; k < due.size(); k++) {
+            finish(due.get(k), new TailReader.Read(rows.get(k), sets[k], nanos, sets[k] != null));
+        }
+    }
+
+    private PreparedStatement flushStatement(String sql) throws SQLException {
+        var statement = flushes.get(sql);
+        if (statement == null) {
+            statement = connection.prepareStatement(sql);
+            statement.unwrap(org.postgresql.PGStatement.class).setPrepareThreshold(settings.genericPlans() ? 1 : 0);
+            flushes.put(sql, statement);
+            if (flushes.size() > MAX_FLUSH_TEXTS) {
+                var eldest = flushes.entrySet().iterator();
+                closeQuietly(eldest.next().getValue());
+                eldest.remove();
+            }
+        }
+        return statement;
+    }
+
+    /** Distinct flush texts kept prepared; the mixes of types and shapes that occur are few (phase 6 §4.2) */
+    private static final int MAX_FLUSH_TEXTS = 64;
+
+    private static void closeQuietly(Statement statement) {
+        try {
+            statement.close();
+        } catch (SQLException e) {
+            log.debug("Closing a flush statement failed", e);
+        }
+    }
+
+    /**
+     * The probe clock (phase 6 §5): a running set is read only once the last one is a probe wait old - the woken wait
+     * if a wake arrived since, else the backstop-floored {@link EventLogSettings#probeWait}
+     */
+    private boolean probeAllowed(ActiveType type, long now) {
+        if (type.wokenSinceProbe && type.seams.has(PROBE_ON_EVERY_WAKE)) {
+            return true;
+        }
+        return now - probeDueNanos(type) >= 0;
+    }
+
+    private long probeDueNanos(ActiveType type) {
         var reader = type.reader;
-        var rows   = reader.poll();
+        var wait = type.wokenSinceProbe ? settings.wokenProbeWait(type.lastProbeCostNanos, reader.lastBackends())
+                                        : settings.probeWait(type.lastProbeCostNanos, reader.lastBackends());
+        return type.lastProbeNanos + wait.toNanos();
+    }
+
+    /** Apply one read of {@code type}, publish it, and set its next due time */
+    private void finish(ActiveType type, TailReader.Read read) throws Exception {
+        var reader = type.reader;
+        var rows   = reader.apply(read, type.wokenRead);
+        type.wokenRead = false;
         type.seams.hooks().afterReadBeforePublish(type.aggregateType, rows);
         offer(type, rows, reader.watermark());
         type.publish(reader.state());
         var now = System.nanoTime();
-        if (reader.readAgainNow(rows.size())) {
+        if (read.combined()) {
+            type.lastProbeNanos = now;
+            type.lastProbeCostNanos = read.nanos();
+            type.wokenSinceProbe = false;
+        }
+        if (read.rows().size() >= settings.tailPageSize()) {
             type.nextDueNanos = now;
-        } else if (reader.hasOutstandingCandidates()) {
-            type.nextDueNanos = now + settings.probeWait(reader.lastReadNanos(), reader.lastBackends()).toNanos();
+        } else if (reader.wantsRunningSet()) {
+            // A new hole, a hole or a candidate: the tail is read again when the probe clock allows a running set
+            var probeDue = probeDueNanos(type);
+            type.nextDueNanos = probeDue - now > 0 ? probeDue : now;
         } else {
             type.nextDueNanos = now + settings.backstopInterval().toNanos();
         }
+    }
+
+    /** {@link WatermarkMutant#PARK_UNTIL_WOKEN}: no deadline while no candidate is outstanding */
+    private boolean parkUntilWoken() {
+        return types.stream().anyMatch(type -> type.seams.has(PARK_UNTIL_WOKEN))
+                && types.stream().noneMatch(type -> type.reader != null && type.reader.hasOutstandingCandidates());
     }
 
     /**
@@ -532,6 +748,9 @@ final class ReaderLoop {
         reader.startAtHead();
         type.reader = reader;
         type.nextDueNanos = System.nanoTime();
+        type.lastProbeNanos = type.nextDueNanos;
+        type.lastProbeCostNanos = 0;
+        type.wokenSinceProbe = false;
         type.publish(reader.state());
     }
 
@@ -570,6 +789,8 @@ final class ReaderLoop {
             closeReader(type);
         }
         published = null;
+        flushes.values().forEach(ReaderLoop::closeQuietly);
+        flushes.clear();
         if (connection == null) {
             return;
         }
@@ -599,7 +820,11 @@ final class ReaderLoop {
         if (nanos <= 0 || woken.getAndSet(false)) {
             return;
         }
-        LockSupport.parkNanos(this, nanos);
+        if (nanos == Long.MAX_VALUE) {
+            LockSupport.park(this);
+        } else {
+            LockSupport.parkNanos(this, nanos);
+        }
         woken.set(false);
     }
 }
