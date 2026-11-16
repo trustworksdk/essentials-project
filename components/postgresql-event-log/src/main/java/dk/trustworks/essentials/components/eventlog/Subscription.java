@@ -154,6 +154,14 @@ public final class Subscription {
     private final ProgressStore                  progress;
     private final EventLogSettings               settings;
     private final EventLogObserver               observer;
+    // ---- phase 5 ----
+    private final EventTypeFilter                filter;
+    private final boolean                        filtered;
+    private final CatchUpContext                 catchUp;
+    private final CatchUpPermits                 permits;
+    private final CatchUpWindow                  window;
+    /** Mutant {@link WatermarkMutant#PERMIT_HELD_THROUGH_PAGE}: a permit kept until the rows read are applied */
+    private boolean                              permitHeld;
 
     private final CountDownLatch                 started = new CountDownLatch(1);
     private volatile boolean                     running;
@@ -210,8 +218,13 @@ public final class Subscription {
     private final Queue<ParkedRequest>           parkedRequests = new ConcurrentLinkedQueue<>();
 
     Subscription(SubscriptionSpec spec, ReaderLoop loop, EventLogStorage.TailStatements statements, TailReader.RowMapper mapper, ProgressStore progress,
-                 EventLogSettings settings, EventLogObserver observer) {
+                 EventLogSettings settings, EventLogObserver observer, CatchUpContext catchUp) {
         this.key = spec.key();
+        this.filter = spec.filter();
+        this.filtered = !spec.filter().matchesAll();
+        this.catchUp = requireNonNull(catchUp, "No catchUp provided");
+        this.permits = spec.seams().has(PERMIT_PER_EVENT_LOG) ? catchUp.perEventLog() : catchUp.shared();
+        this.window = new CatchUpWindow(settings.catchUpScanWindow(), settings.catchUpScanWindowMax(), settings.catchUpPageSize());
         this.initialResumeFrom = spec.initialResumeFrom();
         this.mode = spec.mode();
         this.model = spec.model();
@@ -229,14 +242,29 @@ public final class Subscription {
     }
 
     /**
+     * What a subscription's catch-up reads share with its event log (phase 5 §2.2, §3, §4): the type-id registry, the
+     * database's permits (and, for mutant {@link WatermarkMutant#PERMIT_PER_EVENT_LOG}, the event log's own), and whether
+     * the aggregate type's {@code (event_type, global_order)} index is valid
+     */
+    record CatchUpContext(EventTypeRegistry eventTypes, CatchUpPermits shared, CatchUpPermits perEventLog, java.util.function.BooleanSupplier indexValid) {
+        CatchUpContext {
+            requireNonNull(eventTypes, "No eventTypes provided");
+            requireNonNull(shared, "No shared provided");
+            requireNonNull(perEventLog, "No perEventLog provided");
+            requireNonNull(indexValid, "No indexValid provided");
+        }
+    }
+
+    /**
      * What a subscription is: its progress key, where a new one starts, its consistency mode and progress model, the
      * handler that model calls ({@code handler} for {@link ProgressModel#PERIODIC}, {@code pageHandler} for
      * {@link ProgressModel#IN_HANDLER_TRANSACTION}) and its test seams
      */
     record SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, ProgressModel model, Handler handler, PageHandler pageHandler,
-                            TestSeams seams) {
+                            TestSeams seams, EventTypeFilter filter) {
         SubscriptionSpec {
             requireNonNull(key, "No key provided");
+            requireNonNull(filter, "No filter provided");
             requireNonNull(mode, "No mode provided");
             requireNonNull(model, "No model provided");
             requireNonNull(seams, "No seams provided");
@@ -252,15 +280,20 @@ public final class Subscription {
 
         /** Phase 2's and 3's subscription: {@code FRESH}, periodic */
         SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, Handler handler, TestSeams seams) {
-            this(key, initialResumeFrom, ConsistencyMode.FRESH, ProgressModel.PERIODIC, handler, null, seams);
+            this(key, initialResumeFrom, ConsistencyMode.FRESH, ProgressModel.PERIODIC, handler, null, seams, EventTypeFilter.all());
+        }
+
+        /** @return this spec with the event-type filter {@code filter} (phase 5 §1.2) */
+        SubscriptionSpec withFilter(EventTypeFilter filter) {
+            return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter);
         }
 
         static SubscriptionSpec periodic(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, Handler handler, TestSeams seams) {
-            return new SubscriptionSpec(key, initialResumeFrom, mode, ProgressModel.PERIODIC, handler, null, seams);
+            return new SubscriptionSpec(key, initialResumeFrom, mode, ProgressModel.PERIODIC, handler, null, seams, EventTypeFilter.all());
         }
 
         static SubscriptionSpec inTransaction(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, PageHandler pageHandler, TestSeams seams) {
-            return new SubscriptionSpec(key, initialResumeFrom, mode, ProgressModel.IN_HANDLER_TRANSACTION, null, pageHandler, seams);
+            return new SubscriptionSpec(key, initialResumeFrom, mode, ProgressModel.IN_HANDLER_TRANSACTION, null, pageHandler, seams, EventTypeFilter.all());
         }
     }
 
@@ -412,6 +445,9 @@ public final class Subscription {
             lifecycle();
         } finally {
             phase = Phase.STOPPED;
+            if (permitHeld) {
+                releasePermit(true);
+            }
             failParkedRequests();
             var current = inbox;
             if (current != null) {
@@ -451,6 +487,7 @@ public final class Subscription {
         failingOrder = -1;
         ioFailures = 0;
         stepDown.reset();
+        window.reset();
     }
 
     /** The held aggregates from {@code el_parked_events} (§4.5): at start and after a reposition */
@@ -519,6 +556,7 @@ public final class Subscription {
      */
     private ReaderLoop.AttachReply catchUpAndAttach() throws Exception {
         while (running && repositionTo == null) {
+            var earlyIds  = typeIdsBeforeCeiling();
             var version   = type.version();
             var state     = type.state();
             var watermark = state == null ? null : state.watermark();
@@ -527,19 +565,36 @@ public final class Subscription {
                 continue;
             }
             phase = Phase.CATCHING_UP;
-            if (watermark != null && handled.prefix() < watermark) {
+            if (filtered && watermark != null && handled.prefix() < watermark) {
+                seams.hooks().beforeDeliveryRead(key.subscriber(), false);
+                var page = filteredRead(handled.prefix(), watermark, earlyIds);
+                if (page == null) {
+                    continue;
+                }
+                receivedWatermark = Math.max(receivedWatermark, page.advanceTo());
+                var worked = work(page.rows());
+                releasePermit(true);
+                if (!worked) {
+                    return null;
+                }
+                if (handled.prefix() < watermark) {
+                    continue;
+                }
+            } else if (watermark != null && handled.prefix() < watermark) {
                 seams.hooks().beforeDeliveryRead(key.subscriber(), false);
                 var rows = read(false, handled.prefix(), watermark, null, null);
                 var full = rows.size() >= settings.catchUpPageSize();
                 receivedWatermark = Math.max(receivedWatermark, full ? rows.getLast().globalOrder() : watermark);
-                if (!work(rows)) {
+                var worked = work(rows);
+                releasePermit(true);
+                if (!worked) {
                     return null;
                 }
                 if (full) {
                     continue;
                 }
             }
-            var candidate = new Inbox(settings.subscriptionBufferSize());
+            var candidate = new Inbox(settings.subscriptionBufferSize(), false, filter, seams.has(INBOX_COUNTS_UNMATCHED));
             inbox = candidate;
             if (seams.has(BRIDGE_BEFORE_ATTACH) && state != null && !bridge(new ReaderLoop.AttachReply(true, state.cursor(), watermark, state.holes(), state.ranges()))) {
                 inbox = null;
@@ -650,7 +705,8 @@ public final class Subscription {
                     }
                 }
             }
-            var rows    = read(true, lower, Math.max(lower, cursor), rereadHoles, rereadRanges);
+            var typeIds = filtered ? resolveTypeIds() : null;
+            List<StoredEvent> rows = typeIds != null && typeIds.length == 0 ? List.of() : read(true, lower, Math.max(lower, cursor), rereadHoles, rereadRanges, typeIds);
             var newRows = 0;
             var highest = lower;
             var dropped = 0;
@@ -667,8 +723,19 @@ public final class Subscription {
             bridgeRowsDroppedAsHandled += dropped;
             var ceiling = newRows >= settings.catchUpPageSize() ? highest : Math.max(lower, cursor);
             receivedWatermark = Math.max(receivedWatermark, Math.min(ceiling, reply.watermark()));
-            if (!work(rows)) {
+            var worked = work(rows);
+            releasePermit(true);
+            if (!worked) {
                 return false;
+            }
+            if (filtered && ceiling > lower) {
+                // §2.3: every order of (lower, ceiling] the page did not return is non-matching or an attach hole still re-read
+                if (seams.has(FILTERED_BRIDGE_MARKS_HOLES)) {
+                    handled.addRange(lower, ceiling, Collections.emptySortedSet(), Collections.emptySortedMap());
+                } else {
+                    handled.addRange(lower, ceiling, holes, ranges);
+                }
+                advance();
             }
             lower = ceiling;
         }
@@ -726,6 +793,11 @@ public final class Subscription {
     private boolean work(List<StoredEvent> rows) throws Exception {
         pending.clear();
         for (var row : rows) {
+            if (filtered && !filter.matches(row.eventType())) {
+                // §2.1, §2.4: a non-matching row is handled as a no-op
+                handled.add(row.globalOrder());
+                continue;
+            }
             if (seams.has(NO_DEDUPE) || !handled.contains(row.globalOrder())) {
                 pending.addLast(new HeldBack.Entry(row, null));
             }
@@ -763,6 +835,7 @@ public final class Subscription {
                 }
                 continue;
             }
+            var earlyIds  = typeIdsBeforeCeiling();
             var version   = type.version();
             var state     = type.state();
             var watermark = state == null ? null : state.watermark();
@@ -771,6 +844,15 @@ public final class Subscription {
                 continue;
             }
             phase = Phase.CATCHING_UP;
+            if (filtered && watermark != null && receivedPrefix < watermark) {
+                seams.hooks().beforeDeliveryRead(key.subscriber(), false);
+                var page = filteredRead(receivedPrefix, watermark, earlyIds);
+                if (page != null) {
+                    receivedWatermark = Math.max(receivedWatermark, page.advanceTo());
+                    toPending(page.rows(), page.advanceTo());
+                }
+                continue;
+            }
             if (watermark != null && receivedPrefix < watermark) {
                 seams.hooks().beforeDeliveryRead(key.subscriber(), false);
                 var rows    = read(false, receivedPrefix, watermark, null, null);
@@ -780,7 +862,7 @@ public final class Subscription {
                 toPending(rows, ceiling);
                 continue;
             }
-            var candidate = new Inbox(settings.subscriptionBufferSize(), !seams.has(HELD_NOT_COUNTED));
+            var candidate = new Inbox(settings.subscriptionBufferSize(), !seams.has(HELD_NOT_COUNTED), filter, seams.has(INBOX_COUNTS_UNMATCHED));
             inbox = candidate;
             seams.hooks().beforeAttachRequest(key.subscriber());
             phase = Phase.ATTACHING;
@@ -842,6 +924,13 @@ public final class Subscription {
             receivedWatermark = Math.max(receivedWatermark, batch.watermark());
         }
         for (var row : batch.rows()) {
+            if (filtered && !filter.matches(row.eventType())) {
+                // §2.4: dropped on receipt; R moves with W_rcv regardless. Counted only under the mutant
+                if (seams.has(INBOX_COUNTS_UNMATCHED)) {
+                    counting.release(1);
+                }
+                continue;
+            }
             var entry = new HeldBack.Entry(row, counting);
             if (row.globalOrder() <= receivedPrefix) {
                 entry.release();
@@ -875,9 +964,19 @@ public final class Subscription {
             if (attachCursor != null && receivedPrefix < attachCursor) {
                 var upper = Math.min(target, attachCursor);
                 seams.hooks().beforeDeliveryRead(key.subscriber(), true);
-                var rows    = read(true, receivedPrefix, upper, null, null);
-                var full    = rows.size() >= settings.catchUpPageSize();
-                var ceiling = full ? rows.getLast().globalOrder() : upper;
+                List<StoredEvent> rows;
+                long              ceiling;
+                if (filtered) {
+                    var page = filteredRead(receivedPrefix, upper, null);
+                    if (page == null) {
+                        continue;
+                    }
+                    rows = page.rows();
+                    ceiling = page.advanceTo();
+                } else {
+                    rows = read(true, receivedPrefix, upper, null, null);
+                    ceiling = rows.size() >= settings.catchUpPageSize() ? rows.getLast().globalOrder() : upper;
+                }
                 heldBack.dropUpTo(ceiling);
                 if (ceiling >= attachCursor) {
                     attachCursor = null;
@@ -996,6 +1095,7 @@ public final class Subscription {
                 return false;
             }
         }
+        releasePermit(true);
         return true;
     }
 
@@ -1574,34 +1674,232 @@ public final class Subscription {
      * holes, on a borrowed connection that is returned before any row is applied. Rows come back in {@code global_order}
      * order, each once.
      */
-    private List<StoredEvent> read(boolean bridge, long lower, long upper, SortedSet<Long> holes, SortedMap<Long, Long> ranges) throws SQLException {
-        var started = System.nanoTime();
-        var rows    = new ArrayList<StoredEvent>();
-        var plain   = holes == null || (holes.isEmpty() && ranges.isEmpty());
-        var sql     = plain ? statements.rangeRead() : ranges.isEmpty() ? statements.bridgePage() : statements.bridgePageWithRanges();
-        try (var connection = loop.dataSource().getConnection(); var statement = connection.prepareStatement(sql)) {
-            statement.setLong(1, lower);
-            statement.setLong(2, upper);
-            statement.setInt(3, settings.catchUpPageSize());
-            if (!plain) {
-                statement.setArray(4, connection.createArrayOf("bigint", holes.toArray(Long[]::new)));
-                if (!ranges.isEmpty()) {
-                    statement.setArray(5, connection.createArrayOf("bigint", ranges.keySet().toArray(Long[]::new)));
-                    statement.setArray(6, connection.createArrayOf("bigint", ranges.values().toArray(Long[]::new)));
+    private List<StoredEvent> read(boolean bridge, long lower, long upper, SortedSet<Long> holes, SortedMap<Long, Long> ranges) throws SQLException, InterruptedException {
+        return read(bridge, lower, upper, holes, ranges, null);
+    }
+
+    /**
+     * As {@link #read(boolean, long, long, SortedSet, SortedMap)}; with {@code typeIds} (a filtered {@code FRESH} bridge,
+     * phase 5 §2.3) both branches carry the type predicate. Under a catch-up permit (§4).
+     */
+    private List<StoredEvent> read(boolean bridge, long lower, long upper, SortedSet<Long> holes, SortedMap<Long, Long> ranges, Short[] typeIds)
+            throws SQLException, InterruptedException {
+        var started  = System.nanoTime();
+        var rows     = new ArrayList<StoredEvent>();
+        var plain    = holes == null || (holes.isEmpty() && ranges.isEmpty());
+        var typed    = typeIds != null;
+        var sql      = typed ? plain ? statements.filteredRangeRead() : ranges.isEmpty() ? statements.filteredBridgePage() : statements.filteredBridgePageWithRanges()
+                             : plain ? statements.rangeRead() : ranges.isEmpty() ? statements.bridgePage() : statements.bridgePageWithRanges();
+        acquirePermit();
+        try {
+            try (var connection = loop.dataSource().getConnection(); var statement = connection.prepareStatement(sql)) {
+                var p = 1;
+                statement.setLong(p++, lower);
+                statement.setLong(p++, upper);
+                if (typed) {
+                    statement.setArray(p++, connection.createArrayOf("int2", typeIds));
                 }
-            }
-            try (var resultSet = statement.executeQuery()) {
-                while (resultSet.next()) {
-                    var row = mapper.map(resultSet);
-                    // Re-read holes and ranges may overlap each other: each row once
-                    if (rows.isEmpty() || rows.getLast().globalOrder() != row.globalOrder()) {
-                        rows.add(row);
+                statement.setInt(p++, settings.catchUpPageSize());
+                if (!plain) {
+                    statement.setArray(p++, connection.createArrayOf("bigint", holes.toArray(Long[]::new)));
+                    if (typed) {
+                        statement.setArray(p++, connection.createArrayOf("int2", typeIds));
+                    }
+                    if (!ranges.isEmpty()) {
+                        statement.setArray(p++, connection.createArrayOf("bigint", ranges.keySet().toArray(Long[]::new)));
+                        statement.setArray(p++, connection.createArrayOf("bigint", ranges.values().toArray(Long[]::new)));
+                        if (typed) {
+                            statement.setArray(p, connection.createArrayOf("int2", typeIds));
+                        }
+                    }
+                }
+                try (var resultSet = statement.executeQuery()) {
+                    while (resultSet.next()) {
+                        var row = mapper.map(resultSet);
+                        // Re-read holes and ranges may overlap each other: each row once
+                        if (rows.isEmpty() || rows.getLast().globalOrder() != row.globalOrder()) {
+                            rows.add(row);
+                        }
                     }
                 }
             }
+        } finally {
+            releasePermit(false);
         }
         observer.onCatchUpRead(key.subscriber(), key.aggregateType(), bridge, System.nanoTime() - started, rows.size());
         return rows;
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // Phase 5: filtered reads (§2.2, §3) and the catch-up permit (§4)
+    // ---------------------------------------------------------------------------------------------------------------
+
+    /** One filtered read: the matching rows, and how far the position may advance (a final order) */
+    private record FilteredPage(List<StoredEvent> rows, long advanceTo) {
+    }
+
+    /**
+     * The filter's type ids (§2.2): names with no id yet are left out; each lookup of an unknown name costs one reload.
+     * Called after the ceiling is read, so every type that can occur at or below it has its id.
+     */
+    private Short[] resolveTypeIds() throws SQLException {
+        var ids = new TreeSet<Short>();
+        for (var name : filter.eventTypes()) {
+            var id = catchUp.eventTypes().knownIdOf(name);
+            if (id != null) {
+                ids.add(id);
+            }
+        }
+        return ids.toArray(Short[]::new);
+    }
+
+    /**
+     * Early type ids: mutant {@link WatermarkMutant#TYPE_IDS_BEFORE_CEILING} resolves them before the watermark is read,
+     * and the hold-point hook runs between the two steps; otherwise {@code null}
+     */
+    private Short[] typeIdsBeforeCeiling() throws Exception {
+        if (!filtered || !seams.has(TYPE_IDS_BEFORE_CEILING)) {
+            return null;
+        }
+        var ids = resolveTypeIds();
+        seams.hooks().afterCeilingBeforeTypeIds(key.subscriber(), -1);
+        return ids;
+    }
+
+    /**
+     * A filtered read of {@code (lower, min(final, lower + window)]} (§2.2, §3.2): {@code finalOrder} is a watermark (or
+     * the deferred bridge's {@code min(W_rcv, C)}), so every order at or below it is final. A short page advances to the
+     * ceiling, a full one to its last row; with a valid type index and a sparse type, a short page is followed by the
+     * skip-ahead probe. A cancelled statement quarters the window and returns {@code null}: retry from {@code lower}.
+     */
+    private FilteredPage filteredRead(long lower, long finalOrder, Short[] earlyIds) throws Exception {
+        var ceiling = window.ceiling(lower, finalOrder);
+        Short[] ids;
+        if (earlyIds != null) {
+            ids = earlyIds;
+        } else {
+            seams.hooks().afterCeilingBeforeTypeIds(key.subscriber(), ceiling);
+            ids = resolveTypeIds();
+        }
+        var dense     = window.dense();
+        var usedIndex = catchUp.indexValid().getAsBoolean() && !dense;
+        var rows      = List.<StoredEvent>of();
+        if (ids.length > 0) {
+            seams.hooks().beforeFilteredRead(key.subscriber(), lower, ceiling, Set.of(ids));
+            try {
+                rows = readFiltered(dense ? statements.filteredRangeReadPk() : statements.filteredRangeRead(), lower, ceiling, ids);
+            } catch (SQLException e) {
+                if ("57014".equals(e.getSQLState())) {
+                    window.afterCancel();
+                    log.debug("Subscription {} on {}: a filtered read of ({}, {}] was cancelled; retrying with a window of {}", key.subscriber(), key.aggregateType(), lower,
+                              ceiling, window.window());
+                    return null;
+                }
+                throw e;
+            }
+        }
+        var full      = rows.size() >= settings.catchUpPageSize();
+        var crawl     = !full && !rows.isEmpty() && seams.has(FILTERED_ADVANCE_TO_LAST_ROW);
+        var advanceTo = full || crawl ? rows.getLast().globalOrder() : ceiling;
+        if (!crawl) {
+            window.afterRead(full, rows.size(), advanceTo - lower);
+        }
+        observer.onFilteredRead(key.subscriber(), key.aggregateType(), advanceTo - lower, rows.size(), window.window(), usedIndex && ids.length > 0);
+        if (!full && !crawl) {
+            if (seams.has(FILTERED_CATCH_UP_TO_CURSOR)) {
+                var state = type.state();
+                if (state != null) {
+                    advanceTo = Math.max(advanceTo, state.cursor());
+                }
+            } else if (advanceTo < finalOrder && usedIndex && ids.length > 0) {
+                var next = skipAhead(ids, advanceTo, finalOrder);
+                advanceTo = next == null ? finalOrder : Math.max(advanceTo, next - 1);
+            }
+        }
+        return new FilteredPage(rows, advanceTo);
+    }
+
+    private List<StoredEvent> readFiltered(String sql, long lower, long ceiling, Short[] ids) throws SQLException, InterruptedException {
+        var started = System.nanoTime();
+        var rows    = new ArrayList<StoredEvent>();
+        acquirePermit();
+        try (var connection = loop.dataSource().getConnection(); var statement = connection.prepareStatement(sql)) {
+            statement.setLong(1, lower);
+            statement.setLong(2, ceiling);
+            statement.setArray(3, connection.createArrayOf("int2", ids));
+            statement.setInt(4, settings.catchUpPageSize());
+            try (var resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    rows.add(mapper.map(resultSet));
+                }
+            }
+        } finally {
+            releasePermit(false);
+        }
+        observer.onCatchUpRead(key.subscriber(), key.aggregateType(), false, System.nanoTime() - started, rows.size());
+        return rows;
+    }
+
+    /** §3.2: the first matching order in {@code (lower, upper]}, or {@code null} */
+    private Long skipAhead(Short[] ids, long lower, long upper) throws SQLException, InterruptedException {
+        acquirePermit();
+        try (var connection = loop.dataSource().getConnection(); var statement = connection.prepareStatement(statements.skipAheadProbe())) {
+            statement.setArray(1, connection.createArrayOf("int2", ids));
+            statement.setLong(2, lower);
+            statement.setLong(3, upper);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getLong(1) : null;
+            }
+        } finally {
+            releasePermit(false);
+        }
+    }
+
+    /** §4.2: before a covered statement borrows its connection. Fair, interruptible */
+    private void acquirePermit() throws InterruptedException {
+        if (seams.has(NO_CATCH_UP_PERMIT)) {
+            return;
+        }
+        if (permitHeld) {
+            // PERMIT_HELD_THROUGH_PAGE: the previous read's permit is still held; never take a second one
+            return;
+        }
+        var waited = permits.acquire();
+        try {
+            seams.hooks().onPermit(key.subscriber(), true);
+        } catch (Exception e) {
+            permits.release();
+            throw new IllegalStateException("onPermit hook failed", e);
+        }
+        observer.onCatchUpPermit(key.subscriber(), key.aggregateType(), waited, permits.inUse());
+    }
+
+    /**
+     * §4.2: after the result set is closed and the connection returned. {@code applied}: the rows read were applied
+     * (only mutant {@link WatermarkMutant#PERMIT_HELD_THROUGH_PAGE} waits for that)
+     */
+    private void releasePermit(boolean applied) {
+        if (seams.has(NO_CATCH_UP_PERMIT)) {
+            return;
+        }
+        if (seams.has(PERMIT_HELD_THROUGH_PAGE)) {
+            if (!applied) {
+                permitHeld = true;
+                return;
+            }
+            if (!permitHeld) {
+                return;
+            }
+        } else if (applied) {
+            return;
+        }
+        permitHeld = false;
+        try {
+            seams.hooks().onPermit(key.subscriber(), false);
+        } catch (Exception e) {
+            log.debug("onPermit hook failed", e);
+        }
+        permits.release();
     }
 
     /**

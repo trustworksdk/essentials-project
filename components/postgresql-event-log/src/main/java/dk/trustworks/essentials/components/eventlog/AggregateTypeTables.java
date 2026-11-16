@@ -44,6 +44,7 @@ public record AggregateTypeTables(String aggregateType, String eventTable, Strin
     static final String HEADS_SUFFIX            = "_heads";
     static final String STREAM_ORDER_SUFFIX     = "_stream_order";
     static final String EVENT_ID_INDEX_SUFFIX   = "_event_id";
+    static final String EVENT_TYPE_INDEX_SUFFIX = "_type_order";
 
     /**
      * The longest aggregate type whose derived names all fit in {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH}
@@ -69,6 +70,16 @@ public record AggregateTypeTables(String aggregateType, String eventTable, Strin
      * @throws IllegalArgumentException (or {@code InvalidTableOrColumnNameException}) if a derived name is not a valid,
      *                                  untruncated identifier
      */
+    /**
+     * @return {@code el_<type>_events_type_order}, the opt-in {@code (event_type, global_order)} index (design phase 5
+     * §5.1); shorter than {@link #streamOrderConstraint()}, so it fits whenever the other names do
+     */
+    public String eventTypeIndex() {
+        var name = eventTable + EVENT_TYPE_INDEX_SUFFIX;
+        PostgresqlUtil.checkIsValidTableOrColumnName(name, "aggregate type '" + aggregateType + "'");
+        return name;
+    }
+
     public static AggregateTypeTables of(String aggregateType) {
         requireNonBlank(aggregateType, "No aggregateType provided");
         var events = PREFIX + aggregateType.toLowerCase(Locale.ROOT) + EVENTS_SUFFIX;

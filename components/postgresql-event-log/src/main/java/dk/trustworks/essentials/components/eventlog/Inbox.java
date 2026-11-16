@@ -65,6 +65,10 @@ final class Inbox {
 
     private final int                    capacity;
     private final boolean                countUntilReleased;
+    /** Phase 5 §2.4: only rows that pass count; a batch with none is stored as watermark-only */
+    private final EventTypeFilter        filter;
+    /** Mutant {@link WatermarkMutant#INBOX_COUNTS_UNMATCHED}: every row counts, as without a filter */
+    private final boolean                countUnmatched;
     private final ReentrantLock          lock     = new ReentrantLock();
     private final Condition              changed  = lock.newCondition();
     private final ArrayDeque<Batch>      batches  = new ArrayDeque<>();
@@ -85,9 +89,34 @@ final class Inbox {
      *                           (phase 4 §2.3); {@code false}: until its batch is taken (phase 3)
      */
     Inbox(int capacity, boolean countUntilReleased) {
+        this(capacity, countUntilReleased, EventTypeFilter.all(), false);
+    }
+
+    /**
+     * @param filter         the subscription's filter (phase 5 §2.4): only matching rows count against the bound, and a
+     *                       batch without one is stored as watermark-only
+     * @param countUnmatched mutant {@link WatermarkMutant#INBOX_COUNTS_UNMATCHED}
+     */
+    Inbox(int capacity, boolean countUntilReleased, EventTypeFilter filter, boolean countUnmatched) {
         requireTrue(capacity > 0, "capacity must be > 0");
         this.capacity = capacity;
         this.countUntilReleased = countUntilReleased;
+        this.filter = requireNonNull(filter, "No filter provided");
+        this.countUnmatched = countUnmatched;
+    }
+
+    /** @return the rows of {@code batch} that count against the bound */
+    int counted(Batch batch) {
+        if (filter.matchesAll() || countUnmatched) {
+            return batch.size();
+        }
+        var n = 0;
+        for (var row : batch.rows()) {
+            if (filter.matches(row.eventType())) {
+                n++;
+            }
+        }
+        return n;
     }
 
     /**
@@ -119,6 +148,11 @@ final class Inbox {
      */
     Offer offer(Batch batch) {
         requireNonNull(batch, "No batch provided");
+        var counted = counted(batch);
+        if (counted == 0 && !batch.watermarkOnly()) {
+            // §2.4: nothing in it matches - a watermark-only batch, always accepted, merged into a trailing one
+            batch = new Batch(java.util.List.of(), batch.watermark());
+        }
         lock.lock();
         try {
             if (closed != null) {
@@ -130,11 +164,11 @@ final class Inbox {
                     batches.pollLast();
                     batch = new Batch(batch.rows(), Math.max(last.watermark(), batch.watermark()));
                 }
-            } else if (events > 0 && events + batch.size() > capacity) {
+            } else if (events > 0 && events + counted > capacity) {
                 return Offer.FULL;
             }
             batches.addLast(batch);
-            events += batch.size();
+            events += counted;
             changed.signalAll();
             return Offer.ACCEPTED;
         } finally {
@@ -167,7 +201,7 @@ final class Inbox {
             }
             var batch = batches.pollFirst();
             if (!countUntilReleased) {
-                events -= batch.size();
+                events -= counted(batch);
             }
             return batch;
         } finally {

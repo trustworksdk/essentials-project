@@ -54,6 +54,12 @@ final class EventLogStorage {
     /** Column index of the running set in the combined probe; columns 1-12 are {@link #EVENT_COLUMNS} */
     static final int RUNNING_COLUMN = 13;
 
+    // ---- phase 5 (§4.2, §5.3) ----
+    /** The database identity the catch-up permits are keyed by: name, server address (null on a socket), port */
+    static final String DATABASE_IDENTITY = "SELECT current_database(), host(inet_server_addr()), inet_server_port()";
+    /** Then the index name: one row {@code indisvalid AND indisready} if the index exists, none if absent */
+    static final String INDEX_VALIDITY    = "SELECT i.indisvalid AND i.indisready FROM pg_index i WHERE i.indexrelid = to_regclass(?)";
+
     // ---- progress (design §2.5, §3.4) ----
     static final String PROGRESS_START =
             "WITH old AS (SELECT consistency_mode, progress_model FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?)\n" +
@@ -113,9 +119,17 @@ final class EventLogStorage {
      * at or below the lower bound; {@code bridgePageWithRanges} plus {@code bigint[]} range lows and highs. The bridge
      * re-reads holes by {@code UNION ALL}, never {@code OR} (P0.11), and reads no running set. {@code byOrders}:
      * {@code bigint[]} global orders - a parked aggregate's events (phase 4 §4.5).
+     * <p>
+     * Phase 5's filtered statements (§2.2, §2.3, §3.2) take a {@code smallint[]} of event type ids after the range bounds:
+     * {@code filteredRangeRead} lower, upper, ids, limit; {@code filteredRangeReadPk} the same with
+     * {@code event_type + 0}, which keeps the type index out of the plan (the density switch); {@code skipAheadProbe}
+     * ids, lower, upper - the first matching order, issued only while the type index is valid; {@code filteredBridgePage}
+     * lower, upper, ids, limit, holes, ids; {@code filteredBridgePageWithRanges} plus range lows, highs, ids. Both bridge
+     * branches carry the type predicate.
      */
     record TailStatements(String head, String plainTail, String probe, String probeWithRanges, String holeRead, String runningSet,
-                          String probeWithoutHoleReread, String rangeRead, String bridgePage, String bridgePageWithRanges, String byOrders) {
+                          String probeWithoutHoleReread, String rangeRead, String bridgePage, String bridgePageWithRanges, String byOrders,
+                          String filteredRangeRead, String filteredRangeReadPk, String skipAheadProbe, String filteredBridgePage, String filteredBridgePageWithRanges) {
         static TailStatements of(String relation) {
             var tail   = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] AS running FROM " + relation + " WHERE global_order > ? ORDER BY global_order LIMIT ?)";
             var holes  = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] FROM " + relation + " WHERE global_order = ANY(?::bigint[]))";
@@ -125,6 +139,11 @@ final class EventLogStorage {
             var range        = "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? AND global_order <= ? ORDER BY global_order LIMIT ?";
             var bridgeHoles  = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order = ANY(?::bigint[]))";
             var bridgeRanges = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " e JOIN unnest(?::bigint[], ?::bigint[]) AS r(lo, hi) ON e.global_order BETWEEN r.lo AND r.hi)";
+            var typed        = " AND event_type = ANY(?::smallint[])";
+            var filtered     = "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? AND global_order <= ?" + typed + " ORDER BY global_order LIMIT ?";
+            var filteredPk   = "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? AND global_order <= ? AND event_type + 0 = ANY(?::smallint[]) ORDER BY global_order LIMIT ?";
+            var fHoles       = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order = ANY(?::bigint[])" + typed + ")";
+            var fRanges      = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " e JOIN unnest(?::bigint[], ?::bigint[]) AS r(lo, hi) ON e.global_order BETWEEN r.lo AND r.hi WHERE e.event_type = ANY(?::smallint[]))";
             return new TailStatements(
                     "SELECT (SELECT coalesce(max(global_order), 0) FROM " + relation + "), " + RUNNING_SET,
                     "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? ORDER BY global_order LIMIT ?",
@@ -136,7 +155,12 @@ final class EventLogStorage {
                     range,
                     "SELECT * FROM (\n(" + range + ")\nUNION ALL\n" + bridgeHoles + "\n) u ORDER BY u.global_order",
                     "SELECT * FROM (\n(" + range + ")\nUNION ALL\n" + bridgeHoles + "\nUNION ALL\n" + bridgeRanges + "\n) u ORDER BY u.global_order",
-                    "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order = ANY(?::bigint[]) ORDER BY global_order");
+                    "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order = ANY(?::bigint[]) ORDER BY global_order",
+                    filtered,
+                    filteredPk,
+                    "SELECT global_order FROM " + relation + " WHERE event_type = ANY(?::smallint[]) AND global_order > ? AND global_order <= ? ORDER BY global_order LIMIT 1",
+                    "SELECT * FROM (\n(" + filtered + ")\nUNION ALL\n" + fHoles + "\n) u ORDER BY u.global_order",
+                    "SELECT * FROM (\n(" + filtered + ")\nUNION ALL\n" + fHoles + "\nUNION ALL\n" + fRanges + "\n) u ORDER BY u.global_order");
         }
 
         /** Every statement with its name, for the generic-plan check */
@@ -151,6 +175,11 @@ final class EventLogStorage {
             all.put("rangeRead", rangeRead);
             all.put("bridgePage", bridgePage);
             all.put("bridgePageWithRanges", bridgePageWithRanges);
+            all.put("filteredRangeRead", filteredRangeRead);
+            all.put("filteredRangeReadPk", filteredRangeReadPk);
+            all.put("skipAheadProbe", skipAheadProbe);
+            all.put("filteredBridgePage", filteredBridgePage);
+            all.put("filteredBridgePageWithRanges", filteredBridgePageWithRanges);
             return all;
         }
     }

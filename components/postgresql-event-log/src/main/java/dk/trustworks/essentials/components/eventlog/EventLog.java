@@ -51,8 +51,21 @@ public final class EventLog {
     private final ReaderLoop                                          readerLoop;
     private final List<Subscription>                             subscriptions  = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile boolean                                          started;
+    private final EventTypeIndex                                      eventTypeIndex;
+    /** The database's shared catch-up permits (phase 5 §4), and this event log's own for the per-event-log mutant */
+    private volatile CatchUpPermits                                   permits;
+    private volatile CatchUpPermits                                   ownPermits;
 
     EventLog(DataSource dataSource, SchemaOwnership schemaOwnership, EventLogSchema.AggregateTypeDdlExecutor ddl, EventLogSettings settings, EventLogObserver observer) {
+        this(dataSource, schemaOwnership, ddl, settings, observer, () -> schemaOwnership == SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * @param createsSchema whether the engine creates the schema (schema mode {@code create}): the opt-in event-type
+     *                      index is built only then (phase 5 §5.2)
+     */
+    EventLog(DataSource dataSource, SchemaOwnership schemaOwnership, EventLogSchema.AggregateTypeDdlExecutor ddl, EventLogSettings settings, EventLogObserver observer,
+             java.util.function.BooleanSupplier createsSchema) {
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
         this.settings = requireNonNull(settings, "No settings provided");
         this.observer = requireNonNull(observer, "No observer provided");
@@ -61,6 +74,7 @@ public final class EventLog {
         this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
         this.ddl = requireNonNull(ddl, "No ddl provided");
         this.eventTypes = new EventTypeRegistry(dataSource);
+        this.eventTypeIndex = new EventTypeIndex(dataSource, createsSchema);
     }
 
     /**
@@ -83,7 +97,26 @@ public final class EventLog {
             EventLogSchema.initialize(dataSource);
         }
         EventLogSchema.verifyWatermarkPrerequisites(dataSource);
+        var database = CatchUpPermits.databaseKey(dataSource);
+        permits = CatchUpPermits.forDatabase(database, settings.catchUpPermits());
+        ownPermits = CatchUpPermits.unshared(database, settings.catchUpPermits());
+        warnIfPermitsReachPool();
         started = true;
+    }
+
+    /**
+     * §4.3: a cap at or above the pool size does nothing; Hikari's maximum pool size is read reflectively, if present
+     */
+    private void warnIfPermitsReachPool() {
+        try {
+            var size = (Integer) dataSource.getClass().getMethod("getMaximumPoolSize").invoke(dataSource);
+            if (size != null && settings.catchUpPermits() >= size) {
+                log.info("catchUpPermits ({}) is at or above the pool's maximum size ({}): the cap does not limit catch-up reads, and appenders may wait for " +
+                                 "connections during a catch-up storm", settings.catchUpPermits(), size);
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            // not a pool that reports its size
+        }
     }
 
     /**
@@ -123,7 +156,16 @@ public final class EventLog {
      * @return the running subscription
      */
     public Subscription subscribe(String subscriber, String aggregateType, String instanceName, long startFrom, Subscription.Handler handler) throws SQLException {
-        return subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(subscriber, aggregateType, instanceName), startFrom, handler, TestSeams.NONE));
+        return subscribe(subscriber, aggregateType, instanceName, startFrom, EventTypeFilter.all(), handler);
+    }
+
+    /**
+     * As {@link #subscribe(String, String, String, long, Subscription.Handler)}, receiving only the event types of
+     * {@code filter} (design phase 5 §1.2): the others count as handled without reaching the handler. <b>Temporary</b>.
+     */
+    public Subscription subscribe(String subscriber, String aggregateType, String instanceName, long startFrom, EventTypeFilter filter, Subscription.Handler handler)
+            throws SQLException {
+        return subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(subscriber, aggregateType, instanceName), startFrom, handler, TestSeams.NONE).withFilter(filter));
     }
 
     /**
@@ -138,8 +180,17 @@ public final class EventLog {
      */
     public Subscription subscribe(String subscriber, String aggregateType, String instanceName, long startFrom, Subscription.ConsistencyMode mode,
                                   Subscription.PageHandler handler) throws SQLException {
+        return subscribe(subscriber, aggregateType, instanceName, startFrom, mode, EventTypeFilter.all(), handler);
+    }
+
+    /**
+     * As {@link #subscribe(String, String, String, long, Subscription.ConsistencyMode, Subscription.PageHandler)},
+     * receiving only the event types of {@code filter} (design phase 5 §1.2). <b>Temporary</b>.
+     */
+    public Subscription subscribe(String subscriber, String aggregateType, String instanceName, long startFrom, Subscription.ConsistencyMode mode,
+                                  EventTypeFilter filter, Subscription.PageHandler handler) throws SQLException {
         return subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key(subscriber, aggregateType, instanceName), startFrom, mode, handler,
-                                                                     TestSeams.NONE));
+                                                                     TestSeams.NONE).withFilter(filter));
     }
 
     /**
@@ -162,8 +213,12 @@ public final class EventLog {
         var aggregateType = spec.key().aggregateType();
         var type          = registered(aggregateType);
         var relation      = spec.seams().readTable() != null ? spec.seams().readTable() : type.tables.eventTable();
+        if (settings.eventTypeIndexed().contains(aggregateType)) {
+            eventTypeIndex.refresh(type.tables);
+        }
+        var catchUp       = new Subscription.CatchUpContext(eventTypes, permits, ownPermits, () -> eventTypeIndex.valid(aggregateType));
         var subscription  = new Subscription(spec, readerLoop, EventLogStorage.TailStatements.of(relation), rs -> read(aggregateType, rs), progressStore, settings,
-                                                  observer);
+                                                  observer, catchUp);
         subscription.start();
         subscriptions.add(subscription);
         return subscription;
@@ -175,6 +230,16 @@ public final class EventLog {
      */
     TailReader reader(String aggregateType) {
         return readerLoop.reader(aggregateType);
+    }
+
+    /** The opt-in event-type index, for tests */
+    EventTypeIndex eventTypeIndex() {
+        return eventTypeIndex;
+    }
+
+    /** The shared catch-up permits of this event log's database, for tests */
+    CatchUpPermits catchUpPermits() {
+        return permits;
     }
 
     /** The shared reader loop, for tests */
@@ -205,7 +270,9 @@ public final class EventLog {
         }
         ddl.execute(tables, EventLogSchemaContributor.aggregateTypeStatements(tables));
         var registered = new RegisteredAggregateType(tables);
-        aggregateTypes.putIfAbsent(aggregateType, registered);
+        if (aggregateTypes.putIfAbsent(aggregateType, registered) == null && settings.eventTypeIndexed().contains(aggregateType)) {
+            eventTypeIndex.ensure(tables);
+        }
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement("SELECT to_regclass(?) IS NOT NULL")) {
             statement.setString(1, tables.eventTable());

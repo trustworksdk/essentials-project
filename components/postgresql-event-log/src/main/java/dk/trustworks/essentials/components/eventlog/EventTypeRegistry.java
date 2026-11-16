@@ -64,6 +64,21 @@ public final class EventTypeRegistry {
     }
 
     /**
+     * The id of {@code eventType} if it is registered, without registering it (design phase 5 §2.2): a name the cache
+     * does not know costs one reload of the committed rows
+     *
+     * @return the id, or {@code null} if no such event type is registered yet
+     */
+    Short knownIdOf(String eventType) throws SQLException {
+        var id = idsByName.get(eventType);
+        if (id != null) {
+            return id;
+        }
+        reload();
+        return idsByName.get(eventType);
+    }
+
+    /**
      * @return the name of the event type with {@code id}
      * @throws IllegalStateException if no such id is registered
      */

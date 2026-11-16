@@ -88,6 +88,9 @@ public final class EventLogBuilder {
             case COMPONENT -> EventLogSchema.lockedAggregateTypeDdl(dataSource);
             case HARNESS -> requireNonNull(schemaContributor, "SchemaOwnership.HARNESS requires the EventLogSchemaContributor registered with the harness").aggregateTypeDdl();
         };
-        return new EventLog(dataSource, schemaOwnership, ddl, settings, observer);
+        var contributor = schemaContributor;
+        java.util.function.BooleanSupplier createsSchema = schemaOwnership == SchemaOwnership.COMPONENT ? () -> true
+                                                                                                         : () -> contributor != null && contributor.createsSchema();
+        return new EventLog(dataSource, schemaOwnership, ddl, settings, observer, createsSchema);
     }
 }

@@ -150,4 +150,24 @@ public interface EventLogObserver {
      */
     default void onHeldAggregates(String subscriber, String aggregateType, int count) {
     }
+
+    /**
+     * A delivery thread acquired a catch-up permit (phase 5 §4). Delivery thread.
+     *
+     * @param waitNanos how long it waited for it
+     * @param inUse     permits of the database in use after acquiring
+     */
+    default void onCatchUpPermit(String subscriber, String aggregateType, long waitNanos, int inUse) {
+    }
+
+    /**
+     * A filtered catch-up, skip-ahead or deferred-bridge read finished (phase 5 §3). Delivery thread.
+     *
+     * @param scannedOrders the orders its range covered
+     * @param rows          matching rows returned
+     * @param window        the scan window it ran with
+     * @param usedIndex     whether the type index could serve it (the index is valid and the read is not dense)
+     */
+    default void onFilteredRead(String subscriber, String aggregateType, long scannedOrders, int rows, long window, boolean usedIndex) {
+    }
 }

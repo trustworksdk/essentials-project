@@ -180,6 +180,28 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
     }
 
     /**
+     * The opt-in {@code (event_type, global_order)} index (design phase 5 §5.1). Not a {@link SchemaChange}: the harness
+     * applies a change set in one transaction, and {@code CONCURRENTLY} cannot run inside one, so {@code EventTypeIndex}
+     * runs these in autocommit when the schema is created, and logs the create statement otherwise (§5.2).
+     *
+     * @return {@code [create, drop]}: the concurrent build, and the drop of an invalid index left by a failed build
+     */
+    public static List<String> eventTypeIndexStatements(AggregateTypeTables tables) {
+        requireNonNull(tables, "No tables provided");
+        var index = tables.eventTypeIndex();
+        return List.of("CREATE INDEX CONCURRENTLY IF NOT EXISTS " + index + " ON " + tables.eventTable() + " (event_type, global_order)",
+                       "DROP INDEX CONCURRENTLY IF EXISTS " + index);
+    }
+
+    /**
+     * @return whether the harness this contributor is attached to creates the schema (schema mode {@code create})
+     */
+    boolean createsSchema() {
+        var current = sink.get();
+        return current != null && current.createsSchema();
+    }
+
+    /**
      * @param tables the validated names of one aggregate type
      * @return its event table, head table and registry row, each statement safe against existing objects (design §2.1,
      * §2.2, §2.4). The registry insert does nothing on any conflict; the engine checks afterwards that the row maps back

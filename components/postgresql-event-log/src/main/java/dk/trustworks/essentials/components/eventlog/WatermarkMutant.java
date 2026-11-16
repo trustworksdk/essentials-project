@@ -101,5 +101,24 @@ enum WatermarkMutant {
     /** Later events of a parked event's aggregate are handed on instead of parked behind it (§4.5) */
     NO_AGGREGATE_HOLD,
     /** The held aggregates are not loaded from {@code el_parked_events} at start (§4.5) */
-    HELD_SET_NOT_RELOADED
+    HELD_SET_NOT_RELOADED,
+
+    // ---- phase 5 unit A (design phase 5 §7) ----
+
+    /** A short filtered catch-up page advances to the reader's cursor instead of the read's ceiling (§2.2, I13) */
+    FILTERED_CATCH_UP_TO_CURSOR,
+    /** The filter's type ids are resolved before the ceiling is read (§2.2, I13) */
+    TYPE_IDS_BEFORE_CEILING,
+    /** A filtered {@code FRESH} bridge page marks the attach holes handled with its covered range (§2.3, I13) */
+    FILTERED_BRIDGE_MARKS_HOLES,
+    /** A filtered inbox counts every row, matching or not, and stores zero-match batches whole (§2.4) */
+    INBOX_COUNTS_UNMATCHED,
+    /** A short filtered page advances only to its last row, not to the ceiling: it crawls (§2.2, §7.3) */
+    FILTERED_ADVANCE_TO_LAST_ROW,
+    /** Catch-up and bridge reads take no permit (§4, I15) */
+    NO_CATCH_UP_PERMIT,
+    /** Each {@code EventLog} has its own permits instead of one set per database (§4.2, I15). On the event log's settings seam */
+    PERMIT_PER_EVENT_LOG,
+    /** The permit is held until the rows read are applied, not released after the statement (§4.2, I15) */
+    PERMIT_HELD_THROUGH_PAGE
 }

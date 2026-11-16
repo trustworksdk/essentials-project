@@ -121,5 +121,19 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         /** An event is parked ({@code blockedBy} null) or held behind a parked head (unit B) */
         default void onPark(String subscriber, long globalOrder, Long blockedBy) throws Exception {
         }
+
+        // ---- phase 5 (§7): delivery thread ----
+
+        /** A filtered catch-up read its ceiling {@code ceiling} and is about to resolve its type ids */
+        default void afterCeilingBeforeTypeIds(String subscriber, long ceiling) throws Exception {
+        }
+
+        /** A filtered read of {@code (lower, ceiling]} is about to run with type ids {@code typeIds} */
+        default void beforeFilteredRead(String subscriber, long lower, long ceiling, Set<Short> typeIds) throws Exception {
+        }
+
+        /** A catch-up permit was acquired ({@code true}) or released ({@code false}) */
+        default void onPermit(String subscriber, boolean acquired) throws Exception {
+        }
     }
 }

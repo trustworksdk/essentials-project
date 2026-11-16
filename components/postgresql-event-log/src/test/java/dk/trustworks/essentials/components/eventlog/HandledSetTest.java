@@ -17,6 +17,8 @@ package dk.trustworks.essentials.components.eventlog;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.*;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -129,5 +131,35 @@ class HandledSetTest {
         set.add(6);
         assertThat(set.gaps(3)).hasSize(3);
         assertThat(set.gaps(2)).as("three gaps, limit 2: the bridge falls back to P").isNull();
+    }
+
+    @Test
+    void add_range_marks_the_covered_range_except_holes_and_ranges() {
+        var set = new HandledSet(10);
+        set.add(12);
+        set.add(30);
+        set.addRange(10, 25, new TreeSet<>(List.of(15L, 40L)), new TreeMap<>(Map.of(18L, 20L, 50L, 60L)));
+        // handled: 11..14, 16..17, 21..25, 30; unhandled 15, 18..20
+        assertThat(set.prefix()).isEqualTo(10);
+        assertThat(set.contains(11)).isTrue();
+        assertThat(set.contains(15)).isFalse();
+        assertThat(set.contains(16)).isTrue();
+        assertThat(set.contains(18)).isFalse();
+        assertThat(set.contains(20)).isFalse();
+        assertThat(set.contains(21)).isTrue();
+        assertThat(set.contains(26)).isFalse();
+        assertThat(set.gaps(10)).containsExactly(new HandledSet.Gap(15, 15), new HandledSet.Gap(18, 20), new HandledSet.Gap(26, 29));
+    }
+
+    @Test
+    void add_range_merges_with_neighbouring_runs_and_ignores_orders_below_the_prefix() {
+        var set = new HandledSet(100);
+        set.add(105);
+        set.add(120);
+        set.addRange(90, 119, Collections.emptySortedSet(), Collections.emptySortedMap());
+        assertThat(set.runCount()).as("one run from P + 1 to 120").isEqualTo(1);
+        assertThat(set.prefix()).isEqualTo(100);
+        assertThat(set.gaps(10)).isEmpty();
+        assertThat(set.highest()).isEqualTo(120);
     }
 }

@@ -79,6 +79,52 @@ final class HandledSet {
     }
 
     /**
+     * Mark every order in {@code (lowExclusive, highInclusive]} handled except {@code holes} and the ranges of
+     * {@code ranges} (low to high, inclusive): a filtered {@code FRESH} bridge page's covered range (design phase 5
+     * §2.3), where every order the page did not return is non-matching or an attach hole still re-read
+     */
+    void addRange(long lowExclusive, long highInclusive, SortedSet<Long> holes, SortedMap<Long, Long> ranges) {
+        var excluded = new TreeMap<Long, Long>();
+        holes.subSet(lowExclusive + 1, highInclusive == Long.MAX_VALUE ? Long.MAX_VALUE : highInclusive + 1).forEach(h -> excluded.merge(h, h, Math::max));
+        ranges.forEach((lo, hi) -> {
+            if (hi > lowExclusive && lo <= highInclusive) {
+                excluded.merge(lo, hi, Math::max);
+            }
+        });
+        var from = lowExclusive + 1;
+        for (var ex : excluded.entrySet()) {
+            if (ex.getKey() > from) {
+                addSpan(from, ex.getKey() - 1);
+            }
+            from = Math.max(from, ex.getValue() + 1);
+        }
+        if (from <= highInclusive) {
+            addSpan(from, highInclusive);
+        }
+    }
+
+    private void addSpan(long low, long high) {
+        low = Math.max(low, prefix + 1);
+        if (low > high) {
+            return;
+        }
+        var start = low;
+        var end   = high;
+        var below = runs.floorEntry(low);
+        if (below != null && below.getValue() >= low - 1) {
+            start = below.getKey();
+            end = Math.max(end, below.getValue());
+            runs.remove(below.getKey());
+        }
+        for (var it = runs.subMap(start, true, end + 1, true).entrySet().iterator(); it.hasNext(); ) {
+            var run = it.next();
+            end = Math.max(end, run.getValue());
+            it.remove();
+        }
+        runs.put(start, end);
+    }
+
+    /**
      * Raise {@code P} to {@code newPrefix} if higher, pruning the runs at or below it. Never lowers {@code P}: what
      * {@code P} claimed stays true.
      */
