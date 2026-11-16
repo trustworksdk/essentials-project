@@ -1,6 +1,6 @@
 # Event store redesign, phase 5: engine design
 
-**Status:** decided 2026-11-16 (§10); being built on `feature/event-store-engine-phase5`. When phase 5 is done, this file moves to `docs/archive/` or is folded
+**Status:** decided 2026-11-16 (§10); built on `feature/event-store-engine-phase5`, gate passed 2026-11-16 (§11, restart-storm row accepted in §11.5). When phase 5 is done, this file moves to `docs/archive/` or is folded
 into the redesign's record (`docs/plans/README.md`).
 **Scope:** phase 5 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): filtered catch-up, the
 adaptive fallback, the per-database cap on catch-up reads and the opt-in `(event_type, global_order)` index (§10.1,
@@ -630,3 +630,10 @@ reader statements against 375 126). The restart storm passes on peak connections
 append p99 during the storm (3.9-4.5 ms against 2.2-2.9 ms), explained in 11.2 by the new engine compressing the catch-up
 into a 1-2 s burst on shared CPUs; it is better on the maximum append and the writer's connection wait. §8.3: first
 delivery about 2 s after a reader restart behind a 60 s writer, no loss, no duplicate. No main code changed.
+
+### 11.5 Decision on the restart-storm row (2026-11-16)
+
+Taken with the project lead: the row is **accepted**. The p99 rise comes from compressing a 17 s catch-up into a 1-2 s
+burst on the VM's shared CPUs, and the row is judged on the worst case instead, where the new engine is better (maximum
+append 10-17 ms against 15-24 ms, writer connection wait 8-14 ms against 26-32 ms). No default changes. The row is
+measured again on the dedicated server, without shared-CPU noise, before the engine's defaults are final.
