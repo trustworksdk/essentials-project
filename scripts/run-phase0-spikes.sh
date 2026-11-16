@@ -69,14 +69,15 @@
 #                                  cpu           UnattributedCpuSpikeIT                                  P0.9
 #                                  jdbc          JdbiVsRawPgjdbcSpikeIT                                  P0.6 (+ round_trip_reconciliation)
 #                                  probe         CombinedProbeSnapshotOrderSpikeIT                       P0.2
-#                                  p2-gate       EventLogGateSpikeIT (postgresql-event-log)              phase 2 unit C: the new
-#                                                engine's statements per delivery and per idle poll (1 and 10 subscriptions),
-#                                                the event_id index's append cost, the probe back-off at 10/100/400
-#                                                connections (opens up to 400: max_connections must allow ~410)
+#                                  p3-gate       EventLogGateSpikeIT (postgresql-event-log)              phase 3 unit C: the shared
+#                                                reader's statements per delivery and per idle poll (1, 10 and 50 subscriptions),
+#                                                at reader pools of subscriptions + 10 and 4 with the pool wait, and the
+#                                                re-attach churn of a slow FRESH subscription behind a 60 s writer. Replaces
+#                                                p2-gate (retired: its probe topology, one reader per subscription, is gone)
 #                                  p2-gate-old   CurrentEngineBaselineSpikeIT#steady+idle with 1 and 10 subscriptions,
 #                                                postgres:18.4 in a container: the old engine's side of the phase-2 gate
 #                                "default" is the priority order of the original runs; "all" is the same set in
-#                                phase-number order, then the phase-2 suites.
+#                                phase-number order, then the phase-2 and phase-3 suites.
 #   --mvn-arg <arg>              one extra Maven argument, repeatable; everything after "--" is the same
 #   --out <dir>                  results directory (default phase0-results/<timestamp>-<host>-<mode>/)
 #   --no-build                   skip the one-off install of the module and its upstream modules
@@ -174,7 +175,7 @@ suite_classes() {
     listen)       echo "AlternativeClientSpikeIT" ;;
     pipeline)     echo "OneFlushTransactionSpikeIT" ;;
     owned)        echo "OwnedReadConnectionSpikeIT" ;;
-    p2-gate)      echo "EventLogGateSpikeIT" ;;
+    p3-gate)      echo "EventLogGateSpikeIT" ;;
     p2-gate-old)  echo "CurrentEngineBaselineSpikeIT#steady+idle" ;;
     *)            return 1 ;;
   esac
@@ -197,14 +198,14 @@ suite_results() {
     listen)       echo "p0-17-*" ;;
     pipeline)     echo "p0-14-*" ;;
     owned)        echo "p0-16-*" ;;
-    p2-gate)      echo "p2-c-*" ;;
+    p3-gate)      echo "p3-c-*" ;;
     p2-gate-old)  echo "p0-0-*" ;;
   esac
 }
 # The module a suite's classes live in.
 suite_module() {
   case "$1" in
-    p2-gate) echo "components/postgresql-event-log" ;;
+    p3-gate) echo "components/postgresql-event-log" ;;
     *)       echo "components/postgresql-event-store" ;;
   esac
 }
@@ -215,7 +216,7 @@ suite_args() {
   esac
 }
 DEFAULT_SUITES="xid table-design contention notify tail probe-cost progress listen pipeline owned append baseline cpu jdbc probe"
-ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline owned listen p2-gate p2-gate-old"
+ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline owned listen p2-gate-old p3-gate"
 
 (( ${#SUITE_SPECS[@]} )) || SUITE_SPECS=(default)
 SUITES=()

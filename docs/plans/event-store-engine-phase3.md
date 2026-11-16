@@ -1,6 +1,6 @@
 # Event store redesign, phase 3: engine design
 
-**Status:** decided 2026-11-15 (§6); being built on `feature/event-store-engine-phase3`. When phase 3 is done, this file moves to
+**Status:** decided 2026-11-15 (§6); built on `feature/event-store-engine-phase3`, gate passed 2026-11-16 (§7). When phase 3 is done, this file moves to
 `docs/archive/` or is folded into the redesign's record (`docs/plans/README.md`).
 **Scope:** phase 3 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): one shared tail
 reader per aggregate type per `EventLog` (§6), attach and detach with the bridge read (F3), overflow and the F5 resume
@@ -445,3 +445,98 @@ the draft recommended. The sections above already follow them.
 | 1 | Thread and connection of the shared reader | **One thread and one held connection per `EventLog`**, with a `TailReader` state machine per aggregate type (§2.1). §6's "one tail reader per aggregate type per JVM" holds for the state each type keeps (cursor, candidates, holes, watermark); the thread and connection are shared. Held connections stay at one per JVM, P0.12's per-backend probe cost stays down and P0.16's one-flush read (phase 6) needs it. Head-of-line delay between types is accepted |
 | 2 | `FRESH` behind a long writer at reader start (F4's cost) | **F4 as decided.** Catch-up never reads above an unknown watermark. Phase 3 adds a metric for subscriptions waiting on an unknown watermark and the xid that holds it; letting catch-up hand gaps below the head to the reader is decided in phase 5 with §10.1's "catch-up with its own candidate" |
 | 3 | Re-attach churn for `FRESH` (risk 14) | **The bridge always starts at `P`** and drops rows already handled (§3.6). §5.4 measures the churn; starting the bridge above the highest handled order is decided in phase 4 with `CONTIGUOUS`'s options for the same risk |
+
+---
+
+## 7. Results (2026-11-16)
+
+Measured by `spike/EventLogGateSpikeIT` (`scripts/run-phase0-spikes.sh --suite p3-gate`, two runs of every arm) on the
+development VM: PostgreSQL 18.4 in a container with `fsync=off`, a fresh container per arm. Today's engine was not
+rerun: its shapes are phase 2's (P0.0's steady and idle shapes with 10 subscriptions), so its figures are phase-2 §6.1's.
+Statements are `pg_stat_statements` calls by role, utility statements included; the reader role covers everything the
+engine runs on its `DataSource` (tail reads, catch-up and bridge reads, progress saves). Two reader pools: phase 2's
+sizing (subscriptions + 10) and 4. Every `getConnection()` on the reader pool is timed.
+
+Suite `p2-gate` is retired: its probe back-off measurement assumed one tail reader per subscription, a topology phase 3
+removed, and its `event_id` index measurement is unchanged by phase 3. Both remain at commit `13184d080`; `p2-gate-old`
+stays.
+
+### 7.1 Idle reader statements against subscriptions
+
+100 seeded events, no writes, 10 s warm-up after catch-up, 60 s window. Reader statements per second:
+
+| Backstop | 1 subscription | 10 subscriptions | 50 subscriptions | Pass (10 and 50 within 10 % of 1) |
+|---|---|---|---|---|
+| 1 s, pool subscriptions + 10 | 1.00 | 1.00 | 1.00 | yes |
+| 1 s, pool 4 | 0.98-1.00 | 0.98-1.00 | 0.98-1.00 | yes |
+| 100 ms, pool subscriptions + 10 | 9.65-9.67 | 9.65-9.68 | 9.68 | yes |
+| 100 ms, pool 4 | 9.60-9.67 | 9.67-9.73 | 9.65-9.70 | yes |
+
+Every idle statement is the shared loop's tail read (1.00 statement per read, no combined probes, no progress saves:
+an unchanged resume point is not saved). The cost no longer grows with subscriptions; phase 2 measured 9.9/s at 1 s and
+98/s at 100 ms with 10 subscriptions, today's engine 15/s. The §4.3 prediction (~1.0/s and ~9.6/s, flat) holds.
+
+### 7.2 Statements per delivered event, 10 subscriptions
+
+P0.0's steady shape: one writer, one event per unit of work to a new aggregate, 10 s warm-up, 60 s window.
+
+| Backstop | 10 ev/s | 100 ev/s | Latency p50 / p99 | Today's engine (phase-2 §6.1) |
+|---|---|---|---|---|
+| 1 s | 0.110 | 0.012 | 503-511 ms / 984-1 000 ms | 6.79-6.91 / 1.04 |
+| 100 ms | 0.196 | 0.020 | 47-53 ms / 102-105 ms | 6.79-6.91 / 1.04 |
+
+Identical to three decimals across both runs and both pools. **The gate passes** by a factor of 35 to 87. The figures
+match §4.3's prediction (~0.2 and ~0.02 at 100 ms). At the 1 s backstop the progress saves now dominate: one per
+subscription per second, 10 of the 11 reader statements per second at 10 ev/s. At 100 ev/s and a 1 s backstop the loop
+reads about twice per second, because a read that fills the 100-row tail page is followed at once by another. Writer
+statements stay at 2.00 per event. Latency is set by the backstop, as in phase 2: the p99 is one backstop interval.
+
+### 7.3 Reader pool of 4
+
+Every arm of 7.1 and 7.2 ran on a reader pool of 4 (phase 2 needed subscriptions + 10) with the same statement counts.
+Largest `getConnection()` wait:
+
+| Shape | Pool subscriptions + 10 | Pool 4 |
+|---|---|---|
+| Idle, in the window | 0.0 ms | 0.0 ms |
+| Idle, whole run (start-up and 50 subscriptions catching up at once included) | 13.9 ms | 9.3 ms |
+| Steady, in the window | 12.5 ms | 10.3 ms |
+| Re-attach churn (7.4, pool 4 only) | — | 2.5 ms |
+
+**The gate passes**: no wait above 1 s; the largest is 14 ms, on the larger pool, and is Hikari creating connections at
+start-up rather than waiting for one. The subscriptions' borrowed connections (catch-up, bridge, saves) are short enough
+that 50 subscriptions share three non-reader connections without measurable waiting.
+
+### 7.4 Re-attach churn (decision 3)
+
+One `FRESH` subscription whose handler sleeps 50 ms (at most 20 events/s) behind a writer at 100 ev/s for 60 s, reader
+pool 4, default buffer (1 000 events) and catch-up page (500 rows). Arm "long writer": a transaction holds a
+`global_order` below the head for the whole window, so the watermark stays at the held value. Counts are for the window;
+the page being worked through when it closes is not counted (at most one 500-row page).
+
+| Backstop | Arm | Handled (duplicates) | Attaches | Detaches | Catch-up rows | Bridge pages | Bridge rows read | Dropped as already handled |
+|---|---|---|---|---|---|---|---|---|
+| 1 s | long writer | 1 107-1 114 (0) | 3 | 3 overflow | 0 | 5 | 2 500 | 1 728 (69 %) |
+| 100 ms | long writer | 1 127-1 137 (0) | 3 | 3 overflow | 0 | 5-6 | 2 500-2 501 | 1 731-1 739 (69 %) |
+| 1 s | no long writer | 1 108-1 115 (0) | 0 | 1 overflow | 500 | 0 | 0 | 0 |
+| 100 ms | no long writer | 1 125-1 141 (0) | 0 | 1 overflow | 500 | 0 | 0 | 0 |
+
+With the long writer the churn decision 3 accepted is visible: the resume point `P` cannot pass the held value, so
+after each overflow catch-up has nothing to read, the subscription attaches at once, and the bridge re-reads `(P, C]`
+from the held value. Every re-attach re-reads everything handled since the writer took its value, so the dropped share
+grows with each attach; over 60 s, 69 % of the bridge rows were already handled. Three attaches in 60 s: one about every
+20 s (the inbox fills at the 80 events/s the handler falls behind, plus the bridge's own time). Handling
+throughput is unaffected (about 19 events/s in both arms, handler-bound), no row was delivered twice, and the reader
+statements stay low (2.0-2.1/s at 1 s, 4.8-6.4/s at 100 ms). Without a long writer the slow subscription overflows once
+and then stays in catch-up, chasing a watermark that moves faster than it handles; it never bridges in the window.
+
+The cost is read volume, not correctness: 1 730 redundant rows in a minute for one subscription behind one
+minute-long transaction. It grows with the length of the transaction and the write rate, which is the input phase 4
+needs for starting the bridge above the highest handled order (decision 3).
+
+### 7.5 Verdict
+
+All four rows pass or are recorded as required: idle cost is flat in the number of subscriptions, statements per
+delivery are 35-87 times below today's engine, a reader pool of 4 suffices with millisecond waits, and the churn is
+measured. No main code changed for this unit. As in phase 2, absolute figures need the dedicated server; the statement
+counts do not depend on it.
