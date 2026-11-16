@@ -27,31 +27,79 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * I7, plan §16, design phase 6 §6.1: <i>with no running writers, a committed event is delivered within the backstop
- * interval with every wake-up lost</i>. Unit A's arm: one {@code EventLog}, {@code afterCommit} never called (tier 2
- * lost); the cross-JVM arms join with tier 1. Subscriptions in both modes, each event measured from its commit's
- * return to the handler. Must-fail: {@link WatermarkMutant#PARK_UNTIL_WOKEN}.
+ * interval with every wake-up lost</i>. Three arms, subscriptions in both modes, each event measured from its commit's
+ * return to the handler:
+ * <ul>
+ *     <li>tier 2 lost: one {@code EventLog}, {@code afterCommit} never called;</li>
+ *     <li>listener killed: the writer is a second {@code EventLog} that never calls {@code afterCommit}; the subscribing
+ *     one's listener drops every notification and its backend is terminated every 150 ms (reconnecting after 50 ms);</li>
+ *     <li>{@code NOTIFY} lost: the writer calls {@code afterCommit}, but its notifier sends on a channel nobody listens on.</li>
+ * </ul>
+ * Must-fail: {@link WatermarkMutant#PARK_UNTIL_WOKEN} (tier 2 lost, {@code NOTIFY} lost) and
+ * {@link WatermarkMutant#BACKSTOP_REARMED_ON_LISTENER_RESTART} (listener killed: restarts more frequent than the backstop
+ * starve the reader).
  */
 class EventLogProgressIT extends AbstractSubscriptionIT {
     static final Duration BACKSTOP = Duration.ofMillis(500);
     static final Duration SLACK    = Duration.ofMillis(250);
-    static final int      EVENTS   = 4;
+    static final int      EVENTS   = 3;
+
+    /** Which wake-up is lost */
+    enum Arm {
+        TIER_2_LOST,
+        LISTENER_KILLED,
+        NOTIFY_LOST
+    }
+
+    private EventLog writer;
+
+    @org.junit.jupiter.api.AfterEach
+    void stopWriter() {
+        if (writer != null) {
+            writer.stop();
+        }
+    }
 
     @Test
     void with_every_wake_lost_each_event_is_delivered_within_the_backstop() throws Exception {
-        assertThat(lateDeliveries(null)).isEmpty();
+        assertThat(lateDeliveries(Arm.TIER_2_LOST, null)).isEmpty();
     }
 
     @Test
     void must_fail_the_loop_parks_until_woken() throws Exception {
-        assertThat(lateDeliveries(WatermarkMutant.PARK_UNTIL_WOKEN)).isNotEmpty();
+        assertThat(lateDeliveries(Arm.TIER_2_LOST, WatermarkMutant.PARK_UNTIL_WOKEN)).isNotEmpty();
+    }
+
+    @Test
+    void with_the_listener_killed_each_event_is_delivered_within_the_backstop() throws Exception {
+        assertThat(lateDeliveries(Arm.LISTENER_KILLED, null)).isEmpty();
+    }
+
+    @Test
+    void must_fail_each_listener_restart_rearms_the_backstop() throws Exception {
+        assertThat(lateDeliveries(Arm.LISTENER_KILLED, WatermarkMutant.BACKSTOP_REARMED_ON_LISTENER_RESTART)).isNotEmpty();
+    }
+
+    @Test
+    void with_notify_lost_each_event_is_delivered_within_the_backstop() throws Exception {
+        assertThat(lateDeliveries(Arm.NOTIFY_LOST, null)).isEmpty();
+    }
+
+    @Test
+    void must_fail_the_loop_parks_until_woken_with_notify_lost() throws Exception {
+        assertThat(lateDeliveries(Arm.NOTIFY_LOST, WatermarkMutant.PARK_UNTIL_WOKEN)).isNotEmpty();
     }
 
     /**
      * @return a line per event a subscription did not receive within {@code BACKSTOP + SLACK} of its commit
      */
-    private List<String> lateDeliveries(WatermarkMutant mutant) throws Exception {
+    private List<String> lateDeliveries(Arm arm, WatermarkMutant mutant) throws Exception {
         restartEventLog(dataSource, FAST.withBackstopInterval(BACKSTOP));
-        var seams      = mutant == null ? TestSeams.NONE : new TestSeams(Set.of(mutant), TestSeams.Hooks.NONE, null);
+        var loopMutant = mutant == WatermarkMutant.PARK_UNTIL_WOKEN;
+        var seams      = loopMutant ? new TestSeams(Set.of(mutant), TestSeams.Hooks.NONE, null) : TestSeams.NONE;
+        if (mutant != null && !loopMutant) {
+            eventLog.wakeSeams(new TestSeams(Set.of(mutant), TestSeams.Hooks.NONE, null));
+        }
         var fresh      = new ConcurrentHashMap<Long, Long>();
         var contiguous = new ConcurrentHashMap<Long, Long>();
         subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key("fresh", TYPE, "node-1"), 1, event -> fresh.putIfAbsent(event.globalOrder(), System.nanoTime()), seams));
@@ -59,12 +107,59 @@ class EventLogProgressIT extends AbstractSubscriptionIT {
                                                               (page, connection) -> page.forEach(event -> contiguous.putIfAbsent(event.globalOrder(), System.nanoTime())),
                                                               TestSeams.NONE));
         awaitTrue(() -> reads.attaches.get() >= 2);
+        if (arm != Arm.TIER_2_LOST) {
+            writer = EventLog.builder().setDataSource(dataSource("")).setSettings(FAST.withBackstopInterval(BACKSTOP)).build();
+            writer.start();
+            writer.registerAggregateType(TYPE);
+            writer.notifier().channelForTests = "el_wake_lost";
+        }
+        var killer = arm == Arm.LISTENER_KILLED ? killListenerRepeatedly() : null;
+        try {
+            return measure(arm, fresh, contiguous);
+        } finally {
+            if (killer != null) {
+                killer.interrupt();
+                killer.join();
+            }
+        }
+    }
 
+    /** The listener drops every notification; its backend is terminated every 150 ms, and it reconnects after 50 ms */
+    private Thread killListenerRepeatedly() {
+        var listener = eventLog.listener();
+        listener.deafForTests = true;
+        listener.reconnectDelayForTests = Duration.ofMillis(50);
+        return Thread.ofPlatform().name("listener-killer").start(() -> {
+            try {
+                while (!Thread.currentThread().isInterrupted()) {
+                    var pid = listener.backendPid();
+                    if (pid != 0) {
+                        execute("SELECT pg_terminate_backend(" + pid + ")");
+                    }
+                    Thread.sleep(150);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (java.sql.SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    private List<String> measure(Arm arm, Map<Long, Long> fresh, Map<Long, Long> contiguous) throws Exception {
         var bound = BACKSTOP.plus(SLACK).toNanos();
         var late  = new ArrayList<String>();
         for (var i = 0; i < EVENTS; i++) {
-            var globalOrder = commitAppend("a" + i, 1);
-            var committed   = System.nanoTime();
+            long globalOrder;
+            if (arm == Arm.TIER_2_LOST) {
+                globalOrder = commitAppend("a" + i, 1);
+            } else {
+                globalOrder = appendCommitted(writer, AppendRequest.withoutExpectedOrder(TYPE, "a" + i, events("E", 1))).getFirst().events().getFirst().globalOrder();
+            }
+            var committed = System.nanoTime();
+            if (arm == Arm.NOTIFY_LOST) {
+                writer.afterCommit(List.of(TYPE));
+            }
             try {
                 await().atMost(BACKSTOP.plus(SLACK).plusMillis(100)).until(() -> fresh.containsKey(globalOrder) && contiguous.containsKey(globalOrder));
             } catch (ConditionTimeoutException e) {

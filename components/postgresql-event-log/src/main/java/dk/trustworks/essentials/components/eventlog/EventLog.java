@@ -55,6 +55,13 @@ public final class EventLog {
     /** The database's shared catch-up permits (phase 5 §4), and this event log's own for the per-event-log mutant */
     private volatile CatchUpPermits                                   permits;
     private volatile CatchUpPermits                                   ownPermits;
+    /** This event log's id in wake payloads (phase 6 §3.1): a listener drops its own instance's notifications */
+    private final String                                              instance;
+    /** Tier 1 (phase 6 §3); both {@code null} without {@link EventLogSettings#crossJvmWakeUp()} */
+    private final WakeNotifier                                        notifier;
+    private final WakeListener                                        listener;
+    /** The mutants and hooks of the notifier and listener; for tests */
+    private volatile TestSeams                                        wakeSeams      = TestSeams.NONE;
 
     EventLog(DataSource dataSource, SchemaOwnership schemaOwnership, EventLogSchema.AggregateTypeDdlExecutor ddl, EventLogSettings settings, EventLogObserver observer) {
         this(dataSource, schemaOwnership, ddl, settings, observer, () -> schemaOwnership == SchemaOwnership.COMPONENT);
@@ -75,6 +82,52 @@ public final class EventLog {
         this.ddl = requireNonNull(ddl, "No ddl provided");
         this.eventTypes = new EventTypeRegistry(dataSource);
         this.eventTypeIndex = new EventTypeIndex(dataSource, createsSchema);
+        this.instance = newInstanceId();
+        if (settings.crossJvmWakeUp()) {
+            this.notifier = new WakeNotifier(instance, WakeNotifier.sendOnBorrowedConnection(dataSource), () -> wakeSeams);
+            this.listener = new WakeListener(dataSource, settings, instance, readerLoop, notifier, () -> wakeSeams);
+            readerLoop.onActivity(any -> {
+                if (any) {
+                    listener.start();
+                } else {
+                    listener.stop();
+                }
+            });
+        } else {
+            this.notifier = null;
+            this.listener = null;
+        }
+    }
+
+    /** A random 8-character id (phase 6 §3.1) */
+    private static String newInstanceId() {
+        var chars  = "abcdefghijklmnopqrstuvwxyz0123456789";
+        var random = java.util.concurrent.ThreadLocalRandom.current();
+        var id     = new StringBuilder(8);
+        for (var i = 0; i < 8; i++) {
+            id.append(chars.charAt(random.nextInt(chars.length())));
+        }
+        return id.toString();
+    }
+
+    /** This event log's wake id; for tests */
+    String instance() {
+        return instance;
+    }
+
+    /** The tier-1 notifier, {@code null} without cross-JVM wake-up; for tests */
+    WakeNotifier notifier() {
+        return notifier;
+    }
+
+    /** The tier-1 listener, {@code null} without cross-JVM wake-up; for tests */
+    WakeListener listener() {
+        return listener;
+    }
+
+    /** Set the notifier's and listener's mutants and hooks; package-private, for tests */
+    void wakeSeams(TestSeams seams) {
+        this.wakeSeams = requireNonNull(seams, "No seams provided");
     }
 
     /**
@@ -131,8 +184,14 @@ public final class EventLog {
             if (!readerLoop.awaitStopped(java.time.Duration.ofSeconds(30))) {
                 log.warn("The reader loop did not end within 30 s of the last subscription's stop");
             }
+            if (listener != null && !listener.awaitStopped(java.time.Duration.ofSeconds(5))) {
+                log.warn("The wake listener did not end within 5 s of the last subscription's stop");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+        if (notifier != null) {
+            notifier.stop();
         }
         started = false;
     }
@@ -465,7 +524,8 @@ public final class EventLog {
     /**
      * Tell the engine that a transaction which appended to {@code aggregateTypes} has committed (design phase 6 §2.2):
      * each type active in this event log's reader is woken, so its subscriptions see the commit at once instead of
-     * within the backstop interval. Call it after {@code commit()} returns; with foundation's {@code UnitOfWork} the
+     * within the backstop interval; with {@link EventLogSettings#crossJvmWakeUp()} each registered type is also sent, coalesced,
+     * as one {@code NOTIFY} on a borrowed connection, waking other event logs' readers (tier 1, §3). Call it after {@code commit()} returns; with foundation's {@code UnitOfWork} the
      * engine's commit callback does it. A hint, never a statement of fact: a call before the commit, or for a
      * transaction that rolled back, costs one read; no call costs latency up to the backstop interval, never an event
      * (I7). Never blocks and never throws for an unknown or inactive type. <b>Temporary</b>: phase 8's API absorbs it.
@@ -476,7 +536,7 @@ public final class EventLog {
         requireNonNull(aggregateTypes, "No aggregateTypes provided");
         for (var aggregateType : aggregateTypes) {
             if (aggregateType != null) {
-                readerLoop.wake(aggregateType);
+                committed(aggregateType);
             }
         }
     }
@@ -489,8 +549,16 @@ public final class EventLog {
         requireNonNull(committedRequests, "No committedRequests provided");
         for (var request : committedRequests) {
             if (request != null) {
-                readerLoop.wake(request.aggregateType());
+                committed(request.aggregateType());
             }
+        }
+    }
+
+    /** Tier 2: wake the type if active here; tier 1: hand it to the notifier if this event log appends to it */
+    private void committed(String aggregateType) {
+        readerLoop.wake(aggregateType);
+        if (notifier != null && aggregateTypes.containsKey(aggregateType)) {
+            notifier.add(aggregateType);
         }
     }
 

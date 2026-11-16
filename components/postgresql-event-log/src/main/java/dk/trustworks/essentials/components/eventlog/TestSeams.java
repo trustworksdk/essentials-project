@@ -162,5 +162,19 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         /** The due types' statements returned; their results are not yet applied to any reader */
         default void afterFlushBeforeApply(List<String> aggregateTypes) throws Exception {
         }
+
+        // ---- phase 6 unit B (§6): the event log's wake seams ----
+
+        /** Notifier thread: {@code payloads} are about to be sent as one {@code NOTIFY} statement */
+        default void beforeNotifySend(List<String> payloads) throws Exception {
+        }
+
+        /** Listener thread: a notification arrived on the wake channel, before it is parsed or filtered */
+        default void onNotification(String payload) throws Exception {
+        }
+
+        /** Listener thread: a restarted listener is about to take a new connection and re-run {@code LISTEN} */
+        default void beforeListenerReconnect() throws Exception {
+        }
     }
 }

@@ -70,6 +70,9 @@ final class ReaderLoop {
     private final LinkedHashMap<String, PreparedStatement> flushes = new LinkedHashMap<>(16, 0.75f, true);
     /** The loop's connection, published for tests that terminate its backend */
     private volatile Connection                      published;
+    /** Told when the first type becomes active ({@code true}) and the last one inactive; under {@code this} (phase 6 §3.3) */
+    private volatile java.util.function.Consumer<Boolean> activity = any -> {
+    };
 
     ReaderLoop(DataSource dataSource, EventLogSettings settings, EventLogObserver observer) {
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
@@ -145,6 +148,8 @@ final class ReaderLoop {
         private final Object                 signal = new Object();
         /** Set by a wake (phase 6 §4.1), taken by the loop before it reads; any thread */
         private final AtomicBoolean          wake   = new AtomicBoolean();
+        /** {@link WatermarkMutant#BACKSTOP_REARMED_ON_LISTENER_RESTART} only; any thread */
+        private final AtomicBoolean          rearm  = new AtomicBoolean();
         /** Bumped whenever the watermark may have changed; guarded by {@link #signal} */
         private long                         version;
 
@@ -216,6 +221,14 @@ final class ReaderLoop {
         }
     }
 
+    /**
+     * @param activity told, under the loop's monitor and without blocking, when the first aggregate type becomes active
+     *                 ({@code true}) and when the last one becomes inactive ({@code false}): the wake listener's lifetime
+     */
+    void onActivity(java.util.function.Consumer<Boolean> activity) {
+        this.activity = requireNonNull(activity, "No activity provided");
+    }
+
     DataSource dataSource() {
         return dataSource;
     }
@@ -227,9 +240,13 @@ final class ReaderLoop {
         synchronized (this) {
             var type = active.get(aggregateType);
             if (type == null) {
+                var first = active.isEmpty();
                 type = new ActiveType(aggregateType, statements, mapper, seams);
                 active.put(aggregateType, type);
                 submit(new Activate(type));
+                if (first) {
+                    activity.accept(true);
+                }
             }
             type.refs++;
             return type;
@@ -247,6 +264,9 @@ final class ReaderLoop {
                 active.remove(type.aggregateType, type);
             }
             submit(new Leave(type, inbox, last));
+            if (last && active.isEmpty()) {
+                activity.accept(false);
+            }
         }
     }
 
@@ -302,6 +322,28 @@ final class ReaderLoop {
         var type = active.get(aggregateType);
         if (type != null) {
             wake(type);
+        }
+    }
+
+    /** Wake every active type once: the wake listener restarted and may have missed notifications (phase 6 §3.3); any thread */
+    void wakeAll() {
+        for (var type : active.values()) {
+            wake(type);
+        }
+    }
+
+    /**
+     * {@link WatermarkMutant#BACKSTOP_REARMED_ON_LISTENER_RESTART}: push every active type's next read a full backstop
+     * interval out instead of waking it; any thread
+     */
+    void rearmBackstops() {
+        for (var type : active.values()) {
+            type.rearm.set(true);
+        }
+        woken.set(true);
+        var t = thread;
+        if (t != null) {
+            LockSupport.unpark(t);
         }
     }
 
@@ -487,6 +529,9 @@ final class ReaderLoop {
         var clearAfterRead = types.stream().anyMatch(type -> type.seams.has(WAKE_CLEARED_AFTER_READ));
         var due            = new ArrayList<ActiveType>();
         for (var type : types) {
+            if (type.rearm.getAndSet(false)) {
+                type.nextDueNanos = now + settings.backstopInterval().toNanos();
+            }
             var woken = clearAfterRead ? type.wake.get() : type.wake.getAndSet(false);
             if (woken) {
                 type.nextDueNanos = now;

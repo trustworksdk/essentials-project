@@ -163,5 +163,21 @@ enum WatermarkMutant {
     /** The loop clears a type's wake flag after its read instead of before it: a wake during the read is lost (§4.1) */
     WAKE_CLEARED_AFTER_READ,
     /** Every woken read that wants a running set reads one: no probe clock after a wake (§5) */
-    PROBE_ON_EVERY_WAKE
+    PROBE_ON_EVERY_WAKE,
+
+    // ---- phase 6 unit B (design phase 6 §6.1, §6.3); on the event log's wake seams ({@code EventLog.wakeSeams}) ----
+
+    /**
+     * Each listener restart pushes every active type's next read a full backstop interval out instead of waking it:
+     * restarts more frequent than the backstop starve the reader (§6.1, I7)
+     */
+    BACKSTOP_REARMED_ON_LISTENER_RESTART,
+    /** A reconnecting listener does not re-run {@code LISTEN}: after its first restart it hears nothing (§3.3) */
+    RECONNECT_WITHOUT_LISTEN,
+    /** A restarted listener does not wake the active types: a commit whose notification it missed waits a backstop (§3.3) */
+    NO_WAKE_ON_LISTENER_RESTART,
+    /** The listener drains with pgjdbc's stock {@code getNotifications(timeout)}: dense traffic holds every wake inside the driver (§3.3, P0.17) */
+    STOCK_DRAIN,
+    /** The listener acts on its own event log's notifications too: every local commit wakes the reader twice (§3.1, §3.3) */
+    NO_OWN_INSTANCE_FILTER
 }
