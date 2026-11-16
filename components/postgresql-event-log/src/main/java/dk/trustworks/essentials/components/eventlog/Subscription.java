@@ -58,8 +58,15 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     <b>detaches</b> between pages, never during one (§7.1), and catches up again. {@code CONTIGUOUS} keeps its pending
  *     rows across a detach (§2.5).</li>
  * </ol>
- * A handler that throws is retried with the same event or page after the backstop interval (phase 3's behaviour, a
- * placeholder for phase 4 §4); an interrupted handler is not handled. {@link #stop()} saves once more.
+ * Failures (phase 4 §4): an I/O failure (the page connection invalid, or an {@code SQLException} of class {@code 08} or
+ * an {@link SQLTransientConnectionException} in the cause chain, or any failure outside the handler) retries the same
+ * page indefinitely with a doubling backoff. A handler failure of a page of several events shrinks the page
+ * ({@link StepDown}); an event failing alone is retried {@link EventLogSettings#retryAttempts()} times with a doubling
+ * backoff, then parked in {@code el_parked_events} - in the page transaction that moves past it (in-transaction), or in
+ * autocommit before it counts as handled (periodic). A {@link ParkEventException} parks at once. The later events of a
+ * parked event's aggregate are parked behind it ({@link ParkedEvents}) until {@link #retryParked(long)} or
+ * {@link #discardParked(long)}; every other aggregate continues. An interrupted handler is not handled.
+ * {@link #stop()} saves once more.
  */
 public final class Subscription {
     private static final Logger log = LoggerFactory.getLogger(Subscription.class);
@@ -188,6 +195,19 @@ public final class Subscription {
     private List<HeldBack.Entry>                 lastFailedPage;
     /** {@code A} before the last page; mutant {@link WatermarkMutant#REREAD_WITHOUT_APPLIED_DROP} */
     private Long                                 appliedBeforeLastPage;
+    // Failures (phase 4 §4)
+    private final StepDown                       stepDown;
+    private final ParkedEvents                   parked;
+    /** Events decided for parking, by global order: the next page that holds them parks them (§4.4) */
+    private final Map<Long, ParkedEvents.Row>    toPark = new HashMap<>();
+    /** One-shot limit of the next page: the events before one a handler asked to park commit in a page of their own */
+    private int                                  pageCut;
+    /** The event failing alone, and its attempts so far (§4.3) */
+    private long                                 failingOrder = -1;
+    private int                                  failingAttempts;
+    /** Consecutive I/O failures of pages, for the backoff */
+    private int                                  ioFailures;
+    private final Queue<ParkedRequest>           parkedRequests = new ConcurrentLinkedQueue<>();
 
     Subscription(SubscriptionSpec spec, ReaderLoop loop, EventLogStorage.TailStatements statements, TailReader.RowMapper mapper, ProgressStore progress,
                  EventLogSettings settings, EventLogObserver observer) {
@@ -204,6 +224,8 @@ public final class Subscription {
         this.progress = requireNonNull(progress, "No progress provided");
         this.settings = requireNonNull(settings, "No settings provided");
         this.observer = requireNonNull(observer, "No observer provided");
+        this.stepDown = new StepDown(settings.pageSize(), seams.has(GROW_INSIDE_SUSPECT_RANGE));
+        this.parked = new ParkedEvents(key, loop.dataSource());
     }
 
     /**
@@ -377,6 +399,7 @@ public final class Subscription {
                 lastSaved = row.resumeFrom();
                 lastSaveNanos = System.nanoTime();
                 positionAt(row.resumeFrom());
+                loadParked();
                 type = loop.join(key.aggregateType(), statements, mapper, seams);
             } catch (Throwable e) {
                 startFailure = e;
@@ -389,6 +412,7 @@ public final class Subscription {
             lifecycle();
         } finally {
             phase = Phase.STOPPED;
+            failParkedRequests();
             var current = inbox;
             if (current != null) {
                 current.close(Inbox.CloseReason.STOPPED);
@@ -422,6 +446,21 @@ public final class Subscription {
         }
         receivedPrefix = resumeFrom - 1;
         receivedWatermark = resumeFrom - 1;
+        toPark.clear();
+        pageCut = 0;
+        failingOrder = -1;
+        ioFailures = 0;
+        stepDown.reset();
+    }
+
+    /** The held aggregates from {@code el_parked_events} (§4.5): at start and after a reposition */
+    private void loadParked() throws SQLException {
+        if (seams.has(HELD_SET_NOT_RELOADED)) {
+            parked.clear();
+            return;
+        }
+        parked.load();
+        observer.onHeldAggregates(key.subscriber(), key.aggregateType(), parked.heldCount());
     }
 
     private void lifecycle() {
@@ -526,8 +565,9 @@ public final class Subscription {
     /**
      * WaitingForWatermark (§3.1): read nothing until the type's watermark may have changed (F4, decision 2)
      */
-    private void waitForWatermark(long version, TailReader.State state) throws InterruptedException {
+    private void waitForWatermark(long version, TailReader.State state) throws Exception {
         phase = Phase.WAITING_FOR_WATERMARK;
+        serveParkedRequests();
         if (!waitReported && (state == null || state.watermark() == null)) {
             waitReported = true;
             var heldBy = new HashSet<String>();
@@ -653,6 +693,10 @@ public final class Subscription {
         var poll = settings.backstopInterval().toNanos();
         while (running && repositionTo == null) {
             iterations++;
+            serveParkedRequests();
+            if (repositionTo != null) {
+                return;
+            }
             var current = inbox;
             var reason  = current.closeReason();
             if (reason != null) {
@@ -763,6 +807,10 @@ public final class Subscription {
         var poll = settings.backstopInterval().toNanos();
         while (running && repositionTo == null) {
             iterations++;
+            serveParkedRequests();
+            if (repositionTo != null) {
+                return;
+            }
             var current = inbox;
             var reason  = current.closeReason();
             if (reason != null) {
@@ -925,6 +973,7 @@ public final class Subscription {
             detach(Inbox.CloseReason.RESET);
         }
         positionAt(resumeFrom);
+        loadParked();
     }
 
     /**
@@ -937,6 +986,10 @@ public final class Subscription {
         while (!pending.isEmpty()) {
             if (!running || repositionTo != null || attachedInboxClosed()) {
                 return false;
+            }
+            serveParkedRequests();
+            if (repositionTo != null || pending.isEmpty()) {
+                return repositionTo == null;
             }
             var ok = model == ProgressModel.PERIODIC ? applyOne() : applyPage();
             if (!ok) {
@@ -951,11 +1004,27 @@ public final class Subscription {
         return phase == Phase.ATTACHED && current != null && current.closeReason() != null;
     }
 
-    /** {@link ProgressModel#PERIODIC}: the handler on the first pending event, then mark it applied */
+    /**
+     * {@link ProgressModel#PERIODIC}: the first pending event - parked in autocommit if it is decided or its aggregate is
+     * held (§4.4, §4.5), else handled with retries - then mark it applied. A park row is inserted before the event counts
+     * as handled, so a crash in between replays it and finds it parked.
+     */
     private boolean applyOne() throws Exception {
         var entry = pending.peekFirst();
-        if (!handle(entry.row())) {
-            return false;
+        var event = entry.row();
+        var park  = holdRowFor(event, Map.of());
+        if (park == null) {
+            var outcome = handle(event);
+            if (outcome.stop()) {
+                return false;
+            }
+            park = outcome.park();
+        }
+        if (park != null) {
+            var rows = List.of(park);
+            parked.insertNow(rows);
+            seams.hooks().onPark(key.subscriber(), park.globalOrder(), park.blockedBy());
+            afterParked(rows);
         }
         pending.removeFirst();
         entry.release();
@@ -968,15 +1037,21 @@ public final class Subscription {
         return true;
     }
 
+    /** What became of a {@link ProgressModel#PERIODIC} event: stopped, handled ({@code park} null) or to be parked */
+    private record Outcome(boolean stop, ParkedEvents.Row park) {
+        static final Outcome STOPPED = new Outcome(true, null);
+        static final Outcome HANDLED = new Outcome(false, null);
+    }
+
     /**
-     * Run the handler until it returns normally
-     *
-     * @return {@code false} if the subscription stopped, or an attached inbox closed while the handler failed
+     * Run the handler until it returns normally, the event's retries are used up or it asks to park it (§4.1-§4.4). An
+     * I/O failure is retried indefinitely with a doubling backoff and counts no attempt.
      */
-    private boolean handle(StoredEvent event) throws Exception {
+    private Outcome handle(StoredEvent event) throws Exception {
+        var ioFailuresHere = 0;
         while (true) {
             if (!running) {
-                return false;
+                return Outcome.STOPPED;
             }
             try {
                 handler.handle(event);
@@ -984,64 +1059,177 @@ public final class Subscription {
                 throw e;
             } catch (Exception e) {
                 if (!running) {
-                    return false;
+                    return Outcome.STOPPED;
                 }
                 observer.onError(key.subscriber(), key.aggregateType(), e);
-                log.warn("Subscription {} on {}: handler failed on global_order {}; retrying after {}", key.subscriber(), key.aggregateType(), event.globalOrder(),
-                         settings.backstopInterval(), e);
-                Thread.sleep(settings.backstopInterval());
+                if (e instanceof ParkEventException parkNow && (parkNow.event() == null || parkNow.event().globalOrder() == event.globalOrder())) {
+                    return new Outcome(false, parkRow(event, attemptsAfterFailure(event), parkNow));
+                }
+                Duration wait;
+                if (isIoFailure(e)) {
+                    wait = settings.retryBackoff(ioFailuresHere++);
+                    log.warn("Subscription {} on {}: I/O failure handling global_order {}; retrying after {}", key.subscriber(), key.aggregateType(),
+                             event.globalOrder(), wait, e);
+                } else {
+                    var attempts = attemptsAfterFailure(event);
+                    if (attempts > settings.retryAttempts()) {
+                        log.warn("Subscription {} on {}: handler failed {} times on global_order {}; parking it", key.subscriber(), key.aggregateType(), attempts,
+                                 event.globalOrder(), e);
+                        return new Outcome(false, parkRow(event, attempts, e));
+                    }
+                    wait = settings.retryBackoff(attempts - 1);
+                    log.warn("Subscription {} on {}: handler failed on global_order {} (attempt {}); retrying after {}", key.subscriber(), key.aggregateType(),
+                             event.globalOrder(), attempts, wait, e);
+                }
+                Thread.sleep(wait);
                 if (attachedInboxClosed()) {
-                    return false;
+                    return Outcome.STOPPED;
                 }
                 continue;
             }
             // interrupted while handling: not handled
-            return !(Thread.currentThread().isInterrupted() && !running);
+            if (Thread.currentThread().isInterrupted() && !running) {
+                return Outcome.STOPPED;
+            }
+            if (failingOrder == event.globalOrder()) {
+                failingOrder = -1;
+            }
+            return Outcome.HANDLED;
+        }
+    }
+
+    /** One more failed attempt of {@code event} alone; @return the attempts so far */
+    private int attemptsAfterFailure(StoredEvent event) {
+        if (failingOrder != event.globalOrder()) {
+            failingOrder = event.globalOrder();
+            failingAttempts = 0;
+        }
+        return ++failingAttempts;
+    }
+
+    private static ParkedEvents.Row parkRow(StoredEvent event, int attempts, Throwable error) {
+        if (error instanceof ParkEventException parkNow) {
+            var cause = parkNow.getCause();
+            return new ParkedEvents.Row(event, null, attempts, cause != null ? cause.getClass().getName() : ParkEventException.class.getName(), parkNow.getMessage());
+        }
+        return new ParkedEvents.Row(event, null, attempts, error.getClass().getName(), error.getMessage());
+    }
+
+    /**
+     * §4.5: the park row of an event whose aggregate is held - by the held set, or by a head parked earlier in the same
+     * page ({@code pageHeads}) - else {@code null}
+     */
+    private ParkedEvents.Row holdRowFor(StoredEvent event, Map<String, Long> pageHeads) {
+        if (seams.has(NO_AGGREGATE_HOLD)) {
+            return null;
+        }
+        var head = parked.headOf(event.aggregateId());
+        if (head == null) {
+            head = pageHeads.get(event.aggregateId());
+        }
+        return head != null && head != event.globalOrder() ? new ParkedEvents.Row(event, head, 0, null, null) : null;
+    }
+
+    /** The park rows of {@code page}, in order: events decided for parking (heads) and events of held aggregates */
+    private List<ParkedEvents.Row> parksFor(List<StoredEvent> page) {
+        var rows      = new ArrayList<ParkedEvents.Row>();
+        var pageHeads = new HashMap<String, Long>();
+        for (var event : page) {
+            var decided = toPark.get(event.globalOrder());
+            if (decided != null) {
+                rows.add(decided);
+                pageHeads.putIfAbsent(event.aggregateId(), event.globalOrder());
+                continue;
+            }
+            var hold = holdRowFor(event, pageHeads);
+            if (hold != null) {
+                rows.add(hold);
+            }
+        }
+        return rows;
+    }
+
+    /** Park rows committed: heads hold their aggregates (§4.5), the error state forgets them */
+    private void afterParked(List<ParkedEvents.Row> rows) {
+        var heldBefore = parked.heldCount();
+        for (var row : rows) {
+            toPark.remove(row.globalOrder());
+            if (failingOrder == row.globalOrder()) {
+                failingOrder = -1;
+            }
+            if (row.blockedBy() == null && !seams.has(NO_AGGREGATE_HOLD)) {
+                parked.hold(row.event().aggregateId(), row.globalOrder());
+            }
+            observer.onParked(key.subscriber(), key.aggregateType(), row.globalOrder(), row.blockedBy(), row.attempts());
+        }
+        if (parked.heldCount() != heldBefore) {
+            observer.onHeldAggregates(key.subscriber(), key.aggregateType(), parked.heldCount());
         }
     }
 
     /**
-     * {@link ProgressModel#IN_HANDLER_TRANSACTION}: one page transaction (phase 4 §3.3) over the first
-     * {@link EventLogSettings#pageSize()} pending events. The handler's writes and the progress update - the last
-     * statement, guarded by the reset epoch and the value last committed - commit together; the page leaves pending only
-     * after the commit.
+     * {@link ProgressModel#IN_HANDLER_TRANSACTION}: one page transaction (phase 4 §3.3) over the first pending events, at
+     * most the step-down size (§4.2). Events decided for parking and events of held aggregates are taken out of the page
+     * and parked in the same transaction (§4.4, §4.5); the handler gets the rest. The handler's writes, the park rows and
+     * the progress update - the last statement, guarded by the reset epoch and the value last committed - commit together;
+     * the page leaves pending only after the commit. A failure is classified (§4.1): I/O retries the same page, a park
+     * request parks, anything else shrinks, retries, then parks.
      *
      * @return {@code true} if the page committed or is to be retried; {@code false} if stopped or repositioning
      */
     private boolean applyPage() throws Exception {
-        var size    = Math.min(settings.pageSize(), pending.size());
+        var size = Math.min(stepDown.size(), pending.size());
+        if (pageCut > 0) {
+            size = Math.min(size, pageCut);
+        }
         var entries = new ArrayList<HeldBack.Entry>(size);
         var it      = pending.iterator();
         while (entries.size() < size) {
             entries.add(it.next());
         }
-        var page       = entries.stream().map(HeldBack.Entry::row).toList();
-        var next       = it.hasNext() ? it.next().globalOrder() : null;
-        var resumeFrom = resumeAfterPage(next);
-        var expected   = seams.has(PROGRESS_WITHOUT_EXPECTED_RESUME) ? null : (Long) lastSaved;
+        var page          = entries.stream().map(HeldBack.Entry::row).toList();
+        var parks         = parksFor(page);
+        var parkedOrders  = new HashSet<Long>();
+        parks.forEach(row -> parkedOrders.add(row.globalOrder()));
+        var handlerPage   = parks.isEmpty() ? page : page.stream().filter(event -> !parkedOrders.contains(event.globalOrder())).toList();
+        var parkOutside   = seams.has(PARK_OUTSIDE_PAGE_TRANSACTION);
+        var next          = it.hasNext() ? it.next().globalOrder() : null;
+        var resumeFrom    = resumeAfterPage(next);
+        var expected      = seams.has(PROGRESS_WITHOUT_EXPECTED_RESUME) ? null : (Long) lastSaved;
         if (contiguous()) {
             appliedBeforeLastPage = appliedPrefix();
         }
         var hooks      = seams.hooks();
         var subscriber = key.subscriber();
         Connection connection = null;
+        var        inHandler  = false;
         try {
             connection = loop.dataSource().getConnection();
             openPageConnection = connection;
             connection.setAutoCommit(false);
-            hooks.beforePageHandler(subscriber, page);
-            pageHandler.handle(page, GuardedConnection.of(connection));
+            hooks.beforePageHandler(subscriber, handlerPage);
+            if (!handlerPage.isEmpty()) {
+                inHandler = true;
+                pageHandler.handle(handlerPage, GuardedConnection.of(connection));
+                inHandler = false;
+            }
+            if (!parks.isEmpty() && !parkOutside) {
+                parked.insert(connection, parks);
+                for (var row : parks) {
+                    hooks.onPark(subscriber, row.globalOrder(), row.blockedBy());
+                }
+            }
             boolean saved;
             if (seams.has(PROGRESS_AFTER_COMMIT)) {
                 connection.commit();
-                hooks.afterHandlerBeforeProgress(subscriber, page);
+                hooks.afterHandlerBeforeProgress(subscriber, handlerPage);
                 saved = progress.saveExpected(key, resumeFrom, resetEpoch, expected);
-                hooks.afterProgressBeforeCommit(subscriber, page, resumeFrom);
+                hooks.afterProgressBeforeCommit(subscriber, handlerPage, resumeFrom);
             } else {
-                hooks.afterHandlerBeforeProgress(subscriber, page);
+                hooks.afterHandlerBeforeProgress(subscriber, handlerPage);
                 saved = ProgressStore.saveInTransaction(connection, key, resumeFrom, resetEpoch, expected);
                 if (saved) {
-                    hooks.afterProgressBeforeCommit(subscriber, page, resumeFrom);
+                    hooks.afterProgressBeforeCommit(subscriber, handlerPage, resumeFrom);
                     connection.commit();
                 } else {
                     connection.rollback();
@@ -1053,14 +1241,23 @@ public final class Subscription {
                 onProgressConflict();
                 return repositionTo == null;
             }
+            if (!parks.isEmpty() && parkOutside) {
+                for (var row : parks) {
+                    hooks.onPark(subscriber, row.globalOrder(), row.blockedBy());
+                }
+                parked.insertNow(parks);
+            }
         } catch (TestSeams.Crash e) {
             // A lost JVM: no rollback, no close - the IT terminates the backend
             throw e;
         } catch (Exception e) {
+            // Only what the handler threw on a healthy connection is the handler's failure; everything else is I/O (§4.1)
+            var io = !inHandler || isIoFailure(e) || connection != null && invalid(connection);
             if (connection != null) {
                 try {
                     connection.rollback();
                 } catch (SQLException rollbackFailed) {
+                    io = true;
                     log.debug("Rolling back a failed page of {} failed", key, rollbackFailed);
                 }
                 closePageConnection(connection);
@@ -1071,13 +1268,18 @@ public final class Subscription {
             }
             lastFailedPage = entries;
             observer.onError(subscriber, key.aggregateType(), e);
-            log.warn("Subscription {} on {}: a page of {} events from global_order {} failed; retrying after {}", subscriber, key.aggregateType(), page.size(),
-                     page.getFirst().globalOrder(), settings.backstopInterval(), e);
-            Thread.sleep(settings.backstopInterval());
+            onPageFailure(e, io, page, handlerPage);
             return true;
         }
-        hooks.afterCommit(subscriber, page, resumeFrom);
+        hooks.afterCommit(subscriber, handlerPage, resumeFrom);
         lastFailedPage = null;
+        ioFailures = 0;
+        pageCut = 0;
+        stepDown.committed(page.getFirst().globalOrder(), page.getLast().globalOrder());
+        if (failingOrder >= page.getFirst().globalOrder() && failingOrder <= page.getLast().globalOrder()) {
+            failingOrder = -1;
+        }
+        afterParked(parks);
         for (var i = 0; i < size; i++) {
             pending.removeFirst().release();
         }
@@ -1093,6 +1295,216 @@ public final class Subscription {
         observer.onPageCommitted(subscriber, key.aggregateType(), page.size());
         observer.onProgressSaved(subscriber, key.aggregateType(), resumeFrom);
         return true;
+    }
+
+    /**
+     * §4.1-§4.4 after a page rolled back. I/O: the same page again after a doubling backoff, no shrink, no attempt. A
+     * {@link ParkEventException} naming an event of the page: that event is parked by the page after the ones before it
+     * (which commit in a page of their own). A handler failure of a page of several events: shrink (§4.2); of an event
+     * alone: retry after a doubling backoff, and once {@link EventLogSettings#retryAttempts()} retries are used up, park
+     * it (§4.3).
+     */
+    private void onPageFailure(Exception e, boolean io, List<StoredEvent> page, List<StoredEvent> handlerPage) throws InterruptedException {
+        var subscriber = key.subscriber();
+        if (io) {
+            var wait = settings.retryBackoff(ioFailures++);
+            log.warn("Subscription {} on {}: I/O failure in a page of {} events from global_order {}; retrying it after {}", subscriber, key.aggregateType(),
+                     page.size(), page.getFirst().globalOrder(), wait, e);
+            Thread.sleep(wait);
+            return;
+        }
+        ioFailures = 0;
+        if (e instanceof ParkEventException parkNow) {
+            var named = parkNow.event() != null ? parkNow.event() : handlerPage.size() == 1 ? handlerPage.getFirst() : null;
+            var index = named == null ? -1 : indexOf(page, named.globalOrder());
+            if (index >= 0 && handlerPage.stream().anyMatch(event -> event.globalOrder() == named.globalOrder())) {
+                var event = page.get(index);
+                toPark.put(event.globalOrder(), parkRow(event, attemptsAfterFailure(event), parkNow));
+                pageCut = index;
+                log.info("Subscription {} on {}: the handler asked to park global_order {}", subscriber, key.aggregateType(), event.globalOrder());
+                return;
+            }
+        }
+        if (handlerPage.size() == 1 || seams.has(NO_SHRINK)) {
+            var event    = handlerPage.getFirst();
+            var attempts = attemptsAfterFailure(event);
+            if (attempts > settings.retryAttempts()) {
+                log.warn("Subscription {} on {}: handler failed {} times on global_order {} alone; parking it", subscriber, key.aggregateType(), attempts,
+                         event.globalOrder(), e);
+                toPark.put(event.globalOrder(), parkRow(event, attempts, e));
+                return;
+            }
+            var wait = settings.retryBackoff(attempts - 1);
+            log.warn("Subscription {} on {}: handler failed on global_order {} alone (attempt {}); retrying after {}", subscriber, key.aggregateType(),
+                     event.globalOrder(), attempts, wait, e);
+            Thread.sleep(wait);
+            return;
+        }
+        stepDown.failed(page.getFirst().globalOrder(), page.getLast().globalOrder(), page.size());
+        log.debug("Subscription {} on {}: a page of {} events from global_order {} failed; next page {} events", subscriber, key.aggregateType(), page.size(),
+                  page.getFirst().globalOrder(), stepDown.size(), e);
+    }
+
+    private static int indexOf(List<StoredEvent> page, long globalOrder) {
+        for (var i = 0; i < page.size(); i++) {
+            if (page.get(i).globalOrder() == globalOrder) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * §4.1: the cause chain holds an {@code SQLException} of class {@code 08} (connection exception) or a
+     * {@link SQLTransientConnectionException}
+     */
+    static boolean isIoFailure(Throwable error) {
+        var depth = 0;
+        for (var t = error; t != null && depth < 32; t = t.getCause(), depth++) {
+            if (t instanceof SQLTransientConnectionException) {
+                return true;
+            }
+            if (t instanceof SQLException sql && sql.getSQLState() != null && sql.getSQLState().startsWith("08")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** §4.1: the page connection is no longer valid */
+    private static boolean invalid(Connection connection) {
+        try {
+            return connection.isClosed() || !connection.isValid(1);
+        } catch (SQLException e) {
+            return true;
+        }
+    }
+
+    // ---- retry and discard of a parked aggregate (§4.5) ----
+
+    private record ParkedRequest(long head, boolean discard, CompletableFuture<Boolean> result) {
+    }
+
+    /**
+     * Retry the aggregate parked at {@code head}: on the delivery thread, between pages, one transaction locks the head's
+     * and its held rows, hands their events to the handler in order, deletes the rows and runs the progress
+     * compare-and-set unchanged; after it commits the aggregate is no longer held. If it fails the head's attempts grow
+     * and the aggregate stays held. Package-private until phase 8's admin surface.
+     *
+     * @return {@code true} once applied; {@code false} if it failed, {@code head} is not parked, or a reset intervened
+     */
+    CompletableFuture<Boolean> retryParked(long head) {
+        return requestParked(head, false);
+    }
+
+    /**
+     * As {@link #retryParked(long)}, but the head is deleted without being handed to the handler; the events held behind
+     * it are applied
+     */
+    CompletableFuture<Boolean> discardParked(long head) {
+        return requestParked(head, true);
+    }
+
+    private CompletableFuture<Boolean> requestParked(long head, boolean discard) {
+        var request = new ParkedRequest(head, discard, new CompletableFuture<>());
+        parkedRequests.add(request);
+        if (!isRunning()) {
+            failParkedRequests();
+        }
+        return request.result();
+    }
+
+    private void failParkedRequests() {
+        ParkedRequest request;
+        while ((request = parkedRequests.poll()) != null) {
+            request.result().completeExceptionally(new IllegalStateException("Subscription " + key + " is not running"));
+        }
+    }
+
+    /** Delivery thread, between pages: run the retry and discard requests */
+    private void serveParkedRequests() throws Exception {
+        ParkedRequest request;
+        while ((request = parkedRequests.poll()) != null) {
+            try {
+                request.result().complete(releaseParked(request.head(), request.discard()));
+            } catch (Exception | Error e) {
+                request.result().completeExceptionally(e);
+                throw e;
+            }
+        }
+    }
+
+    private boolean releaseParked(long head, boolean discard) throws Exception {
+        Connection connection = null;
+        try {
+            connection = loop.dataSource().getConnection();
+            connection.setAutoCommit(false);
+            var orders = parked.lock(connection, head);
+            if (orders.isEmpty()) {
+                connection.rollback();
+                closePageConnection(connection);
+                connection = null;
+                releaseHeld(head);
+                return false;
+            }
+            var events = new ArrayList<StoredEvent>();
+            try (var statement = connection.prepareStatement(statements.byOrders())) {
+                statement.setArray(1, connection.createArrayOf("bigint", orders.toArray(Long[]::new)));
+                try (var resultSet = statement.executeQuery()) {
+                    while (resultSet.next()) {
+                        events.add(mapper.map(resultSet));
+                    }
+                }
+            }
+            var toHandle = discard ? events.stream().filter(event -> event.globalOrder() != head).toList() : events;
+            if (model == ProgressModel.PERIODIC) {
+                for (var event : toHandle) {
+                    handler.handle(event);
+                }
+            } else if (!toHandle.isEmpty()) {
+                pageHandler.handle(toHandle, GuardedConnection.of(connection));
+            }
+            parked.delete(connection, orders);
+            var expected = model == ProgressModel.PERIODIC || seams.has(PROGRESS_WITHOUT_EXPECTED_RESUME) ? null : (Long) lastSaved;
+            if (!ProgressStore.saveInTransaction(connection, key, lastSaved, resetEpoch, expected)) {
+                connection.rollback();
+                closePageConnection(connection);
+                connection = null;
+                onProgressConflict();
+                return false;
+            }
+            connection.commit();
+            closePageConnection(connection);
+            connection = null;
+        } catch (TestSeams.Crash | InterruptedException e) {
+            throw e;
+        } catch (Exception e) {
+            if (connection != null) {
+                try {
+                    connection.rollback();
+                } catch (SQLException rollbackFailed) {
+                    log.debug("Rolling back a parked retry of {} failed", key, rollbackFailed);
+                }
+                closePageConnection(connection);
+            }
+            observer.onError(key.subscriber(), key.aggregateType(), e);
+            log.warn("Subscription {} on {}: {} of the aggregate parked at global_order {} failed; it stays held", key.subscriber(), key.aggregateType(),
+                     discard ? "discard" : "retry", head, e);
+            try {
+                parked.failedAgain(head, e);
+            } catch (SQLException again) {
+                log.warn("Subscription {} on {}: counting the failed attempt failed", key.subscriber(), key.aggregateType(), again);
+            }
+            return false;
+        }
+        releaseHeld(head);
+        return true;
+    }
+
+    private void releaseHeld(long head) {
+        if (parked.release(head) != null) {
+            observer.onHeldAggregates(key.subscriber(), key.aggregateType(), parked.heldCount());
+        }
     }
 
     /**

@@ -103,6 +103,16 @@ abstract class AbstractPageIT extends AbstractSubscriptionIT {
      * recorded violation of strictly increasing application; empty when exactly once and in order
      */
     List<String> foldDifferences() throws Exception {
+        return foldDifferences(Set.of(), true);
+    }
+
+    /**
+     * As {@link #foldDifferences()}, for a reference fold that leaves out {@code skipped} (parked events)
+     *
+     * @param checkIncreasing whether a recorded violation of strictly increasing application counts (a retried parked
+     *                        aggregate is applied below the highest order on purpose)
+     */
+    List<String> foldDifferences(Set<Long> skipped, boolean checkIncreasing) throws Exception {
         var expected = new TreeMap<String, String>();
         var counts   = new HashMap<String, Integer>();
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement();
@@ -110,6 +120,9 @@ abstract class AbstractPageIT extends AbstractSubscriptionIT {
             while (rows.next()) {
                 var id = rows.getString(1);
                 var g  = rows.getLong(2);
+                if (skipped.contains(g)) {
+                    continue;
+                }
                 expected.put(id, md5(expected.getOrDefault(id, "") + g));
                 counts.merge(id, 1, Integer::sum);
             }
@@ -132,7 +145,7 @@ abstract class AbstractPageIT extends AbstractSubscriptionIT {
         }
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement();
              var rows = statement.executeQuery("SELECT g FROM " + VIOLATIONS + " ORDER BY g")) {
-            while (rows.next()) {
+            while (checkIncreasing && rows.next()) {
                 differences.add("global_order " + rows.getLong(1) + " applied at or below the highest order applied before it");
             }
         }

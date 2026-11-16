@@ -143,6 +143,18 @@ public final class EventLog {
     }
 
     /**
+     * Reset a subscription to {@code resumeFrom}: bump its reset epoch and delete its parked rows in one transaction
+     * (design phase 4 §4.5). A running subscription notices at its next save or page. Package-private until phase 8's
+     * reset API.
+     *
+     * @return whether the progress row existed
+     */
+    boolean reset(String subscriber, String aggregateType, String instanceName, long resumeFrom) throws SQLException {
+        requireStarted();
+        return progressStore.reset(new ProgressStore.Key(subscriber, aggregateType, instanceName), resumeFrom);
+    }
+
+    /**
      * With test seams: package-private, for the invariant ITs
      */
     Subscription subscribe(Subscription.SubscriptionSpec spec) throws SQLException {

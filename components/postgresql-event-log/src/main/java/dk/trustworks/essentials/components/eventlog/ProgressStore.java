@@ -157,4 +157,39 @@ final class ProgressStore {
             }
         }
     }
+
+    /**
+     * Reset {@code key} to {@code resumeFrom}: bump the epoch and delete the subscription's parked rows in one
+     * transaction, since a rebuild re-delivers everything (design phase 4 §4.5). Package-private until phase 8's reset API.
+     *
+     * @return whether the row existed
+     */
+    boolean reset(Key key, long resumeFrom) throws SQLException {
+        try (var connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            try {
+                int updated;
+                try (var statement = connection.prepareStatement(EventLogStorage.PROGRESS_RESET)) {
+                    statement.setLong(1, resumeFrom);
+                    statement.setString(2, key.subscriber());
+                    statement.setString(3, key.aggregateType());
+                    statement.setString(4, key.instanceName());
+                    updated = statement.executeUpdate();
+                }
+                try (var statement = connection.prepareStatement(EventLogStorage.PARKED_DELETE_ALL)) {
+                    statement.setString(1, key.subscriber());
+                    statement.setString(2, key.aggregateType());
+                    statement.setString(3, key.instanceName());
+                    statement.executeUpdate();
+                }
+                connection.commit();
+                return updated == 1;
+            } catch (SQLException | RuntimeException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        }
+    }
 }

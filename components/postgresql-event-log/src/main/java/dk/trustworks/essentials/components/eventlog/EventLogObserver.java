@@ -134,4 +134,20 @@ public interface EventLogObserver {
      */
     default void onReleased(String subscriber, String aggregateType, int rows, long receivedWatermark, int heldBack) {
     }
+
+    /**
+     * An event was parked (phase 4 §4.4), or held behind its aggregate's parked head (§4.5); the row is committed.
+     * Delivery thread.
+     *
+     * @param blockedBy the parked head this event is held behind, or {@code null} if it is a head itself
+     * @param attempts  how often the handler failed on it alone ({@code 0} for an event held behind a head)
+     */
+    default void onParked(String subscriber, String aggregateType, long globalOrder, Long blockedBy, int attempts) {
+    }
+
+    /**
+     * The number of aggregates held behind a parked head changed, or was loaded at start (phase 4 §4.5). Delivery thread.
+     */
+    default void onHeldAggregates(String subscriber, String aggregateType, int count) {
+    }
 }

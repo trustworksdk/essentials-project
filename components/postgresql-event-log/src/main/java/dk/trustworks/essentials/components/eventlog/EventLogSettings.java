@@ -43,6 +43,11 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * @param catchUpPageSize      most rows one catch-up or bridge statement returns (phase 3 §3.3, §3.4)
  * @param pageSize             most events one page transaction of an in-transaction subscription applies (phase 4
  *                             §3.2; P0.13: no gain above about 100 row by row)
+ * @param retryAttempts        how many times an event that fails alone is retried before it is parked (phase 4 §4.3);
+ *                             zero parks it on its first failure alone
+ * @param retryBackoffInitial  the sleep before the first retry of an event that failed alone, doubled before each further
+ *                             retry; also the first wait after an I/O failure, which is retried indefinitely (phase 4 §4.1)
+ * @param retryBackoffMax      the most any such sleep or wait lasts
  */
 public record EventLogSettings(Duration backstopInterval,
                                int tailPageSize,
@@ -53,7 +58,10 @@ public record EventLogSettings(Duration backstopInterval,
                                boolean genericPlans,
                                int subscriptionBufferSize,
                                int catchUpPageSize,
-                               int pageSize) {
+                               int pageSize,
+                               int retryAttempts,
+                               Duration retryBackoffInitial,
+                               Duration retryBackoffMax) {
     /**
      * The probes of the whole cluster may take at most about 1 % of one core while candidates are outstanding: one
      * reader's probe costs at most 1 % of its wait ({@code wait >= cost * 100}), divided by the number of readers that
@@ -82,6 +90,10 @@ public record EventLogSettings(Duration backstopInterval,
         requireTrue(subscriptionBufferSize >= tailPageSize, "subscriptionBufferSize must be >= tailPageSize");
         requireTrue(catchUpPageSize > 0, "catchUpPageSize must be > 0");
         requireTrue(pageSize > 0, "pageSize must be > 0");
+        requireTrue(retryAttempts >= 0, "retryAttempts must be >= 0");
+        requirePositive(retryBackoffInitial, "retryBackoffInitial");
+        requirePositive(retryBackoffMax, "retryBackoffMax");
+        requireTrue(retryBackoffMax.compareTo(retryBackoffInitial) >= 0, "retryBackoffMax must be >= retryBackoffInitial");
     }
 
     private static void requirePositive(Duration duration, String name) {
@@ -91,47 +103,67 @@ public record EventLogSettings(Duration backstopInterval,
 
     /**
      * Backstop 1 s, page 100 (P0.13), re-probe between 1 s and 10 s, save every second, ranges above 1 000 values,
-     * generic plans on, inbox 1 000 events, catch-up page 500, page transaction 100 events
+     * generic plans on, inbox 1 000 events, catch-up page 500, page transaction 100 events, 3 retries backing off from
+     * 100 ms to at most 10 s
      */
     public static EventLogSettings defaults() {
-        return new EventLogSettings(Duration.ofSeconds(1), 100, Duration.ofSeconds(1), Duration.ofSeconds(10), Duration.ofSeconds(1), 1_000, true, 1_000, 500, 100);
+        return new EventLogSettings(Duration.ofSeconds(1), 100, Duration.ofSeconds(1), Duration.ofSeconds(10), Duration.ofSeconds(1), 1_000, true, 1_000, 500, 100, 3, Duration.ofMillis(100), Duration.ofSeconds(10));
     }
 
     public EventLogSettings withBackstopInterval(Duration backstopInterval) {
         var min = probeBackoffMin.compareTo(backstopInterval) > 0 ? probeBackoffMin : backstopInterval;
-        return new EventLogSettings(backstopInterval, tailPageSize, min, probeBackoffMax.compareTo(min) < 0 ? min : probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize);
+        return new EventLogSettings(backstopInterval, tailPageSize, min, probeBackoffMax.compareTo(min) < 0 ? min : probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax);
     }
 
     public EventLogSettings withTailPageSize(int tailPageSize) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax);
     }
 
     public EventLogSettings withProbeBackoff(Duration min, Duration max) {
-        return new EventLogSettings(backstopInterval, tailPageSize, min, max, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize);
+        return new EventLogSettings(backstopInterval, tailPageSize, min, max, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax);
     }
 
     public EventLogSettings withProgressSaveInterval(Duration progressSaveInterval) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax);
     }
 
     public EventLogSettings withHoleRangeThreshold(int holeRangeThreshold) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax);
     }
 
     public EventLogSettings withGenericPlans(boolean genericPlans) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax);
     }
 
     public EventLogSettings withSubscriptionBufferSize(int subscriptionBufferSize) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax);
     }
 
     public EventLogSettings withCatchUpPageSize(int catchUpPageSize) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax);
     }
 
     public EventLogSettings withPageSize(int pageSize) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax);
+    }
+
+    public EventLogSettings withRetryAttempts(int retryAttempts) {
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax);
+    }
+
+    public EventLogSettings withRetryBackoff(Duration initial, Duration max) {
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, initial, max);
+    }
+
+    /**
+     * @param retry the zero-based number of the retry (or of the consecutive I/O failure) about to happen
+     * @return {@link #retryBackoffInitial()} doubled {@code retry} times, at most {@link #retryBackoffMax()}
+     */
+    Duration retryBackoff(int retry) {
+        var shift = Math.min(Math.max(0, retry), 30);
+        var nanos = retryBackoffInitial.toNanos();
+        var max   = retryBackoffMax.toNanos();
+        return Duration.ofNanos(nanos > (max >> shift) ? max : Math.min(max, nanos << shift));
     }
 
     /**

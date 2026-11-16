@@ -77,6 +77,30 @@ final class EventLogStorage {
     static final String PROGRESS_READ =
             "SELECT resume_from, reset_epoch, consistency_mode, progress_model FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";
 
+    // ---- parked events (phase 4 §4.4, §4.5); the subscription key's three parameters first unless said otherwise ----
+    /** Then global_order, aggregate_id, blocked_by, attempts, error_type, error_message */
+    static final String PARK_EVENT =
+            "INSERT INTO " + PARKED_EVENTS_TABLE + " (subscriber, aggregate_type, instance_name, global_order, aggregate_id, blocked_by, attempts, error_type, error_message)\n" +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING";
+    /** The held aggregates: every parked head */
+    static final String PARKED_HEADS =
+            "SELECT aggregate_id, global_order FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND blocked_by IS NULL ORDER BY global_order";
+    /** Then the head twice: the head and every row held behind it, locked, in order */
+    static final String PARKED_LOCK =
+            "SELECT global_order, blocked_by FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND (global_order = ? OR blocked_by = ?)\n" +
+                    "ORDER BY global_order FOR UPDATE";
+    /** Then {@code bigint[]} global orders */
+    static final String PARKED_DELETE =
+            "DELETE FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ANY(?::bigint[])";
+    /** error_type, error_message, then the key, then the head */
+    static final String PARKED_FAILED_AGAIN =
+            "UPDATE " + PARKED_EVENTS_TABLE + " SET attempts = attempts + 1, error_type = ?, error_message = ?\n" + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?";
+    /** A reset: every parked row of the subscription */
+    static final String PARKED_DELETE_ALL = "DELETE FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";
+    /** A reset (tests until phase 8): resume_from, then the key */
+    static final String PROGRESS_RESET =
+            "UPDATE " + PROGRESS_TABLE + " SET reset_epoch = reset_epoch + 1, resume_from = ?, updated_at = now()\n" + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";
+
     /**
      * The tail reader's statements over one relation - the aggregate type's event table, or a test's stand-in.
      * Parameters: {@code head} none; {@code plainTail} cursor, limit; {@code probe} cursor, limit, {@code bigint[]} holes;
@@ -87,10 +111,11 @@ final class EventLogStorage {
      * Phase 3's subscription statements, run on pooled connections: {@code rangeRead} lower (exclusive), upper
      * (inclusive), limit - the catch-up page; {@code bridgePage} as {@code rangeRead} plus {@code bigint[]} attach holes
      * at or below the lower bound; {@code bridgePageWithRanges} plus {@code bigint[]} range lows and highs. The bridge
-     * re-reads holes by {@code UNION ALL}, never {@code OR} (P0.11), and reads no running set.
+     * re-reads holes by {@code UNION ALL}, never {@code OR} (P0.11), and reads no running set. {@code byOrders}:
+     * {@code bigint[]} global orders - a parked aggregate's events (phase 4 §4.5).
      */
     record TailStatements(String head, String plainTail, String probe, String probeWithRanges, String holeRead, String runningSet,
-                          String probeWithoutHoleReread, String rangeRead, String bridgePage, String bridgePageWithRanges) {
+                          String probeWithoutHoleReread, String rangeRead, String bridgePage, String bridgePageWithRanges, String byOrders) {
         static TailStatements of(String relation) {
             var tail   = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] AS running FROM " + relation + " WHERE global_order > ? ORDER BY global_order LIMIT ?)";
             var holes  = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] FROM " + relation + " WHERE global_order = ANY(?::bigint[]))";
@@ -110,7 +135,8 @@ final class EventLogStorage {
                     "SELECT * FROM (\n" + tail + "\nUNION ALL\n" + running + "\n" + order,
                     range,
                     "SELECT * FROM (\n(" + range + ")\nUNION ALL\n" + bridgeHoles + "\n) u ORDER BY u.global_order",
-                    "SELECT * FROM (\n(" + range + ")\nUNION ALL\n" + bridgeHoles + "\nUNION ALL\n" + bridgeRanges + "\n) u ORDER BY u.global_order");
+                    "SELECT * FROM (\n(" + range + ")\nUNION ALL\n" + bridgeHoles + "\nUNION ALL\n" + bridgeRanges + "\n) u ORDER BY u.global_order",
+                    "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order = ANY(?::bigint[]) ORDER BY global_order");
         }
 
         /** Every statement with its name, for the generic-plan check */

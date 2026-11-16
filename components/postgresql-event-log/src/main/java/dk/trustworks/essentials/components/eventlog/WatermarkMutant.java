@@ -88,5 +88,18 @@ enum WatermarkMutant {
     /** The in-transaction progress update has no {@code resume_from = expected} guard (§3.3) */
     PROGRESS_WITHOUT_EXPECTED_RESUME,
     /** A {@code FRESH} bridge starts above the highest handled order without re-reading the handled set's gaps (§5.3) */
-    BRIDGE_FROM_HIGHEST_WITHOUT_GAPS
+    BRIDGE_FROM_HIGHEST_WITHOUT_GAPS,
+
+    // ---- phase 4 unit B (design phase 4 §4, §8) ----
+
+    /** A failed page is retried whole, never shrunk; when its retries are used up its first event is parked (§4.2) */
+    NO_SHRINK,
+    /** An in-transaction park row is inserted in its own transaction after the page that moves past it committed (§4.4) */
+    PARK_OUTSIDE_PAGE_TRANSACTION,
+    /** The page size doubles after every committed page, inside the suspect range too (§4.2) */
+    GROW_INSIDE_SUSPECT_RANGE,
+    /** Later events of a parked event's aggregate are handed on instead of parked behind it (§4.5) */
+    NO_AGGREGATE_HOLD,
+    /** The held aggregates are not loaded from {@code el_parked_events} at start (§4.5) */
+    HELD_SET_NOT_RELOADED
 }
