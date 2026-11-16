@@ -126,6 +126,48 @@ class EventLogResumePointIT extends AbstractSubscriptionIT {
     }
 
     @Test
+    void a_save_while_the_loop_holds_a_read_before_publishing_it_redelivers_that_read() throws Exception {
+        assertThat(crashWhileTheLoopHoldsARead()).isEmpty();
+    }
+
+    @Test
+    void must_fail_a_resume_point_from_the_readers_live_watermark_loses_the_unpublished_read() throws Exception {
+        assertThat(crashWhileTheLoopHoldsARead(WatermarkMutant.RESUME_FROM_READER_WATERMARK)).isNotEmpty();
+    }
+
+    /**
+     * Phase 3 §3.2: the handler blocks on {@code g1}; the loop reads {@code g2} - the reader's state already has the
+     * moved watermark - and is held at {@code afterReadBeforePublish}. The handler is released, the subscription saves
+     * on its own thread, and crashes before the loop offers {@code g2}.
+     */
+    private Set<Long> crashWhileTheLoopHoldsARead(WatermarkMutant... mutants) throws Exception {
+        var r1      = new Recorder();
+        var holding = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var hooks = new TestSeams.Hooks() {
+            @Override
+            public void afterReadBeforePublish(String aggregateType, List<StoredEvent> rows) throws Exception {
+                if (rows.stream().anyMatch(e -> e.aggregateId().equals("second")) && holding.getCount() > 0) {
+                    holding.countDown();
+                    release.await(30, TimeUnit.SECONDS);
+                }
+            }
+        };
+        r1.blockAtAggregate = "first";
+        var s1 = subscribe("sub", r1, new TestSeams(Set.of(mutants), hooks, null));
+        var g1 = commitAppend("first", 1);
+        assertThat(r1.blocked.await(30, TimeUnit.SECONDS)).isTrue();
+        var g2 = commitAppend("second", 1);
+        assertThat(holding.await(30, TimeUnit.SECONDS)).isTrue();
+        assertThat(eventLog.reader(TYPE).state().watermark()).as("the reader's state moved before the publish").isEqualTo(g2);
+        r1.release.countDown();
+        awaitTrue(() -> s1.lastSaved() >= g1 + 1);
+        crash(s1);
+        release.countDown();
+        return lostAfterRestart(r1);
+    }
+
+    @Test
     void a_restart_keeps_the_resume_point_while_its_watermark_is_unknown() throws Exception {
         assertThat(crashWhileTheRestartWatermarkIsUnknown()).isEmpty();
     }

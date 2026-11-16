@@ -56,5 +56,16 @@ enum WatermarkMutant {
     /** The resume point is computed from the reader's live watermark instead of the received one (§3.2, I3) */
     RESUME_FROM_READER_WATERMARK,
     /** A reader restart leaves the attached subscriptions attached (§2.4, F4) */
-    KEEP_ATTACHED_ON_READER_RESTART
+    KEEP_ATTACHED_ON_READER_RESTART,
+    /** The loop waits for room in a full inbox instead of detaching it (§2.3, I9). On the type's first subscription */
+    BACK_PRESSURE,
+    /** The subscription bridges to the reader's published cursor first and attaches afterwards (§3.4) */
+    BRIDGE_BEFORE_ATTACH,
+    /** The subscription takes the batches already in its inbox before each bridge page (§3.4, I2) */
+    DRAIN_BEFORE_BRIDGE,
+    /**
+     * The loop accepts an attach while the type's watermark is unknown, replying with its cursor as the watermark, and
+     * the subscription asks for one without waiting (§3.4 step 2, F4). On the type's first subscription
+     */
+    ATTACH_WITH_UNKNOWN_WATERMARK
 }

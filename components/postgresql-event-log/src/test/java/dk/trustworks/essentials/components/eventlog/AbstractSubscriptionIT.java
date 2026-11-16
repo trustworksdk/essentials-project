@@ -54,6 +54,10 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         final AtomicLong reads = new AtomicLong();
         final AtomicLong holeReads = new AtomicLong();
         final AtomicLong detaches  = new AtomicLong();
+        final AtomicLong attaches  = new AtomicLong();
+        final AtomicLong rowsRead  = new AtomicLong();
+        final List<String> detachReasons = new CopyOnWriteArrayList<>();
+        final List<Long>   saves         = new CopyOnWriteArrayList<>();
         volatile int lastCandidates;
         volatile int lastHoles;
 
@@ -61,7 +65,18 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         public void onRead(String aggregateType, boolean combined, long nanos, int rows, int outstandingHoles, int outstandingCandidates, Duration oldestCandidateAge) {
             lastCandidates = outstandingCandidates;
             lastHoles = outstandingHoles;
+            rowsRead.addAndGet(rows);
             reads.incrementAndGet();
+        }
+
+        @Override
+        public void onAttach(String subscriber, String aggregateType, long cursor, long watermark) {
+            attaches.incrementAndGet();
+        }
+
+        @Override
+        public void onProgressSaved(String subscriber, String aggregateType, long resumeFrom) {
+            saves.add(resumeFrom);
         }
 
         @Override
@@ -71,23 +86,29 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
 
         @Override
         public void onDetach(String subscriber, String aggregateType, String reason, long resumeFrom) {
+            detachReasons.add(reason);
             detaches.incrementAndGet();
         }
     }
 
-    /** Records every delivery, in order; can be made to block on one global order */
+    /**
+     * Records every delivery, in order; can be made to block on one global order, or on every event of one aggregate,
+     * until {@link #release} is counted down
+     */
     static final class Recorder implements FreshSubscription.Handler {
         final List<StoredEvent> delivered = new CopyOnWriteArrayList<>();
         final List<StoredEvent> handled   = new CopyOnWriteArrayList<>();
         volatile long           blockAt   = -1;
+        volatile String         blockAtAggregate;
         final CountDownLatch    blocked   = new CountDownLatch(1);
+        final CountDownLatch    release   = new CountDownLatch(1);
 
         @Override
         public void handle(StoredEvent event) throws Exception {
             delivered.add(event);
-            if (event.globalOrder() == blockAt) {
+            if (event.globalOrder() == blockAt || event.aggregateId().equals(blockAtAggregate)) {
                 blocked.countDown();
-                new CountDownLatch(1).await();
+                release.await();
             }
             handled.add(event);
         }
@@ -131,9 +152,39 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
     }
 
     FreshSubscription subscribe(String name, Recorder recorder, TestSeams seams) throws SQLException {
-        var subscription = eventLog.subscribe(new FreshSubscription.SubscriptionSpec(new ProgressStore.Key(name, TYPE, "node-1"), 1, recorder, seams));
+        return subscribe(name, recorder, seams, 1);
+    }
+
+    FreshSubscription subscribe(String name, FreshSubscription.Handler handler, TestSeams seams, long startFrom) throws SQLException {
+        var subscription = eventLog.subscribe(new FreshSubscription.SubscriptionSpec(new ProgressStore.Key(name, TYPE, "node-1"), startFrom, handler, seams));
         subscriptions.add(subscription);
         return subscription;
+    }
+
+    /** Replaces the event log with one on {@code source} with {@code settings}; the schema and tables stay */
+    void restartEventLog(javax.sql.DataSource source, EventLogSettings settings) throws SQLException {
+        subscriptions.forEach(FreshSubscription::crash);
+        subscriptions.clear();
+        eventLog.stop();
+        eventLog = EventLog.builder().setDataSource(source).setSettings(settings).setObserver(reads).build();
+        eventLog.start();
+        tables = eventLog.registerAggregateType(TYPE);
+    }
+
+    /**
+     * Waits until the shared reader has read {@code globalOrder} (as a new row or a late commit into a hole) and the
+     * batch holding it has been offered: one more read has finished after it
+     */
+    void awaitOffered(long globalOrder) {
+        await().atMost(WAIT).until(() -> {
+            var reader = eventLog.reader(TYPE);
+            var state  = reader == null ? null : reader.state();
+            if (state == null || state.cursor() < globalOrder || state.holes().contains(globalOrder)) {
+                return false;
+            }
+            return state.ranges().entrySet().stream().noneMatch(range -> range.getKey() <= globalOrder && range.getValue() >= globalOrder);
+        });
+        awaitReads(1);
     }
 
     FreshSubscription subscribe(String name, Recorder recorder, WatermarkMutant... mutants) throws SQLException {

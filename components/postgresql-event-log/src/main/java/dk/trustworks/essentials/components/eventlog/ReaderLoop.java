@@ -374,6 +374,9 @@ final class ReaderLoop {
         var type   = request.type();
         var reader = type.reader;
         var watermark = reader == null || !types.contains(type) ? null : reader.watermark();
+        if (watermark == null && reader != null && types.contains(type) && type.seams.has(ATTACH_WITH_UNKNOWN_WATERMARK)) {
+            watermark = reader.cursor();
+        }
         if (watermark == null) {
             request.reply().complete(AttachReply.REFUSED);
             return;
@@ -420,7 +423,12 @@ final class ReaderLoop {
         var batch = new Batch(rows, watermark == null ? Long.MIN_VALUE : watermark);
         for (var it = type.attached.iterator(); it.hasNext(); ) {
             var inbox = it.next();
-            switch (inbox.offer(batch)) {
+            var offered = inbox.offer(batch);
+            while (offered == Inbox.Offer.FULL && type.seams.has(BACK_PRESSURE)) {
+                LockSupport.parkNanos(this, 1_000_000);
+                offered = inbox.offer(batch);
+            }
+            switch (offered) {
                 case ACCEPTED -> {
                 }
                 case CLOSED -> it.remove();

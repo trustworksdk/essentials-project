@@ -222,6 +222,11 @@ public final class FreshSubscription {
         return phase == Phase.ATTACHED && current != null && current.consumerIdle();
     }
 
+    /** @return the inbox while attaching, bridging or attached, else {@code null}; for tests */
+    Inbox inbox() {
+        return inbox;
+    }
+
     /**
      * The last saved resume point, for tests
      */
@@ -311,12 +316,12 @@ public final class FreshSubscription {
             var version   = type.version();
             var state     = type.state();
             var watermark = state == null ? null : state.watermark();
-            if (watermark == null) {
+            if (watermark == null && (state == null || !seams.has(ATTACH_WITH_UNKNOWN_WATERMARK))) {
                 waitForWatermark(version, state);
                 continue;
             }
             phase = Phase.CATCHING_UP;
-            if (handled.prefix() < watermark) {
+            if (watermark != null && handled.prefix() < watermark) {
                 var rows = read(false, handled.prefix(), watermark, null, null);
                 var full = rows.size() >= settings.catchUpPageSize();
                 receivedWatermark = Math.max(receivedWatermark, full ? rows.getLast().globalOrder() : watermark);
@@ -327,13 +332,21 @@ public final class FreshSubscription {
                     continue;
                 }
             }
-            seams.hooks().beforeAttachRequest(key.subscriber());
-            phase = Phase.ATTACHING;
             var candidate = new Inbox(settings.subscriptionBufferSize());
             inbox = candidate;
+            if (seams.has(BRIDGE_BEFORE_ATTACH) && state != null && !bridge(new ReaderLoop.AttachReply(true, state.cursor(), watermark, state.holes(), state.ranges()))) {
+                inbox = null;
+                return null;
+            }
+            seams.hooks().beforeAttachRequest(key.subscriber());
+            phase = Phase.ATTACHING;
             var reply = loop.attach(type, candidate, key.subscriber(), seams.hooks()).get();
             if (reply.accepted()) {
                 endWait();
+                if (seams.has(BRIDGE_BEFORE_ATTACH)) {
+                    // Bridged already: nothing between the published cursor and the attach is read
+                    return new ReaderLoop.AttachReply(true, Long.MIN_VALUE, reply.watermark(), Collections.emptySortedSet(), Collections.emptySortedMap());
+                }
                 return reply;
             }
             inbox = null;
@@ -391,6 +404,14 @@ public final class FreshSubscription {
                 seams.hooks().betweenBridgePages(key.subscriber(), lower);
             }
             first = false;
+            if (seams.has(DRAIN_BEFORE_BRIDGE)) {
+                Batch batch;
+                while ((batch = inbox.take(0)) != null) {
+                    if (!work(batch.rows())) {
+                        return false;
+                    }
+                }
+            }
             var rereadHoles  = seams.has(BRIDGE_WITHOUT_HOLE_REREAD) ? new TreeSet<Long>() : new TreeSet<>(holes.headSet(lower, true));
             var rereadRanges = new TreeMap<Long, Long>();
             if (!seams.has(BRIDGE_WITHOUT_HOLE_REREAD)) {
@@ -603,8 +624,14 @@ public final class FreshSubscription {
         if (seams.has(RESUME_AT_CURSOR)) {
             return state == null ? handled.resumeFrom() : Math.max(handled.resumeFrom(), state.cursor() + 1);
         }
-        if (seams.has(RESUME_FROM_READER_WATERMARK) && state != null && state.watermark() != null) {
-            var resume = Math.max(handled.resumeFrom(), state.watermark() + 1);
+        if (seams.has(RESUME_FROM_READER_WATERMARK)) {
+            // The reader's live state: published inside its read, before the read's batch is offered
+            var reader = type == null ? null : type.reader();
+            var live   = reader == null ? null : reader.state();
+            if (live == null || live.watermark() == null) {
+                return handled.resumeFrom();
+            }
+            var resume = Math.max(handled.resumeFrom(), live.watermark() + 1);
             return remaining.isEmpty() ? resume : Math.min(resume, remaining.peekFirst().globalOrder());
         }
         return handled.resumeFrom();
