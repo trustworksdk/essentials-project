@@ -1,6 +1,6 @@
 # Event store redesign, phase 4: engine design
 
-**Status:** decided 2026-11-16 (§10); being built on `feature/event-store-engine-phase4`. When phase 4 is done, this file moves to `docs/archive/` or is folded
+**Status:** decided 2026-11-16 (§10); built on `feature/event-store-engine-phase4`, gate passed 2026-11-16 (§11). When phase 4 is done, this file moves to `docs/archive/` or is folded
 into the redesign's record (`docs/plans/README.md`).
 **Scope:** phase 4 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): `CONTIGUOUS` mode
 (§7); progress in the handler's transaction with a page per transaction (§8.1, §8.3); the page error model: a failed
@@ -476,3 +476,133 @@ recommended. The sections above already follow them.
 | 3 | `FRESH` re-attach churn (phase-3 decision 3) | **The bridge starts above the highest handled order** and re-reads the handled set's gaps (§5.3), falling back to starting at `P` above `holeRangeThreshold` gaps |
 | 4 | `CONTIGUOUS` re-attach churn (risk 14) | **Deferred bridge with immediate re-attach** (§2.4, §5.2); §9 confirms it costs no statement behind a long writer |
 | 5 | Mode × progress-model pairs | **All four built**; `CONTIGUOUS` + in-transaction and `FRESH` + periodic are gated, the other two get one smoke IT each |
+
+---
+
+## 11. Results (2026-11-16)
+
+Measured by `spike/EventLogGateSpikeIT` (`scripts/run-phase0-spikes.sh --suite p4-gate`; `p3-gate` now runs only
+phase 3's three methods) on the development VM: PostgreSQL 18.4 in a container with `fsync=off`, 8 CPUs shared by
+client and server, a fresh container per arm, two runs of every arm. Statements are `pg_stat_statements` calls by role,
+utility statements (`BEGIN`, `COMMIT`) included; the reader role covers everything the engine runs on its `DataSource`,
+page transactions included. Every `getConnection()` on that pool is timed. Results files `target/spike-results/p4-c-*.txt`.
+As in phases 2 and 3, absolute figures need the dedicated server; the statement counts do not depend on it. No main code
+changed for this unit.
+
+### 11.1 Projection throughput
+
+P0.13's shape at full size: 200 000 seeded events over 20 000 interleaved aggregates, payload about 200 B, one
+pre-populated view table per projection, every write an `INSERT … ON CONFLICT DO UPDATE` that updates. Each projection
+starts at 1 and is timed from `subscribe` until its last event is applied (in-transaction: the committed resume point
+passes the last event). Reader pool projections + 2; the baseline handler upserts on a dedicated autocommit connection
+from the writer pool. Every run's views plus parked rows equalled the seeded events ("fold OK" in all 28 arms).
+Events/s per projection, runs 1-2:
+
+| Arm | 1 projection | Against baseline | 4 projections | Against baseline |
+|---|---|---|---|---|
+| Baseline: `FRESH` + `PERIODIC`, per-event autocommit upsert, 1 s save | 9 797-9 853 | 1.00 | 8 997-9 037 | 1.00 |
+| `CONTIGUOUS` + in-transaction, row by row, page 10 | 9 184-9 236 | 0.93-0.94x | 8 284-8 313 | 0.92x |
+| **Row by row, page 100** | **10 314-10 478** | **1.05-1.06x** | **9 315** | **1.03-1.04x** |
+| JDBC batch, page 100 | 75 589-77 087 | 7.7-7.8x | 64 834-65 956 | 7.2-7.3x |
+| Set-based (`unnest`), page 100 | 97 194-99 111 | 9.9-10.1x | 55 958-76 180 | 6.2-8.4x |
+| `FALLBACK`, page 100, default retries (3, backoff 100 ms doubling) | 1 185-1 188 | 0.12x | 1 167-1 169 | 0.13x |
+| `FALLBACK`, page 100, retry backoff 1 ms | 9 017-9 022 | 0.92x | 8 161-8 638 | 0.90-0.96x |
+
+`FALLBACK`: every event whose `global_order` is a multiple of 997 always throws (about one in 1 000; 997 is prime to the
+aggregate count, so each failing event heads its own aggregate). In every run all 200 failing events per projection
+were parked as heads after 10 failed pages each (7 halvings plus 3 retries: 2 000 failed pages, 4 255 committed with a
+mean of 47 events), and the 900 later events of their aggregates were parked behind them (§4.5).
+
+**The gate passes, narrowly**: row by row at page 100 is above the baseline for 1 and 4 projections, by 3-6 %. On this VM
+both arms cost one round trip per event: with `fsync=off` a commit is nearly free, and the baseline's upsert in autocommit
+is a single statement, so the page saves the client almost nothing (reader statements per event: 1.02 at page 100). P0.13
+measured 2.0x on the VM because its `PERIODIC` arm spent two round trips per event; on the dedicated server, where every
+commit waits for a flush, it measured 7.8-8.6x, and the page here saves 99 of every 100 flushes. Page 10 is 6-8 % below the
+baseline (one `BEGIN`/progress update/`COMMIT` per 10 events). The batch and set-based handlers get the large factor
+(7.2-10.1x), as P0.13 found; the set-based arm at 4 projections varied between runs (6.2x and 8.4x) on the shared CPUs.
+
+The fallback's cost is the retry backoff, not the shrink: with the default 100 ms doubling backoff each failing event
+waits 0.7 s, 140 s per 200 failures, which makes the arm 8x slower than the baseline. With the backoff at 1 ms the shrink,
+retries and parking cost 8-14 % against page 100 (P0.13: −23 % on the VM, before the step-down). Defaults are not changed
+here: whether `retryBackoffInitial` should start lower, or the first retries of an event isolated by the shrink should not
+wait, is for phase 8's settings review; the trade-off is a handler failure that is transient (a lock timeout) getting
+fewer chances to clear.
+
+### 11.2 `CONTIGUOUS` latency, no long writer
+
+One `FRESH` (periodic) and one `CONTIGUOUS` (in-transaction, empty page handler) subscription on the same type, 100 ev/s,
+10 s warm-up, 60 s window. One writer; or four writers at 25 ev/s each that hold their transaction 0-30 ms after the
+append, so commits come out of order (up to 2 holes outstanding at a tail read). Commit-to-handle, ms:
+
+| Backstop | Writers | `FRESH` p50 / p99 | `CONTIGUOUS` p50 / p99 | Difference p50 / p99 | Pass (≤ one probe interval) |
+|---|---|---|---|---|---|
+| 1 s | 1 | 502.6-502.9 / 992.8-992.9 | 502.9-503.1 / 992.9-993.3 | +0.1-0.3 / +0.0-0.4 | yes |
+| 1 s | 4 | 500.4-504.7 / 991.9-992.4 | 503.3-506.2 / 994.5-994.8 | +1.5-3.0 / +2.5-2.6 | yes |
+| 100 ms | 1 | 51.6-51.9 / 101.9-102.0 | 51.6-51.9 / 102.0-102.1 | +0.0-0.1 / +0.1 | yes |
+| 100 ms | 4 | 69.7-70.0 / 526.5-646.0 | 71.2-71.5 / 542.0-658.5 | +1.5-1.6 / +12.5-15.5 | yes |
+
+**The gate passes** in all eight arms, by a wide margin: as expected, equal with one writer, where the watermark equals the
+cursor; with out-of-order commits `CONTIGUOUS` waits only for the hole to resolve, which costs it 1.5-3 ms at p50 and at
+most 15.5 ms at p99, far inside the 100 ms / 1 s allowance. The four-writer p99 at 100 ms (0.5-0.65 s for both modes) is
+the reader's probe back-off on outstanding holes, not `CONTIGUOUS`: `FRESH` pays it too.
+
+### 11.3 Churn behind a long writer
+
+Phase-3 §7.4's shape: one subscription whose handler sleeps 50 ms per event (at most 20 events/s) behind a writer at
+100 ev/s, reader pool 4, backstop 1 s, default inbox (1 000 events) and catch-up page (500 rows); a transaction holds a
+`global_order` below the head for the whole window (60 s, and 300 s). `CONTIGUOUS` runs in-transaction row by row,
+`FRESH` periodic. Counts are for the window; then the long writer commits and the next 10 s are counted separately.
+
+| Writer | Mode | Handled (duplicates) | Attaches / overflow detaches | Catch-up reads | Bridge statements | Bridge rows read | Dropped as already handled | Largest inbox count | After the commit (10 s) |
+|---|---|---|---|---|---|---|---|---|---|
+| 60 s | `FRESH` | 1 131-1 142 (0) | 2 / 2 | 0 | 2 | 1 000 | **0 (0 %)** | 803-903 | nothing to bridge |
+| 60 s | `CONTIGUOUS` | 0 (0) | 5 / 5 | 0 | **0** | 0 | — | 961-1 000 | 500 rows released by catch-up (detached at the time), 0 bridge statements |
+| 300 s | `FRESH` | 5 751-5 758 (0) | 12 / 12 | 0 | 12 | 6 000 | **0 (0 %)** | 803-904 | nothing to bridge |
+| 300 s | `CONTIGUOUS` | 0 (0) | 29 / 29 | 0 | **0** | 0 | — | 905-970 | 1 deferred-bridge statement, 500 rows released |
+
+Reader statements stayed at 2.0/s in every arm (the shared loop's tail reads; nothing else ran on the reader role while
+the writer held its value).
+
+- **`CONTIGUOUS`: zero bridge statements while the writer runs**, at 60 s and at 300 s, as §5.2 predicted. It re-attaches
+  about every 10 s (the inbox fills at 100 ev/s, since nothing above the held value may be released), each cycle one loop
+  request and no statement: catch-up finds `R` already at the watermark and reads nothing. The inbox never counted more
+  than its bound of 1 000 (held-back rows are counted until released, §2.3). By design it handles nothing behind the writer;
+  once the writer commits, the first watermark above `R` makes it read once (one deferred-bridge or catch-up page of 500)
+  and go on.
+- **`FRESH`: dropped as already handled is 0 %** (phase-3 §7.4: 69 % at 60 s), and the bridge volume is linear in the
+  writer's duration: one 500-row bridge page per attach, one attach about every 25 s (1 000 rows at 60 s, 6 000 at 300 s,
+  where phase 3's start at `P` would have re-read everything handled since the writer took its value on every attach,
+  growing with the square). Handling throughput is unchanged (about 19 events/s, handler-bound), no duplicates.
+
+### 11.4 Statements per delivered event, 10 subscriptions
+
+Phase-3 §7.2's steady shape (one writer, one event per unit of work to a new aggregate, 10 s warm-up, 60 s window) with 5
+`FRESH` periodic and 5 `CONTIGUOUS` in-transaction subscriptions, empty handlers; reader pools 20 and 4. Reader statements
+per delivered event, all statements (non-utility):
+
+| Backstop | 10 ev/s | 100 ev/s | Phase-3 §7.2, 10 `FRESH` (10 / 100 ev/s) |
+|---|---|---|---|
+| 1 s | 0.160 (0.110) | 0.020-0.021 (0.014) | 0.110 / 0.012 |
+| 100 ms | 1.120-1.124 (0.634-0.636) | 0.113 (0.064) | 0.196 / 0.020 |
+
+Identical across both runs and both pools; largest `getConnection()` wait 21.7 ms (pool 4: 17.2 ms); `FRESH` and
+`CONTIGUOUS` latency equal to 1 ms. **An in-transaction page adds no statement outside its own transaction**: in every arm
+the non-utility reader statements are exactly the tail reads plus the progress statements (the `FRESH` saves and one
+update per page). The count per delivery is higher than phase 3's because a page is cut whenever pending is non-empty
+(§3.2, "no waiting to fill a page"): each in-transaction subscription commits one page per tail read that brought it
+rows, `BEGIN` + progress update + `COMMIT`, in place of `PERIODIC`'s one save per second. At 10 ev/s and 100 ms that is
+one page per event (2 925 pages for 3 000 deliveries); at 100 ev/s about ten events per page; at 1 s one page per second,
+the same rate as the save it replaces. The cost follows the wake rate, not the event rate, and is bounded by one page
+per subscription per tail read. A projection that wants fewer, fuller pages at low rates would need the "bounded by
+time" half of §8.3 (a short linger before cutting a page), which phase 4 deliberately left out; recorded here, not
+changed.
+
+### 11.5 Verdict and known gap
+
+All four rows are measured. Projection throughput passes narrowly on this VM (row by row 1.03-1.06x; batch and set-based
+6-10x); `CONTIGUOUS` latency passes in every arm; the churn is as predicted (11.3); the statement count is recorded and
+explained by one page per tail read. No main code changed for this unit.
+
+Known gap from unit B: with `PERIODIC` progress the autocommit insert of a park row is not guarded by the reset epoch, so a
+reset racing a park can leave a parked row for an event the reset has repositioned past; phase 7's I6 work (the reset
+epoch on every write of a subscription) covers it.

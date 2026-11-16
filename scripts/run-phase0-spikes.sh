@@ -74,6 +74,10 @@
 #                                                at reader pools of subscriptions + 10 and 4 with the pool wait, and the
 #                                                re-attach churn of a slow FRESH subscription behind a 60 s writer. Replaces
 #                                                p2-gate (retired: its probe topology, one reader per subscription, is gone)
+#                                  p4-gate       EventLogGateSpikeIT (postgresql-event-log)              phase 4 unit C: projection
+#                                                throughput (CONTIGUOUS in-transaction pages against FRESH + periodic), CONTIGUOUS
+#                                                against FRESH latency, churn behind 60 s and 300 s writers, statements per
+#                                                delivery with half the subscriptions in-transaction
 #                                  p2-gate-old   CurrentEngineBaselineSpikeIT#steady+idle with 1 and 10 subscriptions,
 #                                                postgres:18.4 in a container: the old engine's side of the phase-2 gate
 #                                "default" is the priority order of the original runs; "all" is the same set in
@@ -175,7 +179,8 @@ suite_classes() {
     listen)       echo "AlternativeClientSpikeIT" ;;
     pipeline)     echo "OneFlushTransactionSpikeIT" ;;
     owned)        echo "OwnedReadConnectionSpikeIT" ;;
-    p3-gate)      echo "EventLogGateSpikeIT" ;;
+    p3-gate)      echo "EventLogGateSpikeIT#steady+idle+reattachChurn" ;;
+    p4-gate)      echo "EventLogGateSpikeIT#projectionThroughput+contiguousLatency+longWriterChurn+mixedStatements" ;;
     p2-gate-old)  echo "CurrentEngineBaselineSpikeIT#steady+idle" ;;
     *)            return 1 ;;
   esac
@@ -199,13 +204,14 @@ suite_results() {
     pipeline)     echo "p0-14-*" ;;
     owned)        echo "p0-16-*" ;;
     p3-gate)      echo "p3-c-*" ;;
+    p4-gate)      echo "p4-c-*" ;;
     p2-gate-old)  echo "p0-0-*" ;;
   esac
 }
 # The module a suite's classes live in.
 suite_module() {
   case "$1" in
-    p3-gate) echo "components/postgresql-event-log" ;;
+    p3-gate|p4-gate) echo "components/postgresql-event-log" ;;
     *)       echo "components/postgresql-event-store" ;;
   esac
 }
@@ -216,7 +222,7 @@ suite_args() {
   esac
 }
 DEFAULT_SUITES="xid table-design contention notify tail probe-cost progress listen pipeline owned append baseline cpu jdbc probe"
-ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline owned listen p2-gate-old p3-gate"
+ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline owned listen p2-gate-old p3-gate p4-gate"
 
 (( ${#SUITE_SPECS[@]} )) || SUITE_SPECS=(default)
 SUITES=()
