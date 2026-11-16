@@ -68,6 +68,11 @@ final class SpikeDb implements AutoCloseable {
      *                       what the spike opens
      */
     static SpikeDb start(String purpose, int maxConnections) throws SQLException {
+        return start(purpose, maxConnections, false);
+    }
+
+    /** As {@link #start(String, int)}; {@code fsync} starts a container with {@code fsync=on} (an external server keeps its own) */
+    static SpikeDb start(String purpose, int maxConnections, boolean fsync) throws SQLException {
         if (external()) {
             try (var admin = DriverManager.getConnection(JDBC_URL, USER, PASSWORD); var s = admin.createStatement()) {
                 var preload = queryString(admin, "SELECT setting FROM pg_settings WHERE name = 'shared_preload_libraries'");
@@ -86,7 +91,7 @@ final class SpikeDb implements AutoCloseable {
             }
         }
         var container = new PostgreSQLContainer(IMAGE).withDatabaseName(purpose).withUsername(OBSERVER).withPassword(OBSERVER)
-                                                      .withCommand("postgres", "-c", "fsync=off", "-c", "shared_preload_libraries=pg_stat_statements",
+                                                      .withCommand("postgres", "-c", fsync ? "fsync=on" : "fsync=off", "-c", "shared_preload_libraries=pg_stat_statements",
                                                                    "-c", "pg_stat_statements.max=10000", "-c", "pg_stat_statements.track_utility=on",
                                                                    "-c", "max_connections=" + maxConnections);
         container.start();
@@ -113,6 +118,10 @@ final class SpikeDb implements AutoCloseable {
                 roles.add(role(logical));
             }
         }
+    }
+
+    String jdbcUrl() {
+        return jdbcUrl;
     }
 
     String role(String logical) {
@@ -231,6 +240,41 @@ final class SpikeDb implements AutoCloseable {
             // not available
         }
         return -1;
+    }
+
+    /**
+     * On-CPU time of every current backend of {@code logical}'s role, by pid, from {@code /proc/<pid>/schedstat} in the
+     * container (ns); empty on an external server
+     */
+    Map<Long, Long> backendCpuNanos(String logical) {
+        var result = new HashMap<Long, Long>();
+        if (container == null) return result;
+        try {
+            var pids = new ArrayList<Long>();
+            try (var s = observer.prepareStatement("SELECT pid FROM pg_stat_activity WHERE usename = ?")) {
+                s.setString(1, role(logical));
+                try (var rs = s.executeQuery()) {
+                    while (rs.next()) pids.add(rs.getLong(1));
+                }
+            }
+            if (pids.isEmpty()) return result;
+            var script = new StringBuilder();
+            for (var pid : pids) script.append("echo ").append(pid).append(" $(cut -d' ' -f1 /proc/").append(pid).append("/schedstat 2>/dev/null); ");
+            for (var line : container.execInContainer("sh", "-c", script.toString()).getStdout().split("\n")) {
+                var f = line.trim().split("\\s+");
+                if (f.length == 2) result.put(Long.parseLong(f[0]), Long.parseLong(f[1]));
+            }
+        } catch (Exception e) {
+            // not available
+        }
+        return result;
+    }
+
+    /** CPU the role's backends used between two {@link #backendCpuNanos} snapshots, ns (a backend new since {@code before} counts from 0) */
+    static long cpuBetween(Map<Long, Long> before, Map<Long, Long> after) {
+        long sum = 0;
+        for (var e : after.entrySet()) sum += e.getValue() - before.getOrDefault(e.getKey(), 0L);
+        return sum;
     }
 
     // ------------------------------------------------------------------ helpers

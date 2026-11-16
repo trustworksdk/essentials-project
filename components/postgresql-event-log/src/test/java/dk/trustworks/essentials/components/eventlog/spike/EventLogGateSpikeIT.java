@@ -1135,6 +1135,422 @@ class EventLogGateSpikeIT {
     }
 
 
+    // ------------------------------------------------------------------ phase 6, unit C (design phase 6 §7)
+
+    private static final String        P6_LATENCY  = "p6-c-latency.txt";
+    private static final String        P6_NOTIFY   = "p6-c-notify.txt";
+    private static final String        P6_FLUSH    = "p6-c-flush.txt";
+    private static final List<Integer> P6_RATES    = ints(System.getProperty("spike.gate.p6Rates", "1,10,100"));
+    private static final List<String>  P6_ARMS     = Arrays.stream(System.getProperty("spike.gate.p6Arms", "BACKSTOP_1000,BACKSTOP_100,TIER2,TIER1,TIER12,LOST,TIER1_FORKED")
+                                                                 .split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
+    private static final List<Integer> P6_WRITERS  = ints(System.getProperty("spike.gate.p6Writers", "1,8,20"));
+    private static final List<Integer> P6_TYPES    = ints(System.getProperty("spike.gate.p6Types", "1,10,16,50"));
+    private static final int           P6_FLUSH_HZ = Integer.getInteger("spike.gate.p6FlushRate", 50);
+
+    /** A latency sample sink per (placement, mode) */
+    private static final class Sinks {
+        final Map<String, ConcurrentLinkedQueue<Long>> byKey = new ConcurrentHashMap<>();
+        final AtomicLong                              total = new AtomicLong();
+
+        void add(String key, long nanos) {
+            byKey.computeIfAbsent(key, k -> new ConcurrentLinkedQueue<>()).add(nanos);
+            total.incrementAndGet();
+        }
+    }
+
+    /** 5 FRESH (periodic) and 5 CONTIGUOUS (in-transaction) subscriptions on {@code log}, measured under {@code placement} */
+    private static void subscribeTen(EventLog log, String placement, Map<String, Long> committed, Sinks sinks) throws SQLException {
+        for (int i = 0; i < 5; i++) {
+            log.subscribe(placement + "-fresh-" + i, TYPE, "node1", 1, e -> {
+                var at = committed.get(e.aggregateId());
+                if (at != null) sinks.add(placement + " FRESH", System.nanoTime() - at);
+            });
+            log.subscribe(placement + "-contiguous-" + i, TYPE, "node1", 1, Subscription.ConsistencyMode.CONTIGUOUS, (page, connection) -> {
+                long now = System.nanoTime();
+                for (var e : page) {
+                    var at = committed.get(e.aggregateId());
+                    if (at != null) sinks.add(placement + " CONTIGUOUS", now - at);
+                }
+            });
+        }
+    }
+
+    private static void appendTo(EventLog log, Connection connection, String aggregateType, String id) throws SQLException {
+        var event = new EventToAppend(UUID.randomUUID(), CAUSE, CORRELATION, EVENT_TYPE, 1, Instant.now(),
+                                      "{\"orderId\":\"" + id + "\",\"orderingCustomerId\":\"" + UUID.randomUUID() + "\",\"orderNumber\":" + ThreadLocalRandom.current().nextLong(1_000_000) + "}",
+                                      "{\"Key1\":\"Value1\",\"Key2\":\"Value2\"}");
+        log.append(connection, AppendRequest.withoutExpectedOrder(aggregateType, id, List.of(event)));
+    }
+
+    private static EventLog engine(DataSource dataSource, EventLogSettings settings, Counters observer) throws SQLException {
+        var log = EventLog.builder().setDataSource(dataSource).setSettings(settings).setObserver(observer).build();
+        log.start();
+        log.registerAggregateType(TYPE);
+        log.eventTypes().idOf(EVENT_TYPE);
+        return log;
+    }
+
+    /**
+     * §7.1 latency and §7.4 (arm {@code LOST}): one writer at 1, 10 and 100 ev/s, one event per unit of work to a new
+     * aggregate; 10 subscriptions (5 FRESH periodic, 5 CONTIGUOUS in-transaction). Arms: {@code BACKSTOP_1000},
+     * {@code BACKSTOP_100} (phase 5: no cross-JVM wake-up, no {@code afterCommit}); {@code TIER2} (same engine,
+     * {@code afterCommit}, listener off); {@code TIER1} (writer engine W on the writer role, subscriptions in engine S on
+     * the reader role, notifier and listener on); {@code TIER12} (10 subscriptions in each engine); {@code LOST} (as
+     * TIER1, W's notifier off and no {@code afterCommit}: every notification lost, backstop 1 s); {@code TIER1_FORKED}
+     * (as TIER1 with W in a forked JVM, 10 ev/s only).
+     */
+    @Test
+    void wakeLatency() throws Exception {
+        var warmUp = scaled(Duration.ofSeconds(10));
+        var window = scaled(Duration.ofSeconds(60));
+        header(P6_LATENCY, "WAKE LATENCY", "arms " + P6_ARMS + ", rates " + P6_RATES + " ev/s; 5 FRESH periodic + 5 CONTIGUOUS in-transaction per engine; warm-up "
+                + warmUp.toSeconds() + " s, window " + window.toSeconds() + " s");
+        for (int run = 1; run <= RUNS; run++) {
+            for (var arm : P6_ARMS) {
+                for (int rate : P6_RATES) {
+                    if (arm.equals("TIER1_FORKED") && rate != 10) continue;
+                    latencyArm(run, arm, rate, warmUp, window);
+                }
+            }
+        }
+    }
+
+    private void latencyArm(int run, String arm, int rate, Duration warmUp, Duration window) throws Exception {
+        int     backstop  = arm.equals("BACKSTOP_100") ? 100 : 1000;
+        boolean twoEngine = arm.startsWith("TIER1") || arm.equals("LOST");
+        boolean crossJvm  = twoEngine;
+        boolean callAfter = !arm.startsWith("BACKSTOP") && !arm.equals("LOST");
+        boolean forked    = arm.equals("TIER1_FORKED");
+        var     settings  = settings(backstop).withCrossJvmWakeUp(crossJvm);
+        try (var db = SpikeDb.start("lat_r" + run + "_" + arm.toLowerCase(Locale.ROOT) + "_" + rate, 100); var app = new App(db, settings, 12)) {
+            var committed = new ConcurrentHashMap<String, Long>();
+            var sinks     = new Sinks();
+            var wObserver = new Counters();
+            EventLog writerLog = null;
+            if (twoEngine && !forked) {
+                writerLog = engine(app.writerWait, settings(backstop).withCrossJvmWakeUp(!arm.equals("LOST")), wObserver);
+            }
+            var sends    = new ConcurrentHashMap<String, Long>();
+            var wireWake = new ConcurrentLinkedQueue<Long>();
+            if (writerLog != null) {
+                GateSpikeAccess.wakeHooks(writerLog, batch -> batch.forEach(p -> sends.put(p.substring(p.indexOf(':') + 1), System.nanoTime())), p -> {
+                });
+                GateSpikeAccess.wakeHooks(app.eventLog, batch -> {
+                }, p -> {
+                    var at = sends.get(p.substring(p.indexOf(':') + 1));
+                    if (at != null) wireWake.add(System.nanoTime() - at);
+                });
+            }
+            subscribeTen(app.eventLog, twoEngine ? "other" : "same", committed, sinks);
+            if (arm.equals("TIER12")) subscribeTen(writerLog, "same", committed, sinks);
+            int subscriptions = arm.equals("TIER12") ? 20 : 10;
+            var measuring = new AtomicBoolean();
+            var appended  = new AtomicLong();
+            ScheduledExecutorService scheduler = null;
+            Process child = null;
+            if (forked) {
+                child = SpikeWriterProcess.start(db, rate, committed, measuring, appended);
+            } else {
+                var wl = writerLog;
+                scheduler = Executors.newSingleThreadScheduledExecutor();
+                scheduler.scheduleAtFixedRate(() -> {
+                    try (var c = app.writerWait.getConnection()) {
+                        var id      = UUID.randomUUID().toString();
+                        var measure = measuring.get();
+                        c.setAutoCommit(false);
+                        appendTo(wl != null ? wl : app.eventLog, c, TYPE, id);
+                        if (measure) committed.put(id, System.nanoTime());
+                        c.commit();
+                        if (measure) {
+                            committed.put(id, System.nanoTime());
+                            appended.incrementAndGet();
+                        }
+                        if (callAfter) (wl != null ? wl : app.eventLog).afterCommit(List.of(TYPE));
+                    } catch (SQLException e) {
+                        throw new IllegalStateException(e);
+                    }
+                }, 0, 1_000_000 / rate, TimeUnit.MICROSECONDS);
+            }
+            Thread.sleep(warmUp.toMillis());
+            db.resetStatistics();
+            app.observer.reset();
+            app.observer.resetTotals();
+            wireWake.clear();
+            long notificationsBefore = GateSpikeAccess.listenerNotifications(app.eventLog);
+            long sendsBefore         = writerLog == null ? 0 : GateSpikeAccess.notifierSends(writerLog);
+            measuring.set(true);
+            Thread.sleep(window.toMillis());
+            measuring.set(false);
+            var s     = summarise(db, P6_LATENCY, "latency run " + run + ": " + arm + ", " + rate + " ev/s");
+            var reads = app.observer.snapshot();
+            long notifications = GateSpikeAccess.listenerNotifications(app.eventLog) - notificationsBefore;
+            long sent          = writerLog == null ? 0 : GateSpikeAccess.notifierSends(writerLog) - sendsBefore;
+            if (scheduler != null) {
+                scheduler.shutdown();
+                scheduler.awaitTermination(10, TimeUnit.SECONDS);
+            }
+            if (child != null) SpikeWriterProcess.stop(child);
+            long events = appended.get();
+            try {
+                await(Duration.ofSeconds(30), () -> sinks.total.get() >= events * subscriptions);
+            } catch (IllegalStateException e) {
+                // the forked arm can miss a sample whose "B" line arrived after the delivery; recorded as the count per key
+                SpikeDb.record(P6_LATENCY, "  !! " + arm + " " + rate + " ev/s: " + sinks.total.get() + " of " + events * subscriptions + " samples after 30 s");
+            }
+            double seconds = window.toMillis() / 1000.0;
+            var line = new StringBuilder(String.format("LATENCY run %d | %-12s | %3d ev/s | appended %d |", run, arm, rate, events));
+            for (var key : new TreeSet<>(sinks.byKey.keySet())) {
+                var l = Latencies.of(sinks.byKey.get(key));
+                line.append(String.format(" %s p50 %.2f p99 %.2f max %.1f ms (%d) |", key, l.p50(), l.p99(), l.max(), sinks.byKey.get(key).size()));
+            }
+            // S's deliveries: the "other" placement in two-engine arms, else every delivery
+            long sDeliveries = events * 10;
+            var w = Latencies.of(wireWake);
+            line.append(String.format(" READER STATEMENTS PER DELIVERY %.3f (non-utility %.3f) | writer statements per event %.2f | WAL %.0f B/event | tail reads/s %.1f, "
+                                              + "running-set reads/s %.2f | notifies sent %d (%.2f per commit), received %d | wake send->listener p50 %.2f p99 %.2f ms",
+                                      s.calls("reader") / (double) sDeliveries, s.nonUtility("reader") / (double) sDeliveries, s.calls("writer") / (double) Math.max(1, events),
+                                      s.wal() / (double) Math.max(1, events), reads.reads() / seconds, reads.combined() / seconds, sent, sent / (double) Math.max(1, events),
+                                      notifications, w.p50(), w.p99()));
+            SpikeDb.record(P6_LATENCY, line.toString());
+            if (writerLog != null) writerLog.stop();
+        }
+    }
+
+    /**
+     * §7.2: 1, 8 and 20 writers, one event per unit of work to a new aggregate, 2 s warm-up and an 8 s window, with
+     * {@code fsync} on and off; arms {@code NONE} (no {@code afterCommit}), {@code NOTIFIER} ({@code afterCommit}, the
+     * coalesced notifier on the engine's reader-role pool) and {@code DIRECT} (reference: the writer runs
+     * {@code pg_notify} on its own connection after commit). A second engine with one subscription listens throughout.
+     * A probe samples {@code pg_stat_activity} every 5 ms for backends waiting on {@code Lock:object} (the NOTIFY lock).
+     */
+    @Test
+    void notifyAppendCost() throws Exception {
+        var warmUp = scaled(Duration.ofSeconds(2));
+        var window = scaled(Duration.ofSeconds(8));
+        header(P6_NOTIFY, "NOTIFY APPEND COST", "writers " + P6_WRITERS + ", arms NONE/NOTIFIER/DIRECT, fsync on and off; warm-up " + warmUp.toSeconds() + " s, window " + window.toSeconds() + " s");
+        for (boolean fsync : new boolean[]{true, false}) {
+            for (int run = 1; run <= RUNS; run++) {
+                for (var arm : List.of("NONE", "NOTIFIER", "DIRECT")) {
+                    for (int writers : P6_WRITERS) {
+                        notifyArm(run, fsync, arm, writers, warmUp, window);
+                    }
+                }
+            }
+        }
+    }
+
+    private void notifyArm(int run, boolean fsync, String arm, int writers, Duration warmUp, Duration window) throws Exception {
+        try (var db = SpikeDb.start("ntf_r" + run + "_" + (fsync ? "on" : "off") + "_" + arm.toLowerCase(Locale.ROOT) + "_" + writers, 100, fsync);
+             var app = new App(db, settings(1000), 4)) {
+            var listenerPool = db.pool("reader", 4);
+            var listening    = engine(listenerPool, settings(1000), new Counters());
+            listening.subscribe("listening", TYPE, "node1", 1, e -> {
+            });
+            var measuring = new AtomicBoolean();
+            var stop      = new AtomicBoolean();
+            var commits   = new ConcurrentLinkedQueue<Long>();
+            var pool      = Executors.newFixedThreadPool(writers);
+            for (int w = 0; w < writers; w++) {
+                pool.submit(() -> {
+                    while (!stop.get()) {
+                        try (var c = app.writerPool.getConnection()) {
+                            c.setAutoCommit(false);
+                            appendTo(app.eventLog, c, TYPE, UUID.randomUUID().toString());
+                            long t0 = System.nanoTime();
+                            c.commit();
+                            long took = System.nanoTime() - t0;
+                            if (arm.equals("NOTIFIER")) app.eventLog.afterCommit(List.of(TYPE));
+                            if (arm.equals("DIRECT")) {
+                                c.setAutoCommit(true);
+                                try (var st = c.createStatement()) {
+                                    st.execute("SELECT pg_notify('el_wake', 'direct:" + TYPE + "')");
+                                }
+                            }
+                            if (measuring.get()) commits.add(took);
+                        } catch (SQLException e) {
+                            throw new IllegalStateException(e);
+                        }
+                    }
+                    return null;
+                });
+            }
+            Thread.sleep(warmUp.toMillis());
+            db.resetStatistics();
+            long sendsBefore   = GateSpikeAccess.notifierSends(app.eventLog);
+            long borrowsBefore = app.readerWait.count();
+            long cpuBefore     = db.cpuMicros();
+            var  lockSamples   = new AtomicLong();
+            var  samples       = new AtomicLong();
+            var  sampling      = new AtomicBoolean(true);
+            var  sampler       = Thread.ofPlatform().start(() -> {
+                try (var c = db.connect("writer"); var st = c.prepareStatement("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND wait_event = 'object'")) {
+                    while (sampling.get()) {
+                        try (var rs = st.executeQuery()) {
+                            rs.next();
+                            if (rs.getLong(1) > 0) lockSamples.incrementAndGet();
+                        }
+                        samples.incrementAndGet();
+                        Thread.sleep(5);
+                    }
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            });
+            measuring.set(true);
+            Thread.sleep(window.toMillis());
+            measuring.set(false);
+            long cpu = db.cpuMicros() - cpuBefore;
+            sampling.set(false);
+            sampler.join();
+            stop.set(true);
+            pool.shutdown();
+            pool.awaitTermination(30, TimeUnit.SECONDS);
+            long sends   = GateSpikeAccess.notifierSends(app.eventLog) - sendsBefore;
+            long borrows = app.readerWait.count() - borrowsBefore;
+            var  c       = Latencies.of(commits);
+            double seconds = window.toMillis() / 1000.0;
+            double sendMean = Double.NaN, sendMax = Double.NaN;
+            try (var st = db.observer.createStatement();
+                 var rs = st.executeQuery("SELECT sum(calls), sum(total_exec_time) / nullif(sum(calls), 0), max(max_exec_time) FROM pg_stat_statements WHERE query LIKE '%pg_notify%'")) {
+                if (rs.next()) {
+                    sendMean = rs.getDouble(2);
+                    sendMax = rs.getDouble(3);
+                }
+            }
+            SpikeDb.record(P6_NOTIFY, String.format("NOTIFY run %d | fsync %-3s | %-8s | %2d writer(s) | APPENDS/S %.0f | commit p50 %.3f p99 %.3f max %.1f ms | notifier sends %d "
+                                                            + "(%.3f per commit), borrows %.1f/s | pg_notify exec mean %.3f max %.2f ms | Lock:object in %d of %d samples | server CPU %.1f %% of a core",
+                                                    run, fsync ? "on" : "off", arm, writers, commits.size() / seconds, c.p50(), c.p99(), c.max(), sends,
+                                                    sends / (double) Math.max(1, commits.size()), borrows / seconds, sendMean, sendMax, lockSamples.get(), samples.get(),
+                                                    cpu / 10_000.0 / seconds));
+            listening.stop();
+            listenerPool.close();
+        }
+    }
+
+    /**
+     * §7.3 and §9 decision 2: 1, 10, 16 and 50 aggregate types, one FRESH subscription each; one writer per type commits
+     * in lockstep ({@code P6_FLUSH_HZ} times a second), then one {@code afterCommit} names every type, so they are woken
+     * together. A long writer per type holds one value below its head throughout, so every type keeps a candidate and
+     * wants a running set on every read the probe clock allows. Arms: {@code FLUSH} (the engine as built: one flush for
+     * 2-16 due types, one statement each above 16, the combined probe for one), {@code ALONE} (every due type read alone),
+     * {@code SINGLE_FLUSH} (1 type only: the two-statement flush instead of the combined probe) and {@code WRITERS}
+     * (no subscriptions: the server CPU the writers alone cost, subtracted from the others).
+     */
+    @Test
+    void flushAcrossTypes() throws Exception {
+        var warmUp = scaled(Duration.ofSeconds(5));
+        var window = scaled(Duration.ofSeconds(30));
+        header(P6_FLUSH, "ONE FLUSH ACROSS WOKEN TYPES", "types " + P6_TYPES + ", lockstep " + P6_FLUSH_HZ + "/s, a long writer per type; arms WRITERS/FLUSH/ALONE (+SINGLE_FLUSH at 1 type); warm-up "
+                + warmUp.toSeconds() + " s, window " + window.toSeconds() + " s");
+        for (int run = 1; run <= RUNS; run++) {
+            for (int types : P6_TYPES) {
+                var arms = types == 1 ? List.of("WRITERS", "FLUSH", "SINGLE_FLUSH") : List.of("WRITERS", "FLUSH", "ALONE");
+                double writersCpu = Double.NaN;
+                for (var arm : arms) {
+                    var cpu = flushArm(run, types, arm, warmUp, window);
+                    if (arm.equals("WRITERS")) writersCpu = cpu;
+                    else SpikeDb.record(P6_FLUSH, String.format("   -> run %d, %d type(s), %s: READER SERVER CPU PER WAKE %.1f µs (arm minus WRITERS)", run, types, arm, cpu - writersCpu));
+                }
+            }
+        }
+    }
+
+    /** @return server CPU per wake, µs */
+    private double flushArm(int run, int types, String arm, Duration warmUp, Duration window) throws Exception {
+        try (var db = SpikeDb.start("flush_r" + run + "_" + types + "_" + arm.toLowerCase(Locale.ROOT), 200);
+             var app = new App(db, settings(1000).withCrossJvmWakeUp(false), 4)) {
+            var names = new ArrayList<String>();
+            for (int t = 0; t < types; t++) {
+                names.add("Agg" + t);
+                app.eventLog.registerAggregateType("Agg" + t);
+            }
+            GateSpikeAccess.flush(app.eventLog, !arm.equals("ALONE"));
+            GateSpikeAccess.singleTypeFlush(app.eventLog, arm.equals("SINGLE_FLUSH"));
+            var woken     = new ConcurrentHashMap<String, Long>();
+            var latencies = new ConcurrentLinkedQueue<Long>();
+            var delivered = new AtomicLong();
+            var measuring = new AtomicBoolean();
+            if (!arm.equals("WRITERS")) {
+                for (var name : names) {
+                    app.eventLog.subscribe("sub-" + name, name, "node1", 1, e -> {
+                        var at = woken.get(e.aggregateId());
+                        if (at != null && measuring.get()) {
+                            latencies.add(System.nanoTime() - at);
+                            delivered.incrementAndGet();
+                        }
+                    });
+                }
+                Thread.sleep(500);
+            }
+            var holders = new ArrayList<Connection>();
+            for (var name : names) {
+                var h = db.connect("writer");
+                h.setAutoCommit(false);
+                appendTo(app.eventLog, h, name, UUID.randomUUID().toString());
+                holders.add(h);
+            }
+            var writers   = Executors.newFixedThreadPool(types);
+            var ticks     = new AtomicLong();
+            var scheduler = Executors.newSingleThreadScheduledExecutor();
+            scheduler.scheduleAtFixedRate(() -> {
+                try {
+                    var ids   = new ArrayList<String>();
+                    var tasks = new ArrayList<Callable<Void>>();
+                    for (var name : names) {
+                        var id = UUID.randomUUID().toString();
+                        ids.add(id);
+                        tasks.add(() -> {
+                            try (var c = app.writerPool.getConnection()) {
+                                c.setAutoCommit(false);
+                                appendTo(app.eventLog, c, name, id);
+                                c.commit();
+                            }
+                            return null;
+                        });
+                    }
+                    for (var f : writers.invokeAll(tasks)) f.get();
+                    long now = System.nanoTime();
+                    ids.forEach(id -> woken.put(id, now));
+                    app.eventLog.afterCommit(names);
+                    if (measuring.get()) ticks.incrementAndGet();
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            }, 0, 1_000_000 / P6_FLUSH_HZ, TimeUnit.MICROSECONDS);
+            Thread.sleep(warmUp.toMillis());
+            db.resetStatistics();
+            app.observer.reset();
+            app.observer.resetTotals();
+            long cpuBefore    = db.cpuMicros();
+            var  readerBefore = db.backendCpuNanos("reader");
+            measuring.set(true);
+            Thread.sleep(window.toMillis());
+            measuring.set(false);
+            long cpu       = db.cpuMicros() - cpuBefore;
+            long readerCpu = SpikeDb.cpuBetween(readerBefore, db.backendCpuNanos("reader"));
+            var  s   = summarise(db, P6_FLUSH, "flush run " + run + ": " + types + " type(s), " + arm);
+            var  o   = app.observer;
+            scheduler.shutdown();
+            scheduler.awaitTermination(10, TimeUnit.SECONDS);
+            writers.shutdown();
+            for (var h : holders) {
+                h.rollback();
+                h.close();
+            }
+            long wakes = ticks.get();
+            var  l     = Latencies.of(latencies);
+            double cpuPerWake = cpu / (double) Math.max(1, wakes);
+            SpikeDb.record(P6_FLUSH, String.format("FLUSH run %d | %2d type(s) | %-12s | wakes %d | READER BACKENDS' CPU PER WAKE %.1f µs | server CPU per wake %.1f µs (%.1f %% of a core) | reader statements per wake %.2f | "
+                                                           + "wake->handler p50 %.2f p99 %.2f max %.1f ms (%d deliveries) | reads %d, flushes %d (multi-type %d, statements %d), "
+                                                           + "RUNNING-SET READS PER WAKE %.3f (in flushes %d, combined alone %d) | distinct flush type-lists %d",
+                                                   run, types, arm, wakes, readerCpu / 1000.0 / Math.max(1, wakes), cpuPerWake, cpu / 10_000.0 / (window.toMillis() / 1000.0), s.calls("reader") / (double) Math.max(1, wakes),
+                                                   l.p50(), l.p99(), l.max(), delivered.get(), o.snapshot().reads(), o.flushes.get(), o.multiFlushes.get(), o.flushStatements.get(),
+                                                   (o.runningSetsInFlush.get() + o.combinedAlone.get()) / (double) Math.max(1, wakes), o.runningSetsInFlush.get(), o.combinedAlone.get(),
+                                                   o.flushTexts.size()));
+            return cpuPerWake;
+        }
+    }
+
     // ------------------------------------------------------------------ harness
 
     private static EventLogSettings settings(int backstopMillis) {
@@ -1223,7 +1639,14 @@ class EventLogGateSpikeIT {
             this.delegate = delegate;
         }
 
+        private final AtomicLong count          = new AtomicLong();
+
+        long count() {
+            return count.get();
+        }
+
         private Connection timed(long started, Connection connection) {
+            count.incrementAndGet();
             long waited = System.nanoTime() - started;
             runMaxNanos.accumulateAndGet(waited, Math::max);
             windowMaxNanos.accumulateAndGet(waited, Math::max);
@@ -1349,15 +1772,37 @@ class EventLogGateSpikeIT {
         final         AtomicLong        watermarkWaits   = new AtomicLong();
         final         Map<String, Long> detachReasons    = new ConcurrentHashMap<>();
         private final Map<String, Long> firstAttach      = new ConcurrentHashMap<>();
+        // phase 6: every flush, cleared by resetTotals()
+        final         AtomicLong        flushes            = new AtomicLong();
+        final         AtomicLong        multiFlushes       = new AtomicLong();
+        final         AtomicLong        flushStatements    = new AtomicLong();
+        final         AtomicLong        runningSetsInFlush = new AtomicLong();
+        final         AtomicLong        combinedAlone      = new AtomicLong();
+        final         Set<List<String>> flushTexts         = ConcurrentHashMap.newKeySet();
+        private volatile boolean        lastFlushAlone;
 
         void resetTotals() {
             for (var c : List.of(pagesCommitted, pageEvents, pagesFailed, parkedHeads, parkedBlocked, catchUpReads, bridgeReads, bridgeReadRows, releasedRows, maxInbox,
                                  maxHeldBack, maxHoles, totalAttaches, permits, maxPermitWait, maxInUse, filteredReads, indexReads, catchUpRowsAll, unknownAttaches,
-                                 handOffs, handOffsToReader, gapsHandedOff, watermarkWaits)) {
+                                 handOffs, handOffsToReader, gapsHandedOff, watermarkWaits, flushes, multiFlushes, flushStatements, runningSetsInFlush, combinedAlone)) {
                 c.set(0);
             }
             detachReasons.clear();
             firstAttach.clear();
+            flushTexts.clear();
+        }
+
+        @Override
+        public void onFlush(List<String> aggregateTypes, int statements, long nanos) {
+            flushes.incrementAndGet();
+            flushStatements.addAndGet(statements);
+            // a single type read alone reports one statement (the combined probe or a tail); a flush counts its running set as a statement
+            lastFlushAlone = aggregateTypes.size() == 1 && statements == 1;
+            if (!lastFlushAlone) {
+                if (aggregateTypes.size() > 1) multiFlushes.incrementAndGet();
+                runningSetsInFlush.addAndGet(Math.max(0, statements - aggregateTypes.size()));
+                flushTexts.add(List.copyOf(aggregateTypes));
+            }
         }
 
         /** @return when the subscriber first attached since the last {@link #resetTotals()} ({@code System.nanoTime()}), 0 if not yet */
@@ -1398,6 +1843,7 @@ class EventLogGateSpikeIT {
         public void onRead(String aggregateType, boolean isCombined, long nanos, int rows, int outstandingHoles, int outstandingCandidates, Duration oldestCandidateAge) {
             reads.incrementAndGet();
             if (isCombined) combined.incrementAndGet();
+            if (isCombined && lastFlushAlone) combinedAlone.incrementAndGet();
             maxHoles.accumulateAndGet(outstandingHoles, Math::max);
         }
 

@@ -403,3 +403,203 @@ them; question 2 is settled more conservatively than the draft proposed.
 | 2 | Keep the combined-probe statement beside the flush | **Keep the combined probe for a single due type in phase 6**; the multi-statement flush is used only when two or more types are due. The combined probe is the shape I11 was proven on (P0.2) and costs nothing to keep; §7.3 measures the single-type flush, and retiring the combined probe is decided from that figure in a later phase, not during this build |
 | 3 | `afterCommit` on the public surface before phase 8 | **Public and temporary**, as `subscribe`'s overloads; phase 8 removes or keeps it with the rest of the temporary surface |
 | 4 | `wokenProbeMin` default | **10 ms**, confirmed or changed by §7's `CONTIGUOUS` row and the probe count |
+
+---
+
+## 10. Results (2026-11-16)
+
+Measured by `spike/EventLogGateSpikeIT` (`scripts/run-phase0-spikes.sh --suite p6-gate`: `wakeLatency`, `notifyAppendCost`,
+`flushAcrossTypes`) and, for today's engine, `CurrentEngineBaselineSpikeIT` (`--suite p6-gate-old`: `p6Latency`) on the
+development VM: PostgreSQL 18.4 in a container with `fsync=off` (§7.2 also with `fsync=on`), 8 CPUs shared by client and
+server, a fresh container per arm with a database name of its own (phase 5's permit-key lesson), two runs of every arm.
+Statements are `pg_stat_statements` calls by role, utility statements included; the new engine's subscriptions run on
+the reader role, its writer (and, with two engines, the writer's engine) on the writer role. CDC ran on the module's
+`essentials-test/postgres-wal2json:1` image (PostgreSQL 17.5, `wal_level=logical`, `fsync=off`). Results files
+`components/postgresql-event-log/target/spike-results/p6-c-latency.txt`, `p6-c-notify.txt`, `p6-c-flush.txt` and
+`components/postgresql-event-store/target/spike-results/p6-old-latency.txt`. As in phases 2-5, absolute figures need the
+dedicated server; statement counts and the ratios inside one arm do not depend on it. Nothing was scaled down.
+
+Harness notes. "Two JVMs" is two `EventLog`s on separate pools and roles in the test JVM (engine W on the writer role
+appends and calls `afterCommit`; engine S on the reader role holds the subscriptions); arm `TIER1_FORKED` runs W in a
+forked JVM (`spike/SpikeWriterProcess`, `System.nanoTime()` is `CLOCK_MONOTONIC` and shared across processes on Linux)
+to check that shortcut. Commit-to-handler latency runs from the writer's `commit()` returning; for today's engine from its
+unit of work returning (a delivery that beats that record is not counted: at most 0.2 % of S1's samples at 100 ev/s).
+Two test-only knobs were added to `ReaderLoop` for §7.3, package-private like unit B's: `flushForTests` (`false` = every
+due type read alone) and `singleTypeFlushForTests` (`true` = a single due type through the two-statement flush instead of
+the combined probe); they default to the built behaviour and are reached from the spike through the test-only
+`GateSpikeAccess`. No other main code changed.
+
+### 10.1 Latency (§7.1)
+
+10 subscriptions per engine (5 `FRESH` periodic, 5 `CONTIGUOUS` in-transaction), one writer, one event per unit of work
+to a new aggregate, 10 s warm-up, 60 s window. Commit-to-handler latency in ms, runs 1-2, `FRESH` / `CONTIGUOUS` where
+they differ by more than the noise:
+
+| Arm | 1 ev/s p50 / p99 | 10 ev/s p50 / p99 | 100 ev/s p50 / p99 / max |
+|---|---|---|---|
+| Backstop only, 1 s | 67-80 / 140-159 (phase-locked to the writer) | 508-510 / 989-1000 | 504-505 / 995 / 1008-1012 |
+| Backstop only, 100 ms | 51-59 / 102-105 | 49-53 / 101-102 | 52 / 102 / 111-112 |
+| **Tier 2** (same engine) | 0.84-1.26 / 3.4-6.5; `CONTIGUOUS` 1.27-1.83 / 3.5-4.1 | 0.77-1.25 / 2.6-4.0 | 0.50-0.55 / 1.5-1.7 / 14-21 |
+| **Tier 1** (two engines) | 1.48-2.29 / 4.4-5.9; `CONTIGUOUS` 1.90-2.76 / 3.8-6.0 | 1.33-1.63 / 3.4-4.3 | 0.93-0.95 / 2.2-2.3 / 16-23 |
+| Tier 1, writer in a forked JVM | — | 1.77-1.80 / 6.0-6.7 | — |
+| Tiers 1 + 2, subscriptions in the writer's engine | 0.82-1.64 / 3.4-6.6 | 0.84-0.97 / 2.9-3.2 | 0.48-0.51 / 1.3-1.6 / 11-14 |
+| Tiers 1 + 2, subscriptions in the other engine | 1.75-2.73 / 6.7-11.3 | 1.77-1.82 / 6.3-11.2 | 0.96-1.00 / 3.4-4.3 / 15-18 |
+| S1, `max-delay` 1 s | 329-338 / 802-805 | 50 / 104-109 | 52 / 104 / 114-119 |
+| S1, `max-delay` 200 ms | 86-87 / 205-207 | 48-52 / 103-104 | 51 / 103 / 117 |
+| CDC (backfill, then live from the bus) | 27-33 / 56-60 | 30-32 / 60-61 | 30 / 56 / 69-76 |
+
+Wake latency from the notifier's send to the listener's receipt (through the API hooks): p50 0.6-1.2 ms / p99 2.2-5.5 ms
+at 1 ev/s, 0.5-0.6 / 1.3-1.6 ms at 10 ev/s, 0.37-0.39 / 1.0 ms at 100 ev/s (P0.17 expected 0.3-0.6 ms on the server).
+Coalescing at one writer: 1.00 notification batch per commit. Running-set reads: none in any arm (one writer, commits
+in order, so no read ever left a candidate).
+
+Statements per delivered event, reader role, runs 1-2 (10 subscriptions; the reader role also runs the
+`CONTIGUOUS` page transactions and the progress saves):
+
+| Arm | 1 ev/s | 10 ev/s | 100 ev/s |
+|---|---|---|---|
+| Backstop only, 1 s | 1.52 | 0.160 | 0.021 |
+| Backstop only, 100 ms | 2.43-2.47 | 1.12-1.13 | 0.113 |
+| Tier 2 | 1.44-1.48 | 1.149 | 1.105 |
+| Tier 1 | 1.47-1.48 | 1.147-1.149 | 1.103-1.105 |
+| S1, 1 s / 200 ms | 15.1-15.4 / 22.1-22.6 | 6.89 / 6.95 | 1.05 |
+| CDC | 9.4-9.8 | 1.31-1.33 | 0.293 |
+
+Writer statements per event: 2.00 without tier 1, 3.00 with it (the notifier's `pg_notify` on the writer's engine);
+S1 and CDC 3.0 (today's append path). WAL per event at 100 ev/s: 1 050 B backstop only, 1 790-1 840 B with a wake per
+commit (one `CONTIGUOUS` page transaction per event per subscription instead of per batch), S1 1 053 B, CDC 2 174-2 178 B.
+
+**Verdict.**
+- Tier 1 below S1 at both `max-delay` values and at or below CDC, at every rate: **passes** by one to two orders of
+  magnitude (p50 0.9-2.8 ms against S1's 48-338 ms and CDC's 27-33 ms; p99 2.2-6.0 ms against 103-805 ms and 56-61 ms).
+  S1 does not improve on its 100 ms poll floor at 10 and 100 ev/s: a notification only shortens the *next* poll's delay.
+- Tier 2 at or below tier 1: **passes** on p50 at every rate and on p99 at 10 and 100 ev/s; at 1 ev/s one run's
+  `FRESH` p99 (6.5 against 5.9 ms) is the largest of 60 samples on each side, inside the noise.
+- `CONTIGUOUS` within one woken probe wait of `FRESH`: **passes** (p50 within 0.6 ms, p99 within 1 ms; the woken probe
+  wait is 10 ms at least).
+- Tier 1's reader statements per delivered event: **passes at 1 ev/s** (1.47 against 1.52, within 2×) and **fails as
+  written at 100 ev/s** (1.10 against 0.021 at a 1 s backstop and 0.113 at 100 ms). The cause is the premise "a woken read
+  replaces a backstop read": at 100 ev/s a wake arrives per commit, so the loop reads once per commit (100 tail reads/s
+  against 1-10) and every batch carries one event, so each in-transaction `CONTIGUOUS` subscription commits one page per
+  event (`BEGIN`, progress `UPDATE`, `COMMIT`) instead of one per backstop batch. The tail read is 0.1 of the 1.1; the page
+  transactions are the rest. Tier 2 costs the same (1.105), so it is the wake rate, not the notification. It is the price
+  of millisecond latency and is still at S1's figure (1.05) and below S1's at 1 and 10 ev/s; CDC (0.29) batches on its own
+  dispatcher. Not a defect; nothing was tuned. Options for the maintainer: accept the row as the cost of the latency, or
+  coalesce wakes (a minimum interval between woken reads of a type, e.g. 5-10 ms, would bring 100 ev/s to about 0.2-0.3
+  at a few ms of latency).
+- Forked-JVM check: p50 1.78 against 1.33-1.63 ms in one JVM, p99 6.0-6.7 against 3.4-4.3 ms; the shortcut understates
+  tier 1 by a few tenths of a millisecond at p50, which changes no verdict.
+
+### 10.2 Append-path cost of `NOTIFY` (§7.2)
+
+1, 8 and 20 writers, one event per unit of work to a new aggregate, 2 s warm-up, 8 s window; a second engine with one
+subscription listens throughout. Arms: no `afterCommit`; `afterCommit` with the coalesced notifier (on the engine's own
+pool); a writer running `pg_notify` on its own connection after commit (reference). `pg_stat_activity` sampled every
+5 ms for `Lock:object`. Runs 1-2, `fsync=on`:
+
+| Writers | None: appends/s, commit p50 | Notifier: appends/s, commit p50 | Δ appends/s | Notifier batches per commit | Notifier borrows/s | Direct: appends/s | `Lock:object` samples (notifier / direct) |
+|---|---|---|---|---|---|---|---|
+| 1 | 4 327-4 575, 0.13-0.14 ms | 4 373-4 458, 0.13 ms | −2.6 % / +1.1 % | 1.00 | 4 390-4 475 | 2 369-3 654 | 0 / 0 |
+| 8 | 20 501-20 981, 0.26-0.27 ms | 20 269-20 446, 0.28 ms | −2.6 % / −1.1 % | 0.50 | 10 070-10 150 | 16 268-16 659 | 0 / 42-47 of 1 546 |
+| 20 | 24 584-24 676, 0.28-0.29 ms | 21 099-23 025, 0.31-0.32 ms | **−14.5 %** / −6.3 % | 0.46 | 9 650-10 530 | 20 722-20 901 | 0 / 102 of 1 545 |
+
+`pg_notify` server execution: mean 1 µs, max 0.01-0.30 ms (pg_stat_statements; the client-side send time has no hook
+after the send). `fsync=off` (recorded, not gated): one writer 6 794-7 001 → 5 599-5 693 (−18 %); eight writers 37 826-38 320
+without against 64 194-66 341 with the notifier (the no-notifier figure is low in both runs and is not understood: noise of
+the shared CPUs is the likely cause); twenty 68 590-76 921 → 56 146-57 000 (−18 % / −26 %); coalescing 0.29-0.33 batches
+per commit; direct `pg_notify` waits on `Lock:object` in 820-870 of 1 540 samples at 20 writers.
+
+**Verdict.** Writers are never in `Lock:object` with the notifier (0 samples in every arm; 42-870 with the direct
+reference), which is the point of moving `NOTIFY` off the commit path: **passes**. Appends/s within 10 % of none:
+**passes at 8 writers** (−1 to −3 %) and is **borderline at 20** (−14.5 % in run 1, −6.3 % in run 2; mean −10.4 %), with
+commit p50 +0.02-0.04 ms. The cost is CPU, not the lock: at 20 writers the notifier sends about 10 000 batches/s (coalescing
+0.46 batches per commit; each send is fast, so few commits wait in the set), each one a borrowed connection and a
+transaction of its own, and the server's CPU rises from 2.7 to 3.0-3.1 cores on CPUs it shares with the client. Not a defect;
+no default was changed. The lever, if the dedicated server confirms the cost, is a minimum interval between sends (a
+coalescing window of 1-2 ms would cut the sends to a few hundred per second at the price of that much latency).
+
+### 10.3 One flush across woken types (§7.3) and the single-type flush (§9 decision 2)
+
+1, 10, 16 and 50 aggregate types, one `FRESH` subscription each; one writer per type commits in lockstep 50 times a second,
+then one `afterCommit` names every type, so they are woken together. A long writer per type holds one value below its
+head throughout, so every type keeps a candidate and wants a running set whenever its probe clock allows. 5 s warm-up,
+30 s window. Server CPU of the reader role's backends (on-CPU time from `/proc/<pid>/schedstat` in the container: the
+loop's held connection and the subscriptions' progress saves) per wake, runs 1-2. The container's whole CPU was also
+recorded, minus a writers-only arm, but the writers' cost (19-70 % of a core) swamps the difference and that figure was
+noise (negative in half the arms); the per-backend figure is the measurement.
+
+| Types | Arm | Reader backends' CPU per wake | Statements per wake | Running-set reads per wake | Wake-to-handler p50 / p99 |
+|---|---|---|---|---|---|
+| 1 | Combined probe (as built) | 316-332 µs | 1.09-1.11 | 0.09-0.11 | 0.64-0.70 / 1.5-3.1 ms |
+| 1 | Two-statement flush | 305-328 µs | 1.21-1.28 | 0.11-0.14 | 0.66-0.78 / 1.3-1.9 ms |
+| 10 | **Flush** (as built) | **585-718 µs** | 10.6-10.9 | **0.05-0.10** | 0.77-1.10 / 2.0-3.0 ms |
+| 10 | Each type alone | 1 259-1 280 µs | 11.2-11.8 | 1.17-1.79 | 0.82-0.98 / 2.9 ms |
+| 16 | **Flush** | **713-741 µs** | 16.9-17.1 | 0.05-0.10 | 0.75-0.87 / 2.5-2.8 ms |
+| 16 | Each type alone | 1 908-1 918 µs | 18.3-18.4 | 2.40-2.51 | 1.28-1.29 / 2.9-3.0 ms |
+| 50 | As built (above 16 due: one statement each) | 2 985-2 997 µs | 53.2-53.6 | 1.93-2.25 | 2.37-2.41 / 5.0-5.2 ms |
+| 50 | Each type alone | 3 477-3 484 µs | 54.0-54.1 | 4.36-4.42 | 2.39-2.40 / 5.2-5.3 ms |
+
+**Verdict: passes.** At 10 types the flush cuts the reader's server CPU per wake by 44-54 % (P0.16: −58 %; gate −30 %), at
+16 by 61-63 %, and reads one running set per wake at most (0.05-0.10 against 1.2-1.8: the running set is read once for
+every type and moves every type's probe clock). Wake-to-handler latency is the same or lower (P0.16 had found the flush
+slightly slower; here a single round trip for ten statements outweighs it). At 50 types the engine falls back to one
+statement per type as designed, except when a subset of 2-16 types is due together (715-849 multi-type flushes in
+30 s), which still halves the running-set reads.
+
+**Distinct flush texts** (§4.2's "recorded"): 4-10 at 10 types, 6 at 16, but **180-213 at 50 types**, above
+`MAX_FLUSH_TEXTS` (64): the due subsets of 2-16 types out of 50 vary from iteration to iteration, so the LRU of prepared
+flush statements churns. The "above 16 due, one statement each" guard does not bound the number of texts when many types
+are active but only some are due. Not a correctness issue (a text falls out of the LRU and is prepared again); a later
+phase may want to key the flush on a fixed slot order or cap the subsets it flushes.
+
+**Decision 2's figure.** For a single due type the two-statement flush (tail, then `SELECT RUNNING_SET`) costs the same
+server CPU as the combined probe within the noise: 305-328 against 316-332 µs per wake, 1.2-1.3 against 1.1 statements per
+wake (the running set is a statement of its own about once in eight to ten reads), with the same latency. In this shape only
+about one read in ten carries a running set, so the per-probe difference is diluted tenfold; but nothing here argues for
+keeping the combined probe on cost grounds. §4.2's condition for keeping it ("only if §7 shows the two-statement flush
+costs more server CPU") is not met.
+
+### 10.4 I7 and the backstop as a number (§7.4)
+
+§7.1's two-engine shape with every notification lost: W's cross-JVM wake-up off and no `afterCommit`, S's listener on and
+hearing nothing; backstop 1 s, 10 subscriptions. Runs 1-2: p50 45-110 ms / p99 1 001-1 002 ms / max 1 002-1 003 ms at
+1 ev/s; 502-505 / 988-998 / 1 001-1 005 ms at 10 ev/s; 504-505 / 994-995 / 1 005-1 017 ms at 100 ev/s; every event
+delivered once. **Passes**: p99 at or below 1 s plus one read everywhere (the largest single delivery, 1 017 ms, is 1 s
+plus the read and one in-transaction page). Beside §10.1's tier-1 arm (p99 2.2-6.0 ms) that is what the tiers buy: two
+and a half orders of magnitude at p99, with the backstop still bounding every loss.
+
+### 10.5 `wokenProbeMin` (§9 decision 4)
+
+**Confirmed at 10 ms**, with a caveat. §7.1's steady shape never produced a candidate (one writer, commits in order), so
+no running set was read in any latency arm and the floor did not act; `CONTIGUOUS` stayed within 0.6 ms (p50) and 1 ms
+(p99) of `FRESH`. In §7.3's shape, where every type kept a candidate behind a long writer and was woken 50 times a second,
+the woken probe clock held running-set reads to 1.2-2.5 per wake across 10-16 types read alone (about 7 per second per
+type, the cost rule above the 10 ms floor) and to 0.05-0.10 per wake with the flush. Nothing here argues for moving it;
+`EventLogWakeIT` (8 writers, out-of-order commits) keeps the bound under test.
+
+### 10.6 Unit B's deviations from §3 and §6 (recorded)
+
+- Stopping the listener sends a "kick": the notifier sends `<instance>:` (no type) on `el_wake`, which ends the
+  listener's blocking read at once instead of after its 1 s timeout; a typeless payload wakes nothing.
+- `QUERY_POLL`, the fallback drain when the pin fails, polls from 1 ms doubling to 50 ms instead of one empty query per
+  1 s `timeout` (§3.3).
+- On a restart the listener wakes every active type once (`wakeAll()`) after it has reconnected and re-run `LISTEN`,
+  not before the wait (§3.3), so the wake read covers the whole time it was deaf.
+- The listener and wake ITs run shorter shapes than §6.1 and §6.3 list (fewer seconds, lower rates); the must-fail
+  variants are all present.
+- The `PINNED_PEEK` drain reads pgjdbc internals reflectively (`PGStream.nextStreamAvailableCheckTime`, pinned and undone
+  before release); `WakeTierTest` guards the field names, so a pgjdbc upgrade that renames them fails a unit test instead
+  of silently falling back to `QUERY_POLL`.
+
+### 10.7 Verdict
+
+The tiers deliver what the phase is for: commit-to-handler p50 0.5-1.3 ms in the same engine and 0.9-2.8 ms across
+engines, p99 1.5-6.5 ms, against S1's 48-338 ms / 103-805 ms and CDC's 27-33 / 56-61 ms; with every notification lost the
+backstop still bounds delivery at 1 s (I7). The one-flush read halves the reader's server CPU per wake at 10 types and
+reads one running set per wake instead of one per type. Two rows do not pass as written and are left to the maintainer,
+with their causes: reader statements per delivered event at 100 ev/s (1.10 against 0.02-0.11; a read and an in-transaction
+page per commit, the price of the latency; wake coalescing is the lever), and the notifier's append cost at 20 writers
+(−6 to −15 %, CPU on the shared VM, never the `NOTIFY` lock; a send interval is the lever). For decision 2: the
+single-type two-statement flush costs the same as the combined probe. `wokenProbeMin` stays 10 ms. Surprise: 180-213
+distinct flush texts at 50 active types, above the 64-entry statement LRU. No default changed and no main code changed
+except the two test knobs in `ReaderLoop`.

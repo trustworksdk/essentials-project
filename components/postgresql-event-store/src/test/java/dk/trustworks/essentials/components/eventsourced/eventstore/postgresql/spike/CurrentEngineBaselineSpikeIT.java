@@ -31,11 +31,19 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.schema.SchemaOwnership;
 import dk.trustworks.essentials.components.foundation.types.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify.*;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.reactive.LocalEventBus;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.utility.DockerImageName;
+import org.postgresql.ds.PGSimpleDataSource;
 
 import java.lang.management.ManagementFactory;
 import java.sql.*;
@@ -592,6 +600,88 @@ class CurrentEngineBaselineSpikeIT {
         return condition.getAsBoolean();
     }
 
+    // ------------------------------------------------------------------ phase 6 gate (docs/plans/event-store-engine-phase6.md §7.1)
+
+    private static final String       P6_OLD   = "p6-old-latency.txt";
+    private static final List<String> P6_ARMS  = Arrays.stream(System.getProperty("spike.baseline.p6Arms", "S1_1000,S1_200,CDC").split(",")).map(String::trim)
+                                                       .filter(v -> !v.isEmpty()).toList();
+    private static final List<Integer> P6_RATES = counts(System.getProperty("spike.baseline.p6Rates", "1,10,100"));
+    private static final String       CDC_IMAGE = System.getProperty("essentials.wal2json.test-image", "essentials-test/postgres-wal2json:1");
+
+    /**
+     * Phase 6 §7.1's baselines: today's engine with the starter's wiring, one writer appending one event per unit of
+     * work to a new aggregate at 1, 10 and 100 ev/s, 10 non-exclusive subscriptions, 10 s warm-up, 60 s window. Arms
+     * {@code S1_1000} and {@code S1_200}: notify-polling on (per-row trigger, the shared {@link MultiTableChangeListener}
+     * polling every 50 ms, {@link NotifyAwareEventStorePollingOptimizer} 50 ms initial delay, x2, max-delay 1 s or 200
+     * ms); {@code CDC}: CDC on (pgoutput, inbox delivery, the starter's tailer and dispatcher properties) and the
+     * subscriptions on the {@link CdcEventStore}, subscribed once the tailer holds the slot, so they take the
+     * backfill-then-live path. Latency from the writer's unit of work returning to the handler. Results {@code p6-old-latency.txt}.
+     */
+    @Test
+    void p6Latency() throws Exception {
+        var warmUp = scaled(Duration.ofSeconds(10));
+        var window = scaled(Duration.ofSeconds(60));
+        recordTo(P6_OLD, "");
+        recordTo(P6_OLD, "=== P6 LATENCY BASELINE | " + Instant.now() + " | " + SpikeServer.target("image " + IMAGE + " (CDC: " + CDC_IMAGE + ")") + " | CPUs "
+                + Runtime.getRuntime().availableProcessors() + " | arms " + P6_ARMS + ", rates " + P6_RATES + ", 10 non-exclusive subscriptions, warm-up " + warmUp.toSeconds()
+                + " s, window " + window.toSeconds() + " s");
+        for (int run = 1; run <= RUNS; run++) {
+            for (var arm : P6_ARMS) {
+                for (int rate : P6_RATES) {
+                    boolean cdc = arm.equals("CDC");
+                    try (var pg = cdc ? Pg.startCdc() : Pg.start()) {
+                        var writer = Stack.writer(pg, "writer");
+                        var reader = cdc ? Stack.cdcReader(pg, "reader", "node1") : Stack.s1Reader(pg, "reader", "node1", Duration.ofMillis(Integer.parseInt(arm.substring(3))));
+                        var committed = new ConcurrentHashMap<String, Long>();
+                        var measuring = new AtomicBoolean(false);
+                        var latencies = new ConcurrentLinkedQueue<Long>();
+                        var delivered = new AtomicLong();
+                        for (int i = 0; i < 10; i++) {
+                            reader.manager.subscribeToAggregateEventsAsynchronously(SubscriberId.of("sub-" + i), ORDERS, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER, Optional.empty(), e -> {
+                                long now = System.nanoTime();
+                                var  at  = committed.get(e.aggregateId().toString());
+                                if (at != null) {
+                                    latencies.add(now - at);
+                                    delivered.incrementAndGet();
+                                }
+                            });
+                        }
+                        var scheduler = Executors.newSingleThreadScheduledExecutor();
+                        var appended  = new AtomicLong();
+                        scheduler.scheduleAtFixedRate(() -> {
+                            var id = writer.appendNewOrder(1, Optional.empty());
+                            if (measuring.get()) {
+                                committed.put(id.toString(), System.nanoTime());
+                                appended.incrementAndGet();
+                            }
+                        }, 0, 1_000_000 / rate, TimeUnit.MICROSECONDS);
+                        Thread.sleep(warmUp.toMillis());
+                        pg.resetStatistics();
+                        measuring.set(true);
+                        Thread.sleep(window.toMillis());
+                        measuring.set(false);
+                        var summary = pg.summarise("p6 run " + run + ": " + arm + ", " + rate + " events/s", window, appended.get(), 0);
+                        scheduler.shutdown();
+                        scheduler.awaitTermination(10, TimeUnit.SECONDS);
+                        long events = appended.get();
+                        try {
+                            await(Duration.ofSeconds(30), () -> delivered.get() >= events * 10);
+                        } catch (RuntimeException e) {
+                            recordTo(P6_OLD, "  !! " + arm + " " + rate + " ev/s: " + delivered.get() + " of " + events * 10 + " deliveries after 30 s");
+                        }
+                        var l = Latencies.of(latencies);
+                        recordTo(P6_OLD, String.format("P6 run %d | %-7s | %3d ev/s | appended %d, deliveries %d | latency p50 %.1f p99 %.1f max %.1f ms | statements per event: writer %.2f, "
+                                                               + "reader %.2f | READER STATEMENTS PER DELIVERY %.3f | WAL %.0f B/event",
+                                                       run, arm, rate, events, delivered.get(), l.p50(), l.p99(), l.max(), summary.byRole("writer") / (double) events,
+                                                       summary.byRole("reader") / (double) events, summary.byRole("reader") / (double) (events * 10), summary.walBytes / (double) events));
+                        reader.close();
+                        writer.close();
+                    }
+                }
+            }
+        }
+    }
+
     private static void header(String shape, String setup) {
         record("");
         record("=== " + shape + " | " + Instant.now() + " | " + SpikeServer.target("image " + IMAGE) + " | runs " + RUNS + " | CPUs " + Runtime.getRuntime().availableProcessors()
@@ -686,6 +776,23 @@ class CurrentEngineBaselineSpikeIT {
             try (var s = pg.observer.createStatement()) {
                 s.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements");
                 for (var role : List.of("writer", "reader", "reader2")) s.execute("CREATE ROLE " + role + " LOGIN SUPERUSER PASSWORD '" + role + "'");
+            }
+            return pg;
+        }
+
+        /** A container of the module's CDC image with {@code wal_level=logical} (phase 6 §7.1's CDC arm); container only */
+        static Pg startCdc() throws SQLException {
+            if (SpikeServer.external()) throw new IllegalStateException("the CDC arm runs in a container only");
+            var container = new PostgreSQLContainer(DockerImageName.parse(CDC_IMAGE).asCompatibleSubstituteFor("postgres")).withDatabaseName("baseline").withUsername(OBSERVER)
+                                                                                                                    .withPassword(OBSERVER)
+                                                                                                                    .withCommand("postgres", "-c", "fsync=off", "-c", "shared_preload_libraries=pg_stat_statements",
+                                                                                                                                 "-c", "pg_stat_statements.max=10000", "-c", "pg_stat_statements.track_utility=on",
+                                                                                                                                 "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10");
+            container.start();
+            var pg = new Pg(SpikeServer.of(container));
+            try (var s = pg.observer.createStatement()) {
+                s.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements");
+                for (var role : List.of("writer", "reader", "reader2")) s.execute("CREATE ROLE " + role + " LOGIN SUPERUSER REPLICATION PASSWORD '" + role + "'");
             }
             return pg;
         }
@@ -798,9 +905,132 @@ class CurrentEngineBaselineSpikeIT {
                                              .build();
             eventStore.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);
             this.jdbi = jdbi;
+            this.persistenceStrategy = persistenceStrategy;
+            this.gapHandler = gapHandler;
         }
 
-        private final Jdbi jdbi;
+        private final Jdbi                                                                         jdbi;
+        private final SeparateTablePerAggregateTypePersistenceStrategy                             persistenceStrategy;
+        private final PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> gapHandler;
+        /** Stopped before the manager, in this order (phase 6: S1's listener, CDC's tailer and dispatcher) */
+        private final List<Runnable>                                                               stops = new ArrayList<>();
+
+        private static PostgresqlFencedLockManager lockManager(Stack stack, String instanceId) {
+            return PostgresqlFencedLockManager.builder()
+                                              .setJdbi(stack.jdbi)
+                                              .setUnitOfWorkFactory(stack.unitOfWorkFactory)
+                                              .setLockManagerInstanceId(instanceId)
+                                              .setLockTimeOut(Duration.ofSeconds(15))
+                                              .setLockConfirmationInterval(Duration.ofSeconds(4))
+                                              .setSchemaOwnership(SchemaOwnership.COMPONENT)
+                                              .build();
+        }
+
+        /** The starter's manager wiring (batch 10, poll 100 ms, resume points every 1 s) on {@code store}, with {@code optimizers} */
+        private static EventStoreSubscriptionManager manager(Stack stack, String instanceId, EventStore store,
+                                                             java.util.function.Function<String, EventStorePollingOptimizer> optimizers) {
+            var manager = EventStoreSubscriptionManager.builder()
+                                                       .setEventStore(store)
+                                                       .setFencedLockManager(lockManager(stack, instanceId))
+                                                       .setDurableSubscriptionRepository(new PostgresqlDurableSubscriptionRepository(stack.jdbi, store,
+                                                                                                                                     PostgresqlDurableSubscriptionRepository.DEFAULT_DURABLE_SUBSCRIPTIONS_TABLE_NAME,
+                                                                                                                                     SchemaOwnership.COMPONENT))
+                                                       .setEventStorePollingBatchSize(10)
+                                                       .setEventStorePollingInterval(Duration.ofMillis(100))
+                                                       .setSnapshotResumePointsEvery(Duration.ofSeconds(1))
+                                                       .setSnapshotResumePointsAfterEvents(0)
+                                                       .setStartLifeCycles(true)
+                                                       .setEventStorePollingOptimizerFactory(optimizers)
+                                                       .build();
+            manager.start();
+            return manager;
+        }
+
+        /** S1 (notify-polling) as the starter wires it with {@code notify-polling.enabled=true} and {@code max-delay} */
+        static Stack s1Reader(Pg pg, String role, String instanceId, Duration maxDelay) {
+            var stack = new Stack(pg.jdbcUrl(), pg.server.role(role), pg.server.password(role));
+            var bus   = LocalEventBus.builder().busName("s1-" + role).parallelThreads(1).build();
+            var listener = new MultiTableChangeListener<TableChangeNotification>(stack.jdbi, Duration.ofMillis(50), EssentialsObjectMappers.createJSONSerializer(), bus, false);
+            listener.start();
+            var epochs = new NotifyEpochSource(bus);
+            stack.persistenceStrategy.enableNotifyTriggers(table -> listener.listenToNotificationsFor(table, EventStreamTableChangeNotification.class));
+            var settings = new NotifyPollingSettings(true, Duration.ofMillis(50), maxDelay, 2.0d);
+            stack.stops.add(epochs::close);
+            stack.stops.add(listener::stop);
+            stack.manager = manager(stack, instanceId, stack.eventStore, name -> new NotifyAwareEventStorePollingOptimizer(epochs, EVENTS_TABLE, settings));
+            return stack;
+        }
+
+        /**
+         * CDC as the starter wires it with {@code cdc.enabled=true}: pgoutput, inbox delivery, the starter's tailer and
+         * dispatcher properties, publication {@code essentials_cdc_publication} for the event table (the starter leaves
+         * it to the application by default), and the manager on the {@link CdcEventStore}. Returns once the tailer holds
+         * the slot, so subscriptions start on the backfill-then-live path.
+         */
+        static Stack cdcReader(Pg pg, String role, String instanceId) throws SQLException {
+            var stack      = new Stack(pg.jdbcUrl(), pg.server.role(role), pg.server.password(role));
+            var properties = new CdcProperties();
+            properties.setEnabled(true);
+            var bus          = new CdcEventBus();
+            var availability = new CdcAvailability();
+            var cdcStore = CdcEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                        .setDelegate(stack.eventStore)
+                                        .setUnitOfWorkFactory(stack.unitOfWorkFactory)
+                                        .setEventStreamGapHandler(stack.gapHandler)
+                                        .setCdcBus(bus)
+                                        .setCdcProperties(properties)
+                                        .setAvailability(availability)
+                                        .build();
+            stack.jdbi.useHandle(h -> h.execute("CREATE PUBLICATION " + properties.getPgOutput().getPublicationName() + " FOR TABLE " + EVENTS_TABLE));
+            AggregateTypeResolver resolver = table -> EVENTS_TABLE.equalsIgnoreCase(table) ? ORDERS : null;
+            var plugin = new PgOutputLogicalDecodingPlugin(properties.getPgOutput(),
+                                                           new PgOutputToPersistedEventConverter(EssentialsJSONEventSerializers.create(), resolver,
+                                                                                                 AggregateIdSerializerResolver.forEventStore(stack.eventStore)));
+            var inbox = new CdcInboxRepository(stack.unitOfWorkFactory);
+            var replication = new PGSimpleDataSource();
+            replication.setServerNames(new String[]{pg.server.host()});
+            replication.setPortNumbers(new int[]{pg.server.port()});
+            replication.setDatabaseName("baseline");
+            replication.setUser(pg.server.role(role));
+            replication.setPassword(pg.server.password(role));
+            replication.setProperty("replication", "database");
+            replication.setProperty("preferQueryMode", "simple");
+            replication.setProperty("assumeMinServerVersion", "17");
+            java.util.function.Supplier<Set<String>> tables = () -> Set.of(EVENTS_TABLE);
+            var slot = "spike_p6_slot";
+            var tailer = new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                                       .setReplicationDataSource(replication)
+                                                                       .setJdbi(stack.jdbi)
+                                                                       .setUnitOfWorkFactory(stack.unitOfWorkFactory)
+                                                                       .setLogicalDecodingPlugin(plugin)
+                                                                       .setAvailability(availability)
+                                                                       .setMeterRegistry(Optional.empty())
+                                                                       .setEventStreamTableNamesSupplier(tables)
+                                                                       .build(),
+                                                  new CdcTailerSettings(slot, properties.getWalReplicationTailer(), PgSlotMode.CREATE_IF_MISSING, CdcMode.AUTO, false),
+                                                  CdcDelivery.inbox(inbox));
+            var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                        .setInbox(inbox)
+                                                                        .setUnitOfWorkFactory(stack.unitOfWorkFactory)
+                                                                        .setEventStreamGapHandler(stack.gapHandler)
+                                                                        .setLogicalDecodingPlugin(plugin)
+                                                                        .setOnEvents(bus::publish)
+                                                                        .setAvailability(availability)
+                                                                        .setMeterRegistry(Optional.empty())
+                                                                        .build(),
+                                               new CdcDispatcherSettings(slot, properties.getCdcDispatcher(), CdcProperties.CdcDeliveryMode.INBOX));
+            dispatcher.start();
+            tailer.start();
+            stack.stops.add(tailer::stop);
+            stack.stops.add(dispatcher::stop);
+            long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+            while (!availability.isActive()) {
+                if (System.nanoTime() > deadline) throw new IllegalStateException("CDC did not become active within 60 s");
+                LockSupportSleep.nanos(20_000_000);
+            }
+            stack.manager = manager(stack, instanceId, cdcStore, name -> new JitteredEventStorePollingOptimizer(name, 100, 50, 2000, 0.1d));
+            return stack;
+        }
 
         static Stack writer(Pg pg, String role) {
             return new Stack(pg.jdbcUrl(), pg.server.role(role), pg.server.password(role));
@@ -874,6 +1104,7 @@ class CurrentEngineBaselineSpikeIT {
 
         @Override
         public void close() {
+            stops.forEach(Runnable::run);
             if (manager != null) manager.stop();
             dataSource.close();
         }

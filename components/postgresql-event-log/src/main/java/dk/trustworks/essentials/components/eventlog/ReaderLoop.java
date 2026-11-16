@@ -542,7 +542,8 @@ final class ReaderLoop {
                 due.add(type);
             }
         }
-        if (due.size() == 1 || due.size() > MAX_FLUSH_TYPES) {
+        var alone = due.size() > MAX_FLUSH_TYPES || !flushForTests || (due.size() == 1 && !singleTypeFlushForTests);
+        if (alone) {
             for (var type : due) {
                 if (connection == null) {
                     break;
@@ -561,6 +562,12 @@ final class ReaderLoop {
 
     /** More due types than this are read one statement each, not in one flush: a guard against statement-cache churn */
     static final int MAX_FLUSH_TYPES = 16;
+
+    // ---- test knobs (phase 6 §7.3 gate measurement only) ----
+    /** {@code false} reads every due type alone, one statement each: §7.3's "flush off" arm */
+    volatile boolean flushForTests = true;
+    /** {@code true} reads a single due type through {@link #flush} (tail, then the running set if wanted) instead of the combined probe: §9 decision 2's figure */
+    volatile boolean singleTypeFlushForTests;
 
     private void readAlone(ActiveType type) throws Exception {
         var reader  = type.reader;

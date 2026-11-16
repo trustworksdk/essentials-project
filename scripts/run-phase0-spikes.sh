@@ -84,6 +84,12 @@
 #                                                after a reader restart behind a long writer
 #                                  p5-gate-old   CurrentEngineBaselineSpikeIT#rareTypeCatchUp+restartStorm: today's
 #                                                engine's side of the phase-5 gate, postgres:18.4 in a container
+#                                  p6-gate       EventLogGateSpikeIT (postgresql-event-log)              phase 6 unit C: commit-to-
+#                                                handler latency per wake-up tier (backstop only, tier 2, tier 1, both, every
+#                                                notification lost, a forked writer JVM), NOTIFY's append-path cost (fsync on and
+#                                                off), one flush across woken types against one statement each
+#                                  p6-gate-old   CurrentEngineBaselineSpikeIT#p6Latency: today's engine with S1 (max-delay
+#                                                1 s and 200 ms) and with CDC, postgres:18.4 (CDC: the module's wal2json image)
 #                                  p2-gate-old   CurrentEngineBaselineSpikeIT#steady+idle with 1 and 10 subscriptions,
 #                                                postgres:18.4 in a container: the old engine's side of the phase-2 gate
 #                                "default" is the priority order of the original runs; "all" is the same set in
@@ -115,7 +121,7 @@ OUT=""
 BUILD=1
 DRY_RUN=0
 
-usage() { sed -n '17,91p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '17,97p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_error() { printf '%s\nRun with --help for usage.\n' "$*" >&2; exit 2; }
 
 # The command line as typed, for machine.txt, with any password value replaced. Built before
@@ -189,6 +195,8 @@ suite_classes() {
     p4-gate)      echo "EventLogGateSpikeIT#projectionThroughput+contiguousLatency+longWriterChurn+mixedStatements" ;;
     p5-gate)      echo "EventLogGateSpikeIT#rareTypeCatchUp+restartStorm+freshAfterRestart" ;;
     p5-gate-old)  echo "CurrentEngineBaselineSpikeIT#rareTypeCatchUp+restartStorm" ;;
+    p6-gate)      echo "EventLogGateSpikeIT#wakeLatency+notifyAppendCost+flushAcrossTypes" ;;
+    p6-gate-old)  echo "CurrentEngineBaselineSpikeIT#p6Latency" ;;
     p2-gate-old)  echo "CurrentEngineBaselineSpikeIT#steady+idle" ;;
     *)            return 1 ;;
   esac
@@ -215,13 +223,15 @@ suite_results() {
     p4-gate)      echo "p4-c-*" ;;
     p5-gate)      echo "p5-c-*" ;;
     p5-gate-old)  echo "p5-old-*" ;;
+    p6-gate)      echo "p6-c-*" ;;
+    p6-gate-old)  echo "p6-old-*" ;;
     p2-gate-old)  echo "p0-0-*" ;;
   esac
 }
 # The module a suite's classes live in.
 suite_module() {
   case "$1" in
-    p3-gate|p4-gate|p5-gate) echo "components/postgresql-event-log" ;;
+    p3-gate|p4-gate|p5-gate|p6-gate) echo "components/postgresql-event-log" ;;
     *)       echo "components/postgresql-event-store" ;;
   esac
 }
@@ -229,11 +239,12 @@ suite_module() {
 suite_args() {
   case "$1" in
     p5-gate-old) echo "-Dspike.baseline.image=postgres:18.4" ;;
+    p6-gate-old) echo "-Dspike.baseline.image=postgres:18.4" ;;
     p2-gate-old) echo "-Dspike.baseline.steady.subscriptions=1,10 -Dspike.baseline.idle.subscriptions=1,10 -Dspike.baseline.image=postgres:18.4" ;;
   esac
 }
 DEFAULT_SUITES="xid table-design contention notify tail probe-cost progress listen pipeline owned append baseline cpu jdbc probe"
-ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline owned listen p2-gate-old p3-gate p4-gate p5-gate-old p5-gate"
+ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline owned listen p2-gate-old p3-gate p4-gate p5-gate-old p5-gate p6-gate-old p6-gate"
 
 (( ${#SUITE_SPECS[@]} )) || SUITE_SPECS=(default)
 SUITES=()
