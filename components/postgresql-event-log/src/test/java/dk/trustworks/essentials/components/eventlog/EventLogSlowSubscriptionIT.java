@@ -76,7 +76,7 @@ class EventLogSlowSubscriptionIT extends AbstractSubscriptionIT {
     }
 
     /** Records the first handling time of every global order */
-    private static final class Timed implements FreshSubscription.Handler {
+    private static final class Timed implements Subscription.Handler {
         final Recorder                     recorder = new Recorder();
         final ConcurrentHashMap<Long, Long> handledAt = new ConcurrentHashMap<>();
 
@@ -88,7 +88,7 @@ class EventLogSlowSubscriptionIT extends AbstractSubscriptionIT {
     }
 
     /** Blocks on {@link #release} from its second event on */
-    private static final class Blocking implements FreshSubscription.Handler {
+    private static final class Blocking implements Subscription.Handler {
         final Recorder       recorder = new Recorder();
         final AtomicInteger  calls    = new AtomicInteger();
         final CountDownLatch blocked  = new CountDownLatch(1);
@@ -112,15 +112,15 @@ class EventLogSlowSubscriptionIT extends AbstractSubscriptionIT {
         var fast1     = new Timed();
         var fast2     = new Timed();
         var slow      = new Blocking();
-        var subs      = new ArrayList<FreshSubscription>();
+        var subs      = new ArrayList<Subscription>();
         subs.add(subscribe(name + "-fast1", fast1, new TestSeams(Set.of(mutants), TestSeams.Hooks.NONE, null), startFrom));
         subs.add(subscribe(name + "-fast2", fast2, TestSeams.NONE, startFrom));
-        FreshSubscription slowSubscription = null;
+        Subscription slowSubscription = null;
         if (withBlocked) {
             slowSubscription = subscribe(name + "-slow", slow, TestSeams.NONE, startFrom);
             subs.add(slowSubscription);
         }
-        awaitTrue(() -> subs.stream().allMatch(FreshSubscription::isIdle));
+        awaitTrue(() -> subs.stream().allMatch(Subscription::isIdle));
 
         var committedAt = write();
         var committed   = committedAt.keySet();
@@ -161,7 +161,7 @@ class EventLogSlowSubscriptionIT extends AbstractSubscriptionIT {
             duplicates = slow.recorder.delivered.size() - slow.recorder.deliveredOrders().size();
             slowOrder = perAggregateOrderViolations(slow.recorder.delivered);
         }
-        subs.forEach(FreshSubscription::stop);
+        subs.forEach(Subscription::stop);
         return new Result(received && stillBlocked, overflowed, violations, p99, duplicates, missing, slowOrder);
     }
 

@@ -200,7 +200,7 @@ class EventLogResumePointIT extends AbstractSubscriptionIT {
         return lostAfterRestart(handled);
     }
 
-    private void crash(FreshSubscription subscription) throws SQLException {
+    private void crash(Subscription subscription) throws SQLException {
         terminateReaderBackend();
         subscription.crash();
     }

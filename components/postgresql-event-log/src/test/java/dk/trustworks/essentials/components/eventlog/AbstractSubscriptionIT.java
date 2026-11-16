@@ -47,7 +47,7 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
     protected AggregateTypeTables tables;
     protected final ReadCounter   reads         = new ReadCounter();
     private final List<Connection>        open          = new CopyOnWriteArrayList<>();
-    private final List<FreshSubscription> subscriptions = new CopyOnWriteArrayList<>();
+    private final List<Subscription> subscriptions = new CopyOnWriteArrayList<>();
 
     /** Counts reads and remembers the last one's outstanding state, from the reader's thread */
     static final class ReadCounter implements EventLogObserver {
@@ -56,6 +56,8 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         final AtomicLong detaches  = new AtomicLong();
         final AtomicLong attaches  = new AtomicLong();
         final AtomicLong rowsRead  = new AtomicLong();
+        /** Catch-up, bridge and deferred-bridge statements of every subscription */
+        final AtomicLong catchUpReads = new AtomicLong();
         final List<String> detachReasons = new CopyOnWriteArrayList<>();
         final List<Long>   saves         = new CopyOnWriteArrayList<>();
         volatile int lastCandidates;
@@ -80,6 +82,11 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         }
 
         @Override
+        public void onCatchUpRead(String subscriber, String aggregateType, boolean bridge, long nanos, int rows) {
+            catchUpReads.incrementAndGet();
+        }
+
+        @Override
         public void onHoleRead(String aggregateType, int resolvedHoles, int lateRows) {
             holeReads.incrementAndGet();
         }
@@ -95,7 +102,7 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
      * Records every delivery, in order; can be made to block on one global order, or on every event of one aggregate,
      * until {@link #release} is counted down
      */
-    static final class Recorder implements FreshSubscription.Handler {
+    static final class Recorder implements Subscription.Handler {
         final List<StoredEvent> delivered = new CopyOnWriteArrayList<>();
         final List<StoredEvent> handled   = new CopyOnWriteArrayList<>();
         volatile long           blockAt   = -1;
@@ -141,7 +148,7 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
 
     @AfterEach
     void stopEverything() {
-        subscriptions.forEach(FreshSubscription::crash);
+        subscriptions.forEach(Subscription::crash);
         eventLog.stop();
         for (var connection : open) {
             try {
@@ -151,19 +158,30 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         }
     }
 
-    FreshSubscription subscribe(String name, Recorder recorder, TestSeams seams) throws SQLException {
+    Subscription subscribe(String name, Recorder recorder, TestSeams seams) throws SQLException {
         return subscribe(name, recorder, seams, 1);
     }
 
-    FreshSubscription subscribe(String name, FreshSubscription.Handler handler, TestSeams seams, long startFrom) throws SQLException {
-        var subscription = eventLog.subscribe(new FreshSubscription.SubscriptionSpec(new ProgressStore.Key(name, TYPE, "node-1"), startFrom, handler, seams));
+    /** Starts {@code spec} on the current event log; crashed after the test */
+    Subscription subscribe(Subscription.SubscriptionSpec spec) throws SQLException {
+        return track(eventLog.subscribe(spec));
+    }
+
+    /** Crashes {@code subscription} after the test */
+    Subscription track(Subscription subscription) {
+        subscriptions.add(subscription);
+        return subscription;
+    }
+
+    Subscription subscribe(String name, Subscription.Handler handler, TestSeams seams, long startFrom) throws SQLException {
+        var subscription = eventLog.subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(name, TYPE, "node-1"), startFrom, handler, seams));
         subscriptions.add(subscription);
         return subscription;
     }
 
     /** Replaces the event log with one on {@code source} with {@code settings}; the schema and tables stay */
     void restartEventLog(javax.sql.DataSource source, EventLogSettings settings) throws SQLException {
-        subscriptions.forEach(FreshSubscription::crash);
+        subscriptions.forEach(Subscription::crash);
         subscriptions.clear();
         eventLog.stop();
         eventLog = EventLog.builder().setDataSource(source).setSettings(settings).setObserver(reads).build();
@@ -187,7 +205,7 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         awaitReads(1);
     }
 
-    FreshSubscription subscribe(String name, Recorder recorder, WatermarkMutant... mutants) throws SQLException {
+    Subscription subscribe(String name, Recorder recorder, WatermarkMutant... mutants) throws SQLException {
         return subscribe(name, recorder, new TestSeams(Set.of(mutants), TestSeams.Hooks.NONE, null));
     }
 

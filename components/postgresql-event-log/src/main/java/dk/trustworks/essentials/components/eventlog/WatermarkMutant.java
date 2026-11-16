@@ -67,5 +67,26 @@ enum WatermarkMutant {
      * The loop accepts an attach while the type's watermark is unknown, replying with its cursor as the watermark, and
      * the subscription asks for one without waiting (§3.4 step 2, F4). On the type's first subscription
      */
-    ATTACH_WITH_UNKNOWN_WATERMARK
+    ATTACH_WITH_UNKNOWN_WATERMARK,
+
+    // ---- phase 4 unit A (design phase 4 §8) ----
+
+    /** The progress update runs in its own transaction after the page committed (§3.3, I12) */
+    PROGRESS_AFTER_COMMIT,
+    /** {@code CONTIGUOUS} releases held rows at the reader's live watermark instead of the received one (§2.2, I3) */
+    RELEASE_AT_READER_WATERMARK,
+    /** {@code CONTIGUOUS} hands on every received row at once, as {@code FRESH} does (§2.2) */
+    NO_HOLD_BACK,
+    /** {@code CONTIGUOUS} attaches without the deferred bridge: rows in {@code (R, C]} never seen in a batch are skipped (§2.4) */
+    CONTIGUOUS_SKIPS_DEFERRED_BRIDGE,
+    /** A detach drops the rows of a page that rolled back, as if it had committed (§2.5, §7.1) */
+    DETACH_POSITION_PAST_OPEN_PAGE,
+    /** A detach catches up from the applied prefix as it was before the last page, without dropping what that page applied (§7.1) */
+    REREAD_WITHOUT_APPLIED_DROP,
+    /** A {@code CONTIGUOUS} inbox stops counting an event when its batch is taken, so held-back rows are unbounded (§2.3) */
+    HELD_NOT_COUNTED,
+    /** The in-transaction progress update has no {@code resume_from = expected} guard (§3.3) */
+    PROGRESS_WITHOUT_EXPECTED_RESUME,
+    /** A {@code FRESH} bridge starts above the highest handled order without re-reading the handled set's gaps (§5.3) */
+    BRIDGE_FROM_HIGHEST_WITHOUT_GAPS
 }

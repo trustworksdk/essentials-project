@@ -112,6 +112,39 @@ final class ProgressStore {
         }
     }
 
+    /**
+     * The in-transaction progress update (phase 4 §3.3) on the page's {@code connection}, which is not committed here.
+     *
+     * @param expected the {@code resume_from} this subscription last committed, or {@code null} for no such guard
+     * @return {@code true} if one row was updated; {@code false} if the epoch, the expected value or the row is gone -
+     * the caller rolls back and {@link #read(Key)} tells which
+     */
+    static boolean saveInTransaction(Connection connection, Key key, long resumeFrom, long resetEpoch, Long expected) throws SQLException {
+        try (var statement = connection.prepareStatement(expected == null ? EventLogStorage.PROGRESS_SAVE : EventLogStorage.PROGRESS_SAVE_EXPECTED)) {
+            statement.setLong(1, resumeFrom);
+            statement.setString(2, key.subscriber());
+            statement.setString(3, key.aggregateType());
+            statement.setString(4, key.instanceName());
+            statement.setLong(5, resetEpoch);
+            statement.setNull(6, Types.BIGINT);
+            statement.setNull(7, Types.BIGINT);
+            if (expected != null) {
+                statement.setLong(8, expected);
+            }
+            return statement.executeUpdate() == 1;
+        }
+    }
+
+    /**
+     * {@link #saveInTransaction} in its own autocommit statement: an in-transaction subscription's save of a resume
+     * point that moved without a page (a watermark), still guarded by the expected value
+     */
+    boolean saveExpected(Key key, long resumeFrom, long resetEpoch, Long expected) throws SQLException {
+        try (var connection = dataSource.getConnection()) {
+            return saveInTransaction(connection, key, resumeFrom, resetEpoch, expected);
+        }
+    }
+
     Optional<Progress> read(Key key) throws SQLException {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(EventLogStorage.PROGRESS_READ)) {

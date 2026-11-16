@@ -109,6 +109,46 @@ class InboxTest {
         assertThat(inbox.consumerIdle()).isFalse();
     }
 
+    @Test
+    void counting_until_released_keeps_taken_events_counted_until_released() throws Exception {
+        var inbox = new Inbox(4, true);
+        assertThat(inbox.offer(batch(10, 1, 2, 3))).isEqualTo(Inbox.Offer.ACCEPTED);
+        assertThat(inbox.take(NOW).rows()).hasSize(3);
+        assertThat(inbox.events()).as("taken, held back, still counted").isEqualTo(3);
+        assertThat(inbox.offer(batch(10, 4, 5))).as("3 + 2 exceeds the bound though the inbox holds no batch").isEqualTo(Inbox.Offer.FULL);
+        inbox.release(2);
+        assertThat(inbox.events()).isEqualTo(1);
+        assertThat(inbox.offer(batch(10, 4, 5))).isEqualTo(Inbox.Offer.ACCEPTED);
+        assertThat(inbox.events()).isEqualTo(3);
+    }
+
+    @Test
+    void counting_until_released_still_accepts_watermark_only_batches_and_any_batch_once_everything_is_released() throws Exception {
+        var inbox = new Inbox(2, true);
+        inbox.offer(batch(2, 1, 2));
+        inbox.take(NOW);
+        assertThat(inbox.offer(batch(3))).as("full, but watermark-only").isEqualTo(Inbox.Offer.ACCEPTED);
+        assertThat(inbox.offer(batch(4, 3))).isEqualTo(Inbox.Offer.FULL);
+        inbox.release(2);
+        assertThat(inbox.offer(batch(9, 3, 4, 5, 6, 7))).as("nothing counted: any batch").isEqualTo(Inbox.Offer.ACCEPTED);
+    }
+
+    @Test
+    void release_is_a_no_op_once_closed_and_in_the_phase_3_mode() throws Exception {
+        var counting = new Inbox(10, true);
+        counting.offer(batch(2, 1, 2));
+        counting.close(Inbox.CloseReason.OVERFLOW);
+        counting.release(2);
+        assertThat(counting.events()).isZero();
+
+        var plain = new Inbox(10);
+        plain.offer(batch(2, 1, 2));
+        plain.release(1);
+        assertThat(plain.events()).isEqualTo(2);
+        plain.take(NOW);
+        assertThat(plain.events()).as("phase 3: a taken batch stops counting").isZero();
+    }
+
     private static Batch batch(long watermark, long... orders) {
         var rows = new ArrayList<StoredEvent>();
         for (var g : orders) {

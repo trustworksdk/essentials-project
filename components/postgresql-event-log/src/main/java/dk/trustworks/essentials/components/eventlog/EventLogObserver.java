@@ -107,4 +107,31 @@ public interface EventLogObserver {
      */
     default void onWaitingForWatermark(String subscriber, String aggregateType, boolean waiting, Set<String> heldBy) {
     }
+
+    /**
+     * An in-transaction page committed together with its resume point (phase 4 §3.3). Delivery thread.
+     *
+     * @param size events in the page
+     */
+    default void onPageCommitted(String subscriber, String aggregateType, int size) {
+    }
+
+    /**
+     * A page transaction rolled back (phase 4 §4). Delivery thread.
+     *
+     * @param size  events in the page
+     * @param cause what failed
+     */
+    default void onPageFailed(String subscriber, String aggregateType, int size, Throwable cause) {
+    }
+
+    /**
+     * {@code CONTIGUOUS}: rows moved to pending under a received watermark (phase 4 §2.2). Delivery thread.
+     *
+     * @param rows              rows released
+     * @param receivedWatermark the received watermark that covers them
+     * @param heldBack          rows still held back above it
+     */
+    default void onReleased(String subscriber, String aggregateType, int rows, long receivedWatermark, int heldBack) {
+    }
 }

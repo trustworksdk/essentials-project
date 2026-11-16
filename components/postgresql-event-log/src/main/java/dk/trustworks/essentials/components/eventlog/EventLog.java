@@ -49,7 +49,7 @@ public final class EventLog {
     private final EventLogObserver                                    observer;
     private final ProgressStore                                       progressStore;
     private final ReaderLoop                                          readerLoop;
-    private final List<FreshSubscription>                             subscriptions  = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final List<Subscription>                             subscriptions  = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile boolean                                          started;
 
     EventLog(DataSource dataSource, SchemaOwnership schemaOwnership, EventLogSchema.AggregateTypeDdlExecutor ddl, EventLogSettings settings, EventLogObserver observer) {
@@ -122,19 +122,35 @@ public final class EventLog {
      * @param startFrom the first {@code global_order} a new subscription receives; 1 for everything
      * @return the running subscription
      */
-    public FreshSubscription subscribe(String subscriber, String aggregateType, String instanceName, long startFrom, FreshSubscription.Handler handler) throws SQLException {
-        return subscribe(new FreshSubscription.SubscriptionSpec(new ProgressStore.Key(subscriber, aggregateType, instanceName), startFrom, handler, TestSeams.NONE));
+    public Subscription subscribe(String subscriber, String aggregateType, String instanceName, long startFrom, Subscription.Handler handler) throws SQLException {
+        return subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(subscriber, aggregateType, instanceName), startFrom, handler, TestSeams.NONE));
+    }
+
+    /**
+     * Start a phase-4 subscription whose pages are applied in the engine's transaction (design phase 4 §3.1): every page
+     * of at most {@link EventLogSettings#pageSize()} events runs in a transaction on a connection of this event log's
+     * {@code DataSource}, and its last statement moves the resume point, so the handler's writes and the progress commit
+     * together. Non-exclusive, backstop wake-up only. <b>Temporary</b>: the phase-8 subscription API replaces it.
+     *
+     * @param startFrom the first {@code global_order} a new subscription receives; 1 for everything
+     * @param mode      {@code CONTIGUOUS} (strict {@code global_order}, the view-projection default) or {@code FRESH}
+     * @return the running subscription
+     */
+    public Subscription subscribe(String subscriber, String aggregateType, String instanceName, long startFrom, Subscription.ConsistencyMode mode,
+                                  Subscription.PageHandler handler) throws SQLException {
+        return subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key(subscriber, aggregateType, instanceName), startFrom, mode, handler,
+                                                                     TestSeams.NONE));
     }
 
     /**
      * With test seams: package-private, for the invariant ITs
      */
-    FreshSubscription subscribe(FreshSubscription.SubscriptionSpec spec) throws SQLException {
+    Subscription subscribe(Subscription.SubscriptionSpec spec) throws SQLException {
         requireStarted();
         var aggregateType = spec.key().aggregateType();
         var type          = registered(aggregateType);
         var relation      = spec.seams().readTable() != null ? spec.seams().readTable() : type.tables.eventTable();
-        var subscription  = new FreshSubscription(spec, readerLoop, EventLogStorage.TailStatements.of(relation), rs -> read(aggregateType, rs), progressStore, settings,
+        var subscription  = new Subscription(spec, readerLoop, EventLogStorage.TailStatements.of(relation), rs -> read(aggregateType, rs), progressStore, settings,
                                                   observer);
         subscription.start();
         subscriptions.add(subscription);

@@ -33,6 +33,11 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *     <li>Otherwise a batch that would exceed the bound is refused: an overflow, after which the loop closes the inbox.</li>
  * </ul>
  * Once closed, an inbox accepts nothing and hands out nothing; what it held is discarded.
+ * <p>
+ * Phase 4 §2.3: an inbox created <b>counting until released</b> (for a {@code CONTIGUOUS} subscription) keeps counting
+ * an event after {@link #take(long)} hands its batch out, until the delivery thread calls {@link #release(int)} - when
+ * the row is applied, parked or dropped. Held-back rows thereby count against the bound, and a subscription that cannot
+ * release (behind a long writer) overflows and detaches instead of growing without bound.
  */
 final class Inbox {
     /** Why an inbox was closed: the detach causes of §3.6 */
@@ -59,6 +64,7 @@ final class Inbox {
     }
 
     private final int                    capacity;
+    private final boolean                countUntilReleased;
     private final ReentrantLock          lock     = new ReentrantLock();
     private final Condition              changed  = lock.newCondition();
     private final ArrayDeque<Batch>      batches  = new ArrayDeque<>();
@@ -70,8 +76,42 @@ final class Inbox {
      * @param capacity the bound in events ({@link EventLogSettings#subscriptionBufferSize()})
      */
     Inbox(int capacity) {
+        this(capacity, false);
+    }
+
+    /**
+     * @param capacity           the bound in events ({@link EventLogSettings#subscriptionBufferSize()})
+     * @param countUntilReleased {@code true}: an event counts from {@link #offer(Batch)} until {@link #release(int)}
+     *                           (phase 4 §2.3); {@code false}: until its batch is taken (phase 3)
+     */
+    Inbox(int capacity, boolean countUntilReleased) {
         requireTrue(capacity > 0, "capacity must be > 0");
         this.capacity = capacity;
+        this.countUntilReleased = countUntilReleased;
+    }
+
+    /**
+     * Counting until released only: {@code n} events taken earlier are applied, parked or dropped and stop counting.
+     * A no-op once closed.
+     */
+    void release(int n) {
+        requireTrue(n >= 0, "n must be >= 0");
+        if (!countUntilReleased || n == 0) {
+            return;
+        }
+        lock.lock();
+        try {
+            if (closed == null) {
+                events = Math.max(0, events - n);
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** @return whether this inbox counts an event until {@link #release(int)} */
+    boolean countsUntilReleased() {
+        return countUntilReleased;
     }
 
     /**
@@ -126,7 +166,9 @@ final class Inbox {
                 return null;
             }
             var batch = batches.pollFirst();
-            events -= batch.size();
+            if (!countUntilReleased) {
+                events -= batch.size();
+            }
             return batch;
         } finally {
             lock.unlock();
@@ -175,7 +217,7 @@ final class Inbox {
         }
     }
 
-    /** @return the events held, for the inbox-depth metric */
+    /** @return the events held (counting until released: and taken but not yet released), for the inbox-depth metric */
     int events() {
         lock.lock();
         try {

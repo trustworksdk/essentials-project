@@ -65,6 +65,15 @@ final class EventLogStorage {
     static final String PROGRESS_SAVE =
             "UPDATE " + PROGRESS_TABLE + " SET resume_from = ?, updated_at = now()\n" +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND reset_epoch = ? AND (?::bigint IS NULL OR lease_fence = ?::bigint)";
+    /**
+     * Phase 4 §3.3: the in-transaction progress update, last statement of a page transaction - {@link #PROGRESS_SAVE}
+     * plus a compare-and-set on the value this subscription last committed. Parameters as {@link #PROGRESS_SAVE}, then
+     * the expected {@code resume_from}
+     */
+    static final String PROGRESS_SAVE_EXPECTED =
+            "UPDATE " + PROGRESS_TABLE + " SET resume_from = ?, updated_at = now()\n" +
+                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND reset_epoch = ? AND (?::bigint IS NULL OR lease_fence = ?::bigint)\n" +
+                    "   AND resume_from = ?";
     static final String PROGRESS_READ =
             "SELECT resume_from, reset_epoch, consistency_mode, progress_model FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";
 

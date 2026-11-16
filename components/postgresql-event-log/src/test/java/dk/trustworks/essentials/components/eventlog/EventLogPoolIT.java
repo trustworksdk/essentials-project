@@ -57,7 +57,7 @@ class EventLogPoolIT extends AbstractSubscriptionIT {
     void twenty_subscriptions_on_a_pool_of_three_deliver_everything_and_hold_no_connection() throws Exception {
         commitAppend("before", 10);
         var recorders     = new ArrayList<Recorder>();
-        var subscriptions = new ArrayList<FreshSubscription>();
+        var subscriptions = new ArrayList<Subscription>();
         for (var i = 0; i < SUBSCRIPTIONS; i++) {
             var recorder = new Recorder();
             recorders.add(recorder);
@@ -72,10 +72,10 @@ class EventLogPoolIT extends AbstractSubscriptionIT {
             await().atMost(WAIT).untilAsserted(() -> assertThat(recorder.deliveredOrders()).containsAll(committed));
             assertThat(perAggregateOrderViolations(recorder.delivered)).isEmpty();
         }
-        awaitTrue(() -> subscriptions.stream().allMatch(FreshSubscription::isIdle));
+        awaitTrue(() -> subscriptions.stream().allMatch(Subscription::isIdle));
         assertThat(pool.getHikariPoolMXBean().getActiveConnections()).as("only the reader loop holds a connection while idle").isEqualTo(1);
 
-        subscriptions.forEach(FreshSubscription::stop);
+        subscriptions.forEach(Subscription::stop);
         assertThat(eventLog.readerLoop().awaitStopped(WAIT)).isTrue();
         assertThat(eventLog.readerLoop().isRunning()).isFalse();
         await().atMost(WAIT).until(() -> pool.getHikariPoolMXBean().getActiveConnections() == 0);

@@ -101,4 +101,33 @@ class HandledSetTest {
         assertThat(set.contains(12)).isFalse();
         assertThat(set.runCount()).isZero();
     }
+
+    @Test
+    void gaps_are_the_unhandled_ranges_between_the_prefix_and_the_highest_handled_order() {
+        var set = new HandledSet(10);
+        assertThat(set.gaps(10)).as("no run, no gap").isEmpty();
+        set.add(11);
+        assertThat(set.gaps(10)).as("a run adjacent to P leaves no gap").isEmpty();
+        set.add(13);
+        set.add(14);
+        set.add(20);
+        assertThat(set.highest()).isEqualTo(20);
+        assertThat(set.gaps(10)).containsExactly(new HandledSet.Gap(12, 12), new HandledSet.Gap(15, 19));
+        assertThat(set.gaps(10).getFirst().single()).isTrue();
+        assertThat(set.gaps(10).getLast().single()).isFalse();
+        set.add(12);
+        assertThat(set.gaps(10)).containsExactly(new HandledSet.Gap(15, 19));
+        set.advanceTo(16);
+        assertThat(set.gaps(10)).containsExactly(new HandledSet.Gap(17, 19));
+    }
+
+    @Test
+    void gaps_above_the_limit_are_not_listed() {
+        var set = new HandledSet(0);
+        set.add(2);
+        set.add(4);
+        set.add(6);
+        assertThat(set.gaps(3)).hasSize(3);
+        assertThat(set.gaps(2)).as("three gaps, limit 2: the bridge falls back to P").isNull();
+    }
 }

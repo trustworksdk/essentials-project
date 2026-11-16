@@ -62,7 +62,7 @@ class EventLogAttachIT extends AbstractSubscriptionIT {
         var shape    = longWriterShape();
         var recorder = new Recorder();
         var tested   = subscribe("tested", recorder, new TestSeams(Set.of(mutants), TestSeams.Hooks.NONE, null));
-        awaitTrue(() -> tested.phase() == FreshSubscription.Phase.ATTACHED);
+        awaitTrue(() -> tested.phase() == Subscription.Phase.ATTACHED);
         awaitDelivered(recorder, commitAppend("tail", 1));
         var missed = new TreeSet<>(shape.committedAboveWatermark);
         missed.removeAll(recorder.deliveredOrders());
@@ -100,7 +100,7 @@ class EventLogAttachIT extends AbstractSubscriptionIT {
             }
         };
         var tested = subscribe("tested", recorder, new TestSeams(Set.of(mutants), hooks, null));
-        awaitTrue(() -> tested.phase() == FreshSubscription.Phase.ATTACHED);
+        awaitTrue(() -> tested.phase() == Subscription.Phase.ATTACHED);
         awaitDelivered(recorder, commitAppend("tail", 1));
         shape.longWriter.rollback();
         assertThat(between.get()).as("the hook ran").isPositive();
@@ -225,7 +225,7 @@ class EventLogAttachIT extends AbstractSubscriptionIT {
             }
         };
         var tested = subscribe("tested", recorder, new TestSeams(Set.of(mutants), hooks, null));
-        awaitTrue(() -> tested.phase() == FreshSubscription.Phase.ATTACHED);
+        awaitTrue(() -> tested.phase() == Subscription.Phase.ATTACHED);
         awaitDelivered(recorder, commitAppend("tail", 1));
         awaitTrue(tested::isIdle);
         assertThat(committed).isTrue();
@@ -264,7 +264,7 @@ class EventLogAttachIT extends AbstractSubscriptionIT {
         commitAppend("above", 2);
         var recorder = new Recorder();
         var tested   = subscribe("tested", recorder, mutants);
-        awaitTrue(() -> tested.phase() == FreshSubscription.Phase.WAITING_FOR_WATERMARK || tested.phase() == FreshSubscription.Phase.ATTACHED);
+        awaitTrue(() -> tested.phase() == Subscription.Phase.WAITING_FOR_WATERMARK || tested.phase() == Subscription.Phase.ATTACHED);
         awaitReads(3);
         var attaches = reads.attaches.get();
         held.commit();

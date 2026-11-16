@@ -70,7 +70,7 @@ class EventLogDetachIT extends AbstractSubscriptionIT {
             }
         };
         var savedBeforeSecond = new java.util.concurrent.atomic.AtomicReference<List<Long>>(List.of());
-        FreshSubscription.Handler handler = event -> {
+        Subscription.Handler handler = event -> {
             // Saves run on this (the delivery) thread: every save made before g2 is handled is in the list now
             if (event.aggregateId().equals("burst") && event.eventOrder() == 1 && !recorder.deliveredOrder(event.globalOrder())) {
                 savedBeforeSecond.set(List.copyOf(reads.saves));
@@ -111,7 +111,7 @@ class EventLogDetachIT extends AbstractSubscriptionIT {
         var first        = commitAppend("A", 3);
         awaitDelivered(recorder, first, first + 1, first + 2);
         await().atMost(WAIT).until(() -> savedResumeFrom("sub") == first + 3);
-        awaitTrue(() -> subscription.phase() == FreshSubscription.Phase.ATTACHED);
+        awaitTrue(() -> subscription.phase() == Subscription.Phase.ATTACHED);
         execute("UPDATE " + EventLogSchema.PROGRESS_TABLE + " SET reset_epoch = reset_epoch + 1, resume_from = " + first);
         var next = commitAppend("A", 1);
         await().atMost(Duration.ofSeconds(30)).until(() -> recorder.delivered.stream().filter(e -> e.globalOrder() == first).count() == 2);
@@ -123,5 +123,53 @@ class EventLogDetachIT extends AbstractSubscriptionIT {
         assertThat(reads.detachReasons).contains(Inbox.CloseReason.RESET.name());
         assertThat(queryLong("SELECT reset_epoch FROM " + EventLogSchema.PROGRESS_TABLE)).isEqualTo(1);
         await().atMost(WAIT).until(() -> savedResumeFrom("sub") == next + 1);
+    }
+
+    // ---- phase 4 §5.3: the FRESH bridge starts above the highest handled order ----
+
+    @Test
+    void after_an_overflow_the_bridge_starts_above_the_highest_handled_order_and_re_reads_the_gaps() throws Exception {
+        var result = lateCommitDiscardedByAnOverflow();
+        assertThat(result.lateDeliveries).as("the late commit, discarded with the inbox, delivered once").isEqualTo(1);
+        assertThat(result.droppedAsHandled).as("bridge rows dropped as already handled").isZero();
+    }
+
+    @Test
+    void must_fail_a_bridge_from_the_highest_handled_order_without_the_gaps_loses_the_late_commit() throws Exception {
+        assertThat(lateCommitDiscardedByAnOverflow(WatermarkMutant.BRIDGE_FROM_HIGHEST_WITHOUT_GAPS).lateDeliveries).isZero();
+    }
+
+    private record LateCommitResult(long lateDeliveries, long droppedAsHandled) {
+    }
+
+    /**
+     * Buffer 10, tail page 5. {@code g0} and {@code g1} are held open; five events above them are handled. The handler
+     * blocks on the next event; {@code g1} commits, and its late row sits in the inbox until fifteen more events overflow
+     * it. Released, the subscription detaches with {@code g1} unhandled below the highest handled order, and {@code g0}
+     * still holding the watermark below both.
+     */
+    private LateCommitResult lateCommitDiscardedByAnOverflow(WatermarkMutant... mutants) throws Exception {
+        restartEventLog(dataSource, FAST.withTailPageSize(5).withSubscriptionBufferSize(10));
+        var recorder     = new Recorder();
+        var subscription = subscribe("sub", recorder, mutants);
+        awaitTrue(subscription::isIdle);
+        openAppend("A", 1);
+        var late = openAppend("B", 1);
+        var g2   = commitAppend("C", 5);
+        awaitDelivered(recorder, g2, g2 + 4);
+        recorder.blockAtAggregate = "D";
+        commitAppend("D", 1);
+        assertThat(recorder.blocked.await(30, TimeUnit.SECONDS)).isTrue();
+        late.commit();
+        awaitOffered(late.globalOrder());
+        var gE = commitAppend("E", 15);
+        awaitOffered(gE + 14);
+        assertThat(subscription.inbox().closeReason()).isEqualTo(Inbox.CloseReason.OVERFLOW);
+        recorder.blockAtAggregate = null;
+        recorder.release.countDown();
+        awaitDelivered(recorder, gE + 14);
+        deliveredWithin(recorder, late.globalOrder());
+        var lateDeliveries = recorder.delivered.stream().filter(e -> e.globalOrder() == late.globalOrder()).count();
+        return new LateCommitResult(lateDeliveries, subscription.bridgeRowsDroppedAsHandled());
     }
 }

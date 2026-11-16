@@ -60,7 +60,7 @@ class EventLogReaderRestartIT extends AbstractSubscriptionIT {
         var above = commitAppend("above", 2);
         awaitDelivered(first, above, above + 1);
         awaitDelivered(second, above, above + 1);
-        awaitTrue(() -> s1.phase() == FreshSubscription.Phase.ATTACHED && s2.phase() == FreshSubscription.Phase.ATTACHED);
+        awaitTrue(() -> s1.phase() == Subscription.Phase.ATTACHED && s2.phase() == Subscription.Phase.ATTACHED);
         var before = eventLog.reader(TYPE);
         terminateReaderBackend();
         awaitTrue(() -> eventLog.reader(TYPE) != null && eventLog.reader(TYPE) != before);

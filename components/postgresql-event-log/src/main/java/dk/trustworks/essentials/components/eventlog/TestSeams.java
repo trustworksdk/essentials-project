@@ -42,6 +42,17 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         return mutants.contains(mutant);
     }
 
+    /**
+     * Thrown by a hook to end the delivery thread as a lost JVM would: no further statement, no rollback, no close, no
+     * final save. The IT then terminates the open page connection's backend ({@link Subscription#openPageConnection()}),
+     * so the transaction dies with it (design phase 4 §8).
+     */
+    static final class Crash extends RuntimeException {
+        Crash(String where) {
+            super("Test crash at " + where, null, false, false);
+        }
+    }
+
     interface Hooks {
         Hooks NONE = new Hooks() {
         };
@@ -79,6 +90,36 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
 
         /** Delivery thread: the subscription detached and catches up from {@code resumeFrom} */
         default void onDetach(String subscriber, String reason, long resumeFrom) throws Exception {
+        }
+
+        // ---- phase 4 (§8): delivery thread ----
+
+        /** Before a catch-up read ({@code deferred = false}) or a {@code CONTIGUOUS} deferred-bridge read ({@code true}) */
+        default void beforeDeliveryRead(String subscriber, boolean deferred) throws Exception {
+        }
+
+        /** The page transaction is open; the handler is about to run on {@code page} */
+        default void beforePageHandler(String subscriber, List<StoredEvent> page) throws Exception {
+        }
+
+        /** The handler returned; the progress update is next */
+        default void afterHandlerBeforeProgress(String subscriber, List<StoredEvent> page) throws Exception {
+        }
+
+        /** The progress update ran (in the page transaction); the commit is next */
+        default void afterProgressBeforeCommit(String subscriber, List<StoredEvent> page, long resumeFrom) throws Exception {
+        }
+
+        /** The page transaction committed; the applied prefix is not yet moved in memory */
+        default void afterCommit(String subscriber, List<StoredEvent> page, long resumeFrom) throws Exception {
+        }
+
+        /** {@code CONTIGUOUS}: {@code rows} reach pending, justified by the received watermark {@code receivedWatermark} */
+        default void onRelease(String subscriber, List<StoredEvent> rows, long receivedWatermark) throws Exception {
+        }
+
+        /** An event is parked ({@code blockedBy} null) or held behind a parked head (unit B) */
+        default void onPark(String subscriber, long globalOrder, Long blockedBy) throws Exception {
         }
     }
 }

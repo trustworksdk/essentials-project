@@ -15,7 +15,7 @@
  */
 package dk.trustworks.essentials.components.eventlog;
 
-import java.util.TreeMap;
+import java.util.*;
 
 /**
  * What one subscription has handled (design phase 3 §3.2): a prefix {@code P} - every existing order at or below it is
@@ -113,5 +113,36 @@ final class HandledSet {
     /** @return the highest order handled, {@code P} if no run is held */
     long highest() {
         return runs.isEmpty() ? prefix : runs.lastEntry().getValue();
+    }
+
+    /**
+     * An unhandled range between {@code P} and the highest handled order, both ends inclusive
+     */
+    record Gap(long low, long high) {
+        boolean single() {
+            return low == high;
+        }
+    }
+
+    /**
+     * The unhandled ranges between {@code P} and {@link #highest()} (design phase 4 §5.3): what a {@code FRESH} bridge
+     * that starts above the highest handled order must re-read on every page
+     *
+     * @param limit most gaps to return
+     * @return the gaps in order, or {@code null} if there are more than {@code limit}
+     */
+    List<Gap> gaps(int limit) {
+        if (runs.size() > limit) {
+            return null;
+        }
+        var gaps = new ArrayList<Gap>(runs.size());
+        var from = prefix + 1;
+        for (var run : runs.entrySet()) {
+            if (run.getKey() > from) {
+                gaps.add(new Gap(from, run.getKey() - 1));
+            }
+            from = run.getValue() + 1;
+        }
+        return gaps;
     }
 }
