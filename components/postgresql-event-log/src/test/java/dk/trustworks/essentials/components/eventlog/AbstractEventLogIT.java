@@ -30,8 +30,26 @@ import java.util.*;
  */
 @Testcontainers
 abstract class AbstractEventLogIT {
+    /**
+     * Overrides the PostgreSQL image of every IT of this module, e.g. {@code -Deventlog.it.image=postgres:16.15}, to run
+     * them against another supported major (phase 7 §12: 16, 17 and 18). Unset: {@link EssentialsTestContainers#POSTGRES_IMAGE}
+     */
+    static final String IMAGE_PROPERTY = "eventlog.it.image";
+
     @Container
-    static final PostgreSQLContainer postgres = EssentialsTestContainers.postgres();
+    static final PostgreSQLContainer postgres = postgresContainer();
+
+    private static PostgreSQLContainer postgresContainer() {
+        var image = System.getProperty(IMAGE_PROPERTY, "");
+        if (image.isBlank()) {
+            return EssentialsTestContainers.postgres();
+        }
+        var defaults = EssentialsTestContainers.postgres();
+        return new PostgreSQLContainer(org.testcontainers.utility.DockerImageName.parse(image).asCompatibleSubstituteFor("postgres"))
+                .withDatabaseName(defaults.getDatabaseName())
+                .withUsername(defaults.getUsername())
+                .withPassword(defaults.getPassword());
+    }
 
     protected PGSimpleDataSource dataSource;
 

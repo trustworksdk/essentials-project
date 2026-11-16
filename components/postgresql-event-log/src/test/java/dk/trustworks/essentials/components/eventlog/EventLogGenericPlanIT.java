@@ -53,6 +53,24 @@ class EventLogGenericPlanIT extends AbstractEventLogIT {
         }
     }
 
+    /**
+     * Phase 7 §5: the keeper's batched claim and renewal reach {@code el_progress} through its primary key under a
+     * generic plan, never by scanning the table (§10.2's guard against a renewal that walks the table)
+     */
+    @Test
+    void the_lease_claim_and_renewal_reach_the_progress_table_by_its_primary_key() throws SQLException {
+        execute("INSERT INTO " + EventLogSchema.PROGRESS_TABLE + " (subscriber, aggregate_type, instance_name, exclusive, consistency_mode, progress_model, resume_from, " +
+                        "lease_owner, lease_until, lease_fence) SELECT 's' || n, 'Orders', '', true, 'FRESH', 'PERIODIC', 1, 'owner', now(), n FROM generate_series(1, 50000) n");
+        execute("ANALYZE " + EventLogSchema.PROGRESS_TABLE);
+        for (var entry : Map.of("LEASE_CLAIM", EventLogStorage.LEASE_CLAIM, "LEASE_RENEW", EventLogStorage.LEASE_RENEW).entrySet()) {
+            var plan  = genericPlan(entry.getValue());
+            var scans = plan.stream().filter(line -> line.contains(" on " + EventLogSchema.PROGRESS_TABLE) && !line.trim().startsWith("Update on")).toList();
+            assertThat(scans).as("%s's generic plan:%n%s", entry.getKey(), String.join("\n", plan))
+                             .isNotEmpty()
+                             .allMatch(line -> line.contains("Index Scan") && line.contains(EventLogSchema.PROGRESS_TABLE + "_pkey"));
+        }
+    }
+
     @Test
     void control_the_or_form_walks_the_primary_key_under_a_generic_plan() throws SQLException {
         var or = "SELECT global_order FROM " + tables.eventTable() + " WHERE global_order > ? OR global_order = ANY(?::bigint[]) ORDER BY global_order LIMIT ?";
