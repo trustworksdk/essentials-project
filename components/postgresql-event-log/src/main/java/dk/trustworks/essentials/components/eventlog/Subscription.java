@@ -135,6 +135,10 @@ public final class Subscription {
     /** Where the delivery thread is in the lifecycle (§3.1); for tests and diagnostics */
     enum Phase {
         STARTING,
+        /** Exclusive (phase 7 §2): waiting for the lease keeper to claim the lease; not joined to the reader */
+        STANDBY,
+        /** Exclusive: past the local deadline without a confirmed renewal; no handler call, no page (§2.4) */
+        SUSPENDED,
         CATCHING_UP,
         WAITING_FOR_WATERMARK,
         ATTACHING,
@@ -222,9 +226,30 @@ public final class Subscription {
     /** Consecutive I/O failures of pages, for the backoff */
     private int                                  ioFailures;
     private final Queue<ParkedRequest>           parkedRequests = new ConcurrentLinkedQueue<>();
+    // ---- phase 7: exclusive subscriptions; both null for a non-exclusive one ----
+    private final Lease                          lease;
+    private final LeaseKeeper                    keeper;
+    /** The fence (and owner) of the claim this incarnation delivers under; {@code null} while standby. Delivery thread */
+    private volatile ProgressStore.Fence         ownedFence;
+    /** The lifecycle ended because the lease was lost. Delivery thread */
+    private boolean                              leaseLost;
 
     Subscription(SubscriptionSpec spec, ReaderLoop loop, EventLogStorage.TailStatements statements, TailReader.RowMapper mapper, ProgressStore progress,
                  EventLogSettings settings, EventLogObserver observer, CatchUpContext catchUp) {
+        this(spec, loop, statements, mapper, progress, settings, observer, catchUp, null, null);
+    }
+
+    /**
+     * @param lease  the exclusive subscription's lease (phase 7), {@code null} for a non-exclusive one
+     * @param keeper the event log's lease keeper, with {@code lease}
+     */
+    Subscription(SubscriptionSpec spec, ReaderLoop loop, EventLogStorage.TailStatements statements, TailReader.RowMapper mapper, ProgressStore progress,
+                 EventLogSettings settings, EventLogObserver observer, CatchUpContext catchUp, Lease lease, LeaseKeeper keeper) {
+        if (spec.exclusive() != (lease != null) || (lease == null) != (keeper == null)) {
+            throw new IllegalArgumentException("An exclusive subscription needs a lease and a keeper, a non-exclusive one neither");
+        }
+        this.lease = lease;
+        this.keeper = keeper;
         this.key = spec.key();
         this.filter = spec.filter();
         this.filtered = !spec.filter().matchesAll();
@@ -267,7 +292,7 @@ public final class Subscription {
      * {@link ProgressModel#IN_HANDLER_TRANSACTION}) and its test seams
      */
     record SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, ProgressModel model, Handler handler, PageHandler pageHandler,
-                            TestSeams seams, EventTypeFilter filter) {
+                            TestSeams seams, EventTypeFilter filter, boolean exclusive) {
         SubscriptionSpec {
             requireNonNull(key, "No key provided");
             requireNonNull(filter, "No filter provided");
@@ -282,6 +307,18 @@ public final class Subscription {
             if (initialResumeFrom < 1) {
                 throw new IllegalArgumentException("initialResumeFrom must be >= 1");
             }
+            // Phase 7 §4: the two kinds never share a key
+            if (exclusive && !key.instanceName().isEmpty()) {
+                throw new IllegalArgumentException("An exclusive subscription has the instance name '', not '" + key.instanceName() + "'");
+            }
+            if (!exclusive && key.instanceName().isBlank()) {
+                throw new IllegalArgumentException("A non-exclusive subscription needs a non-blank instance name");
+            }
+        }
+
+        SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, ProgressModel model, Handler handler, PageHandler pageHandler,
+                         TestSeams seams, EventTypeFilter filter) {
+            this(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, false);
         }
 
         /** Phase 2's and 3's subscription: {@code FRESH}, periodic */
@@ -291,7 +328,12 @@ public final class Subscription {
 
         /** @return this spec with the event-type filter {@code filter} (phase 5 §1.2) */
         SubscriptionSpec withFilter(EventTypeFilter filter) {
-            return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter);
+            return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive);
+        }
+
+        /** @return this spec as an exclusive subscription (phase 7), keyed by instance name {@code ""} */
+        SubscriptionSpec asExclusive() {
+            return new SubscriptionSpec(new ProgressStore.Key(key.subscriber(), key.aggregateType(), ""), initialResumeFrom, mode, model, handler, pageHandler, seams, filter, true);
         }
 
         static SubscriptionSpec periodic(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, Handler handler, TestSeams seams) {
@@ -433,22 +475,38 @@ public final class Subscription {
     private void run() {
         try {
             try {
-                var row = progress.start(key, false, mode.name(), model.name(), initialResumeFrom);
-                resetEpoch = row.resetEpoch();
-                lastSaved = row.resumeFrom();
-                lastSaveNanos = System.nanoTime();
-                positionAt(row.resumeFrom());
-                loadParked();
-                type = loop.join(key.aggregateType(), statements, mapper, seams);
+                if (lease == null) {
+                    var row = progress.start(key, false, mode.name(), model.name(), initialResumeFrom);
+                    resetEpoch = row.resetEpoch();
+                    lastSaved = row.resumeFrom();
+                    lastSaveNanos = System.nanoTime();
+                    positionAt(row.resumeFrom());
+                    loadParked();
+                    type = loop.join(key.aggregateType(), statements, mapper, seams);
+                } else {
+                    // Phase 7 §4: never flip a stored row's kind; a standby never writes the row
+                    var row = progress.read(key);
+                    if (row.isPresent() && !row.get().exclusive()) {
+                        throw new IllegalStateException("Subscription " + key.subscriber() + " on " + key.aggregateType() + " (instance '') is stored as non-exclusive and " +
+                                                                "cannot start as exclusive");
+                    }
+                    lease.rowSeen(row.isPresent());
+                    phase = Phase.STANDBY;
+                    keeper.register(lease);
+                }
             } catch (Throwable e) {
                 startFailure = e;
                 return;
             } finally {
                 started.countDown();
             }
-            log.info("Subscription {} on {} (instance '{}', {}, {}) started from {}", key.subscriber(), key.aggregateType(), key.instanceName(), mode, model,
-                     resumePoint());
-            lifecycle();
+            if (lease == null) {
+                log.info("Subscription {} on {} (instance '{}', {}, {}) started from {}", key.subscriber(), key.aggregateType(), key.instanceName(), mode, model,
+                         resumePoint());
+                lifecycle();
+            } else {
+                ownership();
+            }
         } finally {
             phase = Phase.STOPPED;
             if (permitHeld) {
@@ -462,7 +520,11 @@ public final class Subscription {
             if (!crashed && startFailure == null) {
                 Thread.interrupted();
                 try {
-                    saveProgressNow();
+                    if (lease == null) {
+                        saveProgressNow();
+                    } else {
+                        releaseLease();
+                    }
                 } catch (Exception e) {
                     log.warn("Final progress save of {} failed", key, e);
                 }
@@ -470,7 +532,261 @@ public final class Subscription {
             if (type != null) {
                 loop.leave(type, current);
             }
+            if (lease != null) {
+                lease.close();
+                keeper.unregister(lease);
+            }
         }
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // Phase 7: ownership of an exclusive subscription (design phase 7 §2)
+    // ---------------------------------------------------------------------------------------------------------------
+
+    /** Thrown on the delivery thread when the lease is lost (or, {@code fatal}, the row is gone): unwinds to {@link #ownership()} */
+    static final class LeaseLostException extends RuntimeException {
+        final boolean fatal;
+
+        LeaseLostException(boolean fatal) {
+            super(fatal ? "The progress row of an exclusive subscription is gone" : "The lease was lost", null, false, false);
+            this.fatal = fatal;
+        }
+    }
+
+    /**
+     * Await ownership, deliver while owner, and on a loss leave the reader and await it again (§2.4)
+     */
+    private void ownership() {
+        while (running) {
+            phase = Phase.STANDBY;
+            Lease.Claim claim;
+            try {
+                claim = lease.awaitClaim();
+            } catch (InterruptedException e) {
+                return;
+            }
+            if (claim == null || !running) {
+                return;
+            }
+            leaseLost = false;
+            try {
+                adopt(claim);
+            } catch (LeaseLostException e) {
+                leaseLost = true;
+            } catch (Exception e) {
+                if (!running) {
+                    return;
+                }
+                observer.onError(key.subscriber(), key.aggregateType(), e);
+                log.warn("Exclusive subscription {} on {}: starting delivery under fence {} failed; releasing the lease", key.subscriber(), key.aggregateType(),
+                         claim.fence(), e);
+                try {
+                    progress.release(key, null, null, ownedFence);
+                } catch (Exception again) {
+                    log.debug("Releasing the lease of {} failed", key, again);
+                }
+                lease.lost("start-up failed");
+                leaveAfterLoss();
+                sleepQuietly(settings.backstopInterval());
+                continue;
+            }
+            if (!leaseLost) {
+                lifecycle();
+            }
+            if (!leaseLost) {
+                return;
+            }
+            if (ownedFence == null && !running) {
+                return;
+            }
+            leaveAfterLoss();
+        }
+    }
+
+    private static void sleepQuietly(Duration duration) {
+        try {
+            Thread.sleep(duration);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** §2.2: after a claim, what {@link #run()} does after a start - position at the row's resume point, load parked, join */
+    private void adopt(Lease.Claim claim) throws Exception {
+        ownedFence = new ProgressStore.Fence(claim.fence(), lease.owner());
+        resetEpoch = claim.resetEpoch();
+        lastSaved = claim.resumeFrom();
+        lastSaveNanos = System.nanoTime();
+        if (!mode.name().equals(claim.consistencyMode()) || !model.name().equals(claim.progressModel())) {
+            log.warn("Exclusive subscription {} on {} was stored as {}/{} and now runs as {}/{} under fence {}; the progress row is updated", key.subscriber(),
+                     key.aggregateType(), claim.consistencyMode(), claim.progressModel(), mode, model, claim.fence());
+            if (!progress.setMode(key, mode.name(), model.name(), resetEpoch, boundFence())) {
+                onProgressConflict();
+            }
+        }
+        var resumeFrom = repositionTo != null ? repositionTo : lastSaved;
+        repositionTo = null;
+        positionAt(resumeFrom);
+        loadParked();
+        type = loop.join(key.aggregateType(), statements, mapper, seams);
+        log.info("Exclusive subscription {} on {} ({}, {}) claimed with fence {} by {}; delivering from {}", key.subscriber(), key.aggregateType(), mode, model,
+                 claim.fence(), lease.owner(), resumePoint());
+    }
+
+    /**
+     * §2.4 {@code LOST}: close the inbox, leave the reader, drop pending, held-back and parked state, and go back to
+     * standby - no save, no retry of the failed write, no release
+     */
+    private void leaveAfterLoss() {
+        var current = inbox;
+        inbox = null;
+        if (current != null) {
+            current.close(Inbox.CloseReason.STOPPED);
+        }
+        if (type != null) {
+            loop.leave(type, current);
+            type = null;
+        }
+        ownedFence = null;
+        positionAt(lastSaved);
+        parked.clear();
+        repositionTo = null;
+        leaseLost = false;
+        lease.standby();
+        phase = Phase.STANDBY;
+    }
+
+    /** The final write on stop (§2.5): a periodic owner saves and releases in one statement, an in-transaction one releases */
+    private void releaseLease() throws SQLException {
+        var fence = ownedFence;
+        if (fence == null || lease.state() == Lease.State.LOST) {
+            return;
+        }
+        var resume = model == ProgressModel.PERIODIC ? (Long) resumePoint() : null;
+        var epoch  = seams.has(RELEASE_WRITES_ANY_EPOCH) ? null : (Long) resetEpoch;
+        if (progress.release(key, resume, epoch, fence)) {
+            if (resume != null && resume != lastSaved) {
+                lastSaved = resume;
+                observer.onProgressSaved(key.subscriber(), key.aggregateType(), resume);
+            }
+            log.info("Exclusive subscription {} on {} released its lease (fence {})", key.subscriber(), key.aggregateType(), fence.fence());
+        } else {
+            log.info("Exclusive subscription {} on {}: the release under fence {} matched nothing; the lease had moved", key.subscriber(), key.aggregateType(),
+                     fence.fence());
+        }
+        ownedFence = null;
+    }
+
+    /** The fence a write binds: {@code null} for a non-exclusive subscription (and under the test mutants) */
+    private ProgressStore.Fence boundFence() {
+        if (lease == null) {
+            return null;
+        }
+        var fence = ownedFence;
+        if (fence == null) {
+            throw new LeaseLostException(false);
+        }
+        if (seams.has(UNFENCED_SAVE)) {
+            return null;
+        }
+        return seams.has(FENCE_WITHOUT_OWNER) ? fence.withoutOwner() : fence;
+    }
+
+    /** The epoch a save binds: {@code null} only under mutant {@link WatermarkMutant#SAVE_WITHOUT_EPOCH} */
+    private Long boundEpoch() {
+        return seams.has(SAVE_WITHOUT_EPOCH) ? null : (Long) resetEpoch;
+    }
+
+    /** A lost lease ends the lifecycle wherever the delivery thread is idle (§2.4, plan §9 "lost lease leaves the reader") */
+    private void checkLost() {
+        if (lease != null && (ownedFence == null || lease.state() == Lease.State.LOST)) {
+            throw new LeaseLostException(false);
+        }
+    }
+
+    /**
+     * §2.4: before a handler call, a periodic save or park, or a page. Lost: unwind. Past the local deadline: suspend,
+     * and wait until the keeper confirms the lease again or reports it lost
+     */
+    private void ownerCheck() throws InterruptedException {
+        if (lease == null) {
+            return;
+        }
+        checkLost();
+        if (seams.has(NO_LOCAL_DEADLINE)) {
+            return;
+        }
+        if (lease.suspendIfPastDeadline()) {
+            log.warn("Exclusive subscription {} on {}: no lease renewal confirmed within {}; delivery is suspended", key.subscriber(), key.aggregateType(),
+                     settings.leaseLocalStop());
+            observer.onLeaseSuspended(key.subscriber(), key.aggregateType());
+        }
+        if (lease.state() != Lease.State.SUSPENDED) {
+            return;
+        }
+        var before = phase;
+        phase = Phase.SUSPENDED;
+        try {
+            while (running) {
+                var state = lease.awaitNotSuspended(settings.backstopInterval().toNanos());
+                if (state == Lease.State.LOST) {
+                    throw new LeaseLostException(false);
+                }
+                if (state != Lease.State.SUSPENDED) {
+                    log.info("Exclusive subscription {} on {}: lease confirmed again; delivery resumes", key.subscriber(), key.aggregateType());
+                    observer.onLeaseResumed(key.subscriber(), key.aggregateType());
+                    return;
+                }
+                if (lease.closed()) {
+                    return;
+                }
+            }
+        } finally {
+            phase = before;
+        }
+    }
+
+    /** @return the lease of an exclusive subscription, {@code null} for a non-exclusive one; for tests */
+    Lease lease() {
+        return lease;
+    }
+
+    /** §2.6's decision on a fenced write that updated nothing, in order */
+    enum ConflictDecision {
+        /** Non-exclusive, row gone: recreate it (phase 4) */
+        RECREATE,
+        /** Exclusive, row gone: stop with an error, never recreate (it would lose the resume point) */
+        STOP,
+        /** Exclusive, fence or owner differs: ownership moved */
+        LOST,
+        /** The epoch moved: a superseding reset, reposition */
+        RESET,
+        /** {@code resume_from} moved under the same epoch (and fence): another writer, reposition and log at error */
+        MOVED,
+        /** Nothing visible differs any more: the next write tries again */
+        NONE
+    }
+
+    /**
+     * Phase 7 §2.6, as a pure function of the row read after the zero-row write
+     *
+     * @param fence the fence this incarnation delivers under; {@code null} for a non-exclusive subscription
+     */
+    static ConflictDecision decide(boolean exclusive, Optional<ProgressStore.Progress> row, long resetEpoch, long lastSaved, ProgressStore.Fence fence) {
+        if (row.isEmpty()) {
+            return exclusive ? ConflictDecision.STOP : ConflictDecision.RECREATE;
+        }
+        var stored = row.get();
+        if (exclusive && (fence == null || !Objects.equals(stored.leaseFence(), fence.fence()) || !Objects.equals(stored.leaseOwner(), fence.owner()))) {
+            return ConflictDecision.LOST;
+        }
+        if (stored.resetEpoch() != resetEpoch) {
+            return ConflictDecision.RESET;
+        }
+        if (stored.resumeFrom() != lastSaved) {
+            return ConflictDecision.MOVED;
+        }
+        return ConflictDecision.NONE;
     }
 
     /** Start over at {@code resumeFrom}: nothing received, nothing pending */
@@ -529,6 +845,9 @@ public final class Subscription {
                 log.info("Subscription {} on {}: {}", key.subscriber(), key.aggregateType(), e.getMessage());
                 crashed = true;
                 running = false;
+                return;
+            } catch (LeaseLostException e) {
+                leaseLost = true;
                 return;
             } catch (InterruptedException e) {
                 return;
@@ -673,6 +992,7 @@ public final class Subscription {
      * WaitingForWatermark (§3.1): read nothing until the type's watermark may have changed (F4, decision 2)
      */
     private void waitForWatermark(long version, TailReader.State state) throws Exception {
+        checkLost();
         phase = Phase.WAITING_FOR_WATERMARK;
         if (state != null && state.watermark() == null && unknownSinceNanos == null) {
             unknownSinceNanos = System.nanoTime();
@@ -884,6 +1204,7 @@ public final class Subscription {
         var poll = settings.backstopInterval().toNanos();
         while (running && repositionTo == null) {
             iterations++;
+            checkLost();
             serveParkedRequests();
             if (repositionTo != null) {
                 return;
@@ -1013,6 +1334,7 @@ public final class Subscription {
         var poll = settings.backstopInterval().toNanos();
         while (running && repositionTo == null) {
             iterations++;
+            checkLost();
             serveParkedRequests();
             if (repositionTo != null) {
                 return;
@@ -1246,7 +1568,9 @@ public final class Subscription {
         }
         if (park != null) {
             var rows = List.of(park);
-            parked.insertNow(rows);
+            if (!parkNow(park)) {
+                return false;
+            }
             seams.hooks().onPark(key.subscriber(), park.globalOrder(), park.blockedBy());
             afterParked(rows);
         }
@@ -1259,6 +1583,33 @@ public final class Subscription {
         }
         maybeSave();
         return true;
+    }
+
+    /**
+     * The periodic park insert (phase 7 §3.3): guarded by the epoch and, exclusive, the lease; a guard that matches
+     * nothing is a zero-row write (§2.6), and the event does not count as handled
+     *
+     * @return {@code true} once the row is parked (or found parked); {@code false} if stopped or repositioning
+     */
+    private boolean parkNow(ParkedEvents.Row park) throws Exception {
+        while (true) {
+            ownerCheck();
+            if (!running) {
+                return false;
+            }
+            seams.hooks().beforePeriodicPark(key.subscriber(), park.globalOrder());
+            if (seams.has(UNGUARDED_PERIODIC_PARK)) {
+                parked.insertNow(List.of(park));
+                return true;
+            }
+            if (parked.insertGuarded(park, resetEpoch, boundFence())) {
+                return true;
+            }
+            onProgressConflict();
+            if (repositionTo != null) {
+                return false;
+            }
+        }
     }
 
     /** What became of a {@link ProgressModel#PERIODIC} event: stopped, handled ({@code park} null) or to be parked */
@@ -1277,8 +1628,19 @@ public final class Subscription {
             if (!running) {
                 return Outcome.STOPPED;
             }
+            ownerCheck();
+            if (!running) {
+                return Outcome.STOPPED;
+            }
+            seams.hooks().beforeHandler(key.subscriber(), event);
             try {
                 handler.handle(event);
+                if (lease != null) {
+                    var overrun = lease.nanosPastDeadline();
+                    if (overrun > 0) {
+                        observer.onLeaseOverrun(key.subscriber(), key.aggregateType(), overrun);
+                    }
+                }
             } catch (InterruptedException e) {
                 throw e;
             } catch (Exception e) {
@@ -1425,12 +1787,23 @@ public final class Subscription {
         }
         var hooks      = seams.hooks();
         var subscriber = key.subscriber();
+        ownerCheck();
+        if (!running) {
+            return false;
+        }
         Connection connection = null;
         var        inHandler  = false;
         try {
             connection = loop.dataSource().getConnection();
             openPageConnection = connection;
             connection.setAutoCommit(false);
+            if (lease != null) {
+                // §7, decision 6: a dead owner's open page cannot hold the progress row past one lease
+                try (var statement = connection.prepareStatement(EventLogStorage.PAGE_IDLE_TIMEOUT)) {
+                    statement.setString(1, settings.leaseDuration().toMillis() + "ms");
+                    statement.execute();
+                }
+            }
             hooks.beforePageHandler(subscriber, handlerPage);
             if (!handlerPage.isEmpty()) {
                 inHandler = true;
@@ -1447,13 +1820,25 @@ public final class Subscription {
             if (seams.has(PROGRESS_AFTER_COMMIT)) {
                 connection.commit();
                 hooks.afterHandlerBeforeProgress(subscriber, handlerPage);
-                saved = progress.saveExpected(key, resumeFrom, resetEpoch, expected);
+                saved = progress.saveExpected(key, resumeFrom, boundEpoch(), boundFence(), expected);
                 hooks.afterProgressBeforeCommit(subscriber, handlerPage, resumeFrom);
             } else {
                 hooks.afterHandlerBeforeProgress(subscriber, handlerPage);
-                saved = ProgressStore.saveInTransaction(connection, key, resumeFrom, resetEpoch, expected);
+                if (lease != null && seams.has(FENCE_READ_BEFORE_WRITE)) {
+                    saved = ProgressStore.fenceMatches(connection, key, ownedFence) && ProgressStore.saveInTransaction(connection, key, resumeFrom, boundEpoch(), null, expected);
+                } else {
+                    saved = ProgressStore.saveInTransaction(connection, key, resumeFrom, boundEpoch(), boundFence(), expected);
+                }
                 if (saved) {
                     hooks.afterProgressBeforeCommit(subscriber, handlerPage, resumeFrom);
+                    if (lease != null && !seams.has(NO_LOCAL_DEADLINE) && lease.pastDeadline()) {
+                        // §2.4: past the deadline before commit - roll back, suspend, then retry the page
+                        connection.rollback();
+                        closePageConnection(connection);
+                        connection = null;
+                        ownerCheck();
+                        return running && repositionTo == null;
+                    }
                     connection.commit();
                 } else {
                     connection.rollback();
@@ -1473,6 +1858,16 @@ public final class Subscription {
             }
         } catch (TestSeams.Crash e) {
             // A lost JVM: no rollback, no close - the IT terminates the backend
+            throw e;
+        } catch (LeaseLostException e) {
+            if (connection != null) {
+                try {
+                    connection.rollback();
+                } catch (SQLException rollbackFailed) {
+                    log.debug("Rolling back a page of {} after a lost lease failed", key, rollbackFailed);
+                }
+                closePageConnection(connection);
+            }
             throw e;
         } catch (Exception e) {
             // Only what the handler threw on a healthy connection is the handler's failure; everything else is I/O (§4.1)
@@ -1659,6 +2054,10 @@ public final class Subscription {
     }
 
     private boolean releaseParked(long head, boolean discard) throws Exception {
+        ownerCheck();
+        if (!running) {
+            return false;
+        }
         Connection connection = null;
         try {
             connection = loop.dataSource().getConnection();
@@ -1690,7 +2089,7 @@ public final class Subscription {
             }
             parked.delete(connection, orders);
             var expected = model == ProgressModel.PERIODIC || seams.has(PROGRESS_WITHOUT_EXPECTED_RESUME) ? null : (Long) lastSaved;
-            if (!ProgressStore.saveInTransaction(connection, key, lastSaved, resetEpoch, expected)) {
+            if (!ProgressStore.saveInTransaction(connection, key, lastSaved, boundEpoch(), boundFence(), expected)) {
                 connection.rollback();
                 closePageConnection(connection);
                 connection = null;
@@ -1701,6 +2100,16 @@ public final class Subscription {
             closePageConnection(connection);
             connection = null;
         } catch (TestSeams.Crash | InterruptedException e) {
+            throw e;
+        } catch (LeaseLostException e) {
+            if (connection != null) {
+                try {
+                    connection.rollback();
+                } catch (SQLException rollbackFailed) {
+                    log.debug("Rolling back a parked retry of {} after a lost lease failed", key, rollbackFailed);
+                }
+                closePageConnection(connection);
+            }
             throw e;
         } catch (Exception e) {
             if (connection != null) {
@@ -1715,7 +2124,7 @@ public final class Subscription {
             log.warn("Subscription {} on {}: {} of the aggregate parked at global_order {} failed; it stays held", key.subscriber(), key.aggregateType(),
                      discard ? "discard" : "retry", head, e);
             try {
-                parked.failedAgain(head, e);
+                parked.failedAgainGuarded(head, e, resetEpoch, boundFence());
             } catch (SQLException again) {
                 log.warn("Subscription {} on {}: counting the failed attempt failed", key.subscriber(), key.aggregateType(), again);
             }
@@ -1762,35 +2171,61 @@ public final class Subscription {
     }
 
     /**
-     * The progress update matched no row (phase 4 §3.3, not a handler failure): the row is gone - recreate it and retry
-     * the page; its epoch moved - a reset, reposition at its resume point; its resume point moved under the same epoch -
-     * another writer, reposition at its value
+     * The progress update matched no row (phase 4 §3.3, phase 7 §2.6; not a handler failure), decided by
+     * {@link #decide}: the row is gone - non-exclusive, recreate it and retry the page; exclusive, stop with an error.
+     * Exclusive and the fence or owner differs - the lease was lost. Its epoch moved - a reset, reposition at its resume
+     * point. Its resume point moved under the same epoch - another writer, reposition at its value
      */
     private void onProgressConflict() throws SQLException {
         var row = progress.read(key);
-        if (row.isEmpty()) {
-            var current = resumePoint();
-            log.warn("Progress row of {} is gone; recreating it at {}", key, current);
-            var created = progress.start(key, false, mode.name(), model.name(), current);
-            resetEpoch = created.resetEpoch();
-            lastSaved = created.resumeFrom();
-            if (created.resumeFrom() != current) {
-                repositionTo = created.resumeFrom();
+        switch (decide(lease != null, row, resetEpoch, lastSaved, ownedFence)) {
+            case STOP -> {
+                var error = new IllegalStateException("The progress row of exclusive subscription " + key + " is gone; it is never recreated, which would lose " +
+                                                              "its resume point. The subscription stops");
+                log.error(error.getMessage());
+                observer.onError(key.subscriber(), key.aggregateType(), error);
+                lease.lost("progress row gone");
+                ownedFence = null;
+                running = false;
+                throw new LeaseLostException(true);
             }
-        } else if (row.get().resetEpoch() != resetEpoch) {
-            log.info("Subscription {} on {} was reset (epoch {} -> {}); repositioning at {}", key.subscriber(), key.aggregateType(), resetEpoch,
-                     row.get().resetEpoch(), row.get().resumeFrom());
-            resetEpoch = row.get().resetEpoch();
-            lastSaved = row.get().resumeFrom();
-            repositionTo = row.get().resumeFrom();
-        } else if (row.get().resumeFrom() != lastSaved) {
-            log.error("Subscription {} on {} (instance '{}'): its resume point was moved from {} to {} by another writer - two subscriptions with the same " +
-                              "key? Repositioning at {}", key.subscriber(), key.aggregateType(), key.instanceName(), lastSaved, row.get().resumeFrom(),
-                      row.get().resumeFrom());
-            lastSaved = row.get().resumeFrom();
-            repositionTo = row.get().resumeFrom();
+            case LOST -> {
+                var stored = row.get();
+                var reason = "fence " + (ownedFence == null ? null : ownedFence.fence()) + " -> " + stored.leaseFence() + " (owner " + stored.leaseOwner() + ")";
+                if (lease.lost(reason)) {
+                    log.warn("Exclusive subscription {} on {} lost its lease: ownership moved, {}", key.subscriber(), key.aggregateType(), reason);
+                    observer.onLeaseLost(key.subscriber(), key.aggregateType(), reason);
+                }
+                throw new LeaseLostException(false);
+            }
+            case RECREATE -> {
+                var current = resumePoint();
+                log.warn("Progress row of {} is gone; recreating it at {}", key, current);
+                var created = progress.start(key, false, mode.name(), model.name(), current);
+                resetEpoch = created.resetEpoch();
+                lastSaved = created.resumeFrom();
+                if (created.resumeFrom() != current) {
+                    repositionTo = created.resumeFrom();
+                }
+            }
+            case RESET -> {
+                log.info("Subscription {} on {} was reset (epoch {} -> {}); repositioning at {}", key.subscriber(), key.aggregateType(), resetEpoch,
+                         row.get().resetEpoch(), row.get().resumeFrom());
+                resetEpoch = row.get().resetEpoch();
+                lastSaved = row.get().resumeFrom();
+                repositionTo = row.get().resumeFrom();
+            }
+            case MOVED -> {
+                log.error("Subscription {} on {} (instance '{}'): its resume point was moved from {} to {} by another writer - two subscriptions with the same " +
+                                  "key? Repositioning at {}", key.subscriber(), key.aggregateType(), key.instanceName(), lastSaved, row.get().resumeFrom(),
+                          row.get().resumeFrom());
+                lastSaved = row.get().resumeFrom();
+                repositionTo = row.get().resumeFrom();
+            }
+            case NONE -> {
+                // nothing visible differs any more; the next page or save tries again
+            }
         }
-        // else: nothing visible differs any more; the next page or save tries again
     }
 
     /**
@@ -2069,8 +2504,17 @@ public final class Subscription {
         if (resume == lastSaved) {
             return;
         }
-        var saved = model == ProgressModel.PERIODIC ? progress.save(key, resume, resetEpoch)
-                                                    : progress.saveExpected(key, resume, resetEpoch, seams.has(PROGRESS_WITHOUT_EXPECTED_RESUME) ? null : lastSaved);
+        boolean saved;
+        if (model == ProgressModel.PERIODIC) {
+            ownerCheck();
+            if (!running && lease != null) {
+                return;
+            }
+            seams.hooks().beforePeriodicSave(key.subscriber(), resume);
+            saved = progress.save(key, resume, boundEpoch(), boundFence());
+        } else {
+            saved = progress.saveExpected(key, resume, boundEpoch(), boundFence(), seams.has(PROGRESS_WITHOUT_EXPECTED_RESUME) ? null : lastSaved);
+        }
         if (saved) {
             lastSaved = resume;
             observer.onProgressSaved(key.subscriber(), key.aggregateType(), resume);

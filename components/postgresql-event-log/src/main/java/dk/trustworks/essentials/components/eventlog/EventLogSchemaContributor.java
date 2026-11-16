@@ -130,6 +130,12 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
     }
 
     /**
+     * The lease columns of {@code el_progress} ({@code lease_owner}, {@code lease_until}, {@code lease_fence}) are written
+     * only through {@code ProgressStore} and the lease keeper (design phase 7 §2, §5). Every fence is drawn from
+     * {@code el_lease_fence_seq} inside a claim statement, so a fence never repeats: {@code ALTER SEQUENCE ... RESTART},
+     * {@code setval} to a lower value, or dropping and recreating the sequence breaks that guarantee and with it the fencing
+     * of exclusive subscriptions.
+     *
      * @return the fixed schema's statements, in order, each safe against existing objects (design §2.3 - §2.6)
      */
     public static List<String> schemaStatements() {

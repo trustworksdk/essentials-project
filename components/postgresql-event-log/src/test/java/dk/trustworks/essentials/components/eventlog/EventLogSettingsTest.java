@@ -69,4 +69,50 @@ class EventLogSettingsTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> defaults.withWokenReadMin(Duration.ofMillis(-1))).isInstanceOf(IllegalArgumentException.class);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> defaults.withNotifySendMin(Duration.ofMillis(-1))).isInstanceOf(IllegalArgumentException.class);
     }
+
+    // ---- phase 7 §6: lease timings ----
+
+    @Test
+    void the_lease_defaults_are_15_s_4_s_7_s_and_3_s() {
+        var settings = EventLogSettings.defaults();
+        assertThat(settings.leaseDuration()).isEqualTo(Duration.ofSeconds(15));
+        assertThat(settings.leaseRenewalInterval()).isEqualTo(Duration.ofSeconds(4));
+        assertThat(settings.leaseLocalStop()).isEqualTo(Duration.ofSeconds(7));
+        assertThat(settings.leaseStatementTimeout()).isEqualTo(Duration.ofSeconds(3));
+        assertThat(settings.nodeName()).isEmpty();
+    }
+
+    @Test
+    void the_test_timings_are_valid() {
+        var settings = EventLogSettings.defaults().withLease(Duration.ofSeconds(2), Duration.ofMillis(500), Duration.ofSeconds(1))
+                                       .withLeaseStatementTimeout(Duration.ofSeconds(1));
+        assertThat(settings.leaseLocalStop()).isEqualTo(Duration.ofSeconds(1));
+    }
+
+    @Test
+    void the_lease_must_outlast_the_local_deadline_plus_one_renewal() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> EventLogSettings.defaults().withLease(Duration.ofSeconds(11), Duration.ofSeconds(4), Duration.ofSeconds(7)))
+                                       .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("leaseDuration");
+    }
+
+    @Test
+    void the_local_deadline_is_at_least_one_renewal_and_below_the_lease() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> EventLogSettings.defaults().withLease(Duration.ofSeconds(15), Duration.ofSeconds(4), Duration.ofSeconds(3)))
+                                       .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("leaseLocalStop");
+    }
+
+    @Test
+    void the_statement_timeout_is_whole_seconds_and_at_most_the_local_deadline() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> EventLogSettings.defaults().withLeaseStatementTimeout(Duration.ofMillis(1500)))
+                                       .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("whole seconds");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> EventLogSettings.defaults().withLeaseStatementTimeout(Duration.ofSeconds(8)))
+                                       .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("leaseStatementTimeout");
+    }
+
+    @Test
+    void the_node_name_is_at_most_64_characters() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> EventLogSettings.defaults().withNodeName("x".repeat(65)))
+                                       .isInstanceOf(IllegalArgumentException.class);
+        assertThat(EventLogSettings.defaults().withNodeName("x".repeat(64)).nodeName()).hasSize(64);
+    }
 }

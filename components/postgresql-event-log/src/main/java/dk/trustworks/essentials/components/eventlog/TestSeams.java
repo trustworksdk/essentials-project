@@ -176,5 +176,33 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         /** Listener thread: a restarted listener is about to take a new connection and re-run {@code LISTEN} */
         default void beforeListenerReconnect() throws Exception {
         }
+
+        // ---- phase 7 (§9): the lease keeper's thread, on EventLog.leaseSeams ----
+
+        /** Keeper: the claim statement for {@code keys} (standby subscriptions) is about to be sent */
+        default void beforeClaim(List<ProgressStore.Key> keys) throws Exception {
+        }
+
+        /** Keeper: the renewal statement for {@code keys} (owned leases) is about to be sent; its confirmation time is taken */
+        default void beforeRenewal(List<ProgressStore.Key> keys) throws Exception {
+        }
+
+        /** Keeper: the renewal returned; the leases it renewed are not yet confirmed */
+        default void afterRenewalBeforeConfirm(List<ProgressStore.Key> keys) throws Exception {
+        }
+
+        // ---- phase 7 (§9): delivery thread ----
+
+        /** A periodic save of {@code resumeFrom} passed its deadline check and is about to be sent */
+        default void beforePeriodicSave(String subscriber, long resumeFrom) throws Exception {
+        }
+
+        /** A periodic park insert of {@code globalOrder} passed its deadline check and is about to be sent */
+        default void beforePeriodicPark(String subscriber, long globalOrder) throws Exception {
+        }
+
+        /** A periodic handler call on {@code event} passed its deadline check and is about to be made */
+        default void beforeHandler(String subscriber, StoredEvent event) throws Exception {
+        }
     }
 }

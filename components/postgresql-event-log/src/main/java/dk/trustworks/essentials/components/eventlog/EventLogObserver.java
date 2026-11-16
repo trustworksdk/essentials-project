@@ -195,4 +195,37 @@ public interface EventLogObserver {
      */
     default void onFlush(java.util.List<String> aggregateTypes, int statements, long nanos) {
     }
+
+    // ---- phase 7 (design phase 7 §2): leases of exclusive subscriptions ----
+
+    /** An exclusive subscription's lease was claimed with {@code fence}; delivery starts. Lease keeper thread */
+    default void onLeaseClaimed(String subscriber, String aggregateType, long fence) {
+    }
+
+    /**
+     * An exclusive subscription lost its lease ({@code reason}: a renewal or fenced write found another fence or owner);
+     * it stops delivering and goes back to standby
+     */
+    default void onLeaseLost(String subscriber, String aggregateType, String reason) {
+    }
+
+    /** An owner passed its local deadline without a confirmed renewal and stopped delivering (§2.4). Delivery thread */
+    default void onLeaseSuspended(String subscriber, String aggregateType) {
+    }
+
+    /** A suspended owner's lease was confirmed again; delivery resumes where it stopped. Delivery thread */
+    default void onLeaseResumed(String subscriber, String aggregateType) {
+    }
+
+    /** A handler call that started before the local deadline ended {@code nanos} after it (decision 5). Delivery thread */
+    default void onLeaseOverrun(String subscriber, String aggregateType, long nanos) {
+    }
+
+    /** One renewal statement: {@code owned} leases sent, {@code renewed} returned, in {@code nanos}. Lease keeper thread */
+    default void onRenewal(int owned, int renewed, long nanos) {
+    }
+
+    /** A keeper pass failed (no connection, a timeout, a lost connection); no lease was confirmed. Lease keeper thread */
+    default void onRenewalFailed(Throwable cause) {
+    }
 }

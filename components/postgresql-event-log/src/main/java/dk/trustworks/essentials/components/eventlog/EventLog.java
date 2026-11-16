@@ -62,6 +62,9 @@ public final class EventLog {
     private final WakeListener                                        listener;
     /** The mutants and hooks of the notifier and listener; for tests */
     private volatile TestSeams                                        wakeSeams      = TestSeams.NONE;
+    /** Phase 7: the lease keeper of this event log's exclusive subscriptions, and its mutants and hooks (tests) */
+    private final LeaseKeeper                                         leaseKeeper;
+    private volatile TestSeams                                        leaseSeams     = TestSeams.NONE;
 
     EventLog(DataSource dataSource, SchemaOwnership schemaOwnership, EventLogSchema.AggregateTypeDdlExecutor ddl, EventLogSettings settings, EventLogObserver observer) {
         this(dataSource, schemaOwnership, ddl, settings, observer, () -> schemaOwnership == SchemaOwnership.COMPONENT);
@@ -83,6 +86,7 @@ public final class EventLog {
         this.eventTypes = new EventTypeRegistry(dataSource);
         this.eventTypeIndex = new EventTypeIndex(dataSource, createsSchema);
         this.instance = newInstanceId();
+        this.leaseKeeper = new LeaseKeeper(dataSource, settings, observer, settings.nodeName().isEmpty() ? instance : settings.nodeName() + "/" + instance, () -> leaseSeams);
         if (settings.crossJvmWakeUp()) {
             this.notifier = new WakeNotifier(instance, WakeNotifier.sendOnBorrowedConnection(dataSource), () -> wakeSeams, settings.notifySendMin());
             this.listener = new WakeListener(dataSource, settings, instance, readerLoop, notifier, () -> wakeSeams);
@@ -128,6 +132,21 @@ public final class EventLog {
     /** Set the notifier's and listener's mutants and hooks; package-private, for tests */
     void wakeSeams(TestSeams seams) {
         this.wakeSeams = requireNonNull(seams, "No seams provided");
+    }
+
+    /** Set the lease keeper's mutants and hooks (phase 7 §9); package-private, for tests */
+    void leaseSeams(TestSeams seams) {
+        this.leaseSeams = requireNonNull(seams, "No seams provided");
+    }
+
+    /** The lease keeper, for tests */
+    LeaseKeeper leaseKeeper() {
+        return leaseKeeper;
+    }
+
+    /** This event log's {@code lease_owner} (phase 7 §2.1): {@code [<nodeName>/]<instance>}, new on every event log */
+    String leaseOwner() {
+        return leaseKeeper.owner();
     }
 
     /**
@@ -193,6 +212,7 @@ public final class EventLog {
         if (notifier != null) {
             notifier.stop();
         }
+        leaseKeeper.stop();
         started = false;
     }
 
@@ -253,6 +273,49 @@ public final class EventLog {
     }
 
     /**
+     * Start an <b>exclusive</b> subscription (design phase 7 §2, §4): {@code FRESH}, periodic progress, one handler. At most
+     * one event log at a time delivers it - the one holding the lease on its progress row
+     * {@code (subscriber, aggregateType, '')}; every other one waits as a standby and takes over within a lease after the
+     * owner stops or dies. Every write it makes is fenced. Returns at once, possibly as a standby. <b>Temporary</b>: the
+     * phase-8 subscription API replaces it.
+     *
+     * @param startFrom the first {@code global_order} a new subscription receives; 1 for everything
+     * @return the running subscription
+     */
+    public Subscription subscribeExclusive(String subscriber, String aggregateType, long startFrom, Subscription.Handler handler) throws SQLException {
+        return subscribeExclusive(subscriber, aggregateType, startFrom, EventTypeFilter.all(), handler);
+    }
+
+    /**
+     * As {@link #subscribeExclusive(String, String, long, Subscription.Handler)}, receiving only the event types of
+     * {@code filter}. <b>Temporary</b>.
+     */
+    public Subscription subscribeExclusive(String subscriber, String aggregateType, long startFrom, EventTypeFilter filter, Subscription.Handler handler) throws SQLException {
+        return subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(subscriber, aggregateType, ""), startFrom, Subscription.ConsistencyMode.FRESH,
+                                                           Subscription.ProgressModel.PERIODIC, handler, null, TestSeams.NONE, filter, true));
+    }
+
+    /**
+     * Start an <b>exclusive</b> subscription whose pages are applied in the engine's transaction (design phase 7 §2;
+     * phase 4 §3.1): as {@link #subscribe(String, String, String, long, Subscription.ConsistencyMode, Subscription.PageHandler)},
+     * delivered by the one event log that holds the lease, and every page's progress update fenced. <b>Temporary</b>.
+     */
+    public Subscription subscribeExclusive(String subscriber, String aggregateType, long startFrom, Subscription.ConsistencyMode mode, Subscription.PageHandler handler)
+            throws SQLException {
+        return subscribeExclusive(subscriber, aggregateType, startFrom, mode, EventTypeFilter.all(), handler);
+    }
+
+    /**
+     * As {@link #subscribeExclusive(String, String, long, Subscription.ConsistencyMode, Subscription.PageHandler)}, receiving
+     * only the event types of {@code filter}. <b>Temporary</b>.
+     */
+    public Subscription subscribeExclusive(String subscriber, String aggregateType, long startFrom, Subscription.ConsistencyMode mode, EventTypeFilter filter,
+                                           Subscription.PageHandler handler) throws SQLException {
+        return subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(subscriber, aggregateType, ""), startFrom, mode, Subscription.ProgressModel.IN_HANDLER_TRANSACTION,
+                                                           null, handler, TestSeams.NONE, filter, true));
+    }
+
+    /**
      * Reset a subscription to {@code resumeFrom}: bump its reset epoch and delete its parked rows in one transaction
      * (design phase 4 §4.5). A running subscription notices at its next save or page. Package-private until phase 8's
      * reset API.
@@ -276,8 +339,18 @@ public final class EventLog {
             eventTypeIndex.refresh(type.tables);
         }
         var catchUp       = new Subscription.CatchUpContext(eventTypes, permits, ownPermits, () -> eventTypeIndex.valid(aggregateType));
+        Lease lease = null;
+        if (spec.exclusive()) {
+            for (var running : subscriptions) {
+                if (running.lease() != null && running.lease().key().equals(spec.key()) && running.isRunning()) {
+                    throw new IllegalStateException("Exclusive subscription " + spec.key().subscriber() + " on " + aggregateType + " is already running in this EventLog");
+                }
+            }
+            lease = new Lease(spec.key(), new Lease.NewRow(spec.mode().name(), spec.model().name(), spec.initialResumeFrom()), leaseKeeper.owner(),
+                              settings.leaseLocalStop().toNanos(), System::nanoTime);
+        }
         var subscription  = new Subscription(spec, readerLoop, EventLogStorage.TailStatements.of(relation), rs -> read(aggregateType, rs), progressStore, settings,
-                                                  observer, catchUp);
+                                                  observer, catchUp, lease, lease == null ? null : leaseKeeper);
         subscription.start();
         subscriptions.add(subscription);
         return subscription;

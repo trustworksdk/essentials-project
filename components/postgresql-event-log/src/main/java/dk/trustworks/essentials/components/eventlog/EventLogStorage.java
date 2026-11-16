@@ -66,11 +66,19 @@ final class EventLogStorage {
                     "INSERT INTO " + PROGRESS_TABLE + " AS p (subscriber, aggregate_type, instance_name, exclusive, consistency_mode, progress_model, resume_from)\n" +
                     "VALUES (?, ?, ?, ?, ?, ?, ?)\n" +
                     "ON CONFLICT (subscriber, aggregate_type, instance_name) DO UPDATE\n" +
-                    "    SET consistency_mode = EXCLUDED.consistency_mode, progress_model = EXCLUDED.progress_model, exclusive = EXCLUDED.exclusive, updated_at = now()\n" +
-                    "RETURNING p.resume_from, p.reset_epoch, (SELECT count(*) FROM old) > 0, (SELECT consistency_mode FROM old), (SELECT progress_model FROM old)";
+                    "    SET consistency_mode = EXCLUDED.consistency_mode, progress_model = EXCLUDED.progress_model, updated_at = now()\n" +
+                    "RETURNING p.resume_from, p.reset_epoch, (SELECT count(*) FROM old) > 0, (SELECT consistency_mode FROM old), (SELECT progress_model FROM old), p.exclusive";
+    /**
+     * The guard every fenced write of a subscription carries (phase 7 §3.1): the epoch, then fence, fence, owner. A
+     * non-exclusive subscription binds a null fence. A null epoch or owner disables that part: only the test mutants
+     * {@code SAVE_WITHOUT_EPOCH} and {@code FENCE_WITHOUT_OWNER} bind one
+     */
+    static final String FENCE_GUARD =
+            "reset_epoch = coalesce(?::bigint, reset_epoch) AND (?::bigint IS NULL OR (lease_fence = ?::bigint AND lease_owner = coalesce(?::text, lease_owner)))";
+    /** resume_from, the key, then {@link #FENCE_GUARD}'s parameters */
     static final String PROGRESS_SAVE =
             "UPDATE " + PROGRESS_TABLE + " SET resume_from = ?, updated_at = now()\n" +
-                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND reset_epoch = ? AND (?::bigint IS NULL OR lease_fence = ?::bigint)";
+                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD;
     /**
      * Phase 4 §3.3: the in-transaction progress update, last statement of a page transaction - {@link #PROGRESS_SAVE}
      * plus a compare-and-set on the value this subscription last committed. Parameters as {@link #PROGRESS_SAVE}, then
@@ -78,16 +86,106 @@ final class EventLogStorage {
      */
     static final String PROGRESS_SAVE_EXPECTED =
             "UPDATE " + PROGRESS_TABLE + " SET resume_from = ?, updated_at = now()\n" +
-                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND reset_epoch = ? AND (?::bigint IS NULL OR lease_fence = ?::bigint)\n" +
+                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD + "\n" +
                     "   AND resume_from = ?";
     static final String PROGRESS_READ =
-            "SELECT resume_from, reset_epoch, consistency_mode, progress_model FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";
+            "SELECT resume_from, reset_epoch, consistency_mode, progress_model, exclusive, lease_owner, lease_fence FROM " + PROGRESS_TABLE +
+                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";
+
+    // ---- leases (phase 7 §2); all lease time is the server's now() ----
+    /**
+     * Claim every standby key whose lease is free or expired, in one statement (§2.2): owner, lease interval, then
+     * {@code text[]} subscribers and aggregate types. Returns subscriber, aggregate type, fence, resume_from, reset_epoch,
+     * consistency_mode, progress_model of each row claimed
+     */
+    static final String LEASE_CLAIM =
+            "UPDATE " + PROGRESS_TABLE + " p\n" +
+                    "   SET lease_owner = ?, lease_fence = nextval('" + LEASE_FENCE_SEQUENCE + "'), lease_until = now() + ?::interval\n" +
+                    "  FROM unnest(?::text[], ?::text[]) AS k(subscriber, aggregate_type)\n" +
+                    " WHERE p.subscriber = k.subscriber AND p.aggregate_type = k.aggregate_type AND p.instance_name = ''\n" +
+                    "   AND p.exclusive\n" +
+                    "   AND (p.lease_owner IS NULL OR p.lease_until < now())\n" +
+                    "RETURNING p.subscriber, p.aggregate_type, p.lease_fence, p.resume_from, p.reset_epoch, p.consistency_mode, p.progress_model";
+    /** Mutant {@code CLAIM_IGNORES_LIVE_LEASE}: {@link #LEASE_CLAIM} without the lease condition */
+    static final String LEASE_CLAIM_IGNORING_LEASE = LEASE_CLAIM.replace("   AND (p.lease_owner IS NULL OR p.lease_until < now())\n", "");
+    /**
+     * The first claim of an exclusive row that does not exist yet (§2.2): subscriber, aggregate type, consistency_mode,
+     * progress_model, resume_from, owner, lease interval. No row returned: another node created it
+     */
+    static final String LEASE_CLAIM_NEW =
+            "INSERT INTO " + PROGRESS_TABLE + " (subscriber, aggregate_type, instance_name, exclusive, consistency_mode, progress_model, resume_from, lease_owner, lease_fence, lease_until)\n" +
+                    "VALUES (?, ?, '', true, ?, ?, ?, ?, nextval('" + LEASE_FENCE_SEQUENCE + "'), now() + ?::interval)\n" +
+                    "ON CONFLICT (subscriber, aggregate_type, instance_name) DO NOTHING\n" +
+                    "RETURNING lease_fence, resume_from, reset_epoch";
+    /**
+     * Renew every owned lease in one statement (§2.3): owner, lease interval, then {@code text[]} subscribers, aggregate
+     * types and {@code bigint[]} fences. Returns subscriber, aggregate type of each lease renewed
+     */
+    static final String LEASE_RENEW =
+            "UPDATE " + PROGRESS_TABLE + " p\n" +
+                    "   SET lease_until = now() + ?::interval\n" +
+                    "  FROM unnest(?::text[], ?::text[], ?::bigint[]) AS k(subscriber, aggregate_type, fence)\n" +
+                    " WHERE p.subscriber = k.subscriber AND p.aggregate_type = k.aggregate_type AND p.instance_name = ''\n" +
+                    "   AND p.lease_fence = k.fence\n" +
+                    "   AND p.lease_owner = ?\n" +
+                    "RETURNING p.subscriber, p.aggregate_type";
+    /** Mutant {@code RENEW_WITHOUT_FENCE}: {@link #LEASE_RENEW} keyed by the subscription only (the owner still binds, unused) */
+    static final String LEASE_RENEW_WITHOUT_FENCE = LEASE_RENEW.replace("   AND p.lease_fence = k.fence\n", "   AND k.fence IS NOT NULL\n")
+                                                               .replace("   AND p.lease_owner = ?\n", "   AND ?::text IS NOT NULL\n");
+    /** Release an in-transaction subscription's lease (§2.5): the key, then fence, owner */
+    static final String LEASE_RELEASE =
+            "UPDATE " + PROGRESS_TABLE + " SET lease_owner = NULL, lease_until = NULL, updated_at = now()\n" +
+                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND lease_fence = ? AND lease_owner = ?";
+    /**
+     * A periodic subscription's final save and release in one statement (§2.5): resume_from, the key, the epoch the
+     * resume point was computed in (null under mutant {@code RELEASE_WRITES_ANY_EPOCH}), fence, owner
+     */
+    static final String PROGRESS_SAVE_RELEASE =
+            "UPDATE " + PROGRESS_TABLE + "\n" +
+                    "   SET resume_from = CASE WHEN reset_epoch = coalesce(?::bigint, reset_epoch) THEN ? ELSE resume_from END,\n" +
+                    "       updated_at = now(), lease_owner = NULL, lease_until = NULL\n" +
+                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND lease_fence = ? AND lease_owner = ?";
+    /**
+     * A new owner whose claimed row names another mode or model writes its own (§2.2): consistency_mode, progress_model,
+     * the key, then {@link #FENCE_GUARD}'s parameters
+     */
+    static final String PROGRESS_SET_MODE =
+            "UPDATE " + PROGRESS_TABLE + " SET consistency_mode = ?, progress_model = ?, updated_at = now()\n" +
+                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD;
+    /**
+     * Mutant {@code FENCE_READ_BEFORE_WRITE}: the fence checked by a separate, unlocked read before an unfenced update - the
+     * shape plan §9's revision rejected. The key, then fence, owner
+     */
+    static final String PROGRESS_FENCE_CHECK =
+            "SELECT 1 FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND lease_fence = ? AND lease_owner = ?";
+    /** A page transaction of an exclusive subscription ends within one lease if its owner dies (§7, decision 6): milliseconds */
+    static final String PAGE_IDLE_TIMEOUT = "SELECT set_config('idle_in_transaction_session_timeout', ?, true)";
 
     // ---- parked events (phase 4 §4.4, §4.5); the subscription key's three parameters first unless said otherwise ----
     /** Then global_order, aggregate_id, blocked_by, attempts, error_type, error_message */
     static final String PARK_EVENT =
             "INSERT INTO " + PARKED_EVENTS_TABLE + " (subscriber, aggregate_type, instance_name, global_order, aggregate_id, blocked_by, attempts, error_type, error_message)\n" +
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING";
+    /**
+     * The periodic park insert, guarded on the progress row (phase 7 §3.3): the key, then {@link #FENCE_GUARD}'s
+     * parameters, then global_order, aggregate_id, blocked_by, attempts, error_type, error_message. The {@code FOR SHARE}
+     * guard waits for a reset or claim that got there first and re-checks against its row version. Returns the guard's
+     * and the insert's row counts
+     */
+    static final String PARK_EVENT_GUARDED =
+            "WITH guard AS (SELECT 1 FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD + " FOR SHARE),\n" +
+                    "ins AS (INSERT INTO " + PARKED_EVENTS_TABLE + " (subscriber, aggregate_type, instance_name, global_order, aggregate_id, blocked_by, attempts, error_type, error_message)\n" +
+                    "        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? FROM guard\n" +
+                    "        ON CONFLICT DO NOTHING RETURNING 1)\n" +
+                    "SELECT (SELECT count(*) FROM guard), (SELECT count(*) FROM ins)";
+    /**
+     * {@link #PARKED_FAILED_AGAIN} guarded as {@link #PARK_EVENT_GUARDED}: error_type, error_message, the key, the head,
+     * then the key and {@link #FENCE_GUARD}'s parameters
+     */
+    static final String PARKED_FAILED_AGAIN_GUARDED =
+            "UPDATE " + PARKED_EVENTS_TABLE + " SET attempts = attempts + 1, error_type = ?, error_message = ?\n" +
+                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?\n" +
+                    "   AND EXISTS (SELECT 1 FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD + " FOR SHARE)";
     /** The held aggregates: every parked head */
     static final String PARKED_HEADS =
             "SELECT aggregate_id, global_order FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND blocked_by IS NULL ORDER BY global_order";

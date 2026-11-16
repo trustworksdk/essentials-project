@@ -125,6 +125,36 @@ final class ParkedEvents {
     }
 
     /**
+     * The periodic park insert guarded on the progress row (phase 7 §3.3): lands only while the row's reset epoch is
+     * {@code resetEpoch} and, for an exclusive subscription, its lease is {@code fence}'s. A row already there stays as it
+     * is.
+     *
+     * @return {@code false} if the guard matched no row (a zero-row write: the caller decides by phase 7 §2.6), else
+     * {@code true}, inserted or found parked
+     */
+    boolean insertGuarded(Row row, long resetEpoch, ProgressStore.Fence fence) throws SQLException {
+        try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement(EventLogStorage.PARK_EVENT_GUARDED)) {
+            var p = bindKey(statement, 1);
+            p = ProgressStore.bindGuard(statement, p, resetEpoch, fence);
+            p = bindKey(statement, p);
+            statement.setLong(p++, row.globalOrder());
+            statement.setString(p++, row.event().aggregateId());
+            if (row.blockedBy() == null) {
+                statement.setNull(p++, Types.BIGINT);
+            } else {
+                statement.setLong(p++, row.blockedBy());
+            }
+            statement.setInt(p++, row.attempts());
+            statement.setString(p++, row.errorType());
+            statement.setString(p, row.errorMessage());
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getLong(1) > 0;
+            }
+        }
+    }
+
+    /**
      * Lock {@code head}'s row and every row held behind it, on {@code connection}
      *
      * @return their global orders, in order; empty if {@code head} is not parked
@@ -159,6 +189,22 @@ final class ParkedEvents {
             statement.setString(2, error.getMessage());
             var p = bindKey(statement, 3);
             statement.setLong(p, head);
+            statement.executeUpdate();
+        }
+    }
+
+    /**
+     * {@link #failedAgain(long, Throwable)} guarded as {@link #insertGuarded} (phase 7 §3.1): counts only under the
+     * current epoch and lease
+     */
+    void failedAgainGuarded(long head, Throwable error, long resetEpoch, ProgressStore.Fence fence) throws SQLException {
+        try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement(EventLogStorage.PARKED_FAILED_AGAIN_GUARDED)) {
+            statement.setString(1, error.getClass().getName());
+            statement.setString(2, error.getMessage());
+            var p = bindKey(statement, 3);
+            statement.setLong(p++, head);
+            p = bindKey(statement, p);
+            ProgressStore.bindGuard(statement, p, resetEpoch, fence);
             statement.executeUpdate();
         }
     }

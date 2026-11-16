@@ -193,5 +193,33 @@ enum WatermarkMutant {
      * last send instead of unioning them into the next one: other event logs wait for their backstop. On the event log's
      * wake seams
      */
-    NOTIFY_DROPPED_INSIDE_INTERVAL
+    NOTIFY_DROPPED_INSIDE_INTERVAL,
+
+    // ---- phase 7 (design phase 7 §9); subscription mutants on the subscription's seams, keeper mutants on EventLog.leaseSeams ----
+
+    /** Every save, page update and park insert binds a null fence: a stale owner's write lands (§3.1, I5) */
+    UNFENCED_SAVE,
+    /**
+     * The in-transaction page checks the fence with a separate, unlocked read before an unfenced update: the check passes
+     * before the new owner's claim and the update lands after its commit (§9.1 (c), I5)
+     */
+    FENCE_READ_BEFORE_WRITE,
+    /** The periodic park insert is the unguarded autocommit insert of phase 4 (§3.3, I5, I6) */
+    UNGUARDED_PERIODIC_PARK,
+    /** Keeper: the claim ignores a live lease and steals it (§2.2, I5) */
+    CLAIM_IGNORES_LIVE_LEASE,
+    /** Every fenced write asserts the fence alone, not the owner: a duplicated fence after a failover lands (§3.2) */
+    FENCE_WITHOUT_OWNER,
+    /** Every save, page update and park insert ignores the reset epoch: a reset is undone (§3.1, I6) */
+    SAVE_WITHOUT_EPOCH,
+    /** The release writes its resume point under any epoch: a reset racing a stop is undone (§2.5, I6) */
+    RELEASE_WRITES_ANY_EPOCH,
+    /** No local deadline: an owner that cannot renew keeps delivering (§2.4, I16) */
+    NO_LOCAL_DEADLINE,
+    /** Keeper: a renewal is confirmed at the time its reply arrived instead of before it was sent (§2.3, I16) */
+    DEADLINE_FROM_RENEWAL_END,
+    /** Keeper: the renewal is keyed by subscription only, not by fence and owner: a lost lease is extended (§2.3, I16) */
+    RENEW_WITHOUT_FENCE,
+    /** Keeper: one renewal statement per owned lease instead of one for all (§2.3, §8) */
+    RENEW_PER_LEASE
 }
