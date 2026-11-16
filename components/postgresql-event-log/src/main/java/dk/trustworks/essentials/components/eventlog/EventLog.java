@@ -84,7 +84,7 @@ public final class EventLog {
         this.eventTypeIndex = new EventTypeIndex(dataSource, createsSchema);
         this.instance = newInstanceId();
         if (settings.crossJvmWakeUp()) {
-            this.notifier = new WakeNotifier(instance, WakeNotifier.sendOnBorrowedConnection(dataSource), () -> wakeSeams);
+            this.notifier = new WakeNotifier(instance, WakeNotifier.sendOnBorrowedConnection(dataSource), () -> wakeSeams, settings.notifySendMin());
             this.listener = new WakeListener(dataSource, settings, instance, readerLoop, notifier, () -> wakeSeams);
             readerLoop.onActivity(any -> {
                 if (any) {

@@ -1222,7 +1222,7 @@ class EventLogGateSpikeIT {
         boolean callAfter = !arm.startsWith("BACKSTOP") && !arm.equals("LOST");
         boolean forked    = arm.equals("TIER1_FORKED");
         var     settings  = settings(backstop).withCrossJvmWakeUp(crossJvm);
-        try (var db = SpikeDb.start("lat_r" + run + "_" + arm.toLowerCase(Locale.ROOT) + "_" + rate, 100); var app = new App(db, settings, 12)) {
+        try (var db = SpikeDb.start("lat_r" + run + "_" + arm.toLowerCase(Locale.ROOT) + "_" + rate + coalescingSuffix(), 100); var app = new App(db, settings, 12)) {
             var committed = new ConcurrentHashMap<String, Long>();
             var sinks     = new Sinks();
             var wObserver = new Counters();
@@ -1329,8 +1329,9 @@ class EventLogGateSpikeIT {
         var window = scaled(Duration.ofSeconds(8));
         header(P6_NOTIFY, "NOTIFY APPEND COST", "writers " + P6_WRITERS + ", arms NONE/NOTIFIER/DIRECT, fsync on and off; warm-up " + warmUp.toSeconds() + " s, window " + window.toSeconds() + " s");
         for (boolean fsync : new boolean[]{true, false}) {
+            if (!Arrays.asList(P6_FSYNC.split(",")).contains(fsync ? "on" : "off")) continue;
             for (int run = 1; run <= RUNS; run++) {
-                for (var arm : List.of("NONE", "NOTIFIER", "DIRECT")) {
+                for (var arm : Arrays.stream(System.getProperty("spike.gate.p6NotifyArms", "NONE,NOTIFIER,DIRECT").split(",")).map(String::trim).toList()) {
                     for (int writers : P6_WRITERS) {
                         notifyArm(run, fsync, arm, writers, warmUp, window);
                     }
@@ -1340,7 +1341,7 @@ class EventLogGateSpikeIT {
     }
 
     private void notifyArm(int run, boolean fsync, String arm, int writers, Duration warmUp, Duration window) throws Exception {
-        try (var db = SpikeDb.start("ntf_r" + run + "_" + (fsync ? "on" : "off") + "_" + arm.toLowerCase(Locale.ROOT) + "_" + writers, 100, fsync);
+        try (var db = SpikeDb.start("ntf_r" + run + "_" + (fsync ? "on" : "off") + "_" + arm.toLowerCase(Locale.ROOT) + "_" + writers + coalescingSuffix(), 100, fsync);
              var app = new App(db, settings(1000), 4)) {
             var listenerPool = db.pool("reader", 4);
             var listening    = engine(listenerPool, settings(1000), new Counters());
@@ -1556,7 +1557,21 @@ class EventLogGateSpikeIT {
     private static EventLogSettings settings(int backstopMillis) {
         var backstop = Duration.ofMillis(backstopMillis);
         // the back-off floor follows the backstop, as withBackstopInterval does when it is raised
-        return EventLogSettings.defaults().withProbeBackoff(backstop, Duration.ofSeconds(10)).withBackstopInterval(backstop);
+        var settings = EventLogSettings.defaults().withProbeBackoff(backstop, Duration.ofSeconds(10)).withBackstopInterval(backstop);
+        if (WOKEN_READ_MIN != null) settings = settings.withWokenReadMin(Duration.ofMillis(Long.parseLong(WOKEN_READ_MIN)));
+        if (NOTIFY_SEND_MIN != null) settings = settings.withNotifySendMin(Duration.ofMillis(Long.parseLong(NOTIFY_SEND_MIN)));
+        return settings;
+    }
+
+    // ---- phase 6 unit D (§10.8): the coalescing intervals, in ms; absent = the defaults ----
+    private static final String  WOKEN_READ_MIN  = System.getProperty("spike.gate.p6WokenReadMin");
+    private static final String  NOTIFY_SEND_MIN = System.getProperty("spike.gate.p6NotifySendMin");
+    /** {@code on}, {@code off} or {@code on,off} (the default): the fsync settings §7.2 runs */
+    private static final String  P6_FSYNC        = System.getProperty("spike.gate.p6Fsync", "on,off");
+
+    /** A database-name suffix per coalescing setting, so arms with different intervals never share a permit key */
+    private static String coalescingSuffix() {
+        return (WOKEN_READ_MIN == null ? "" : "_r" + WOKEN_READ_MIN) + (NOTIFY_SEND_MIN == null ? "" : "_n" + NOTIFY_SEND_MIN);
     }
 
     /**

@@ -179,5 +179,19 @@ enum WatermarkMutant {
     /** The listener drains with pgjdbc's stock {@code getNotifications(timeout)}: dense traffic holds every wake inside the driver (§3.3, P0.17) */
     STOCK_DRAIN,
     /** The listener acts on its own event log's notifications too: every local commit wakes the reader twice (§3.1, §3.3) */
-    NO_OWN_INSTANCE_FILTER
+    NO_OWN_INSTANCE_FILTER,
+
+    // ---- phase 6 unit D (design phase 6 §10.8, coalescing) ----
+
+    /**
+     * A wake that arrives inside {@link EventLogSettings#wokenReadMin()} of the type's last read is dropped instead of
+     * deferring a read to the interval's end: the commit waits for the backstop. Loop mutant, as phase 6 unit A's
+     */
+    WOKEN_READ_DROPPED_INSIDE_INTERVAL,
+    /**
+     * The notifier drops the aggregate types that become pending inside {@link EventLogSettings#notifySendMin()} of its
+     * last send instead of unioning them into the next one: other event logs wait for their backstop. On the event log's
+     * wake seams
+     */
+    NOTIFY_DROPPED_INSIDE_INTERVAL
 }

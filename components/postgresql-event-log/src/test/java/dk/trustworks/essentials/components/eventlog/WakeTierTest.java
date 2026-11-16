@@ -92,4 +92,38 @@ class WakeTierTest {
         assertThat(attempts).containsExactly(List.of("inst0001:A"), List.of("inst0001:B"));
         notifier.stop();
     }
+
+    @Test
+    void the_notifier_unions_what_arrives_inside_its_send_interval_into_the_next_send() throws Exception {
+        var sent     = new CopyOnWriteArrayList<List<String>>();
+        var sentAt   = new CopyOnWriteArrayList<Long>();
+        var interval = Duration.ofMillis(200);
+        var notifier = new WakeNotifier("inst0001", (channel, payloads) -> {
+            sentAt.add(System.nanoTime());
+            sent.add(List.copyOf(payloads));
+        }, () -> TestSeams.NONE, interval);
+        notifier.add("A");
+        await().atMost(Duration.ofSeconds(10)).until(() -> sent.size() == 1);
+        notifier.add("B");
+        notifier.add("C");
+        notifier.add("B");
+        await().atMost(Duration.ofSeconds(10)).until(() -> sent.size() == 2);
+        assertThat(sent.get(1)).as("one send for everything inside the interval").containsExactlyInAnyOrder("inst0001:B", "inst0001:C");
+        assertThat(sentAt.get(1) - sentAt.get(0)).as("not before the interval ended").isGreaterThanOrEqualTo(interval.toNanos());
+        Thread.sleep(interval.toMillis() * 2);
+        assertThat(sent).hasSize(2);
+        notifier.stop();
+    }
+
+    @Test
+    void a_stop_sends_what_is_pending_without_waiting_for_the_interval() throws Exception {
+        var sent     = new CopyOnWriteArrayList<List<String>>();
+        var notifier = new WakeNotifier("inst0001", (channel, payloads) -> sent.add(List.copyOf(payloads)), () -> TestSeams.NONE, Duration.ofSeconds(30));
+        notifier.add("A");
+        await().atMost(Duration.ofSeconds(10)).until(() -> sent.size() == 1);
+        notifier.add("B");
+        notifier.stop();
+        await().atMost(Duration.ofSeconds(5)).until(() -> !notifier.isRunning());
+        assertThat(sent).containsExactly(List.of("inst0001:A"), List.of("inst0001:B"));
+    }
 }

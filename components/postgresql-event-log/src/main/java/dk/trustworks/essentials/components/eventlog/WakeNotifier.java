@@ -35,6 +35,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * flight goes out in the next one. A failed send is logged at debug and dropped, never retried: the backstop delivers
  * anyway (I7).
  * <p>
+ * <b>Send coalescing</b> (phase 6 §10.8): a send starts no sooner than {@code sendMin} after the previous one started; the
+ * types added meanwhile wait in the set and go out together in that send. A {@link #stop} sends what is pending at once.
+ * <p>
  * Payload {@code <instance>:<aggregateType>} on channel {@link #CHANNEL} (§3.1). {@link #kick} sends
  * {@code <instance>:} (no type), which wakes this event log's own {@link WakeListener} out of its blocking read so it
  * notices a stop at once; every listener ignores it.
@@ -59,6 +62,10 @@ final class WakeNotifier {
     /** Written under {@code this} */
     private volatile Thread           thread;
     private volatile boolean          stopped;
+    private final long                sendMinNanos;
+    /** When the last batch send started; notifier thread only */
+    private long                      lastSendNanos;
+    private boolean                   sentBefore;
     final LongAdder                   sends   = new LongAdder();
     final LongAdder                   failures = new LongAdder();
 
@@ -69,9 +76,18 @@ final class WakeNotifier {
     volatile boolean                  enabledForTests = true;
 
     WakeNotifier(String instance, Sender sender, Supplier<TestSeams> seams) {
+        this(instance, sender, seams, java.time.Duration.ZERO);
+    }
+
+    /**
+     * @param sendMin least time between the starts of two batch sends ({@link EventLogSettings#notifySendMin()}); zero
+     *                sends as soon as the previous send returned
+     */
+    WakeNotifier(String instance, Sender sender, Supplier<TestSeams> seams, java.time.Duration sendMin) {
         this.instance = requireNonNull(instance, "No instance provided");
         this.sender = requireNonNull(sender, "No sender provided");
         this.seams = requireNonNull(seams, "No seams provided");
+        this.sendMinNanos = requireNonNull(sendMin, "No sendMin provided").toNanos();
     }
 
     /** The production sender: one borrowed connection per send, autocommit (committed here if the pool hands out a transaction) */
@@ -159,6 +175,18 @@ final class WakeNotifier {
                 kicked = false;
                 send(CHANNEL, List.of(instance + ":"));
             }
+            if (sendMinNanos > 0 && sentBefore && !stopped && !pending.isEmpty()) {
+                var wait = lastSendNanos + sendMinNanos - System.nanoTime();
+                if (wait > 0) {
+                    if (seams.get().has(WatermarkMutant.NOTIFY_DROPPED_INSIDE_INTERVAL)) {
+                        pending.clear();
+                    } else {
+                        // Pending types stay in the set and are unioned with what arrives until the interval ends
+                        LockSupport.parkNanos(this, wait);
+                    }
+                    continue;
+                }
+            }
             // Removing after reading: a concurrent add of a type already taken is covered by this send, which follows it
             var batch = new ArrayList<String>();
             for (var it = pending.iterator(); it.hasNext(); ) {
@@ -174,6 +202,8 @@ final class WakeNotifier {
                 log.debug("beforeNotifySend hook failed", e);
             }
             if (enabledForTests) {
+                lastSendNanos = System.nanoTime();
+                sentBefore = true;
                 send(channelForTests, batch);
             }
         }

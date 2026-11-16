@@ -60,4 +60,13 @@ class EventLogSettingsTest {
         assertThat(defaults.wokenProbeWait(TWO_MS, 100)).isEqualTo(Duration.ofSeconds(2));
         assertThat(defaults.wokenProbeWait(Duration.ofSeconds(1).toNanos(), 1)).isEqualTo(defaults.probeBackoffMax());
     }
+
+    @Test
+    void the_coalescing_intervals_may_be_zero_but_not_negative() {
+        var defaults = EventLogSettings.defaults();
+        assertThat(defaults.withWokenReadMin(Duration.ZERO).wokenReadMin()).isZero();
+        assertThat(defaults.withNotifySendMin(Duration.ZERO).notifySendMin()).isZero();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> defaults.withWokenReadMin(Duration.ofMillis(-1))).isInstanceOf(IllegalArgumentException.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> defaults.withNotifySendMin(Duration.ofMillis(-1))).isInstanceOf(IllegalArgumentException.class);
+    }
 }

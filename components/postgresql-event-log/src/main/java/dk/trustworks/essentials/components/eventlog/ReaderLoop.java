@@ -164,6 +164,10 @@ final class ReaderLoop {
         private boolean                      wokenSinceProbe;
         /** The read about to run follows a wake */
         private boolean                      wokenRead;
+        /** When the last read of this type started: the woken-read clock (phase 6 §10.8) */
+        private long                         lastReadNanos;
+        /** A wake was taken and its read deferred by {@link EventLogSettings#wokenReadMin()}; the next read serves it */
+        private boolean                      wakePending;
 
         private ActiveType(String aggregateType, EventLogStorage.TailStatements statements, TailReader.RowMapper mapper, TestSeams seams) {
             this.aggregateType = aggregateType;
@@ -534,11 +538,21 @@ final class ReaderLoop {
             }
             var woken = clearAfterRead ? type.wake.get() : type.wake.getAndSet(false);
             if (woken) {
-                type.nextDueNanos = now;
                 type.wokenSinceProbe = true;
+                var at = wokenReadDueNanos(type, now);
+                if (at - now > 0 && type.seams.has(WOKEN_READ_DROPPED_INSIDE_INTERVAL)) {
+                    woken = false;
+                } else {
+                    if (type.nextDueNanos - at > 0) {
+                        type.nextDueNanos = at;
+                    }
+                    type.wakePending = true;
+                }
             }
             if (type.reader != null && now - type.nextDueNanos >= 0) {
-                type.wokenRead = woken;
+                type.wokenRead = type.wakePending;
+                type.wakePending = false;
+                type.lastReadNanos = now;
                 due.add(type);
             }
         }
@@ -558,6 +572,22 @@ final class ReaderLoop {
                 type.wake.set(false);
             }
         }
+    }
+
+    /**
+     * Wake coalescing (phase 6 §10.8): a woken read starts no sooner than {@link EventLogSettings#wokenReadMin()} after the
+     * start of the type's last read of any kind - any read that starts after a wake serves it - and never later than the
+     * due time the type already has, so the backstop still bounds it (I7). The wake is only deferred, never dropped: the
+     * due time is lowered to this and {@link ActiveType#wakePending} carries the wake to that read. Per type, because the
+     * due time is per type; types read in one flush share their read start, so they stay in step and keep sharing flushes.
+     */
+    private long wokenReadDueNanos(ActiveType type, long now) {
+        var min = settings.wokenReadMin().toNanos();
+        if (min == 0) {
+            return now;
+        }
+        var at = type.lastReadNanos + min;
+        return at - now > 0 ? at : now;
     }
 
     /** More due types than this are read one statement each, not in one flush: a guard against statement-cache churn */
@@ -803,6 +833,7 @@ final class ReaderLoop {
         type.lastProbeNanos = type.nextDueNanos;
         type.lastProbeCostNanos = 0;
         type.wokenSinceProbe = false;
+        type.lastReadNanos = type.nextDueNanos;
         type.publish(reader.state());
     }
 

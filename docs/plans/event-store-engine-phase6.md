@@ -603,3 +603,94 @@ page per commit, the price of the latency; wake coalescing is the lever), and th
 single-type two-statement flush costs the same as the combined probe. `wokenProbeMin` stays 10 ms. Surprise: 180-213
 distinct flush texts at 50 active types, above the 64-entry statement LRU. No default changed and no main code changed
 except the two test knobs in `ReaderLoop`.
+
+**Final verdict per row, after unit D (§10.8).** The maintainer chose "add coalescing, re-measure".
+- §7.1 latency (tier 1 below S1 and at or below CDC; tier 2 at or below tier 1; `CONTIGUOUS` within one woken probe wait
+  of `FRESH`): **passes**, unchanged by unit D.
+- §7.1 reader statements per delivered event: **passes at 1 ev/s, fails at 100 ev/s** with every interval measured (0, 2
+  and 5 ms: 1.10; 20 ms: 0.54; backstop only: 0.02-0.11). Woken-read coalescing ships, off by default.
+- §7.2 append cost of `NOTIFY` within 10 % at 8 and 20 writers: **passes** with the 2 ms send interval, now the default
+  (8 writers +6 to +8 %, 20 writers −2.3 to +1.7 %); `Lock:object` never seen.
+- §7.3 one flush, §7.4 I7: **pass**, unchanged.
+
+### 10.8 Coalescing (unit D)
+
+The maintainer's answer to the two rows that failed as written (§10.7): add coalescing and measure again. Two settings,
+each validated `>= 0`, with zero meaning off:
+
+- **`wokenReadMin`** (`ReaderLoop`). A woken read starts no sooner than `wokenReadMin` after the start of the type's last
+  read of any kind, because any read that starts after a wake serves it. A wake inside the interval lowers the type's
+  `nextDueNanos` to the end of the interval and is carried to that read (`wakePending`). It is never dropped, and it never
+  pushes the type's due time later than it already was, so the backstop still bounds every read (I7). The clock is per
+  type because due times are per type, and it reuses `nextDueNanos` rather than adding a new one. Types read in one flush
+  share their read start, so they stay in step and keep sharing flushes. The probe clock is untouched: `wokenSinceProbe`
+  is set when the wake is taken, as before. A wake that arrives during a read sets the flag again, as §4.1 requires.
+- **`notifySendMin`** (`WakeNotifier`). A send starts no sooner than `notifySendMin` after the previous one started. Types
+  added meanwhile stay in the set and go out together in that send. A `stop` sends what is pending at once, and the kick
+  is never delayed.
+- **Tests.** `EventLogCoalescingIT` uses 300 ms intervals against a 30 s backstop. A burst of five commits inside the read
+  interval is served by at most two reads and delivered within the interval plus 500 ms; mutant
+  `WOKEN_READ_DROPPED_INSIDE_INTERVAL` fails it, because the burst waits for the backstop. Five commits inside the send
+  interval go out in exactly one later send and reach the other event log within the same bound; mutant
+  `NOTIFY_DROPPED_INSIDE_INTERVAL` fails it. `WakeTierTest` adds the union inside the interval and the immediate send on
+  `stop`. `EventLogSettingsTest` adds the validation.
+
+**Measurement.** The same harness and VM as §10.1 and §10.2, with the same caveat: absolute figures need the dedicated
+server, while statement counts and the ratios inside one arm do not depend on it. Each arm got a fresh container and a
+database name of its own (suffix `_r<ms>_n<ms>`), with two runs per arm. Both intervals were set to the same value: 0, 2
+and 5 ms. §7.1 covered TIER2 and TIER1 at 1, 10 and 100 ev/s. §7.2 covered NONE and NOTIFIER at 8 and 20 writers with
+`fsync=on`. One extra point, 20 ms, was taken at 100 ev/s only (read interval 20 ms, send interval 2 ms) to show where the
+row's curve goes. Properties: `-Dspike.gate.p6WokenReadMin`, `p6NotifySendMin`, `p6Fsync`, `p6NotifyArms`. Raw results
+were kept outside the repository.
+
+§7.1, tier 1 (two engines). Runs 1-2, FRESH p50 / p99 in ms; reader statements per delivered event:
+
+| Interval | 1 ev/s | 10 ev/s | 100 ev/s | Statements per event at 1 / 10 / 100 ev/s | Tail reads/s at 100 ev/s |
+|---|---|---|---|---|---|
+| 0 | 2.08-2.20 / 3.96-8.40 | 1.51-1.63 / 3.15-7.10 | 0.97-1.00 / 1.71-1.86 | 1.46-1.48 / 1.149 / 1.103-1.104 | 100.1 |
+| 2 ms | 1.69-2.25 / 5.67-10.14 | 1.51-1.65 / 2.72-3.06 | 0.98-0.99 / 1.86-1.90 | 1.44 / 1.149 / 1.104 | 100.1 |
+| 5 ms | 2.13-2.26 / 6.32-9.24 | 1.49-1.58 / 2.31-2.54 | 0.97-0.98 / 2.48-3.26 | 1.45-1.46 / 1.149-1.150 / 1.102-1.104 | 100.1 |
+| 20 ms (100 ev/s only) | — | — | 10.74-11.19 / 21.39-21.99 | — / — / 0.534-0.539 | 48.1-48.6 |
+
+Tier 2 (same engine) behaves the same way. At 100 ev/s: p50 0.56-0.59 / p99 1.25-1.44 ms at 0, 0.56-0.60 / 1.32-1.43 at
+2 ms, 0.56-0.59 / 1.45-1.69 at 5 ms, and 10.6-10.8 / 21.2-21.3 at 20 ms. Statements per event were 1.105 at 0-5 ms and
+0.539-0.542 at 20 ms. `CONTIGUOUS` stayed within 0.1 ms of `FRESH` at 10 and 100 ev/s in every arm. The coalescing ratio
+at one writer was 1.00 notification batch per commit in every arm.
+
+§7.2, `fsync=on`, runs 1-2. NONE and NOTIFIER ran back to back in the same JVM with their own containers, so each Δ is
+against its own NONE:
+
+| Interval | Writers | None: appends/s | Notifier: appends/s | Δ | Batches per commit | Sends/s | Commit p50 none / notifier |
+|---|---|---|---|---|---|---|---|
+| 0 | 8 | 19 701-20 070 | 20 435-20 475 | +3.9 % / +1.8 % | 0.497 | 10 150-10 180 | 0.27-0.28 / 0.28 ms |
+| 0 | 20 | 24 098-24 478 | 23 182-23 230 | −3.6 % / −5.3 % | 0.457-0.458 | 10 610-10 620 | 0.29 / 0.30 ms |
+| 2 ms | 8 | 20 545-20 924 | 22 178-22 191 | +8.0 % / +6.0 % | 0.022 | 486-487 | 0.27 / 0.26 ms |
+| 2 ms | 20 | 24 202-25 494 | 24 614-24 914 | +1.7 % / −2.3 % | 0.020 | 486 | 0.28-0.29 / 0.28-0.29 ms |
+| 5 ms | 8 | 20 721-21 622 | 21 073-21 626 | 0.0 % / +1.7 % | 0.009 | 197-198 | 0.26-0.27 / 0.26-0.27 ms |
+| 5 ms | 20 | 24 482-25 431 | 24 074-24 105 | −1.7 % / −5.2 % | 0.008 | 198 | 0.28-0.29 / 0.30 ms |
+
+No arm sampled a writer in `Lock:object`.
+
+**Verdict.**
+- **§7.2 passes at every interval in this run, including 0.** At 0, 20 writers cost −3.6 % and −5.3 %, against §10.2's
+  −14.5 % and −6.3 %. Counting both measurements, the uncoalesced notifier stayed inside 10 % in 3 of 4 runs at 20
+  writers: the VM's noise sits around the limit. The 2 ms interval cuts sends from about 10 000 to 486 a second
+  (0.020 batches per commit), and the cost moves inside the noise (−2.3 to +8 %). 5 ms halves the sends again and buys
+  nothing measurable. **Default `notifySendMin` = 2 ms.** It is the smallest interval that takes the row from borderline to
+  clearly inside the limit. Its latency cost lands only when commits arrive less than 2 ms after the previous send. With
+  one writer at up to 100 ev/s that never happens (1.00 batch per commit), and tier 1's latency is unchanged within the
+  noise.
+- **§7.1's statements row fails at 0, 2 and 5 ms alike: 1.10 at 100 ev/s, against 0.02-0.11 backstop only.** In §7.1's
+  shape the commits come at a fixed pace, 10 ms apart at 100 ev/s, so a read interval under 10 ms never finds a second
+  wake to merge. Tail reads stay at 100.1/s and the statements do not move. 20 ms halves the reads (48/s) and the
+  statements (0.54), still five times the 100 ms backstop arm's 0.113, and costs 10 ms of p50 and 20 ms of p99. To reach
+  the row as written, the interval would have to be close to the 100 ms backstop, which is the backstop arm's latency.
+  The row conflicts with millisecond latency at a steady 100 ev/s. §10.1's estimate that 5-10 ms would bring it to 0.2-0.3
+  assumed commits that cluster, and this shape's commits do not. As instructed, nothing was forced: **default
+  `wokenReadMin` = 0 (off).** The mechanism ships and is tested, for a deployment whose commits come in bursts (many
+  writers) to opt into. The row is left to the maintainer: accept it as the cost of the latency (tier 1 is at S1's 1.05
+  and CDC batches on its own dispatcher), or restate it for clustered commits.
+- **Decision 2 and `wokenProbeMin` are unchanged.** Unit D did not touch the combined probe or the flush, and §10.3's
+  figure (305-328 against 316-332 µs per wake) stands. `wokenProbeMin` stays 10 ms. No running set was read in any
+  latency arm, as in §10.5.
+
