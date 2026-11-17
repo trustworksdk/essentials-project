@@ -145,6 +145,13 @@ public record EventLogSettings(Duration backstopInterval,
      * notifier's sends at 8 and 20 writers from about 10 000 to about 490 a second and keeps §7.2's append cost inside 10 %
      */
     static final Duration DEFAULT_NOTIFY_SEND_MIN = Duration.ofMillis(2);
+    /**
+     * {@link #retryBackoffInitial()} of {@link #defaults()}: 10 ms, so a failing event waits 10, 20 and 40 ms before it is
+     * parked. Phase 8 §16 measured one always-failing event in 1 000 at 0.10x the no-failure throughput with 100 ms and
+     * about 0.45x with 10 ms. Configurable engine-wide with {@link #withRetryBackoff(Duration, Duration)} and per
+     * subscription with {@link ErrorSettings}.
+     */
+    static final Duration DEFAULT_RETRY_BACKOFF_INITIAL = Duration.ofMillis(10);
 
     public EventLogSettings {
         requirePositive(backstopInterval, "backstopInterval");
@@ -238,7 +245,7 @@ public record EventLogSettings(Duration backstopInterval,
      * time out after 3 s, no node name
      */
     public static EventLogSettings defaults() {
-        return new EventLogSettings(Duration.ofSeconds(1), 100, Duration.ofSeconds(1), Duration.ofSeconds(10), Duration.ofSeconds(1), 1_000, true, 1_000, 500, 100, 3, Duration.ofMillis(100), Duration.ofSeconds(10), 4, 100_000, 10_000_000,
+        return new EventLogSettings(Duration.ofSeconds(1), 100, Duration.ofSeconds(1), Duration.ofSeconds(10), Duration.ofSeconds(1), 1_000, true, 1_000, 500, 100, 3, DEFAULT_RETRY_BACKOFF_INITIAL, Duration.ofSeconds(10), 4, 100_000, 10_000_000,
                                     java.util.Set.of(), java.util.Set.of(), Duration.ofMillis(10), true, DEFAULT_WOKEN_READ_MIN, DEFAULT_NOTIFY_SEND_MIN,
                                     Duration.ofSeconds(15), Duration.ofSeconds(4), Duration.ofSeconds(7), Duration.ofSeconds(3), "", Duration.ZERO, 1_000);
     }

@@ -853,3 +853,7 @@ which is why this is a default to choose, not a defect. For the maintainer to de
 | §10.4 retry from another node (recorded) | ≤ one backstop interval expected | p50 509-539 ms, p100 958-1 004 ms | as expected |
 
 No row missed. The one figure that leans is the steady p99 of the processors (§16.1), inside the noise on this VM.
+
+### 16.x Retry back-off default, decided (2026-11-17)
+
+The maintainer chose the recommended 10 ms default and asked that it stay configurable. `EventLogSettings.defaults()` now uses `DEFAULT_RETRY_BACKOFF_INITIAL` = 10 ms. It is configurable engine-wide with `withRetryBackoff(initial, max)` and per subscription with `ErrorSettings`.

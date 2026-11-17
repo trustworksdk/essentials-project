@@ -54,9 +54,9 @@ class SubscriptionDefinitionTest {
     @Test
     void error_defaults_come_from_the_event_log_settings() {
         var defaults = ErrorSettings.defaults(EventLogSettings.defaults());
-        assertThat(defaults).isEqualTo(new ErrorSettings(3, Duration.ofMillis(100), Duration.ofSeconds(10), 100));
-        assertThat(defaults.backoff(0)).isEqualTo(Duration.ofMillis(100));
-        assertThat(defaults.backoff(3)).isEqualTo(Duration.ofMillis(800));
+        assertThat(defaults).isEqualTo(new ErrorSettings(3, Duration.ofMillis(10), Duration.ofSeconds(10), 100));
+        assertThat(defaults.backoff(0)).isEqualTo(Duration.ofMillis(10));
+        assertThat(defaults.backoff(3)).isEqualTo(Duration.ofMillis(80));
         assertThat(defaults.backoff(30)).isEqualTo(Duration.ofSeconds(10));
     }
 
