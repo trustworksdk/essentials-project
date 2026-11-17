@@ -864,3 +864,90 @@ The maintainer added unit **8b-E**: a scenario in `examples/essentials-performan
 adapter, `ViewProjection` and `EventReactor`) side by side with the old engine's polling and CDC, under the lab's
 existing load profiles, alongside `BaselinePollingVsCdcComparisonScenario`. The change to the example module is
 additive. Results are recorded in this file. It runs after 8b-B, when the adapter exists.
+
+## 17. Performance-lab comparison (8b-E)
+
+**Run on 2026-11-17, on a shared VM, not a dedicated server.** The machine is an 8-CPU, 15 GB devcontainer. PostgreSQL
+17.5 (`postgres:17.5-bookworm`, `wal_level=logical`) ran in Docker on the same machine, and other agents' builds may
+have run at the same time. The JVM and the database competed for the same cores. Each case ran once, so there is no
+run-to-run spread. Treat the absolute numbers as indicative only. The gaps are large enough to read; small differences
+are not.
+
+### 17.1 The scenario
+
+`event-log-vs-polling-vs-cdc-compare` in `examples/essentials-performance-lab` is opt-in and registered only with
+`essentials.lab.event-log.enabled=true`. It runs the baseline workload of `BaselinePollingVsCdcComparisonScenario` six
+times, each in its own child Spring context: the old engine's `polling`, `notifyPolling`, `cdcInbox` and `cdcDirect`
+legs, then `eventLogReactor` and `eventLogProjection`. The two new-engine legs use the `EventLogEventStore` adapter, with
+`subscriber-count` `EventReactor`s (`FRESH`) or `ViewProjection`s (`CONTIGUOUS`, engine page source). The child for the
+new engine is `EventLogBaselineScenario`. Its producer phase, seeds, metrics and JSON fields are the baseline's.
+
+Every handler records the delivery in memory and writes nothing, so every leg measures the delivery path. Each case
+runs `scripts/run-event-log-compare-matrix.sh` over the four profiles of `run-baseline-matrix.sh`, with warm-up 5 s,
+measurement 20 s, 4 producer threads, unthrottled appends and seed 42. The smoke test is
+`EventLogComparisonScenarioSmokeIT`; the README section "New event store engine vs polling vs CDC (opt-in)" says how to
+run it.
+
+### 17.2 Results
+
+End-to-end latency runs from append to handler. Selects/s are `SELECT`s that name the aggregate type's event table.
+For the old legs they are counted with JDBI's `SqlLogger`; for the new engine, with a counting `DataSource` under its
+pool. Statements/delivery counts every statement of the new-engine leg, appends included. Lag is the undelivered count
+at the end of the catch-up window.
+
+| Profile | Leg | Append eps | Delivery eps | p50 ms | p95 ms | p99 ms | Catch-up ms | Lag | Selects/s | Stmts/delivery |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| s1_card5000 | polling | 1 774 | 1 774 | 3 506 | 4 388 | 4 609 | 2 431 | 0 | 1 777 | |
+| | notifyPolling | 1 698 | 1 698 | 9 360 | 12 630 | 13 018 | 6 013 | 0 | 1 464 | |
+| | cdcInbox | 1 851 | 1 851 | 10 243 | 12 694 | 12 897 | 12 166 | 0 | 1 636 | |
+| | cdcDirect | 1 912 | 1 912 | 10 906 | 11 950 | 12 141 | 12 021 | 0 | 1 839 | |
+| | eventLogReactor | 6 882 | 6 882 | 0.7 | 0.8 | 1.0 | 26 | 0 | 13 314 | 3.01 |
+| | eventLogProjection | 6 595 | 6 595 | 1.5 | 2.0 | 93.6 | 26 | 0 | 13 442 | 3.48 |
+| s1_card50 | polling | 2 169 | 2 169 | 5 306 | 7 773 | 8 042 | 4 365 | 0 | 1 999 | |
+| | notifyPolling | 1 779 | 1 779 | 8 600 | 12 009 | 12 243 | 5 710 | 0 | 1 541 | |
+| | cdcInbox | 1 829 | 1 829 | 5 174 | 11 836 | 12 700 | 12 748 | 0 | 1 666 | |
+| | cdcDirect | 1 898 | 1 898 | 13 331 | 14 553 | 14 698 | 14 701 | 0 | 1 838 | |
+| | eventLogReactor | 6 913 | 6 913 | 0.7 | 0.8 | 1.0 | 0 | 0 | 13 411 | 3.01 |
+| | eventLogProjection | 6 611 | 6 611 | 1.5 | 55.8 | 137.5 | 28 | 0 | 13 399 | 3.46 |
+| s5_card5000 | polling | 1 429 | 7 143 | 8 085 | 12 462 | 12 957 | 12 175 | 0 | 1 441 | |
+| | notifyPolling | 1 067 | 5 335 | 7 965 | 12 187 | 12 975 | 10 382 | 0 | 1 141 | |
+| | cdcInbox | 1 325 | 6 623 | 5 381 | 13 381 | 15 191 | 15 178 | 0 | 1 376 | |
+| | cdcDirect | 1 213 | 6 064 | 5 889 | 11 253 | 12 037 | 11 040 | 0 | 1 470 | |
+| | eventLogReactor | 6 598 | 32 992 | 0.7 | 0.9 | 1.0 | 25 | 0 | 12 475 | 0.59 |
+| | eventLogProjection | 5 238 | 26 192 | 2.1 | 165.1 | 189.5 | 26 | 0 | 12 384 | 1.10 |
+| s5_card50 | polling | 1 399 | 6 994 | 9 006 | 12 879 | 13 145 | 13 028 | 0 | 1 375 | |
+| | notifyPolling | 1 115 | 5 574 | 9 106 | 12 104 | 12 445 | 11 293 | 0 | 1 157 | |
+| | cdcInbox | 1 272 | 6 160 | 7 252 | 20 289 | 22 877 | timeout | 3 983 | 2 976 | |
+| | cdcDirect | 1 194 | 5 924 | 7 579 | 18 572 | 20 535 | timeout | 879 | 3 016 | |
+| | eventLogReactor | 6 522 | 32 609 | 0.7 | 0.9 | 1.3 | 25 | 0 | 12 286 | 0.59 |
+| | eventLogProjection | 5 500 | 27 499 | 2.1 | 161.3 | 182.1 | 326 | 0 | 12 623 | 1.10 |
+
+A pool-size check reran s1_card5000 and s5_card5000 with the new engine's pool at 10 connections, the old legs' Hikari
+default, instead of 20. The reactor gave 6 700 and 6 598 append eps, with p99 1.0 ms both. The projection gave 6 410
+and 4 588 append eps, with p99 132 and 212 ms. Pool size does not explain the gap.
+
+### 17.3 Reading
+
+- **Every profile here saturates the old engine.** Appends are unthrottled. On the old engine, polling and CDC alike,
+  the subscribers fall seconds behind: p50 is 3.5-13 s and catch-up takes 2-15 s. With 5 subscribers at cardinality 50,
+  both CDC legs did not catch up within the window (lag 3 983 and 879). Under this load, CDC is no faster than polling,
+  and notify-polling is a little slower. These are the same shapes the lab has recorded for the old engine before. This
+  is a throughput test; it is not a test of wake-up latency.
+- **The new engine keeps up at about 3.5-5 times the append rate.** The reactor delivers at p99 ≈ 1 ms in every
+  profile, and every leg catches up within one 25 ms poll of the wait loop. The projection's p50 is 1.5-2 ms. Its
+  p95/p99 of 55-190 ms comes from the page transaction (`CONTIGUOUS`, a page applied and committed before the next
+  page), and with 5 subscribers it costs about 20 % of append throughput.
+- **Read load.** The new engine executes about 1.9 `SELECT`s naming the event table per appended event, whatever the
+  subscriber count. One is the append path's last-order read; the rest are the shared reader. The old engine executes
+  about 1.0 per appended event: the append path's read, plus very few subscriber polls, because each poll returns a
+  large batch while the subscriber is behind. All statements per delivered event on the new engine are 3.0 with one
+  subscriber and 0.59 with five, so the reads are shared across subscriptions.
+- **Confounds that favour the new engine and were not measured away:**
+  - The new legs append through a JDBI unit of work on their own pool (`EventStoreManagedUnitOfWorkFactory`, so that
+    every statement is counted). The old legs append through the starter's Spring unit of work on the application
+    pool, which they share with their subscribers and the old engine's background components.
+  - Only the pool size was checked (§17.2), not the Spring-versus-JDBI unit of work.
+  - Each result is a single run.
+
+  A quiet-workload profile (a throttled `producer-rate-hz`, as in the lab's notify-polling studies) would isolate
+  wake-up latency, and is the next run to make on the dedicated server.

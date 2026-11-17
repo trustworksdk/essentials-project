@@ -62,6 +62,15 @@
             <artifactId>postgresql-queue-shard-owned</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!--
+          The new event store engine (design phase 8), as the EventLogEventStore adapter plus the ViewProjection and
+          EventReactor processors. Only the opt-in scenarios behind essentials.lab.event-log.enabled=true use it.
+        -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-event-log-integration</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
@@ -88,6 +97,13 @@
             <groupId>org.objenesis</groupId>
             <artifactId>objenesis</artifactId>
             <version>${objenesis.version}</version>
+        </dependency>
+        <dependency>
+            <!-- optional in spring-boot-starter-postgresql, but EssentialsComponentsConfiguration has a bean method with an
+                 Optional<Tracer> parameter, and Spring's introspection of that class fails with NoClassDefFoundError
+                 without it: every @SpringBootTest of the lab failed to load its context. -->
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
