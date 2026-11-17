@@ -187,6 +187,9 @@ final class Subscription {
     /** Consecutive I/O failures of pages, for the backoff */
     private int                                  ioFailures;
     private final Queue<ParkedRequest>           parkedRequests = new ConcurrentLinkedQueue<>();
+    /** Phase 8 §4.3: when the next parked check is due (0: at once), and how many ran; delivery thread */
+    private long                                 nextParkedCheckNanos;
+    private volatile long                        parkedChecks;
     // ---- phase 7: exclusive subscriptions; both null for a non-exclusive one ----
     private final Lease                          lease;
     private final LeaseKeeper                    keeper;
@@ -778,6 +781,18 @@ final class Subscription {
         } finally {
             phase = before;
         }
+    }
+
+    /** @return the progress row's key */
+    ProgressStore.Key key() {
+        return key;
+    }
+
+    /**
+     * Phase 8 §4.3: whether this subscription may serve a parked request now - running and, if exclusive, owning its lease
+     */
+    boolean servesParked() {
+        return isRunning() && (lease == null || (lease.state() == Lease.State.OWNED && ownedFence != null));
     }
 
     /** @return the lease of an exclusive subscription, {@code null} for a non-exclusive one; for tests */
@@ -2079,8 +2094,37 @@ final class Subscription {
         }
     }
 
-    /** Delivery thread, between pages: run the retry and discard requests */
+    /**
+     * Phase 8 §4.3, the parked check: while this subscription holds at least one aggregate, read the requests an operator
+     * stored on its parked heads, at most once per {@link EventLogSettings#effectiveParkedCheckInterval()}, and queue them.
+     * With no held aggregate there is no head to request anything on, and nothing is read
+     */
+    private void checkParkedRequests() throws SQLException {
+        if (seams.has(PARKED_CHECK_SKIPPED) || (parked.heldCount() == 0 && !seams.has(PARKED_CHECK_ALWAYS))) {
+            return;
+        }
+        var now = System.nanoTime();
+        if (nextParkedCheckNanos != 0 && now - nextParkedCheckNanos < 0) {
+            return;
+        }
+        nextParkedCheckNanos = now + settings.effectiveParkedCheckInterval().toNanos();
+        parkedChecks++;
+        for (var request : parked.requests()) {
+            var queued = parkedRequests.stream().anyMatch(r -> r.head() == request.head());
+            if (!queued) {
+                parkedRequests.add(new ParkedRequest(request.head(), request.discard(), new CompletableFuture<>()));
+            }
+        }
+    }
+
+    /** @return the parked checks that read the table (phase 8 §4.3); for tests */
+    long parkedChecks() {
+        return parkedChecks;
+    }
+
+    /** Delivery thread, between pages: run the retry and discard requests, the stored ones first read by the parked check */
     private void serveParkedRequests() throws Exception {
+        checkParkedRequests();
         ParkedRequest request;
         while ((request = parkedRequests.poll()) != null) {
             try {
@@ -2101,6 +2145,16 @@ final class Subscription {
         try {
             open = (model == ProgressModel.PERIODIC ? engineSource : pageSource).begin();
             var connection = open.connection();
+            // Phase 8 §4.3: the progress row first, epoch- and fence-guarded, in the order a reset locks
+            if (!seams.has(SERVE_WITHOUT_EPOCH)
+                    && !ParkedEvents.lockProgress(connection, key, seams.has(SERVE_WITHOUT_EPOCH) ? null : (Long) resetEpoch,
+                                                  seams.has(SERVE_WITHOUT_FENCE) ? null : boundFence())) {
+                var ending = open;
+                open = null;
+                rollback(ending);
+                onProgressConflict();
+                return false;
+            }
             var orders = parked.lock(connection, head);
             if (orders.isEmpty()) {
                 var ending = open;
@@ -2128,7 +2182,8 @@ final class Subscription {
             }
             parked.delete(connection, orders);
             var expected = model == ProgressModel.PERIODIC || seams.has(PROGRESS_WITHOUT_EXPECTED_RESUME) ? null : (Long) lastSaved;
-            if (!ProgressStore.saveInTransaction(connection, key, lastSaved, boundEpoch(), boundFence(), expected)) {
+            if (!ProgressStore.saveInTransaction(connection, key, lastSaved, seams.has(SERVE_WITHOUT_EPOCH) ? null : boundEpoch(),
+                                                 seams.has(SERVE_WITHOUT_FENCE) ? null : boundFence(), expected)) {
                 var ending = open;
                 open = null;
                 rollback(ending);

@@ -66,6 +66,8 @@ public final class EventLog {
     private final LeaseKeeper                                         leaseKeeper;
     private final EventLogCommitCallback                              commitCallback = new EventLogCommitCallback(this);
     private volatile TestSeams                                        leaseSeams     = TestSeams.NONE;
+    private volatile TestSeams                                        adminSeams     = TestSeams.NONE;
+    private final EventLogAdmin                                       admin;
 
     EventLog(DataSource dataSource, SchemaOwnership schemaOwnership, EventLogSchema.AggregateTypeDdlExecutor ddl, EventLogSettings settings, EventLogObserver observer) {
         this(dataSource, schemaOwnership, ddl, settings, observer, () -> schemaOwnership == SchemaOwnership.COMPONENT);
@@ -87,6 +89,7 @@ public final class EventLog {
         this.eventTypes = new EventTypeRegistry(dataSource);
         this.eventTypeIndex = new EventTypeIndex(dataSource, createsSchema);
         this.instance = newInstanceId();
+        this.admin = new DatabaseEventLogAdmin(dataSource, settings, progressStore, () -> subscriptions, () -> adminSeams);
         this.leaseKeeper = new LeaseKeeper(dataSource, settings, observer, settings.nodeName().isEmpty() ? instance : settings.nodeName() + "/" + instance, () -> leaseSeams);
         if (settings.crossJvmWakeUp()) {
             this.notifier = new WakeNotifier(instance, WakeNotifier.sendOnBorrowedConnection(dataSource), () -> wakeSeams, settings.notifySendMin());
@@ -344,6 +347,22 @@ public final class EventLog {
      */
     public dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkLifecycleCallback<String> commitCallback() {
         return commitCallback;
+    }
+
+    /**
+     * The admin operations (design phase 8 §4): listing, parked rows, reset, retry and discard from any node, retired
+     * instances
+     *
+     * @return this event log's admin facade
+     */
+    public EventLogAdmin admin() {
+        requireStarted();
+        return admin;
+    }
+
+    /** The admin facade's mutants (phase 8 §9.3); for tests */
+    void adminSeams(TestSeams seams) {
+        this.adminSeams = requireNonNull(seams, "No seams provided");
     }
 
     /**

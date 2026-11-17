@@ -220,7 +220,7 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
      * then the key and {@link #FENCE_GUARD}'s parameters
      */
     static final String PARKED_FAILED_AGAIN_GUARDED =
-            "UPDATE " + PARKED_EVENTS_TABLE + " SET attempts = attempts + 1, error_type = ?, error_message = ?\n" +
+            "UPDATE " + PARKED_EVENTS_TABLE + " SET attempts = attempts + 1, error_type = ?, error_message = ?, requested = NULL, requested_at = NULL\n" +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?\n" +
                     "   AND EXISTS (SELECT 1 FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD + " FOR SHARE)";
     /** The held aggregates: every parked head */
@@ -235,9 +235,72 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
             "DELETE FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ANY(?::bigint[])";
     /** error_type, error_message, then the key, then the head */
     static final String PARKED_FAILED_AGAIN =
-            "UPDATE " + PARKED_EVENTS_TABLE + " SET attempts = attempts + 1, error_type = ?, error_message = ?\n" + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?";
+            "UPDATE " + PARKED_EVENTS_TABLE + " SET attempts = attempts + 1, error_type = ?, error_message = ?, requested = NULL, requested_at = NULL\n" + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?";
     /** A reset: every parked row of the subscription */
     static final String PARKED_DELETE_ALL = "DELETE FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";
+    // ---- phase 8 §4: parked requests and the admin facade ----
+    /**
+     * The serve transaction's first statement (§4.3, §11.1 I5, I6): lock the progress row under {@link #FENCE_GUARD}, so a
+     * reset or a takeover that got there first leaves nothing to serve, and one that comes later waits for the serve to
+     * commit. The key, then {@link #FENCE_GUARD}'s parameters. Taken before the parked rows, in the order a reset takes
+     * them, so the two never deadlock
+     */
+    static final String PARKED_SERVE_GUARD =
+            "SELECT 1 FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD + " FOR NO KEY UPDATE";
+    /** The parked check (§4.3): the requests stored on the subscription's heads. The key */
+    static final String PARKED_REQUESTS =
+            "SELECT global_order, requested FROM " + PARKED_EVENTS_TABLE +
+                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND requested IS NOT NULL AND blocked_by IS NULL ORDER BY global_order";
+    /**
+     * Store a request on a parked head (§4.3): the key, then the key, requested, the head. Returns whether the progress
+     * row exists and whether a head row took the request
+     */
+    static final String PARKED_REQUEST =
+            "WITH p AS (SELECT 1 FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?),\n" +
+                    "u AS (UPDATE " + PARKED_EVENTS_TABLE + " SET requested = ?, requested_at = now()\n" +
+                    "       WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ? AND blocked_by IS NULL AND EXISTS (SELECT 1 FROM p)\n" +
+                    "       RETURNING 1)\n" +
+                    "SELECT (SELECT count(*) FROM p), (SELECT count(*) FROM u)";
+    /**
+     * The admin listing (§4.1), one statement: every progress row with its parked head count and total and its lag, the
+     * head of each listed aggregate type read once from the type's event table through {@code el_aggregate_types} (so a
+     * type no node of this JVM registered still shows). Optional aggregate type twice, then the limit. Columns:
+     * subscriber, aggregate_type, instance_name, exclusive, consistency_mode, progress_model, resume_from, reset_epoch,
+     * lease_owner, lease_until, lease_fence, updated_at, filter_digest, parked heads, parked total, lag (null if the type is
+     * not registered)
+     */
+    static final String ADMIN_SUBSCRIPTIONS =
+            "WITH p AS MATERIALIZED (SELECT * FROM " + PROGRESS_TABLE + " WHERE (?::text IS NULL OR aggregate_type = ?)\n" +
+                    "                         ORDER BY aggregate_type, subscriber, instance_name LIMIT ?),\n" +
+                    "h AS MATERIALIZED (SELECT t.aggregate_type,\n" +
+                    "                          coalesce((xpath('/row/m/text()', query_to_xml(format('SELECT max(global_order) AS m FROM %I', t.event_table), false, true, '')))[1]::text::bigint, 0) AS head\n" +
+                    "                     FROM " + AGGREGATE_TYPES_TABLE + " t WHERE t.aggregate_type IN (SELECT DISTINCT aggregate_type FROM p)),\n" +
+                    "c AS (SELECT e.subscriber, e.aggregate_type, e.instance_name, count(*) FILTER (WHERE e.blocked_by IS NULL) AS heads, count(*) AS total\n" +
+                    "        FROM " + PARKED_EVENTS_TABLE + " e JOIN p USING (subscriber, aggregate_type, instance_name)\n" +
+                    "       GROUP BY e.subscriber, e.aggregate_type, e.instance_name)\n" +
+                    "SELECT p.subscriber, p.aggregate_type, p.instance_name, p.exclusive, p.consistency_mode, p.progress_model, p.resume_from, p.reset_epoch,\n" +
+                    "       p.lease_owner, p.lease_until, p.lease_fence, p.updated_at, p.filter_digest, coalesce(c.heads, 0), coalesce(c.total, 0),\n" +
+                    "       greatest(h.head - (p.resume_from - 1), 0)\n" +
+                    "  FROM p LEFT JOIN c USING (subscriber, aggregate_type, instance_name) LEFT JOIN h USING (aggregate_type)\n" +
+                    " ORDER BY p.aggregate_type, p.subscriber, p.instance_name";
+    /** {@link #ADMIN_SUBSCRIPTIONS} for one key: the key */
+    static final String ADMIN_SUBSCRIPTION =
+            ADMIN_SUBSCRIPTIONS.replace("WHERE (?::text IS NULL OR aggregate_type = ?)\n", "WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?\n")
+                               .replace(" LIMIT ?),\n", "),\n");
+    /** One subscription's parked rows above a global order (§4.1): the key, the lower bound (exclusive), the limit */
+    static final String ADMIN_PARKED =
+            "SELECT global_order, aggregate_id, blocked_by, attempts, error_type, error_message, parked_at, requested, requested_at FROM " + PARKED_EVENTS_TABLE +
+                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order > ? ORDER BY global_order LIMIT ?";
+    /**
+     * Delete a retired instance's row and its parked rows (§19 item 17): only a non-exclusive row nobody holds a lease on.
+     * The key, then the key. Returns the progress rows deleted
+     */
+    static final String ADMIN_DELETE_RETIRED =
+            "WITH d AS (DELETE FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND NOT exclusive AND instance_name <> ''\n" +
+                    "           AND (lease_until IS NULL OR lease_until < now()) RETURNING 1),\n" +
+                    "e AS (DELETE FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND EXISTS (SELECT 1 FROM d))\n" +
+                    "SELECT count(*) FROM d";
+
     /** A reset (tests until phase 8): resume_from, then the key */
     static final String PROGRESS_RESET =
             "UPDATE " + PROGRESS_TABLE + " SET reset_epoch = reset_epoch + 1, resume_from = ?, updated_at = now()\n" + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";

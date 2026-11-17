@@ -302,22 +302,9 @@ final class ProgressStore {
         try (var connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
             try {
-                int updated;
-                try (var statement = connection.prepareStatement(EventLogStorage.PROGRESS_RESET)) {
-                    statement.setLong(1, resumeFrom);
-                    statement.setString(2, key.subscriber());
-                    statement.setString(3, key.aggregateType());
-                    statement.setString(4, key.instanceName());
-                    updated = statement.executeUpdate();
-                }
-                try (var statement = connection.prepareStatement(EventLogStorage.PARKED_DELETE_ALL)) {
-                    statement.setString(1, key.subscriber());
-                    statement.setString(2, key.aggregateType());
-                    statement.setString(3, key.instanceName());
-                    statement.executeUpdate();
-                }
+                var existed = reset(connection, key, resumeFrom);
                 connection.commit();
-                return updated == 1;
+                return existed;
             } catch (SQLException | RuntimeException e) {
                 connection.rollback();
                 throw e;
@@ -325,5 +312,29 @@ final class ProgressStore {
                 connection.setAutoCommit(true);
             }
         }
+    }
+
+    /**
+     * The reset's two statements on {@code connection}, which is not committed here (phase 8 §4.2): the caller's
+     * transaction, so a rebuild truncates its view and resets in one commit. The progress row first, then the parked
+     * rows - the order the serve transaction locks them in. A row that does not exist is not created.
+     *
+     * @return whether the row existed
+     */
+    static boolean reset(Connection connection, Key key, long resumeFrom) throws SQLException {
+        int updated;
+        try (var statement = connection.prepareStatement(EventLogStorage.PROGRESS_RESET)) {
+            statement.setLong(1, resumeFrom);
+            bindKey(statement, 2, key);
+            updated = statement.executeUpdate();
+        }
+        if (updated == 0) {
+            return false;
+        }
+        try (var statement = connection.prepareStatement(EventLogStorage.PARKED_DELETE_ALL)) {
+            bindKey(statement, 1, key);
+            statement.executeUpdate();
+        }
+        return true;
     }
 }

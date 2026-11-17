@@ -181,8 +181,14 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
                         "    error_type      text,\n" +
                         "    error_message   text,\n" +
                         "    parked_at       timestamptz NOT NULL DEFAULT now(),\n" +
+                        "    requested       text        CHECK (requested IN ('RETRY', 'DISCARD')),\n" +
+                        "    requested_at    timestamptz,\n" +
                         "    PRIMARY KEY (subscriber, aggregate_type, instance_name, global_order)\n" +
                         ")",
+                // Phase 8 §4.3: an operator's retry or discard request on a parked head, served by the node that runs the
+                // subscription; added to a table created before phase 8
+                "ALTER TABLE " + PARKED_EVENTS_TABLE + " ADD COLUMN IF NOT EXISTS requested text CHECK (requested IN ('RETRY', 'DISCARD'))",
+                "ALTER TABLE " + PARKED_EVENTS_TABLE + " ADD COLUMN IF NOT EXISTS requested_at timestamptz",
                 createIndexUnlessPresent(PARKED_EVENTS_TABLE, PARKED_EVENTS_TABLE + "_aggregate",
                                          "CREATE INDEX IF NOT EXISTS " + PARKED_EVENTS_TABLE + "_aggregate ON " + PARKED_EVENTS_TABLE +
                                                  " (subscriber, aggregate_type, instance_name, aggregate_id, global_order)"));

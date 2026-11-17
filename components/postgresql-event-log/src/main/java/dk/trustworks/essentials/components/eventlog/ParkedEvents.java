@@ -174,6 +174,40 @@ final class ParkedEvents {
         return orders;
     }
 
+    /** A request stored on a parked head (phase 8 §4.3) */
+    record Request(long head, boolean discard) {
+    }
+
+    /** The parked check (phase 8 §4.3): the requests stored on this subscription's heads, in order */
+    List<Request> requests() throws SQLException {
+        var requests = new ArrayList<Request>();
+        try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement(EventLogStorage.PARKED_REQUESTS)) {
+            bindKey(statement, 1);
+            try (var resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    requests.add(new Request(resultSet.getLong(1), "DISCARD".equals(resultSet.getString(2))));
+                }
+            }
+        }
+        return requests;
+    }
+
+    /**
+     * The serve transaction's first statement (phase 8 §4.3): lock {@code key}'s progress row if its epoch is
+     * {@code resetEpoch} and, exclusive, its lease is {@code fence}'s
+     *
+     * @return {@code false} if the guard matched no row: a reset or takeover got there first
+     */
+    static boolean lockProgress(Connection connection, ProgressStore.Key key, Long resetEpoch, ProgressStore.Fence fence) throws SQLException {
+        try (var statement = connection.prepareStatement(EventLogStorage.PARKED_SERVE_GUARD)) {
+            var p = ProgressStore.bindKey(statement, 1, key);
+            ProgressStore.bindGuard(statement, p, resetEpoch, fence);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next();
+            }
+        }
+    }
+
     void delete(Connection connection, List<Long> globalOrders) throws SQLException {
         try (var statement = connection.prepareStatement(EventLogStorage.PARKED_DELETE)) {
             var p = bindKey(statement, 1);

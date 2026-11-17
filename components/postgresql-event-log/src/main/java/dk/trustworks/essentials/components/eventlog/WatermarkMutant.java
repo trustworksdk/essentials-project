@@ -221,5 +221,24 @@ enum WatermarkMutant {
     /** Keeper: the renewal is keyed by subscription only, not by fence and owner: a lost lease is extended (§2.3, I16) */
     RENEW_WITHOUT_FENCE,
     /** Keeper: one renewal statement per owned lease instead of one for all (§2.3, §8) */
-    RENEW_PER_LEASE
+    RENEW_PER_LEASE,
+
+    // ---- phase 8 unit 8a-B (design phase 8 §4.3, §9.3); subscription mutants, except where it says the event log's admin seams ----
+
+    /** The parked check never runs: a request stored by an operator on another node is never served (§4.3) */
+    PARKED_CHECK_SKIPPED,
+    /** The parked check runs on every interval even while the subscription holds no aggregate (§4.3, §8: cost 0 without one) */
+    PARKED_CHECK_ALWAYS,
+    /**
+     * The serve transaction takes no epoch-guarded lock on the progress row before the parked rows, and its progress update
+     * ignores the epoch: a reset racing it deadlocks with it instead of being ordered after it (§4.3, I6)
+     */
+    SERVE_WITHOUT_EPOCH,
+    /** The serve transaction's progress lock and update bind no fence: an owner that lost its lease serves a request (§4.3, I5) */
+    SERVE_WITHOUT_FENCE,
+    /**
+     * The admin reset on the caller's {@code Connection} runs on its own transaction instead: a rebuild that rolls back
+     * leaves the view as it was under a reset resume point (§4.2). On the event log's admin seams
+     */
+    RESET_OUTSIDE_CALLER_TRANSACTION
 }
