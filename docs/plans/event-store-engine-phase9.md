@@ -596,3 +596,144 @@ instruction to ask only on genuine forks.
 | 8 | The import value is the lowest *filled* open gap, not the lowest open gap | Claude |
 | 9 | Progress rows are written through a new `EventLogAdmin.importProgress` | Claude |
 | 10 | `el_migration` in the engine's schema, checked by `registerAggregateType` while a copy is in progress | Claude |
+
+---
+
+## 16. Spike results (9-A)
+
+**Run:** 2026-11-17, `MigrationCopySpikeIT` (package `…eventlog.integration.spike`, module
+`postgresql-event-log-integration`, runs only with `-Dspike.run=true`). Raw results:
+`target/spike-results/p9-a-bulk.txt` and `p9-a-online.txt`. The spike is throwaway code. The copy SQL is hand-written
+in the test, and unit 9-C writes the real one.
+
+### 16.1 Setup
+
+- PostgreSQL 18.4 (the repo's pinned Testcontainers image, aarch64), `fsync=on` (checked with `SHOW fsync` and recorded
+  per arm), server defaults otherwise (`shared_buffers` 128 MB, `max_wal_size` 1 GB). A fresh container per (run, arm),
+  two runs per arm, with arm order reversed in run 2. The client is on the same VM.
+- **Source:** 10 aggregate types (the trading demo's names), created by `PostgresqlEventStore` as the starter wires it
+  (`TEXT` ids, `JSONB`, `TestPersistableEventMapper`, so causation, correlation and metadata are set). Each type gets 3
+  real streams of 10 events appended through `appendToStream`. A bulk SQL generator then adds rows of the same shape:
+  the same `FQCN:` event type names (3 names), revision `'1'`, the same metadata and the same payload keys at about
+  980 B of `jsonb`. Streams have 10 events each, a third of the rows have a cause, and correlation ids are canonical
+  UUIDs. Every fifth `global_order` value is a hole (20 %), and 7 values are burned at each table's end. The shape check
+  (a real row against a generated row: column types, keys, sizes, metadata) is recorded per arm and matched in every arm.
+- **Size: 1 million events only** (100 000 per type, 1 558 MB of source tables). **10 M and 30 M were not run.** The VM
+  had 5.2 GB of free disk, and a 1 M arm already took it down to 1.2 GB free at its lowest (source + target + WAL).
+  10 M needs about 15 GB more. The bulk rates below are flat from 1 000- to 100 000-value batches and CPU-bound, so I
+  expect 10 M to scale about linearly (about 2 min per bulk copy), but that is not measured.
+- **Target:** `EventLog.registerAggregateType` for each type. Event types are interned with `EventTypeRegistry.idOf`
+  per batch's distinct names (§3.4). Each batch runs in its own transaction with `synchronous_commit = off`: a range
+  `count(*)`, the `INSERT … SELECT` of §3.2 (with the cause regex), the row-count check, the batch's heads upsert and a
+  checkpoint row (`spike_migration`, standing in for `el_migration`, which 9-B is building).
+- **Caveat:** this is a shared 8-CPU dev VM, with another agent building and running ITs at the same time. Treat the
+  absolute numbers as indicative. The comparisons within a run are more reliable.
+
+### 16.2 Bulk copy and online verify (1 M events, 10 types)
+
+| Arm | Run | Copy events/s | Server CPU | WAL/event | Target/source size | Verify events/s |
+|---|---|---|---|---|---|---|
+| `INSERT … SELECT`, batch 1 000 | 1 / 2 | 87 151 / 101 998 | 11.1 / 9.7 s | 1 500 B | 1 353 / 1 558 MB = 0.87 | 109 529 / 112 938 |
+| `INSERT … SELECT`, batch 10 000 | 1 / 2 | 88 003 / 97 582 | 10.8 / 10.0 s | 1 500 B | 0.87 | 104 277 / 114 977 |
+| `INSERT … SELECT`, batch 100 000 | 1 / 2 | 88 813 / 86 063 | 10.5 / 11.2 s | 1 500 B | 0.87 | 110 598 / 90 539 |
+| `COPY` out + in to temp staging, batch 10 000 | 1 / 2 | 66 877 / 65 393 | 14.6 / 14.9 s | 1 500 B | 0.87 | 116 730 / 116 359 |
+
+- The batch size does not matter in this range: the three `INSERT … SELECT` sizes are within each other's noise. The
+  copy is server-CPU-bound (server CPU ≈ wall time), dominated by the insert and its index maintenance.
+- `COPY` is about 30 % slower, because every byte crosses to the client and back, and `COPY … FROM STDIN` into staging
+  alone took 2.3 s of server time per million rows. It is still above the pass line, so a cross-database move (open
+  question 2) is feasible at about 65 000 events/s.
+- Building the source (the generator's `INSERT … SELECT` into the old table, with its three indexes) ran at 44 000 to
+  52 000 rows/s. That is the old schema's own insert cost, for comparison.
+- The target is 13 % smaller than the source (`json` text instead of `jsonb`, and the `smallint` type and revision). WAL
+  is 1 500 B per copied event, about the target's size plus full-page writes.
+- Every arm verified equal over all 20 windows (§6.1's hash, every column), with heads and sequences correct.
+
+### 16.3 Online epochs against a running old engine (batch 10 000)
+
+The old engine appended 1 event per new aggregate through `appendToStream`, paced at 1 000 events/s on 4 threads over
+the 10 types. There was a 5 s warm-up, a 30 s baseline, epochs until the delta was under 5 000 rows, then a 30 s
+baseline after, then the appender stopped and a catch-up epoch ran.
+
+| Run | Epoch 1 (bulk) | Epoch 2 | Epoch 3 | Epoch waits | Append p99 baseline before / during epochs / after | p99 ratio (during ÷ mean of baselines) |
+|---|---|---|---|---|---|---|
+| 1 | 1 035 004 rows in 10.62 s (97 491/s) | 10 630 rows in 0.17 s | 173 rows | 0.3–2.1 ms, 0 polls | 1.23 / 3.43 / 2.58 ms | **1.80** |
+| 2 | 1 035 002 rows in 10.41 s (99 425/s) | 10 417 rows in 0.15 s | 161 rows | 0.2–1.8 ms, 0 polls | 2.05 / 4.57 / 2.44 ms | **2.04** |
+
+- The epoch wait (§3.3) is negligible when no long transaction is open: the appender's transactions last under 1 ms,
+  so the first check already finds none. A held transaction was not part of this spike. That case is
+  `MigrationEpochIT` in 9-C.
+- The copy rate under load equals the bulk rate. The epochs converge geometrically (1 M → 10 K → about 170 rows),
+  as the 1 000 ev/s write rate predicts.
+- The p50 of the appends did not get worse (0.34 ms during the epochs against 0.54–0.63 ms in the baselines). The p99
+  roughly doubled, from 1.2–2.6 ms to 3.4–4.6 ms. The copy saturates one server core and writes WAL at about
+  140 MB/s, which competes with the appends' commit `fsync`s.
+
+### 16.4 Cut-over (final pass under `SHARE` locks)
+
+The delta was 10 000 events (1 000 per type, 100 streams of 10 per type) appended by the old engine after the catch-up
+epoch, with 50 `durable_subscriptions` rows (5 per type) and their transient gaps (one hole and one filled value each).
+Everything ran in one transaction, per §3.5:
+
+| Step | Run 1 | Run 2 |
+|---|---|---|
+| `LOCK TABLE … IN SHARE MODE` (10 tables, no writers) | 0.5 ms | 0.2 ms |
+| Copy delta + heads (10 batches) | 140.5 ms | 156.5 ms |
+| `setval` × 10 | 2.6 ms | 3.1 ms |
+| Verify the touched 100 000-value windows (§6.2 as written; about 285 000 rows per side) | 2 269 ms | 2 282 ms |
+| *Alternative:* verify exactly the delta range (10 000 rows per side) | 92 ms | 92 ms |
+| Structural checks on the delta's aggregates and sequences | 253 ms | 228 ms |
+| Import 50 subscriptions (§4.2 value, one `INSERT … SELECT` per type into `el_progress`) | 3.8 ms | 3.2 ms |
+| State update + commit | 2.0 ms | 1.2 ms |
+| **Stop as designed** | **2 672 ms** | **2 674 ms** |
+| Stop with exact-range verify instead | 494 ms | 484 ms |
+
+The import writes `el_progress` directly, because `EventLogAdmin.importProgress` is 9-B's work. Its cost is negligible
+either way. After the cut-over, a full verify over every window matched in both runs (132 000–137 000 events/s).
+
+### 16.5 Against the pass lines (§10.1)
+
+| Pass line | Result |
+|---|---|
+| Bulk copy ≥ 20 000 events/s for the chosen arm | **Met**, 86 000–102 000 events/s (`INSERT … SELECT`, 1 M). 10 M and 30 M not measured (disk) |
+| Old-engine append p99 during an epoch ≤ 1.5× without | **Missed**: 1.80× and 2.04×. In absolute terms the p99 went from about 2 ms to 3.4–4.6 ms, and p50 did not move |
+| Cut-over of a 10 000-event delta over 10 types ≤ 5 s, incl. delta verify and import of 50 subscriptions | **Met**: 2.67 s as designed, 0.49 s with exact-range verify |
+| Online verify ≥ 50 000 events/s | **Met**: 90 000–137 000 events/s (both sides hashed) |
+| Recorded: WAL per copied event | 1 500 B |
+| Recorded: target size against source size | 0.87 |
+| Recorded: time per epoch wait | 0.2–2.1 ms with no long transaction open |
+
+**About the missed line:** §10.1 says that only the cut-over line gates users, and that a miss is recorded with a
+decision. The cause is server-side contention: one copier backend at full speed. It is not lock interference, since
+the copy takes no lock that the appends wait on. **Recommended decision:** accept the doubling of p99 as it is, and give 9-C
+an optional `settings.maxEventsPerSecond` throttle between batches (default unlimited) for operators whose latency
+budget is tight. A copy throttled to 20 000 events/s still moves 10 M events in under 9 minutes. The spike did not
+measure a throttled arm.
+
+### 16.6 Recommendations for 9-C
+
+- **Arm:** same-database `INSERT … SELECT` (§3.2), as proposed. `COPY` costs about 30 % more and is only needed for a
+  cross-database move.
+- **Batch size:** **10 000** `global_order` values (the proposed default). Rates were flat from 1 000 to 100 000.
+  10 000 keeps each batch transaction short: about 0.1 s and 12 MB of WAL. That bounds what a crash re-copies and how
+  long a batch holds its snapshot, and it gives the throttle a fine step.
+- **§6.2 delta verify:** verify exactly the range the final pass copied (`(copied_through, max]`), not the aligned
+  100 000-value windows the delta touches. The aligned windows made the stop 2.67 s instead of 0.49 s for the same
+  10 000-row delta, and their cost grows with the window size rather than the delta. Ranges below `copied_through` were
+  already verified online and are final (§3.3), so nothing is lost. **Proposed change to §6.2.**
+- The structural check over the delta's aggregates (230–250 ms) is the next-largest step. It reads every event of each
+  touched stream, and could be restricted to the head rows the final pass upserted.
+
+### 16.7 Decisions on the spike (2026-11-17)
+
+Claude settled these under the standing instruction to ask only on genuine forks:
+
+- **Arm and batch size:** same-database `INSERT … SELECT`, batch 10 000 `global_order` values, as §16.6 recommends.
+- **§6.2 delta verify:** the final pass verifies exactly the range it copied, `(copied_through, max]`. Ranges below
+  `copied_through` are final (§3.3) and were verified online, so the aligned windows add stop time without adding
+  safety.
+- **Append p99 during an epoch (missed, 1.80× and 2.04× against 1.5×):** not decided yet. 9-C adds an optional
+  `maxEventsPerSecond` throttle on the online copy (unthrottled by default), and 9-G measures the line again with the
+  throttle set. If the line is still missed with a throttle that keeps the copy at or above 20 000 events/s, the miss
+  goes to the maintainer with the numbers.
+- **10 M and 30 M sizes:** not run on the development VM (disk); they belong to the dedicated-server rerun.
