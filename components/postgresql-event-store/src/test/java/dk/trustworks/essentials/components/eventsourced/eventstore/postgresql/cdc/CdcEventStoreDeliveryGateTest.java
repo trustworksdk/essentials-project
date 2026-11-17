@@ -28,7 +28,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.te
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.*;
-import dk.trustworks.essentials.shared.functional.CheckedFunction;
+import dk.trustworks.essentials.shared.functional.*;
 import dk.trustworks.essentials.types.LongRange;
 import org.jdbi.v3.core.Handle;
 import org.junit.jupiter.api.*;
@@ -63,6 +63,11 @@ class CdcEventStoreDeliveryGateTest {
     /** What the gate acknowledged to the delegate's poll */
     private final List<Long>               delegateAcknowledged = new CopyOnWriteArrayList<>();
     private final Map<Long, PersistedEvent> events              = new HashMap<>();
+    /**
+     * Set by {@link #setupDeferringGapRecording()}: the gate keeps gaps in memory only while the live source is the bus
+     */
+    private CdcEventBus                    cdcBus;
+    private CdcAvailability                availability;
 
     private RecordingGapHandler                                              gapHandler;
     private EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork>      uowFactory;
@@ -306,6 +311,23 @@ class CdcEventStoreDeliveryGateTest {
     }
 
     /**
+     * On the delegate's polling leg the poll records the gaps it finds itself, so the gate keeps none in memory: it records
+     * them at once too, and resolves the fill when the subscriber is done with it - kept, it took the fill for that of a
+     * gap nothing recorded, and the poll's row stayed behind
+     */
+    @Test
+    void gaps_opened_on_the_polling_leg_are_recorded_at_once_not_kept_in_memory() {
+        setupDeferringGapRecording();
+        var received = subscribe();
+        poll(1, 3);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L)));
+
+        assertThat(gapHandler.reconciliations).extracting(Reconciliation::events).contains(List.of(3L));
+        cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
+        assertThat(gapHandler.transientGapsAdded).as("nothing kept in memory to record").isEmpty();
+    }
+
+    /**
      * The recording of the gaps kept in memory bounds how long a row lock can block it - and so how long it holds the
      * gate lock: its own unit of work sets a lock_timeout before any gap is written
      */
@@ -318,7 +340,7 @@ class CdcEventStoreDeliveryGateTest {
             return 0;
         }).when(uowHandle).execute(anyString());
         var received = subscribe();
-        poll(1, 3);
+        pollOneThenDeliverOnTheBus(received, 3);
         await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L)));
 
         cdcEventStore.beforeResumePointSave(SUBSCRIBER, ORDERS).close();
@@ -337,7 +359,7 @@ class CdcEventStoreDeliveryGateTest {
     void gaps_kept_in_memory_stay_recorded_when_the_unit_of_work_current_on_the_saving_thread_rolls_back() throws Exception {
         setupDeferringGapRecording();
         var received = subscribe();
-        poll(1, 3);
+        pollOneThenDeliverOnTheBus(received, 3);
         await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L)));
         assertThat(gapHandler.transientGapsAdded).as("kept in memory").isEmpty();
 
@@ -368,7 +390,7 @@ class CdcEventStoreDeliveryGateTest {
         var acknowledgement = SubscriberAcknowledgement.create();
         var received        = subscribe(Optional.of(acknowledgement));
         // 2 fills a gap kept in memory and is not acknowledged yet; 5 opens a gap kept in memory
-        poll(1, 3, 2, 5);
+        pollOneThenDeliverOnTheBus(received, 3, 2, 5);
         await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L, 3L, 2L, 5L)));
         var recordingMayEnd = new CountDownLatch(1);
         gapHandler.addingTransientGapsMayEnd = recordingMayEnd;
@@ -473,9 +495,9 @@ class CdcEventStoreDeliveryGateTest {
         cdcEventStore = new CdcEventStore<>(delegate,
                                             uowFactory,
                                             gapHandlers,
-                                            new CdcEventBus(),
+                                            cdcBus = new CdcEventBus(),
                                             new CdcProperties(),
-                                            new CdcAvailability());
+                                            availability = new CdcAvailability());
         cdcEventStore.deferGapRecordingUntilResumePointSave(SUBSCRIBER, ORDERS);
     }
 
@@ -566,6 +588,29 @@ class CdcEventStoreDeliveryGateTest {
     private void poll(long... globalOrders) {
         for (var globalOrder : globalOrders) {
             polled.tryEmitNext(event(globalOrder)).orThrow();
+        }
+    }
+
+    /**
+     * After {@link #setupDeferringGapRecording()}: the subscription polls {@code 1}, then moves onto the bus - catching up
+     * to a head of {@code 1} - and the bus delivers {@code globalOrders}. Only gaps opened on the bus are kept in memory: a
+     * poll records the gaps it finds itself
+     */
+    @SuppressWarnings("unchecked")
+    private void pollOneThenDeliverOnTheBus(List<Long> received, long... globalOrders) {
+        poll(1);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.equals(List.of(1L)));
+        when(uowFactory.withUnitOfWork(any(CheckedSupplier.class))).thenAnswer(inv -> ((CheckedSupplier<Object>) inv.getArgument(0)).get());
+        when(delegate.findHighestGlobalEventOrderPersisted(ORDERS)).thenReturn(Optional.of(GlobalEventOrder.of(1)));
+        when(delegate.loadEventsByGlobalOrder(any(AggregateType.class), any(LongRange.class), anyList(), any(Tenant.class))).thenAnswer(inv -> Stream.empty());
+        when(delegate.loadEventsByGlobalOrder(any(AggregateType.class), any(LongRange.class), anyList(), any(Optional.class))).thenAnswer(inv -> Stream.empty());
+        availability.active("gate-test-slot");
+        for (var globalOrder : globalOrders) {
+            // Until the subscription is on the bus, which replays nothing to a late subscriber
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                cdcBus.publish(List.of(event(globalOrder)));
+                assertThat(received).contains(globalOrder);
+            });
         }
     }
 
