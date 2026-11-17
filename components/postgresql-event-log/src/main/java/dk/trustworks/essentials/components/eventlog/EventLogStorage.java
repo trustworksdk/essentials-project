@@ -60,6 +60,11 @@ final class EventLogStorage {
     /** Then the index name: one row {@code indisvalid AND indisready} if the index exists, none if absent */
     static final String INDEX_VALIDITY    = "SELECT i.indisvalid AND i.indisready FROM pg_index i WHERE i.indexrelid = to_regclass(?)";
 
+    // ---- migration (phase 9 §3.8) ----
+    /** The aggregate type; its migration's state, source table and start, if a migration row exists */
+    static final String MIGRATION_STATE =
+            "SELECT state, source_table, started_at FROM " + MIGRATION_TABLE + " WHERE aggregate_type = ?";
+
     // ---- progress (design §2.5, §3.4) ----
     static final String PROGRESS_START = progressStart(null);
 
@@ -100,6 +105,22 @@ final class EventLogStorage {
             "UPDATE " + PROGRESS_TABLE + " SET resume_from = ?, updated_at = now()\n" +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD + "\n" +
                     "   AND resume_from = ?";
+    /**
+     * Phase 9 §4.3: insert an imported progress row, or leave the existing one: the key, exclusive, mode, model,
+     * resume_from, filter digest. Reset epoch 0 and no lease, so the first claim takes it. Returns resume_from of the
+     * inserted row; no row when one existed
+     */
+    static final String PROGRESS_IMPORT =
+            "INSERT INTO " + PROGRESS_TABLE + " (subscriber, aggregate_type, instance_name, exclusive, consistency_mode, progress_model, resume_from, filter_digest)\n" +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)\n" +
+                    "ON CONFLICT (subscriber, aggregate_type, instance_name) DO NOTHING\n" +
+                    "RETURNING resume_from";
+    /** Mutant {@code IMPORT_PROGRESS_OVERWRITES}: {@link #PROGRESS_IMPORT} replacing an existing row's resume point */
+    static final String PROGRESS_IMPORT_OVERWRITING = PROGRESS_IMPORT.replace("DO NOTHING",
+                                                                              "DO UPDATE SET resume_from = EXCLUDED.resume_from, updated_at = now()");
+    /** The key; the stored resume_from */
+    static final String PROGRESS_RESUME_FROM =
+            "SELECT resume_from FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";
     static final String PROGRESS_READ =
             "SELECT resume_from, reset_epoch, consistency_mode, progress_model, exclusive, lease_owner, lease_fence FROM " + PROGRESS_TABLE +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";

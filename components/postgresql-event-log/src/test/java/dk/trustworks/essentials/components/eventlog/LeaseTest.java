@@ -155,7 +155,7 @@ class LeaseTest {
         assertThatThrownBy(() -> new Subscription.SubscriptionSpec(new ProgressStore.Key("s", "Orders", " "), 1, handler, TestSeams.NONE))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new Subscription.SubscriptionSpec(new ProgressStore.Key("s", "Orders", "node-1"), 1, ConsistencyMode.FRESH,
-                                                                   Subscription.ProgressModel.PERIODIC, handler, null, TestSeams.NONE, EventTypeFilter.all(), true))
+                                                                   ProgressModel.PERIODIC, handler, null, TestSeams.NONE, EventTypeFilter.all(), true))
                 .isInstanceOf(IllegalArgumentException.class);
         var exclusive = new Subscription.SubscriptionSpec(new ProgressStore.Key("s", "Orders", "node-1"), 1, handler, TestSeams.NONE).asExclusive();
         assertThat(exclusive.exclusive()).isTrue();

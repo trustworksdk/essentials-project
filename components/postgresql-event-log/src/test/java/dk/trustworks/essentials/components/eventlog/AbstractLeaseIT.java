@@ -137,14 +137,14 @@ abstract class AbstractLeaseIT extends AbstractEventLogIT {
 
     /** An exclusive {@code FRESH} periodic subscription on {@code eventLog}; crashed after the test */
     Subscription periodic(EventLog eventLog, String subscriber, PeriodicHandler handler, TestSeams seams) throws SQLException {
-        return track(eventLog.subscribe(new Subscription.SubscriptionSpec(key(subscriber), 1, ConsistencyMode.FRESH, Subscription.ProgressModel.PERIODIC,
+        return track(eventLog.subscribe(new Subscription.SubscriptionSpec(key(subscriber), 1, ConsistencyMode.FRESH, ProgressModel.PERIODIC,
                                                                            handler, null, seams, EventTypeFilter.all(), true)));
     }
 
     /** An exclusive in-transaction subscription on {@code eventLog}; crashed after the test */
     Subscription inTransaction(EventLog eventLog, String subscriber, ConsistencyMode mode, PageHandler handler, TestSeams seams)
             throws SQLException {
-        return track(eventLog.subscribe(new Subscription.SubscriptionSpec(key(subscriber), 1, mode, Subscription.ProgressModel.IN_HANDLER_TRANSACTION, null, handler,
+        return track(eventLog.subscribe(new Subscription.SubscriptionSpec(key(subscriber), 1, mode, ProgressModel.IN_HANDLER_TRANSACTION, null, handler,
                                                                            seams, EventTypeFilter.all(), true)));
     }
 

@@ -24,6 +24,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.*;
 
+import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.IMPORT_PROGRESS_OVERWRITES;
 import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.RESET_OUTSIDE_CALLER_TRANSACTION;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
@@ -194,6 +195,48 @@ final class DatabaseEventLogAdmin implements EventLogAdmin {
                     log.info("Deleted the progress row and parked rows of retired instance {}", key);
                 }
                 return deleted;
+            }
+        }
+    }
+
+    @Override
+    public long importProgress(SubscriptionDefinition definition, ProgressModel model, String instanceName, long resumeFrom, Connection connection) throws SQLException {
+        requireNonNull(definition, "No definition provided");
+        requireNonNull(model, "No model provided");
+        requireNonNull(instanceName, "No instanceName provided");
+        requireNonNull(connection, "No connection provided");
+        requireTrue(resumeFrom >= 1, "resumeFrom must be >= 1");
+        var exclusive = definition.ownership() instanceof Ownership.Exclusive;
+        if (exclusive) {
+            requireTrue(instanceName.isEmpty(), "An exclusive subscription has one row, under the instance name \"\"");
+        } else {
+            requireTrue(!instanceName.isBlank(), "A per-instance subscription's row needs a non-blank instance name");
+        }
+        var key = new ProgressStore.Key(definition.subscriber(), definition.aggregateType(), instanceName);
+        var sql = seams.get().has(IMPORT_PROGRESS_OVERWRITES) ? EventLogStorage.PROGRESS_IMPORT_OVERWRITING : EventLogStorage.PROGRESS_IMPORT;
+        try (var statement = connection.prepareStatement(sql)) {
+            var p = ProgressStore.bindKey(statement, 1, key);
+            statement.setBoolean(p++, exclusive);
+            statement.setString(p++, definition.consistency().name());
+            statement.setString(p++, model.name());
+            statement.setLong(p++, resumeFrom);
+            statement.setString(p, definition.filterDigest());
+            try (var resultSet = statement.executeQuery()) {
+                if (resultSet.next()) {
+                    log.info("Imported progress row of {} at resume point {}", key, resumeFrom);
+                    return resultSet.getLong(1);
+                }
+            }
+        }
+        // The row existed: its stored resume point, read in a statement of its own so a row a concurrent import
+        // committed while this one waited on it is seen
+        try (var statement = connection.prepareStatement(EventLogStorage.PROGRESS_RESUME_FROM)) {
+            ProgressStore.bindKey(statement, 1, key);
+            try (var resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    throw new IllegalStateException("The progress row of " + key + " neither was inserted nor exists");
+                }
+                return resultSet.getLong(1);
             }
         }
     }

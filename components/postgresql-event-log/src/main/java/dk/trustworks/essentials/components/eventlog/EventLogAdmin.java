@@ -22,7 +22,7 @@ import java.util.*;
  * The engine's admin operations (design {@code docs/plans/event-store-engine-phase8.md} §4), reached through
  * {@link EventLog#admin()}. Every operation works from the database, so it can be called on any node, whether or not
  * that node runs the subscription. Each call borrows one connection from the event log's {@code DataSource} (except
- * {@link #reset(ProgressKey, long, Connection)}) and runs one to three statements.
+ * {@link #reset(ProgressKey, long, Connection)} and {@link #importProgress}, which run on the caller's) and runs one to three statements.
  */
 public interface EventLogAdmin {
     /**
@@ -71,4 +71,26 @@ public interface EventLogAdmin {
      * @return whether a row was deleted
      */
     boolean deleteRetiredInstance(ProgressKey key) throws SQLException;
+
+    /**
+     * Write an imported resume point (design {@code docs/plans/event-store-engine-phase9.md} §4.3), for the migration
+     * from the old event store: insert the progress row of {@code definition} under {@code instanceName} with the
+     * definition's consistency mode, exclusive flag and filter digest, {@code model}, {@code resume_from = resumeFrom},
+     * reset epoch 0 and no lease, so the first claim takes it. Runs on the caller's transaction, which is neither committed
+     * nor rolled back here; must be a connection to this event log's database.
+     * <p>
+     * An existing row is left as it is, and its resume point is returned: the caller compares it with
+     * {@code resumeFrom} to tell an idempotent rerun from a conflicting one. Because the row exists, the subscription's
+     * {@link SubscriptionDefinition#startFrom()} is not consulted when it first starts.
+     *
+     * @param definition   the subscription the row belongs to
+     * @param model        the progress model of the handler it will run with: {@link ProgressModel#PERIODIC} for a
+     *                     {@link PeriodicHandler}, {@link ProgressModel#IN_HANDLER_TRANSACTION} for a {@link PageHandler}.
+     *                     A wrong one is corrected, with a warning, at the first start
+     * @param instanceName the instance whose row is written: {@code ""} for an exclusive definition, the non-blank name
+     *                     of one instance that will run a per-instance definition (each instance needs its own call)
+     * @param resumeFrom   the first global order to deliver, {@code >= 1}
+     * @return the row's resume point: {@code resumeFrom} if the row was inserted, the stored one if it existed
+     */
+    long importProgress(SubscriptionDefinition definition, ProgressModel model, String instanceName, long resumeFrom, Connection connection) throws SQLException;
 }

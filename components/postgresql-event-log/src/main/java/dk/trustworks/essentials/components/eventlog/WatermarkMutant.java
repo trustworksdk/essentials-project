@@ -245,5 +245,15 @@ enum WatermarkMutant {
      * The admin reset on the caller's {@code Connection} runs on its own transaction instead: a rebuild that rolls back
      * leaves the view as it was under a reset resume point (§4.2). On the event log's admin seams
      */
-    RESET_OUTSIDE_CALLER_TRANSACTION
+    RESET_OUTSIDE_CALLER_TRANSACTION,
+
+    // ---- phase 9 unit 9-B (design phase 9 §3.8, §4.3, §9); on the event log's admin seams ----
+
+    /**
+     * {@code registerAggregateType} skips the {@code el_migration} read: a node started while the type is still being
+     * copied registers it, and its reader takes the copied rows appearing below its watermark as retired holes (§3.8)
+     */
+    GUARD_SKIPPED,
+    /** The progress import replaces an existing row's resume point instead of leaving it and returning it (§4.3, §9.2) */
+    IMPORT_PROGRESS_OVERWRITES
 }

@@ -73,14 +73,6 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 final class Subscription {
     private static final Logger log = LoggerFactory.getLogger(Subscription.class);
 
-    /** Where the resume point is written (plan §8); the values {@code el_progress} checks */
-    enum ProgressModel {
-        /** An autocommit save at most every {@link EventLogSettings#progressSaveInterval()} */
-        PERIODIC,
-        /** In the page transaction, as its last statement (phase 4 §3.3) */
-        IN_HANDLER_TRANSACTION
-    }
-
     /** Where the delivery thread is in the lifecycle (§3.1); for tests and diagnostics */
     enum Phase {
         STARTING,

@@ -33,7 +33,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * (the schema harness rule: DDL lives in schema contributors). Design: {@code docs/plans/event-store-engine-phase2.md} §2.
  * <p>
  * The fixed schema ({@code el_event_types}, {@code el_aggregate_types}, {@code el_lease_fence_seq},
- * {@code el_progress}, {@code el_parked_events}) is one repeatable change. Each aggregate type's event and head tables
+ * {@code el_progress}, {@code el_parked_events}, {@code el_migration}) is one repeatable change. Each aggregate type's event and head tables
  * are a change of their own, known only once the aggregate type registers - the shard-owned queue's per-queue-sequence
  * pattern:
  * <ul>
@@ -191,7 +191,20 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
                 "ALTER TABLE " + PARKED_EVENTS_TABLE + " ADD COLUMN IF NOT EXISTS requested_at timestamptz",
                 createIndexUnlessPresent(PARKED_EVENTS_TABLE, PARKED_EVENTS_TABLE + "_aggregate",
                                          "CREATE INDEX IF NOT EXISTS " + PARKED_EVENTS_TABLE + "_aggregate ON " + PARKED_EVENTS_TABLE +
-                                                 " (subscriber, aggregate_type, instance_name, aggregate_id, global_order)"));
+                                                 " (subscriber, aggregate_type, instance_name, aggregate_id, global_order)"),
+                // Phase 9 §3.8: the state of each aggregate type's move from the old event store. The engine owns the DDL
+                // and only reads it (the registerAggregateType guard); the migration tool writes the rows. CUT_OVER rows
+                // stay as the record of the move; the engine never deletes one
+                "CREATE TABLE IF NOT EXISTS " + MIGRATION_TABLE + " (\n" +
+                        "    aggregate_type text        PRIMARY KEY,\n" +
+                        "    state          text        NOT NULL CHECK (state IN ('COPYING', 'CUT_OVER')),\n" +
+                        "    source_table   text        NOT NULL,\n" +
+                        "    copied_through bigint      NOT NULL DEFAULT 0,\n" +
+                        "    epochs         integer     NOT NULL DEFAULT 0,\n" +
+                        "    started_at     timestamptz NOT NULL DEFAULT now(),\n" +
+                        "    cut_over_at    timestamptz,\n" +
+                        "    report         json\n" +
+                        ")");
     }
 
     /**

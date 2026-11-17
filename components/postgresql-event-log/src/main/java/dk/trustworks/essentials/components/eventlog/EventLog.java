@@ -39,6 +39,8 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  */
 public final class EventLog {
     private static final Logger log = LoggerFactory.getLogger(EventLog.class);
+    /** PostgreSQL's {@code undefined_table} */
+    private static final String UNDEFINED_TABLE = "42P01";
 
     private final DataSource                                          dataSource;
     private final SchemaOwnership                                     schemaOwnership;
@@ -291,7 +293,7 @@ public final class EventLog {
         var fromHead  = definition.startFrom() instanceof StartFrom.Head;
         var initial   = definition.startFrom() instanceof StartFrom.GlobalOrder order ? order.value() : 1;
         var tenant    = definition.tenant().orElse(null);
-        var model = periodic != null ? Subscription.ProgressModel.PERIODIC : Subscription.ProgressModel.IN_HANDLER_TRANSACTION;
+        var model = periodic != null ? ProgressModel.PERIODIC : ProgressModel.IN_HANDLER_TRANSACTION;
         return new Subscription.SubscriptionSpec(key, initial, definition.consistency(), model, periodic, page, TestSeams.NONE, definition.eventTypes(), exclusive, source,
                                                  definition.errors().orElse(null), definition.filterDigest(), fromHead, tenant);
     }
@@ -434,8 +436,13 @@ public final class EventLog {
      * Register an aggregate type: create (or have the harness create) its event and head tables and registry row.
      * Idempotent. The table is verified - identity {@code CACHE 1}, the registry row maps back to this aggregate type -
      * now if it exists, otherwise before its first append or load.
+     * <p>
+     * A type whose move from the old event store is still being copied ({@code el_migration} state {@code COPYING},
+     * design phase 9 §3.8) is refused: this node's reader would take the copied rows appearing below its watermark as
+     * retired holes, and its appends would draw values a later copy epoch collides with. Register it after the cut-over.
      *
      * @return the aggregate type's validated names
+     * @throws IllegalStateException if the aggregate type is being copied from the old event store
      */
     public AggregateTypeTables registerAggregateType(String aggregateType) throws SQLException {
         requireStarted();
@@ -443,6 +450,9 @@ public final class EventLog {
         var existing = aggregateTypes.get(aggregateType);
         if (existing != null) {
             return existing.tables;
+        }
+        if (!adminSeams.has(WatermarkMutant.GUARD_SKIPPED)) {
+            refuseWhileCopying(aggregateType);
         }
         ddl.execute(tables, EventLogSchemaContributor.aggregateTypeStatements(tables));
         var registered = new RegisteredAggregateType(tables);
@@ -465,6 +475,30 @@ public final class EventLog {
             }
         }
         return tables;
+    }
+
+    /**
+     * The registration guard (phase 9 §3.8): one primary-key read of {@code el_migration}. A schema without the table
+     * (one created before phase 9 and not upgraded, under a validating harness) has had no migration written to it
+     */
+    private void refuseWhileCopying(String aggregateType) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(EventLogStorage.MIGRATION_STATE)) {
+            statement.setString(1, aggregateType);
+            try (var resultSet = statement.executeQuery()) {
+                if (resultSet.next() && "COPYING".equals(resultSet.getString(1))) {
+                    throw new IllegalStateException("Aggregate type '" + aggregateType + "' is being copied from the old event store (" +
+                                                            EventLogSchema.MIGRATION_TABLE + " row: state COPYING, source table " + resultSet.getString(2) +
+                                                            ", started " + resultSet.getObject(3, java.time.OffsetDateTime.class) +
+                                                            "). Its tables may not be used by the event log before the migration's cut-over; " +
+                                                            "start this node, or register the type, after the cut-over");
+                }
+            }
+        } catch (SQLException e) {
+            if (!UNDEFINED_TABLE.equals(e.getSQLState())) {
+                throw e;
+            }
+        }
     }
 
     /**

@@ -36,6 +36,11 @@ public final class EventLogSchema {
     public static final String PROGRESS_TABLE        = "el_progress";
     public static final String LEASE_FENCE_SEQUENCE  = "el_lease_fence_seq";
     public static final String PARKED_EVENTS_TABLE   = "el_parked_events";
+    /**
+     * One row per aggregate type moved from the old event store (design phase 9 §3.8): written only by the migration
+     * tool, read by {@link EventLog#registerAggregateType(String)}, which refuses a type whose copy is in progress
+     */
+    public static final String MIGRATION_TABLE       = "el_migration";
 
     /**
      * Data sources already proven to show one connection another's {@code backend_xid}; identity, not equality
