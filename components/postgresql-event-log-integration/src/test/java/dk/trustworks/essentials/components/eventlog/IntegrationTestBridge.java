@@ -105,6 +105,11 @@ public final class IntegrationTestBridge {
         }
     }
 
+    /** @return the parked checks that read the parked table (phase 8 §4.3) of the subscription behind {@code handle}; for the 8a-D gate spike */
+    public static long parkedChecks(SubscriptionHandle handle) {
+        return ((DefinedSubscription) handle).subscription().parkedChecks();
+    }
+
     @FunctionalInterface
     public interface DataSourceExecutor {
         void execute(String sql) throws SQLException;

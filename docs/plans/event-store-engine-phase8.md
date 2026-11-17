@@ -1,6 +1,6 @@
 # Event store redesign, phase 8: engine design
 
-**Status:** decided 2026-11-17 (§15); split into 8a and 8b, being built on `feature/event-store-engine-phase8` (from
+**Status:** decided 2026-11-17 (§15); split into 8a and 8b. 8a built 2026-11-17, gate passed (§16); 8b being built on `feature/event-store-engine-phase8` (from
 phase 7, `9d147a6bb`). When phase 8 is done, this file moves to `docs/archive/` or is folded into the redesign's record.
 **Scope:** phase 8 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): the new subscription
 API, the view-projection and event-processor processors built on it, parked events and the admin API (§12.3), and the
@@ -686,3 +686,170 @@ genuine design forks.
   tenant's catch-up returns only that tenant's rows (with and without the index) and that the tenant combines with the
   type filter on catch-up and on live batches.
 - **Every other question in §14:** settled by Claude as recommended there.
+
+---
+
+## 16. Results (2026-11-17)
+
+Measured by `integration/spike/EventLogIntegrationGateSpikeIT` in `postgresql-event-log-integration`
+(`scripts/run-phase0-spikes.sh --container --suite p8-gate`: `processorSteady`, `burst`, `retryBackoff`,
+`adminAndParked`). The processor arms need this module, so the whole 8a suite lives here, §10.4 included (it uses only
+the engine's public `EventLogAdmin`); the engine's `spike/EventLogGateSpikeIT` is unchanged. The harness is phase 7's:
+a copy of the engine's `SpikeDb` (the integration module has no dependency on the engine's test classes), a fresh
+container and a database name of its own per arm, `pg_stat_statements` by role. The engine runs on the `reader` role;
+the application's pool (appends, and the JDBI and Spring page sources) on the `writer` role. Results files:
+`components/postgresql-event-log-integration/target/spike-results/p8-c-steady.txt`, `p8-c-burst.txt`,
+`p8-c-backoff.txt`, `p8-c-admin.txt`.
+
+**The VM caveat.** As in phases 2-7 this is the shared development VM: PostgreSQL 18.4 in a container with `fsync=off`,
+8 CPUs shared by client and server. Absolute times and rates need the dedicated server; statement counts, row counts and
+the ratios between arms of one run do not depend on it. Every arm ran twice in the suite run. Two rows were then run
+again because two runs were not enough to separate them from the noise: the burst (100 000 events take 0.8-1.0 s, so
+JIT warm-up and the 5 ms completion poll matter) five more times, and twice at 1 000 000 events
+(`-Dspike.gate.p8BurstEvents=1000000`); the steady shape four more times. Those reruns are reported with the suite run.
+
+Harness notes. Commit-to-handler is from just before the commit to the handler, keyed by aggregate id (the processor
+arms read it from the typed payload). Client CPU is the process CPU time (`OperatingSystemMXBean`) and allocation is
+`ThreadMXBean.getTotalThreadAllocatedBytes()`, both for the whole test JVM over the window, so they include the writer
+and the lease keeper; the difference between arms is what the processors add. Burst arms are timed from `subscribe`
+until the progress row, polled on the observer connection (not counted), passes the last event. The integration module
+got a `logback-test.xml` (a copy of the engine's): without one, logback logged at `DEBUG`, which would have charged log
+formatting to the client CPU figures. No main code was changed and no knob was added to main code;
+`IntegrationTestBridge` (test code) gained `parkedChecks(SubscriptionHandle)`. Spike knobs: `-Dspike.gate.runs` (2),
+`-Dspike.gate.timeScale` (1.0), `-Dspike.gate.p8BurstEvents` (100000), `-Dspike.gate.p8Backoffs` ("100,25,5,1").
+
+### 16.1 Processor overhead (§10.1)
+
+**Steady.** Phase 7 §10.3's exclusive shape: 100 ev/s, one event per unit of work to a new aggregate, 10 s warm-up,
+60 s window, 6 000 events and 60 000 deliveries per arm; RAW = 5 `CONTIGUOUS` page handlers + 5 `FRESH` periodic
+handlers on the engine API, PROCESSOR = 5 `ViewProjection` (`on(Added.class, ...)`) + 5 `EventReactor`. Six pairs (the
+suite's two runs and the four reruns, arm order alternating). Commit-to-handler, ms:
+
+| | RAW | PROCESSOR | Difference |
+|---|---|---|---|
+| All deliveries p50 | 0.55-0.62 | 0.55-0.62 | 0.00-+0.02 per pair |
+| All deliveries p99 | 1.50-2.36 (median 1.98) | 1.57-2.88 (median 2.34) | −0.34-+0.93 per pair |
+| `CONTIGUOUS` p50 / p99 | 0.76-0.87 / 2.14-8.03 | 0.80-0.90 / 2.93-7.82 | +0.00-+0.04 / −0.93-+4.66 per pair |
+| `FRESH` p50 / p99 | 0.43-0.51 / 0.84-1.08 | 0.43-0.52 / 0.80-1.09 | −0.01-+0.01 / −0.04-+0.17 per pair |
+| Reader statements per delivery | 1.605-1.606 | 1.605-1.606 | equal |
+| Client CPU per delivery (whole JVM) | 275-323 µs | 284-306 µs | inside the noise |
+| Allocation | 3.5-4.2 MB/s, 3 495-4 232 B per delivery | 5.6-5.8 MB/s, 5 646-5 799 B per delivery | +1.5-2.2 KB per delivery |
+
+**Burst.** 100 000 seeded events over 10 000 interleaved aggregates into one exclusive `CONTIGUOUS` projection at the
+default page size (100), a pre-populated view, one `unnest` upsert per page: RAW = a `PageHandler` on the engine API,
+VIEW_ENGINE = `ViewProjection.onPage` (deserializing every event) on `PageTransactionSource.engine()`. Events/s:
+
+| Run | RAW | VIEW_ENGINE | Ratio |
+|---|---|---|---|
+| suite 1, 2 | 125 054, 128 284 | 117 373, 119 229 | 0.94, 0.93 |
+| reruns 1-5 | 101 755, 127 340, 128 975, 126 782, 129 214 | 103 236, 119 362, 119 166, 120 052, 118 013 | 1.01, 0.94, 0.92, 0.95, 0.91 |
+| 1 000 000 events, runs 1, 2 | 113 183, 119 370 | 110 010, 111 963 | 0.97, 0.94 |
+
+Statements per page 4.21 in both arms (4.20 at 1 000 000 events): `BEGIN`, the idle-timeout `set_config`, the
+handler's upsert and the progress update per page, plus 0.2 catch-up reads (one per 500 rows); every view folded to
+exactly the seeded count. Client CPU per event 2.9-3.0 µs RAW against 3.6-4.5 µs VIEW_ENGINE once warm (the first arm
+of a JVM pays the JIT: 5-18 µs); allocation 1.33-1.41 KB per event RAW against 3.39-3.56 KB per event VIEW_ENGINE.
+
+**Verdict: met.** p50 is within 0.04 ms of the raw arm in every pair, well inside the 0.2 ms allowance. p99 moves
+between runs of the same arm by more than the arms differ: the raw arm's own pooled p99 spans 1.50-2.36 ms and its
+`CONTIGUOUS` p99 2.1-8.0 ms, and each processor figure lies inside or at the edge of that spread (`FRESH` p99 at most
++0.17 ms). The pooled p99 median is 0.36 ms higher for the processors; that is inside the raw arm's 0.86 ms spread, so by
+§10's rule it is no change, but it leans one way in four of six pairs and is the figure to re-check on the dedicated
+server. Statements per delivered event are equal (1.605-1.606). The burst ratio is 0.91-0.95 at 100 000 events once the
+JVM is warm (1.01 in a cold first arm) and 0.94-0.97 at 1 000 000, all ≥ 0.9. The cost the processors add is the
+deserialization: about 2 KB allocated and 0.6-1.5 µs of CPU per event, which is 5-9 % of a set-based page's throughput
+and invisible at 100 ev/s.
+
+### 16.2 Application-sourced pages (§10.2)
+
+The burst shape with the same `ViewProjection` on the JDBI unit-of-work source
+(`UnitOfWorkPageTransactions(new JdbiUnitOfWorkFactory(Jdbi.create(pool)))`) and the Spring source
+(`SpringPageTransactions` on a `DataSourceTransactionManager`), against VIEW_ENGINE. Events/s and the ratio to
+VIEW_ENGINE of the same run:
+
+| Run | VIEW_JDBI | VIEW_SPRING |
+|---|---|---|
+| suite 1, 2 | 108 518 (0.92), 115 425 (0.97) | 112 288 (0.96), 116 371 (0.98) |
+| reruns 1-5 | 105 654 (1.02), 115 441 (0.97), 118 931 (1.00), 118 096 (0.98), 119 349 (1.01) | 114 379 (1.11), 114 713 (0.96), 115 420 (0.97), 119 586 (1.00), 117 756 (1.00) |
+| 1 000 000 events, runs 1, 2 | 108 372 (0.99), 110 857 (0.99) | 111 027 (1.01), 111 903 (1.00) |
+
+Statements per page 4.21 in every arm (4.20 at 1 000 000): the four page statements move to the application's role
+(writer 4.00 per page) and only the catch-up reads stay on the engine's (0.21). Borrow time from the application pool:
+mean ≤ 0.001 ms, maximum < 0.05 ms over 1 001 (10 001) borrows; the engine's own pool in VIEW_ENGINE: mean ≤ 0.006 ms,
+maximum 0.2-0.4 ms (20 ms once, in a cold first arm). The JDBI source's per-commit lookup of its transaction-handler
+guard (8a-C's note) does not show: JDBI is level with Spring and with `engine()`. Client CPU and allocation per event
+are the same as VIEW_ENGINE once warm (3.5-4.5 µs, 3.4-3.6 KB).
+
+**Verdict: met.** Events/s 0.92-1.11 of `engine()` (0.99-1.01 at 1 000 000 events), statements per page equal.
+
+### 16.3 Admin and parked check (§10.4)
+
+**Listing.** 1 000 progress rows over 10 aggregate types with 1 000 events each, 100 of them with a parked head and 9
+rows behind it, seeded in SQL; `subscriptions(Optional.empty())` called 200 times (after 20 warm-up calls) from a second
+`EventLog` on the writer role that runs nothing. Every call returned 1 000 rows, 100 with parked heads.
+
+| Run | p50 | p99 | max | Statements per call |
+|---|---|---|---|---|
+| 1 | 2.68 ms | 4.93 ms | 5.87 ms | 1.00 |
+| 2 | 2.51 ms | 3.24 ms | 3.56 ms | 1.01 (200 listing statements and one `SET application_name` of a pool connection opened in the window) |
+
+**Parked check.** 20 per-instance `CONTIGUOUS` subscriptions on one event log (default backstop 1 s, so the parked-check
+interval is 1 s): 10 whose handler fails 20 events with zero retries, so each holds 20 parked heads, and 10 that hold
+none; then an idle 60 s window. In both runs the parked-request read ran 590 times: 59 per holding subscription, 0.98
+per interval, and **0** for every subscription holding nothing (its `parkedChecks` counter did not move).
+
+**Retry from another node.** A second `EventLog` that runs nothing calls `retryParked` on one of the 20 heads of a
+holding subscription after the handler has been allowed to succeed for it, 20 times, 50-1 050 ms apart; every call
+answered `ACCEPTED`, and the head reached the handler on the owning node after p50 509 / 539 ms and p100 1 004 / 958 ms.
+
+**Verdict: met.** `subscriptions()` is one statement with p99 3.2-4.9 ms against 50 ms; the parked check reads nothing
+for a subscription without held aggregates and at most once per interval for one with (0.98). Retry from another node
+lands within one backstop interval (p100 at most 1 004 ms: the 1 s interval plus the page that serves it), as expected.
+
+### 16.4 The retry back-off default (phase 4 §11.1)
+
+Phase 4's open settings question, measured on this suite's burst seed (100 000 events, 10 000 aggregates): a raw
+`CONTIGUOUS` row-by-row upsert at page 100, 3 retries, back-off maximum 10 s, every global order divisible by 997 always
+failing (100 events, each heading its own aggregate), the back-off set per subscription with `ErrorSettings`. Both runs:
+
+| Initial back-off | Time | Events/s | vs no failures |
+|---|---|---|---|
+| no failures | 8.7-8.9 s | 11 243-11 466 | 1.00x |
+| 100 ms (default) | 83.7-83.8 s | 1 193-1 195 | 0.10-0.11x |
+| 25 ms | 29.3 s | 3 416-3 417 | 0.30x |
+| 5 ms | 15.7 s | 6 375-6 384 | 0.56-0.57x |
+| 1 ms | 12.7 s | 7 863-7 868 | 0.69-0.70x |
+
+Every failing event was parked as a head with its 450 later events behind it (100 heads, 550 rows), and view plus parked
+rows equal the seeded count in every arm. The times fit `8.8 s + 100 × (7 × backoff + 32 ms)`: each always-failing event
+waits backoff × (1 + 2 + 4) over its three retries, plus about 32 ms of shrinking (seven halvings), failed pages and
+smaller pages afterwards that no back-off setting removes. At 100 ms the waits are 70 s of the 84 s; at 1 ms the shrink
+is most of what is left, which is why 1 ms reaches only 0.70x here (phase 4's 0.92x was measured against row by row on
+200 000 events with its periodic baseline, a different denominator).
+
+**Recommendation: lower the default `retryBackoffInitial` to 10 ms; do not change it in 8a.** At 10 ms the three retries
+of an event that fails alone wait 10 + 20 + 40 = 70 ms, and the model gives about 19 s here, 0.45x, against 0.10x today.
+The trade-off is the chance a *transient* handler failure gets to clear before its event is parked: 70 ms of waiting
+instead of 700 ms. That still covers a deadlock retry or a serialization failure, which clear in milliseconds; a lock
+that is held for seconds outlasts both settings anyway (its failure already takes `lock_timeout` per attempt), and a
+parked event can be retried by an operator from any node (§16.3). The same setting is the first wait after an I/O
+failure, which is retried indefinitely and doubles to `retryBackoffMax` (10 s): at 10 ms it reaches 1 s after seven
+failures instead of four, a few more statements against a database that is down, which is cheap. Going lower than
+10 ms buys little: 5 ms gives 0.57x and 1 ms 0.70x, and the remaining cost is the shrink, whose fix is phase 4's other
+option (an event isolated by the shrink retried without the first wait), not a smaller back-off. A rate of one
+always-failing event per 1 000 is a poison stream, not a normal one; at realistic rates both settings cost little,
+which is why this is a default to choose, not a defect. For the maintainer to decide; nothing was changed.
+
+### 16.5 Verdict summary
+
+| Row | Pass line | Measured | Verdict |
+|---|---|---|---|
+| §10.1 steady latency | p50, p99 within the noise of raw or ≤ +0.2 ms | p50 +0.00-0.04 ms; p99 inside the raw arm's run-to-run spread (pooled median +0.36 ms against a 0.86 ms spread) | met (p99 to re-check on the dedicated server) |
+| §10.1 statements per delivery | equal | 1.605-1.606 both | met |
+| §10.1 burst | ≥ 0.9× raw | 0.91-0.95 warm at 100 000 events, 0.94-0.97 at 1 000 000 | met |
+| §10.2 page sources | ≥ 0.9× `engine()`, statements per page equal | JDBI 0.92-1.02, Spring 0.96-1.11; 4.21 per page everywhere | met |
+| §10.4 listing | one statement, p99 < 50 ms | 1.00 statement, p99 3.2-4.9 ms | met |
+| §10.4 parked check | 0 without held aggregates, ≤ 1 per interval with | 0; 0.98 per interval | met |
+| §10.4 retry from another node (recorded) | ≤ one backstop interval expected | p50 509-539 ms, p100 958-1 004 ms | as expected |
+
+No row missed. The one figure that leans is the steady p99 of the processors (§16.1), inside the noise on this VM.
