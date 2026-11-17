@@ -140,7 +140,7 @@ class EventLogGateSpikeIT {
                                 var latencies = new ConcurrentLinkedQueue<Long>();
                                 var delivered = new AtomicLong();
                                 for (int i = 0; i < subscriptions; i++) {
-                                    app.eventLog.subscribe("sub-" + i, TYPE, "node1", 1, e -> {
+                                    app.eventLog.subscribe(Definitions.definition("sub-" + i, TYPE, "node1", 1, null, null), e -> {
                                         var at = committed.get(e.aggregateId());
                                         if (at != null) {
                                             latencies.add(System.nanoTime() - at);
@@ -214,7 +214,7 @@ class EventLogGateSpikeIT {
                         try (var db = SpikeDb.start("gate", 100); var app = new App(db, settings(backstop), pool)) {
                             var received = new AtomicLong();
                             for (int i = 0; i < subscriptions; i++) {
-                                app.eventLog.subscribe("sub-" + i, TYPE, "node1", 1, e -> received.incrementAndGet());
+                                app.eventLog.subscribe(Definitions.definition("sub-" + i, TYPE, "node1", 1, null, null), e -> received.incrementAndGet());
                             }
                             for (int i = 0; i < 100; i++) app.appendNewStream(1, false);
                             await(Duration.ofSeconds(60), () -> received.get() >= 100L * subscriptions);
@@ -252,7 +252,7 @@ class EventLogGateSpikeIT {
                 for (boolean longWriter : new boolean[]{true, false}) {
                     try (var db = SpikeDb.start("churn", 100); var app = new App(db, settings(backstop), CHURN_POOL)) {
                         var churn = app.observer;
-                        app.eventLog.subscribe("slow", TYPE, "node1", 1, e -> {
+                        app.eventLog.subscribe(Definitions.definition("slow", TYPE, "node1", 1, null, null), e -> {
                             churn.handled(e.globalOrder());
                             Thread.sleep(50);
                         });
@@ -368,17 +368,19 @@ class EventLogGateSpikeIT {
         }
     }
 
-    private static Subscription.PageHandler pageHandler(ProjectionArm arm, int projection) {
+    private static PageHandler pageHandler(ProjectionArm arm, int projection) {
         var row = upsert(projection);
         return switch (arm) {
-            case ROW_10, ROW_100, FALLBACK_100, FALLBACK_100_FAST -> Subscription.PageHandler.perEvent((event, connection) -> {
+            case ROW_10, ROW_100, FALLBACK_100, FALLBACK_100_FAST -> PageHandler.perEvent((event, tx) -> {
+                var connection = tx.connection();
                 failIfChosen(arm, event);
                 try (var statement = connection.prepareStatement(row)) {
                     bind(statement, event);
                     statement.executeUpdate();
                 }
             });
-            case BATCH_100 -> (page, connection) -> {
+            case BATCH_100 -> (page, tx) -> {
+                var connection = tx.connection();
                 try (var statement = connection.prepareStatement(row)) {
                     for (var event : page) {
                         bind(statement, event);
@@ -389,7 +391,8 @@ class EventLogGateSpikeIT {
             };
             case SET_100 -> {
                 var set = setUpsert(projection);
-                yield (page, connection) -> {
+                yield (page, tx) -> {
+                    var connection = tx.connection();
                     try (var statement = connection.prepareStatement(set)) {
                         statement.setArray(1, connection.createArrayOf("text", page.stream().map(StoredEvent::aggregateId).toArray(String[]::new)));
                         statement.setArray(2, connection.createArrayOf("bigint", page.stream().map(StoredEvent::globalOrder).toArray(Long[]::new)));
@@ -440,7 +443,7 @@ class EventLogGateSpikeIT {
                                 dedicated.add(connection);
                                 var counter = handled[i];
                                 var sql     = upsert(i);
-                                app.eventLog.subscribe(subscriber, TYPE, "node1", 1, e -> {
+                                app.eventLog.subscribe(Definitions.definition(subscriber, TYPE, "node1", 1, null, null), e -> {
                                     try (var statement = connection.prepareStatement(sql)) {
                                         bind(statement, e);
                                         statement.executeUpdate();
@@ -448,7 +451,7 @@ class EventLogGateSpikeIT {
                                     counter.incrementAndGet();
                                 });
                             } else {
-                                app.eventLog.subscribe(subscriber, TYPE, "node1", 1, Subscription.ConsistencyMode.CONTIGUOUS, pageHandler(arm, i));
+                                app.eventLog.subscribe(Definitions.definition(subscriber, TYPE, "node1", 1, ConsistencyMode.CONTIGUOUS, null), pageHandler(arm, i));
                             }
                         }
                         var finished = new long[projections];
@@ -551,14 +554,15 @@ class EventLogGateSpikeIT {
                         var contiguous = new ConcurrentLinkedQueue<Long>();
                         var freshCount = new AtomicLong();
                         var contCount  = new AtomicLong();
-                        app.eventLog.subscribe("fresh", TYPE, "node1", 1, e -> {
+                        app.eventLog.subscribe(Definitions.definition("fresh", TYPE, "node1", 1, null, null), e -> {
                             var at = committed.get(e.aggregateId());
                             if (at != null) {
                                 fresh.add(System.nanoTime() - at);
                                 freshCount.incrementAndGet();
                             }
                         });
-                        app.eventLog.subscribe("contiguous", TYPE, "node1", 1, Subscription.ConsistencyMode.CONTIGUOUS, (page, connection) -> {
+                        app.eventLog.subscribe(Definitions.definition("contiguous", TYPE, "node1", 1, ConsistencyMode.CONTIGUOUS, null), (page, tx) -> {
+                            var connection = tx.connection();
                             long now = System.nanoTime();
                             for (var e : page) {
                                 var at = committed.get(e.aggregateId());
@@ -634,18 +638,19 @@ class EventLogGateSpikeIT {
                 + "; then " + after.toSeconds() + " s after the long writer commits");
         for (int run = 1; run <= RUNS; run++) {
             for (int windowSeconds : new int[]{60, 300}) {
-                for (var mode : Subscription.ConsistencyMode.values()) {
+                for (var mode : ConsistencyMode.values()) {
                     var window     = scaled(Duration.ofSeconds(windowSeconds));
-                    var contiguous = mode == Subscription.ConsistencyMode.CONTIGUOUS;
+                    var contiguous = mode == ConsistencyMode.CONTIGUOUS;
                     try (var db = SpikeDb.start("churn", 100); var app = new App(db, settings(1000), CHURN_POOL)) {
                         var churn = app.observer;
                         if (contiguous) {
-                            app.eventLog.subscribe("slow", TYPE, "node1", 1, mode, Subscription.PageHandler.perEvent((e, connection) -> {
+                            app.eventLog.subscribe(Definitions.definition("slow", TYPE, "node1", 1, mode, null), PageHandler.perEvent((e, tx) -> {
+                                var connection = tx.connection();
                                 churn.handled(e.globalOrder());
                                 Thread.sleep(50);
                             }));
                         } else {
-                            app.eventLog.subscribe("slow", TYPE, "node1", 1, e -> {
+                            app.eventLog.subscribe(Definitions.definition("slow", TYPE, "node1", 1, null, null), e -> {
                                 churn.handled(e.globalOrder());
                                 Thread.sleep(50);
                             });
@@ -719,14 +724,15 @@ class EventLogGateSpikeIT {
                             var contiguous = new ConcurrentLinkedQueue<Long>();
                             var delivered  = new AtomicLong();
                             for (int i = 0; i < subscriptions / 2; i++) {
-                                app.eventLog.subscribe("fresh-" + i, TYPE, "node1", 1, e -> {
+                                app.eventLog.subscribe(Definitions.definition("fresh-" + i, TYPE, "node1", 1, null, null), e -> {
                                     var at = committed.get(e.aggregateId());
                                     if (at != null) {
                                         fresh.add(System.nanoTime() - at);
                                         delivered.incrementAndGet();
                                     }
                                 });
-                                app.eventLog.subscribe("contiguous-" + i, TYPE, "node1", 1, Subscription.ConsistencyMode.CONTIGUOUS, (page, connection) -> {
+                                app.eventLog.subscribe(Definitions.definition("contiguous-" + i, TYPE, "node1", 1, ConsistencyMode.CONTIGUOUS, null), (page, tx) -> {
+                                    var connection = tx.connection();
                                     long now = System.nanoTime();
                                     for (var e : page) {
                                         var at = committed.get(e.aggregateId());
@@ -878,11 +884,11 @@ class EventLogGateSpikeIT {
                 var  handled = new AtomicLong();
                 long started = System.nanoTime();
                 if (arm == RareArm.UNFILTERED) {
-                    app.eventLog.subscribe("rare", TYPE, "node1", 1, e -> {
+                    app.eventLog.subscribe(Definitions.definition("rare", TYPE, "node1", 1, null, null), e -> {
                         if (RARE_TYPE.equals(e.eventType())) handled.incrementAndGet();
                     });
                 } else {
-                    app.eventLog.subscribe("rare", TYPE, "node1", 1, EventTypeFilter.of(RARE_TYPE), e -> handled.incrementAndGet());
+                    app.eventLog.subscribe(Definitions.definition("rare", TYPE, "node1", 1, null, EventTypeFilter.of(RARE_TYPE)), e -> handled.incrementAndGet());
                 }
                 await(Duration.ofMinutes(30), () -> app.observer.firstAttach("rare") != 0);
                 double seconds = (app.observer.firstAttach("rare") - started) / 1e9;
@@ -1000,10 +1006,11 @@ class EventLogGateSpikeIT {
                 names.add(name);
                 var filter = filtered ? EventTypeFilter.of(typeName(0), typeName(1)) : EventTypeFilter.all();
                 if (fresh) {
-                    app.eventLog.subscribe(name, TYPE, "node1", 1, filter, e -> {
+                    app.eventLog.subscribe(Definitions.definition(name, TYPE, "node1", 1, null, filter), e -> {
                     });
                 } else {
-                    app.eventLog.subscribe(name, TYPE, "node1", 1, Subscription.ConsistencyMode.CONTIGUOUS, filter, (page, connection) -> {
+                    app.eventLog.subscribe(Definitions.definition(name, TYPE, "node1", 1, ConsistencyMode.CONTIGUOUS, filter), (page, tx) -> {
+                        var connection = tx.connection();
                     });
                 }
             }
@@ -1087,7 +1094,7 @@ class EventLogGateSpikeIT {
                 var o            = app.observer;
                 var restartedAt  = new AtomicLong(Long.MAX_VALUE);
                 var firstAfter   = new AtomicLong();
-                app.eventLog.subscribe("fresh", TYPE, "node1", 1, e -> {
+                app.eventLog.subscribe(Definitions.definition("fresh", TYPE, "node1", 1, null, null), e -> {
                     o.handled(e.globalOrder());
                     long now = System.nanoTime();
                     if (now > restartedAt.get()) firstAfter.compareAndSet(0, now);
@@ -1168,11 +1175,12 @@ class EventLogGateSpikeIT {
     /** 5 FRESH (periodic) and 5 CONTIGUOUS (in-transaction) subscriptions on {@code log}, measured under {@code placement} */
     private static void subscribeTen(EventLog log, String placement, Map<String, Long> committed, Sinks sinks) throws SQLException {
         for (int i = 0; i < 5; i++) {
-            log.subscribe(placement + "-fresh-" + i, TYPE, "node1", 1, e -> {
+            log.subscribe(Definitions.definition(placement + "-fresh-" + i, TYPE, "node1", 1, null, null), e -> {
                 var at = committed.get(e.aggregateId());
                 if (at != null) sinks.add(placement + " FRESH", System.nanoTime() - at);
             });
-            log.subscribe(placement + "-contiguous-" + i, TYPE, "node1", 1, Subscription.ConsistencyMode.CONTIGUOUS, (page, connection) -> {
+            log.subscribe(Definitions.definition(placement + "-contiguous-" + i, TYPE, "node1", 1, ConsistencyMode.CONTIGUOUS, null), (page, tx) -> {
+                var connection = tx.connection();
                 long now = System.nanoTime();
                 for (var e : page) {
                     var at = committed.get(e.aggregateId());
@@ -1352,7 +1360,7 @@ class EventLogGateSpikeIT {
              var app = new App(db, settings(1000), 4)) {
             var listenerPool = db.pool("reader", 4);
             var listening    = engine(listenerPool, settings(1000), new Counters());
-            listening.subscribe("listening", TYPE, "node1", 1, e -> {
+            listening.subscribe(Definitions.definition("listening", TYPE, "node1", 1, null, null), e -> {
             });
             var measuring = new AtomicBoolean();
             var stop      = new AtomicBoolean();
@@ -1480,7 +1488,7 @@ class EventLogGateSpikeIT {
             var measuring = new AtomicBoolean();
             if (!arm.equals("WRITERS")) {
                 for (var name : names) {
-                    app.eventLog.subscribe("sub-" + name, name, "node1", 1, e -> {
+                    app.eventLog.subscribe(Definitions.definition("sub-" + name, name, "node1", 1, null, null), e -> {
                         var at = woken.get(e.aggregateId());
                         if (at != null && measuring.get()) {
                             latencies.add(System.nanoTime() - at);
@@ -1655,14 +1663,15 @@ class EventLogGateSpikeIT {
         long head = SpikeDb.queryLong(db.observer, "SELECT coalesce(max(global_order), 0) FROM " + app.tables.eventTable());
         var lines = new ConcurrentLinkedQueue<String[]>();
         var child = GateSpikeAccess.startLeaseOwner(db.jdbcUrl(), db.role("writer"), db.password("writer"), node, periodicName, pagesName, head + 1, lines::add);
-        Subscription sp = null, sc = null;
+        SubscriptionHandle sp = null, sc = null;
         try {
             await(Duration.ofSeconds(60), () -> childFence(lines, periodicName) != null && childFence(lines, pagesName) != null);
             long oldFenceP = childFence(lines, periodicName), oldFenceC = childFence(lines, pagesName);
             var standbyP = new ConcurrentLinkedQueue<long[]>();
             var standbyC = new ConcurrentLinkedQueue<long[]>();
-            sp = app.eventLog.subscribeExclusive(periodicName, TYPE, head + 1, e -> standbyP.add(new long[]{e.globalOrder(), System.nanoTime()}));
-            sc = app.eventLog.subscribeExclusive(pagesName, TYPE, head + 1, Subscription.ConsistencyMode.CONTIGUOUS, (page, connection) -> {
+            sp = app.eventLog.subscribe(Definitions.definition(periodicName, TYPE, null, head + 1, null, null), e -> standbyP.add(new long[]{e.globalOrder(), System.nanoTime()}));
+            sc = app.eventLog.subscribe(Definitions.definition(pagesName, TYPE, null, head + 1, ConsistencyMode.CONTIGUOUS, null), (page, tx) -> {
+                var connection = tx.connection();
                 long now = System.nanoTime();
                 for (var e : page) standbyC.add(new long[]{e.globalOrder(), now});
             });
@@ -1763,9 +1772,9 @@ class EventLogGateSpikeIT {
     private void renewalArm(int run, int n, Duration window) throws Exception {
         try (var db = SpikeDb.start("ren_r" + run + "_" + n, 100); var app = new App(db, EventLogSettings.defaults(), 20)) {
             long sizeEmpty = SpikeDb.queryLong(db.observer, "SELECT pg_total_relation_size('el_progress')");
-            var subscriptions = new ArrayList<Subscription>(n);
+            var subscriptions = new ArrayList<SubscriptionHandle>(n);
             for (int i = 0; i < n; i++) {
-                subscriptions.add(app.eventLog.subscribeExclusive("lease-" + i, TYPE, 1, e -> {
+                subscriptions.add(app.eventLog.subscribe(Definitions.definition("lease-" + i, TYPE, null, 1, null, null), e -> {
                 }));
             }
             await(Duration.ofMinutes(5), () -> app.observer.claimedAt.size() >= n);
@@ -1835,7 +1844,7 @@ class EventLogGateSpikeIT {
             SpikeDb.record(P7_RENEWAL, String.format("  cold start (unit D): first %d passes in the window, client statement ms [%s] | el_progress analysed %d times by the window's end",
                                                      Math.min(15, renewals.size()), first,
                                                      SpikeDb.queryLong(db.observer, "SELECT analyze_count + autoanalyze_count FROM pg_stat_user_tables WHERE relname = 'el_progress'")));
-            subscriptions.forEach(Subscription::stop);
+            subscriptions.forEach(SubscriptionHandle::stop);
         }
     }
 
@@ -1874,13 +1883,13 @@ class EventLogGateSpikeIT {
         }
     }
 
-    private static Subscription subscribe(EventLog log, String subscriber, boolean exclusive, Subscription.Handler handler) throws SQLException {
-        return exclusive ? log.subscribeExclusive(subscriber, TYPE, 1, handler) : log.subscribe(subscriber, TYPE, "node1", 1, handler);
+    private static SubscriptionHandle subscribe(EventLog log, String subscriber, boolean exclusive, PeriodicHandler handler) throws SQLException {
+        return exclusive ? log.subscribe(Definitions.definition(subscriber, TYPE, null, 1, null, null), handler) : log.subscribe(Definitions.definition(subscriber, TYPE, "node1", 1, null, null), handler);
     }
 
-    private static Subscription subscribe(EventLog log, String subscriber, boolean exclusive, Subscription.PageHandler handler) throws SQLException {
-        return exclusive ? log.subscribeExclusive(subscriber, TYPE, 1, Subscription.ConsistencyMode.CONTIGUOUS, handler)
-                         : log.subscribe(subscriber, TYPE, "node1", 1, Subscription.ConsistencyMode.CONTIGUOUS, handler);
+    private static SubscriptionHandle subscribe(EventLog log, String subscriber, boolean exclusive, PageHandler handler) throws SQLException {
+        return exclusive ? log.subscribe(Definitions.definition(subscriber, TYPE, null, 1, ConsistencyMode.CONTIGUOUS, null), handler)
+                         : log.subscribe(Definitions.definition(subscriber, TYPE, "node1", 1, ConsistencyMode.CONTIGUOUS, null), handler);
     }
 
     /** Samples {@code pg_stat_activity} every 5 ms: [samples, samples with a Lock wait, samples with a Lock wait on an el_progress statement] */
@@ -1927,7 +1936,8 @@ class EventLogGateSpikeIT {
                     var at = committed.get(e.aggregateId());
                     if (at != null) sinks.add("FRESH", System.nanoTime() - at);
                 });
-                subscribe(app.eventLog, "contiguous-" + i, exclusive, (page, connection) -> {
+                subscribe(app.eventLog, "contiguous-" + i, exclusive, (page, tx) -> {
+                    var connection = tx.connection();
                     long now = System.nanoTime();
                     for (var e : page) {
                         var at = committed.get(e.aggregateId());

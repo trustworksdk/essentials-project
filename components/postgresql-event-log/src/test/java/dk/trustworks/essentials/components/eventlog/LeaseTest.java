@@ -150,11 +150,11 @@ class LeaseTest {
 
     @Test
     void an_exclusive_spec_has_the_empty_instance_name_and_a_non_exclusive_one_a_non_blank_one() {
-        Subscription.Handler handler = event -> {
+        PeriodicHandler handler = event -> {
         };
         assertThatThrownBy(() -> new Subscription.SubscriptionSpec(new ProgressStore.Key("s", "Orders", " "), 1, handler, TestSeams.NONE))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new Subscription.SubscriptionSpec(new ProgressStore.Key("s", "Orders", "node-1"), 1, Subscription.ConsistencyMode.FRESH,
+        assertThatThrownBy(() -> new Subscription.SubscriptionSpec(new ProgressStore.Key("s", "Orders", "node-1"), 1, ConsistencyMode.FRESH,
                                                                    Subscription.ProgressModel.PERIODIC, handler, null, TestSeams.NONE, EventTypeFilter.all(), true))
                 .isInstanceOf(IllegalArgumentException.class);
         var exclusive = new Subscription.SubscriptionSpec(new ProgressStore.Key("s", "Orders", "node-1"), 1, handler, TestSeams.NONE).asExclusive();

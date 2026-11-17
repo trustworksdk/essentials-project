@@ -136,13 +136,13 @@ abstract class AbstractLeaseIT extends AbstractEventLogIT {
     }
 
     /** An exclusive {@code FRESH} periodic subscription on {@code eventLog}; crashed after the test */
-    Subscription periodic(EventLog eventLog, String subscriber, Subscription.Handler handler, TestSeams seams) throws SQLException {
-        return track(eventLog.subscribe(new Subscription.SubscriptionSpec(key(subscriber), 1, Subscription.ConsistencyMode.FRESH, Subscription.ProgressModel.PERIODIC,
+    Subscription periodic(EventLog eventLog, String subscriber, PeriodicHandler handler, TestSeams seams) throws SQLException {
+        return track(eventLog.subscribe(new Subscription.SubscriptionSpec(key(subscriber), 1, ConsistencyMode.FRESH, Subscription.ProgressModel.PERIODIC,
                                                                            handler, null, seams, EventTypeFilter.all(), true)));
     }
 
     /** An exclusive in-transaction subscription on {@code eventLog}; crashed after the test */
-    Subscription inTransaction(EventLog eventLog, String subscriber, Subscription.ConsistencyMode mode, Subscription.PageHandler handler, TestSeams seams)
+    Subscription inTransaction(EventLog eventLog, String subscriber, ConsistencyMode mode, PageHandler handler, TestSeams seams)
             throws SQLException {
         return track(eventLog.subscribe(new Subscription.SubscriptionSpec(key(subscriber), 1, mode, Subscription.ProgressModel.IN_HANDLER_TRANSACTION, null, handler,
                                                                            seams, EventTypeFilter.all(), true)));
@@ -166,8 +166,9 @@ abstract class AbstractLeaseIT extends AbstractEventLogIT {
     }
 
     /** A page handler that writes each event of the page to {@code table}, tagged {@code writer} */
-    static Subscription.PageHandler viewWriter(String table, String writer) {
-        return Subscription.PageHandler.perEvent((event, connection) -> {
+    static PageHandler viewWriter(String table, String writer) {
+        return PageHandler.perEvent((event, tx) -> {
+            var connection = tx.connection();
             try (var statement = connection.prepareStatement("INSERT INTO " + table + " (global_order, writer) VALUES (?, ?)")) {
                 statement.setLong(1, event.globalOrder());
                 statement.setString(2, writer);

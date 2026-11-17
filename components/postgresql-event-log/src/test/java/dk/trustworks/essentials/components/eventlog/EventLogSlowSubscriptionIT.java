@@ -76,7 +76,7 @@ class EventLogSlowSubscriptionIT extends AbstractSubscriptionIT {
     }
 
     /** Records the first handling time of every global order */
-    private static final class Timed implements Subscription.Handler {
+    private static final class Timed implements PeriodicHandler {
         final Recorder                     recorder = new Recorder();
         final ConcurrentHashMap<Long, Long> handledAt = new ConcurrentHashMap<>();
 
@@ -88,7 +88,7 @@ class EventLogSlowSubscriptionIT extends AbstractSubscriptionIT {
     }
 
     /** Blocks on {@link #release} from its second event on */
-    private static final class Blocking implements Subscription.Handler {
+    private static final class Blocking implements PeriodicHandler {
         final Recorder       recorder = new Recorder();
         final AtomicInteger  calls    = new AtomicInteger();
         final CountDownLatch blocked  = new CountDownLatch(1);

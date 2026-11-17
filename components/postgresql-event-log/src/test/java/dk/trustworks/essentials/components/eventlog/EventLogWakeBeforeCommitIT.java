@@ -102,8 +102,8 @@ class EventLogWakeBeforeCommitIT extends AbstractSubscriptionIT {
         subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key("h", H, "node-1"), 1, recorderH, new TestSeams(mutants, hooks, heldView)));
         awaitTrue(() -> reads.attaches.get() >= 2);
         subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key("b", B, "node-1"), 1, recorderB, new TestSeams(mutants, hooks, null)));
-        subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key("b-contiguous", B, "node-1"), 1, Subscription.ConsistencyMode.CONTIGUOUS,
-                                                              (page, connection) -> page.forEach(event -> contiguous.add(event.globalOrder())), TestSeams.NONE));
+        subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key("b-contiguous", B, "node-1"), 1, ConsistencyMode.CONTIGUOUS,
+                                                              (page, tx) -> page.forEach(event -> contiguous.add(event.globalOrder())), TestSeams.NONE));
         awaitTrue(() -> reads.attaches.get() >= 4);
 
         // L holds a value of WakeH: a hole with a candidate, so WakeH wants a running set

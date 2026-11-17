@@ -133,17 +133,18 @@ final class LeaseOwnerProcess {
         var log = EventLog.builder().setDataSource(source).setSettings((gate ? EventLogSettings.defaults() : LEASE).withNodeName(nodeName)).setObserver(observer).build();
         log.start();
         log.registerAggregateType(TYPE);
-        var periodicRef = new AtomicReference<Subscription>();
-        var periodic = log.subscribeExclusive(periodicName, TYPE, startFrom, event -> {
+        var periodicRef = new AtomicReference<SubscriptionHandle>();
+        var periodic = log.subscribe(Definitions.definition(periodicName, TYPE, null, startFrom, null, null), event -> {
             var subscription = periodicRef.get();
-            var fence        = subscription == null ? null : subscription.lease().fenceValue();
+            Long fence        = subscription == null ? null : Definitions.internal(subscription).lease().fenceValue();
             synchronized (out) {
                 out.println("H " + event.globalOrder() + " " + fence + " " + System.nanoTime());
             }
         });
         periodicRef.set(periodic);
-        var pages = log.subscribeExclusive(pagesName, TYPE, startFrom, Subscription.ConsistencyMode.CONTIGUOUS,
-                                           Subscription.PageHandler.perEvent((event, connection) -> {
+        var pages = log.subscribe(Definitions.definition(pagesName, TYPE, null, startFrom, ConsistencyMode.CONTIGUOUS, null),
+                                           PageHandler.perEvent((event, tx) -> {
+                                               var connection = tx.connection();
                                                try (var statement = connection.prepareStatement("INSERT INTO " + VIEW + " (global_order, writer) VALUES (?, ?)")) {
                                                    statement.setLong(1, event.globalOrder());
                                                    statement.setString(2, nodeName);

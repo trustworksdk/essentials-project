@@ -45,13 +45,13 @@ class EventLogResetRaceIT extends AbstractLeaseIT {
         return exclusive ? "" : INSTANCE;
     }
 
-    private Subscription periodic(boolean exclusive, Subscription.Handler handler, TestSeams seams) throws SQLException {
-        return track(eventLog.subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(SUB, TYPE, instance(exclusive)), 1, Subscription.ConsistencyMode.FRESH,
+    private Subscription periodic(boolean exclusive, PeriodicHandler handler, TestSeams seams) throws SQLException {
+        return track(eventLog.subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(SUB, TYPE, instance(exclusive)), 1, ConsistencyMode.FRESH,
                                                                            Subscription.ProgressModel.PERIODIC, handler, null, seams, EventTypeFilter.all(), exclusive)));
     }
 
-    private Subscription inTransaction(boolean exclusive, Subscription.PageHandler handler, TestSeams seams) throws SQLException {
-        return track(eventLog.subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(SUB, TYPE, instance(exclusive)), 1, Subscription.ConsistencyMode.CONTIGUOUS,
+    private Subscription inTransaction(boolean exclusive, PageHandler handler, TestSeams seams) throws SQLException {
+        return track(eventLog.subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(SUB, TYPE, instance(exclusive)), 1, ConsistencyMode.CONTIGUOUS,
                                                                            Subscription.ProgressModel.IN_HANDLER_TRANSACTION, null, handler, seams, EventTypeFilter.all(),
                                                                            exclusive)));
     }

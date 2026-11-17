@@ -91,13 +91,14 @@ class EventLogContiguousDetachIT extends AbstractPageIT {
             }
         };
         var view = view();
-        Subscription.PageHandler handler = (page, connection) -> {
+        PageHandler handler = (page, tx) -> {
+            var connection = tx.connection();
             if (page.getFirst().aggregateId().equals("burst") && throwFlag.getAndSet(false)) {
                 throw new IllegalStateException("fails once");
             }
-            view.handle(page, connection);
+            view.handle(page, tx);
         };
-        var subscription = subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key(NAME, TYPE, "node-1"), 1, Subscription.ConsistencyMode.CONTIGUOUS,
+        var subscription = subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key(NAME, TYPE, "node-1"), 1, ConsistencyMode.CONTIGUOUS,
                                                                                  handler, new TestSeams(Set.of(mutants), hooks, null)));
         awaitTrue(subscription::isIdle);
         var g1 = commitAppend("burst", BURST);

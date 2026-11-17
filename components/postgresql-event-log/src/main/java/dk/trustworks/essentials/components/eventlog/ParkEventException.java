@@ -26,7 +26,7 @@ package dk.trustworks.essentials.components.eventlog;
  * not in the page, from a page of several events, it counts as an ordinary handler failure, so the page shrinks until the
  * failing event is alone, where it parks at once. A per-event handler may always throw it without an event.
  * <p>
- * <b>Temporary</b> like {@link Subscription.PageHandler}: phase 8's API decides the final shape.
+ * Phase 8 keeps it as the way a handler parks an event at once (design phase 8 §2.3).
  */
 public final class ParkEventException extends RuntimeException {
     private final transient StoredEvent event;

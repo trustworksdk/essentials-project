@@ -130,9 +130,9 @@ class EventLogCatchUpCapIT extends AbstractSubscriptionIT {
                 var set      = ConcurrentHashMap.<Long>newKeySet();
                 delivered.put(name, set);
                 expected.put(name, filtered ? xs : new TreeSet<>(orders));
-                var spec = i < PER_LOG / 2 ? Subscription.SubscriptionSpec.periodic(key, 1, Subscription.ConsistencyMode.FRESH, event -> set.add(event.globalOrder()), seams)
-                                           : Subscription.SubscriptionSpec.inTransaction(key, 1, Subscription.ConsistencyMode.CONTIGUOUS,
-                                                                                         (page, connection) -> page.forEach(event -> set.add(event.globalOrder())), seams);
+                var spec = i < PER_LOG / 2 ? Subscription.SubscriptionSpec.periodic(key, 1, ConsistencyMode.FRESH, event -> set.add(event.globalOrder()), seams)
+                                           : Subscription.SubscriptionSpec.inTransaction(key, 1, ConsistencyMode.CONTIGUOUS,
+                                                                                         (page, tx) -> page.forEach(event -> set.add(event.globalOrder())), seams);
                 track(log.subscribe(filtered ? spec.withFilter(EventTypeFilter.of("X")) : spec));
             }
         }

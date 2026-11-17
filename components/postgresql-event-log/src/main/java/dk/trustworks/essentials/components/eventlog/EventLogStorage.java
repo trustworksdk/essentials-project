@@ -61,13 +61,25 @@ final class EventLogStorage {
     static final String INDEX_VALIDITY    = "SELECT i.indisvalid AND i.indisready FROM pg_index i WHERE i.indexrelid = to_regclass(?)";
 
     // ---- progress (design §2.5, §3.4) ----
-    static final String PROGRESS_START =
-            "WITH old AS (SELECT consistency_mode, progress_model FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?)\n" +
-                    "INSERT INTO " + PROGRESS_TABLE + " AS p (subscriber, aggregate_type, instance_name, exclusive, consistency_mode, progress_model, resume_from)\n" +
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)\n" +
-                    "ON CONFLICT (subscriber, aggregate_type, instance_name) DO UPDATE\n" +
-                    "    SET consistency_mode = EXCLUDED.consistency_mode, progress_model = EXCLUDED.progress_model, updated_at = now()\n" +
-                    "RETURNING p.resume_from, p.reset_epoch, (SELECT count(*) FROM old) > 0, (SELECT consistency_mode FROM old), (SELECT progress_model FROM old), p.exclusive";
+    static final String PROGRESS_START = progressStart(null);
+
+    /**
+     * Create a progress row or take the stored one, storing the mode, model and filter digest (phase 8 §2.6). Parameters:
+     * the key twice, exclusive, mode, model, then the initial resume point unless {@code headTable} is given, then the
+     * filter digest. With {@code headTable} (a validated event table name) a new row starts at its
+     * {@code max(global_order) + 1}, resolved in this statement (phase 8 decision 13)
+     */
+    static String progressStart(String headTable) {
+        var resume = headTable == null ? "?" : "(SELECT coalesce(max(global_order), 0) + 1 FROM " + headTable + ")";
+        return "WITH old AS (SELECT consistency_mode, progress_model, filter_digest FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?)\n" +
+                "INSERT INTO " + PROGRESS_TABLE + " AS p (subscriber, aggregate_type, instance_name, exclusive, consistency_mode, progress_model, resume_from, filter_digest)\n" +
+                "VALUES (?, ?, ?, ?, ?, ?, " + resume + ", ?)\n" +
+                "ON CONFLICT (subscriber, aggregate_type, instance_name) DO UPDATE\n" +
+                "    SET consistency_mode = EXCLUDED.consistency_mode, progress_model = EXCLUDED.progress_model, filter_digest = EXCLUDED.filter_digest, updated_at = now()\n" +
+                "RETURNING p.resume_from, p.reset_epoch, (SELECT count(*) FROM old) > 0, (SELECT consistency_mode FROM old), (SELECT progress_model FROM old), p.exclusive,\n" +
+                "          (SELECT filter_digest FROM old)";
+    }
+
     /**
      * The guard every fenced write of a subscription carries (phase 7 §3.1): the epoch, then fence, fence, owner. A
      * non-exclusive subscription binds a null fence. A null epoch or owner disables that part: only the test mutants
@@ -115,18 +127,27 @@ final class EventLogStorage {
                     " WHERE p.subscriber = k.subscriber AND p.aggregate_type = k.aggregate_type AND p.instance_name = k.instance_name\n" +
                     "   AND p.exclusive = k.exclusive\n" +
                     "   AND (p.lease_owner IS NULL OR p.lease_until < k.claim_time)\n" +
-                    "RETURNING p.subscriber, p.aggregate_type, p.lease_fence, p.resume_from, p.reset_epoch, p.consistency_mode, p.progress_model";
+                    "RETURNING p.subscriber, p.aggregate_type, p.lease_fence, p.resume_from, p.reset_epoch, p.consistency_mode, p.progress_model, p.filter_digest";
     /** Mutant {@code CLAIM_IGNORES_LIVE_LEASE}: {@link #LEASE_CLAIM} without the lease condition */
     static final String LEASE_CLAIM_IGNORING_LEASE = LEASE_CLAIM.replace("   AND (p.lease_owner IS NULL OR p.lease_until < k.claim_time)\n", "");
     /**
      * The first claim of an exclusive row that does not exist yet (§2.2): subscriber, aggregate type, consistency_mode,
      * progress_model, resume_from, owner, lease interval. No row returned: another node created it
      */
-    static final String LEASE_CLAIM_NEW =
-            "INSERT INTO " + PROGRESS_TABLE + " (subscriber, aggregate_type, instance_name, exclusive, consistency_mode, progress_model, resume_from, lease_owner, lease_fence, lease_until)\n" +
-                    "VALUES (?, ?, '', true, ?, ?, ?, ?, nextval('" + LEASE_FENCE_SEQUENCE + "'), now() + ?::interval)\n" +
-                    "ON CONFLICT (subscriber, aggregate_type, instance_name) DO NOTHING\n" +
-                    "RETURNING lease_fence, resume_from, reset_epoch";
+static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
+
+    /**
+     * Insert the row of a never-seen exclusive subscription with its first claim (§2.2): subscriber, aggregate type, mode,
+     * model, the initial resume point unless {@code headTable} is given (phase 8 decision 13: then
+     * {@code max(global_order) + 1} of that validated event table), owner, lease interval, filter digest (phase 8 §2.6)
+     */
+    static String leaseClaimNew(String headTable) {
+        var resume = headTable == null ? "?" : "(SELECT coalesce(max(global_order), 0) + 1 FROM " + headTable + ")";
+        return "INSERT INTO " + PROGRESS_TABLE + " (subscriber, aggregate_type, instance_name, exclusive, consistency_mode, progress_model, resume_from, lease_owner, lease_fence, lease_until, filter_digest)\n" +
+                "VALUES (?, ?, '', true, ?, ?, " + resume + ", ?, nextval('" + LEASE_FENCE_SEQUENCE + "'), now() + ?::interval, ?)\n" +
+                "ON CONFLICT (subscriber, aggregate_type, instance_name) DO NOTHING\n" +
+                "RETURNING lease_fence, resume_from, reset_epoch";
+    }
     /**
      * Renew every owned lease in one statement (§2.3): owner, then {@code text[]} subscribers, aggregate types and
      * {@code bigint[]} fences, then the lease interval. Returns subscriber, aggregate type of each lease renewed. Shaped
@@ -166,7 +187,7 @@ final class EventLogStorage {
      * the key, then {@link #FENCE_GUARD}'s parameters
      */
     static final String PROGRESS_SET_MODE =
-            "UPDATE " + PROGRESS_TABLE + " SET consistency_mode = ?, progress_model = ?, updated_at = now()\n" +
+            "UPDATE " + PROGRESS_TABLE + " SET consistency_mode = ?, progress_model = ?, filter_digest = ?, updated_at = now()\n" +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD;
     /**
      * Mutant {@code FENCE_READ_BEFORE_WRITE}: the fence checked by a separate, unlocked read before an unfenced update - the

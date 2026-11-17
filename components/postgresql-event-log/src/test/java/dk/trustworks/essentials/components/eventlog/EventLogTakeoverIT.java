@@ -60,7 +60,7 @@ class EventLogTakeoverIT extends AbstractLeaseIT {
                 handled.add(event.globalOrder());
                 periodicDelivered.add(event.globalOrder());
             }, TestSeams.NONE);
-            pages = inTransaction(log, PAGES, Subscription.ConsistencyMode.CONTIGUOUS, viewWriter(VIEW, name), TestSeams.NONE);
+            pages = inTransaction(log, PAGES, ConsistencyMode.CONTIGUOUS, viewWriter(VIEW, name), TestSeams.NONE);
             return this;
         }
 

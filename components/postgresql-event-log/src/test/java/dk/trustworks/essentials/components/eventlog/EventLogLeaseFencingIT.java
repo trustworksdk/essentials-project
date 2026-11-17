@@ -164,14 +164,14 @@ class EventLogLeaseFencingIT extends AbstractLeaseIT {
         }));
         var aMutants = new HashSet<>(List.of(mutants));
         aMutants.add(PROGRESS_WITHOUT_EXPECTED_RESUME);
-        var a = inTransaction(logA, SUB, Subscription.ConsistencyMode.CONTIGUOUS, viewWriter(VIEW, "A"), seams(new TestSeams.Hooks() {
+        var a = inTransaction(logA, SUB, ConsistencyMode.CONTIGUOUS, viewWriter(VIEW, "A"), seams(new TestSeams.Hooks() {
             @Override
             public void afterHandlerBeforeProgress(String subscriber, List<StoredEvent> page) throws Exception {
                 pageGate.pass();
             }
         }, aMutants));
         awaitOwned(a);
-        var b = inTransaction(logB, SUB, Subscription.ConsistencyMode.CONTIGUOUS, viewWriter(VIEW, "B"), TestSeams.NONE);
+        var b = inTransaction(logB, SUB, ConsistencyMode.CONTIGUOUS, viewWriter(VIEW, "B"), TestSeams.NONE);
         append(logA, "order-1", 10);
         pageGate.awaitReached();
 
@@ -229,14 +229,14 @@ class EventLogLeaseFencingIT extends AbstractLeaseIT {
                 claimGate.pass();
             }
         }));
-        var a = inTransaction(logA, SUB, Subscription.ConsistencyMode.CONTIGUOUS, viewWriter(VIEW, "A"), seams(new TestSeams.Hooks() {
+        var a = inTransaction(logA, SUB, ConsistencyMode.CONTIGUOUS, viewWriter(VIEW, "A"), seams(new TestSeams.Hooks() {
             @Override
             public void afterHandlerBeforeProgress(String subscriber, List<StoredEvent> page) throws Exception {
                 pageGate.pass();
             }
         }, mutants));
         awaitOwned(a);
-        var b = inTransaction(logB, SUB, Subscription.ConsistencyMode.CONTIGUOUS, viewWriter(VIEW, "B"), TestSeams.NONE);
+        var b = inTransaction(logB, SUB, ConsistencyMode.CONTIGUOUS, viewWriter(VIEW, "B"), TestSeams.NONE);
         claimGate.awaitReached();
         append(logA, "order-1", 10);
         pageGate.awaitReached();

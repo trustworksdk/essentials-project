@@ -49,8 +49,8 @@ abstract class AbstractPageIT extends AbstractSubscriptionIT {
     }
 
     /** The view projection, row by row on the page's connection */
-    Subscription.PageHandler view() {
-        return Subscription.PageHandler.perEvent(this::apply);
+    PageHandler view() {
+        return PageHandler.perEvent((event, tx) -> apply(event, tx.connection()));
     }
 
     void apply(StoredEvent event, Connection connection) throws SQLException {
@@ -77,7 +77,7 @@ abstract class AbstractPageIT extends AbstractSubscriptionIT {
     }
 
     Subscription.SubscriptionSpec contiguousSpec(String name, TestSeams seams) {
-        return Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key(name, TYPE, "node-1"), 1, Subscription.ConsistencyMode.CONTIGUOUS, view(), seams);
+        return Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key(name, TYPE, "node-1"), 1, ConsistencyMode.CONTIGUOUS, view(), seams);
     }
 
     Subscription contiguous(String name, TestSeams seams) throws SQLException {

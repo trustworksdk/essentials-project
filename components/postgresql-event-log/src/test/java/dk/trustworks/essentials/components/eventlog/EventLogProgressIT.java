@@ -103,8 +103,8 @@ class EventLogProgressIT extends AbstractSubscriptionIT {
         var fresh      = new ConcurrentHashMap<Long, Long>();
         var contiguous = new ConcurrentHashMap<Long, Long>();
         subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key("fresh", TYPE, "node-1"), 1, event -> fresh.putIfAbsent(event.globalOrder(), System.nanoTime()), seams));
-        subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key("contiguous", TYPE, "node-1"), 1, Subscription.ConsistencyMode.CONTIGUOUS,
-                                                              (page, connection) -> page.forEach(event -> contiguous.putIfAbsent(event.globalOrder(), System.nanoTime())),
+        subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key("contiguous", TYPE, "node-1"), 1, ConsistencyMode.CONTIGUOUS,
+                                                              (page, tx) -> page.forEach(event -> contiguous.putIfAbsent(event.globalOrder(), System.nanoTime())),
                                                               TestSeams.NONE));
         awaitTrue(() -> reads.attaches.get() >= 2);
         if (arm != Arm.TIER_2_LOST) {

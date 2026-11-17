@@ -163,10 +163,13 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
                         "    lease_owner       text,\n" +
                         "    lease_until       timestamptz,\n" +
                         "    lease_fence       bigint,\n" +
+                        "    filter_digest     text,\n" +
                         "    created_at        timestamptz NOT NULL DEFAULT now(),\n" +
                         "    updated_at        timestamptz NOT NULL DEFAULT now(),\n" +
                         "    PRIMARY KEY (subscriber, aggregate_type, instance_name)\n" +
                         ") WITH (fillfactor = 70)",
+                // Phase 8 §2.6: the stored filter digest; added to a table created before phase 8
+                "ALTER TABLE " + PROGRESS_TABLE + " ADD COLUMN IF NOT EXISTS filter_digest text",
                 "CREATE TABLE IF NOT EXISTS " + PARKED_EVENTS_TABLE + " (\n" +
                         "    subscriber      text        NOT NULL,\n" +
                         "    aggregate_type  text        NOT NULL,\n" +

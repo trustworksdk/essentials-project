@@ -86,8 +86,18 @@ final class ProgressStore {
      * if a stored row had others, the change is logged and the row updated in the same statement (§19 item 17).
      */
     Started start(Key key, boolean exclusive, String consistencyMode, String progressModel, long initialResumeFrom) throws SQLException {
+        return start(key, exclusive, consistencyMode, progressModel, initialResumeFrom, null, null);
+    }
+
+    /**
+     * As {@link #start(Key, boolean, String, String, long)}, storing {@code filterDigest} (phase 8 §2.6: a changed digest
+     * is logged at WARN and stored, never refused) and, with {@code headTable}, starting a new row at that event table's
+     * {@code max(global_order) + 1} instead of {@code initialResumeFrom} (phase 8 decision 13)
+     */
+    Started start(Key key, boolean exclusive, String consistencyMode, String progressModel, long initialResumeFrom, String headTable, String filterDigest)
+            throws SQLException {
         try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(EventLogStorage.PROGRESS_START)) {
+             var statement = connection.prepareStatement(headTable == null ? EventLogStorage.PROGRESS_START : EventLogStorage.progressStart(headTable))) {
             var p = 1;
             statement.setString(p++, key.subscriber());
             statement.setString(p++, key.aggregateType());
@@ -98,7 +108,10 @@ final class ProgressStore {
             statement.setBoolean(p++, exclusive);
             statement.setString(p++, consistencyMode);
             statement.setString(p++, progressModel);
-            statement.setLong(p, initialResumeFrom);
+            if (headTable == null) {
+                statement.setLong(p++, initialResumeFrom);
+            }
+            statement.setString(p, filterDigest);
             try (var resultSet = statement.executeQuery()) {
                 resultSet.next();
                 var started = new Started(resultSet.getLong(1), resultSet.getLong(2), resultSet.getBoolean(3));
@@ -112,6 +125,12 @@ final class ProgressStore {
                     log.warn("Subscription {} on {} (instance '{}') was stored as {}/{} and now starts as {}/{}; the progress row is updated and the subscription " +
                                      "resumes from {}", key.subscriber(), key.aggregateType(), key.instanceName(), oldMode, oldModel, consistencyMode, progressModel,
                              started.resumeFrom());
+                }
+                var oldDigest = resultSet.getString(7);
+                if (started.existed() && !java.util.Objects.equals(oldDigest, filterDigest)) {
+                    log.warn("Subscription {} on {} (instance '{}') was stored with filter digest {} and now starts with {}: its event-type or tenant filter " +
+                                     "changed. The new digest is stored and delivery continues under the new filter from {}; reset the subscription to replay",
+                             key.subscriber(), key.aggregateType(), key.instanceName(), oldDigest, filterDigest, started.resumeFrom());
                 }
                 return started;
             }
@@ -188,12 +207,13 @@ final class ProgressStore {
      *
      * @return whether the row was updated
      */
-    boolean setMode(Key key, String consistencyMode, String progressModel, long resetEpoch, Fence fence) throws SQLException {
+    boolean setMode(Key key, String consistencyMode, String progressModel, String filterDigest, long resetEpoch, Fence fence) throws SQLException {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(EventLogStorage.PROGRESS_SET_MODE)) {
             statement.setString(1, consistencyMode);
             statement.setString(2, progressModel);
-            var p = bindKey(statement, 3, key);
+            statement.setString(3, filterDigest);
+            var p = bindKey(statement, 4, key);
             bindGuard(statement, p, resetEpoch, fence);
             return statement.executeUpdate() == 1;
         }

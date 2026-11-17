@@ -64,6 +64,7 @@ public final class EventLog {
     private volatile TestSeams                                        wakeSeams      = TestSeams.NONE;
     /** Phase 7: the lease keeper of this event log's exclusive subscriptions, and its mutants and hooks (tests) */
     private final LeaseKeeper                                         leaseKeeper;
+    private final EventLogCommitCallback                              commitCallback = new EventLogCommitCallback(this);
     private volatile TestSeams                                        leaseSeams     = TestSeams.NONE;
 
     EventLog(DataSource dataSource, SchemaOwnership schemaOwnership, EventLogSchema.AggregateTypeDdlExecutor ddl, EventLogSettings settings, EventLogObserver observer) {
@@ -224,95 +225,125 @@ public final class EventLog {
     }
 
     /**
-     * Start the phase-2 subscription (design §1.2): {@code FRESH}, periodic progress, non-exclusive, one handler,
-     * backstop wake-up only. <b>Temporary</b>: the phase-8 subscription API replaces it.
-     * <p>
-     * Progress is kept per {@code (subscriber, aggregateType, instanceName)}; two JVMs started with the same instance
-     * name overwrite each other's progress (no lease in phase 2). A new subscription starts at {@code startFrom}; an
-     * existing one resumes from its stored point.
+     * Start a subscription (design phase 8 §2.5). A {@link PeriodicHandler} gets one event at a time and the resume point is
+     * saved periodically; a {@link PageHandler} gets pages in transactions from {@link PageTransactionSource#engine()}, each
+     * of which moves the resume point as its last statement. An existing progress row resumes from its stored point; a
+     * new one starts at {@link SubscriptionDefinition#startFrom()}. An exclusive subscription returns at once, possibly as
+     * a standby.
      *
-     * @param startFrom the first {@code global_order} a new subscription receives; 1 for everything
      * @return the running subscription
      */
-    public Subscription subscribe(String subscriber, String aggregateType, String instanceName, long startFrom, Subscription.Handler handler) throws SQLException {
-        return subscribe(subscriber, aggregateType, instanceName, startFrom, EventTypeFilter.all(), handler);
+    public SubscriptionHandle subscribe(SubscriptionDefinition definition, DeliveryHandler handler) throws SQLException {
+        requireNonNull(handler, "No handler provided");
+        return switch (handler) {
+            case PeriodicHandler periodic -> handle(definition, subscribe(spec(definition, periodic, null, null)));
+            case PageHandler page -> subscribe(definition, page, PageTransactionSource.engine());
+        };
     }
 
     /**
-     * As {@link #subscribe(String, String, String, long, Subscription.Handler)}, receiving only the event types of
-     * {@code filter} (design phase 5 §1.2): the others count as handled without reaching the handler. <b>Temporary</b>.
+     * {@link #subscribe(SubscriptionDefinition, DeliveryHandler)} for a periodic handler; lets a one-argument lambda be passed
      */
-    public Subscription subscribe(String subscriber, String aggregateType, String instanceName, long startFrom, EventTypeFilter filter, Subscription.Handler handler)
-            throws SQLException {
-        return subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(subscriber, aggregateType, instanceName), startFrom, handler, TestSeams.NONE).withFilter(filter));
+    public SubscriptionHandle subscribe(SubscriptionDefinition definition, PeriodicHandler handler) throws SQLException {
+        return subscribe(definition, (DeliveryHandler) handler);
     }
 
     /**
-     * Start a phase-4 subscription whose pages are applied in the engine's transaction (design phase 4 §3.1): every page
-     * of at most {@link EventLogSettings#pageSize()} events runs in a transaction on a connection of this event log's
-     * {@code DataSource}, and its last statement moves the resume point, so the handler's writes and the progress commit
-     * together. Non-exclusive, backstop wake-up only. <b>Temporary</b>: the phase-8 subscription API replaces it.
+     * {@link #subscribe(SubscriptionDefinition, DeliveryHandler)} for a page handler on {@link PageTransactionSource#engine()};
+     * lets a two-argument lambda be passed
+     */
+    public SubscriptionHandle subscribe(SubscriptionDefinition definition, PageHandler handler) throws SQLException {
+        return subscribe(definition, handler, PageTransactionSource.engine());
+    }
+
+    /**
+     * Start an in-transaction subscription whose page transactions come from {@code source} (design phase 8 §2.4): the
+     * handler's writes, the parked rows and the progress update commit together through it. The source must give
+     * connections to this event log's database.
      *
-     * @param startFrom the first {@code global_order} a new subscription receives; 1 for everything
-     * @param mode      {@code CONTIGUOUS} (strict {@code global_order}, the view-projection default) or {@code FRESH}
      * @return the running subscription
+     * @throws IllegalArgumentException if {@code source} connects to another database
      */
-    public Subscription subscribe(String subscriber, String aggregateType, String instanceName, long startFrom, Subscription.ConsistencyMode mode,
-                                  Subscription.PageHandler handler) throws SQLException {
-        return subscribe(subscriber, aggregateType, instanceName, startFrom, mode, EventTypeFilter.all(), handler);
+    public SubscriptionHandle subscribe(SubscriptionDefinition definition, PageHandler handler, PageTransactionSource source) throws SQLException {
+        requireNonNull(handler, "No handler provided");
+        requireNonNull(source, "No source provided");
+        requireStarted();
+        if (!EnginePageTransactions.isEngine(source)) {
+            requireSameDatabase(source);
+        }
+        return handle(definition, subscribe(spec(definition, null, handler, source)));
     }
 
     /**
-     * As {@link #subscribe(String, String, String, long, Subscription.ConsistencyMode, Subscription.PageHandler)},
-     * receiving only the event types of {@code filter} (design phase 5 §1.2). <b>Temporary</b>.
+     * The package-private spec of a definition: the seams-free path every test seam path shares. The tenant filter is
+     * applied in memory around the handler (phase 8 §2.6): an event of another tenant counts as handled without reaching it
      */
-    public Subscription subscribe(String subscriber, String aggregateType, String instanceName, long startFrom, Subscription.ConsistencyMode mode,
-                                  EventTypeFilter filter, Subscription.PageHandler handler) throws SQLException {
-        return subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key(subscriber, aggregateType, instanceName), startFrom, mode, handler,
-                                                                     TestSeams.NONE).withFilter(filter));
+    static Subscription.SubscriptionSpec spec(SubscriptionDefinition definition, PeriodicHandler periodic, PageHandler page, PageTransactionSource source) {
+        requireNonNull(definition, "No definition provided");
+        var exclusive = definition.ownership() instanceof Ownership.Exclusive;
+        var key       = new ProgressStore.Key(definition.subscriber(), definition.aggregateType(), definition.ownership().instanceName());
+        var fromHead  = definition.startFrom() instanceof StartFrom.Head;
+        var initial   = definition.startFrom() instanceof StartFrom.GlobalOrder order ? order.value() : 1;
+        var tenant    = definition.tenant().orElse(null);
+        if (tenant != null) {
+            if (periodic != null) {
+                var inner = periodic;
+                periodic = event -> {
+                    if (tenant.equals(event.tenant())) {
+                        inner.handle(event);
+                    }
+                };
+            } else {
+                var inner = page;
+                page = (events, transaction) -> {
+                    var mine = events.stream().filter(event -> tenant.equals(event.tenant())).toList();
+                    if (!mine.isEmpty()) {
+                        inner.handle(mine, transaction);
+                    }
+                };
+            }
+        }
+        var model = periodic != null ? Subscription.ProgressModel.PERIODIC : Subscription.ProgressModel.IN_HANDLER_TRANSACTION;
+        return new Subscription.SubscriptionSpec(key, initial, definition.consistency(), model, periodic, page, TestSeams.NONE, definition.eventTypes(), exclusive, source,
+                                                 definition.errors().orElse(null), definition.filterDigest(), fromHead);
+    }
+
+    /** §2.4: a source on another database would make the page's progress non-atomic with its output */
+    private void requireSameDatabase(PageTransactionSource source) throws SQLException {
+        var open = source.begin();
+        String theirs;
+        try (var statement = open.connection().prepareStatement(EventLogStorage.DATABASE_IDENTITY);
+             var resultSet = statement.executeQuery()) {
+            resultSet.next();
+            theirs = resultSet.getString(1) + "@" + resultSet.getString(2) + ":" + resultSet.getInt(3);
+        } finally {
+            open.rollback();
+        }
+        String ours;
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(EventLogStorage.DATABASE_IDENTITY);
+             var resultSet = statement.executeQuery()) {
+            resultSet.next();
+            ours = resultSet.getString(1) + "@" + resultSet.getString(2) + ":" + resultSet.getInt(3);
+        }
+        if (!ours.equals(theirs)) {
+            throw new IllegalArgumentException("The PageTransactionSource connects to database " + theirs + ", not this event log's " + ours +
+                                                       ": a page's progress would not commit atomically with its output");
+        }
+    }
+
+    private SubscriptionHandle handle(SubscriptionDefinition definition, Subscription subscription) {
+        return new DefinedSubscription(definition, subscription);
     }
 
     /**
-     * Start an <b>exclusive</b> subscription (design phase 7 §2, §4): {@code FRESH}, periodic progress, one handler. At most
-     * one event log at a time delivers it - the one holding the lease on its progress row
-     * {@code (subscriber, aggregateType, '')}; every other one waits as a standby and takes over within a lease after the
-     * owner stops or dies. Every write it makes is fenced. Returns at once, possibly as a standby. <b>Temporary</b>: the
-     * phase-8 subscription API replaces it.
+     * Foundation's unit-of-work callback that calls {@link #afterCommit(Collection)} after a commit (design phase 8 §2.8):
+     * register it on a unit of work with the aggregate types it appended to as the associated resources
      *
-     * @param startFrom the first {@code global_order} a new subscription receives; 1 for everything
-     * @return the running subscription
+     * @return this event log's commit callback
      */
-    public Subscription subscribeExclusive(String subscriber, String aggregateType, long startFrom, Subscription.Handler handler) throws SQLException {
-        return subscribeExclusive(subscriber, aggregateType, startFrom, EventTypeFilter.all(), handler);
-    }
-
-    /**
-     * As {@link #subscribeExclusive(String, String, long, Subscription.Handler)}, receiving only the event types of
-     * {@code filter}. <b>Temporary</b>.
-     */
-    public Subscription subscribeExclusive(String subscriber, String aggregateType, long startFrom, EventTypeFilter filter, Subscription.Handler handler) throws SQLException {
-        return subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(subscriber, aggregateType, ""), startFrom, Subscription.ConsistencyMode.FRESH,
-                                                           Subscription.ProgressModel.PERIODIC, handler, null, TestSeams.NONE, filter, true));
-    }
-
-    /**
-     * Start an <b>exclusive</b> subscription whose pages are applied in the engine's transaction (design phase 7 §2;
-     * phase 4 §3.1): as {@link #subscribe(String, String, String, long, Subscription.ConsistencyMode, Subscription.PageHandler)},
-     * delivered by the one event log that holds the lease, and every page's progress update fenced. <b>Temporary</b>.
-     */
-    public Subscription subscribeExclusive(String subscriber, String aggregateType, long startFrom, Subscription.ConsistencyMode mode, Subscription.PageHandler handler)
-            throws SQLException {
-        return subscribeExclusive(subscriber, aggregateType, startFrom, mode, EventTypeFilter.all(), handler);
-    }
-
-    /**
-     * As {@link #subscribeExclusive(String, String, long, Subscription.ConsistencyMode, Subscription.PageHandler)}, receiving
-     * only the event types of {@code filter}. <b>Temporary</b>.
-     */
-    public Subscription subscribeExclusive(String subscriber, String aggregateType, long startFrom, Subscription.ConsistencyMode mode, EventTypeFilter filter,
-                                           Subscription.PageHandler handler) throws SQLException {
-        return subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(subscriber, aggregateType, ""), startFrom, mode, Subscription.ProgressModel.IN_HANDLER_TRANSACTION,
-                                                           null, handler, TestSeams.NONE, filter, true));
+    public dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkLifecycleCallback<String> commitCallback() {
+        return commitCallback;
     }
 
     /**
@@ -346,7 +377,7 @@ public final class EventLog {
                     throw new IllegalStateException("Exclusive subscription " + spec.key().subscriber() + " on " + aggregateType + " is already running in this EventLog");
                 }
             }
-            lease = new Lease(spec.key(), new Lease.NewRow(spec.mode().name(), spec.model().name(), spec.initialResumeFrom()), leaseKeeper.owner(),
+            lease = new Lease(spec.key(), new Lease.NewRow(spec.mode().name(), spec.model().name(), spec.initialResumeFrom(), spec.fromHead() ? type.tables.eventTable() : null, spec.filterDigest()), leaseKeeper.owner(),
                               settings.leaseLocalStop().toNanos(), System::nanoTime);
         }
         var subscription  = new Subscription(spec, readerLoop, EventLogStorage.TailStatements.of(relation), rs -> read(aggregateType, rs), progressStore, settings,
@@ -601,7 +632,8 @@ public final class EventLog {
      * as one {@code NOTIFY} on a borrowed connection, waking other event logs' readers (tier 1, §3). Call it after {@code commit()} returns; with foundation's {@code UnitOfWork} the
      * engine's commit callback does it. A hint, never a statement of fact: a call before the commit, or for a
      * transaction that rolled back, costs one read; no call costs latency up to the backstop interval, never an event
-     * (I7). Never blocks and never throws for an unknown or inactive type. <b>Temporary</b>: phase 8's API absorbs it.
+     * (I7). Never blocks and never throws for an unknown or inactive type. An application that appends on a connection it commits
+     * itself calls it; with foundation's {@code UnitOfWork}, register {@link #commitCallback()} instead.
      *
      * @param aggregateTypes the aggregate types the committed transaction appended to
      */
@@ -610,19 +642,6 @@ public final class EventLog {
         for (var aggregateType : aggregateTypes) {
             if (aggregateType != null) {
                 committed(aggregateType);
-            }
-        }
-    }
-
-    /**
-     * {@link #afterCommit(Collection)} for the aggregate types of {@code committedRequests}, the requests the committed
-     * transaction appended. <b>Temporary</b>.
-     */
-    public void afterCommit(List<AppendRequest> committedRequests) {
-        requireNonNull(committedRequests, "No committedRequests provided");
-        for (var request : committedRequests) {
-            if (request != null) {
-                committed(request.aggregateType());
             }
         }
     }

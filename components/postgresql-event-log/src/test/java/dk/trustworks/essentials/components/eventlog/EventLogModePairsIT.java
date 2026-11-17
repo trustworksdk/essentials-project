@@ -32,7 +32,8 @@ class EventLogModePairsIT extends AbstractPageIT {
     void fresh_in_transaction_hands_on_above_a_held_value_and_applies_every_event_once() throws Exception {
         execute("CREATE TABLE el_test_seen (g bigint NOT NULL)");
         var delivered = Collections.synchronizedList(new ArrayList<StoredEvent>());
-        Subscription.PageHandler handler = Subscription.PageHandler.perEvent((event, connection) -> {
+        PageHandler handler = PageHandler.perEvent((event, tx) -> {
+            var connection = tx.connection();
             delivered.add(event);
             try (var statement = connection.prepareStatement("INSERT INTO el_test_seen VALUES (?)")) {
                 statement.setLong(1, event.globalOrder());
@@ -40,7 +41,7 @@ class EventLogModePairsIT extends AbstractPageIT {
             }
         });
         var subscription = subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key("fresh", TYPE, "node-1"), 1,
-                                                                                 Subscription.ConsistencyMode.FRESH, handler, TestSeams.NONE));
+                                                                                 ConsistencyMode.FRESH, handler, TestSeams.NONE));
         awaitTrue(subscription::isIdle);
         var writer = openAppend("A", 1);
         var first  = commitAppend("B", 10);
@@ -58,7 +59,7 @@ class EventLogModePairsIT extends AbstractPageIT {
     void contiguous_periodic_holds_back_above_a_held_value_and_applies_every_event_once_in_global_order() throws Exception {
         var recorder     = new Recorder();
         var subscription = subscribe(Subscription.SubscriptionSpec.periodic(new ProgressStore.Key("contiguous", TYPE, "node-1"), 1,
-                                                                            Subscription.ConsistencyMode.CONTIGUOUS, recorder, TestSeams.NONE));
+                                                                            ConsistencyMode.CONTIGUOUS, recorder, TestSeams.NONE));
         awaitTrue(subscription::isIdle);
         var writer = openAppend("A", 1);
         var first  = commitAppend("B", 10);

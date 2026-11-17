@@ -26,8 +26,8 @@ import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * A subscription of phases 2 to 4: one handler, non-exclusive, backstop wake-up only. <b>Internal and temporary</b>: the
- * phase-8 subscription API replaces it.
+ * The engine's subscription behind a {@link SubscriptionHandle} (phase 8 decision 12): package-private, started by
+ * {@link EventLog#subscribe(SubscriptionDefinition, DeliveryHandler)} or, with test seams, the package-private spec path.
  * <p>
  * Two independent strategies (design {@code docs/plans/event-store-engine-phase4.md} §1.1):
  * <ul>
@@ -38,7 +38,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     and hands on only the received prefix, in strict {@code global_order}; the resume point is the applied prefix
  *     {@code A + 1}.</li>
  *     <li>The <b>progress model</b> decides how rows are applied and where the resume point is written.
- *     {@link ProgressModel#PERIODIC} calls a per-event {@link Handler} and saves at most every
+ *     {@link ProgressModel#PERIODIC} calls a per-event {@link PeriodicHandler} and saves at most every
  *     {@link EventLogSettings#progressSaveInterval()}; {@link ProgressModel#IN_HANDLER_TRANSACTION} hands pages of at most
  *     {@link EventLogSettings#pageSize()} events to a {@link PageHandler} in a transaction on a connection of the engine's
  *     {@code DataSource}, whose last statement moves the resume point - guarded by the reset epoch and by the value last
@@ -70,16 +70,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * {@link #discardParked(long)}; every other aggregate continues. An interrupted handler is not handled.
  * {@link #stop()} saves once more.
  */
-public final class Subscription {
+final class Subscription {
     private static final Logger log = LoggerFactory.getLogger(Subscription.class);
-
-    /** Which received rows may be handed on (plan §7); the values {@code el_progress} checks */
-    public enum ConsistencyMode {
-        /** Every received row as soon as it is received, above holes; per-aggregate order only (plan §7.1) */
-        FRESH,
-        /** Only rows at or below a received watermark, in strict {@code global_order} (plan §7.2) */
-        CONTIGUOUS
-    }
 
     /** Where the resume point is written (plan §8); the values {@code el_progress} checks */
     enum ProgressModel {
@@ -87,49 +79,6 @@ public final class Subscription {
         PERIODIC,
         /** In the page transaction, as its last statement (phase 4 §3.3) */
         IN_HANDLER_TRANSACTION
-    }
-
-    /**
-     * Handles one event ({@link ProgressModel#PERIODIC}). Returning normally marks it handled; throwing retries it.
-     */
-    @FunctionalInterface
-    public interface Handler {
-        void handle(StoredEvent event) throws Exception;
-    }
-
-    /**
-     * Applies a page of events in the engine's transaction (design phase 4 §3.1). <b>Temporary</b>: phase 8 replaces it
-     * with the application's own transaction management over the same {@code DataSource}.
-     */
-    @FunctionalInterface
-    public interface PageHandler {
-        /**
-         * Apply a page of events, in {@code global_order} order, using {@code connection}. The engine owns the
-         * transaction: it has begun it, and commits it together with the resume point after this returns, or rolls it
-         * back if this throws. {@code connection} refuses {@code commit}, {@code rollback()}, {@code setAutoCommit},
-         * {@code close} and {@code abort}; savepoints work.
-         */
-        void handle(List<StoredEvent> page, Connection connection) throws Exception;
-
-        /**
-         * @return a row-by-row page handler on top of {@code handler}
-         */
-        static PageHandler perEvent(EventHandler handler) {
-            requireNonNull(handler, "No handler provided");
-            return (page, connection) -> {
-                for (var event : page) {
-                    handler.handle(event, connection);
-                }
-            };
-        }
-    }
-
-    /**
-     * Applies one event of a page on the page's connection; see {@link PageHandler#perEvent(EventHandler)}
-     */
-    @FunctionalInterface
-    public interface EventHandler {
-        void handle(StoredEvent event, Connection connection) throws Exception;
     }
 
     /** Where the delivery thread is in the lifecycle (§3.1); for tests and diagnostics */
@@ -151,9 +100,21 @@ public final class Subscription {
     private final long                           initialResumeFrom;
     private final ConsistencyMode                mode;
     private final ProgressModel                  model;
-    private final Handler                        handler;
+    private final PeriodicHandler                handler;
     private final PageHandler                    pageHandler;
     private final TestSeams                      seams;
+    /** Where page transactions come from (phase 8 §2.4); parked retries of a periodic subscription use {@link #engineSource} */
+    private final PageTransactionSource          pageSource;
+    private final EnginePageTransactions         engineSource;
+    /** Per-subscription retry, backoff and page size (phase 8 §2.2) */
+    private final ErrorSettings                  errors;
+    /** The stored filter digest (phase 8 §2.6), {@code null} without a filter */
+    private final String                         filterDigest;
+    /** A new row starts at the head (phase 8 decision 13) */
+    private final boolean                        fromHead;
+    // ---- status (phase 8 §2.7) ----
+    private volatile Throwable                   lastError;
+    private volatile int                         heldAggregates;
     private final ReaderLoop                     loop;
     private final EventLogStorage.TailStatements statements;
     private final TailReader.RowMapper           mapper;
@@ -186,7 +147,7 @@ public final class Subscription {
 
     // ---- delivery thread only ----
     /** {@code W_rcv}: the watermark received - a catch-up page's ceiling, the bridge's progress (at most {@code W}), a batch's */
-    private long                                 receivedWatermark;
+    private volatile long                        receivedWatermark;
     /**
      * The received rows that may be handed on and are not yet applied, in {@code global_order} order. {@code FRESH}:
      * the unhandled rows of the rows being worked through. {@code CONTIGUOUS}: every existing order in {@code (A, R]}
@@ -268,7 +229,12 @@ public final class Subscription {
         this.progress = requireNonNull(progress, "No progress provided");
         this.settings = requireNonNull(settings, "No settings provided");
         this.observer = requireNonNull(observer, "No observer provided");
-        this.stepDown = new StepDown(settings.pageSize(), seams.has(GROW_INSIDE_SUSPECT_RANGE));
+        this.errors = spec.errors() != null ? spec.errors() : ErrorSettings.defaults(settings);
+        this.engineSource = EnginePageTransactions.on(loop.dataSource());
+        this.pageSource = EnginePageTransactions.isEngine(spec.source()) ? engineSource : spec.source();
+        this.filterDigest = spec.filterDigest();
+        this.fromHead = spec.fromHead();
+        this.stepDown = new StepDown(errors.pageSize(), seams.has(GROW_INSIDE_SUSPECT_RANGE));
         this.parked = new ParkedEvents(key, loop.dataSource());
     }
 
@@ -289,10 +255,13 @@ public final class Subscription {
     /**
      * What a subscription is: its progress key, where a new one starts, its consistency mode and progress model, the
      * handler that model calls ({@code handler} for {@link ProgressModel#PERIODIC}, {@code pageHandler} for
-     * {@link ProgressModel#IN_HANDLER_TRANSACTION}) and its test seams
+     * {@link ProgressModel#IN_HANDLER_TRANSACTION}) and its test seams. Phase 8: the page transaction source
+     * ({@code null} for the engine's), the error settings ({@code null} for the event log's defaults), the filter digest
+     * stored on the row and whether a new row starts at the head ({@code initialResumeFrom} is then ignored)
      */
-    record SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, ProgressModel model, Handler handler, PageHandler pageHandler,
-                            TestSeams seams, EventTypeFilter filter, boolean exclusive) {
+    record SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, ProgressModel model, PeriodicHandler handler, PageHandler pageHandler,
+                            TestSeams seams, EventTypeFilter filter, boolean exclusive, PageTransactionSource source, ErrorSettings errors, String filterDigest,
+                            boolean fromHead) {
         SubscriptionSpec {
             requireNonNull(key, "No key provided");
             requireNonNull(filter, "No filter provided");
@@ -301,6 +270,9 @@ public final class Subscription {
             requireNonNull(seams, "No seams provided");
             if (model == ProgressModel.PERIODIC) {
                 requireNonNull(handler, "No handler provided");
+                if (!EnginePageTransactions.isEngine(source)) {
+                    throw new IllegalArgumentException("A periodic subscription has no page transactions");
+                }
             } else {
                 requireNonNull(pageHandler, "No pageHandler provided");
             }
@@ -316,27 +288,45 @@ public final class Subscription {
             }
         }
 
-        SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, ProgressModel model, Handler handler, PageHandler pageHandler,
+        SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, ProgressModel model, PeriodicHandler handler, PageHandler pageHandler,
+                         TestSeams seams, EventTypeFilter filter, boolean exclusive) {
+            this(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, null, null, SubscriptionDefinition.filterDigest(filter, Optional.empty()),
+                 false);
+        }
+
+        SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, ProgressModel model, PeriodicHandler handler, PageHandler pageHandler,
                          TestSeams seams, EventTypeFilter filter) {
             this(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, false);
         }
 
         /** Phase 2's and 3's subscription: {@code FRESH}, periodic */
-        SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, Handler handler, TestSeams seams) {
+        SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, PeriodicHandler handler, TestSeams seams) {
             this(key, initialResumeFrom, ConsistencyMode.FRESH, ProgressModel.PERIODIC, handler, null, seams, EventTypeFilter.all());
         }
 
         /** @return this spec with the event-type filter {@code filter} (phase 5 §1.2) */
         SubscriptionSpec withFilter(EventTypeFilter filter) {
-            return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive);
+            return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, source, errors,
+                                        SubscriptionDefinition.filterDigest(filter, Optional.empty()), fromHead);
+        }
+
+        /** @return this spec with test seams {@code seams} */
+        SubscriptionSpec withSeams(TestSeams seams) {
+            return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, source, errors, filterDigest, fromHead);
+        }
+
+        /** @return this spec with error settings {@code errors} */
+        SubscriptionSpec withErrors(ErrorSettings errors) {
+            return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, source, errors, filterDigest, fromHead);
         }
 
         /** @return this spec as an exclusive subscription (phase 7), keyed by instance name {@code ""} */
         SubscriptionSpec asExclusive() {
-            return new SubscriptionSpec(new ProgressStore.Key(key.subscriber(), key.aggregateType(), ""), initialResumeFrom, mode, model, handler, pageHandler, seams, filter, true);
+            return new SubscriptionSpec(new ProgressStore.Key(key.subscriber(), key.aggregateType(), ""), initialResumeFrom, mode, model, handler, pageHandler, seams, filter,
+                                        true, source, errors, filterDigest, fromHead);
         }
 
-        static SubscriptionSpec periodic(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, Handler handler, TestSeams seams) {
+        static SubscriptionSpec periodic(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, PeriodicHandler handler, TestSeams seams) {
             return new SubscriptionSpec(key, initialResumeFrom, mode, ProgressModel.PERIODIC, handler, null, seams, EventTypeFilter.all());
         }
 
@@ -468,6 +458,48 @@ public final class Subscription {
         return bridgeRowsDroppedAsHandled;
     }
 
+    /** A failure: kept for {@link #lastError()} and reported to the observer */
+    private void reportError(Throwable error) {
+        lastError = error;
+        observer.onError(key.subscriber(), key.aggregateType(), error);
+    }
+
+    /** The held set changed: kept for {@link #heldAggregates()} and reported to the observer */
+    private void heldChanged() {
+        heldAggregates = parked.heldCount();
+        observer.onHeldAggregates(key.subscriber(), key.aggregateType(), heldAggregates);
+    }
+
+    /** @return the last failure, or {@code null}; for the status (phase 8 §2.7) */
+    Throwable lastError() {
+        return lastError;
+    }
+
+    /** @return the aggregates held behind a parked head; for the status */
+    int heldAggregates() {
+        return heldAggregates;
+    }
+
+    /** @return the received watermark; for the status */
+    long receivedWatermark() {
+        return receivedWatermark;
+    }
+
+    /** @return the progress model; for the status */
+    ProgressModel model() {
+        return model;
+    }
+
+    /** @return the shared reader's active type while joined, else {@code null}; for the status */
+    ReaderLoop.ActiveType activeType() {
+        return type;
+    }
+
+    /** @return the fence this incarnation delivers under, or {@code null}; for the status */
+    ProgressStore.Fence ownedFence() {
+        return ownedFence;
+    }
+
     private boolean contiguous() {
         return mode == ConsistencyMode.CONTIGUOUS;
     }
@@ -476,7 +508,7 @@ public final class Subscription {
         try {
             try {
                 if (lease == null) {
-                    var row = progress.start(key, false, mode.name(), model.name(), initialResumeFrom);
+                    var row = progress.start(key, false, mode.name(), model.name(), initialResumeFrom, fromHead ? AggregateTypeTables.of(key.aggregateType()).eventTable() : null, filterDigest);
                     resetEpoch = row.resetEpoch();
                     lastSaved = row.resumeFrom();
                     lastSaveNanos = System.nanoTime();
@@ -577,7 +609,7 @@ public final class Subscription {
                 if (!running) {
                     return;
                 }
-                observer.onError(key.subscriber(), key.aggregateType(), e);
+                reportError(e);
                 log.warn("Exclusive subscription {} on {}: starting delivery under fence {} failed; releasing the lease", key.subscriber(), key.aggregateType(),
                          claim.fence(), e);
                 try {
@@ -617,10 +649,12 @@ public final class Subscription {
         resetEpoch = claim.resetEpoch();
         lastSaved = claim.resumeFrom();
         lastSaveNanos = System.nanoTime();
-        if (!mode.name().equals(claim.consistencyMode()) || !model.name().equals(claim.progressModel())) {
-            log.warn("Exclusive subscription {} on {} was stored as {}/{} and now runs as {}/{} under fence {}; the progress row is updated", key.subscriber(),
-                     key.aggregateType(), claim.consistencyMode(), claim.progressModel(), mode, model, claim.fence());
-            if (!progress.setMode(key, mode.name(), model.name(), resetEpoch, boundFence())) {
+        var digestChanged = !Objects.equals(filterDigest, claim.filterDigest());
+        if (!mode.name().equals(claim.consistencyMode()) || !model.name().equals(claim.progressModel()) || digestChanged) {
+            log.warn("Exclusive subscription {} on {} was stored as {}/{} (filter digest {}) and now runs as {}/{} (filter digest {}) under fence {}; the progress " +
+                             "row is updated{}", key.subscriber(), key.aggregateType(), claim.consistencyMode(), claim.progressModel(), claim.filterDigest(), mode, model,
+                     filterDigest, claim.fence(), digestChanged ? " and delivery continues under the new filter; reset the subscription to replay" : "");
+            if (!progress.setMode(key, mode.name(), model.name(), filterDigest, resetEpoch, boundFence())) {
                 onProgressConflict();
             }
         }
@@ -821,7 +855,7 @@ public final class Subscription {
             return;
         }
         parked.load();
-        observer.onHeldAggregates(key.subscriber(), key.aggregateType(), parked.heldCount());
+        heldChanged();
     }
 
     private void lifecycle() {
@@ -855,7 +889,7 @@ public final class Subscription {
                 if (!running) {
                     return;
                 }
-                observer.onError(key.subscriber(), key.aggregateType(), e);
+                reportError(e);
                 log.warn("Subscription {} on {}: a catch-up or bridge read failed; catching up again after {}", key.subscriber(), key.aggregateType(),
                          settings.backstopInterval(), e);
                 try {
@@ -1647,23 +1681,23 @@ public final class Subscription {
                 if (!running) {
                     return Outcome.STOPPED;
                 }
-                observer.onError(key.subscriber(), key.aggregateType(), e);
+                reportError(e);
                 if (e instanceof ParkEventException parkNow && (parkNow.event() == null || parkNow.event().globalOrder() == event.globalOrder())) {
                     return new Outcome(false, parkRow(event, attemptsAfterFailure(event), parkNow));
                 }
                 Duration wait;
                 if (isIoFailure(e)) {
-                    wait = settings.retryBackoff(ioFailuresHere++);
+                    wait = errors.backoff(ioFailuresHere++);
                     log.warn("Subscription {} on {}: I/O failure handling global_order {}; retrying after {}", key.subscriber(), key.aggregateType(),
                              event.globalOrder(), wait, e);
                 } else {
                     var attempts = attemptsAfterFailure(event);
-                    if (attempts > settings.retryAttempts()) {
+                    if (attempts > errors.retryAttempts()) {
                         log.warn("Subscription {} on {}: handler failed {} times on global_order {}; parking it", key.subscriber(), key.aggregateType(), attempts,
                                  event.globalOrder(), e);
                         return new Outcome(false, parkRow(event, attempts, e));
                     }
-                    wait = settings.retryBackoff(attempts - 1);
+                    wait = errors.backoff(attempts - 1);
                     log.warn("Subscription {} on {}: handler failed on global_order {} (attempt {}); retrying after {}", key.subscriber(), key.aggregateType(),
                              event.globalOrder(), attempts, wait, e);
                 }
@@ -1749,7 +1783,7 @@ public final class Subscription {
             observer.onParked(key.subscriber(), key.aggregateType(), row.globalOrder(), row.blockedBy(), row.attempts());
         }
         if (parked.heldCount() != heldBefore) {
-            observer.onHeldAggregates(key.subscriber(), key.aggregateType(), parked.heldCount());
+            heldChanged();
         }
     }
 
@@ -1791,12 +1825,13 @@ public final class Subscription {
         if (!running) {
             return false;
         }
-        Connection connection = null;
-        var        inHandler  = false;
+        PageTransactionSource.OpenPage open       = null;
+        Connection                     connection = null;
+        var                            inHandler  = false;
         try {
-            connection = loop.dataSource().getConnection();
+            open = pageSource.begin();
+            connection = open.connection();
             openPageConnection = connection;
-            connection.setAutoCommit(false);
             if (lease != null) {
                 // §7, decision 6: a dead owner's open page cannot hold the progress row past one lease
                 try (var statement = connection.prepareStatement(EventLogStorage.PAGE_IDLE_TIMEOUT)) {
@@ -1807,7 +1842,7 @@ public final class Subscription {
             hooks.beforePageHandler(subscriber, handlerPage);
             if (!handlerPage.isEmpty()) {
                 inHandler = true;
-                pageHandler.handle(handlerPage, GuardedConnection.of(connection));
+                pageHandler.handle(handlerPage, handlerTransaction(open));
                 inHandler = false;
             }
             if (!parks.isEmpty() && !parkOutside) {
@@ -1818,7 +1853,9 @@ public final class Subscription {
             }
             boolean saved;
             if (seams.has(PROGRESS_AFTER_COMMIT)) {
-                connection.commit();
+                var ending = open;
+                open = null;
+                commit(ending);
                 hooks.afterHandlerBeforeProgress(subscriber, handlerPage);
                 saved = progress.saveExpected(key, resumeFrom, boundEpoch(), boundFence(), expected);
                 hooks.afterProgressBeforeCommit(subscriber, handlerPage, resumeFrom);
@@ -1833,18 +1870,22 @@ public final class Subscription {
                     hooks.afterProgressBeforeCommit(subscriber, handlerPage, resumeFrom);
                     if (lease != null && !seams.has(NO_LOCAL_DEADLINE) && lease.pastDeadline()) {
                         // §2.4: past the deadline before commit - roll back, suspend, then retry the page
-                        connection.rollback();
-                        closePageConnection(connection);
+                        var ending = open;
+                        open = null;
+                        rollback(ending);
                         connection = null;
                         ownerCheck();
                         return running && repositionTo == null;
                     }
-                    connection.commit();
+                    var ending = open;
+                    open = null;
+                    commit(ending);
                 } else {
-                    connection.rollback();
+                    var ending = open;
+                    open = null;
+                    rollback(ending);
                 }
             }
-            closePageConnection(connection);
             connection = null;
             if (!saved) {
                 onProgressConflict();
@@ -1860,33 +1901,31 @@ public final class Subscription {
             // A lost JVM: no rollback, no close - the IT terminates the backend
             throw e;
         } catch (LeaseLostException e) {
-            if (connection != null) {
+            if (open != null) {
                 try {
-                    connection.rollback();
-                } catch (SQLException rollbackFailed) {
+                    rollback(open);
+                } catch (RuntimeException rollbackFailed) {
                     log.debug("Rolling back a page of {} after a lost lease failed", key, rollbackFailed);
                 }
-                closePageConnection(connection);
             }
             throw e;
         } catch (Exception e) {
             // Only what the handler threw on a healthy connection is the handler's failure; everything else is I/O (§4.1)
-            var io = !inHandler || isIoFailure(e) || connection != null && invalid(connection);
-            if (connection != null) {
+            var io = !inHandler || isIoFailure(e) || open != null && invalid(connection);
+            if (open != null) {
                 try {
-                    connection.rollback();
-                } catch (SQLException rollbackFailed) {
+                    rollback(open);
+                } catch (RuntimeException rollbackFailed) {
                     io = true;
                     log.debug("Rolling back a failed page of {} failed", key, rollbackFailed);
                 }
-                closePageConnection(connection);
             }
             observer.onPageFailed(subscriber, key.aggregateType(), page.size(), e);
             if (e instanceof InterruptedException || !running) {
                 return false;
             }
             lastFailedPage = entries;
-            observer.onError(subscriber, key.aggregateType(), e);
+            reportError(e);
             onPageFailure(e, io, page, handlerPage);
             return true;
         }
@@ -1926,7 +1965,7 @@ public final class Subscription {
     private void onPageFailure(Exception e, boolean io, List<StoredEvent> page, List<StoredEvent> handlerPage) throws InterruptedException {
         var subscriber = key.subscriber();
         if (io) {
-            var wait = settings.retryBackoff(ioFailures++);
+            var wait = errors.backoff(ioFailures++);
             log.warn("Subscription {} on {}: I/O failure in a page of {} events from global_order {}; retrying it after {}", subscriber, key.aggregateType(),
                      page.size(), page.getFirst().globalOrder(), wait, e);
             Thread.sleep(wait);
@@ -1947,13 +1986,13 @@ public final class Subscription {
         if (handlerPage.size() == 1 || seams.has(NO_SHRINK)) {
             var event    = handlerPage.getFirst();
             var attempts = attemptsAfterFailure(event);
-            if (attempts > settings.retryAttempts()) {
+            if (attempts > errors.retryAttempts()) {
                 log.warn("Subscription {} on {}: handler failed {} times on global_order {} alone; parking it", subscriber, key.aggregateType(), attempts,
                          event.globalOrder(), e);
                 toPark.put(event.globalOrder(), parkRow(event, attempts, e));
                 return;
             }
-            var wait = settings.retryBackoff(attempts - 1);
+            var wait = errors.backoff(attempts - 1);
             log.warn("Subscription {} on {}: handler failed on global_order {} alone (attempt {}); retrying after {}", subscriber, key.aggregateType(),
                      event.globalOrder(), attempts, wait, e);
             Thread.sleep(wait);
@@ -2058,15 +2097,15 @@ public final class Subscription {
         if (!running) {
             return false;
         }
-        Connection connection = null;
+        PageTransactionSource.OpenPage open = null;
         try {
-            connection = loop.dataSource().getConnection();
-            connection.setAutoCommit(false);
+            open = (model == ProgressModel.PERIODIC ? engineSource : pageSource).begin();
+            var connection = open.connection();
             var orders = parked.lock(connection, head);
             if (orders.isEmpty()) {
-                connection.rollback();
-                closePageConnection(connection);
-                connection = null;
+                var ending = open;
+                open = null;
+                rollback(ending);
                 releaseHeld(head);
                 return false;
             }
@@ -2085,42 +2124,40 @@ public final class Subscription {
                     handler.handle(event);
                 }
             } else if (!toHandle.isEmpty()) {
-                pageHandler.handle(toHandle, GuardedConnection.of(connection));
+                pageHandler.handle(toHandle, handlerTransaction(open));
             }
             parked.delete(connection, orders);
             var expected = model == ProgressModel.PERIODIC || seams.has(PROGRESS_WITHOUT_EXPECTED_RESUME) ? null : (Long) lastSaved;
             if (!ProgressStore.saveInTransaction(connection, key, lastSaved, boundEpoch(), boundFence(), expected)) {
-                connection.rollback();
-                closePageConnection(connection);
-                connection = null;
+                var ending = open;
+                open = null;
+                rollback(ending);
                 onProgressConflict();
                 return false;
             }
-            connection.commit();
-            closePageConnection(connection);
-            connection = null;
+            var ending = open;
+            open = null;
+            commit(ending);
         } catch (TestSeams.Crash | InterruptedException e) {
             throw e;
         } catch (LeaseLostException e) {
-            if (connection != null) {
+            if (open != null) {
                 try {
-                    connection.rollback();
-                } catch (SQLException rollbackFailed) {
+                    rollback(open);
+                } catch (RuntimeException rollbackFailed) {
                     log.debug("Rolling back a parked retry of {} after a lost lease failed", key, rollbackFailed);
                 }
-                closePageConnection(connection);
             }
             throw e;
         } catch (Exception e) {
-            if (connection != null) {
+            if (open != null) {
                 try {
-                    connection.rollback();
-                } catch (SQLException rollbackFailed) {
+                    rollback(open);
+                } catch (RuntimeException rollbackFailed) {
                     log.debug("Rolling back a parked retry of {} failed", key, rollbackFailed);
                 }
-                closePageConnection(connection);
             }
-            observer.onError(key.subscriber(), key.aggregateType(), e);
+            reportError(e);
             log.warn("Subscription {} on {}: {} of the aggregate parked at global_order {} failed; it stays held", key.subscriber(), key.aggregateType(),
                      discard ? "discard" : "retry", head, e);
             try {
@@ -2136,7 +2173,7 @@ public final class Subscription {
 
     private void releaseHeld(long head) {
         if (parked.release(head) != null) {
-            observer.onHeldAggregates(key.subscriber(), key.aggregateType(), parked.heldCount());
+            heldChanged();
         }
     }
 
@@ -2154,20 +2191,35 @@ public final class Subscription {
         return Math.max(handled.prefix(), prefix) + 1;
     }
 
-    private void closePageConnection(Connection connection) {
+    /** Commit a page through its source (phase 8 §2.4); the connection is released either way */
+    private void commit(PageTransactionSource.OpenPage open) throws SQLException {
         openPageConnection = null;
-        try {
-            if (!connection.isClosed()) {
-                connection.setAutoCommit(true);
+        open.commit();
+    }
+
+    /** Roll a page back through its source; an unchecked exception means the connection is unusable */
+    private void rollback(PageTransactionSource.OpenPage open) {
+        openPageConnection = null;
+        open.rollback();
+    }
+
+    /**
+     * What the handler sees of a page transaction (phase 8 §2.3): the connection guarded against ending the transaction,
+     * and the source's resources
+     */
+    private static PageTransaction handlerTransaction(PageTransactionSource.OpenPage open) {
+        var guarded = GuardedConnection.of(open.connection());
+        return new PageTransaction() {
+            @Override
+            public Connection connection() {
+                return guarded;
             }
-        } catch (SQLException e) {
-            log.debug("Resetting a page connection of {} failed", key, e);
-        }
-        try {
-            connection.close();
-        } catch (SQLException e) {
-            log.debug("Closing a page connection of {} failed", key, e);
-        }
+
+            @Override
+            public <T> T resource(Class<T> type) {
+                return open.resource(type);
+            }
+        };
     }
 
     /**
@@ -2183,7 +2235,7 @@ public final class Subscription {
                 var error = new IllegalStateException("The progress row of exclusive subscription " + key + " is gone; it is never recreated, which would lose " +
                                                               "its resume point. The subscription stops");
                 log.error(error.getMessage());
-                observer.onError(key.subscriber(), key.aggregateType(), error);
+                reportError(error);
                 lease.lost("progress row gone");
                 ownedFence = null;
                 running = false;
@@ -2201,7 +2253,7 @@ public final class Subscription {
             case RECREATE -> {
                 var current = resumePoint();
                 log.warn("Progress row of {} is gone; recreating it at {}", key, current);
-                var created = progress.start(key, false, mode.name(), model.name(), current);
+                var created = progress.start(key, false, mode.name(), model.name(), current, null, filterDigest);
                 resetEpoch = created.resetEpoch();
                 lastSaved = created.resumeFrom();
                 if (created.resumeFrom() != current) {

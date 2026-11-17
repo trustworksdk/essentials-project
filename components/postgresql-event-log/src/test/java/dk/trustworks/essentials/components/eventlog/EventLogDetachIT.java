@@ -70,7 +70,7 @@ class EventLogDetachIT extends AbstractSubscriptionIT {
             }
         };
         var savedBeforeSecond = new java.util.concurrent.atomic.AtomicReference<List<Long>>(List.of());
-        Subscription.Handler handler = event -> {
+        PeriodicHandler handler = event -> {
             // Saves run on this (the delivery) thread: every save made before g2 is handled is in the list now
             if (event.aggregateId().equals("burst") && event.eventOrder() == 1 && !recorder.deliveredOrder(event.globalOrder())) {
                 savedBeforeSecond.set(List.copyOf(reads.saves));

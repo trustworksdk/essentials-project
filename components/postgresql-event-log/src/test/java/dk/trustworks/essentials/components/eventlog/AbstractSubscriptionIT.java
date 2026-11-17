@@ -119,7 +119,7 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
      * Records every delivery, in order; can be made to block on one global order, or on every event of one aggregate,
      * until {@link #release} is counted down
      */
-    static final class Recorder implements Subscription.Handler {
+    static final class Recorder implements PeriodicHandler {
         final List<StoredEvent> delivered = new CopyOnWriteArrayList<>();
         final List<StoredEvent> handled   = new CopyOnWriteArrayList<>();
         volatile long           blockAt   = -1;
@@ -190,7 +190,7 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         return subscription;
     }
 
-    Subscription subscribe(String name, Subscription.Handler handler, TestSeams seams, long startFrom) throws SQLException {
+    Subscription subscribe(String name, PeriodicHandler handler, TestSeams seams, long startFrom) throws SQLException {
         var subscription = eventLog.subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key(name, TYPE, "node-1"), startFrom, handler, seams));
         subscriptions.add(subscription);
         return subscription;

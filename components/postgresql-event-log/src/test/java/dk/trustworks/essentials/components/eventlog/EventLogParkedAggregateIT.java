@@ -47,11 +47,12 @@ class EventLogParkedAggregateIT extends AbstractPageIT {
     }
 
     private Subscription start(WatermarkMutant... mutants) throws SQLException {
-        Subscription.PageHandler handler = Subscription.PageHandler.perEvent((event, connection) -> {
+        PageHandler handler = PageHandler.perEvent((event, tx) -> {
+            var connection = tx.connection();
             maybeFail(event);
             apply(event, connection);
         });
-        return subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key(PROJECTION, TYPE, "node-1"), 1, Subscription.ConsistencyMode.CONTIGUOUS,
+        return subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key(PROJECTION, TYPE, "node-1"), 1, ConsistencyMode.CONTIGUOUS,
                                                                      handler, new TestSeams(Set.of(mutants), TestSeams.Hooks.NONE, null)));
     }
 
@@ -187,11 +188,11 @@ class EventLogParkedAggregateIT extends AbstractPageIT {
     @Test
     void a_periodic_fresh_subscription_holds_the_aggregate_too() throws Exception {
         var handled = new CopyOnWriteArrayList<StoredEvent>();
-        Subscription.Handler handler = event -> {
+        PeriodicHandler handler = event -> {
             maybeFail(event);
             handled.add(event);
         };
-        subscribe(Subscription.SubscriptionSpec.periodic(new ProgressStore.Key(PROJECTION, TYPE, "node-1"), 1, Subscription.ConsistencyMode.FRESH, handler,
+        subscribe(Subscription.SubscriptionSpec.periodic(new ProgressStore.Key(PROJECTION, TYPE, "node-1"), 1, ConsistencyMode.FRESH, handler,
                                                          TestSeams.NONE));
         var a = parkA1();
         assertThat(parkedRows()).isEqualTo(Map.of(a[0], "head/4", a[1], "behind " + a[0], a[2], "behind " + a[0]));

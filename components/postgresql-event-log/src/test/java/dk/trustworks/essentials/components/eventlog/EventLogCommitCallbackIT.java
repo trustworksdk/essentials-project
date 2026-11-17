@@ -37,7 +37,7 @@ class EventLogCommitCallbackIT extends AbstractSubscriptionIT {
         subscribe("sub", recorder, TestSeams.NONE);
         awaitTrue(() -> reads.attaches.get() >= 1);
         var unitOfWorkFactory = new JdbiUnitOfWorkFactory(Jdbi.create(dataSource));
-        var callback          = new EventLogCommitCallback(eventLog);
+        var callback          = eventLog.commitCallback();
 
         assertThatThrownBy(() -> unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
             unitOfWork.registerLifecycleCallbackForResource(TYPE, callback);

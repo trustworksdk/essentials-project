@@ -42,11 +42,17 @@ final class Lease {
     }
 
     /** A claimed row (§2.2): the fence the database drew and the row's progress */
-    record Claim(long fence, long resumeFrom, long resetEpoch, String consistencyMode, String progressModel) {
+    record Claim(long fence, long resumeFrom, long resetEpoch, String consistencyMode, String progressModel, String filterDigest) {
+        Claim(long fence, long resumeFrom, long resetEpoch, String consistencyMode, String progressModel) {
+            this(fence, resumeFrom, resetEpoch, consistencyMode, progressModel, null);
+        }
     }
 
     /** What a first claim inserts when the row does not exist yet (§2.2, {@code LEASE_CLAIM_NEW}) */
-    record NewRow(String consistencyMode, String progressModel, long initialResumeFrom) {
+    record NewRow(String consistencyMode, String progressModel, long initialResumeFrom, String headTable, String filterDigest) {
+        NewRow(String consistencyMode, String progressModel, long initialResumeFrom) {
+            this(consistencyMode, progressModel, initialResumeFrom, null, null);
+        }
     }
 
     private final ProgressStore.Key key;

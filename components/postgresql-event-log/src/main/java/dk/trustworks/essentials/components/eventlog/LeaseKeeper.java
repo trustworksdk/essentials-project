@@ -251,7 +251,7 @@ final class LeaseKeeper {
                 while (resultSet.next()) {
                     var pair  = new KeyPair(resultSet.getString(1), resultSet.getString(2));
                     var lease = byKey.get(pair);
-                    var claim = new Lease.Claim(resultSet.getLong(3), resultSet.getLong(4), resultSet.getLong(5), resultSet.getString(6), resultSet.getString(7));
+                    var claim = new Lease.Claim(resultSet.getLong(3), resultSet.getLong(4), resultSet.getLong(5), resultSet.getString(6), resultSet.getString(7), resultSet.getString(8));
                     claimed.add(pair);
                     if (lease != null) {
                         took(connection, lease, claim, start);
@@ -270,18 +270,22 @@ final class LeaseKeeper {
     /** §2.2: a missing key whose subscription never saw its row - insert it with the lease, or find it created by another node */
     private void claimNew(Connection connection, Lease lease, long start) throws SQLException {
         var row = lease.newRow();
-        try (var statement = connection.prepareStatement(EventLogStorage.LEASE_CLAIM_NEW)) {
+        try (var statement = connection.prepareStatement(row.headTable() == null ? EventLogStorage.LEASE_CLAIM_NEW : EventLogStorage.leaseClaimNew(row.headTable()))) {
             statement.setQueryTimeout(timeoutSeconds());
             statement.setString(1, lease.key().subscriber());
             statement.setString(2, lease.key().aggregateType());
             statement.setString(3, row.consistencyMode());
             statement.setString(4, row.progressModel());
-            statement.setLong(5, row.initialResumeFrom());
-            statement.setString(6, owner);
-            statement.setString(7, leaseInterval());
+            var p = 5;
+            if (row.headTable() == null) {
+                statement.setLong(p++, row.initialResumeFrom());
+            }
+            statement.setString(p++, owner);
+            statement.setString(p++, leaseInterval());
+            statement.setString(p, row.filterDigest());
             try (var resultSet = statement.executeQuery()) {
                 if (resultSet.next()) {
-                    took(connection, lease, new Lease.Claim(resultSet.getLong(1), resultSet.getLong(2), resultSet.getLong(3), row.consistencyMode(), row.progressModel()), start);
+                    took(connection, lease, new Lease.Claim(resultSet.getLong(1), resultSet.getLong(2), resultSet.getLong(3), row.consistencyMode(), row.progressModel(), row.filterDigest()), start);
                 } else {
                     // Another node created it and holds it: claim it like any other from now on
                     lease.rowSeen(true);

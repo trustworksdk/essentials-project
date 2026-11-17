@@ -107,7 +107,7 @@ class EventLogLeaseIT extends AbstractLeaseIT {
         };
         var delivered = new CopyOnWriteArrayList<Long>();
         var periodic  = periodic(log, PERIODIC, event -> delivered.add(event.globalOrder()), seams(hooks, subscriptionMutants));
-        var pages     = inTransaction(log, PAGES, Subscription.ConsistencyMode.CONTIGUOUS, viewWriter(VIEW, "A"), seams(hooks, subscriptionMutants));
+        var pages     = inTransaction(log, PAGES, ConsistencyMode.CONTIGUOUS, viewWriter(VIEW, "A"), seams(hooks, subscriptionMutants));
         awaitOwned(periodic);
         awaitOwned(pages);
 

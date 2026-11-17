@@ -53,35 +53,35 @@ class EventLogFilteredCatchUpIT extends AbstractSubscriptionIT {
 
     @ParameterizedTest
     @CsvSource({"FRESH, false", "FRESH, true", "CONTIGUOUS, false", "CONTIGUOUS, true"})
-    void a_held_matching_event_below_the_cursor_is_delivered_once(Subscription.ConsistencyMode mode, boolean indexed) throws Exception {
+    void a_held_matching_event_below_the_cursor_is_delivered_once(ConsistencyMode mode, boolean indexed) throws Exception {
         assertDeliveredOnce(heldMatchingEvent(mode, indexed, Shape.READER_RUNNING, Set.of(), Set.of()));
     }
 
     @ParameterizedTest
     @CsvSource({"FRESH", "CONTIGUOUS"})
-    void must_fail_a_short_page_advancing_to_the_cursor_loses_the_held_event(Subscription.ConsistencyMode mode) throws Exception {
+    void must_fail_a_short_page_advancing_to_the_cursor_loses_the_held_event(ConsistencyMode mode) throws Exception {
         assertThat(heldMatchingEvent(mode, false, Shape.READER_RUNNING, Set.of(), Set.of(WatermarkMutant.FILTERED_CATCH_UP_TO_CURSOR)).missed()).isNotEmpty();
     }
 
     @ParameterizedTest
     @CsvSource({"FRESH", "CONTIGUOUS"})
-    void a_filtered_subscription_started_under_a_long_writer_waits_for_the_watermark(Subscription.ConsistencyMode mode) throws Exception {
+    void a_filtered_subscription_started_under_a_long_writer_waits_for_the_watermark(ConsistencyMode mode) throws Exception {
         assertDeliveredOnce(heldMatchingEvent(mode, false, Shape.READER_STARTS_HELD, Set.of(), Set.of()));
     }
 
     @Test
     void must_fail_catching_up_above_the_unknown_watermark_loses_the_held_event() throws Exception {
-        assertThat(heldMatchingEvent(Subscription.ConsistencyMode.FRESH, false, Shape.READER_STARTS_HELD, Set.of(WatermarkMutant.CATCH_UP_ABOVE_WATERMARK), Set.of())
+        assertThat(heldMatchingEvent(ConsistencyMode.FRESH, false, Shape.READER_STARTS_HELD, Set.of(WatermarkMutant.CATCH_UP_ABOVE_WATERMARK), Set.of())
                            .missed()).isNotEmpty();
     }
 
     @ParameterizedTest
     @CsvSource({"FRESH", "CONTIGUOUS"})
-    void a_filtered_subscription_behind_a_restarted_reader_gets_the_held_event_once(Subscription.ConsistencyMode mode) throws Exception {
+    void a_filtered_subscription_behind_a_restarted_reader_gets_the_held_event_once(ConsistencyMode mode) throws Exception {
         assertDeliveredOnce(heldMatchingEvent(mode, false, Shape.READER_RESTARTED, Set.of(), Set.of()));
         // §6.3: FRESH attaches under the unknown watermark and hands its gaps off before the held event commits;
         // CONTIGUOUS keeps F4's wait
-        if (mode == Subscription.ConsistencyMode.FRESH) {
+        if (mode == ConsistencyMode.FRESH) {
             assertThat(reads.handedOffBy).contains("tested");
         } else {
             assertThat(reads.handedOffBy).doesNotContain("tested");
@@ -92,12 +92,12 @@ class EventLogFilteredCatchUpIT extends AbstractSubscriptionIT {
     @EnumSource(value = WatermarkMutant.class, names = {"GAPS_NOT_HANDED_OFF", "HANDED_GAPS_RESOLVED_AT_ONCE"})
     void must_fail_a_filtered_subscription_behind_a_restarted_reader_loses_the_held_event_handed_off(WatermarkMutant mutant) throws Exception {
         // On both: the warm subscription hands off too, and it carries the reader's seams
-        assertThat(heldMatchingEvent(Subscription.ConsistencyMode.FRESH, false, Shape.READER_RESTARTED, Set.of(mutant), Set.of(mutant)).missed()).isNotEmpty();
+        assertThat(heldMatchingEvent(ConsistencyMode.FRESH, false, Shape.READER_RESTARTED, Set.of(mutant), Set.of(mutant)).missed()).isNotEmpty();
     }
 
     @Test
     void must_fail_a_restarted_reader_at_the_head_loses_the_held_event() throws Exception {
-        assertThat(heldMatchingEvent(Subscription.ConsistencyMode.FRESH, false, Shape.READER_RESTARTED, Set.of(WatermarkMutant.RESTARTED_READER_AT_HEAD), Set.of())
+        assertThat(heldMatchingEvent(ConsistencyMode.FRESH, false, Shape.READER_RESTARTED, Set.of(WatermarkMutant.RESTARTED_READER_AT_HEAD), Set.of())
                            .missed()).isNotEmpty();
     }
 
@@ -112,7 +112,7 @@ class EventLogFilteredCatchUpIT extends AbstractSubscriptionIT {
      * A transaction holds {@code X} at {@code g0}; 20 rounds of 99 {@code Y} and one {@code X} commit above it (times
      * {@link #SCALE}); a filtered subscription starts at 1 and catches up; then {@code g0} commits
      */
-    private Outcome heldMatchingEvent(Subscription.ConsistencyMode mode, boolean indexed, Shape shape, Set<WatermarkMutant> readerMutants,
+    private Outcome heldMatchingEvent(ConsistencyMode mode, boolean indexed, Shape shape, Set<WatermarkMutant> readerMutants,
                                       Set<WatermarkMutant> mutants) throws Exception {
         var settings = indexed ? FILTERED.withEventTypeIndexed(Set.of(TYPE)) : FILTERED;
         restartEventLog(dataSource, settings);
@@ -144,16 +144,16 @@ class EventLogFilteredCatchUpIT extends AbstractSubscriptionIT {
         var recorder = new Recorder();
         var seams    = new TestSeams(shape == Shape.READER_STARTS_HELD ? union(readerMutants, mutants) : mutants, TestSeams.Hooks.NONE, null);
         var key      = new ProgressStore.Key("tested", TYPE, "node-1");
-        var spec     = mode == Subscription.ConsistencyMode.FRESH ? Subscription.SubscriptionSpec.periodic(key, 1, mode, recorder, seams)
-                                                                  : Subscription.SubscriptionSpec.inTransaction(key, 1, mode, Subscription.PageHandler.perEvent((e, c) -> recorder.handle(e)), seams);
+        var spec     = mode == ConsistencyMode.FRESH ? Subscription.SubscriptionSpec.periodic(key, 1, mode, recorder, seams)
+                                                                  : Subscription.SubscriptionSpec.inTransaction(key, 1, mode, PageHandler.perEvent((e, tx) -> recorder.handle(e)), seams);
         var tested   = subscribe(spec.withFilter(ONLY_X));
-        if (mode == Subscription.ConsistencyMode.FRESH && shape == Shape.READER_RESTARTED && !readerMutants.contains(WatermarkMutant.RESTARTED_READER_AT_HEAD)) {
+        if (mode == ConsistencyMode.FRESH && shape == Shape.READER_RESTARTED && !readerMutants.contains(WatermarkMutant.RESTARTED_READER_AT_HEAD)) {
             // §6.3: the held event commits only once the subscription attached under the unknown watermark and handed off
             var handing = !mutants.contains(WatermarkMutant.GAPS_NOT_HANDED_OFF);
             awaitTrue(() -> tested.phase() == Subscription.Phase.ATTACHED && (!handing || reads.handedOffBy.contains("tested")));
             assertThat(eventLog.reader(TYPE).state().watermark()).as("the restart's watermark is still unknown").isNull();
         }
-        if (mode == Subscription.ConsistencyMode.FRESH && shape == Shape.READER_RUNNING && mutants.isEmpty()) {
+        if (mode == ConsistencyMode.FRESH && shape == Shape.READER_RUNNING && mutants.isEmpty()) {
             awaitDelivered(recorder, committedX.stream().mapToLong(Long::longValue).toArray());
         }
         awaitTrue(tested::isIdle);

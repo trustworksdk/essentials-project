@@ -99,7 +99,7 @@ class EventLogExclusiveSubscriptionIT extends AbstractEventLogIT {
         var delivered = new CopyOnWriteArrayList<Long>();
         append(eventLog, "order-1", 10);
 
-        var subscription = eventLog.subscribeExclusive(SUB, TYPE, 1, event -> delivered.add(event.globalOrder()));
+        var subscription = Definitions.internal(eventLog.subscribe(Definitions.definition(SUB, TYPE, null, 1, null, null), event -> delivered.add(event.globalOrder())));
         await(() -> delivered.size() == 10, "the first 10 events");
         append(eventLog, "order-2", 5);
         await(() -> delivered.size() == 15, "15 events");
@@ -129,9 +129,9 @@ class EventLogExclusiveSubscriptionIT extends AbstractEventLogIT {
         var deliveredSecond = new CopyOnWriteArrayList<Long>();
         append(first, "order-1", 10);
 
-        var a = first.subscribeExclusive(SUB, TYPE, 1, event -> deliveredFirst.add(event.globalOrder()));
+        var a = Definitions.internal(first.subscribe(Definitions.definition(SUB, TYPE, null, 1, null, null), event -> deliveredFirst.add(event.globalOrder())));
         await(() -> deliveredFirst.size() == 10, "the owner's 10 events");
-        var b = second.subscribeExclusive(SUB, TYPE, 1, event -> deliveredSecond.add(event.globalOrder()));
+        var b = Definitions.internal(second.subscribe(Definitions.definition(SUB, TYPE, null, 1, null, null), event -> deliveredSecond.add(event.globalOrder())));
         // Several claim passes of the standby go by: it stays standby while the owner renews
         Thread.sleep(SETTINGS.leaseDuration().toMillis() + SETTINGS.leaseRenewalInterval().toMillis());
         assertThat(b.phase()).isEqualTo(Subscription.Phase.STANDBY);
@@ -154,7 +154,7 @@ class EventLogExclusiveSubscriptionIT extends AbstractEventLogIT {
     @Test
     void a_non_exclusive_subscription_needs_a_non_blank_instance_name() throws Exception {
         var eventLog = eventLog("");
-        assertThatThrownBy(() -> eventLog.subscribe(SUB, TYPE, "", 1, event -> {
+        assertThatThrownBy(() -> eventLog.subscribe(Definitions.definition(SUB, TYPE, "", 1, null, null), event -> {
         })).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("non-blank instance name");
     }
 }

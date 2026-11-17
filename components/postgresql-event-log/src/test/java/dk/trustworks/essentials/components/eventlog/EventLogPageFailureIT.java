@@ -52,7 +52,7 @@ class EventLogPageFailureIT extends AbstractPageIT {
     }
 
     /** The view projection, failing on every event of an aggregate whose id starts with {@code poison} */
-    final class PoisonHandler implements Subscription.PageHandler {
+    final class PoisonHandler implements PageHandler {
         final Failure         failure;
         final AtomicInteger   aloneFailures = new AtomicInteger();
         volatile Runnable     onFailure     = () -> {
@@ -65,7 +65,8 @@ class EventLogPageFailureIT extends AbstractPageIT {
         }
 
         @Override
-        public void handle(List<StoredEvent> page, Connection connection) throws Exception {
+        public void handle(List<StoredEvent> page, PageTransaction tx) throws Exception {
+            var connection = tx.connection();
             for (var event : page) {
                 if (event.aggregateId().startsWith("poison")) {
                     fail(event, page.size() == 1);
@@ -129,7 +130,7 @@ class EventLogPageFailureIT extends AbstractPageIT {
         return poison;
     }
 
-    private Subscription start(Subscription.ConsistencyMode mode, Subscription.PageHandler handler, TestSeams.Hooks hooks, WatermarkMutant... mutants) throws SQLException {
+    private Subscription start(ConsistencyMode mode, PageHandler handler, TestSeams.Hooks hooks, WatermarkMutant... mutants) throws SQLException {
         return subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key(PROJECTION, TYPE, "node-1"), 1, mode, handler,
                                                                      new TestSeams(Set.of(mutants), hooks, null)));
     }
@@ -165,7 +166,7 @@ class EventLogPageFailureIT extends AbstractPageIT {
     private PageHooks isolateATransientFailure(WatermarkMutant... mutants) throws Exception {
         seed();
         var hooks = new PageHooks();
-        start(Subscription.ConsistencyMode.CONTIGUOUS, new PoisonHandler(Failure.TRANSIENT), hooks, mutants);
+        start(ConsistencyMode.CONTIGUOUS, new PoisonHandler(Failure.TRANSIENT), hooks, mutants);
         awaitCaughtUp(PROJECTION);
         return hooks;
     }
@@ -174,25 +175,25 @@ class EventLogPageFailureIT extends AbstractPageIT {
 
     @Test
     void an_event_that_always_fails_is_parked_after_its_retries_and_nothing_else_is_lost() throws Exception {
-        var poison = alwaysFailing(Subscription.ConsistencyMode.CONTIGUOUS);
+        var poison = alwaysFailing(ConsistencyMode.CONTIGUOUS);
         assertThat(parkedRows()).containsExactly(Map.entry(poison, "null/4/java.lang.IllegalArgumentException/poison " + poison));
         assertThat(foldDifferences(Set.of(poison), true)).isEmpty();
     }
 
     @Test
     void fresh_in_transaction_parks_an_event_that_always_fails_too() throws Exception {
-        var poison = alwaysFailing(Subscription.ConsistencyMode.FRESH);
+        var poison = alwaysFailing(ConsistencyMode.FRESH);
         assertThat(parkedRows()).containsExactly(Map.entry(poison, "null/4/java.lang.IllegalArgumentException/poison " + poison));
         assertThat(foldDifferences(Set.of(poison), true)).isEmpty();
     }
 
     @Test
     void must_fail_without_shrinking_the_wrong_events_are_parked() throws Exception {
-        var poison = alwaysFailing(Subscription.ConsistencyMode.CONTIGUOUS, WatermarkMutant.NO_SHRINK);
+        var poison = alwaysFailing(ConsistencyMode.CONTIGUOUS, WatermarkMutant.NO_SHRINK);
         assertThat(foldDifferences(Set.of(poison), true)).isNotEmpty();
     }
 
-    private long alwaysFailing(Subscription.ConsistencyMode mode, WatermarkMutant... mutants) throws Exception {
+    private long alwaysFailing(ConsistencyMode mode, WatermarkMutant... mutants) throws Exception {
         var poison = seed();
         start(mode, new PoisonHandler(Failure.ALWAYS), TestSeams.Hooks.NONE, mutants);
         awaitCaughtUp(PROJECTION);
@@ -205,7 +206,7 @@ class EventLogPageFailureIT extends AbstractPageIT {
     void a_park_request_parks_the_named_event_at_once() throws Exception {
         var poison = seed();
         var hooks  = new PageHooks();
-        start(Subscription.ConsistencyMode.CONTIGUOUS, new PoisonHandler(Failure.PARK_EXCEPTION), hooks);
+        start(ConsistencyMode.CONTIGUOUS, new PoisonHandler(Failure.PARK_EXCEPTION), hooks);
         awaitCaughtUp(PROJECTION);
         assertThat(parkedRows()).containsExactly(Map.entry(poison, "null/1/java.lang.IllegalStateException/poison " + poison));
         assertThat(hooks.failedPages()).as("only the page that asked").isEqualTo(1);
@@ -313,11 +314,11 @@ class EventLogPageFailureIT extends AbstractPageIT {
             } else {
                 handler.onFailure = () -> hooks.armed.set(true);
             }
-            var subscription = start(Subscription.ConsistencyMode.CONTIGUOUS, handler, hooks, mutants);
+            var subscription = start(ConsistencyMode.CONTIGUOUS, handler, hooks, mutants);
             await().atMost(WAIT).until(hooks.crashed::get);
             cleanUpCrash(subscription);
         }
-        start(Subscription.ConsistencyMode.CONTIGUOUS, new PoisonHandler(Failure.ALWAYS), TestSeams.Hooks.NONE, mutants);
+        start(ConsistencyMode.CONTIGUOUS, new PoisonHandler(Failure.ALWAYS), TestSeams.Hooks.NONE, mutants);
         commitAppend("tail", 1);
         awaitCaughtUp(PROJECTION);
         var differences = new ArrayList<String>();
@@ -343,7 +344,8 @@ class EventLogPageFailureIT extends AbstractPageIT {
         var trigger    = queryLong("SELECT global_order FROM " + tables.eventTable() + " ORDER BY global_order OFFSET 150 LIMIT 1");
         var terminated = new AtomicBoolean();
         var hooks      = new PageHooks();
-        Subscription.PageHandler handler = (page, connection) -> {
+        PageHandler handler = (page, tx) -> {
+            var connection = tx.connection();
             for (var event : page) {
                 if (event.globalOrder() == trigger && terminated.compareAndSet(false, true)) {
                     long pid;
@@ -356,7 +358,7 @@ class EventLogPageFailureIT extends AbstractPageIT {
                 apply(event, connection);
             }
         };
-        start(Subscription.ConsistencyMode.CONTIGUOUS, handler, hooks);
+        start(ConsistencyMode.CONTIGUOUS, handler, hooks);
         awaitCaughtUp(PROJECTION);
         assertThat(terminated).isTrue();
         assertThat(hooks.failedPages()).isEqualTo(1);
