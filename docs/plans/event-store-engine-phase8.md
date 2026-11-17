@@ -1,6 +1,6 @@
 # Event store redesign, phase 8: engine design
 
-**Status:** decided 2026-11-17 (§15); split into 8a and 8b. 8a built 2026-11-17, gate passed (§16); 8b being built on `feature/event-store-engine-phase8` (from
+**Status:** decided 2026-11-17 (§15); split into 8a and 8b. 8a built 2026-11-17, gate passed (§16); 8b built 2026-11-17, gate passed (§18). Built on `feature/event-store-engine-phase8` (from
 phase 7, `9d147a6bb`). When phase 8 is done, this file moves to `docs/archive/` or is folded into the redesign's record.
 **Scope:** phase 8 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): the new subscription
 API, the view-projection and event-processor processors built on it, parked events and the admin API (§12.3), and the
@@ -1090,3 +1090,33 @@ here. In throughput terms the extra read is small: contended appends/s are level
 - No main code was changed. Test code: `EventLogAdapterGateSpikeIT` (new), `RoundTripCountingProxy` (a copy of the old
   engine module's spike class), and `SpikeDb.hostAndPort()`/`poolVia(...)` for the proxied pool. The `p8b-gate` suite was
   added to `scripts/run-phase0-spikes.sh`.
+
+### 18.5 Decisions (2026-11-17)
+
+The maintainer decided both misses of §18.3:
+
+| Miss | Decision |
+|---|---|
+| A conflict loser makes one more round trip (the version read) | **Drop the read** (`QP-99e821318d`). The engine no longer reads the head's version after a lost check: `StreamAppendConflictException.actualEventOrder()` is `null` for every exception the engine throws, and the `headVersion` statement is gone. A loser now costs the append statement and its rollback, as in the old engine without its failed insert. Re-measured in §18.6. |
+| Five aggregates make the same number of round trips as the old engine | **Accept "equal"** for 8b (`QP-b9d468231e`): statements are already 7 against 52 and p50 is 14-15 % lower. A multi-stream append path from the repositories (one `EventStore` call for every aggregate of a unit of work, using `EventLog.append(Connection, List<AppendRequest>)`) goes on the open list for the command-side track, which changes existing aggregate code and so needs the maintainer's go-ahead first. |
+
+### 18.6 Re-measurement after dropping the loser's read
+
+The contended arm was run again (two runs, fresh container per run and arm) after the change of §18.5:
+
+| Arm | Run | Attempts | Conflicts | Writer statements per attempt | Appends/s | p50 / p99 ms | Burned per 1 000 appends | WAL per event |
+|---|---|---|---|---|---|---|---|---|
+| OLD | 1 / 2 | 340 342 / 345 460 | 37.0 % / 36.9 % | 3.63 recorded, 4.00 with the failed `INSERT` | 10 728 / 10 894 | 0.468 / 0.767, 0.462 / 0.711 | 586 / 586 | 1 359 / 1 360 B |
+| ADAPTER | 1 / 2 | 357 908 / 344 057 | 37.0 % / 37.1 % | **4.00** (was 4.37) | 11 270 / 10 822 | 0.459 / 0.688, 0.472 / 0.811 | 0 / 0 | 895 / 896 B |
+
+The `SELECT version FROM el_orders_heads` row is gone from the adapter's statements. A loser now sends what the old
+engine's loser sends (`BEGIN`, `SHOW TRANSACTION ISOLATION LEVEL`, the last-event read, the append, the rollback), so
+round trips per unit of work are equal for losers and winners alike, and the first pass line of §10.3 is **met** in
+every shape. The adapter's two runs also no longer share identical latencies, which supports reading §18.4's identical
+p50/p99 as a coincidence.
+
+### 18.7 Gate verdict
+
+8b's gate passes. Every line of §10.3 is met except "lower round trips for five aggregates", which is equal and was
+accepted by the maintainer (§18.5). §9.4 and §9.5 passed in 8b-B (the adapter's ITs and the 33 repository IT copies
+under `RepositoryItCopiesTest`), and the admin controller IT and OpenAPI contract check passed in 8b-C.

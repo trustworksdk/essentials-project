@@ -538,8 +538,8 @@ public final class EventLog {
                     var request = append.request;
                     var rows    = counts[i];
                     if (rows == 0) {
-                        conflicts.add(new StreamAppendConflictException(request.aggregateType(), request.aggregateId(), request.expectedEventOrder(),
-                                                                        currentVersion(connection, append.type, request.aggregateId())));
+                        // No read of the stream's actual version: it would cost a loser one more round trip (phase 8 §18.5)
+                        conflicts.add(new StreamAppendConflictException(request.aggregateType(), request.aggregateId(), request.expectedEventOrder(), null));
                         continue;
                     }
                     var events = new ArrayList<AppendedEvent>(rows);
@@ -632,15 +632,6 @@ public final class EventLog {
             }
         }
         return e;
-    }
-
-    private static Long currentVersion(Connection connection, RegisteredAggregateType type, String aggregateId) throws SQLException {
-        try (var statement = connection.prepareStatement(type.statements.headVersion())) {
-            statement.setString(1, aggregateId);
-            try (var resultSet = statement.executeQuery()) {
-                return resultSet.next() ? resultSet.getLong(1) : AppendRequest.NEW_STREAM;
-            }
-        }
     }
 
     /**

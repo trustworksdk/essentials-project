@@ -21,8 +21,11 @@ package dk.trustworks.essentials.components.eventlog;
  * the other requests of the same {@link EventLog#append} call wrote, and must be rolled back.
  * <p>
  * Also thrown when the {@code UNIQUE(aggregate_id, event_order)} backstop fires, which only happens when a stream's
- * head row is out of step with its events (an external writer); the transaction is then already aborted and the
- * actual event order is unknown.
+ * head row is out of step with its events (an external writer); the transaction is then already aborted.
+ * <p>
+ * The engine does not read the stream's actual event order after a lost check, so {@link #actualEventOrder()} is
+ * {@code null} for every exception it throws: the read would cost a losing writer one more round trip on a path that
+ * rolls back anyway (design phase 8 §18.5). Reload the stream to learn where it is.
  */
 public final class StreamAppendConflictException extends RuntimeException {
     private final String aggregateType;
@@ -35,7 +38,7 @@ public final class StreamAppendConflictException extends RuntimeException {
      * @param aggregateId        the stream
      * @param expectedEventOrder what the caller expected, or {@code null} if it gave no expectation
      * @param actualEventOrder   the stream's last event order as committed when the conflict was found, {@code -1} for no
-     *                           stream, or {@code null} when unknown
+     *                           stream, or {@code null} when unknown (always, for exceptions the engine throws)
      */
     public StreamAppendConflictException(String aggregateType, String aggregateId, Long expectedEventOrder, Long actualEventOrder) {
         super("Append to aggregate type '" + aggregateType + "' stream '" + aggregateId + "' expected last event order " + expectedEventOrder +

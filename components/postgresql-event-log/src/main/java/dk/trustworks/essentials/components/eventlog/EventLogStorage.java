@@ -501,7 +501,7 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
      * {@code aggregate_id, tenant} and the eight arrays {@code uuid[] id, uuid[] caused_by, uuid[] correlation,
      * int2[] type, int2[] revision, text[] timestamp, text[] payload, text[] metadata}.
      */
-    record TableStatements(String appendAfter, String appendNewStream, String appendWithoutExpectation, String headVersion, String loadStream, String findEvent) {
+    record TableStatements(String appendAfter, String appendNewStream, String appendWithoutExpectation, String loadStream, String findEvent) {
         static TableStatements of(AggregateTypeTables tables) {
             var events = tables.eventTable();
             var heads  = tables.headTable();
@@ -526,7 +526,6 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
                     "            ON CONFLICT (aggregate_id) DO UPDATE SET version = hd.version + ?::bigint\n" +
                     "            RETURNING hd.version - ?::bigint AS v)\n" + insert;
             return new TableStatements(after, newStream, without,
-                                       "SELECT version FROM " + heads + " WHERE aggregate_id = ?",
                                        "SELECT " + EVENT_COLUMNS + " FROM " + events + " WHERE aggregate_id = ? AND event_order >= ? AND event_order <= ? ORDER BY event_order",
                                        "SELECT " + EVENT_COLUMNS + " FROM " + events + " WHERE event_id = ?");
         }

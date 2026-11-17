@@ -44,12 +44,12 @@ class EventLogOptimisticConcurrencyIT extends AbstractEventLogIT {
                         assertThat(e.aggregateType()).isEqualTo("Orders");
                         assertThat(e.aggregateId()).isEqualTo("o1");
                         assertThat(e.expectedEventOrder()).isEqualTo(stale);
-                        assertThat(e.actualEventOrder()).isEqualTo(1L);
+                        assertThat(e.actualEventOrder()).as("not read: phase 8 §18.5").isNull();
                     });
         }
         // An expected order on a stream that does not exist
         assertThatThrownBy(() -> appendCommitted(eventLog, AppendRequest.afterEventOrder("Orders", "missing", 0, events("E", 1))))
-                .isInstanceOfSatisfying(StreamAppendConflictException.class, e -> assertThat(e.actualEventOrder()).isEqualTo(-1L));
+                .isInstanceOfSatisfying(StreamAppendConflictException.class, e -> assertThat(e.actualEventOrder()).isNull());
 
         assertThat(sequenceLastValue(tables)).as("no global_order consumed").isEqualTo(before);
         var next = appendCommitted(eventLog, AppendRequest.afterEventOrder("Orders", "o1", 1, events("E", 1))).getFirst();
