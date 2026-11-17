@@ -737,3 +737,169 @@ Claude settled these under the standing instruction to ask only on genuine forks
   throttle set. If the line is still missed with a throttle that keeps the copy at or above 20 000 events/s, the miss
   goes to the maintainer with the numbers.
 - **10 M and 30 M sizes:** not run on the development VM (disk); they belong to the dedicated-server rerun.
+
+---
+
+## 17. Gate results (9-G)
+
+**Run:** 2026-11-17, on the same shared 8-CPU development VM as §16 (aarch64, other agents building at the same time;
+about 5 GB of free disk). The absolute numbers are indicative; comparisons within a run are more reliable. Raw results:
+`components/postgresql-event-log-integration/target/spike-results/p9-g-online-throttled.txt` and `p9-g-demo.txt`.
+
+### 17.1 Copy rate and stop length (§10.1)
+
+The append p99 line was re-measured with the real `Migration` API (not the 9-A spike's hand-written copy), through a
+new arm `ONLINE_T<rate>` of `MigrationCopySpikeIT` (`-Dspike.run=true -Dspike.p9.arms=ONLINE_T50000`, …). The setup is
+§16.3's: 1 M events in 10 types with 20 % holes, PostgreSQL 18.4 with `fsync=on`, a fresh container per arm, the old
+engine appending 1 000 ev/s on 4 threads, a 30 s baseline before and after, and epochs (`Migration.copyEpoch`, batch
+10 000) until the delta is under 5 000 rows. Every arm verified equal afterwards. Two runs per arm.
+
+| Arm (`maxEventsPerSecond`) | Copy rate, run 1 / 2 | Append p99 before / during / after (ms), run 1 | Run 2 | p99 ratio, run 1 / 2 |
+|---|---|---|---|---|
+| 0 (unthrottled) | 72 748 / 73 279 events/s | 0.79 / 3.44 / 2.32 | 1.40 / 3.33 / 2.78 | **2.21 / 1.59** |
+| 50 000 | 49 887 / 49 886 events/s | 1.68 / 2.83 / 2.44 | 2.12 / 3.28 / 2.68 | **1.38 / 1.37** |
+| 25 000 | 24 973 / 24 971 events/s | 2.31 / 2.32 / 3.18 | 2.15 / 2.46 / 3.17 | **0.84 / 0.92** |
+
+The p50 of the appends did not get worse in any arm (0.33–0.35 ms during the epochs against 0.51–0.61 ms in the
+baselines). The throttle holds its rate within 0.1 %.
+
+| Pass line | Result |
+|---|---|
+| Bulk copy ≥ 20 000 events/s | **Met**: 72 700–73 300 events/s unthrottled through the `Migration` API (1 M events; 10 M and 30 M still not run, disk) |
+| Append p99 during an epoch ≤ 1.5× without | **Met with the throttle**: 1.37–1.38× at 50 000 events/s and 0.84–0.92× at 25 000 events/s, both above the 20 000 events/s floor of §16.7. Unthrottled it is still missed (1.59× and 2.21×), as in §16 |
+| Cut-over of a 10 000-event delta over 10 types ≤ 5 s, with delta verify and 50 imports | **Not re-measured at that size**; §16.4's 0.49 s (exact-range verify, as adopted in §16.7) stands. The trading demo's cut-over (§17.3: a delta of 0 rows after the final epoch, 10 types, 27 imports) stopped for 145 ms |
+| Online verify ≥ 50 000 events/s | **Met**: the demo copy, 268 441 events over 10 types, verified in 1.64–1.70 s (about 160 000 events/s, both sides hashed) |
+
+**About the p99 line:** the absolute p99 during the epochs moved little between the arms (3.3–3.4 ms unthrottled,
+2.8–3.3 ms at 50 000/s, 2.3–2.5 ms at 25 000/s), while the baselines themselves ranged from 0.79 to 3.18 ms. The ratio
+at 50 000 events/s is inside the line, but not by a wide margin given that noise. The recommendation for operators with
+a tight latency budget is therefore 25 000 events/s, which still moves 10 M events in about 7 minutes.
+
+### 17.2 I8 and the must-fail set on PostgreSQL 16, 17 and 18 (§10.2)
+
+**Met.** The migration module's full suite (15 unit tests, 46 ITs, the must-fail set of `MigrationInvariantIT`
+included) passed with `-Dmigration.it.image=postgres:16.15` and `postgres:17.5`, and the engine's `EventLogMigrationIT`
+(11 tests) with `-Deventlog.it.image=postgres:16.15` and `postgres:17.5`. PostgreSQL 18 is the default image of both
+suites. The first PostgreSQL 16 run of the migration module failed before any test ran (surefire: "TestEngine with ID
+'archunit' failed to discover tests"); a rerun with nothing else changed passed. That is the shared-`target/` symptom of
+the root `CLAUDE.md`, not a test result.
+
+### 17.3 The trading demo (§10.3)
+
+**How the source was produced.** `run-load.sh` needs the demo's `simulators` profile, whose images
+(`exchange-simulator:dev`, `payment-gateway:dev`) are not in this repository and were not built on the VM. So the real
+application ran on the old engine (unchanged code and configuration: profile `compose` with Docker Compose support off,
+pointed at its own `essentials-postgres:17.5` container), with the stub exchange and payment gateway, and was loaded
+through its own in-application generators over HTTP: ledger load (300 accounts) and order flow (100 customers) twice,
+funding load (100 customers), three instruments registered, 20 accounts' books rolled to a second generation (closing
+books) and 3 closed generations archived. The source then had 387 `Accounts` snapshots, 3 archives, 89 permanent
+gaps, about 18 500 transient subscriber gaps and 27 `durable_subscriptions` rows; holes were 1 132 in `Accounts` and
+2 042 in `Orders`. The demo was stopped and copied with `CREATE DATABASE … TEMPLATE …`.
+
+**Not covered:** `ReconciliationCases`, `TradeSettlements` and `UnknownExchangeOrders` have no events, because only the
+simulators' webhooks create them. Their tables, subscriptions and resume points were migrated (empty), and step 4's
+append and delivery checks ran on them, but no copied row of those types was compared.
+
+**Step 2.** The demo ran again on the copy under the same generators (about 1 100 events/s) while the harness
+`TradingDemoMigrationGateSpikeIT` (integration module, `spike` package, `-Dspike.demo.phase=online|cutover`) ran the CLI
+in-process with a generated YAML: `preflight`, `prepare`, `copy --until-caught-up --max-delta 500` (51 epochs in all;
+the first call took 86 s and 49 epochs to catch up under the writes, with epoch waits of up to 7.1 s on the demo's own
+transactions), then `verify`. After the demo was stopped: `import-preview`, `cutover` with an import of every
+`durable_subscriptions` row (views `CONTIGUOUS` with `IN_HANDLER_TRANSACTION`, routers and processors `FRESH` with
+`PERIODIC`, all exclusive), `verify --after-cutover`, `verify --all`.
+
+**Step 3, verifies equal: met.** §6.1 equal over all 10 types (268 441 events), zero late rows after the cut-over.
+
+**Step 4, resumes without loss: met.**
+
+- Every copied stream loaded through `EventLogEventStore.fetchStream` (`Accounts` 1 421 streams and 181 347 events,
+  `Orders` 16 000 and 80 000, the others smaller), with global order, event order and event id equal, and every payload
+  equal to the old row's as a Jackson tree.
+- One event per type, built from a copied payload with a new event id (a new stream for the three empty types), got the
+  expected `event_order` and a `global_order` above the old maximum `S` in all 10 types.
+- All 27 imported subscriptions delivered exactly the old table's events at or above their imported `I`, plus the new
+  event: no missing, no extra and no duplicate `global_order`.
+
+**Observed:** the import's rule of the lowest *filled* open gap (decision 8) made five view subscriptions replay far
+back. `AccountActivityProjection` resumes from 73 490 instead of 187 368 (109 361 rows replayed, because 4 of its
+1 998 open transient gaps had been filled), and `UnclearedDepositsProjection` replays 106 021 rows. Three `Orders` views
+each replay 43 320 rows. This is correct by design (an idempotent view replays rather than loses), but the demo's
+gap tables are large: up to 2 000 open transient gaps per `Accounts` subscriber after a few minutes of load.
+
+### 17.4 Why the import replays so far back (follow-up)
+
+**Question.** In §17.3, `AccountActivityProjection` was imported with `I` = 73 490 against `R` = 187 368, and three
+`Orders` views each replayed about 43 000 rows. Is the filled transient gap at `I` an event that the old engine never
+delivered, or one that it delivered while the gap row stayed behind?
+
+**How it was checked.** The demo source was rebuilt with a shorter run (the same application, stubs and generators,
+about 2 minutes of load). The gap tables were read while the demo ran and again after a graceful stop. The source of the
+§17.3 run was removed after that gate, so its per-subscriber numbers come from the import report.
+
+**(a) Delivered, row left.** `AccountActivityProjection` had 2 filled gaps, at `global_order` 4 385 and 4 386. Both
+are `FundsHeld` events of streams that have 130 to 140 later events. `projection_account_activity` has the row for
+both, keyed by `(account_stream_id, event_order)`, and only that projection writes that table. So the projection
+handled both events, but their transient gap rows remained. The rows were still there after the graceful stop. The
+events were appended 30–50 ms before their gaps were first discovered, so they were late commits that the subscriber
+passed and then received as gap fills.
+
+**(b) The old engine's gap handling** (`PostgresqlEventStreamGapHandler`, `GapFillsAwaitingAcknowledgement`,
+`CdcEventStore`; read only):
+
+- **A gap row is deleted** in three ways:
+  - A poll whose gap query included the gap finds its event, and the gap is not a fill still awaiting
+    acknowledgement (`reconcileGapsAndReport`).
+  - The subscriber acknowledges a delivered fill (`resolveFilledGaps`). This happens in the subscriber's unit of work,
+    atomically with the handling when there is one, and otherwise in a unit of work of its own.
+  - A reset deletes it.
+- **Gap recording under CDC is deferred.** Under CDC, which the demo runs with, a narrow gap is kept in memory and
+  written at the next resume-point save or when the subscription ends (`recordDeferredGaps`). A fill that arrives while
+  its gap is only in memory is meant to need no row deletion.
+- **A gap is promoted to permanent** only after its first discovery is older than the threshold (120 s by default), and
+  only by a poll whose query asked for that gap (the query includes at most 50 promotable gaps per poll), or when CDC's
+  delivery tracker gives up on it.
+
+I did not find the path that leaves the row of a delivered fill. The pattern is that only view processors
+(`ViewEventProcessor` and its partitioned variant) were affected; no router or event processor was. Finding the cause in
+the old engine is outside phase 9.
+
+**(c) Open and filled gaps per subscriber.**
+
+| Run | Subscriber | Open transient gaps | With a row in the copy (filled) |
+|---|---|---|---|
+| §17.3 | `AccountActivityProjection` | 1 998 | 4 |
+| §17.3 | `UnclearedDepositsProjection` | 1 953 | 3 |
+| §17.3 | other 4 `Accounts` subscribers | 1 771–1 983 | 0 |
+| §17.3 | `LateFillsProjection`, `OrdersProjection`, `SettlementFillsProjection` | 423, 343, 298 | 1 each |
+| §17.3 | other 3 `Orders` subscribers | 299–619 | 0 |
+| §17.3 | `Deposits`, `Withdrawals`, others | 0 | 0 |
+| rebuild | `AccountActivityProjection`, `AccountOverviewProjection`, `PositionsProjection` | 1 064–1 067 | 2, 3, 5 |
+| rebuild | the other 17 subscribers | 9–2 049 | 0 |
+
+In the rebuild, the unfilled open gaps match the holes exactly: 1 062 holes in `Accounts` and 2 049 in `Orders`. None of
+them was older than the 120 s promotion threshold yet. A handful of filled gaps per subscriber is enough to move `I`
+back across most of the stream, because `I` is the lowest filled open gap (decision 8).
+
+**A signal for skipping such gaps.** The old tables hold no reliable one. The engine records no delivery per event: the
+only record is the resume point, and `R` is past the gap whether or not the fill was delivered. The two candidates fail:
+
+- An event timestamp earlier than the gap's `first_discovered` is also true of a late commit that was never delivered,
+  because the timestamp is taken before the commit.
+- A later event in the same stream below `R` shows that the event had committed before the subscriber passed that later
+  event. It does not show that the gap query picked the event up.
+
+The only proof is application-level, here the view's own row. So the import cannot skip these gaps safely by itself.
+The options are an explicit per-mapping operator choice (for example "import `R` and ignore filled transient gaps" for
+an idempotent view, with the risk stated) or accepting the replay, which is correct for an idempotent view. No code was
+changed.
+
+### 17.5 Summary
+
+| Gate | Result |
+|---|---|
+| §10.1 bulk copy | Met |
+| §10.1 append p99 | Met with `maxEventsPerSecond` 50 000 or 25 000; missed unthrottled |
+| §10.1 cut-over | Met in §16.4 (0.49 s); not re-measured at 10 000 events |
+| §10.1 online verify | Met |
+| §10.2 | Met on 16, 17 and 18 |
+| §10.3 | Met for steps 3 and 4, on 7 of the 10 aggregate types with events (the other 3 need the simulators) |

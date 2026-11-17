@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.eventlog.integration.spike;
 
 import com.zaxxer.hikari.HikariDataSource;
 import dk.trustworks.essentials.components.eventlog.*;
+import dk.trustworks.essentials.components.eventlog.integration.migration.MigrationSourceTables;
+import dk.trustworks.essentials.components.eventlog.migration.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
@@ -69,6 +71,7 @@ import java.util.concurrent.atomic.*;
 class MigrationCopySpikeIT {
     private static final String       BULK     = "p9-a-bulk.txt";
     private static final String       ONLINE   = "p9-a-online.txt";
+    private static final String       ONLINE_G = "p9-g-online-throttled.txt";
     private static final int          TYPES    = 10;
     private static final long         EVENTS   = Long.getLong("spike.p9.events", 1_000_000);
     private static final int          RUNS     = Integer.getInteger("spike.p9.runs", 2);
@@ -108,6 +111,7 @@ class MigrationCopySpikeIT {
                 try (var db = SpikeDb.start("p9a_r" + run + "_" + arm.toLowerCase(Locale.ROOT), 60, true); var src = new Source(db)) {
                     src.build();
                     if (arm.equals("ONLINE")) online(db, src, run);
+                    else if (arm.startsWith("ONLINE_T")) onlineThrottled(db, src, run, Long.parseLong(arm.substring("ONLINE_T".length())));
                     else bulk(db, src, run, arm);
                 }
             }
@@ -248,6 +252,56 @@ class MigrationCopySpikeIT {
             SpikeDb.record(ONLINE, String.format("VERIFY run %d | ONLINE | after cut-over, every window: %d rows per side, mismatching windows %d | %.0f events/s | heads ok %s",
                                                  run, v.rows, v.mismatches, v.rows / v.seconds, target.headsOk()));
             if (v.mismatches > 0) throw new IllegalStateException("verification mismatch after cut-over");
+        }
+    }
+
+    /**
+     * Gate 9-G (§16.7): the append p99 line re-measured with the real {@link Migration} API (not the spike's hand-written copy),
+     * its online copy throttled by {@link CopySettings#withMaxEventsPerSecond}; arm {@code ONLINE_T<rate>}, {@code 0} unthrottled.
+     * Same phases as {@link #online}: warm-up, 30 s baseline, epochs until a delta under 5 000 rows, 30 s baseline.
+     */
+    private void onlineThrottled(SpikeDb db, Source src, int run, long rate) throws Exception {
+        try (var pool = db.pool("reader", 4); var appender = new Appender(src)) {
+            var eventLog = EventLog.builder().setDataSource(pool).build();
+            eventLog.start();
+            try {
+                var tables = new ArrayList<SourceTable>();
+                for (var type : src.types) tables.add(MigrationSourceTables.from(src.eventStore.getAggregateEventStreamConfiguration(type)));
+                var migration = new Migration(new MigrationPlan(pool, eventLog, tables, CopySettings.defaults().withMaxEventsPerSecond(rate)));
+                migration.prepare();
+                db.checkpoint();
+                appender.start();
+                Thread.sleep(5_000); // warm-up
+                appender.mark("baseline-before");
+                Thread.sleep(30_000);
+                appender.mark("epochs");
+                long copied = 0;
+                long t0     = System.nanoTime();
+                for (int epoch = 1; epoch <= 6; epoch++) {
+                    var report = migration.copyEpoch();
+                    copied += report.rows();
+                    SpikeDb.record(ONLINE_G, String.format("EPOCH run %d | ONLINE_T%d | epoch %d | %d rows | wait %d ms | copy %.2f s = %.0f events/s", run, rate, epoch, report.rows(),
+                                                           report.waited().toMillis(), report.copyTime().toMillis() / 1e3, report.rows() / Math.max(report.copyTime().toMillis() / 1e3, 1e-3)));
+                    if (report.rows() < 5_000) break;
+                }
+                double epochsS = (System.nanoTime() - t0) / 1e9;
+                appender.mark("baseline-after");
+                Thread.sleep(30_000);
+                appender.mark("end");
+                appender.stop();
+                var lat    = appender.byPhase();
+                var before = lat.get("baseline-before");
+                var during = lat.get("epochs");
+                var after  = lat.get("baseline-after");
+                var verify = migration.verify();
+                SpikeDb.record(ONLINE_G, String.format("APPEND run %d | ONLINE_T%d (maxEventsPerSecond %d) | copied %d rows in %.1f s = %.0f events/s overall | baseline-before n=%d p50 %.2f p99 %.2f ms "
+                                                               + "| during epochs n=%d p50 %.2f p99 %.2f ms | baseline-after n=%d p50 %.2f p99 %.2f ms | p99 ratio during/mean(baselines) %.2f "
+                                                               + "| achieved append rate during epochs %.0f ev/s | errors %d | verify equal %s",
+                                                       run, rate, rate, copied, epochsS, copied / epochsS, before.n, before.p50, before.p99, during.n, during.p50, during.p99, after.n, after.p50, after.p99,
+                                                       during.p99 / ((before.p99 + after.p99) / 2), during.n / Math.max(during.seconds, 1e-9), appender.errors.get(), verify.equal()));
+            } finally {
+                eventLog.stop();
+            }
         }
     }
 
