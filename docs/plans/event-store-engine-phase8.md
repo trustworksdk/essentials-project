@@ -652,8 +652,9 @@ needs the maintainer's confirmation (also open question 1).
 
 ## 15. Decisions (2026-11-17)
 
-The maintainer decided the questions that touch the phase's shape and existing modules; the rest are settled as
-recommended in §14 by the maintainer working through the phases autonomously.
+The maintainer decided the questions that touch the phase's shape and existing modules, and question 7 (tenant
+filter). Claude settled the rest as recommended in §14, under the maintainer's standing instruction to ask only on
+genuine design forks.
 
 - **Split:** phase 8 is built as **8a** (subscription API, processors, parked events and the admin SPI) and **8b**
   (the `EventStore` adapter, the engine reads it needs, and the admin REST mapping), each with its own gate and stop,
@@ -664,4 +665,7 @@ recommended in §14 by the maintainer working through the phases autonomously.
   - No other existing module is changed. A unit that finds it must change one stops and asks.
 - **Repository ITs:** copied into the new module, with a drift test that fails when the originals change. The
   originals are not refactored.
-- **Every other question in §14:** settled as recommended there.
+- **Tenant filter (question 7), decided by the maintainer 2026-11-17:** in SQL as well, not in memory only. A
+  `tenant = ?` predicate on catch-up and bridge reads, in memory on live batches (the event-type filter's split), with an
+  optional `(tenant, global_order)` index built like the type index. Built in 8a-C's scope or a small unit after 8a-B.
+- **Every other question in §14:** settled by Claude as recommended there.
