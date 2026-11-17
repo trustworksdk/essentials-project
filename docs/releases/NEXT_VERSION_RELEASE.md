@@ -674,6 +674,10 @@ Additive: the existing methods are unchanged; their javadoc now says when they a
 while holding the generation lock, as the built-in scan's rollover does) and points to the guarded variant. The
 `essentials-trading-demo` rolls its accounts with the guarded repository method (`aad1916a3`).
 
+### 2.18 `AppendedEvents.appended` is public, for `EventStore` implementations (`postgresql-event-store`)
+
+`AppendedEvents.appended(List<PersistedEvent>)` is now public, so an `EventStore` other than `PostgresqlEventStore` can report its appends to `AppendedEvents.recordDuring` (which `EventStreamDeciderCommandHandlerAdapter` uses to return the events a command appended). Additive; nothing to change. (Event store redesign, phase 8b.)
+
 ## 3. Bug fixes
 
 | Area | Fix | Commit |
