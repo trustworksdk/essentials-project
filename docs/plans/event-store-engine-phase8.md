@@ -857,3 +857,10 @@ No row missed. The one figure that leans is the steady p99 of the processors (§
 ### 16.x Retry back-off default, decided (2026-11-17)
 
 The maintainer chose the recommended 10 ms default and asked that it stay configurable. `EventLogSettings.defaults()` now uses `DEFAULT_RETRY_BACKOFF_INITIAL` = 10 ms. It is configurable engine-wide with `withRetryBackoff(initial, max)` and per subscription with `ErrorSettings`.
+
+### 16.y Performance-lab comparison, decided (2026-11-17)
+
+The maintainer added unit **8b-E**: a scenario in `examples/essentials-performance-lab` that runs the new engine (the
+adapter, `ViewProjection` and `EventReactor`) side by side with the old engine's polling and CDC, under the lab's
+existing load profiles, alongside `BaselinePollingVsCdcComparisonScenario`. The change to the example module is
+additive. Results are recorded in this file. It runs after 8b-B, when the adapter exists.
