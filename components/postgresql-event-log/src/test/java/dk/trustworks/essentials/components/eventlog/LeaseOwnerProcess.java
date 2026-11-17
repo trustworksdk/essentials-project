@@ -37,6 +37,12 @@ import java.util.concurrent.atomic.AtomicReference;
  *     <li>{@code L <subscriber>} on a loss</li>
  * </ul>
  * {@code System.nanoTime()} is {@code CLOCK_MONOTONIC} on Linux, shared by every process on the host.
+ * <p>
+ * Phase 7 unit C ({@code spike.EventLogGateSpikeIT#takeoverTime}, design §10.1) starts it with four more arguments
+ * ({@code default <periodicSubscriber> <pagesSubscriber> <startFrom>}, through {@link GateSpikeAccess#startLeaseOwner}):
+ * the default lease settings ({@link EventLogSettings#defaults()}) on a small pool instead of the test timings, the given
+ * subscriber names and start point, and one more line, {@code P <global_order> <nanoTime>} per event the in-transaction
+ * handler wrote (before its page commits). Without them it behaves as the IT expects.
  */
 final class LeaseOwnerProcess {
     static final String PERIODIC = "forked-periodic";
@@ -97,6 +103,17 @@ final class LeaseOwnerProcess {
         dataSource.setPassword(args[2]);
         dataSource.setApplicationName(args[3]);
         var nodeName = args[3];
+        var gate     = args.length >= 8 && args[4].equals("default");
+        var periodicName = gate ? args[5] : PERIODIC;
+        var pagesName    = gate ? args[6] : PAGES;
+        var startFrom    = gate ? Long.parseLong(args[7]) : 1L;
+        javax.sql.DataSource source = dataSource;
+        if (gate) {
+            var config = new com.zaxxer.hikari.HikariConfig();
+            config.setDataSource(dataSource);
+            config.setMaximumPoolSize(10);
+            source = new com.zaxxer.hikari.HikariDataSource(config);
+        }
         var out      = new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8);
         var observer = new EventLogObserver() {
             @Override
@@ -113,11 +130,11 @@ final class LeaseOwnerProcess {
                 }
             }
         };
-        var log = EventLog.builder().setDataSource(dataSource).setSettings(LEASE.withNodeName(nodeName)).setObserver(observer).build();
+        var log = EventLog.builder().setDataSource(source).setSettings((gate ? EventLogSettings.defaults() : LEASE).withNodeName(nodeName)).setObserver(observer).build();
         log.start();
         log.registerAggregateType(TYPE);
         var periodicRef = new AtomicReference<Subscription>();
-        var periodic = log.subscribeExclusive(PERIODIC, TYPE, 1, event -> {
+        var periodic = log.subscribeExclusive(periodicName, TYPE, startFrom, event -> {
             var subscription = periodicRef.get();
             var fence        = subscription == null ? null : subscription.lease().fenceValue();
             synchronized (out) {
@@ -125,12 +142,17 @@ final class LeaseOwnerProcess {
             }
         });
         periodicRef.set(periodic);
-        var pages = log.subscribeExclusive(PAGES, TYPE, 1, Subscription.ConsistencyMode.CONTIGUOUS,
+        var pages = log.subscribeExclusive(pagesName, TYPE, startFrom, Subscription.ConsistencyMode.CONTIGUOUS,
                                            Subscription.PageHandler.perEvent((event, connection) -> {
                                                try (var statement = connection.prepareStatement("INSERT INTO " + VIEW + " (global_order, writer) VALUES (?, ?)")) {
                                                    statement.setLong(1, event.globalOrder());
                                                    statement.setString(2, nodeName);
                                                    statement.executeUpdate();
+                                               }
+                                               if (gate) {
+                                                   synchronized (out) {
+                                                       out.println("P " + event.globalOrder() + " " + System.nanoTime());
+                                                   }
                                                }
                                            }));
         // ends when the parent closes our standard input

@@ -66,4 +66,34 @@ public final class GateSpikeAccess {
             }
         }, null));
     }
+
+    /**
+     * Phase 7 §10.1: starts a {@link LeaseOwnerProcess} child on the default lease settings, owning {@code periodic}
+     * (FRESH, periodic) and {@code pages} (CONTIGUOUS, in-transaction, writing {@code el_test_view}) from
+     * {@code startFrom}; each line it prints goes to {@code lines}, split on spaces, with the parent's receipt time
+     * appended as the last field. End it by closing its standard input (graceful) or killing it.
+     */
+    public static Process startLeaseOwner(String jdbcUrl, String user, String password, String nodeName, String periodic, String pages, long startFrom,
+                                          Consumer<String[]> lines) throws java.io.IOException {
+        var javaBin = java.nio.file.Path.of(System.getProperty("java.home"), "bin", "java").toString();
+        var process = new ProcessBuilder(javaBin, "-cp", System.getProperty("java.class.path"), LeaseOwnerProcess.class.getName(), jdbcUrl, user, password, nodeName,
+                                         "default", periodic, pages, Long.toString(startFrom))
+                .redirectError(ProcessBuilder.Redirect.DISCARD).start();
+        Thread.ofPlatform().daemon().start(() -> {
+            try (var in = new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = in.readLine()) != null) {
+                    var fields = line.split(" ");
+                    if (fields.length >= 2) {
+                        var withReceipt = java.util.Arrays.copyOf(fields, fields.length + 1);
+                        withReceipt[fields.length] = Long.toString(System.nanoTime());
+                        lines.accept(withReceipt);
+                    }
+                }
+            } catch (java.io.IOException e) {
+                // child ended
+            }
+        });
+        return process;
+    }
 }

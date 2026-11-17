@@ -90,6 +90,9 @@
 #                                                off), one flush across woken types against one statement each
 #                                  p6-gate-old   CurrentEngineBaselineSpikeIT#p6Latency: today's engine with S1 (max-delay
 #                                                1 s and 200 ms) and with CDC, postgres:18.4 (CDC: the module's wal2json image)
+#                                  p7-gate       EventLogGateSpikeIT (postgresql-event-log)              phase 7 unit C: takeover
+#                                                time of exclusive subscriptions (crash, pause, graceful; a forked owner JVM), lease
+#                                                renewal cost at 1-1000 leases, append and delivery with exclusive subscriptions
 #                                  p2-gate-old   CurrentEngineBaselineSpikeIT#steady+idle with 1 and 10 subscriptions,
 #                                                postgres:18.4 in a container: the old engine's side of the phase-2 gate
 #                                "default" is the priority order of the original runs; "all" is the same set in
@@ -121,7 +124,7 @@ OUT=""
 BUILD=1
 DRY_RUN=0
 
-usage() { sed -n '17,97p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '17,100p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_error() { printf '%s\nRun with --help for usage.\n' "$*" >&2; exit 2; }
 
 # The command line as typed, for machine.txt, with any password value replaced. Built before
@@ -197,6 +200,7 @@ suite_classes() {
     p5-gate-old)  echo "CurrentEngineBaselineSpikeIT#rareTypeCatchUp+restartStorm" ;;
     p6-gate)      echo "EventLogGateSpikeIT#wakeLatency+notifyAppendCost+flushAcrossTypes" ;;
     p6-gate-old)  echo "CurrentEngineBaselineSpikeIT#p6Latency" ;;
+    p7-gate)      echo "EventLogGateSpikeIT#takeoverTime+renewalCost+leaseUnaffected" ;;
     p2-gate-old)  echo "CurrentEngineBaselineSpikeIT#steady+idle" ;;
     *)            return 1 ;;
   esac
@@ -225,13 +229,14 @@ suite_results() {
     p5-gate-old)  echo "p5-old-*" ;;
     p6-gate)      echo "p6-c-*" ;;
     p6-gate-old)  echo "p6-old-*" ;;
+    p7-gate)      echo "p7-c-*" ;;
     p2-gate-old)  echo "p0-0-*" ;;
   esac
 }
 # The module a suite's classes live in.
 suite_module() {
   case "$1" in
-    p3-gate|p4-gate|p5-gate|p6-gate) echo "components/postgresql-event-log" ;;
+    p3-gate|p4-gate|p5-gate|p6-gate|p7-gate) echo "components/postgresql-event-log" ;;
     *)       echo "components/postgresql-event-store" ;;
   esac
 }
@@ -244,7 +249,7 @@ suite_args() {
   esac
 }
 DEFAULT_SUITES="xid table-design contention notify tail probe-cost progress listen pipeline owned append baseline cpu jdbc probe"
-ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline owned listen p2-gate-old p3-gate p4-gate p5-gate-old p5-gate p6-gate-old p6-gate"
+ALL_SUITES="baseline xid probe append contention table-design cpu jdbc notify tail probe-cost progress pipeline owned listen p2-gate-old p3-gate p4-gate p5-gate-old p5-gate p6-gate-old p6-gate p7-gate"
 
 (( ${#SUITE_SPECS[@]} )) || SUITE_SPECS=(default)
 SUITES=()

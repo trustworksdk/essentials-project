@@ -494,3 +494,165 @@ as recommended.
 | 8 | Duplicate instance names on non-exclusive rows | **Leave as phase 2 documented** |
 | 9 | Temporary public API | **`subscribeExclusive(...)` overloads**, removed or kept with the rest of the temporary surface in phase 8 |
 | 10 | Lease timings | **15 s lease / 4 s renewal / 7 s local deadline**, confirmed by §10.1 |
+
+---
+
+## 15. Results (2026-11-16)
+
+Measured by `spike/EventLogGateSpikeIT` (`scripts/run-phase0-spikes.sh --suite p7-gate`: `takeoverTime`, `renewalCost`,
+`leaseUnaffected`) on the development VM: PostgreSQL 18.4 in a container, 8 CPUs shared by client and server, a fresh
+container per arm with a database name of its own (phase 5's permit-key lesson), two runs of every arm. As in phases 2-6,
+this is a shared VM, not a dedicated server: absolute times need the dedicated server; statement counts, row counts and
+the ratios inside one arm do not depend on it. Statements are `pg_stat_statements` calls by role, utility statements
+included; every engine in the test JVM runs on the reader role. **`fsync`:** the append rows of §10.3 ran with
+`fsync=on`; every other arm (§10.1's takeovers, §10.2's renewals and §10.3's steady shape, as phase 6's §7.1) ran with
+`fsync=off`. Results files `components/postgresql-event-log/target/spike-results/p7-c-takeover.txt`,
+`p7-c-renewal.txt`, `p7-c-unaffected.txt`. Nothing was scaled down: 20 repetitions per shape, 30 s pauses, 5 min idle
+windows.
+
+Harness notes. The forked owner is unit B's `LeaseOwnerProcess`, started through the test-only
+`GateSpikeAccess.startLeaseOwner` with four extra arguments (`default <periodic> <pages> <startFrom>`): the default lease
+settings (15 s / 4 s / 7 s) on a 10-connection pool, subscriber names of each repetition's own, a start at the head, and
+one more line, `P <global_order> <nanoTime>`, per event its in-transaction handler wrote. Without those arguments it
+behaves exactly as `EventLogForkedTakeoverIT` expects. The standby is an `EventLog` in the test JVM (default settings)
+with the same two exclusive subscriptions (one `FRESH` periodic, one `CONTIGUOUS` in-transaction); a writer in the test
+JVM appends 100 events/s and calls `afterCommit`. Each repetition waits until the owner handled 20 events of each, then
+a random 0-4 s, so the action falls at a random point of the renewal cycle. Landed writes are read from a test-only
+progress-log trigger on `el_progress` (as unit B's ITs). No main code changed and no knob was added.
+
+### 15.1 Takeover time (§10.1)
+
+From the kill or stop to the standby's first handled event, `nanoTime` across processes; 20 repetitions per shape and
+run. The in-transaction model's first handled event follows the periodic one by 0-2 ms in every repetition, so one
+figure stands for both. "To claim" is the standby's `onLeaseClaimed`.
+
+| Shape | Run | First handled p50 / p100 | To claim p50 / p100 | PERIODIC replayed, mean / max | IN_TX re-handled, mean / max | IN_TX duplicated effects | Landed writes by the old owner | Old owner saw the loss |
+|---|---|---|---|---|---|---|---|---|
+| Crash (SIGKILL) | 1 | 13.9 / **15.9 s** | 13.9 / 15.9 s | 49.5 / 94 | 0.1 / 1 | 0 | 0 | — |
+| Crash (SIGKILL) | 2 | 13.2 / **15.9 s** | 13.1 / 15.9 s | 50.7 / 96 | 0.0 / 0 | 0 | 0 | — |
+| Pause (SIGSTOP 30 s) | 1 | 13.8 / 15.8 s | 13.8 / 15.8 s | 55.9 / 93 | 0.1 / 1 | 0 | **0** | 20 of 20 |
+| Pause (SIGSTOP 30 s) | 2 | 13.7 / 15.0 s | 13.7 / 15.0 s | 46.9 / 99 | 5.1 / 100 | 0 | **0** | 20 of 20 |
+| Graceful | 1 | 1.3 / **3.8 s** | 1.3 / 3.8 s | 0 / 0 | 0.1 / 1 | 0 | 0 | — |
+| Graceful | 2 | 2.0 / **3.8 s** | 2.0 / 3.8 s | 0 / 0 | 0.1 / 1 | 0 | 0 | — |
+
+- The takeover is the claim: first delivery follows the claim by 5-25 ms. Crash and pause land between 11 and 16 s:
+  the lease's remaining life (15 s minus the time since the last renewal, 0-4 s) plus the wait for the standby's next
+  claim pass (0-4 s). Graceful is the wait for the standby's next pass after the release (0-4 s), as decision 2 chose.
+- PERIODIC replays are the events handled since the last periodic save (1 s at 100 ev/s: up to about 100); none after a
+  graceful stop, whose release writes the resume point.
+- **In-transaction re-handled events** are handler calls the new owner repeated after the old owner made them in a page
+  that never committed; "duplicated effects" counts those at or below the old owner's last *committed* view row, and is
+  0 in all 120 repetitions. The one repetition with 100 (pause, run 2, repetition 19) is one whole page of 100 events
+  (the default `pageSize`) that the paused owner had handled inside an open page transaction when it was stopped: the
+  transaction never committed (no landed write, no committed view row past the resume point), and the new owner
+  delivered the page again from the last committed resume point. That is the in-transaction model doing what it
+  promises. Why that page held 100 events rather than the usual one at 100 ev/s (the owner had a backlog at that moment,
+  a scheduling stall on the shared VM being the likely cause) cannot be settled from the recorded data.
+
+**Verdict.** Crash p100 15.9 s ≤ 20 s: **passes**. Graceful p100 3.8 s ≤ 5 s: **passes**. Pause: no landed write by
+the paused owner in any of 40 repetitions, and the resumed owner reported the loss in all 40: **passes**.
+
+### 15.2 Renewal cost per N leases (§10.2)
+
+N idle exclusive `FRESH` periodic subscriptions owned by one `EventLog`, 5 min window (75 passes) after every lease was
+claimed and a 10 s settle. Runs 1-2:
+
+| N | `LEASE_RENEW` per pass | Server mean / max (ms) | Client statement p50 / p99 (ms) | Borrow p50 / p99 (ms) | Pass p50 / p99 (ms) | WAL per pass (LSN; statement's own) | HOT ratio | `el_progress` size (growth in window) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 1.00 | 0.20-0.23 / 0.32-0.47 | 1.4-2.0 / 2.3-2.7 | 0.95-1.42 / 1.5-2.8 | 2.4-3.4 / 3.5-5.2 | 6.8 kB; 126 B | 1.000 | 32 kB (0) |
+| 10 | 1.00 | 0.28-0.31 / 0.40-0.48 | 1.5-1.9 / 1.8-2.5 | 0.95-1.26 / 1.2-1.7 | 2.5-3.1 / 2.9-4.0 | 7.4 kB; 0.8 kB | 1.000 | 32 kB (0) |
+| 100 | 1.00 | 1.19-1.37 / 4.2-4.7 | 2.5 / 5.6-5.8 | 0.94-1.07 / 1.2-1.4 | 3.4-3.6 / 6.5-6.7 | 16 kB; 8.1 kB | 1.000 | 90-106 kB (8 kB) |
+| 1 000 | 1.00 | 23.5-24.2 / 117-119 | 11.0-11.3 / **118.2-118.5** | 0.94-0.97 / 1.1-1.9 | 11.9-12.4 / 119.1-119.5 | 99 kB; 84 kB | 0.997-0.999 | 524-549 kB (8-32 kB) |
+
+The idle `EventLog`'s other reader statements stay at 1.25/s at every N (the backstop read): leases add nothing to the
+reader loop. At N ≤ 10 the pass's WAL is the cluster's background (checkpoint and statistics records), not the renewal.
+
+- **The N = 1 000 miss is the first minute after the rows were created.** A diagnostic re-run (N = 1 000, 120 s window,
+  the slow passes listed; the third N = 1 000 row in `p7-c-renewal.txt`) shows passes 1-11 at 119-127 ms and every later
+  pass at 11-14 ms. In the two 75-pass runs the mean (23.5-24.2 ms) against the p50 (11.0-11.3 ms) puts about 9 passes
+  above 100 ms, the same opening stretch; 75 samples make p99 the second-largest. The cause is the plan before
+  `el_progress` is first analysed: with no statistics the planner expects about one row with `lease_owner = $owner`,
+  takes a nested loop with that seq scan outside and the `unnest` inside, and rescans the 1 000-element function scan for
+  each of the 1 000 rows (about 120 µs per row, O(N²)). Autoanalyze ran about a minute in (the 1 000 inserts and every
+  renewal's updates trip its threshold), after which the custom plan is a hash join (1.5 ms under `EXPLAIN ANALYZE`) and
+  the generic plan an index nested loop over the primary key (2.7 ms), both as §2.3 intended. It is not a checkpoint: the
+  slow passes are consecutive from the window's start, and the diagnostic run's renewal wrote no full-page image at all
+  while still showing its 11 slow passes. **Expected but not measured:** the same plan returns after every restart of the owner, because the
+  owner id is new per `EventLog` start (§2.1) and is then missing from `lease_owner`'s statistics, until the next
+  autoanalyze, again about a minute. At N = 1 000 that is about 15 renewals of 120 ms, well inside the 3 s statement
+  timeout and the 4 s interval, so no lease was at risk (no failed pass in any arm).
+
+**Verdict.** One renewal statement per pass at every N: **passes** (exactly 1.00, every lease sent and returned on every
+pass). HOT ratio ≥ 0.95: **passes** (0.997-1.000). Renewal p99 at N = 1 000 below 100 ms: **fails as written**
+(118.2-118.5 ms), caused by the plan `el_progress` gets before its first analyse (and, by the same mechanism, after an
+owner restart), not by the steady-state plan, which runs a 1 000-lease pass in 11-12 ms. Levers for the maintainer, none
+applied: an `ANALYZE el_progress` after creating rows in bulk, or writing the statement so the plan does not depend on
+`lease_owner`'s statistics (for example moving the owner predicate out of the join's estimate, or a join on the
+primary key that the planner always prefers).
+
+### 15.3 Append and delivery unaffected (§10.3)
+
+Steady shape (phase 6's tier-2 arm: one engine, `afterCommit`, tier 1 off; 5 `FRESH` periodic and 5 `CONTIGUOUS`
+in-transaction subscriptions; 100 ev/s; 10 s warm-up, 60 s window; `fsync=off`), the two arms alternated between runs:
+
+| Arm | Run | `FRESH` p50 / p99 (ms) | `CONTIGUOUS` p50 / p99 (ms) | Reader statements per delivery | Lease statements | Page idle-timeout statements per delivery | WAL per event |
+|---|---|---|---|---|---|---|---|
+| Non-exclusive | 1 | 0.26 / 0.64 | 0.27 / 0.65 | 1.105 | 0 | 0 | 1 798 B |
+| Non-exclusive | 2 | 0.57 / 1.18 | 0.59 / 1.18 | 1.105 | 0 | 0 | 1 792 B |
+| Exclusive | 1 | 0.27 / 0.72 | 0.49 / **1.64** | **1.606** | 0.250/s | 0.500 | 1 918 B |
+| Exclusive | 2 | 0.30 / 0.76 | 0.55 / **2.05** | **1.605** | 0.250/s | 0.500 | 1 920 B |
+
+Append shape (phase 6 §7.2: 8 writers, one event per unit of work, `afterCommit` with the default notifier, a second
+engine with one listening `FRESH` subscription, 2 s warm-up, 8 s window, `fsync=on`): non-exclusive 21 643-22 328
+appends/s, commit p50 0.254-0.262 ms; exclusive 21 958-22 000 appends/s, commit p50 0.258-0.259 ms.
+
+`pg_stat_activity` samples (every 5 ms) with a backend waiting on a heavyweight lock: steady, 0 in every arm except one
+sample of about 9 500 in exclusive run 2, on an `el_progress` statement; append, 1-2 of 1 544 per arm, none on
+`el_progress`. As expected: no lock traffic on the progress rows from renewals.
+
+- **Statements.** The exclusive arm's reader statements per delivery rise by exactly 0.500. The renewal adds 0.25
+  statements/s (one pass per 4 s), which is 0.00025 per delivery at 1 000 deliveries/s, as the line allows. The rest is
+  decision 6's `SELECT set_config('idle_in_transaction_session_timeout', …, true)`, one per in-transaction page: at
+  100 ev/s each of the 5 `CONTIGUOUS` subscriptions commits one page per event (phase 6 §10.1), so 5 extra statements per
+  event, 0.5 per delivery. **Could it ride in an existing statement?** Not in one that exists before the handler: the
+  page transaction sends nothing of its own ahead of the handler, so the `set_config` is the page's first statement and a
+  round trip of its own. It could ride in the fenced progress `UPDATE`, as a `set_config` evaluated inside that
+  statement (for example in a CTE the `UPDATE` references): that `UPDATE` is what takes the `el_progress` row lock §7's
+  failure case is about, and from it to `COMMIT` is the only stretch in which a dead owner can hold that lock against a
+  claimant. The difference is that the timeout would no longer cover a page that dies idle inside the handler, before
+  the progress update, whose locks on the application's own tables could still block the next owner's handler. Other
+  routes: a session-level setting applied once per physical connection, which leaks into the application's pool; or
+  leave it to the application's connection options. None applied; it is the maintainer's call.
+- **Latency.** `FRESH`: exclusive p50 0.27-0.30 / p99 0.72-0.76 ms inside the baseline's run-to-run range (0.26-0.57 /
+  0.64-1.18): within the noise. `CONTIGUOUS` p50: 0.49-0.55 against 0.27-0.59, within the noise. `CONTIGUOUS` p99:
+  1.64-2.05 ms against 0.65-1.18; both exclusive runs lie above the baseline's highest run, by 0.5-0.9 ms, so it is
+  **outside the noise**. The cause is the same extra round trip: the `set_config` sits on the page's path from batch to
+  handler, and its tail on the shared CPUs shows at p99. Small in absolute terms, but measurable.
+- **Appends.** Exclusive 21 958-22 000 against 21 643-22 328 appends/s, commit p50 equal: within the noise.
+
+**Verdict.** Appends/s within the noise: **passes**. Commit-to-handler latency within the noise: **passes for `FRESH`
+and for `CONTIGUOUS` p50; fails for `CONTIGUOUS` p99** (+0.5-0.9 ms). Reader statements per delivered event within
+baseline plus the renewal: **fails** (1.606 against 1.105 + 0.00025). Both misses have one cause, the per-page
+`set_config` of decision 6; the renewal itself is inside the line (0.25 statements/s). Lock waits on `el_progress`:
+none beyond one sample, as expected.
+
+### 15.4 Verdict
+
+| Row | Pass line | Measured | Verdict |
+|---|---|---|---|
+| §10.1 crash | p100 ≤ 20 s | 15.9 s (p50 13.2-13.9) | **Passes** |
+| §10.1 graceful | p100 ≤ 5 s | 3.8 s (p50 1.3-2.0) | **Passes** |
+| §10.1 pause | no landed write by the paused owner | 0 in 40 repetitions | **Passes** |
+| §10.2 statements | one renewal statement per pass at every N | 1.00 at N = 1-1 000 | **Passes** |
+| §10.2 HOT | ≥ 0.95 | 0.997-1.000 | **Passes** |
+| §10.2 renewal p99, N = 1 000 | < 100 ms | 118.2-118.5 ms (p50 11.0-11.3) | **Fails**: the plan before `el_progress`'s first analyse (about 9-11 passes); expected again after each owner restart |
+| §10.3 appends/s | within the noise | 21 958-22 000 against 21 643-22 328 | **Passes** |
+| §10.3 latency | p50 and p99 within the noise | `FRESH` and `CONTIGUOUS` p50 within; `CONTIGUOUS` p99 +0.5-0.9 ms | **Fails for `CONTIGUOUS` p99**: decision 6's per-page `set_config` round trip |
+| §10.3 statements per delivery | ≤ baseline + 0.25 statements/s | 1.606 against 1.105 (+0.5) | **Fails**: decision 6's per-page `set_config` |
+
+The lease does what the phase is for: takeovers inside the decided bounds with decision 10's timings, no landed write by
+a stale owner, no duplicated effect in the in-transaction model, one renewal statement per pass whatever N, HOT updates,
+and no effect on appends. Three rows miss as written, with two causes, both left to the maintainer: the renewal's plan
+before `el_progress` has statistics (and after an owner restart), and the per-page idle-timeout statement, which could
+ride in the fenced progress update at the price of not covering a page that dies inside the handler. No default was
+tuned and no main code changed.

@@ -82,6 +82,13 @@ import java.util.logging.Logger;
  * {@code target/spike-results/p5-c-*.txt}. Knobs: {@code -Dspike.gate.rareEvents} (1000000), {@code -Dspike.gate.densities}
  * ("1,5,25,50"), {@code -Dspike.gate.stormEvents} (100000).
  * <p>
+ * Phase 7, unit C of {@code docs/plans/event-store-engine-phase7.md} (§10), suite {@code p7-gate}: {@link #takeoverTime()}
+ * (§10.1, a forked {@code LeaseOwnerProcess} owner and an in-JVM standby), {@link #renewalCost()} (§10.2) and
+ * {@link #leaseUnaffected()} (§10.3). Results {@code target/spike-results/p7-c-*.txt}. Knobs:
+ * {@code -Dspike.gate.p7Repetitions} (20), {@code -Dspike.gate.p7Shapes} ("CRASH,PAUSE,GRACEFUL"),
+ * {@code -Dspike.gate.p7PauseSeconds} (30), {@code -Dspike.gate.p7Leases} ("1,10,100,1000"),
+ * {@code -Dspike.gate.p7IdleSeconds} (300).
+ * <p>
  * Phase 2's {@code eventIdIndex} and {@code probeBackoff} measurements (suite {@code p2-gate}, results in phase-2 §6)
  * were retired with this change: the probe topology (one reader per subscription) no longer exists. They are at commit
  * {@code 13184d080}.
@@ -1552,6 +1559,490 @@ class EventLogGateSpikeIT {
         }
     }
 
+    // ------------------------------------------------------------------ phase 7, unit C (design phase 7 §10)
+
+    private static final String        P7_TAKEOVER   = "p7-c-takeover.txt";
+    private static final String        P7_RENEWAL    = "p7-c-renewal.txt";
+    private static final String        P7_UNAFFECTED = "p7-c-unaffected.txt";
+    private static final int           P7_REPS       = Integer.getInteger("spike.gate.p7Repetitions", 20);
+    private static final List<String>  P7_SHAPES     = Arrays.stream(System.getProperty("spike.gate.p7Shapes", "CRASH,PAUSE,GRACEFUL").split(",")).map(String::trim)
+                                                             .filter(s -> !s.isEmpty()).toList();
+    private static final int           P7_PAUSE_S    = Integer.getInteger("spike.gate.p7PauseSeconds", 30);
+    private static final List<Integer> P7_LEASES     = ints(System.getProperty("spike.gate.p7Leases", "1,10,100,1000"));
+    private static final int           P7_IDLE_S     = Integer.getInteger("spike.gate.p7IdleSeconds", 300);
+    private static final String        P7_VIEW       = "el_test_view";
+    private static final String        P7_LOG        = "el_test_progress_log";
+
+    /** One §10.1 repetition: ms from the kill or stop to the standby's claim and first handled event per model, replays, landed writes */
+    record Takeover(double claimMs, double periodicMs, double pagesMs, long periodicReplayed, long pagesRehandled, long pagesDuplicated, long landed, boolean lossSeen) {
+    }
+
+    /**
+     * §10.1: a forked owner ({@code LeaseOwnerProcess} on the default lease settings: one FRESH periodic and one CONTIGUOUS
+     * in-transaction exclusive subscription) and an in-JVM standby with the same two; a writer here at 100 ev/s. Shapes:
+     * {@code CRASH} (SIGKILL), {@code PAUSE} (SIGSTOP for 30 s, then SIGCONT) and {@code GRACEFUL} (standard input
+     * closed: the child stops its subscriptions, which releases). Each repetition uses subscriber names of its own and
+     * starts at the head, waits for the owner to handle 20 events of each, then waits a random 0-4 s so the action falls at
+     * a random point of the renewal cycle. Takeover time: from the action to the standby's first handled event, per
+     * model ({@code nanoTime}, shared by every process on Linux). Replays: PERIODIC, standby deliveries at or below the
+     * owner's last handled event; in-transaction, standby handler calls at or below the owner's last handler call
+     * (re-handled, rolled back by the owner) and at or below its last committed view row (duplicated effects). Landed
+     * writes: progress-log versions under the owner's fence that committed after the standby's claim (I5; the pause
+     * shape's pass line). A fresh container per shape and run.
+     */
+    @Test
+    void takeoverTime() throws Exception {
+        header(P7_TAKEOVER, "TAKEOVER TIME", "shapes " + P7_SHAPES + ", " + P7_REPS + " repetitions each, pause " + P7_PAUSE_S
+                + " s, default lease settings (15 s / 4 s / 7 s), forked owner, in-JVM standby, writer 100 ev/s");
+        for (int run = 1; run <= RUNS; run++) {
+            for (var shape : P7_SHAPES) {
+                takeoverArm(run, shape);
+            }
+        }
+    }
+
+    private void takeoverArm(int run, String shape) throws Exception {
+        try (var db = SpikeDb.start("tko_r" + run + "_" + shape.toLowerCase(Locale.ROOT), 100); var app = new App(db, EventLogSettings.defaults(), 20)) {
+            try (var c = db.connect("writer"); var st = c.createStatement()) {
+                st.execute("CREATE TABLE " + P7_VIEW + " (global_order bigint NOT NULL, writer text NOT NULL)");
+                st.execute("CREATE TABLE " + P7_LOG + " (id bigserial PRIMARY KEY, subscriber text, resume_from bigint, lease_fence bigint, lease_owner text, at timestamptz)");
+                st.execute("CREATE OR REPLACE FUNCTION el_test_progress_log_row() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO " + P7_LOG
+                                   + " (subscriber, resume_from, lease_fence, lease_owner, at) VALUES (NEW.subscriber, NEW.resume_from, NEW.lease_fence, NEW.lease_owner, clock_timestamp()); "
+                                   + "RETURN NEW; END $$");
+                st.execute("CREATE TRIGGER el_test_progress_log AFTER INSERT OR UPDATE ON el_progress FOR EACH ROW EXECUTE FUNCTION el_test_progress_log_row()");
+            }
+            var writing   = new AtomicBoolean(true);
+            var scheduler = Executors.newSingleThreadScheduledExecutor();
+            scheduler.scheduleAtFixedRate(() -> {
+                if (!writing.get()) return;
+                try {
+                    app.appendNewStream(1, false);
+                    app.eventLog.afterCommit(List.of(TYPE));
+                } catch (Exception e) {
+                    // keep the schedule alive
+                }
+            }, 0, 10_000, TimeUnit.MICROSECONDS);
+            var reps = new ArrayList<Takeover>();
+            for (int rep = 1; rep <= P7_REPS; rep++) {
+                var t = takeoverRep(db, app, shape, rep);
+                reps.add(t);
+                SpikeDb.record(P7_TAKEOVER, String.format("  rep run %d | %-8s | %2d | claim %.0f ms | first handled PERIODIC %.0f ms, IN_TX %.0f ms | replayed PERIODIC %d | IN_TX re-handled %d, "
+                                                                  + "duplicated %d | landed writes by the old owner %d | loss seen %s",
+                                                          run, shape, rep, t.claimMs(), t.periodicMs(), t.pagesMs(), t.periodicReplayed(), t.pagesRehandled(), t.pagesDuplicated(),
+                                                          t.landed(), t.lossSeen()));
+            }
+            writing.set(false);
+            scheduler.shutdown();
+            scheduler.awaitTermination(10, TimeUnit.SECONDS);
+            var periodic = reps.stream().mapToDouble(Takeover::periodicMs).sorted().toArray();
+            var pages    = reps.stream().mapToDouble(Takeover::pagesMs).sorted().toArray();
+            var claims   = reps.stream().mapToDouble(Takeover::claimMs).sorted().toArray();
+            SpikeDb.record(P7_TAKEOVER, String.format("TAKEOVER run %d | %-8s | %d reps | to first handled PERIODIC p50 %.0f p100 %.0f ms | IN_TX p50 %.0f p100 %.0f ms | to claim p50 %.0f p100 %.0f ms | "
+                                                              + "replayed PERIODIC mean %.1f max %d | IN_TX re-handled mean %.1f max %d, duplicated %d | landed writes %d | loss seen %d of %d",
+                                                      run, shape, reps.size(), periodic[(periodic.length - 1) / 2], periodic[periodic.length - 1], pages[(pages.length - 1) / 2],
+                                                      pages[pages.length - 1], claims[(claims.length - 1) / 2], claims[claims.length - 1],
+                                                      reps.stream().mapToLong(Takeover::periodicReplayed).average().orElse(0), reps.stream().mapToLong(Takeover::periodicReplayed).max().orElse(0),
+                                                      reps.stream().mapToLong(Takeover::pagesRehandled).average().orElse(0), reps.stream().mapToLong(Takeover::pagesRehandled).max().orElse(0),
+                                                      reps.stream().mapToLong(Takeover::pagesDuplicated).sum(), reps.stream().mapToLong(Takeover::landed).sum(),
+                                                      reps.stream().filter(Takeover::lossSeen).count(), reps.size()));
+        }
+    }
+
+    private Takeover takeoverRep(SpikeDb db, App app, String shape, int rep) throws Exception {
+        var node         = "owner-" + rep;
+        var periodicName = "tk-p-" + rep;
+        var pagesName    = "tk-c-" + rep;
+        long head = SpikeDb.queryLong(db.observer, "SELECT coalesce(max(global_order), 0) FROM " + app.tables.eventTable());
+        var lines = new ConcurrentLinkedQueue<String[]>();
+        var child = GateSpikeAccess.startLeaseOwner(db.jdbcUrl(), db.role("writer"), db.password("writer"), node, periodicName, pagesName, head + 1, lines::add);
+        Subscription sp = null, sc = null;
+        try {
+            await(Duration.ofSeconds(60), () -> childFence(lines, periodicName) != null && childFence(lines, pagesName) != null);
+            long oldFenceP = childFence(lines, periodicName), oldFenceC = childFence(lines, pagesName);
+            var standbyP = new ConcurrentLinkedQueue<long[]>();
+            var standbyC = new ConcurrentLinkedQueue<long[]>();
+            sp = app.eventLog.subscribeExclusive(periodicName, TYPE, head + 1, e -> standbyP.add(new long[]{e.globalOrder(), System.nanoTime()}));
+            sc = app.eventLog.subscribeExclusive(pagesName, TYPE, head + 1, Subscription.ConsistencyMode.CONTIGUOUS, (page, connection) -> {
+                long now = System.nanoTime();
+                for (var e : page) standbyC.add(new long[]{e.globalOrder(), now});
+            });
+            await(Duration.ofSeconds(60), () -> count(lines, "H") >= 20 && count(lines, "P") >= 20);
+            Thread.sleep(ThreadLocalRandom.current().nextLong(EventLogSettings.defaults().leaseRenewalInterval().toMillis()));
+            long t0 = System.nanoTime();
+            switch (shape) {
+                case "CRASH" -> {
+                    child.destroyForcibly();
+                    child.waitFor(30, TimeUnit.SECONDS);
+                }
+                case "GRACEFUL" -> {
+                    child.getOutputStream().close();
+                    child.waitFor(60, TimeUnit.SECONDS);
+                }
+                case "PAUSE" -> signal(child, "STOP");
+                default -> throw new IllegalArgumentException(shape);
+            }
+            await(Duration.ofSeconds(90), () -> !standbyP.isEmpty() && !standbyC.isEmpty());
+            var lossSeen = false;
+            if (shape.equals("PAUSE")) {
+                Thread.sleep(Math.max(0, Duration.ofSeconds(P7_PAUSE_S).toMillis() - Duration.ofNanos(System.nanoTime() - t0).toMillis()));
+                signal(child, "CONT");
+                try {
+                    await(Duration.ofSeconds(30), () -> lost(lines, periodicName) && lost(lines, pagesName));
+                    lossSeen = true;
+                } catch (IllegalStateException e) {
+                    // recorded as not seen
+                }
+                Thread.sleep(2_000); // anything the resumed owner still had in flight lands, or not, now
+                child.getOutputStream().close();
+                child.waitFor(60, TimeUnit.SECONDS);
+            }
+            Long claimedAt = app.observer.claimedAt.get(periodicName);
+            long maxChildH = lines.stream().filter(l -> l[0].equals("H")).mapToLong(l -> Long.parseLong(l[1])).max().orElse(0);
+            long maxChildP = lines.stream().filter(l -> l[0].equals("P")).mapToLong(l -> Long.parseLong(l[1])).max().orElse(0);
+            long committed = SpikeDb.queryLong(db.observer, "SELECT coalesce(max(global_order), 0) FROM " + P7_VIEW + " WHERE writer = '" + node + "'");
+            long landed    = landedWrites(db, periodicName, oldFenceP) + landedWrites(db, pagesName, oldFenceC);
+            return new Takeover(claimedAt == null ? Double.NaN : (claimedAt - t0) / 1e6,
+                                (standbyP.stream().mapToLong(a -> a[1]).min().orElseThrow() - t0) / 1e6,
+                                (standbyC.stream().mapToLong(a -> a[1]).min().orElseThrow() - t0) / 1e6,
+                                standbyP.stream().filter(a -> a[0] <= maxChildH).count(),
+                                standbyC.stream().filter(a -> a[0] <= maxChildP).count(),
+                                standbyC.stream().filter(a -> a[0] <= committed).count(),
+                                landed, lossSeen);
+        } finally {
+            if (sp != null) sp.stop();
+            if (sc != null) sc.stop();
+            if (child.isAlive()) {
+                child.destroyForcibly();
+                child.waitFor(30, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    private static Long childFence(Collection<String[]> lines, String subscriber) {
+        return lines.stream().filter(l -> l[0].equals("C") && l[1].equals(subscriber)).map(l -> Long.parseLong(l[2])).findFirst().orElse(null);
+    }
+
+    private static long count(Collection<String[]> lines, String kind) {
+        return lines.stream().filter(l -> l[0].equals(kind)).count();
+    }
+
+    private static boolean lost(Collection<String[]> lines, String subscriber) {
+        return lines.stream().anyMatch(l -> l[0].equals("L") && l[1].equals(subscriber));
+    }
+
+    /** Progress-log versions under {@code oldFence} that committed after the first version under any later fence */
+    private static long landedWrites(SpikeDb db, String subscriber, long oldFence) throws SQLException {
+        return SpikeDb.queryLong(db.observer, "SELECT count(*) FROM " + P7_LOG + " l WHERE l.subscriber = '" + subscriber + "' AND l.lease_fence = " + oldFence
+                + " AND l.id > (SELECT coalesce(min(id), 9223372036854775807) FROM " + P7_LOG + " WHERE subscriber = '" + subscriber + "' AND lease_fence > " + oldFence + ")");
+    }
+
+    private static void signal(Process process, String signal) throws Exception {
+        if (new ProcessBuilder("kill", "-" + signal, Long.toString(process.pid())).inheritIO().start().waitFor() != 0) {
+            throw new IllegalStateException("kill -" + signal + " failed");
+        }
+    }
+
+    /**
+     * §10.2: N exclusive FRESH periodic subscriptions owned by one {@link EventLog}, all idle (no events), for 5 min after
+     * every lease was claimed and a 10 s settle. Recorded: {@code LEASE_RENEW} calls, rows, server mean and max
+     * ({@code pg_stat_statements}), the keeper's renewal statement time and connection-borrow time on the client (the
+     * borrows of the {@code eventlog-lease} thread), WAL per pass ({@code pg_stat_wal}, the LSN, and the statement's own
+     * {@code wal_bytes}/{@code wal_fpi}), the HOT ratio on {@code el_progress} over the window, and the table's size.
+     */
+    @Test
+    void renewalCost() throws Exception {
+        var window = scaled(Duration.ofSeconds(P7_IDLE_S));
+        header(P7_RENEWAL, "RENEWAL COST PER N LEASES", "N " + P7_LEASES + ", idle exclusive FRESH periodic subscriptions, default lease settings, window " + window.toSeconds() + " s");
+        for (int run = 1; run <= RUNS; run++) {
+            for (int n : P7_LEASES) {
+                renewalArm(run, n, window);
+            }
+        }
+    }
+
+    private void renewalArm(int run, int n, Duration window) throws Exception {
+        try (var db = SpikeDb.start("ren_r" + run + "_" + n, 100); var app = new App(db, EventLogSettings.defaults(), 20)) {
+            long sizeEmpty = SpikeDb.queryLong(db.observer, "SELECT pg_total_relation_size('el_progress')");
+            var subscriptions = new ArrayList<Subscription>(n);
+            for (int i = 0; i < n; i++) {
+                subscriptions.add(app.eventLog.subscribeExclusive("lease-" + i, TYPE, 1, e -> {
+                }));
+            }
+            await(Duration.ofMinutes(5), () -> app.observer.claimedAt.size() >= n);
+            Thread.sleep(10_000);
+            db.resetStatistics();
+            app.observer.resetLease();
+            app.readerWait.leaseBorrows.clear();
+            var tableBefore = progressTableStats(db);
+            long walBefore  = SpikeDb.queryLong(db.observer, "SELECT wal_bytes::bigint FROM pg_stat_wal");
+            Thread.sleep(window.toMillis());
+            var renewals = new ArrayList<>(app.observer.renewals);
+            var borrows  = new ArrayList<>(app.readerWait.leaseBorrows);
+            long failed  = app.observer.renewalFailed.get();
+            long wal     = db.walSinceReset();
+            long walStat = SpikeDb.queryLong(db.observer, "SELECT wal_bytes::bigint FROM pg_stat_wal") - walBefore;
+            long renewCalls = 0, renewRows = 0, renewWal = 0, renewFpi = 0, claimCalls = 0, readerCalls = 0;
+            double renewMean = Double.NaN, renewMax = Double.NaN;
+            try (var st = db.observer.createStatement();
+                 var rs = st.executeQuery("SELECT s.query, s.calls, s.rows, s.mean_exec_time, s.max_exec_time, s.wal_bytes::bigint, s.wal_fpi FROM pg_stat_statements s "
+                                                  + "JOIN pg_roles r ON r.oid = s.userid WHERE r.rolname = '" + db.role("reader") + "' AND s.dbid = (SELECT oid FROM pg_database WHERE datname = current_database())")) {
+                while (rs.next()) {
+                    var q = rs.getString(1);
+                    readerCalls += rs.getLong(2);
+                    if (q.contains("SET lease_until = now()") && !q.contains("nextval")) {
+                        renewCalls += rs.getLong(2);
+                        renewRows += rs.getLong(3);
+                        renewMean = rs.getDouble(4);
+                        renewMax = rs.getDouble(5);
+                        renewWal += rs.getLong(6);
+                        renewFpi += rs.getLong(7);
+                    } else if (q.contains("lease_fence = nextval")) {
+                        claimCalls += rs.getLong(2);
+                    }
+                }
+            }
+            summarise(db, P7_RENEWAL, "renewal run " + run + ", N " + n);
+            Thread.sleep(11_000); // backends flush table statistics at most every 10 s when idle; the same lag applies to both snapshots
+            var tableAfter = progressTableStats(db);
+
+            long passes = renewals.size();
+            var stmt = Latencies.of(renewals.stream().map(r -> r[2]).toList());
+            var borrow = Latencies.of(borrows);
+            var pass = new ArrayList<Long>();
+            for (int i = 0; i < Math.min(renewals.size(), borrows.size()); i++) pass.add(renewals.get(i)[2] + borrows.get(i));
+            var p = Latencies.of(pass);
+            long minOwned = renewals.stream().mapToLong(r -> r[0]).min().orElse(0), minRenewed = renewals.stream().mapToLong(r -> r[1]).min().orElse(0);
+            long upd = tableAfter[0] - tableBefore[0], hot = tableAfter[1] - tableBefore[1];
+            SpikeDb.record(P7_RENEWAL, String.format("RENEWAL run %d | N %4d | passes %d (owned min %d, renewed min %d, failed %d) | LEASE_RENEW calls %d (%.2f per pass), rows %d, claims %d | "
+                                                             + "server mean %.3f max %.2f ms | client statement p50 %.2f p99 %.2f max %.2f ms | borrow p50 %.3f p99 %.3f max %.2f ms | "
+                                                             + "pass p50 %.2f p99 %.2f ms | WAL per pass: pg_stat_wal %.0f B, LSN %.0f B, statement %.0f B (FPI %d) | "
+                                                             + "el_progress n_tup_upd %d, HOT %d, HOT ratio %.3f | size %d B empty, %d B before, %d B after, %d B growth | reader statements %d (%.2f/s)",
+                                                     run, n, passes, minOwned, minRenewed, failed, renewCalls, renewCalls / (double) Math.max(1, passes), renewRows, claimCalls,
+                                                     renewMean, renewMax, stmt.p50(), stmt.p99(), stmt.max(), borrow.p50(), borrow.p99(), borrow.max(), p.p50(), p.p99(),
+                                                     walStat / (double) Math.max(1, passes), wal / (double) Math.max(1, passes), renewWal / (double) Math.max(1, renewCalls), renewFpi,
+                                                     upd, hot, hot / (double) Math.max(1, upd), sizeEmpty, tableBefore[2], tableAfter[2], tableAfter[2] - tableBefore[2], readerCalls,
+                                                     readerCalls / (window.toMillis() / 1000.0)));
+            var slow = new StringBuilder();
+            for (int i = 0; i < renewals.size(); i++) {
+                if (renewals.get(i)[2] > 100_000_000L) slow.append(slow.isEmpty() ? "" : ",").append(i + 1).append('=').append(renewals.get(i)[2] / 1_000_000);
+            }
+            SpikeDb.record(P7_RENEWAL, String.format("  passes over 100 ms (client statement): %d of %d [pass=ms: %s]", slow.isEmpty() ? 0 : slow.toString().split(",").length,
+                                                     renewals.size(), slow));
+            subscriptions.forEach(Subscription::stop);
+        }
+    }
+
+    /** {@code el_progress}: n_tup_upd, n_tup_hot_upd, pg_total_relation_size */
+    private static long[] progressTableStats(SpikeDb db) throws SQLException {
+        try (var st = db.observer.createStatement();
+             var rs = st.executeQuery("SELECT n_tup_upd, n_tup_hot_upd, pg_total_relation_size('el_progress') FROM pg_stat_user_tables WHERE relname = 'el_progress'")) {
+            rs.next();
+            return new long[]{rs.getLong(1), rs.getLong(2), rs.getLong(3)};
+        }
+    }
+
+    /**
+     * §10.3: phase-6 §7.1's steady shape at 100 ev/s (one engine, {@code afterCommit}, tier 1 off: phase 6's
+     * {@code TIER2} arm; 5 FRESH periodic and 5 CONTIGUOUS in-transaction subscriptions, 10 s warm-up, 60 s window),
+     * arms {@code NONEXCLUSIVE} (phase 6 baseline) and {@code EXCLUSIVE}; and phase-6 §7.2's append shape at 8 writers
+     * with {@code fsync=on} (2 s warm-up, 8 s window, {@code afterCommit} with the default notifier, a second engine with
+     * one listening FRESH subscription, non-exclusive or exclusive). {@code pg_stat_activity} is sampled every 5 ms for
+     * backends waiting on a heavyweight lock, and those whose statement touches {@code el_progress} are counted apart.
+     */
+    @Test
+    void leaseUnaffected() throws Exception {
+        var warmUp = scaled(Duration.ofSeconds(10));
+        var window = scaled(Duration.ofSeconds(60));
+        header(P7_UNAFFECTED, "APPEND AND DELIVERY UNAFFECTED", "steady 100 ev/s, 5 FRESH periodic + 5 CONTIGUOUS in-transaction, warm-up " + warmUp.toSeconds() + " s, window "
+                + window.toSeconds() + " s; append 8 writers fsync=on 2 s / 8 s; arms NONEXCLUSIVE/EXCLUSIVE");
+        for (int run = 1; run <= RUNS; run++) {
+            for (var exclusive : run % 2 == 1 ? new boolean[]{false, true} : new boolean[]{true, false}) {
+                unaffectedSteady(run, exclusive, warmUp, window);
+            }
+        }
+        for (int run = 1; run <= RUNS; run++) {
+            for (var exclusive : run % 2 == 1 ? new boolean[]{false, true} : new boolean[]{true, false}) {
+                unaffectedAppend(run, exclusive, scaled(Duration.ofSeconds(2)), scaled(Duration.ofSeconds(8)));
+            }
+        }
+    }
+
+    private static Subscription subscribe(EventLog log, String subscriber, boolean exclusive, Subscription.Handler handler) throws SQLException {
+        return exclusive ? log.subscribeExclusive(subscriber, TYPE, 1, handler) : log.subscribe(subscriber, TYPE, "node1", 1, handler);
+    }
+
+    private static Subscription subscribe(EventLog log, String subscriber, boolean exclusive, Subscription.PageHandler handler) throws SQLException {
+        return exclusive ? log.subscribeExclusive(subscriber, TYPE, 1, Subscription.ConsistencyMode.CONTIGUOUS, handler)
+                         : log.subscribe(subscriber, TYPE, "node1", 1, Subscription.ConsistencyMode.CONTIGUOUS, handler);
+    }
+
+    /** Samples {@code pg_stat_activity} every 5 ms: [samples, samples with a Lock wait, samples with a Lock wait on an el_progress statement] */
+    private static final class LockSampler implements AutoCloseable {
+        final AtomicLong samples = new AtomicLong(), anyLock = new AtomicLong(), progressLock = new AtomicLong();
+        private final AtomicBoolean running = new AtomicBoolean(true);
+        private final Thread        thread;
+
+        LockSampler(SpikeDb db) {
+            var sql = "SELECT count(*), count(*) FILTER (WHERE query ILIKE '%el_progress%') FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND usename IN ('"
+                    + db.role("writer") + "', '" + db.role("reader") + "')";
+            thread = Thread.ofPlatform().name("lock-sampler").start(() -> {
+                try (var st = db.observer.prepareStatement(sql)) {
+                    while (running.get()) {
+                        try (var rs = st.executeQuery()) {
+                            rs.next();
+                            if (rs.getLong(1) > 0) anyLock.incrementAndGet();
+                            if (rs.getLong(2) > 0) progressLock.incrementAndGet();
+                        }
+                        samples.incrementAndGet();
+                        Thread.sleep(5);
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            });
+        }
+
+        @Override
+        public void close() throws InterruptedException {
+            running.set(false);
+            thread.join();
+        }
+    }
+
+    private void unaffectedSteady(int run, boolean exclusive, Duration warmUp, Duration window) throws Exception {
+        var arm      = exclusive ? "EXCLUSIVE" : "NONEXCLUSIVE";
+        var settings = settings(1000).withCrossJvmWakeUp(false);
+        try (var db = SpikeDb.start("una_r" + run + "_" + arm.toLowerCase(Locale.ROOT), 100); var app = new App(db, settings, 12)) {
+            var committed = new ConcurrentHashMap<String, Long>();
+            var sinks     = new Sinks();
+            for (int i = 0; i < 5; i++) {
+                subscribe(app.eventLog, "fresh-" + i, exclusive, e -> {
+                    var at = committed.get(e.aggregateId());
+                    if (at != null) sinks.add("FRESH", System.nanoTime() - at);
+                });
+                subscribe(app.eventLog, "contiguous-" + i, exclusive, (page, connection) -> {
+                    long now = System.nanoTime();
+                    for (var e : page) {
+                        var at = committed.get(e.aggregateId());
+                        if (at != null) sinks.add("CONTIGUOUS", now - at);
+                    }
+                });
+            }
+            var measuring = new AtomicBoolean();
+            var appended  = new AtomicLong();
+            var scheduler = Executors.newSingleThreadScheduledExecutor();
+            scheduler.scheduleAtFixedRate(() -> {
+                try (var c = app.writerWait.getConnection()) {
+                    var id      = UUID.randomUUID().toString();
+                    var measure = measuring.get();
+                    c.setAutoCommit(false);
+                    appendTo(app.eventLog, c, TYPE, id);
+                    if (measure) committed.put(id, System.nanoTime());
+                    c.commit();
+                    if (measure) {
+                        committed.put(id, System.nanoTime());
+                        appended.incrementAndGet();
+                    }
+                    app.eventLog.afterCommit(List.of(TYPE));
+                } catch (SQLException e) {
+                    throw new IllegalStateException(e);
+                }
+            }, 0, 10_000, TimeUnit.MICROSECONDS);
+            Thread.sleep(warmUp.toMillis());
+            db.resetStatistics();
+            app.observer.resetLease();
+            Summary s;
+            LockSampler locks;
+            try (var sampler = new LockSampler(db)) {
+                locks = sampler;
+                measuring.set(true);
+                Thread.sleep(window.toMillis());
+                measuring.set(false);
+                s = summarise(db, P7_UNAFFECTED, "steady run " + run + ": " + arm);
+            }
+            long renewals = app.observer.renewals.size();
+            scheduler.shutdown();
+            scheduler.awaitTermination(10, TimeUnit.SECONDS);
+            long events = appended.get();
+            try {
+                await(Duration.ofSeconds(30), () -> sinks.total.get() >= events * 10);
+            } catch (IllegalStateException e) {
+                SpikeDb.record(P7_UNAFFECTED, "  !! " + arm + ": " + sinks.total.get() + " of " + events * 10 + " samples after 30 s");
+            }
+            long leaseStatements = 0, idleTimeout = 0;
+            for (var st : db.statements()) {
+                if (!st.role().equals("reader")) continue;
+                if (st.query().contains("lease_until = now()")) leaseStatements += st.calls();
+                if (st.query().contains("idle_in_transaction_session_timeout")) idleTimeout += st.calls();
+            }
+            double seconds = window.toMillis() / 1000.0;
+            var line = new StringBuilder(String.format("STEADY run %d | %-12s | 100 ev/s | appended %d |", run, arm, events));
+            for (var key : new TreeSet<>(sinks.byKey.keySet())) {
+                var l = Latencies.of(sinks.byKey.get(key));
+                line.append(String.format(" %s p50 %.2f p99 %.2f max %.1f ms (%d) |", key, l.p50(), l.p99(), l.max(), sinks.byKey.get(key).size()));
+            }
+            long deliveries = events * 10;
+            line.append(String.format(" READER STATEMENTS PER DELIVERY %.3f (non-utility %.3f) | lease statements %d (%.3f/s), renewal passes %d | page idle-timeout statements %d (%.3f per delivery) | "
+                                              + "writer statements per event %.2f | WAL %.0f B/event | Lock waits in %d of %d samples, on el_progress statements %d",
+                                      s.calls("reader") / (double) deliveries, s.nonUtility("reader") / (double) deliveries, leaseStatements, leaseStatements / seconds, renewals,
+                                      idleTimeout, idleTimeout / (double) Math.max(1, deliveries), s.calls("writer") / (double) Math.max(1, events), s.wal() / (double) Math.max(1, events),
+                                      locks.anyLock.get(), locks.samples.get(), locks.progressLock.get()));
+            SpikeDb.record(P7_UNAFFECTED, line.toString());
+        }
+    }
+
+    private void unaffectedAppend(int run, boolean exclusive, Duration warmUp, Duration window) throws Exception {
+        var arm = exclusive ? "EXCLUSIVE" : "NONEXCLUSIVE";
+        int writers = 8;
+        try (var db = SpikeDb.start("unaa_r" + run + "_" + arm.toLowerCase(Locale.ROOT), 100, true); var app = new App(db, settings(1000), 4)) {
+            var listenerPool = db.pool("reader", 4);
+            var listening    = engine(listenerPool, settings(1000), new Counters());
+            subscribe(listening, "listening", exclusive, e -> {
+            });
+            var measuring = new AtomicBoolean();
+            var stop      = new AtomicBoolean();
+            var commits   = new ConcurrentLinkedQueue<Long>();
+            var pool      = Executors.newFixedThreadPool(writers);
+            for (int w = 0; w < writers; w++) {
+                pool.submit(() -> {
+                    while (!stop.get()) {
+                        try (var c = app.writerPool.getConnection()) {
+                            c.setAutoCommit(false);
+                            appendTo(app.eventLog, c, TYPE, UUID.randomUUID().toString());
+                            long t0 = System.nanoTime();
+                            c.commit();
+                            long took = System.nanoTime() - t0;
+                            app.eventLog.afterCommit(List.of(TYPE));
+                            if (measuring.get()) commits.add(took);
+                        } catch (SQLException e) {
+                            throw new IllegalStateException(e);
+                        }
+                    }
+                    return null;
+                });
+            }
+            Thread.sleep(warmUp.toMillis());
+            db.resetStatistics();
+            LockSampler locks;
+            try (var sampler = new LockSampler(db)) {
+                locks = sampler;
+                measuring.set(true);
+                Thread.sleep(window.toMillis());
+                measuring.set(false);
+            }
+            stop.set(true);
+            pool.shutdown();
+            pool.awaitTermination(30, TimeUnit.SECONDS);
+            var c = Latencies.of(commits);
+            double seconds = window.toMillis() / 1000.0;
+            SpikeDb.record(P7_UNAFFECTED, String.format("APPEND run %d | fsync on | %-12s | %d writers | APPENDS/S %.0f | commit p50 %.3f p99 %.3f max %.1f ms | Lock waits in %d of %d samples, on el_progress statements %d",
+                                                        run, arm, writers, commits.size() / seconds, c.p50(), c.p99(), c.max(), locks.anyLock.get(), locks.samples.get(),
+                                                        locks.progressLock.get()));
+            listening.stop();
+            listenerPool.close();
+        }
+    }
+
     // ------------------------------------------------------------------ harness
 
     private static EventLogSettings settings(int backstopMillis) {
@@ -1660,9 +2151,13 @@ class EventLogGateSpikeIT {
             return count.get();
         }
 
+        /** Phase 7 §10.2: the borrows of the lease keeper's thread, ns */
+        final ConcurrentLinkedQueue<Long> leaseBorrows = new ConcurrentLinkedQueue<>();
+
         private Connection timed(long started, Connection connection) {
             count.incrementAndGet();
             long waited = System.nanoTime() - started;
+            if ("eventlog-lease".equals(Thread.currentThread().getName())) leaseBorrows.add(waited);
             runMaxNanos.accumulateAndGet(waited, Math::max);
             windowMaxNanos.accumulateAndGet(waited, Math::max);
             return connection;
@@ -1751,6 +2246,30 @@ class EventLogGateSpikeIT {
         private final AtomicLong        handled  = new AtomicLong();
         private final AtomicLong        duplicates = new AtomicLong();
         private volatile boolean        counting   = true;
+        // phase 7: leases
+        final Map<String, Long>                 claimedAt     = new ConcurrentHashMap<>();
+        final ConcurrentLinkedQueue<long[]>     renewals      = new ConcurrentLinkedQueue<>(); // owned, renewed, nanos
+        final AtomicLong                        renewalFailed = new AtomicLong();
+
+        void resetLease() {
+            renewals.clear();
+            renewalFailed.set(0);
+        }
+
+        @Override
+        public void onLeaseClaimed(String subscriber, String aggregateType, long fence) {
+            claimedAt.put(subscriber, System.nanoTime());
+        }
+
+        @Override
+        public void onRenewal(int owned, int renewed, long nanos) {
+            renewals.add(new long[]{owned, renewed, nanos});
+        }
+
+        @Override
+        public void onRenewalFailed(Throwable cause) {
+            renewalFailed.incrementAndGet();
+        }
 
         // delivery thread only (one subscription)
         private          String pageKind;          // "catch-up", "bridge" or null (an inbox batch)
