@@ -45,6 +45,7 @@ public record AggregateTypeTables(String aggregateType, String eventTable, Strin
     static final String STREAM_ORDER_SUFFIX     = "_stream_order";
     static final String EVENT_ID_INDEX_SUFFIX   = "_event_id";
     static final String EVENT_TYPE_INDEX_SUFFIX = "_type_order";
+    static final String TENANT_INDEX_SUFFIX     = "_tenant_order";
 
     /**
      * The longest aggregate type whose derived names all fit in {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH}
@@ -76,6 +77,16 @@ public record AggregateTypeTables(String aggregateType, String eventTable, Strin
      */
     public String eventTypeIndex() {
         var name = eventTable + EVENT_TYPE_INDEX_SUFFIX;
+        PostgresqlUtil.checkIsValidTableOrColumnName(name, "aggregate type '" + aggregateType + "'");
+        return name;
+    }
+
+    /**
+     * @return {@code el_<type>_events_tenant_order}, the opt-in {@code (tenant, global_order)} index (phase 8 §15
+     * question 7); as long as {@link #streamOrderConstraint()}, so it fits whenever the other names do
+     */
+    public String tenantIndex() {
+        var name = eventTable + TENANT_INDEX_SUFFIX;
         PostgresqlUtil.checkIsValidTableOrColumnName(name, "aggregate type '" + aggregateType + "'");
         return name;
     }

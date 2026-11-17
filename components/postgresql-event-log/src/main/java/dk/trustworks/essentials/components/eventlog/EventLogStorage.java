@@ -318,12 +318,9 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
      * re-reads holes by {@code UNION ALL}, never {@code OR} (P0.11), and reads no running set. {@code byOrders}:
      * {@code bigint[]} global orders - a parked aggregate's events (phase 4 §4.5).
      * <p>
-     * Phase 5's filtered statements (§2.2, §2.3, §3.2) take a {@code smallint[]} of event type ids after the range bounds:
-     * {@code filteredRangeRead} lower, upper, ids, limit; {@code filteredRangeReadPk} the same with
-     * {@code event_type + 0}, which keeps the type index out of the plan (the density switch); {@code skipAheadProbe}
-     * ids, lower, upper - the first matching order, issued only while the type index is valid; {@code filteredBridgePage}
-     * lower, upper, ids, limit, holes, ids; {@code filteredBridgePageWithRanges} plus range lows, highs, ids. Both bridge
-     * branches carry the type predicate.
+     * Phase 5's filtered statements (§2.2, §2.3, §3.2) and phase 8's tenant filter (§15, question 7) are the three
+     * {@link FilterStatements} sets {@code typeFilter}, {@code tenantFilter} and {@code typeAndTenantFilter}; each binds
+     * its filter parameters where {@link FilterStatements} says.
      * <p>
      * Phase 6's tail with re-read (§4.2), the shape a woken read and every statement of a multi-type flush use when holes
      * are outstanding: {@code rereadTail} cursor, limit, {@code bigint[]} holes; {@code rereadTailWithRanges} plus range
@@ -331,7 +328,7 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
      */
     record TailStatements(String head, String plainTail, String probe, String probeWithRanges, String holeRead, String runningSet,
                           String probeWithoutHoleReread, String rangeRead, String bridgePage, String bridgePageWithRanges, String byOrders,
-                          String filteredRangeRead, String filteredRangeReadPk, String skipAheadProbe, String filteredBridgePage, String filteredBridgePageWithRanges,
+                          FilterStatements typeFilter, FilterStatements tenantFilter, FilterStatements typeAndTenantFilter,
                           String rereadTail, String rereadTailWithRanges) {
         static TailStatements of(String relation) {
             var tail   = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] AS running FROM " + relation + " WHERE global_order > ? ORDER BY global_order LIMIT ?)";
@@ -342,12 +339,7 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
             var range        = "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? AND global_order <= ? ORDER BY global_order LIMIT ?";
             var bridgeHoles  = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order = ANY(?::bigint[]))";
             var bridgeRanges = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " e JOIN unnest(?::bigint[], ?::bigint[]) AS r(lo, hi) ON e.global_order BETWEEN r.lo AND r.hi)";
-            var typed        = " AND event_type = ANY(?::smallint[])";
-            var filtered     = "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? AND global_order <= ?" + typed + " ORDER BY global_order LIMIT ?";
-            var filteredPk   = "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? AND global_order <= ? AND event_type + 0 = ANY(?::smallint[]) ORDER BY global_order LIMIT ?";
-            var fHoles       = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order = ANY(?::bigint[])" + typed + ")";
             var rTail        = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? ORDER BY global_order LIMIT ?)";
-            var fRanges      = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " e JOIN unnest(?::bigint[], ?::bigint[]) AS r(lo, hi) ON e.global_order BETWEEN r.lo AND r.hi WHERE e.event_type = ANY(?::smallint[]))";
             return new TailStatements(
                     "SELECT (SELECT coalesce(max(global_order), 0) FROM " + relation + "), " + RUNNING_SET,
                     "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? ORDER BY global_order LIMIT ?",
@@ -360,11 +352,9 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
                     "SELECT * FROM (\n(" + range + ")\nUNION ALL\n" + bridgeHoles + "\n) u ORDER BY u.global_order",
                     "SELECT * FROM (\n(" + range + ")\nUNION ALL\n" + bridgeHoles + "\nUNION ALL\n" + bridgeRanges + "\n) u ORDER BY u.global_order",
                     "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order = ANY(?::bigint[]) ORDER BY global_order",
-                    filtered,
-                    filteredPk,
-                    "SELECT global_order FROM " + relation + " WHERE event_type = ANY(?::smallint[]) AND global_order > ? AND global_order <= ? ORDER BY global_order LIMIT 1",
-                    "SELECT * FROM (\n(" + filtered + ")\nUNION ALL\n" + fHoles + "\n) u ORDER BY u.global_order",
-                    "SELECT * FROM (\n(" + filtered + ")\nUNION ALL\n" + fHoles + "\nUNION ALL\n" + fRanges + "\n) u ORDER BY u.global_order",
+                    FilterStatements.of(relation, true, false),
+                    FilterStatements.of(relation, false, true),
+                    FilterStatements.of(relation, true, true),
                     "SELECT * FROM (\n" + rTail + "\nUNION ALL\n" + bridgeHoles + "\n) u ORDER BY u.global_order",
                     "SELECT * FROM (\n" + rTail + "\nUNION ALL\n" + bridgeHoles + "\nUNION ALL\n" + bridgeRanges + "\n) u ORDER BY u.global_order");
         }
@@ -381,14 +371,72 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
             all.put("rangeRead", rangeRead);
             all.put("bridgePage", bridgePage);
             all.put("bridgePageWithRanges", bridgePageWithRanges);
-            all.put("filteredRangeRead", filteredRangeRead);
-            all.put("filteredRangeReadPk", filteredRangeReadPk);
-            all.put("skipAheadProbe", skipAheadProbe);
-            all.put("filteredBridgePage", filteredBridgePage);
-            all.put("filteredBridgePageWithRanges", filteredBridgePageWithRanges);
+            typeFilter.putAll("", all);
+            tenantFilter.putAll("tenant.", all);
+            typeAndTenantFilter.putAll("typeAndTenant.", all);
             all.put("rereadTail", rereadTail);
             all.put("rereadTailWithRanges", rereadTailWithRanges);
             return all;
+        }
+
+        /**
+         * @param types  the subscription filters on event type
+         * @param tenant the subscription filters on tenant
+         * @return the filtered statements for that filter; {@code null} without either
+         */
+        FilterStatements filter(boolean types, boolean tenant) {
+            return types ? tenant ? typeAndTenantFilter : typeFilter : tenant ? tenantFilter : null;
+        }
+    }
+
+    /**
+     * The filtered catch-up and bridge statements of one filter shape (phase 5 §2.2, §2.3, §3.2; phase 8 §15 question 7).
+     * The filter predicate {@code F} is {@code event_type = ANY(?::smallint[])} (the event type ids), {@code tenant = ?},
+     * or both, ids first; every place below that says {@code F} binds those parameters in that order.
+     * <ul>
+     *     <li>{@code rangeRead}: lower (exclusive), upper (inclusive), {@code F}, limit</li>
+     *     <li>{@code rangeReadPk}: the same with {@code event_type + 0} and {@code tenant || ''}, which keep the type and
+     *     tenant indexes out of the plan (the density switch)</li>
+     *     <li>{@code skipAheadProbe}: {@code F}, lower, upper - the first matching order; issued only while an index
+     *     that serves {@code F} is valid</li>
+     *     <li>{@code bridgePage}: lower, upper, {@code F}, limit, {@code bigint[]} holes, {@code F}</li>
+     *     <li>{@code bridgePageWithRanges}: as {@code bridgePage}, then range lows, highs, {@code F}. Every bridge branch
+     *     carries {@code F}</li>
+     * </ul>
+     */
+    record FilterStatements(boolean types, boolean tenant, String rangeRead, String rangeReadPk, String skipAheadProbe, String bridgePage, String bridgePageWithRanges) {
+        static FilterStatements of(String relation, boolean types, boolean tenant) {
+            if (!types && !tenant) {
+                throw new IllegalArgumentException("A filter statement set filters on event type, tenant or both");
+            }
+            var predicate   = predicate("", types, tenant, false);
+            var predicatePk = predicate("", types, tenant, true);
+            var range       = "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? AND global_order <= ? AND " + predicate + " ORDER BY global_order LIMIT ?";
+            var rangePk     = "SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order > ? AND global_order <= ? AND " + predicatePk + " ORDER BY global_order LIMIT ?";
+            var holes       = "(SELECT " + EVENT_COLUMNS + " FROM " + relation + " WHERE global_order = ANY(?::bigint[]) AND " + predicate + ")";
+            // The tenant predicate filters the joined rows behind an OFFSET 0 fence: inside the join, a tenant the
+            // statistics think rare (e.g. a column of nulls) makes a generic plan walk the table instead of the ranges
+            var join        = "SELECT " + EVENT_COLUMNS + " FROM " + relation + " e JOIN unnest(?::bigint[], ?::bigint[]) AS r(lo, hi) ON e.global_order BETWEEN r.lo AND r.hi" +
+                    (types ? " WHERE " + predicate("e.", true, false, false) : "");
+            var ranges      = tenant ? "(SELECT * FROM (" + join + " OFFSET 0) f WHERE " + predicate("f.", false, true, false) + ")" : "(" + join + ")";
+            return new FilterStatements(types, tenant, range, rangePk,
+                                        "SELECT global_order FROM " + relation + " WHERE " + predicate + " AND global_order > ? AND global_order <= ? ORDER BY global_order LIMIT 1",
+                                        "SELECT * FROM (\n(" + range + ")\nUNION ALL\n" + holes + "\n) u ORDER BY u.global_order",
+                                        "SELECT * FROM (\n(" + range + ")\nUNION ALL\n" + holes + "\nUNION ALL\n" + ranges + "\n) u ORDER BY u.global_order");
+        }
+
+        private static String predicate(String alias, boolean types, boolean tenant, boolean primaryKey) {
+            var typed    = alias + (primaryKey ? "event_type + 0" : "event_type") + " = ANY(?::smallint[])";
+            var tenanted = alias + (primaryKey ? "tenant || ''" : "tenant") + " = ?";
+            return types ? tenant ? typed + " AND " + tenanted : typed : tenanted;
+        }
+
+        private void putAll(String prefix, java.util.Map<String, String> all) {
+            all.put(prefix + "filteredRangeRead", rangeRead);
+            all.put(prefix + "filteredRangeReadPk", rangeReadPk);
+            all.put(prefix + "skipAheadProbe", skipAheadProbe);
+            all.put(prefix + "filteredBridgePage", bridgePage);
+            all.put(prefix + "filteredBridgePageWithRanges", bridgePageWithRanges);
         }
     }
 

@@ -114,6 +114,11 @@ enum WatermarkMutant {
     TYPE_IDS_BEFORE_CEILING,
     /** A filtered {@code FRESH} bridge page marks the attach holes handled with its covered range (§2.3, I13) */
     FILTERED_BRIDGE_MARKS_HOLES,
+    /**
+     * A filtered {@code FRESH} bridge under an unknown watermark marks its covered range handled, so a value held below
+     * the head is no gap and never handed off (phase 5 §6.3; phase 8 §15 question 7, the tenant filter's bridge)
+     */
+    FILTERED_BRIDGE_MARKS_RANGE_UNDER_UNKNOWN_WATERMARK,
     /** A filtered inbox counts every row, matching or not, and stores zero-match batches whole (§2.4) */
     INBOX_COUNTS_UNMATCHED,
     /** A short filtered page advances only to its last row, not to the ceiling: it crawls (§2.2, §7.3) */

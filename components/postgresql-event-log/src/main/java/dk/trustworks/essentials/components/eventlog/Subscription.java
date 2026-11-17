@@ -123,7 +123,14 @@ final class Subscription {
     private final EventLogObserver               observer;
     // ---- phase 5 ----
     private final EventTypeFilter                filter;
+    /** Whether rows are filtered at all: on event type, on tenant, or both */
     private final boolean                        filtered;
+    /** Whether rows are filtered on event type (phase 5) */
+    private final boolean                        typeFiltered;
+    /** The tenant filter (phase 8 §15 question 7), {@code null} for every tenant */
+    private final String                         tenant;
+    /** The filtered statements of this filter's shape, {@code null} unfiltered */
+    private final EventLogStorage.FilterStatements filterStatements;
     private final CatchUpContext                 catchUp;
     private final CatchUpPermits                 permits;
     private final CatchUpWindow                  window;
@@ -216,7 +223,10 @@ final class Subscription {
         this.keeper = keeper;
         this.key = spec.key();
         this.filter = spec.filter();
-        this.filtered = !spec.filter().matchesAll();
+        this.tenant = spec.tenant();
+        this.typeFiltered = !spec.filter().matchesAll();
+        this.filtered = typeFiltered || tenant != null;
+        this.filterStatements = filtered ? statements.filter(typeFiltered, tenant != null) : null;
         this.catchUp = requireNonNull(catchUp, "No catchUp provided");
         this.permits = spec.seams().has(PERMIT_PER_EVENT_LOG) ? catchUp.perEventLog() : catchUp.shared();
         this.window = new CatchUpWindow(settings.catchUpScanWindow(), settings.catchUpScanWindowMax(), settings.catchUpPageSize());
@@ -246,8 +256,10 @@ final class Subscription {
      * database's permits (and, for mutant {@link WatermarkMutant#PERMIT_PER_EVENT_LOG}, the event log's own), and whether
      * the aggregate type's {@code (event_type, global_order)} index is valid
      */
-    record CatchUpContext(EventTypeRegistry eventTypes, CatchUpPermits shared, CatchUpPermits perEventLog, java.util.function.BooleanSupplier indexValid) {
+    record CatchUpContext(EventTypeRegistry eventTypes, CatchUpPermits shared, CatchUpPermits perEventLog, java.util.function.BooleanSupplier indexValid,
+                          java.util.function.BooleanSupplier tenantIndexValid) {
         CatchUpContext {
+            requireNonNull(tenantIndexValid, "No tenantIndexValid provided");
             requireNonNull(eventTypes, "No eventTypes provided");
             requireNonNull(shared, "No shared provided");
             requireNonNull(perEventLog, "No perEventLog provided");
@@ -264,7 +276,7 @@ final class Subscription {
      */
     record SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, ProgressModel model, PeriodicHandler handler, PageHandler pageHandler,
                             TestSeams seams, EventTypeFilter filter, boolean exclusive, PageTransactionSource source, ErrorSettings errors, String filterDigest,
-                            boolean fromHead) {
+                            boolean fromHead, String tenant) {
         SubscriptionSpec {
             requireNonNull(key, "No key provided");
             requireNonNull(filter, "No filter provided");
@@ -294,7 +306,7 @@ final class Subscription {
         SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, ProgressModel model, PeriodicHandler handler, PageHandler pageHandler,
                          TestSeams seams, EventTypeFilter filter, boolean exclusive) {
             this(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, null, null, SubscriptionDefinition.filterDigest(filter, Optional.empty()),
-                 false);
+                 false, null);
         }
 
         SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, ProgressModel model, PeriodicHandler handler, PageHandler pageHandler,
@@ -310,23 +322,29 @@ final class Subscription {
         /** @return this spec with the event-type filter {@code filter} (phase 5 §1.2) */
         SubscriptionSpec withFilter(EventTypeFilter filter) {
             return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, source, errors,
-                                        SubscriptionDefinition.filterDigest(filter, Optional.empty()), fromHead);
+                                        SubscriptionDefinition.filterDigest(filter, Optional.ofNullable(tenant)), fromHead, tenant);
+        }
+
+        /** @return this spec with the tenant filter {@code tenant} (phase 8 §15 question 7); {@code null} for every tenant */
+        SubscriptionSpec withTenant(String tenant) {
+            return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, source, errors,
+                                        SubscriptionDefinition.filterDigest(filter, Optional.ofNullable(tenant)), fromHead, tenant);
         }
 
         /** @return this spec with test seams {@code seams} */
         SubscriptionSpec withSeams(TestSeams seams) {
-            return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, source, errors, filterDigest, fromHead);
+            return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, source, errors, filterDigest, fromHead, tenant);
         }
 
         /** @return this spec with error settings {@code errors} */
         SubscriptionSpec withErrors(ErrorSettings errors) {
-            return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, source, errors, filterDigest, fromHead);
+            return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, source, errors, filterDigest, fromHead, tenant);
         }
 
         /** @return this spec as an exclusive subscription (phase 7), keyed by instance name {@code ""} */
         SubscriptionSpec asExclusive() {
             return new SubscriptionSpec(new ProgressStore.Key(key.subscriber(), key.aggregateType(), ""), initialResumeFrom, mode, model, handler, pageHandler, seams, filter,
-                                        true, source, errors, filterDigest, fromHead);
+                                        true, source, errors, filterDigest, fromHead, tenant);
         }
 
         static SubscriptionSpec periodic(ProgressStore.Key key, long initialResumeFrom, ConsistencyMode mode, PeriodicHandler handler, TestSeams seams) {
@@ -981,7 +999,7 @@ final class Subscription {
                     continue;
                 }
             }
-            var candidate = new Inbox(settings.subscriptionBufferSize(), false, filter, seams.has(INBOX_COUNTS_UNMATCHED));
+            var candidate = new Inbox(settings.subscriptionBufferSize(), false, filter, tenant, seams.has(INBOX_COUNTS_UNMATCHED));
             inbox = candidate;
             if (seams.has(BRIDGE_BEFORE_ATTACH) && state != null && !bridge(new ReaderLoop.AttachReply(true, state.cursor(), watermark, state.holes(), state.ranges()))) {
                 inbox = null;
@@ -1023,7 +1041,7 @@ final class Subscription {
      * ordinary attach
      */
     private ReaderLoop.AttachReply attachUnknown(long version) throws Exception {
-        var candidate = new Inbox(settings.subscriptionBufferSize(), false, filter, seams.has(INBOX_COUNTS_UNMATCHED));
+        var candidate = new Inbox(settings.subscriptionBufferSize(), false, filter, tenant, seams.has(INBOX_COUNTS_UNMATCHED));
         inbox = candidate;
         seams.hooks().beforeAttachRequest(key.subscriber());
         phase = Phase.ATTACHING;
@@ -1133,7 +1151,7 @@ final class Subscription {
                     }
                 }
             }
-            var typeIds = filtered ? resolveTypeIds() : null;
+            var typeIds = typeFiltered ? resolveTypeIds() : null;
             List<StoredEvent> rows = typeIds != null && typeIds.length == 0 ? List.of() : read(true, lower, Math.max(lower, cursor), rereadHoles, rereadRanges, typeIds);
             var newRows = 0;
             var highest = lower;
@@ -1156,7 +1174,7 @@ final class Subscription {
             if (!worked) {
                 return false;
             }
-            if (filtered && ceiling > lower && !reply.unknownWatermark()) {
+            if (filtered && ceiling > lower && (!reply.unknownWatermark() || seams.has(FILTERED_BRIDGE_MARKS_RANGE_UNDER_UNKNOWN_WATERMARK))) {
                 // §2.3 (not under an unknown watermark, phase 5 §6.3: a value held below the head is no attach hole, so
                 // the covered range would mark it handled; there every order not returned stays a gap and is handed off): every order of (lower, ceiling] the page did not return is non-matching or an attach hole still re-read
                 if (seams.has(FILTERED_BRIDGE_MARKS_HOLES)) {
@@ -1215,7 +1233,7 @@ final class Subscription {
                 ranges.put(gap.low(), gap.high());
             }
         }
-        var typeIds = filtered ? resolveTypeIds() : null;
+        var typeIds = typeFiltered ? resolveTypeIds() : null;
         List<StoredEvent> rows = typeIds != null && typeIds.length == 0 || seams.has(NO_REREAD_AFTER_HAND_OFF) ? List.of()
                                                                                                          : read(true, cursor, cursor, holes, ranges, typeIds);
         var worked = work(rows);
@@ -1287,7 +1305,7 @@ final class Subscription {
     private boolean work(List<StoredEvent> rows) throws Exception {
         pending.clear();
         for (var row : rows) {
-            if (filtered && !filter.matches(row.eventType())) {
+            if (filtered && !matches(row)) {
                 // §2.1, §2.4: a non-matching row is handled as a no-op
                 handled.add(row.globalOrder());
                 continue;
@@ -1356,7 +1374,7 @@ final class Subscription {
                 toPending(rows, ceiling);
                 continue;
             }
-            var candidate = new Inbox(settings.subscriptionBufferSize(), !seams.has(HELD_NOT_COUNTED), filter, seams.has(INBOX_COUNTS_UNMATCHED));
+            var candidate = new Inbox(settings.subscriptionBufferSize(), !seams.has(HELD_NOT_COUNTED), filter, tenant, seams.has(INBOX_COUNTS_UNMATCHED));
             inbox = candidate;
             seams.hooks().beforeAttachRequest(key.subscriber());
             phase = Phase.ATTACHING;
@@ -1419,7 +1437,7 @@ final class Subscription {
             receivedWatermark = Math.max(receivedWatermark, batch.watermark());
         }
         for (var row : batch.rows()) {
-            if (filtered && !filter.matches(row.eventType())) {
+            if (filtered && !matches(row)) {
                 // §2.4: dropped on receipt; R moves with W_rcv regardless. Counted only under the mutant
                 if (seams.has(INBOX_COUNTS_UNMATCHED)) {
                     counting.release(1);
@@ -2353,8 +2371,9 @@ final class Subscription {
         var started  = System.nanoTime();
         var rows     = new ArrayList<StoredEvent>();
         var plain    = holes == null || (holes.isEmpty() && ranges.isEmpty());
-        var typed    = typeIds != null;
-        var sql      = typed ? plain ? statements.filteredRangeRead() : ranges.isEmpty() ? statements.filteredBridgePage() : statements.filteredBridgePageWithRanges()
+        var typed    = filtered;
+        var f        = filterStatements;
+        var sql      = typed ? plain ? f.rangeRead() : ranges.isEmpty() ? f.bridgePage() : f.bridgePageWithRanges()
                              : plain ? statements.rangeRead() : ranges.isEmpty() ? statements.bridgePage() : statements.bridgePageWithRanges();
         acquirePermit();
         try {
@@ -2363,19 +2382,19 @@ final class Subscription {
                 statement.setLong(p++, lower);
                 statement.setLong(p++, upper);
                 if (typed) {
-                    statement.setArray(p++, connection.createArrayOf("int2", typeIds));
+                    p = bindFilter(connection, statement, p, typeIds);
                 }
                 statement.setInt(p++, settings.catchUpPageSize());
                 if (!plain) {
                     statement.setArray(p++, connection.createArrayOf("bigint", holes.toArray(Long[]::new)));
                     if (typed) {
-                        statement.setArray(p++, connection.createArrayOf("int2", typeIds));
+                        p = bindFilter(connection, statement, p, typeIds);
                     }
                     if (!ranges.isEmpty()) {
                         statement.setArray(p++, connection.createArrayOf("bigint", ranges.keySet().toArray(Long[]::new)));
                         statement.setArray(p++, connection.createArrayOf("bigint", ranges.values().toArray(Long[]::new)));
                         if (typed) {
-                            statement.setArray(p, connection.createArrayOf("int2", typeIds));
+                            bindFilter(connection, statement, p, typeIds);
                         }
                     }
                 }
@@ -2409,6 +2428,9 @@ final class Subscription {
      * Called after the ceiling is read, so every type that can occur at or below it has its id.
      */
     private Short[] resolveTypeIds() throws SQLException {
+        if (!typeFiltered) {
+            return null;
+        }
         var ids = new TreeSet<Short>();
         for (var name : filter.eventTypes()) {
             var id = catchUp.eventTypes().knownIdOf(name);
@@ -2424,7 +2446,7 @@ final class Subscription {
      * and the hold-point hook runs between the two steps; otherwise {@code null}
      */
     private Short[] typeIdsBeforeCeiling() throws Exception {
-        if (!filtered || !seams.has(TYPE_IDS_BEFORE_CEILING)) {
+        if (!typeFiltered || !seams.has(TYPE_IDS_BEFORE_CEILING)) {
             return null;
         }
         var ids = resolveTypeIds();
@@ -2448,12 +2470,14 @@ final class Subscription {
             ids = resolveTypeIds();
         }
         var dense     = window.dense();
-        var usedIndex = catchUp.indexValid().getAsBoolean() && !dense;
+        var usedIndex = !dense && ((typeFiltered && catchUp.indexValid().getAsBoolean()) || (tenant != null && catchUp.tenantIndexValid().getAsBoolean()));
         var rows      = List.<StoredEvent>of();
-        if (ids.length > 0) {
-            seams.hooks().beforeFilteredRead(key.subscriber(), lower, ceiling, Set.of(ids));
+        // A type filter none of whose types has an id yet matches nothing at or below the ceiling
+        var matchable = ids == null || ids.length > 0;
+        if (matchable) {
+            seams.hooks().beforeFilteredRead(key.subscriber(), lower, ceiling, ids == null ? Set.of() : Set.of(ids));
             try {
-                rows = readFiltered(dense ? statements.filteredRangeReadPk() : statements.filteredRangeRead(), lower, ceiling, ids);
+                rows = readFiltered(dense ? filterStatements.rangeReadPk() : filterStatements.rangeRead(), lower, ceiling, ids);
             } catch (SQLException e) {
                 if ("57014".equals(e.getSQLState())) {
                     window.afterCancel();
@@ -2470,14 +2494,14 @@ final class Subscription {
         if (!crawl) {
             window.afterRead(full, rows.size(), advanceTo - lower);
         }
-        observer.onFilteredRead(key.subscriber(), key.aggregateType(), advanceTo - lower, rows.size(), window.window(), usedIndex && ids.length > 0);
+        observer.onFilteredRead(key.subscriber(), key.aggregateType(), advanceTo - lower, rows.size(), window.window(), usedIndex && matchable);
         if (!full && !crawl) {
             if (seams.has(FILTERED_CATCH_UP_TO_CURSOR)) {
                 var state = type.state();
                 if (state != null) {
                     advanceTo = Math.max(advanceTo, state.cursor());
                 }
-            } else if (advanceTo < finalOrder && usedIndex && ids.length > 0) {
+            } else if (advanceTo < finalOrder && usedIndex && matchable) {
                 var next = skipAhead(ids, advanceTo, finalOrder);
                 advanceTo = next == null ? finalOrder : Math.max(advanceTo, next - 1);
             }
@@ -2492,8 +2516,8 @@ final class Subscription {
         try (var connection = loop.dataSource().getConnection(); var statement = connection.prepareStatement(sql)) {
             statement.setLong(1, lower);
             statement.setLong(2, ceiling);
-            statement.setArray(3, connection.createArrayOf("int2", ids));
-            statement.setInt(4, settings.catchUpPageSize());
+            var p = bindFilter(connection, statement, 3, ids);
+            statement.setInt(p, settings.catchUpPageSize());
             try (var resultSet = statement.executeQuery()) {
                 while (resultSet.next()) {
                     rows.add(mapper.map(resultSet));
@@ -2509,16 +2533,37 @@ final class Subscription {
     /** §3.2: the first matching order in {@code (lower, upper]}, or {@code null} */
     private Long skipAhead(Short[] ids, long lower, long upper) throws SQLException, InterruptedException {
         acquirePermit();
-        try (var connection = loop.dataSource().getConnection(); var statement = connection.prepareStatement(statements.skipAheadProbe())) {
-            statement.setArray(1, connection.createArrayOf("int2", ids));
-            statement.setLong(2, lower);
-            statement.setLong(3, upper);
+        try (var connection = loop.dataSource().getConnection(); var statement = connection.prepareStatement(filterStatements.skipAheadProbe())) {
+            var p = bindFilter(connection, statement, 1, ids);
+            statement.setLong(p++, lower);
+            statement.setLong(p, upper);
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next() ? resultSet.getLong(1) : null;
             }
         } finally {
             releasePermit(false);
         }
+    }
+
+    /**
+     * Bind the filter predicate's parameters at {@code p}: the type ids when the filter has event types, then the tenant
+     * when it has one ({@link EventLogStorage.FilterStatements})
+     *
+     * @return the next parameter index
+     */
+    private int bindFilter(java.sql.Connection connection, java.sql.PreparedStatement statement, int p, Short[] typeIds) throws SQLException {
+        if (typeFiltered) {
+            statement.setArray(p++, connection.createArrayOf("int2", typeIds));
+        }
+        if (tenant != null) {
+            statement.setString(p++, tenant);
+        }
+        return p;
+    }
+
+    /** @return whether {@code row} passes the filter in memory: its event type, and its tenant (phase 8 §15 question 7) */
+    private boolean matches(StoredEvent row) {
+        return filter.matches(row.eventType()) && (tenant == null || tenant.equals(row.tenant()));
     }
 
     /** §4.2: before a covered statement borrows its connection. Fair, interruptible */

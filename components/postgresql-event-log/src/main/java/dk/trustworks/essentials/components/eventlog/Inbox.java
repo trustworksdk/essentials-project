@@ -72,6 +72,7 @@ final class Inbox {
     private final boolean                countUntilReleased;
     /** Phase 5 §2.4: only rows that pass count; a batch with none is stored as watermark-only */
     private final EventTypeFilter        filter;
+    private final String                 tenant;
     /** Mutant {@link WatermarkMutant#INBOX_COUNTS_UNMATCHED}: every row counts, as without a filter */
     private final boolean                countUnmatched;
     private final ReentrantLock          lock     = new ReentrantLock();
@@ -103,21 +104,30 @@ final class Inbox {
      * @param countUnmatched mutant {@link WatermarkMutant#INBOX_COUNTS_UNMATCHED}
      */
     Inbox(int capacity, boolean countUntilReleased, EventTypeFilter filter, boolean countUnmatched) {
+        this(capacity, countUntilReleased, filter, null, countUnmatched);
+    }
+
+    /**
+     * @param tenant the subscription's tenant filter (phase 8 §15 question 7), {@code null} for every tenant: a row of
+     *               another tenant does not match
+     */
+    Inbox(int capacity, boolean countUntilReleased, EventTypeFilter filter, String tenant, boolean countUnmatched) {
         requireTrue(capacity > 0, "capacity must be > 0");
         this.capacity = capacity;
         this.countUntilReleased = countUntilReleased;
         this.filter = requireNonNull(filter, "No filter provided");
         this.countUnmatched = countUnmatched;
+        this.tenant = tenant;
     }
 
     /** @return the rows of {@code batch} that count against the bound */
     int counted(Batch batch) {
-        if (filter.matchesAll() || countUnmatched) {
+        if ((filter.matchesAll() && tenant == null) || countUnmatched) {
             return batch.size();
         }
         var n = 0;
         for (var row : batch.rows()) {
-            if (filter.matches(row.eventType())) {
+            if (filter.matches(row.eventType()) && (tenant == null || tenant.equals(row.tenant()))) {
                 n++;
             }
         }

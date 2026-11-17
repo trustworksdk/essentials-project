@@ -52,6 +52,7 @@ public final class EventLog {
     private final List<Subscription>                             subscriptions  = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile boolean                                          started;
     private final EventTypeIndex                                      eventTypeIndex;
+    private final EventTypeIndex                                      tenantIndex;
     /** The database's shared catch-up permits (phase 5 §4), and this event log's own for the per-event-log mutant */
     private volatile CatchUpPermits                                   permits;
     private volatile CatchUpPermits                                   ownPermits;
@@ -88,6 +89,7 @@ public final class EventLog {
         this.ddl = requireNonNull(ddl, "No ddl provided");
         this.eventTypes = new EventTypeRegistry(dataSource);
         this.eventTypeIndex = new EventTypeIndex(dataSource, createsSchema);
+        this.tenantIndex = new EventTypeIndex(dataSource, createsSchema, EventTypeIndex.Kind.TENANT);
         this.instance = newInstanceId();
         this.admin = new DatabaseEventLogAdmin(dataSource, settings, progressStore, () -> subscriptions, () -> adminSeams);
         this.leaseKeeper = new LeaseKeeper(dataSource, settings, observer, settings.nodeName().isEmpty() ? instance : settings.nodeName() + "/" + instance, () -> leaseSeams);
@@ -278,8 +280,9 @@ public final class EventLog {
     }
 
     /**
-     * The package-private spec of a definition: the seams-free path every test seam path shares. The tenant filter is
-     * applied in memory around the handler (phase 8 §2.6): an event of another tenant counts as handled without reaching it
+     * The package-private spec of a definition: the seams-free path every test seam path shares. The tenant filter goes
+     * into the spec beside the event-type filter (phase 8 §15 question 7): in SQL on catch-up and bridge reads, in memory
+     * on live batches; an event of another tenant counts as handled without reaching the handler
      */
     static Subscription.SubscriptionSpec spec(SubscriptionDefinition definition, PeriodicHandler periodic, PageHandler page, PageTransactionSource source) {
         requireNonNull(definition, "No definition provided");
@@ -288,27 +291,9 @@ public final class EventLog {
         var fromHead  = definition.startFrom() instanceof StartFrom.Head;
         var initial   = definition.startFrom() instanceof StartFrom.GlobalOrder order ? order.value() : 1;
         var tenant    = definition.tenant().orElse(null);
-        if (tenant != null) {
-            if (periodic != null) {
-                var inner = periodic;
-                periodic = event -> {
-                    if (tenant.equals(event.tenant())) {
-                        inner.handle(event);
-                    }
-                };
-            } else {
-                var inner = page;
-                page = (events, transaction) -> {
-                    var mine = events.stream().filter(event -> tenant.equals(event.tenant())).toList();
-                    if (!mine.isEmpty()) {
-                        inner.handle(mine, transaction);
-                    }
-                };
-            }
-        }
         var model = periodic != null ? Subscription.ProgressModel.PERIODIC : Subscription.ProgressModel.IN_HANDLER_TRANSACTION;
         return new Subscription.SubscriptionSpec(key, initial, definition.consistency(), model, periodic, page, TestSeams.NONE, definition.eventTypes(), exclusive, source,
-                                                 definition.errors().orElse(null), definition.filterDigest(), fromHead);
+                                                 definition.errors().orElse(null), definition.filterDigest(), fromHead, tenant);
     }
 
     /** §2.4: a source on another database would make the page's progress non-atomic with its output */
@@ -388,7 +373,11 @@ public final class EventLog {
         if (settings.eventTypeIndexed().contains(aggregateType)) {
             eventTypeIndex.refresh(type.tables);
         }
-        var catchUp       = new Subscription.CatchUpContext(eventTypes, permits, ownPermits, () -> eventTypeIndex.valid(aggregateType));
+        if (spec.tenant() != null && settings.tenantIndexed().contains(aggregateType)) {
+            tenantIndex.refresh(type.tables);
+        }
+        var catchUp       = new Subscription.CatchUpContext(eventTypes, permits, ownPermits, () -> eventTypeIndex.valid(aggregateType),
+                                                            () -> tenantIndex.valid(aggregateType));
         Lease lease = null;
         if (spec.exclusive()) {
             for (var running : subscriptions) {
@@ -417,6 +406,11 @@ public final class EventLog {
     /** The opt-in event-type index, for tests */
     EventTypeIndex eventTypeIndex() {
         return eventTypeIndex;
+    }
+
+    /** The opt-in tenant index (phase 8 §15 question 7), for tests */
+    EventTypeIndex tenantIndex() {
+        return tenantIndex;
     }
 
     /** The shared catch-up permits of this event log's database, for tests */
@@ -452,8 +446,13 @@ public final class EventLog {
         }
         ddl.execute(tables, EventLogSchemaContributor.aggregateTypeStatements(tables));
         var registered = new RegisteredAggregateType(tables);
-        if (aggregateTypes.putIfAbsent(aggregateType, registered) == null && settings.eventTypeIndexed().contains(aggregateType)) {
-            eventTypeIndex.ensure(tables);
+        if (aggregateTypes.putIfAbsent(aggregateType, registered) == null) {
+            if (settings.eventTypeIndexed().contains(aggregateType)) {
+                eventTypeIndex.ensure(tables);
+            }
+            if (settings.tenantIndexed().contains(aggregateType)) {
+                tenantIndex.ensure(tables);
+            }
         }
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement("SELECT to_regclass(?) IS NOT NULL")) {

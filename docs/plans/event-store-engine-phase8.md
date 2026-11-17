@@ -668,4 +668,21 @@ genuine design forks.
 - **Tenant filter (question 7), decided by the maintainer 2026-11-17:** in SQL as well, not in memory only. A
   `tenant = ?` predicate on catch-up and bridge reads, in memory on live batches (the event-type filter's split), with an
   optional `(tenant, global_order)` index built like the type index. Built in 8a-C's scope or a small unit after 8a-B.
+
+  **Built (2026-11-17, unit after 8a-B).** The tenant is part of the subscription spec and is applied wherever the
+  event-type filter is: a `tenant = ?` predicate on the filtered catch-up page, the skip-ahead probe, the `CONTIGUOUS`
+  deferred bridge and both branches of the `FRESH` bridge (holes and ranges), combined with `event_type = ANY(?)` when
+  the subscription also filters on types; attached batches and the inbox's bound are filtered in memory, so the handler
+  wrapper of 8a-A is gone. Each filter shape has its own statement set (`EventLogStorage.FilterStatements`); in the
+  bridge's ranges branch the tenant predicate sits behind an `OFFSET 0` fence, because inside the join a tenant the
+  statistics consider rare made the generic plan scan the event table. The density switch obscures the tenant column
+  (`tenant || ''`) as it does `event_type + 0`. A filtered bridge under an unknown watermark keeps counting non-matching
+  runs as gaps and hands them off, as phase 5 §6.3 requires; mutant `FILTERED_BRIDGE_MARKS_RANGE_UNDER_UNKNOWN_WATERMARK`
+  (mark the covered range handled there) loses the held event in `EventLogTenantFilterIT`. The opt-in index
+  `el_<type>_events_tenant_order` on `(tenant, global_order)` is configured with `EventLogSettings.tenantIndexed` and
+  built like the type index (`CONCURRENTLY`, in the background, only in schema mode `create`, otherwise the statement is
+  logged; DDL in `EventLogSchemaContributor.tenantIndexStatements`); a valid index for either filter enables the
+  skip-ahead probe. The filter digest already covered the tenant. `EventLogTenantFilterIT` also shows that a rare
+  tenant's catch-up returns only that tenant's rows (with and without the index) and that the tenant combines with the
+  type filter on catch-up and on live batches.
 - **Every other question in §14:** settled by Claude as recommended there.

@@ -54,6 +54,9 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                             short page, quartered after a cancelled statement
  * @param catchUpScanWindowMax the largest such window
  * @param eventTypeIndexed     aggregate types that get the opt-in {@code (event_type, global_order)} index (phase 5 §5)
+ * @param tenantIndexed        aggregate types that get the opt-in {@code (tenant, global_order)} index (phase 8 §15
+ *                             question 7): built like the event-type index; it serves the skip-ahead probe of a
+ *                             tenant-filtered catch-up
  * @param wokenProbeMin        least time between two running-set reads of an aggregate type that was woken since its last
  *                             one (phase 6 §5): the cost rule of {@link #probeWait(long, int)} without the backstop floor
  * @param crossJvmWakeUp       tier 1 (phase 6 §3): {@link EventLog#afterCommit} also sends a coalesced {@code NOTIFY} on a
@@ -103,6 +106,7 @@ public record EventLogSettings(Duration backstopInterval,
                                long catchUpScanWindow,
                                long catchUpScanWindowMax,
                                java.util.Set<String> eventTypeIndexed,
+                               java.util.Set<String> tenantIndexed,
                                Duration wokenProbeMin,
                                boolean crossJvmWakeUp,
                                Duration wokenReadMin,
@@ -162,6 +166,7 @@ public record EventLogSettings(Duration backstopInterval,
         requireTrue(catchUpScanWindow >= catchUpPageSize, "catchUpScanWindow must be >= catchUpPageSize");
         requireTrue(catchUpScanWindowMax >= catchUpScanWindow, "catchUpScanWindowMax must be >= catchUpScanWindow");
         eventTypeIndexed = java.util.Set.copyOf(requireNonNull(eventTypeIndexed, "No eventTypeIndexed provided"));
+        tenantIndexed = java.util.Set.copyOf(requireNonNull(tenantIndexed, "No tenantIndexed provided"));
         requirePositive(wokenProbeMin, "wokenProbeMin");
         requireNotNegative(wokenReadMin, "wokenReadMin");
         requireNotNegative(notifySendMin, "notifySendMin");
@@ -189,20 +194,20 @@ public record EventLogSettings(Duration backstopInterval,
         if (leaseLocalStop != null && leaseStatementTimeout.compareTo(leaseLocalStop) > 0) {
             leaseStatementTimeout = Duration.ofSeconds(Math.max(1, leaseLocalStop.toSeconds()));
         }
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withLeaseStatementTimeout(Duration leaseStatementTimeout) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     /** Phase 8 §4.3; {@link Duration#ZERO} means {@code backstopInterval} */
     public EventLogSettings withParkedCheckInterval(Duration parkedCheckInterval) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withAdminListLimit(int adminListLimit) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     /** @return the effective parked-check interval (phase 8 §4.3) */
@@ -211,7 +216,7 @@ public record EventLogSettings(Duration backstopInterval,
     }
 
     public EventLogSettings withNodeName(String nodeName) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     private static void requireNotNegative(Duration duration, String name) {
@@ -234,81 +239,86 @@ public record EventLogSettings(Duration backstopInterval,
      */
     public static EventLogSettings defaults() {
         return new EventLogSettings(Duration.ofSeconds(1), 100, Duration.ofSeconds(1), Duration.ofSeconds(10), Duration.ofSeconds(1), 1_000, true, 1_000, 500, 100, 3, Duration.ofMillis(100), Duration.ofSeconds(10), 4, 100_000, 10_000_000,
-                                    java.util.Set.of(), Duration.ofMillis(10), true, DEFAULT_WOKEN_READ_MIN, DEFAULT_NOTIFY_SEND_MIN,
+                                    java.util.Set.of(), java.util.Set.of(), Duration.ofMillis(10), true, DEFAULT_WOKEN_READ_MIN, DEFAULT_NOTIFY_SEND_MIN,
                                     Duration.ofSeconds(15), Duration.ofSeconds(4), Duration.ofSeconds(7), Duration.ofSeconds(3), "", Duration.ZERO, 1_000);
     }
 
     public EventLogSettings withBackstopInterval(Duration backstopInterval) {
         var min = probeBackoffMin.compareTo(backstopInterval) > 0 ? probeBackoffMin : backstopInterval;
-        return new EventLogSettings(backstopInterval, tailPageSize, min, probeBackoffMax.compareTo(min) < 0 ? min : probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, min, probeBackoffMax.compareTo(min) < 0 ? min : probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withTailPageSize(int tailPageSize) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withProbeBackoff(Duration min, Duration max) {
-        return new EventLogSettings(backstopInterval, tailPageSize, min, max, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, min, max, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withProgressSaveInterval(Duration progressSaveInterval) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withHoleRangeThreshold(int holeRangeThreshold) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withGenericPlans(boolean genericPlans) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withSubscriptionBufferSize(int subscriptionBufferSize) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withCatchUpPageSize(int catchUpPageSize) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withPageSize(int pageSize) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withRetryAttempts(int retryAttempts) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withRetryBackoff(Duration initial, Duration max) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, initial, max, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, initial, max, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withCatchUpPermits(int catchUpPermits) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withCatchUpScanWindow(long catchUpScanWindow, long catchUpScanWindowMax) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withEventTypeIndexed(java.util.Set<String> eventTypeIndexed) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+    }
+
+    /** Phase 8 §15 question 7: the aggregate types that get the opt-in {@code (tenant, global_order)} index */
+    public EventLogSettings withTenantIndexed(java.util.Set<String> tenantIndexed) {
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withCrossJvmWakeUp(boolean crossJvmWakeUp) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withWokenReadMin(Duration wokenReadMin) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withNotifySendMin(Duration notifySendMin) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     public EventLogSettings withWokenProbeMin(Duration wokenProbeMin) {
-        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
+        return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit);
     }
 
     /**

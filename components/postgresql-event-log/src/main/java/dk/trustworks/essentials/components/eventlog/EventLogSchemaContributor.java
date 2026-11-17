@@ -209,6 +209,19 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
     }
 
     /**
+     * The opt-in {@code (tenant, global_order)} index (phase 8 §15 question 7), built and logged as
+     * {@link #eventTypeIndexStatements(AggregateTypeTables)} is
+     *
+     * @return {@code [create, drop]}: the concurrent build, and the drop of an invalid index left by a failed build
+     */
+    public static List<String> tenantIndexStatements(AggregateTypeTables tables) {
+        requireNonNull(tables, "No tables provided");
+        var index = tables.tenantIndex();
+        return List.of("CREATE INDEX CONCURRENTLY IF NOT EXISTS " + index + " ON " + tables.eventTable() + " (tenant, global_order)",
+                       "DROP INDEX CONCURRENTLY IF EXISTS " + index);
+    }
+
+    /**
      * @return whether the harness this contributor is attached to creates the schema (schema mode {@code create})
      */
     boolean createsSchema() {

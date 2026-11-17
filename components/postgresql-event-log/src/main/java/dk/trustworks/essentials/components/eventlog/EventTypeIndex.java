@@ -27,7 +27,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * The opt-in {@code (event_type, global_order)} index of the aggregate types in
- * {@link EventLogSettings#eventTypeIndexed()} (design phase 5 §5, decision 3).
+ * {@link EventLogSettings#eventTypeIndexed()} (design phase 5 §5, decision 3), or - {@link Kind#TENANT} - the
+ * {@code (tenant, global_order)} index of those in {@link EventLogSettings#tenantIndexed()} (phase 8 §15 question 7).
  * <ul>
  *     <li>When the engine creates the schema it builds the index {@code CONCURRENTLY} on a virtual thread, on a
  *     connection of its own in autocommit, never on the start-up path: valid - done; invalid (a failed build) - drop it
@@ -41,6 +42,33 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 final class EventTypeIndex {
     private static final Logger log = LoggerFactory.getLogger(EventTypeIndex.class);
 
+    /**
+     * Which opt-in index: the event-type index (phase 5 §5), or the tenant index (phase 8 §15 question 7), built, logged
+     * and read the same way
+     */
+    enum Kind {
+        EVENT_TYPE("(event_type, global_order)", "Filtered"),
+        TENANT("(tenant, global_order)", "Tenant-filtered");
+
+        private final String columns;
+        private final String reader;
+
+        Kind(String columns, String reader) {
+            this.columns = columns;
+            this.reader = reader;
+        }
+
+        String indexName(AggregateTypeTables tables) {
+            return this == EVENT_TYPE ? tables.eventTypeIndex() : tables.tenantIndex();
+        }
+
+        List<String> statements(AggregateTypeTables tables) {
+            return this == EVENT_TYPE ? EventLogSchemaContributor.eventTypeIndexStatements(tables) : EventLogSchemaContributor.tenantIndexStatements(tables);
+        }
+    }
+
+    private final Kind                                          kind;
+
     private final DataSource                                    dataSource;
     private final BooleanSupplier                               createsSchema;
     private final ConcurrentHashMap<String, Boolean>            validity = new ConcurrentHashMap<>();
@@ -51,6 +79,11 @@ final class EventTypeIndex {
      * @param createsSchema whether the engine creates the schema (schema mode {@code create}); read when a build is due
      */
     EventTypeIndex(DataSource dataSource, BooleanSupplier createsSchema) {
+        this(dataSource, createsSchema, Kind.EVENT_TYPE);
+    }
+
+    EventTypeIndex(DataSource dataSource, BooleanSupplier createsSchema, Kind kind) {
+        this.kind = requireNonNull(kind, "No kind provided");
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
         this.createsSchema = requireNonNull(createsSchema, "No createsSchema provided");
     }
@@ -62,12 +95,12 @@ final class EventTypeIndex {
      */
     CompletableFuture<Boolean> ensure(AggregateTypeTables tables) {
         requireNonNull(tables, "No tables provided");
-        var statements = EventLogSchemaContributor.eventTypeIndexStatements(tables);
+        var statements = kind.statements(tables);
         if (!createsSchema.getAsBoolean()) {
             if (warned.add(tables.aggregateType())) {
-                log.warn("Aggregate type '{}' is configured for the (event_type, global_order) index, but the event log does not create the schema in this " +
-                                 "mode, so it does not build it. Filtered catch-up runs without it until it exists. Run outside a transaction: {}",
-                         tables.aggregateType(), statements.getFirst());
+                log.warn("Aggregate type '{}' is configured for the {} index, but the event log does not create the schema in this " +
+                                 "mode, so it does not build it. {} catch-up runs without it until it exists. Run outside a transaction: {}",
+                         tables.aggregateType(), kind.columns, kind.reader, statements.getFirst());
             }
             return CompletableFuture.completedFuture(refreshQuietly(tables));
         }
@@ -76,11 +109,11 @@ final class EventTypeIndex {
                 return running;
             }
             var future = new CompletableFuture<Boolean>();
-            Thread.ofVirtual().name("eventlog-index-" + type).start(() -> {
+            Thread.ofVirtual().name("eventlog-index-" + type + "-" + kind.name().toLowerCase(Locale.ROOT)).start(() -> {
                 try {
                     future.complete(build(tables, statements));
                 } catch (Throwable e) {
-                    log.warn("Building the (event_type, global_order) index {} failed; filtered catch-up runs without it", tables.eventTypeIndex(), e);
+                    log.warn("Building the {} index {} failed; {} catch-up runs without it", kind.columns, kind.indexName(tables), kind.reader.toLowerCase(Locale.ROOT), e);
                     refreshQuietly(tables);
                     future.complete(false);
                 }
@@ -100,17 +133,17 @@ final class EventTypeIndex {
                 connection.setAutoCommit(true);
                 try (var statement = connection.createStatement()) {
                     if (Boolean.FALSE.equals(state)) {
-                        log.info("The (event_type, global_order) index {} is invalid (a failed build); dropping and rebuilding it", tables.eventTypeIndex());
+                        log.info("The {} index {} is invalid (a failed build); dropping and rebuilding it", kind.columns, kind.indexName(tables));
                         statement.execute(statements.get(1));
                     }
-                    log.info("Building the (event_type, global_order) index {} concurrently", tables.eventTypeIndex());
+                    log.info("Building the {} index {} concurrently", kind.columns, kind.indexName(tables));
                     statement.execute(statements.getFirst());
                 }
             } catch (SQLException e) {
                 if (!"23505".equals(e.getSQLState()) && !"42P07".equals(e.getSQLState())) {
                     throw e;
                 }
-                log.debug("A concurrent build of {} won the catalog race; re-checking", tables.eventTypeIndex(), e);
+                log.debug("A concurrent build of {} won the catalog race; re-checking", kind.indexName(tables), e);
             }
             if (Boolean.TRUE.equals(read(tables))) {
                 validity.put(tables.aggregateType(), true);
@@ -132,7 +165,7 @@ final class EventTypeIndex {
         try {
             return refresh(tables);
         } catch (SQLException e) {
-            log.debug("Reading the validity of {} failed", tables.eventTypeIndex(), e);
+            log.debug("Reading the validity of {} failed", kind.indexName(tables), e);
             validity.put(tables.aggregateType(), false);
             return false;
         }
@@ -142,7 +175,7 @@ final class EventTypeIndex {
     private Boolean read(AggregateTypeTables tables) throws SQLException {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(EventLogStorage.INDEX_VALIDITY)) {
-            statement.setString(1, tables.eventTypeIndex());
+            statement.setString(1, kind.indexName(tables));
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next() ? resultSet.getBoolean(1) : null;
             }

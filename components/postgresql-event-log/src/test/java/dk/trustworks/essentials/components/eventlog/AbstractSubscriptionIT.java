@@ -60,6 +60,10 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         final AtomicLong combinedReads = new AtomicLong();
         /** Catch-up, bridge and deferred-bridge statements of every subscription */
         final AtomicLong catchUpReads = new AtomicLong();
+        /** Rows returned by each subscriber's catch-up, bridge and deferred-bridge statements */
+        final Map<String, AtomicLong> catchUpRows = new java.util.concurrent.ConcurrentHashMap<>();
+        /** Each subscriber's filtered reads that ran while an index served the filter (the skip-ahead probe may follow) */
+        final Map<String, AtomicLong> indexedFilteredReads = new java.util.concurrent.ConcurrentHashMap<>();
         final List<String> detachReasons = new CopyOnWriteArrayList<>();
         final List<Long>   saves         = new CopyOnWriteArrayList<>();
         /** Attaches under an unknown watermark (phase 5 §6.3) */
@@ -101,6 +105,14 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         @Override
         public void onCatchUpRead(String subscriber, String aggregateType, boolean bridge, long nanos, int rows) {
             catchUpReads.incrementAndGet();
+            catchUpRows.computeIfAbsent(subscriber, s -> new AtomicLong()).addAndGet(rows);
+        }
+
+        @Override
+        public void onFilteredRead(String subscriber, String aggregateType, long scannedOrders, int rows, long window, boolean usedIndex) {
+            if (usedIndex) {
+                indexedFilteredReads.computeIfAbsent(subscriber, s -> new AtomicLong()).incrementAndGet();
+            }
         }
 
         @Override
