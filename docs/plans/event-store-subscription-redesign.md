@@ -1444,7 +1444,7 @@ Taken with the project lead, one at a time, the same day; each settles a §19 it
 | 6 | Wake-up tiers 1 and 2 (§11). Design: [phase-6 design](event-store-engine-phase6.md) | I7 passes. Latency compared with S1 and CDC |
 | 7 | Engine leases on the progress row, batched renewal, exclusive subscriptions fenced (§9); no `FencedLockManager`. Design: [phase-7 design](event-store-engine-phase7.md) | I5, I6 and I16 pass. Multi-JVM takeover ITs |
 | 8 | The new subscription API, the view-projection and event-processor processors built on it, parked events and the admin API (§12.3); the `EventStore` adapter for appends and stream loads (§19 item 19). Design: [phase-8 design](event-store-engine-phase8.md) | New ITs for the API and processors pass, I14 among them; the existing repository ITs pass against the adapter |
-| 9 | One-way migration: copy of events per aggregate type, optional import of resume points, cut-over, and its verification (§12.4) | I8 passes. A copy of the trading demo's data verifies equal and the demo resumes on the new engine without loss |
+| 9 | One-way migration: copy of events per aggregate type, optional import of resume points, cut-over, and its verification (§12.4). Design: [phase-9 design](event-store-engine-phase9.md) | I8 passes. A copy of the trading demo's data verifies equal and the demo resumes on the new engine without loss |
 | 10 | Starter, documentation, LLM docs, admin UI, release notes | Trading demo runs on the new engine at or above baseline |
 
 ### Command-side track (independent of the phases above)
