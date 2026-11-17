@@ -460,10 +460,24 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
             requireNonNull(globalOrderQueryRange, "No globalOrderQueryRange provided");
             requireNonNull(persistedEvents, "No persistedEvents provided");
             requireNonNull(transientGapsIncludedInQuery, "No transientGaps provided");
-            return inUnitOfWorkOfThisGapHandler(() -> doReconcileGapsAndReport(aggregateType, globalOrderQueryRange, persistedEvents, transientGapsIncludedInQuery));
+            return inUnitOfWorkOfThisGapHandler(() -> doReconcileGapsAndReport(aggregateType, globalOrderQueryRange, persistedEvents, transientGapsIncludedInQuery, true));
         }
 
-        private GapReconciliation doReconcileGapsAndReport(AggregateType aggregateType, LongRange globalOrderQueryRange, List<PersistedEvent> persistedEvents, List<GlobalEventOrder> transientGapsIncludedInQuery) {
+        /**
+         * {@link #reconcileGapsAndReport} without the new gaps: resolves and promotes only - see
+         * {@link SubscriptionGapHandler#reconcileGapsAndReportWithoutRecordingNewGaps}
+         */
+        @Override
+        public GapReconciliation reconcileGapsAndReportWithoutRecordingNewGaps(AggregateType aggregateType, LongRange globalOrderQueryRange, List<PersistedEvent> persistedEvents, List<GlobalEventOrder> transientGapsIncludedInQuery) {
+            requireNonNull(aggregateType, "No aggregateType provided");
+            requireNonNull(globalOrderQueryRange, "No globalOrderQueryRange provided");
+            requireNonNull(persistedEvents, "No persistedEvents provided");
+            requireNonNull(transientGapsIncludedInQuery, "No transientGaps provided");
+            return inUnitOfWorkOfThisGapHandler(() -> doReconcileGapsAndReport(aggregateType, globalOrderQueryRange, persistedEvents, transientGapsIncludedInQuery, false));
+        }
+
+        private GapReconciliation doReconcileGapsAndReport(AggregateType aggregateType, LongRange globalOrderQueryRange, List<PersistedEvent> persistedEvents, List<GlobalEventOrder> transientGapsIncludedInQuery,
+                                                           boolean recordNewGaps) {
 
             log.debug("[{}] Reconciling '{}' Gaps for query with globalOrderQueryRange: {},  persistedEvents size: {} and transientGaps size: {}",
                       subscriberId,
@@ -488,7 +502,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
 
             // New Transient Gaps - walked hole by hole between the events, never order by order across the range: a hole
             // can be a million orders wide, and only the orders at its two ends are recorded (see GapEnds)
-            if (!persistedEvents.isEmpty()) {
+            if (recordNewGaps && !persistedEvents.isEmpty()) {
                 var newGaps = GapEnds.below(globalOrderQueryRange.fromInclusive,
                                             persistedEvents.stream().mapToLong(persistedEvent -> persistedEvent.globalEventOrder().longValue()));
                 if (!newGaps.awaitedInMemoryOnly().isEmpty()) {

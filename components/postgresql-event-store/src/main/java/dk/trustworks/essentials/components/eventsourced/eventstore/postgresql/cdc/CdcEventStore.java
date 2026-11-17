@@ -885,6 +885,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                       if (state == CdcAvailability.State.ACTIVE) {
                                           log.debug("[{}] Adaptive live source switching to CDC bus ({}, catchUp={})",
                                                     aggregateType, tracker, catchUp);
+                                          deliveryGate.leftDelegatePollingLeg();
                                           return busLeg(aggregateType,
                                                         subscriberIdForLog,
                                                         deliveryGate,
@@ -1195,6 +1196,14 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          */
         private final boolean                                   defersGapRecording;
         /**
+         * Whether the live source is the delegate's polling leg ({@link #newDelegateAcknowledgement()} until
+         * {@link #leftDelegatePollingLeg()}): a poll records the gaps it finds itself, at once, so the gate keeps none in
+         * memory meanwhile - see {@link #keptUnrecorded}. Written by the live source's switch, which Reactor's
+         * {@code switchMap} only makes once no event of the previous source is passing the gate; read for an
+         * event that opens a gap only, never for an in-order one
+         */
+        private volatile boolean                                onDelegatePollingLeg;
+        /**
          * Guards the two collections below; held across {@link #recordDeferredGaps()}'s commit, so an acknowledgement
          * never resolves a fill whose gap that is still recording. Taken before the gap handler's monitor, never after.
          * A save's emptiness check, the subscription's end, an acknowledgement and {@link #isAwaitedAsGap}'s check of a
@@ -1350,9 +1359,40 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * fill an earlier poll handed on is the gate's to resolve anyway
          */
         SubscriberAcknowledgement newDelegateAcknowledgement() {
+            onDelegatePollingLeg = true;
+            recordDeferredGapsBeforeDelegatePolling();
             var acknowledgement = SubscriberAcknowledgement.create();
             delegateAcknowledgement = acknowledgement;
             return acknowledgement;
+        }
+
+        /**
+         * The live source switches from the delegate's polling leg to the bus: the gaps this subscription opens from now on
+         * are recorded by nothing but the gate, which may keep them in memory again
+         */
+        void leftDelegatePollingLeg() {
+            onDelegatePollingLeg = false;
+        }
+
+        /**
+         * The live source switches to the delegate's polling leg, which reads again from right after the tracker's
+         * watermark and records every hole it finds as a transient gap - also one this gate keeps in memory. Recorded
+         * here first, so the fill of such a gap is resolved when the subscriber is done with it, whichever source delivers
+         * it: kept in memory, the gate would take it for the fill of a gap nothing recorded, and the poll's row would stay
+         * behind. One recording per switch, nothing when no gap is kept. A failure leaves them kept and is logged: the
+         * next resume point save records them
+         */
+        private void recordDeferredGapsBeforeDelegatePolling() {
+            try {
+                recordDeferredGapsCommitted();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("[{}-{}] Interrupted while recording the gaps kept in memory before polling - a gap the poll records too may stay a transient gap after its fill was handled",
+                         subscriberId.orElseThrow(), aggregateType, e);
+            } catch (TimeoutException | RuntimeException e) {
+                log.warn("[{}-{}] Could not record the gaps kept in memory before polling - a gap the poll records too may stay a transient gap after its fill was handled",
+                         subscriberId.orElseThrow(), aggregateType, e);
+            }
         }
 
         /**
@@ -1375,12 +1415,16 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * Keeps the gap below an event that opened it in memory instead of recording it - when this subscription defers
          * gap recording, the gap is narrow (no middle awaited in memory only, at most {@link #MAX_DEFERRED_ORDERS_PER_GAP}
          * orders), no more than {@link #MAX_DEFERRED_ORDERS_PER_SUBSCRIPTION} orders are kept, and no resume point save of
-         * the subscriber is in progress: the resume point that save reads may already be past this gap's event.
+         * the subscriber is in progress: the resume point that save reads may already be past this gap's event. Never
+         * while the live source is the delegate's polling leg: the poll that delivered the event has recorded the gap
+         * already, and a gap kept here would have its fill taken for that of a gap nothing recorded - the poll's row then
+         * stays behind once the fill is handled. The back-fill and catch-up pages record no new gaps when this gate keeps
+         * them in memory (see {@code backfillOnePageAndEmit}).
          *
          * @return true if kept, false if the gap is to be recorded now
          */
         private boolean keptUnrecorded(List<LongRange> awaitedGaps) {
-            if (!defersGapRecording || awaitedGaps.size() != 1) return false;
+            if (!defersGapRecording || onDelegatePollingLeg || awaitedGaps.size() != 1) return false;
             var  gap   = awaitedGaps.getFirst();
             long width = gap.toInclusive - gap.fromInclusive + 1;
             deferredGapsLock.lock();
@@ -2141,9 +2185,16 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                     // its fill. Given the fills still awaiting that too, so their gaps are not promoted
                     var loadedGlobalOrders = events.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toSet());
                     var gapsNotFilled      = transientGaps.stream().filter(gap -> !loadedGlobalOrders.contains(gap)).toList();
+                    // Nor are the new gaps its events reveal recorded here when the gate keeps narrow gaps in memory: every
+                    // event of the page passes the gate, which records the gaps it sees open - at once, or at the next resume
+                    // point save. A row written here as well is one the gate does not know about: it takes the gap's fill for
+                    // that of a gap nothing recorded, and the subscriber's acknowledgement then resolves nothing
                     gapHandler.ifPresent(h -> {
+                        var eventsToReconcile = deliveryGate.withAwaitingAcknowledgement(eventsForGapHandler);
                         synchronized (h) {
-                            gapReconciliation.set(h.reconcileGapsAndReport(aggregateType, range, deliveryGate.withAwaitingAcknowledgement(eventsForGapHandler), gapsNotFilled));
+                            gapReconciliation.set(deliveryGate.defersGapRecording
+                                                  ? h.reconcileGapsAndReportWithoutRecordingNewGaps(aggregateType, range, eventsToReconcile, gapsNotFilled)
+                                                  : h.reconcileGapsAndReport(aggregateType, range, eventsToReconcile, gapsNotFilled));
                         }
                     });
                     return events;

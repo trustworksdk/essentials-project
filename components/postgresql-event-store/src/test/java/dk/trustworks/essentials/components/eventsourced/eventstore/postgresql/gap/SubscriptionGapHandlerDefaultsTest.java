@@ -45,6 +45,20 @@ class SubscriptionGapHandlerDefaultsTest {
         assertThat(outcome).isEqualTo(RecordingGapHandler.REPORTED);
     }
 
+    /**
+     * A gap handler that does not override it records the new gaps as before: the CDC event store only leaves new gaps to
+     * its delivery gate with the PostgreSQL gap handler, which keeps gaps in memory
+     */
+    @Test
+    void reconciling_without_recording_new_gaps_is_an_ordinary_reconciliation_by_default() {
+        var handler = new RecordingGapHandler();
+
+        var outcome = handler.reconcileGapsAndReportWithoutRecordingNewGaps(ORDERS, LongRange.between(1, 10), List.of(), List.of(GlobalEventOrder.of(3)));
+
+        assertThat(handler.reconciliations).containsExactly(new Reconciliation(ORDERS, LongRange.between(1, 10), List.of(), List.of(GlobalEventOrder.of(3))));
+        assertThat(outcome).isEqualTo(RecordingGapHandler.REPORTED);
+    }
+
     @Test
     void giving_up_queries_up_to_the_highest_gap_whatever_order_the_gaps_are_given_in() {
         var handler = new RecordingGapHandler();

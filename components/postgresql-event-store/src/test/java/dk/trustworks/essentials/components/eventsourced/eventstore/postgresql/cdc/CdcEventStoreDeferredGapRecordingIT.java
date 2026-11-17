@@ -379,6 +379,130 @@ class CdcEventStoreDeferredGapRecordingIT extends AbstractLogicalReplicationPost
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(received).contains(a.globalOrder()));
     }
 
+    /**
+     * A back-fill page that finds a hole records it as a transient gap - and the delivery gate, which the page's events
+     * pass, keeps the same gap in memory. The fill then arrives on the bus before a resume point save: the gate used to
+     * take it for the fill of a gap nothing had recorded, so its acknowledgement deleted nothing and the page's row stayed
+     * behind, over an event the subscriber had handled.
+     */
+    @Test
+    void a_gap_a_back_fill_page_finds_is_resolved_when_its_fill_arrives_on_the_bus_and_is_handled() throws Exception {
+        var subscriberId = SubscriberId.of("backfill-gap-filled-on-the-bus");
+        availability.active("deferred-gaps-slot");
+        appendAndCommit();
+        var a = holdAppend();
+        var b = appendAndCommit();
+
+        // No periodic save while the gap opens and fills
+        var manager  = startManager("node-1", Duration.ofHours(1));
+        var received = subscribe(manager, subscriberId);
+        await().atMost(Duration.ofSeconds(10)).until(() -> received.contains(b));
+        // The page leaves the gap to the gate, which keeps it in memory
+        assertThat(transientGapInserts()).as("transient gaps written").isEmpty();
+
+        a.commit();
+        publishUntilReceived(received, a.globalOrder());
+
+        await().atMost(Duration.ofSeconds(5))
+               .untilAsserted(() -> assertThat(transientGapsOf(subscriberId)).doesNotContain(GlobalEventOrder.of(a.globalOrder())));
+        manager.stop();
+        assertThat(transientGapsOf(subscriberId)).doesNotContain(GlobalEventOrder.of(a.globalOrder()));
+    }
+
+    /**
+     * A back-fill page leaves the gaps it finds to the gate: the gate records one before a resume point is saved past it,
+     * so a restart after a crash still receives its event - the page's own row is no longer what makes it survive.
+     */
+    @Test
+    void a_gap_a_back_fill_page_finds_is_recorded_before_a_resume_point_past_it_is_saved_so_a_restart_after_a_crash_still_receives_its_event() throws Exception {
+        var subscriberId = SubscriberId.of("backfill-gap-then-saved");
+        availability.active("deferred-gaps-slot");
+        appendAndCommit();
+        var a = holdAppend();
+        var b = appendAndCommit();
+
+        var crashed  = startManager("node-1", Duration.ofMillis(200));
+        var received = subscribe(crashed, subscriberId);
+        await().atMost(Duration.ofSeconds(10)).until(() -> received.contains(b));
+        await().atMost(Duration.ofSeconds(10)).until(() -> persistedResumePoint(subscriberId) > b);
+        assertThat(transientGapsOf(subscriberId)).containsExactly(GlobalEventOrder.of(a.globalOrder()));
+
+        // node-1 "crashes": never stopped - node-2 starts from the saved resume point, past the gap
+        var restarted = subscribe(startManager("node-2", Duration.ofMillis(200)), subscriberId);
+        var c         = appendAndCommit();
+        publishUntilReceived(restarted, c);
+        a.commit();
+        publish(a.globalOrder());
+
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(restarted).contains(a.globalOrder(), c));
+        assertThat(restarted).doesNotHaveDuplicates().doesNotContain(b);
+        await().atMost(Duration.ofSeconds(10)).until(() -> transientGapsOf(subscriberId).isEmpty());
+    }
+
+    /**
+     * The same on the polling leg: the delegate's poll records the hole it finds as a transient gap, and the gate must not
+     * also keep it in memory - else a fill that arrives once the subscription moved onto the bus leaves the poll's row
+     * behind.
+     */
+    @Test
+    void a_gap_a_poll_finds_is_resolved_when_its_fill_arrives_on_the_bus_and_is_handled() throws Exception {
+        var subscriberId = SubscriberId.of("polled-gap-filled-on-the-bus");
+        var manager      = startManager("node-1", Duration.ofHours(1));
+        var received     = subscribe(manager, subscriberId);
+        publish(appendAndCommit());
+        await().atMost(Duration.ofSeconds(10)).until(() -> received.size() == 1);
+
+        var a = holdAppend();
+        var b = appendAndCommit();
+        await().atMost(Duration.ofSeconds(10)).until(() -> received.contains(b));
+
+        availability.active("deferred-gaps-slot");
+        awaitOnTheBus();
+        a.commit();
+        publishUntilReceived(received, a.globalOrder());
+
+        await().atMost(Duration.ofSeconds(5))
+               .untilAsserted(() -> assertThat(transientGapsOf(subscriberId)).doesNotContain(GlobalEventOrder.of(a.globalOrder())));
+        manager.stop();
+        assertThat(transientGapsOf(subscriberId)).doesNotContain(GlobalEventOrder.of(a.globalOrder()));
+    }
+
+    /**
+     * A gap the gate kept in memory on the bus is recorded when the subscription switches to polling: the poll reads it
+     * again from the tracker's watermark and records the hole as a transient gap too. Kept, the gate would take its fill -
+     * delivered on the bus again after the outage - for that of a gap nothing recorded, and the poll's row would stay.
+     */
+    @Test
+    void a_gap_kept_in_memory_and_polled_again_during_an_outage_is_resolved_when_its_fill_arrives_on_the_bus_afterwards() throws Exception {
+        var subscriberId = SubscriberId.of("kept-then-polled-then-filled-on-the-bus");
+        var manager      = startManager("node-1", Duration.ofHours(1));
+        var received     = subscribe(manager, subscriberId);
+        publish(appendAndCommit());
+        await().atMost(Duration.ofSeconds(10)).until(() -> received.size() == 1);
+        availability.active("deferred-gaps-slot");
+        awaitOnTheBus();
+
+        var a = holdAppend();
+        publishUntilReceived(received, appendAndCommit());
+        assertThat(transientGapsOf(subscriberId)).as("kept in memory").doesNotContain(GlobalEventOrder.of(a.globalOrder()));
+
+        // An outage: the subscription polls - and reads the hole again
+        availability.failed("deferred-gaps-slot", "simulated outage");
+        await().atMost(Duration.ofSeconds(10))
+               .untilAsserted(() -> assertThat(transientGapsOf(subscriberId)).contains(GlobalEventOrder.of(a.globalOrder())));
+        var polled = appendAndCommit();
+        await().atMost(Duration.ofSeconds(10)).until(() -> received.contains(polled));
+
+        // Back on the bus before the fill commits
+        availability.active("deferred-gaps-slot");
+        awaitOnTheBus();
+        a.commit();
+        publishUntilReceived(received, a.globalOrder());
+
+        await().atMost(Duration.ofSeconds(5))
+               .untilAsserted(() -> assertThat(transientGapsOf(subscriberId)).doesNotContain(GlobalEventOrder.of(a.globalOrder())));
+    }
+
     // ------------------------------------------------------------------------------------------------------------
 
     private List<Long> transientGapInserts() {
