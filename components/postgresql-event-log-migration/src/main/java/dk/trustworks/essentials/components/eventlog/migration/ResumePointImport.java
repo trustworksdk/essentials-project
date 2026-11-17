@@ -40,11 +40,16 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * through {@link EventLogAdmin#importProgress}, once per instance name: an open transient gap whose event committed late
  * may never have been delivered, and the new engine keeps no per-subscription pending set, so the subscription replays
  * {@code [I, R)} (at least once, as on the old engine). An open gap that never filled does not force a replay (decision 8).
+ * <p>
+ * A mapping with {@link ImportedSubscription#trustOldResumePoint()} imports {@code R} unchanged instead (§18): the
+ * operator states the old subscriber already handled its gap fills, which trades invariant I8 for no replay. The report
+ * records the opt-in and the filled gaps it skips, and the run logs them at WARN.
  * The gaps' rows are looked up in the event log's table, which the cut-over has just verified equal to the old one.
  * <p>
  * It takes {@code SHARE} locks on the old subscription and gap tables too, so an old node still running a subscriber
  * cannot move a resume point under it. Then it checks every progress row it wrote (§6.1): {@code resume_from = I},
- * {@code I <= R}, and {@code I <=} every open transient gap of the subscriber that has a row. A progress row that already
+ * {@code I <= R}, and {@code I <=} every open transient gap of the subscriber that has a row; for an opted-in mapping,
+ * {@code resume_from = R}. A progress row that already
  * exists with another resume point is refused (an equal one is an idempotent rerun). Any refusal rolls the whole
  * cut-over back.
  * <p>
@@ -109,7 +114,8 @@ public final class ResumePointImport implements CutoverStep {
 
     /**
      * The import preview (design phase 9 §4): per mapping, the old resume point {@code R}, the value the cut-over would
-     * import {@code I}, and the replay length in values and rows, plus the old subscribers that are not mapped. Computed
+     * import {@code I}, the I8-safe value and the rows it replays (flagged when large, {@link ImportReport#LARGE_REPLAY_ROWS}),
+     * the opt-in and the filled gaps it skips, and the replay length in values and rows, plus the old subscribers that are not mapped. Computed
      * by the same code as {@link #run}, in a {@code READ ONLY} transaction: it takes no {@code SHARE} lock, writes
      * nothing, and runs while the old engine does.
      * <p>
@@ -171,6 +177,14 @@ public final class ResumePointImport implements CutoverStep {
                              "is imported unchanged", transientGapsTable);
         }
         for (var i : imported) {
+            if (i.trustedOldResumePoint()) {
+                log.warn("Old subscriber '{}' of '{}' is imported at its old resume point {} on the operator's statement that it handled its gap fills " +
+                                 "(trustOldResumePoint): the I8-safe value {} would have replayed {} events; {} filled open transient gaps are skipped and " +
+                                 "not delivered again{}: {}",
+                         i.oldSubscriberId(), i.aggregateType(), i.oldResumeFrom(), i.safeResumeFrom(), i.safeReplayRows(), i.skippedFilledGapCount(),
+                         i.skippedFilledGapCount() > i.skippedFilledGaps().size() ? " (lowest " + i.skippedFilledGaps().size() + " listed)" : "",
+                         i.skippedFilledGaps());
+            }
             log.info("Imported the resume point of old subscriber '{}' of '{}' as '{}' {}: old {}, imported {}; replays {} values, {} events; " +
                              "{} open transient gaps, {} filled; {} late-filled permanent gaps below the old resume point not delivered",
                      i.oldSubscriberId(), i.aggregateType(), i.subscriber(), i.instanceNames(), i.oldResumeFrom(), i.resumeFrom(), i.replayValues(), i.replayRows(),
@@ -211,16 +225,40 @@ public final class ResumePointImport implements CutoverStep {
             }
         }
 
+        long safeResumeFrom = lowestFilled == null ? oldResume : Math.min(oldResume, lowestFilled);
         long resumeFrom;
-        if (seams.has(IMPORT_RESUME_UNCHANGED)) {
+        if (s.trustOldResumePoint()) {
+            resumeFrom = oldResume;
+        } else if (seams.has(IMPORT_RESUME_UNCHANGED)) {
             resumeFrom = oldResume;
         } else if (seams.has(IMPORT_LOWEST_GAP_UNFILTERED)) {
             resumeFrom = lowestOpen == null ? oldResume : Math.min(oldResume, lowestOpen);
         } else {
-            resumeFrom = lowestFilled == null ? oldResume : Math.min(oldResume, lowestFilled);
+            resumeFrom = safeResumeFrom;
         }
 
-        long replayRows = queryLong(connection, "SELECT count(*) FROM " + eventTable + " WHERE global_order >= ? AND global_order < ?", resumeFrom, oldResume);
+        var  replaySql      = "SELECT count(*) FROM " + eventTable + " WHERE global_order >= ? AND global_order < ?";
+        long replayRows     = queryLong(connection, replaySql, resumeFrom, oldResume);
+        long safeReplayRows = safeResumeFrom == resumeFrom ? replayRows : queryLong(connection, replaySql, safeResumeFrom, oldResume);
+
+        var  skipped      = new ArrayList<Long>();
+        long skippedCount = 0;
+        if (s.trustOldResumePoint() && gapTracking && lowestFilled != null) {
+            try (var statement = connection.prepareStatement(
+                    "SELECT g.gap_global_event_order, count(*) OVER () FROM " + transientGapsTable + " g WHERE g.subscriber_id = ? AND g.aggregate_type = ? " +
+                            "AND g.gap_global_event_order < ? AND EXISTS (SELECT 1 FROM " + eventTable + " x WHERE x.global_order = g.gap_global_event_order) " +
+                            "ORDER BY g.gap_global_event_order LIMIT " + ImportReport.MAX_LISTED_GAPS)) {
+                statement.setString(1, s.oldSubscriberId());
+                statement.setString(2, type);
+                statement.setLong(3, oldResume);
+                try (var resultSet = statement.executeQuery()) {
+                    while (resultSet.next()) {
+                        skipped.add(resultSet.getLong(1));
+                        skippedCount = resultSet.getLong(2);
+                    }
+                }
+            }
+        }
         long lateFills  = 0;
         if (permanentExists) {
             try (var statement = connection.prepareStatement("SELECT count(*) FROM " + permanentGapsTable + " p WHERE p.aggregate_type = ? AND p.gap_global_event_order < ? " +
@@ -234,7 +272,8 @@ public final class ResumePointImport implements CutoverStep {
             }
         }
         return new Computed(new SubscriptionImport(s.oldSubscriberId(), type, s.definition().subscriber(), s.instanceNames(), oldResume, resumeFrom,
-                                                   oldResume - resumeFrom, replayRows, openGaps, filledGaps, lateFills), lowestFilled);
+                                                   oldResume - resumeFrom, replayRows, openGaps, filledGaps, lateFills, safeResumeFrom, safeReplayRows,
+                                                   s.trustOldResumePoint(), skipped, skippedCount), lowestFilled);
     }
 
     /** Writes the computed resume point as each instance's progress row, then checks the rows */
@@ -250,39 +289,60 @@ public final class ResumePointImport implements CutoverStep {
         }
         if (!seams.has(MigrationMutant.CUTOVER_WITHOUT_VERIFY)) {
             check(connection, s, computed.report().oldResumeFrom(), computed.lowestFilled());
+            if (s.trustOldResumePoint()) {
+                checkTrusted(connection, s, computed.report().oldResumeFrom());
+            }
         }
     }
 
     /**
      * The progress-row structural checks (§6.1), read back from {@code el_progress} and against bounds computed apart from
      * the imported value: {@code 1 <= resume_from <= R}, and {@code resume_from <=} the lowest open transient gap that
-     * has a row
+     * has a row, unless the mapping opted in to {@code R} ({@link #checkTrusted})
      */
     private void check(Connection connection, ImportedSubscription s, long oldResume, Long lowestFilled) throws SQLException {
         for (var instance : s.instanceNames()) {
-            Long stored;
-            try (var statement = connection.prepareStatement("SELECT resume_from FROM " + EventLogSchema.PROGRESS_TABLE +
-                                                                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?")) {
-                statement.setString(1, s.definition().subscriber());
-                statement.setString(2, s.aggregateType());
-                statement.setString(3, instance);
-                try (var resultSet = statement.executeQuery()) {
-                    stored = resultSet.next() ? resultSet.getLong(1) : null;
-                }
-            }
-            var key = "'" + s.definition().subscriber() + "' of '" + s.aggregateType() + "' (instance '" + instance + "')";
+            var stored = storedResumeFrom(connection, s, instance);
+            var key    = key(s, instance);
             if (stored == null) {
                 throw new IllegalStateException("Import check failed: no progress row of " + key);
             }
             if (stored < 1 || stored > oldResume) {
                 throw new IllegalStateException("Import check failed: the progress row of " + key + " resumes from " + stored + ", above the old resume point " + oldResume);
             }
-            if (lowestFilled != null && stored > lowestFilled) {
+            if (lowestFilled != null && stored > lowestFilled && !s.trustOldResumePoint()) {
                 throw new IllegalStateException("Import check failed: the progress row of " + key + " resumes from " + stored +
                                                         ", above open transient gap " + lowestFilled + " of old subscriber '" + s.oldSubscriberId() +
                                                         "', whose event committed late and may never have been delivered");
             }
         }
+    }
+
+    /** The opt-in's check (§18): every progress row resumes from the old resume point {@code R} exactly */
+    private void checkTrusted(Connection connection, ImportedSubscription s, long oldResume) throws SQLException {
+        for (var instance : s.instanceNames()) {
+            var stored = storedResumeFrom(connection, s, instance);
+            if (stored == null || stored != oldResume) {
+                throw new IllegalStateException("Import check failed: the progress row of " + key(s, instance) + " resumes from " + stored +
+                                                        ", not the old resume point " + oldResume + " its mapping opted in to (trustOldResumePoint)");
+            }
+        }
+    }
+
+    private static Long storedResumeFrom(Connection connection, ImportedSubscription s, String instance) throws SQLException {
+        try (var statement = connection.prepareStatement("SELECT resume_from FROM " + EventLogSchema.PROGRESS_TABLE +
+                                                                 " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?")) {
+            statement.setString(1, s.definition().subscriber());
+            statement.setString(2, s.aggregateType());
+            statement.setString(3, instance);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getLong(1) : null;
+            }
+        }
+    }
+
+    private static String key(ImportedSubscription s, String instance) {
+        return "'" + s.definition().subscriber() + "' of '" + s.aggregateType() + "' (instance '" + instance + "')";
     }
 
     private long oldResumePoint(Connection connection, ImportedSubscription s, boolean durableExists) throws SQLException {

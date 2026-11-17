@@ -51,7 +51,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *   epochWaitTimeout: 10m                # ISO-8601 (PT10M) or <n>ms|s|m|h
  *   epochWaitPoll: 20ms
  *   lockTimeout: 10s
- *   maxEventsPerSecond: 0
+ *   maxEventsPerSecond: 25000            # 0 is unthrottled
  *   verifyWindow: 100000
  * import:                                # optional
  *   durableSubscriptionsTable: durable_subscriptions   # optional, the old engine's defaults
@@ -66,6 +66,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *       instances: [node-a, node-b]      # optional; absent for an exclusive subscription
  *       eventTypes: [OrderPlaced]        # optional; absent for all
  *       tenant: acme                     # optional
+ *       trustOldResumePoint: false       # optional; true imports the old resume point R unchanged, on the operator's
+ *                                        # statement that the old subscriber already handled its gap fills (no replay,
+ *                                        # but trades invariant I8; see ImportedSubscription)
  * }</pre>
  */
 public final class MigrationConfigYaml {
@@ -179,7 +182,7 @@ public final class MigrationConfigYaml {
         for (var i = 0; i < list.size(); i++) {
             var where = "import.subscriptions[" + i + "]";
             var s     = map(list.get(i), where);
-            keys(s, where, "oldSubscriber", "subscriber", "aggregateType", "model", "consistency", "instances", "eventTypes", "tenant");
+            keys(s, where, "oldSubscriber", "subscriber", "aggregateType", "model", "consistency", "instances", "eventTypes", "tenant", "trustOldResumePoint");
             subscriptions.add(new MigrationConfig.Subscription(string(required(s, "oldSubscriber", where), where + ".oldSubscriber"),
                                                                string(required(s, "subscriber", where), where + ".subscriber"),
                                                                string(required(s, "aggregateType", where), where + ".aggregateType"),
@@ -188,7 +191,8 @@ public final class MigrationConfigYaml {
                                                                                             : ConsistencyMode.FRESH,
                                                                s.containsKey("instances") ? strings(s.get("instances"), where + ".instances") : List.of(),
                                                                s.containsKey("eventTypes") ? new LinkedHashSet<>(strings(s.get("eventTypes"), where + ".eventTypes")) : Set.of(),
-                                                               optionalString(s, "tenant", where)));
+                                                               optionalString(s, "tenant", where),
+                                                               s.containsKey("trustOldResumePoint") && bool(s.get("trustOldResumePoint"), where + ".trustOldResumePoint")));
         }
         return new MigrationConfig.Imports(Objects.requireNonNullElse(optionalString(map, "durableSubscriptionsTable", "import"), none.durableSubscriptionsTable()),
                                            Objects.requireNonNullElse(optionalString(map, "transientGapsTable", "import"), none.transientGapsTable()),
@@ -234,6 +238,13 @@ public final class MigrationConfigYaml {
             return ((Number) value).longValue();
         }
         throw new IllegalArgumentException(where + ": expected a whole number, got '" + value + "'");
+    }
+
+    private static boolean bool(Object value, String where) {
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        throw new IllegalArgumentException(where + ": expected true or false, got '" + value + "'");
     }
 
     private static String string(Object value, String where) {

@@ -118,6 +118,27 @@ class MigrationConfigYamlTest {
     }
 
     @Test
+    void trustOldResumePoint_opts_a_mapping_in_to_the_old_resume_point() {
+        var config = parse(FULL.replace("    model: PERIODIC\n", "    model: PERIODIC\n      trustOldResumePoint: true\n"));
+        var trusted = config.imports().subscriptions().get(0);
+        assertThat(trusted.trustOldResumePoint()).isTrue();
+        assertThat(trusted.imported().trustOldResumePoint()).isTrue();
+        assertThat(trusted.imported()).isEqualTo(ImportedSubscription.exclusive("orders-projector", SubscriptionDefinition.builder("orders-view", "Orders").build(),
+                                                                                ProgressModel.PERIODIC).trustingOldResumePoint());
+        assertThat(config.imports().subscriptions().get(1).imported().trustOldResumePoint()).as("absent is false").isFalse();
+        assertThat(parse(FULL.replace("    model: PERIODIC\n", "    model: PERIODIC\n      trustOldResumePoint: false\n")).imports().subscriptions().get(0)
+                                                                                                                         .trustOldResumePoint()).isFalse();
+        assertThatThrownBy(() -> parse(FULL.replace("    model: PERIODIC\n", "    model: PERIODIC\n      trustOldResumePoint: maybe\n")))
+                .hasMessageContaining("import.subscriptions[0].trustOldResumePoint: expected true or false");
+    }
+
+    @Test
+    void the_default_throttle_is_25000_events_per_second() {
+        assertThat(CopySettings.defaults().maxEventsPerSecond()).isEqualTo(25_000);
+        assertThat(CopySettings.defaults().withMaxEventsPerSecond(0).maxEventsPerSecond()).as("0 is still unthrottled").isZero();
+    }
+
+    @Test
     void an_unknown_key_is_refused_so_a_misspelt_setting_never_falls_back_to_its_default() {
         assertThatThrownBy(() -> parse(FULL.replace("lockTimeout:", "lockTimout:"))).isInstanceOf(IllegalArgumentException.class)
                                                                                     .hasMessageContaining("settings: unknown key(s) [lockTimout]");

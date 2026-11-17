@@ -30,8 +30,9 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * @param epochWaitPoll      how often the epoch wait polls {@code pg_stat_activity} (default 20 ms)
  * @param lockTimeout        the cut-over's {@code lock_timeout} for the {@code SHARE} locks on the old tables (default
  *                           10 s, §3.5); on timeout nothing is copied and the cut-over reports writers still running
- * @param maxEventsPerSecond the online copy's throttle, applied between batches; 0 (the default) is unthrottled
- *                           (§16.7). The cut-over is never throttled
+ * @param maxEventsPerSecond the online copy's throttle, applied between batches (default 25 000, §18: at that rate the
+ *                           old engine's append p99 during an epoch was 0.84-0.92x of its p99 without a copy in the gate,
+ *                           §17); 0 is unthrottled. The cut-over is never throttled
  * @param verifyWindow       the {@code global_order} values per verification window (default 100 000, §6.1): each window
  *                           is hashed on both sides, and a differing one is bisected down to its rows
  */
@@ -49,7 +50,7 @@ public record CopySettings(int batchSize, Duration epochWaitTimeout, Duration ep
     }
 
     public static CopySettings defaults() {
-        return new CopySettings(10_000, Duration.ofMinutes(10), Duration.ofMillis(20), Duration.ofSeconds(10), 0, 100_000);
+        return new CopySettings(10_000, Duration.ofMinutes(10), Duration.ofMillis(20), Duration.ofSeconds(10), 25_000, 100_000);
     }
 
     public CopySettings withBatchSize(int batchSize) {

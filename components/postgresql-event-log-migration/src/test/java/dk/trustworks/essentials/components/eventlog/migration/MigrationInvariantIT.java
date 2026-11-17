@@ -85,6 +85,8 @@ class MigrationInvariantIT extends AbstractMigrationIT {
     private OldEngine         old;
     private ResumePointImport importStep;
     private Migration         migration;
+    /** The arms whose mapping opts in to the old resume point (trustOldResumePoint) */
+    private Set<String>       trusting = Set.of();
 
     // ------------------------------------------------------------------ the source
 
@@ -92,7 +94,7 @@ class MigrationInvariantIT extends AbstractMigrationIT {
         old = i8Source();
 
         var builder = ResumePointImport.builder(eventLog.admin());
-        ARMS.forEach(arm -> builder.addSubscription(arm.imported()));
+        ARMS.forEach(arm -> builder.addSubscription(trusting.contains(arm.subscriber()) ? arm.imported().trustingOldResumePoint() : arm.imported()));
         importStep = builder.build();
         importStep.seams(mutants(mutants));
         migration = new Migration(new MigrationPlan(dataSource, eventLog, List.of(SourceTable.of(ORDERS, old.table(ORDERS)), SourceTable.of(PAYMENTS, old.table(PAYMENTS))),
@@ -188,6 +190,12 @@ class MigrationInvariantIT extends AbstractMigrationIT {
             assertThat(i.openTransientGaps()).isEqualTo(2);
             assertThat(i.filledOpenTransientGaps()).isEqualTo(1);
             assertThat(i.lateFilledPermanentGapsBelowResume()).as("9: given up, filled late, reported only").isEqualTo(1);
+            assertThat(i.safeResumeFrom()).isEqualTo(GAP_FILL);
+            assertThat(i.safeReplayRows()).isEqualTo(4);
+            assertThat(i.trustedOldResumePoint()).isFalse();
+            assertThat(i.skippedFilledGaps()).isEmpty();
+            assertThat(i.skippedFilledGapCount()).isZero();
+            assertThat(i.largeReplay()).isFalse();
         });
         assertThat(report.imported()).filteredOn(i -> i.subscriber().equals("per-instance")).singleElement()
                                      .satisfies(i -> assertThat(i.instanceNames()).containsExactly("node-a", "node-b"));
@@ -270,5 +278,60 @@ class MigrationInvariantIT extends AbstractMigrationIT {
                                      CopySettings.defaults(), List.of(other));
         assertThatThrownBy(() -> new Migration(plan).cutover()).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no row in 'durable_subscriptions'");
         assertThat(migration.status(ORDERS).orElseThrow().state()).isEqualTo(MigrationStatus.State.COPYING);
+    }
+
+    @Test
+    void a_mapping_that_trusts_the_old_resume_point_imports_R_and_reports_the_skipped_gap_fill() throws Exception {
+        trusting = Set.of("fresh-periodic", "per-instance");
+        source();
+
+        // The preview shows both values: R, and the I8-safe I with its replay
+        ImportReport preview;
+        try (var connection = dataSource.getConnection()) {
+            preview = importStep.preview(connection, List.of(ORDERS, PAYMENTS));
+        }
+        assertThat(preview.imported()).filteredOn(ImportReport.SubscriptionImport::trustedOldResumePoint).hasSize(2).allSatisfy(i -> {
+            assertThat(i.resumeFrom()).isEqualTo(R);
+            assertThat(i.safeResumeFrom()).isEqualTo(GAP_FILL);
+            assertThat(i.safeReplayRows()).isEqualTo(4);
+            assertThat(i.skippedFilledGaps()).containsExactly(GAP_FILL);
+        });
+
+        migration.cutover();
+        var report = importStep.report().orElseThrow();
+        assertThat(report.imported()).hasSize(ARMS.size()).allSatisfy(i -> {
+            assertThat(i.oldResumeFrom()).isEqualTo(R);
+            assertThat(i.safeResumeFrom()).isEqualTo(GAP_FILL);
+            assertThat(i.safeReplayRows()).as("13..16").isEqualTo(4);
+            if (trusting.contains(i.subscriber())) {
+                assertThat(i.trustedOldResumePoint()).isTrue();
+                assertThat(i.resumeFrom()).as("the opt-in imports R").isEqualTo(R);
+                assertThat(i.replayValues()).isZero();
+                assertThat(i.replayRows()).isZero();
+                assertThat(i.skippedFilledGaps()).as("the filled open gap below R, never delivered again").containsExactly(GAP_FILL);
+                assertThat(i.skippedFilledGapCount()).isEqualTo(1);
+            } else {
+                assertThat(i.trustedOldResumePoint()).isFalse();
+                assertThat(i.resumeFrom()).as("without the opt-in, I8-safe as before").isEqualTo(GAP_FILL);
+                assertThat(i.replayRows()).isEqualTo(4);
+                assertThat(i.skippedFilledGaps()).isEmpty();
+            }
+        });
+        for (var arm : ARMS) {
+            for (var instance : arm.instances()) {
+                assertThat(queryLong("SELECT resume_from FROM el_progress WHERE subscriber = '" + arm.subscriber() + "' AND instance_name = '" + instance + "'"))
+                        .as("%s/%s", arm.subscriber(), instance).isEqualTo(trusting.contains(arm.subscriber()) ? R : GAP_FILL);
+            }
+        }
+
+        // The trusted arms do not get the gap fill again; that is exactly what the operator stated they do not need
+        var delivered = deliver(1);
+        assertThat(delivered).allSatisfy((key, set) -> {
+            if (trusting.contains(key.substring(0, key.indexOf('/')))) {
+                assertThat(set).as("%s: nothing below R", key).allMatch(g -> g >= R);
+            } else {
+                assertThat(set).as("%s: the gap fill", key).contains(GAP_FILL);
+            }
+        });
     }
 }

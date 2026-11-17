@@ -96,9 +96,11 @@ public record MigrationConfig(ConnectionSettings connection, SchemaOwnership sch
      * @param instanceNames   empty for an exclusive subscription; else every instance that will run the per-instance one
      * @param eventTypes      the new subscription's event-type filter; empty for all
      * @param tenant          the new subscription's tenant; may be null
+     * @param trustOldResumePoint import the old resume point unchanged, on the operator's statement that the old subscriber
+     *                        already handled its gap fills ({@link ImportedSubscription#trustOldResumePoint()})
      */
     public record Subscription(String oldSubscriberId, String subscriber, String aggregateType, ProgressModel model, ConsistencyMode consistency,
-                               List<String> instanceNames, Set<String> eventTypes, String tenant) {
+                               List<String> instanceNames, Set<String> eventTypes, String tenant, boolean trustOldResumePoint) {
         public Subscription {
             requireNonBlank(oldSubscriberId, "No oldSubscriber provided");
             requireNonBlank(subscriber, "No subscriber provided");
@@ -120,8 +122,9 @@ public record MigrationConfig(ConnectionSettings connection, SchemaOwnership sch
 
         /** @return the mapping the {@link ResumePointImport} takes */
         public ImportedSubscription imported() {
-            return instanceNames.isEmpty() ? ImportedSubscription.exclusive(oldSubscriberId, definition(""), model)
+            var imported = instanceNames.isEmpty() ? ImportedSubscription.exclusive(oldSubscriberId, definition(""), model)
                                            : ImportedSubscription.perInstance(oldSubscriberId, definition(instanceNames.getFirst()), model, instanceNames);
+            return trustOldResumePoint ? imported.trustingOldResumePoint() : imported;
         }
     }
 

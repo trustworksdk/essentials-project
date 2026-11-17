@@ -16,18 +16,41 @@
 
 package dk.trustworks.essentials.components.eventlog.migration.cli;
 
+import dk.trustworks.essentials.components.eventlog.migration.ImportReport;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.*;
 
 class MigrationCliTest {
     @TempDir
     Path dir;
+
+    private static ImportReport.SubscriptionImport imported(long safeReplayRows, boolean trusted) {
+        return new ImportReport.SubscriptionImport("old", "Orders", "view", List.of(""), 200_000, trusted ? 200_000 : 90_000, trusted ? 0 : 110_000,
+                                                   trusted ? 0 : safeReplayRows, 2, 1, 0, 90_000, safeReplayRows, trusted, trusted ? List.of(90_000L) : List.of(),
+                                                   trusted ? 1 : 0);
+    }
+
+    @Test
+    void the_preview_flags_a_large_safe_replay_with_a_hint_about_the_opt_in() {
+        var large = imported(ImportReport.LARGE_REPLAY_ROWS + 1, false);
+        assertThat(large.largeReplay()).isTrue();
+        assertThat(MigrationCli.optInLine(large)).hasValueSatisfying(line -> assertThat(line).contains("LARGE REPLAY", "10001 rows", "trustOldResumePoint: true"));
+
+        var small = imported(ImportReport.LARGE_REPLAY_ROWS, false);
+        assertThat(small.largeReplay()).isFalse();
+        assertThat(MigrationCli.optInLine(small)).isEmpty();
+
+        var trusted = imported(ImportReport.LARGE_REPLAY_ROWS + 1, true);
+        assertThat(trusted.largeReplay()).as("opted in: nothing to replay").isFalse();
+        assertThat(MigrationCli.optInLine(trusted)).hasValueSatisfying(line -> assertThat(line).contains("WARNING: trustOldResumePoint", "safe I 90000", "[90000]"));
+    }
 
     @Test
     void arguments_are_parsed_per_command() {

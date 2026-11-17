@@ -1,6 +1,6 @@
 # Event store redesign, phase 9: migration design
 
-**Status:** decided 2026-11-17 (§15); being built. Built on
+**Status:** decided 2026-11-17 (§15); built 2026-11-17, gate passed (§17, with the decisions of §18). Built on
 `feature/event-store-engine-phase9` (from phase 8b, `223d36278`). When phase 9 is done, this file moves to
 `docs/archive/` or is folded into the redesign's record.
 **Scope:** phase 9 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): the one-way move of an
@@ -312,6 +312,14 @@ gives each subscription's replay length `R - I` in values and in rows, so a gap 
 causes, is seen before the cut-over. The new model has no per-subscription pending set: progress is one `resume_from`,
 and decided §19 item 17 stores no open-page state. Replaying from `I` is therefore the only hand-over that loses nothing.
 
+**Operator opt-in to `R` (§18).** A mapping may set `trustOldResumePoint` (YAML `trustOldResumePoint: true`). The
+operator then states that the old subscriber has already handled the events that filled its open transient gaps, and
+the import writes `R` instead of `I`. This trades I8 for a smaller replay, on the operator's word and not on anything
+the tool can prove (§17.4). The report records the opt-in and lists the filled gaps it skips, the cut-over logs them at
+WARN, and the read-back check asserts `resume_from = R` for such a mapping. Mappings without the opt-in keep `I`. The
+import preview and the report show, per mapping, both `R` and the I8-safe `I` with the rows `I` replays, and the preview
+flags a safe replay of more than 10 000 rows with a hint about the opt-in.
+
 Mutant `IMPORT_RESUME_UNCHANGED` (`I = R`) is I8's named must-fail (§9.2). Mutant `IMPORT_LOWEST_GAP_UNFILTERED`
 (`I` = the lowest open gap, filled or not) is *not* a correctness mutant. It is the stricter rule §12.4 states, and it
 only replays more. The test asserts the replay length to show the tighter rule is in use.
@@ -522,7 +530,8 @@ users. A miss is recorded with a decision.
 
 ## 11. Against the invariants
 
-- **I8.** This phase (§9.2).
+- **I8.** This phase (§9.2). A mapping with the `trustOldResumePoint` opt-in (§4.2, §18) gives I8 up for that
+  subscription on the operator's statement that its gap fills were handled; I8 holds for every other mapping.
 - **I1, I3.** Copied holes are permanent at cut-over and never held by a running writer, so the reader retires them at
   once (§3.6). The engine guard keeps every reader off a table while it is being filled (§3.8).
 - **I2.** Per-aggregate order is the copied `event_order`, unchanged. Replays of `[I, R)` re-deliver in order.
@@ -706,7 +715,7 @@ either way. After the cut-over, a full verify over every window matched in both 
 **About the missed line:** §10.1 says that only the cut-over line gates users, and that a miss is recorded with a
 decision. The cause is server-side contention: one copier backend at full speed. It is not lock interference, since
 the copy takes no lock that the appends wait on. **Recommended decision:** accept the doubling of p99 as it is, and give 9-C
-an optional `settings.maxEventsPerSecond` throttle between batches (default unlimited) for operators whose latency
+an optional `settings.maxEventsPerSecond` throttle between batches (default unlimited at the time; 25 000 since §18) for operators whose latency
 budget is tight. A copy throttled to 20 000 events/s still moves 10 M events in under 9 minutes. The spike did not
 measure a throttled arm.
 
@@ -903,3 +912,30 @@ changed.
 | §10.1 online verify | Met |
 | §10.2 | Met on 16, 17 and 18 |
 | §10.3 | Met for steps 3 and 4, on 7 of the 10 aggregate types with events (the other 3 need the simulators) |
+
+## 18. Decisions after the gate (2026-11-17)
+
+**The import keeps the I8-safe value by default, with a per-mapping opt-in to the old resume point (maintainer,
+QP-4b2431c225).** The gate showed that the old engine can leave a transient gap row behind after it has delivered the
+fill (§17.4). Because the import uses `I = least(R, lowest filled open gap)`, a handful of such rows moved `I` back across
+most of a stream, and the trading demo replayed up to about 109 000 already-handled events into views (§17.3). The tool
+cannot tell a delivered fill from one that was never delivered, so it cannot skip these gaps on its own. The maintainer
+decided to keep the safe value as the default and to add an opt-in on `ImportedSubscription`, `trustOldResumePoint`
+(YAML `trustOldResumePoint: true`). With it the operator states that the subscriber already handled its gap fills, and the
+import writes `R`. The opt-in gives up I8 for that subscription in exchange for no replay. To make the trade visible, the
+import report and the import preview show `R`, the safe `I` and the rows the safe value replays for every mapping. They
+also record the opt-in and list the filled gaps it skips, and the cut-over logs those gaps at WARN. The preview flags a
+safe replay of more than 10 000 rows and points at the opt-in. Without the opt-in the behaviour is unchanged:
+`MigrationInvariantIT` still passes, and `IMPORT_RESUME_UNCHANGED` must still fail.
+
+**The online copy is throttled to 25 000 events per second by default (Claude).** `CopySettings.maxEventsPerSecond`
+now defaults to 25 000 instead of 0. In the gate, 25 000 events/s kept the old engine's append p99 during an epoch at
+0.84 to 0.92 times its p99 without a copy, while the unthrottled copy missed the 1.5× line (§17.1). 25 000 events/s is
+also above the 20 000 events/s floor of §16.7, so a 10 M-event table still copies in under 7 minutes. Setting the value to
+0 still turns the throttle off, and the cut-over is never throttled.
+
+### 18.1 Open item
+
+Why the old engine leaves transient gap rows after their fill was delivered (§17.4) is to be investigated separately:
+`docs/plans/old-engine-leftover-transient-gaps.md`. Any fix belongs to `postgresql-event-store` and needs the
+maintainer's go-ahead.

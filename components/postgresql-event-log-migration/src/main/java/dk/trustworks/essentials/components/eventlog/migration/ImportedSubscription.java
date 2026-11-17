@@ -37,8 +37,15 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * @param instanceNames   the progress rows to write: {@code [""]} for an exclusive definition; for a per-instance
  *                        definition the non-blank name of every instance that will run it (the new engine keeps one row
  *                        per instance), including the definition's own. Every row gets the same imported point
+ * @param trustOldResumePoint the operator's statement that the old subscriber has already handled the events that filled
+ *                        its open transient gaps (design phase 9 §4.2, §18). When set, the import writes the old resume
+ *                        point {@code R} unchanged instead of the I8-safe {@code least(R, lowest filled open gap)}: the
+ *                        subscription does not replay {@code [I, R)}, and an event that filled a gap and was in fact never
+ *                        delivered is never delivered. The import report names the filled gaps this skips. Off by default
+ *                        ({@link #exclusive}, {@link #perInstance}); set with {@link #trustingOldResumePoint()}
  */
-public record ImportedSubscription(String oldSubscriberId, SubscriptionDefinition definition, ProgressModel model, List<String> instanceNames) {
+public record ImportedSubscription(String oldSubscriberId, SubscriptionDefinition definition, ProgressModel model, List<String> instanceNames,
+                                   boolean trustOldResumePoint) {
     public ImportedSubscription {
         requireNonBlank(oldSubscriberId, "No oldSubscriberId provided");
         requireNonNull(definition, "No definition provided");
@@ -60,7 +67,7 @@ public record ImportedSubscription(String oldSubscriberId, SubscriptionDefinitio
      * @return the mapping of an old subscriber to an exclusive subscription
      */
     public static ImportedSubscription exclusive(String oldSubscriberId, SubscriptionDefinition definition, ProgressModel model) {
-        return new ImportedSubscription(oldSubscriberId, definition, model, List.of(""));
+        return new ImportedSubscription(oldSubscriberId, definition, model, List.of(""), false);
     }
 
     /**
@@ -68,7 +75,15 @@ public record ImportedSubscription(String oldSubscriberId, SubscriptionDefinitio
      * @return the mapping of an old subscriber to a per-instance subscription
      */
     public static ImportedSubscription perInstance(String oldSubscriberId, SubscriptionDefinition definition, ProgressModel model, List<String> instanceNames) {
-        return new ImportedSubscription(oldSubscriberId, definition, model, instanceNames);
+        return new ImportedSubscription(oldSubscriberId, definition, model, instanceNames, false);
+    }
+
+    /**
+     * @return this mapping, opted in to importing the old resume point {@code R} unchanged (see {@code trustOldResumePoint}):
+     * the operator states the old subscriber already handled the events that filled its open transient gaps
+     */
+    public ImportedSubscription trustingOldResumePoint() {
+        return new ImportedSubscription(oldSubscriberId, definition, model, instanceNames, true);
     }
 
     /** @return the aggregate type, the old row's and the new subscription's */

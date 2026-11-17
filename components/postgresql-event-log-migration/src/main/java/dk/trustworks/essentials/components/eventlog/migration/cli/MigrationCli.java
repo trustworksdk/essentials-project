@@ -203,8 +203,10 @@ public final class MigrationCli {
         out.println("Import preview (read only, no locks; as of the last copy epoch, the cut-over may import a lower I and replay more):");
         for (var i : report.imported()) {
             out.println("  " + i.oldSubscriberId() + " -> " + i.subscriber() + " (" + i.aggregateType() + (i.instanceNames().equals(List.of("")) ? "" : ", instances " +
-                    i.instanceNames()) + "): R " + i.oldResumeFrom() + ", I " + i.resumeFrom() + ", replay " + i.replayRows() + " rows (" + i.replayValues() +
-                                " values); " + i.openTransientGaps() + " open transient gaps, " + i.filledOpenTransientGaps() + " filled");
+                    i.instanceNames()) + "): R " + i.oldResumeFrom() + ", I " + i.resumeFrom() + ", replay " + i.replayRows() + " rows (" + i.replayValues() + " values); I8-safe I " +
+                                i.safeResumeFrom() + " replays " + i.safeReplayRows() + " rows; " + i.openTransientGaps() + " open transient gaps, " +
+                                i.filledOpenTransientGaps() + " filled");
+            printOptIn(i);
         }
         if (report.imported().isEmpty()) {
             out.println("  no subscription mapped");
@@ -234,10 +236,35 @@ public final class MigrationCli {
                     i.instanceNames()) + "): resume from " + i.resumeFrom() + " (old " + i.oldResumeFrom() + "), replays " + i.replayRows() + " rows; " +
                                 i.openTransientGaps() + " open transient gaps, " + i.filledOpenTransientGaps() + " filled; " + i.lateFilledPermanentGapsBelowResume() +
                                 " permanent gaps below the resume point filled late (not delivered by the old engine either)");
+            printOptIn(i);
         }
         for (var u : report.unmapped()) {
             out.println("  WARNING: old subscriber " + u.subscriberId() + " (" + u.aggregateType() + ", resume from " + u.resumeFrom() + ") was not imported");
         }
+    }
+
+    private void printOptIn(ImportReport.SubscriptionImport i) {
+        optInLine(i).ifPresent(out::println);
+    }
+
+    /**
+     * @return the line flagging a mapping's opt-in to the old resume point, or its large safe replay with a hint about the
+     * opt-in; empty if neither applies
+     */
+    static Optional<String> optInLine(ImportReport.SubscriptionImport i) {
+        if (i.trustedOldResumePoint()) {
+            return Optional.of("    WARNING: trustOldResumePoint: imports R " + i.oldResumeFrom() + " instead of the safe I " + i.safeResumeFrom() +
+                                       " on the operator's statement that the old subscriber handled its gap fills; " + i.skippedFilledGapCount() +
+                                       " filled gaps skipped, not delivered again" +
+                                       (i.skippedFilledGapCount() > i.skippedFilledGaps().size() ? " (lowest " + i.skippedFilledGaps().size() + ")" : "") + ": " +
+                                       i.skippedFilledGaps());
+        }
+        if (i.largeReplay()) {
+            return Optional.of("    LARGE REPLAY: the safe I replays " + i.safeReplayRows() + " rows (over " + ImportReport.LARGE_REPLAY_ROWS + "). If the old " +
+                                       "subscriber has already handled the events that filled its gaps, set trustOldResumePoint: true on this mapping to import R " +
+                                       "and skip the replay (trades invariant I8 on that statement)");
+        }
+        return Optional.empty();
     }
 
     private int verifyAfterCutover(Migration migration) throws Exception {

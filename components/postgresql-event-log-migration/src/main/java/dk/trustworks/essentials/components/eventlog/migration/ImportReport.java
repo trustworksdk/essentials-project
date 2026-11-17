@@ -36,26 +36,57 @@ public record ImportReport(List<SubscriptionImport> imported, List<UnmappedSubsc
     }
 
     /**
+     * A safe replay longer than this many rows is flagged ({@link SubscriptionImport#largeReplay()}), with a hint about
+     * {@link ImportedSubscription#trustOldResumePoint()}
+     */
+    public static final long LARGE_REPLAY_ROWS = 10_000;
+
+    /** At most this many skipped filled gaps are listed per mapping ({@link SubscriptionImport#skippedFilledGaps()}) */
+    public static final int MAX_LISTED_GAPS = 100;
+
+    /**
      * @param oldSubscriberId                the old subscriber
      * @param aggregateType                  the aggregate type
      * @param subscriber                     the new subscription's subscriber name
      * @param instanceNames                  the progress rows written ({@code ""} for an exclusive subscription)
      * @param oldResumeFrom                  {@code R}: the old row's {@code resume_from_and_including_global_eventorder}
-     * @param resumeFrom                     {@code I = least(R, lowest open transient gap that has a row)}: the progress
-     *                                       rows' {@code resume_from}
-     * @param replayValues                   {@code R - I}: global order values below {@code R} delivered again
-     * @param replayRows                     the events in {@code [I, R)}, delivered again (at least once)
+     * @param resumeFrom                     the progress rows' {@code resume_from}: {@code safeResumeFrom}, or {@code R} when
+     *                                       {@code trustedOldResumePoint}
+     * @param replayValues                   {@code R - resumeFrom}: global order values below {@code R} delivered again
+     * @param replayRows                     the events in {@code [resumeFrom, R)}, delivered again (at least once)
      * @param openTransientGaps              the subscriber's open transient gaps of the type
      * @param filledOpenTransientGaps        those of them that have a row: committed late, maybe never delivered
      * @param lateFilledPermanentGapsBelowResume the permanent gaps of the type below {@code R} that have a row: late
      *                                       commits the old engine gave up on and never delivered; copied, not delivered
      *                                       (decision 7, report only)
+     * @param safeResumeFrom                 the I8-safe {@code I = least(R, lowest open transient gap that has a row)},
+     *                                       whether imported or not
+     * @param safeReplayRows                 the events in {@code [safeResumeFrom, R)}: the replay the safe value costs
+     * @param trustedOldResumePoint          whether the mapping opted in to importing {@code R}
+     *                                       ({@link ImportedSubscription#trustOldResumePoint()})
+     * @param skippedFilledGaps              when {@code trustedOldResumePoint}: the filled open transient gaps below
+     *                                       {@code R}, lowest first and at most {@link #MAX_LISTED_GAPS}, whose events the
+     *                                       subscription will not be delivered again; the operator stated they were handled.
+     *                                       Empty otherwise
+     * @param skippedFilledGapCount          when {@code trustedOldResumePoint}: how many filled open transient gaps below
+     *                                       {@code R} there are in all; 0 otherwise
      */
     public record SubscriptionImport(String oldSubscriberId, String aggregateType, String subscriber, List<String> instanceNames, long oldResumeFrom,
                                      long resumeFrom, long replayValues, long replayRows, long openTransientGaps, long filledOpenTransientGaps,
-                                     long lateFilledPermanentGapsBelowResume) {
+                                     long lateFilledPermanentGapsBelowResume, long safeResumeFrom, long safeReplayRows, boolean trustedOldResumePoint,
+                                     List<Long> skippedFilledGaps, long skippedFilledGapCount) {
         public SubscriptionImport {
             instanceNames = List.copyOf(instanceNames);
+            skippedFilledGaps = List.copyOf(skippedFilledGaps);
+        }
+
+        /**
+         * @return whether the safe value replays more than {@link #LARGE_REPLAY_ROWS} rows and the mapping has not opted in
+         * to the old resume point: an operator who knows the old subscriber handled its gap fills may set
+         * {@link ImportedSubscription#trustOldResumePoint()} to skip the replay
+         */
+        public boolean largeReplay() {
+            return !trustedOldResumePoint && safeReplayRows > LARGE_REPLAY_ROWS;
         }
     }
 
