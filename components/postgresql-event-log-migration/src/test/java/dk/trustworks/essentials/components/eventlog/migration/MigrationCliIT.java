@@ -74,6 +74,19 @@ class MigrationCliIT extends AbstractMigrationIT {
         assertThat(run("verify", config, "--all")).isZero();
         assertThat(output()).contains("Verification (ONLINE) EQUAL").contains("Orders: global_order (0, 1003], 17 rows");
 
+        // The import preview, while the old engine still runs: R, I and the replay per mapping, rolled back
+        var oldSubscriptions = queryLong("SELECT count(*) + sum(resume_from_and_including_global_eventorder) FROM durable_subscriptions") +
+                               queryLong("SELECT count(*) FROM transient_subscriber_gaps") + queryLong("SELECT count(*) FROM permanent_gaps");
+        assertThat(run("import-preview", config)).isZero();
+        assertThat(output()).contains("Import preview (rolled back")
+                            .contains("orders-projector -> orders-view (Orders): R " + R + ", I " + GAP_FILL + ", replay 4 rows (" + (R - GAP_FILL) + " values)")
+                            .contains("orders-projector -> orders-mailer (Orders, instances [node-a, node-b]): R " + R + ", I " + GAP_FILL + ", replay 4 rows")
+                            .contains("WARNING: old subscriber " + OLD_LEGACY + " (" + PAYMENTS + ", resume from 2) is not mapped");
+        assertThat(queryLong("SELECT count(*) FROM el_progress")).as("the preview rolled back").isZero();
+        assertThat(queryLong("SELECT count(*) + sum(resume_from_and_including_global_eventorder) FROM durable_subscriptions") +
+                   queryLong("SELECT count(*) FROM transient_subscriber_gaps") + queryLong("SELECT count(*) FROM permanent_gaps"))
+                .as("the old subscription and gap tables are untouched").isEqualTo(oldSubscriptions);
+
         // Every old-engine node stopped; the cut-over with the resume-point import
         assertThat(run("cutover", config)).isZero();
         assertThat(output()).contains("Cut over")

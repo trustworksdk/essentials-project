@@ -152,15 +152,20 @@ public record MigrationConfig(ConnectionSettings connection, SchemaOwnership sch
      * @return the cut-over's import step; empty when no subscription is mapped
      */
     public Optional<ResumePointImport> resumePointImport(EventLog eventLog) {
-        if (imports.subscriptions().isEmpty()) {
-            return Optional.empty();
-        }
+        return imports.subscriptions().isEmpty() ? Optional.empty() : Optional.of(importStep(eventLog));
+    }
+
+    /**
+     * @param eventLog a started event log
+     * @return the import step, also when no subscription is mapped (its preview then lists only the unmapped subscribers)
+     */
+    public ResumePointImport importStep(EventLog eventLog) {
         var builder = ResumePointImport.builder(eventLog.admin())
                                        .setDurableSubscriptionsTable(imports.durableSubscriptionsTable())
                                        .setTransientGapsTable(imports.transientGapsTable())
                                        .setPermanentGapsTable(imports.permanentGapsTable());
         imports.subscriptions().forEach(s -> builder.addSubscription(s.imported()));
-        return Optional.of(builder.build());
+        return builder.build();
     }
 
     /**

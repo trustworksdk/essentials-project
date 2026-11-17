@@ -37,6 +37,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *   copy [--until-caught-up]           one online epoch; or epochs until one copies at most --max-delta rows
  *        [--max-delta N] [--max-epochs N]   (defaults 5000 and 100)
  *   verify [--all] [--after-cutover]   the copied ranges not verified yet; --all every copied row; --after-cutover late rows
+ *   import-preview                     the resume-point import as the cut-over would do it now (R, I, replay rows), rolled back
  *   cutover                            the final pass, with every old-engine node stopped, plus the resume-point import
  *   verify-after-cutover               as verify --after-cutover
  *   status                             each aggregate type's el_migration row
@@ -57,7 +58,7 @@ public final class MigrationCli {
     static final long DEFAULT_MAX_DELTA  = 5_000;
     static final int  DEFAULT_MAX_EPOCHS = 100;
 
-    private static final Set<String> COMMANDS = Set.of("preflight", "prepare", "copy", "verify", "cutover", "verify-after-cutover", "status", "revoke-statements");
+    private static final Set<String> COMMANDS = Set.of("preflight", "prepare", "copy", "verify", "import-preview", "cutover", "verify-after-cutover", "status", "revoke-statements");
 
     private final PrintStream out;
     private final PrintStream err;
@@ -107,8 +108,9 @@ public final class MigrationCli {
     private int execute(Arguments arguments, MigrationConfig config) throws Exception {
         var dataSource = config.dataSource();
         var eventLog   = config.eventLog(dataSource);
-        // preflight, verify and status are read only, and starting the event log may create its schema (COMPONENT)
-        var start = Set.of("prepare", "copy", "cutover").contains(arguments.command);
+        // preflight, verify and status are read only, and starting the event log may create its schema (COMPONENT); the
+        // import preview needs it started for EventLogAdmin
+        var start = Set.of("prepare", "copy", "import-preview", "cutover").contains(arguments.command);
         if (start) {
             eventLog.start();
         }
@@ -120,6 +122,7 @@ public final class MigrationCli {
                 case "prepare" -> prepare(migration);
                 case "copy" -> copy(migration, arguments);
                 case "verify" -> arguments.afterCutover ? verifyAfterCutover(migration) : verify(migration, arguments.all);
+                case "import-preview" -> importPreview(config, eventLog, dataSource);
                 case "cutover" -> cutover(migration, importStep);
                 case "verify-after-cutover" -> verifyAfterCutover(migration);
                 case "status" -> status(migration, config);
@@ -187,6 +190,30 @@ public final class MigrationCli {
         return report.equal() ? OK : FAILED;
     }
 
+    private int importPreview(MigrationConfig config, EventLog eventLog, javax.sql.DataSource dataSource) throws Exception {
+        var types = config.tables().stream().map(SourceTable::aggregateType).toList();
+        ImportReport report;
+        try (var connection = dataSource.getConnection()) {
+            report = config.importStep(eventLog).preview(connection, types, config.settings().lockTimeout());
+        }
+        out.println("Import preview (rolled back; as of the last copy epoch, the cut-over's final pass may replay more):");
+        for (var i : report.imported()) {
+            out.println("  " + i.oldSubscriberId() + " -> " + i.subscriber() + " (" + i.aggregateType() + (i.instanceNames().equals(List.of("")) ? "" : ", instances " +
+                    i.instanceNames()) + "): R " + i.oldResumeFrom() + ", I " + i.resumeFrom() + ", replay " + i.replayRows() + " rows (" + i.replayValues() +
+                                " values); " + i.openTransientGaps() + " open transient gaps, " + i.filledOpenTransientGaps() + " filled");
+        }
+        if (report.imported().isEmpty()) {
+            out.println("  no subscription mapped");
+        }
+        if (!report.gapTracking()) {
+            out.println("  the old engine tracked no gaps: every resume point would be imported unchanged");
+        }
+        for (var u : report.unmapped()) {
+            out.println("  WARNING: old subscriber " + u.subscriberId() + " (" + u.aggregateType() + ", resume from " + u.resumeFrom() + ") is not mapped");
+        }
+        return OK;
+    }
+
     private int cutover(Migration migration, Optional<ResumePointImport> importStep) throws Exception {
         var report = migration.cutover();
         out.println("Cut over, waited " + report.lockWait() + " for the locks, stop " + report.stop() + ":");
@@ -239,6 +266,7 @@ public final class MigrationCli {
                  prepare
                  copy [--until-caught-up [--max-delta N] [--max-epochs N]]
                  verify [--all | --after-cutover]
+                 import-preview
                  cutover
                  verify-after-cutover
                  status
