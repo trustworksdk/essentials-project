@@ -38,9 +38,16 @@ class DependencyRulesTest {
     }
 
     @Test
-    void the_old_subscription_model_and_reactor_are_not_used() {
-        noClasses().should().dependOnClassesThat().resideInAnyPackage("reactor..",
-                                                                     "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription..",
+    void reactor_appears_only_in_the_event_store_adapters_poll_signatures() {
+        // EventStore's pollEvents/unboundedPollForEvents return Flux; the adapter's overrides throw (design phase 8 §5.2)
+        noClasses().that().doNotHaveFullyQualifiedName("dk.trustworks.essentials.components.eventlog.integration.EventLogEventStore")
+                   .should().dependOnClassesThat().resideInAnyPackage("reactor..")
+                   .check(moduleClasses);
+    }
+
+    @Test
+    void the_old_subscription_model_is_not_used() {
+        noClasses().should().dependOnClassesThat().resideInAnyPackage("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription..",
                                                                      "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor..",
                                                                      "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap..",
                                                                      "dk.trustworks.essentials.components.foundation.fencedlock..",

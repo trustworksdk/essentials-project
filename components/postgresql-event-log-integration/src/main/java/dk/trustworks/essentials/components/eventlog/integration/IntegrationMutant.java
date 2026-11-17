@@ -26,5 +26,9 @@ enum IntegrationMutant {
     /** A payload that cannot be deserialized is reported as an I/O failure: retried forever, never parked */
     DESERIALIZE_OUTSIDE_HANDLER_RETRY,
     /** The page source hands out its typed resources unwrapped: a handler's commit lands output without progress (I12) */
-    HANDLER_COMMITS_EARLY
+    HANDLER_COMMITS_EARLY,
+    /** The adapter lets the engine's StreamAppendConflictException escape instead of OptimisticAppendToStreamException (§9.4) */
+    CONFLICT_UNMAPPED,
+    /** The adapter wakes the engine at append, before commit, instead of through the commit callback (§9.4) */
+    PUBLISH_BEFORE_COMMIT
 }
