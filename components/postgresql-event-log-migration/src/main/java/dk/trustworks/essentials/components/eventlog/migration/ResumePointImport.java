@@ -108,38 +108,33 @@ public final class ResumePointImport implements CutoverStep {
     }
 
     /**
-     * The import preview: what {@link #run} would import if the cut-over ran now, in a transaction that is rolled back.
-     * Writes nothing that survives, and only reads the old engine's tables, taking the same {@code SHARE} locks on its
-     * subscription and gap tables as the cut-over, under {@code lockTimeout}, for the duration of the preview.
+     * The import preview (design phase 9 §4): per mapping, the old resume point {@code R}, the value the cut-over would
+     * import {@code I}, and the replay length in values and rows, plus the old subscribers that are not mapped. Computed
+     * by the same code as {@link #run}, in a {@code READ ONLY} transaction: it takes no {@code SHARE} lock, writes
+     * nothing, and runs while the old engine does.
      * <p>
-     * It sees the event log as the last epoch left it: the replay rows and the filled open gaps count only copied events,
-     * so the cut-over's final pass may find more. The progress-row checks run, so a mapping the cut-over would refuse (an
-     * existing progress row with another resume point, an old subscriber with no resume point) is refused here as well.
-     * Does not change {@link #report()}.
+     * It sees both engines as they are now: the event log as the last copy epoch left it, so a gap filled by an event not
+     * copied yet is not counted, and the old subscribers' resume points as last saved. The cut-over, which computes the
+     * same under its locks after the final pass, may therefore import a lower {@code I} and replay more. The progress-row
+     * checks are not run (they read the rows the import writes). Does not change {@link #report()}.
      *
-     * @param connection     a connection to the database of both engines; its auto-commit is restored
+     * @param connection     a connection to the database of both engines; its auto-commit and read-only flag are restored
      * @param aggregateTypes the aggregate types the migration plan copies
-     * @param lockTimeout    how long to wait for the {@code SHARE} locks
-     * @throws CutoverLockTimeoutException if old subscribers hold the tables longer than {@code lockTimeout}
-     * @throws IllegalStateException       if the cut-over would refuse a mapping
+     * @throws IllegalStateException if a mapping is of an aggregate type the plan does not copy, or its old subscriber has
+     *                               no resume point
      */
-    public ImportReport preview(Connection connection, List<String> aggregateTypes, java.time.Duration lockTimeout) throws SQLException {
+    public ImportReport preview(Connection connection, List<String> aggregateTypes) throws SQLException {
         requireNonNull(connection, "No connection provided");
         requireNonNull(aggregateTypes, "No aggregateTypes provided");
-        requireTrue(requireNonNull(lockTimeout, "No lockTimeout provided").toMillis() > 0, "lockTimeout must be at least 1 ms");
         var autoCommit = connection.getAutoCommit();
+        var readOnly   = connection.isReadOnly();
         connection.setAutoCommit(false);
+        connection.setReadOnly(true);
         try {
-            try (var statement = connection.createStatement()) {
-                statement.execute("SET LOCAL lock_timeout = '" + lockTimeout.toMillis() + "ms'");
-            }
             return importAll(connection, List.copyOf(aggregateTypes), true);
-        } catch (CutoverLockTimeoutException e) {
-            throw new CutoverLockTimeoutException("Old subscribers held the subscription and gap tables longer than " + lockTimeout +
-                                                          " (the preview takes the same SHARE locks as the cut-over): try again, or with a longer lockTimeout",
-                                                  e.getCause());
         } finally {
             connection.rollback();
+            connection.setReadOnly(readOnly);
             connection.setAutoCommit(autoCommit);
         }
     }
@@ -154,11 +149,17 @@ public final class ResumePointImport implements CutoverStep {
         var durableExists   = exists(connection, durableSubscriptionsTable);
         var gapTracking     = exists(connection, transientGapsTable);
         var permanentExists = exists(connection, permanentGapsTable);
-        lock(connection, durableExists, gapTracking, permanentExists);
+        if (!preview) {
+            lock(connection, durableExists, gapTracking, permanentExists);
+        }
 
         var imported = new ArrayList<SubscriptionImport>();
         for (var s : subscriptions) {
-            imported.add(importOne(connection, s, durableExists, gapTracking, permanentExists));
+            var computed = compute(connection, s, durableExists, gapTracking, permanentExists);
+            if (!preview) {
+                write(connection, s, computed);
+            }
+            imported.add(computed.report());
         }
         var unmapped = durableExists ? unmapped(connection, types) : List.<UnmappedSubscriber>of();
         var result   = new ImportReport(imported, unmapped, gapTracking);
@@ -182,7 +183,11 @@ public final class ResumePointImport implements CutoverStep {
         return result;
     }
 
-    private SubscriptionImport importOne(Connection connection, ImportedSubscription s, boolean durableExists, boolean gapTracking, boolean permanentExists) throws SQLException {
+    /** One mapping's import, computed read-only; {@code lowestFilled} is the lowest open transient gap that has a row, or null */
+    private record Computed(SubscriptionImport report, Long lowestFilled) {
+    }
+
+    private Computed compute(Connection connection, ImportedSubscription s, boolean durableExists, boolean gapTracking, boolean permanentExists) throws SQLException {
         var  type       = s.aggregateType();
         var  eventTable = AggregateTypeTables.of(type).eventTable();
         long oldResume  = oldResumePoint(connection, s, durableExists);
@@ -215,18 +220,6 @@ public final class ResumePointImport implements CutoverStep {
             resumeFrom = lowestFilled == null ? oldResume : Math.min(oldResume, lowestFilled);
         }
 
-        for (var instance : s.instanceNames()) {
-            var stored = admin.importProgress(s.definition(), s.model(), instance, resumeFrom, connection);
-            if (stored != resumeFrom) {
-                throw new IllegalStateException("The progress row of '" + s.definition().subscriber() + "' of '" + type + "' (instance '" + instance +
-                                                        "') already exists with resume point " + stored + ", not the imported " + resumeFrom +
-                                                        ": refusing to import over it. Delete the row (EventLogAdmin.deleteRetiredInstance) or drop the mapping");
-            }
-        }
-        if (!seams.has(MigrationMutant.CUTOVER_WITHOUT_VERIFY)) {
-            check(connection, s, oldResume, lowestFilled);
-        }
-
         long replayRows = queryLong(connection, "SELECT count(*) FROM " + eventTable + " WHERE global_order >= ? AND global_order < ?", resumeFrom, oldResume);
         long lateFills  = 0;
         if (permanentExists) {
@@ -240,8 +233,24 @@ public final class ResumePointImport implements CutoverStep {
                 }
             }
         }
-        return new SubscriptionImport(s.oldSubscriberId(), type, s.definition().subscriber(), s.instanceNames(), oldResume, resumeFrom, oldResume - resumeFrom,
-                                      replayRows, openGaps, filledGaps, lateFills);
+        return new Computed(new SubscriptionImport(s.oldSubscriberId(), type, s.definition().subscriber(), s.instanceNames(), oldResume, resumeFrom,
+                                                   oldResume - resumeFrom, replayRows, openGaps, filledGaps, lateFills), lowestFilled);
+    }
+
+    /** Writes the computed resume point as each instance's progress row, then checks the rows */
+    private void write(Connection connection, ImportedSubscription s, Computed computed) throws SQLException {
+        var resumeFrom = computed.report().resumeFrom();
+        for (var instance : s.instanceNames()) {
+            var stored = admin.importProgress(s.definition(), s.model(), instance, resumeFrom, connection);
+            if (stored != resumeFrom) {
+                throw new IllegalStateException("The progress row of '" + s.definition().subscriber() + "' of '" + s.aggregateType() + "' (instance '" + instance +
+                                                        "') already exists with resume point " + stored + ", not the imported " + resumeFrom +
+                                                        ": refusing to import over it. Delete the row (EventLogAdmin.deleteRetiredInstance) or drop the mapping");
+            }
+        }
+        if (!seams.has(MigrationMutant.CUTOVER_WITHOUT_VERIFY)) {
+            check(connection, s, computed.report().oldResumeFrom(), computed.lowestFilled());
+        }
     }
 
     /**

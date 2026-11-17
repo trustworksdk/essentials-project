@@ -16,7 +16,8 @@
 
 package dk.trustworks.essentials.components.eventlog.migration.cli;
 
-import dk.trustworks.essentials.components.eventlog.EventLog;
+import dk.trustworks.essentials.components.eventlog.*;
+import dk.trustworks.essentials.components.foundation.schema.SchemaOwnership;
 import dk.trustworks.essentials.components.eventlog.migration.*;
 
 import java.io.PrintStream;
@@ -37,7 +38,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *   copy [--until-caught-up]           one online epoch; or epochs until one copies at most --max-delta rows
  *        [--max-delta N] [--max-epochs N]   (defaults 5000 and 100)
  *   verify [--all] [--after-cutover]   the copied ranges not verified yet; --all every copied row; --after-cutover late rows
- *   import-preview                     the resume-point import as the cut-over would do it now (R, I, replay rows), rolled back
+ *   import-preview                     read only, no locks: per mapping R, I and the replay, and the unmapped old subscribers
  *   cutover                            the final pass, with every old-engine node stopped, plus the resume-point import
  *   verify-after-cutover               as verify --after-cutover
  *   status                             each aggregate type's el_migration row
@@ -107,9 +108,12 @@ public final class MigrationCli {
 
     private int execute(Arguments arguments, MigrationConfig config) throws Exception {
         var dataSource = config.dataSource();
-        var eventLog   = config.eventLog(dataSource);
-        // preflight, verify and status are read only, and starting the event log may create its schema (COMPONENT); the
-        // import preview needs it started for EventLogAdmin
+        // The import preview needs a started event log only for EventLogAdmin; HARNESS ownership keeps the start from running DDL
+        var eventLog = arguments.command.equals("import-preview")
+                       ? EventLog.builder().setDataSource(dataSource).setSchemaOwnership(SchemaOwnership.HARNESS)
+                               .setSchemaContributor(new EventLogSchemaContributor(dataSource)).build()
+                       : config.eventLog(dataSource);
+        // preflight, verify and status are read only, and starting the event log may create its schema (COMPONENT)
         var start = Set.of("prepare", "copy", "import-preview", "cutover").contains(arguments.command);
         if (start) {
             eventLog.start();
@@ -194,9 +198,9 @@ public final class MigrationCli {
         var types = config.tables().stream().map(SourceTable::aggregateType).toList();
         ImportReport report;
         try (var connection = dataSource.getConnection()) {
-            report = config.importStep(eventLog).preview(connection, types, config.settings().lockTimeout());
+            report = config.importStep(eventLog).preview(connection, types);
         }
-        out.println("Import preview (rolled back; as of the last copy epoch, the cut-over's final pass may replay more):");
+        out.println("Import preview (read only, no locks; as of the last copy epoch, the cut-over may import a lower I and replay more):");
         for (var i : report.imported()) {
             out.println("  " + i.oldSubscriberId() + " -> " + i.subscriber() + " (" + i.aggregateType() + (i.instanceNames().equals(List.of("")) ? "" : ", instances " +
                     i.instanceNames()) + "): R " + i.oldResumeFrom() + ", I " + i.resumeFrom() + ", replay " + i.replayRows() + " rows (" + i.replayValues() +

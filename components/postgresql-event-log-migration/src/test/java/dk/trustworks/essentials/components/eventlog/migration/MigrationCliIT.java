@@ -74,15 +74,29 @@ class MigrationCliIT extends AbstractMigrationIT {
         assertThat(run("verify", config, "--all")).isZero();
         assertThat(output()).contains("Verification (ONLINE) EQUAL").contains("Orders: global_order (0, 1003], 17 rows");
 
-        // The import preview, while the old engine still runs: R, I and the replay per mapping, rolled back
+        // The import preview, while the old engine still runs: R, I and the replay per mapping; read only and without locks, so an
+        // old subscriber holding its tables (ROW EXCLUSIVE, which conflicts with the cut-over's SHARE) does not block it
         var oldSubscriptions = queryLong("SELECT count(*) + sum(resume_from_and_including_global_eventorder) FROM durable_subscriptions") +
                                queryLong("SELECT count(*) FROM transient_subscriber_gaps") + queryLong("SELECT count(*) FROM permanent_gaps");
-        assertThat(run("import-preview", config)).isZero();
-        assertThat(output()).contains("Import preview (rolled back")
+        try (var oldSubscriber = dataSource.getConnection()) {
+            oldSubscriber.setAutoCommit(false);
+            try (var statement = oldSubscriber.createStatement()) {
+                statement.execute("LOCK TABLE durable_subscriptions, transient_subscriber_gaps, permanent_gaps IN ROW EXCLUSIVE MODE");
+            }
+            assertThat(run("import-preview", config)).isZero();
+            oldSubscriber.rollback();
+        }
+        assertThat(output()).contains("Import preview (read only, no locks")
                             .contains("orders-projector -> orders-view (Orders): R " + R + ", I " + GAP_FILL + ", replay 4 rows (" + (R - GAP_FILL) + " values)")
                             .contains("orders-projector -> orders-mailer (Orders, instances [node-a, node-b]): R " + R + ", I " + GAP_FILL + ", replay 4 rows")
                             .contains("WARNING: old subscriber " + OLD_LEGACY + " (" + PAYMENTS + ", resume from 2) is not mapped");
-        assertThat(queryLong("SELECT count(*) FROM el_progress")).as("the preview rolled back").isZero();
+        assertThat(queryLong("SELECT count(*) FROM el_progress")).as("the preview writes nothing").isZero();
+        var previewed = new java.util.TreeMap<String, Long>();
+        var line = java.util.regex.Pattern.compile("-> (\\S+) \\(.*\\): R (\\d+), I (\\d+), replay (\\d+) rows").matcher(output());
+        while (line.find()) {
+            previewed.put(line.group(1), Long.parseLong(line.group(3)));
+        }
+        assertThat(previewed).containsOnlyKeys("orders-mailer", "orders-view");
         assertThat(queryLong("SELECT count(*) + sum(resume_from_and_including_global_eventorder) FROM durable_subscriptions") +
                    queryLong("SELECT count(*) FROM transient_subscriber_gaps") + queryLong("SELECT count(*) FROM permanent_gaps"))
                 .as("the old subscription and gap tables are untouched").isEqualTo(oldSubscriptions);
@@ -94,6 +108,11 @@ class MigrationCliIT extends AbstractMigrationIT {
                             .contains("orders-projector -> orders-mailer (Orders, instances [node-a, node-b]): resume from " + GAP_FILL)
                             .contains("WARNING: old subscriber " + OLD_LEGACY);
         assertThat(longs("SELECT resume_from FROM el_progress ORDER BY subscriber, instance_name")).containsExactly(GAP_FILL, GAP_FILL, GAP_FILL);
+        for (var entry : previewed.entrySet()) {
+            assertThat(longs("SELECT resume_from FROM el_progress WHERE subscriber = '" + entry.getKey() + "'")).as("the preview's I of %s is what the cut-over imported",
+                                                                                                                   entry.getKey())
+                                                                                                               .isNotEmpty().allMatch(entry.getValue()::equals);
+        }
         for (var type : new String[]{ORDERS, PAYMENTS}) {
             assertThat(differingRows(old, type, oldMax(old, type))).as("rows of %s that differ", type).isZero();
             assertThat(newCount(type)).isEqualTo(queryLong("SELECT count(*) FROM " + old.table(type)));
