@@ -28,10 +28,10 @@ and two lock waits removed.
   trace logging is off for.
 - Event processors: `PartitionedEventProcessor` runs its handlers on every instance on the shard-owned engine (§2.7),
   `PartitionedViewEventProcessor` does the same for views (§2.10), and both reset only while stopped on every instance;
-  an `EventProcessor` overridden to competing consumers on a per-node queue now refuses to start (§1); the default retry
-  budget outlasts a failover, minutes instead of ~10 s (§1.1.4).
-- Command handlers: an `AnnotatedCommandHandler` failure is logged at DEBUG, not ERROR - the sender reports it (§1.1.5).
-- CDC: the inbox deletes a row once it is dispatched by default, instead of keeping it until the TTL job (§1.1.6).
+  an `EventProcessor` overridden to competing consumers on a per-node queue now refuses to start (§1); an opt-in
+  `FailoverRedeliveryPolicy` retries for long enough to outlast a failover (§2.18).
+- Command handlers: an `AnnotatedCommandHandler` failure is logged at DEBUG, not ERROR - the sender reports it (§1.1.4).
+- CDC: the inbox deletes a row once it is dispatched by default, instead of keeping it until the TTL job (§1.1.5).
 - Fenced locks: opt-in spreading of async-acquired locks, and so of exclusive processors, over the instances (§2.9).
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1). The
@@ -168,45 +168,7 @@ different policy for a declared class, change its annotation.
 serialization and an insert inside the command's transaction - every tenth event of every aggregate without an
 interval of its own. `@AggregateSnapshotPolicy` keeps its own default of 100. Set the property to keep the old interval.
 
-#### 1.1.4 Event processors retry a failed message for minutes, not seconds (`postgresql-event-store`)
-
-The default `RedeliveryPolicy` of an `EventProcessor`'s inbox (`getInboxRedeliveryPolicy()`) and a `ViewEventProcessor`'s
-queue (`getDurableQueueRedeliveryPolicy()`) retried 20 times, from 200 ms growing ×1.1 to 3 s: about 10 s, then a dead
-letter. A handler that throws until another processor's work is there - "not yet", retried - therefore dead-lettered
-during any failover, which takes the lock timeout (15 s) or the queue's window (30 s) to start, and every later message
-of that aggregate waited behind the dead letter. Measured in the trading demo: one killed instance of two dead-lettered
-438 settlement reports.
-
-The default now outlasts a failover: it starts at 200 ms, doubles to a 10 s cap, and retries for 4 × (lock timeout +
-the queue's window), derived from the actual settings - the lock manager's `lockTimeOut`, and the new
-`DurableQueues.maxUnservedAfterInstanceLoss()`: the time until delivery can actually resume after an instance is lost,
-the implementation's own detection interval included. On `PostgresqlDurableQueues` and MongoDB it is twice the
-`message-handling-timeout`: a surviving instance's stuck-message reset takes back claims at least one timeout old, but
-runs at most once per timeout per queue, so a claim made just after a reset is only taken back by the one after the next.
-On the shard-owned engine it is the lease TTL plus one heartbeat interval, a third of the lease TTL, since a surviving
-instance takes a dead one's units only on its next heartbeat tick after the lease TTL has passed. With the PostgreSQL
-and MongoDB starters' 15 s lock timeout and 30 s `message-handling-timeout` (a 60 s window) that is 36 redeliveries
-over about 5 minutes; an earlier build of this change counted the timeout once (a 30 s window) and gave 24 redeliveries
-over about 3 minutes.
-On the shard-owned engine with its default 30 s lease TTL (a 40 s window) it is 28 redeliveries over about 3.7 minutes.
-A queue that does not report a window counts as 30 s: with a 15 s lock timeout, 24 redeliveries over about 3 minutes.
-`start()` logs the budget in one line.
-
-A handler that runs longer than the `message-handling-timeout` is still WARNed about at the timeout itself, not at the
-longer window: the consumers read the new `DurableQueues.messageHandlingTimeout()`, since a stuck-message reset may
-deliver the message a second time as soon as its claim is that old.
-
-- **What changes for you:** a message that can never succeed (a bug, a poison message) now dead-letters after minutes,
-  and later messages of its aggregate wait that long. A message that succeeds on an early retry is unaffected.
-- **To keep the old budget:** override `getInboxRedeliveryPolicy()` / `getDurableQueueRedeliveryPolicy()`. A processor
-  that already overrides them is unaffected. `FailoverRedeliveryPolicy.outlasting(...)` sizes your own `Inbox` policies
-  the same way.
-- New additive SPI methods, all with defaults: `FencedLockManager.getLockTimeOut()`,
-  `DurableQueues`/`Inboxes.maxUnservedAfterInstanceLoss()`, `DurableQueues.messageHandlingTimeout()`,
-  `EventStoreSubscriptionManager.getFencedLockManager()`, and
-  the shard-owned `MessageQueues.leaseTtl()`.
-
-#### 1.1.5 A failed command is no longer logged at ERROR by `AnnotatedCommandHandler` (`reactive`)
+#### 1.1.4 A failed command is no longer logged at ERROR by `AnnotatedCommandHandler` (`reactive`)
 
 `AnnotatedCommandHandler` logged every exception its handler method threw at ERROR, with the full stack trace, and then
 rethrew it - so every failure was reported twice, once here and once by whoever sent the command, and once more per
@@ -222,7 +184,7 @@ DEBUG at all.
 `SendAndDontWaitErrorHandler` that logs nothing. Then override `getExceptionLogLevel` in your handler to return
 `Optional.of(Level.ERROR)`, or log in that error handler.
 
-#### 1.1.6 The CDC inbox deletes a row once it is dispatched (`postgresql-event-store`)
+#### 1.1.5 The CDC inbox deletes a row once it is dispatched (`postgresql-event-store`)
 
 `essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy` (`CdcDispatcherProperties.dispatchedRowPolicy`) now
 defaults to `DELETE`; it was `MARK_DISPATCHED`. In INBOX delivery mode the dispatcher used to keep every row it had
@@ -674,6 +636,49 @@ Additive: the existing methods are unchanged; their javadoc now says when they a
 while holding the generation lock, as the built-in scan's rollover does) and points to the guarded variant. The
 `essentials-trading-demo` rolls its accounts with the guarded repository method (`aad1916a3`).
 
+### 2.18 `FailoverRedeliveryPolicy`: an event processor retry budget that outlasts a failover, opt-in (`postgresql-event-store`)
+
+The default `RedeliveryPolicy` of an `EventProcessor`'s inbox (`getInboxRedeliveryPolicy()`) and a `ViewEventProcessor`'s
+queue (`getDurableQueueRedeliveryPolicy()`) is unchanged: 20 redeliveries, from 200 ms growing ×1.1 to 3 s, about 10 s,
+then a dead letter. A handler that throws until another processor's work is there - "not yet", retried - can therefore
+dead-letter during a failover, which takes the lock timeout (15 s) or the queue's window (30 s) to start, and every later
+message of that aggregate waits behind the dead letter. Measured in the trading demo: one killed instance of two
+dead-lettered 438 settlement reports.
+
+A processor with such a handler can now override the getter with a policy that outlasts a failover:
+
+```java
+@Override
+protected RedeliveryPolicy getInboxRedeliveryPolicy() {           // ViewEventProcessor: getDurableQueueRedeliveryPolicy()
+    return failoverRedeliveryPolicy(inboxes.maxUnservedAfterInstanceLoss()).policy();  // views: getDurableQueues()...
+}
+```
+
+It starts at 200 ms, doubles to a 10 s cap, and retries for 4 × (lock timeout + the queue's window), derived from the
+actual settings - the lock manager's `lockTimeOut`, and the new `DurableQueues.maxUnservedAfterInstanceLoss()`: the time
+until delivery can actually resume after an instance is lost, the implementation's own detection interval included. On
+`PostgresqlDurableQueues` and MongoDB it is twice the `message-handling-timeout`: a surviving instance's stuck-message
+reset takes back claims at least one timeout old, but runs at most once per timeout per queue, so a claim made just after
+a reset is only taken back by the one after the next. On the shard-owned engine it is the lease TTL plus one heartbeat
+interval, a third of the lease TTL. With the PostgreSQL and MongoDB starters' 15 s lock timeout and 30 s
+`message-handling-timeout` (a 60 s window) that is 36 redeliveries over about 5 minutes; on the shard-owned engine with
+its default 30 s lease TTL (a 40 s window) 28 redeliveries over about 3.7 minutes. A queue that does not report a window
+counts as 30 s. `FailoverRedeliveryPolicy.outlasting(lockTimeOut, queueWindow)` sizes your own `Inbox` policies the same
+way. The cost: a message that can never succeed (a bug, a poison message) dead-letters after minutes, and later messages
+of its aggregate wait that long.
+
+`start()` logs the retry budget in one line: the default policy, the failover policy with what it was derived from, or
+the processor's own.
+
+A handler that runs longer than the `message-handling-timeout` is WARNed about at the timeout itself, not at the longer
+window: the consumers read the new `DurableQueues.messageHandlingTimeout()`, since a stuck-message reset may deliver the
+message a second time as soon as its claim is that old.
+
+- New additive SPI methods, all with defaults: `FencedLockManager.getLockTimeOut()`,
+  `DurableQueues`/`Inboxes.maxUnservedAfterInstanceLoss()`, `DurableQueues.messageHandlingTimeout()`,
+  `EventStoreSubscriptionManager.getFencedLockManager()`, and
+  the shard-owned `MessageQueues.leaseTtl()`.
+
 ## 3. Bug fixes
 
 | Area | Fix | Commit |
@@ -722,6 +727,10 @@ Not published; listed because they are the reference for how to use the framewor
 - **`essentials-trading-demo`** grows into a retail brokerage trading against the exchange-simulator and the
   payment-gateway: accounts, orders, funding, settlement and reconciliation, a phase 6 load driver (`run-load.sh`) and
   fault runs (`run-faults.sh`). See its `docs/EXPANSION_PLAN.md`.
+- **`essentials-trading-demo`'s processors retry with `FailoverRedeliveryPolicy`** (§2.18), set once in its
+  `TradingDemoEventProcessor`, `TradingDemoViewEventProcessor` and `TradingDemoPartitionedViewEventProcessor` bases:
+  its settlement and order-flow handlers throw "not yet" until another processor's work is there, and with the
+  framework's default budget a failover dead-lettered them.
 - **`essentials-trading-demo`: every view projection and query uses Jdbi through the `UnitOfWork`'s handle**, as
   0.60.1 made the original views do. A projection writes through the processor's own unit of work, so its view row
   commits together with the processor's progress by construction; with `JdbcTemplate` it did so only because the
@@ -743,7 +752,7 @@ Not published; listed because they are the reference for how to use the framewor
   sampling (`store-sample-every-days`), queue-depth sampling (`queue-sample-millis`) and, with
   `trading-demo.orders.router-stage-timings.enabled`, a split of the router stage into queue wait, exchange call and
   reports queue wait; its load report no longer times out on a database holding earlier runs. The CDC inbox deletes
-  dispatched rows, which is now the framework default (§1.1.6).
+  dispatched rows, which is now the framework default (§1.1.5).
   `reset-stack.sh` wipes the compose stack and its volumes before a run (the simulators' stores never prune and filled
   the disk), and under `compose` the load driver's `@load.local` users are stored with `{noop}` password hashes
   (`trading-demo.identity.unhashed-password-email-suffix`), so registering 10 000 of them no longer costs BCrypt.

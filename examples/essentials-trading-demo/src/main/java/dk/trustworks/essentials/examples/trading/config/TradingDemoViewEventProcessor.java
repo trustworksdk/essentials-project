@@ -16,6 +16,7 @@
 package dk.trustworks.essentials.examples.trading.config;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
+import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import org.springframework.beans.factory.annotation.Value;
 
 /**
@@ -26,12 +27,21 @@ import org.springframework.beans.factory.annotation.Value;
  * <p>
  * The EF-2 measurement processor ({@code _demo_harness/NoOpAccountsViewProcessor}) stays on {@link ViewEventProcessor}:
  * it measures the event-by-event reader.
+ * <p>
+ * Retries with a {@link FailoverRedeliveryPolicy} instead of the processor's default (about 10 s): the demo's handlers
+ * throw until another processor's work is there ("not yet"), and with the default such a message dead-letters during a
+ * failover - one killed instance of two dead-lettered 438 settlement reports.
  */
 public abstract class TradingDemoViewEventProcessor extends ViewEventProcessor {
     private int directHandlingBatchSize = 1;
 
     protected TradingDemoViewEventProcessor(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
+    }
+
+    @Override
+    protected RedeliveryPolicy getDurableQueueRedeliveryPolicy() {
+        return failoverRedeliveryPolicy(getDurableQueues().maxUnservedAfterInstanceLoss()).policy();
     }
 
     @Value("${trading-demo.views.direct-handling-batch-size:1}")

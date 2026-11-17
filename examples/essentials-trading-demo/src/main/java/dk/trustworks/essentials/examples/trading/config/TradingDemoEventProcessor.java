@@ -16,7 +16,8 @@
 package dk.trustworks.essentials.examples.trading.config;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
-import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.MessageConsumptionMode;
+import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
+import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 
 /**
  * The base of the demo's {@link EventProcessor}s: every instance handles the processor's inbox when the queues keep an
@@ -27,13 +28,24 @@ import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_fo
  * <b>A test aid, not a pattern to copy.</b> It lets the same processors run on both engines. An application picks the
  * contract in its code instead: {@link PartitionedEventProcessor} (every instance, refuses to start on an engine that
  * cannot keep the order) or {@link EventProcessor} (one instance) - see {@code docs/design/event-processor-specializations.md}.
+ * <p>
+ * Retries with a {@link FailoverRedeliveryPolicy} instead of the processor's default (about 10 s): the demo's handlers
+ * throw until another processor's work is there ("not yet"), and with the default such a message dead-letters during a
+ * failover - one killed instance of two dead-lettered 438 settlement reports.
  */
 public abstract class TradingDemoEventProcessor extends EventProcessor {
     private final boolean keepsKeyOrderAcrossInstances;
+    private final Inboxes inboxes;
 
     protected TradingDemoEventProcessor(EventProcessorDependencies dependencies) {
         super(dependencies);
         this.keepsKeyOrderAcrossInstances = dependencies.inboxes.keepsKeyOrderAcrossInstances();
+        this.inboxes = dependencies.inboxes;
+    }
+
+    @Override
+    protected RedeliveryPolicy getInboxRedeliveryPolicy() {
+        return failoverRedeliveryPolicy(inboxes.maxUnservedAfterInstanceLoss()).policy();
     }
 
     @Override

@@ -469,14 +469,6 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
     }
 
     /**
-     * Default: {@link #failoverRedeliveryPolicy(Optional)} with the queue's window, as {@link ViewEventProcessor}.
-     */
-    @Override
-    protected RedeliveryPolicy getDurableQueueRedeliveryPolicy() {
-        return failoverRedeliveryPolicy(durableQueues.maxUnservedAfterInstanceLoss()).policy();
-    }
-
-    /**
      * @return the {@link DurableQueues} the events are forwarded to and consumed from
      */
     public DurableQueues getDurableQueues() {

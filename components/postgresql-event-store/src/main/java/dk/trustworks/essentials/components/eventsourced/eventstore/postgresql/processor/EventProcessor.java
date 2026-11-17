@@ -621,14 +621,15 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     /**
      * Get the {@link RedeliveryPolicy} used when consuming messages from the underlying {@link Inbox}.
      * <p>
-     * Default: {@link #failoverRedeliveryPolicy(Optional)} with the {@link Inbox}es' window - quick first retries, and
-     * retrying for long enough to outlast a failover, so a handler that waits for another processor's work does not
-     * dead-letter while that work moves to another instance. Override for a different budget.
+     * Default: 20 redeliveries, from 200 ms growing x1.1 to 3 s, about 10 s in all. A handler that throws until another
+     * processor's work is there ("not yet") can dead-letter during a failover with that budget; such a processor
+     * overrides this with {@code failoverRedeliveryPolicy(inboxes.maxUnservedAfterInstanceLoss()).policy()}, which
+     * retries for long enough to outlast one.
      *
      * @return the {@link RedeliveryPolicy} used when consuming messages from the underlying {@link Inbox}
      */
     protected RedeliveryPolicy getInboxRedeliveryPolicy() {
-        return failoverRedeliveryPolicy(inboxes.maxUnservedAfterInstanceLoss()).policy();
+        return defaultRedeliveryPolicy();
     }
 
     /**
