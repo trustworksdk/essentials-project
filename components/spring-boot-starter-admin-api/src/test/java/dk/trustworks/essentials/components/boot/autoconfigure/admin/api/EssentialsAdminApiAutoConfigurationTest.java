@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.admin.api;
 
 import dk.trustworks.essentials.components.adminapi.rest.*;
+import dk.trustworks.essentials.components.eventlog.integration.api.EventLogSubscriptionsApi;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
@@ -102,6 +103,18 @@ class EssentialsAdminApiAutoConfigurationTest {
      * SPI beans only exist when essentials.eventstore.archives.enabled is true. Declaring these controllers
      * unconditionally would fail the whole context for a subsystem the application does not run.
      */
+    @Test
+    void the_event_log_subscriptions_controller_is_absent_without_its_spi_bean() {
+        contextRunner.run(context -> assertThat(context).hasNotFailed()
+                                                        .doesNotHaveBean(EventLogSubscriptionsController.class));
+    }
+
+    @Test
+    void the_event_log_subscriptions_controller_is_wired_when_its_spi_bean_is_present() {
+        contextRunner.withBean(EventLogSubscriptionsApi.class, () -> mock(EventLogSubscriptionsApi.class))
+                     .run(context -> assertThat(context).hasSingleBean(EventLogSubscriptionsController.class));
+    }
+
     @Test
     void the_aggregate_controllers_are_absent_when_their_spi_beans_are_not_present() {
         contextRunner.run(context -> assertThat(context).hasNotFailed()

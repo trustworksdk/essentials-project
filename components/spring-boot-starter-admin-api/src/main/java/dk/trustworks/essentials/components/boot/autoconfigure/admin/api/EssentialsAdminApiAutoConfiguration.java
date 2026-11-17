@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.admin.api;
 
 import dk.trustworks.essentials.components.adminapi.rest.*;
 import dk.trustworks.essentials.components.queue.shardowned.api.ShardOwnedQueuesApi;
+import dk.trustworks.essentials.components.eventlog.integration.api.EventLogSubscriptionsApi;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
@@ -129,6 +130,7 @@ public class EssentialsAdminApiAutoConfiguration {
         put(AggregateLifecycleStatisticsController.class, "aggregate-lifecycle-statistics");
         put(AggregateArchiveController.class, "aggregate-archive");
         put(AggregateArchiveStatisticsController.class, "aggregate-archive-statistics");
+        put(EventLogSubscriptionsController.class, "event-log-subscriptions");
     }};
 
     @Bean
@@ -208,6 +210,18 @@ public class EssentialsAdminApiAutoConfiguration {
      * endpoints under the same {@code @RestControllerAdvice} as every other admin operation; while
      * they were outside its package scope a 404 reached the client as a 500.
      */
+    /**
+     * The new event store engine's subscription endpoints. Conditional on its {@code EventLogSubscriptionsApi}, which no
+     * Essentials auto-configuration declares yet: an application that builds one from its {@code EventLog} as a bean gets them.
+     */
+    @Bean
+    @ConditionalOnBean(EventLogSubscriptionsApi.class)
+    @ConditionalOnMissingBean
+    public EventLogSubscriptionsController essentialsEventLogSubscriptionsController(EventLogSubscriptionsApi eventLogSubscriptionsApi,
+                                                                                    AdminApiPrincipalResolver principalResolver) {
+        return new EventLogSubscriptionsController(eventLogSubscriptionsApi, principalResolver);
+    }
+
     @Bean
     @ConditionalOnBean(ShardOwnedQueuesApi.class)
     @ConditionalOnMissingBean

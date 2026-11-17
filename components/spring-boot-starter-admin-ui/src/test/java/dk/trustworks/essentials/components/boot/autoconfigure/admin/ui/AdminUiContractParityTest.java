@@ -72,8 +72,9 @@ class AdminUiContractParityTest {
         // contract silently losing paths, which the two parity assertions below cannot see. The ranked
         // slow-query and the table statistics paths bring it to 50, running a scheduler job on demand to 51,
         // the four event-causation lookups to 55, resuming a subscription stopped by its error policy to 56, and
-        // releasing a shard-owned ordered unit a stop kept behind a hung handler to 57.
-        assertThat(contractPaths).hasSize(48 + 9);
+        // releasing a shard-owned ordered unit a stop kept behind a hung handler to 57, and the new event store
+        // engine's seven event-log subscription paths to 64.
+        assertThat(contractPaths).hasSize(48 + 16);
         assertThat(calledPaths()).isNotEmpty();
     }
 
@@ -105,11 +106,26 @@ class AdminUiContractParityTest {
             "/event-store/statistics/table-activity",
             "/event-store/statistics/table-cache-hit-ratio");
 
+    /**
+     * Contract paths the console does not call yet, deliberately. The new event store engine's subscription admin
+     * operations (tag {@code event-log-subscriptions}) get their UI view in phase 10 of the event-store redesign
+     * ({@code docs/plans/event-store-engine-phase8.md} §4.4); until then they are served to API clients only.
+     */
+    private static final Set<String> NOT_YET_IN_THE_UI_PATHS = Set.of(
+            "/event-log/subscriptions",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/{globalOrder}/retry",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/{globalOrder}/discard",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/reset",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/instances/{instanceName}");
+
     @Test
     void every_contract_path_is_surfaced_by_the_ui() {
         var uncovered = new TreeSet<>(contractPaths);
         uncovered.removeAll(calledPaths());
         uncovered.removeAll(SUPERSEDED_PATHS);
+        uncovered.removeAll(NOT_YET_IN_THE_UI_PATHS);
 
         assertThat(uncovered)
                 .as("""

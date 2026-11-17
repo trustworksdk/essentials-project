@@ -85,6 +85,15 @@
             <artifactId>eventsourced-aggregates</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!--
+            The new event store engine's subscription admin contract (EventLogSubscriptionsApi) and its DTOs,
+            beside the engine as the shard-owned queue's is. Published, as everything the spec reflects over must be.
+        -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-event-log-integration</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
         <!-- OpenAPI model + reflection-based schema resolution + YAML serialization -->
         <dependency>

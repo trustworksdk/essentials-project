@@ -678,6 +678,22 @@ while holding the generation lock, as the built-in scan's rollover does) and poi
 
 `AppendedEvents.appended(List<PersistedEvent>)` is now public, so an `EventStore` other than `PostgresqlEventStore` can report its appends to `AppendedEvents.recordDuring` (which `EventStreamDeciderCommandHandlerAdapter` uses to return the events a command appended). Additive; nothing to change. (Event store redesign, phase 8b.)
 
+### 2.19 Admin API: seven operations for the new event-log engine's subscriptions (`admin-api-spec`, `spring-boot-starter-admin-api`, `admin-api-client-java`)
+
+The admin contract (`essentials-admin-api.yaml`) and the generated Java client grow by seven additive paths under the new
+tag `event-log-subscriptions`, for the subscriptions of the new event store engine (`postgresql-event-log`,
+`postgresql-event-log-integration`). They answer from the database on any instance. You can list subscriptions, get one,
+and page its parked events with `SUBSCRIPTION_READER`. You can reset a subscription, retry or discard a parked event, and
+delete a retired per-instance subscription with `SUBSCRIPTION_WRITER`. `ESSENTIALS_ADMIN` can do both. The path is
+`/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/…` with an optional `instanceName` query parameter;
+leave it out to address an exclusive subscription.
+
+`spring-boot-starter-admin-api` serves these paths only when the application has an `EventLogSubscriptionsApi` bean
+(`DefaultEventLogSubscriptionsApi` over an `EventLog`). No Essentials auto-configuration declares one yet, so an existing
+application serves nothing new and changes nothing; the paths answer 404 as any area without its SPI bean does. The
+starter now depends on `postgresql-event-log-integration`, as it does on the shard-owned queue engine. The admin console
+does not show these operations yet. (Event store redesign, phase 8b.)
+
 ## 3. Bug fixes
 
 | Area | Fix | Commit |

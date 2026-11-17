@@ -124,6 +124,16 @@
             <artifactId>postgresql-queue-shard-owned</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!--
+            The new event store engine's subscription admin SPI, for EventLogSubscriptionsController. Same shape as
+            the shard-owned queue above: @ConditionalOnBean on EventLogSubscriptionsApi, so an application that does
+            not wire that bean never registers the controller.
+        -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-event-log-integration</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>
             <artifactId>eventsourced-aggregates</artifactId>
