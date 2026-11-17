@@ -32,8 +32,10 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                           10 s, §3.5); on timeout nothing is copied and the cut-over reports writers still running
  * @param maxEventsPerSecond the online copy's throttle, applied between batches; 0 (the default) is unthrottled
  *                           (§16.7). The cut-over is never throttled
+ * @param verifyWindow       the {@code global_order} values per verification window (default 100 000, §6.1): each window
+ *                           is hashed on both sides, and a differing one is bisected down to its rows
  */
-public record CopySettings(int batchSize, Duration epochWaitTimeout, Duration epochWaitPoll, Duration lockTimeout, long maxEventsPerSecond) {
+public record CopySettings(int batchSize, Duration epochWaitTimeout, Duration epochWaitPoll, Duration lockTimeout, long maxEventsPerSecond, int verifyWindow) {
     public CopySettings {
         requireTrue(batchSize > 0, "batchSize must be > 0");
         requireNonNull(epochWaitTimeout, "No epochWaitTimeout provided");
@@ -43,25 +45,30 @@ public record CopySettings(int batchSize, Duration epochWaitTimeout, Duration ep
         requireTrue(!epochWaitPoll.isNegative() && !epochWaitPoll.isZero(), "epochWaitPoll must be > 0");
         requireTrue(lockTimeout.toMillis() > 0, "lockTimeout must be at least 1 ms");
         requireTrue(maxEventsPerSecond >= 0, "maxEventsPerSecond must be >= 0 (0 is unthrottled)");
+        requireTrue(verifyWindow > 0, "verifyWindow must be > 0");
     }
 
     public static CopySettings defaults() {
-        return new CopySettings(10_000, Duration.ofMinutes(10), Duration.ofMillis(20), Duration.ofSeconds(10), 0);
+        return new CopySettings(10_000, Duration.ofMinutes(10), Duration.ofMillis(20), Duration.ofSeconds(10), 0, 100_000);
     }
 
     public CopySettings withBatchSize(int batchSize) {
-        return new CopySettings(batchSize, epochWaitTimeout, epochWaitPoll, lockTimeout, maxEventsPerSecond);
+        return new CopySettings(batchSize, epochWaitTimeout, epochWaitPoll, lockTimeout, maxEventsPerSecond, verifyWindow);
     }
 
     public CopySettings withEpochWaitTimeout(Duration epochWaitTimeout) {
-        return new CopySettings(batchSize, epochWaitTimeout, epochWaitPoll, lockTimeout, maxEventsPerSecond);
+        return new CopySettings(batchSize, epochWaitTimeout, epochWaitPoll, lockTimeout, maxEventsPerSecond, verifyWindow);
     }
 
     public CopySettings withLockTimeout(Duration lockTimeout) {
-        return new CopySettings(batchSize, epochWaitTimeout, epochWaitPoll, lockTimeout, maxEventsPerSecond);
+        return new CopySettings(batchSize, epochWaitTimeout, epochWaitPoll, lockTimeout, maxEventsPerSecond, verifyWindow);
     }
 
     public CopySettings withMaxEventsPerSecond(long maxEventsPerSecond) {
-        return new CopySettings(batchSize, epochWaitTimeout, epochWaitPoll, lockTimeout, maxEventsPerSecond);
+        return new CopySettings(batchSize, epochWaitTimeout, epochWaitPoll, lockTimeout, maxEventsPerSecond, verifyWindow);
+    }
+
+    public CopySettings withVerifyWindow(int verifyWindow) {
+        return new CopySettings(batchSize, epochWaitTimeout, epochWaitPoll, lockTimeout, maxEventsPerSecond, verifyWindow);
     }
 }

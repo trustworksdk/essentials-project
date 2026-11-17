@@ -68,7 +68,7 @@ class MigrationSequenceIT extends AbstractMigrationIT {
 
     @Test
     void must_fail_sequence_SEQUENCE_AT_MAX_ROW() throws Exception {
-        var r = firstAppendAfterCutover(SEQUENCE_AT_MAX_ROW);
+        var r = firstAppendAfterCutover(SEQUENCE_AT_MAX_ROW, CUTOVER_WITHOUT_VERIFY);
         assertThat(r[0]).as("below the old resume point, so the imported subscription skips it").isLessThanOrEqualTo(r[1]);
     }
 }

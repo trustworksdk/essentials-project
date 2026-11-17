@@ -33,7 +33,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                     types through its registry. It must run no subscriptions
  * @param tables       the aggregate types to move; aggregate types, old tables and derived event log tables distinct
  * @param settings     how the copy runs
- * @param cutoverSteps run in order under the cut-over's locks ({@link CutoverStep}); empty until 9-D and 9-E
+ * @param cutoverSteps run in order under the cut-over's locks ({@link CutoverStep}), after its built-in verification (§6.2)
  */
 public record MigrationPlan(DataSource dataSource, EventLog eventLog, List<SourceTable> tables, CopySettings settings, List<CutoverStep> cutoverSteps) {
     public MigrationPlan {

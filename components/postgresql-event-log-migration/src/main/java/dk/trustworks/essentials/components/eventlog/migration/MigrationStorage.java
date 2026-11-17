@@ -141,4 +141,94 @@ final class MigrationStorage {
     String lockTarget() {
         return source.tableName();
     }
+
+    // ------------------------------------------------------------------ verification (§6)
+
+    private static final String NULL_MARK = "'∅'";
+
+    /**
+     * §6.1: an old row rendered as the text its event log copy must render to. Every nullable column is marked, so that
+     * {@code concat_ws} cannot shift a value into a neighbour's place; the cause is what the copy keeps of it (§2.4), the
+     * revision what {@code smallint} keeps of it
+     */
+    private String oldRowText(boolean withPayload) {
+        var cause = catalog.isUuid(c().causedByEventId()) ? col(c().causedByEventId()) + "::text"
+                                                           : "CASE WHEN " + col(c().causedByEventId()) + " ~ " + UUID_RE + " THEN " + col(c().causedByEventId()) + "::text END";
+        return "concat_ws('|', " + col(c().globalOrder()) + ", " + col(c().aggregateId()) + "::text, " + col(c().eventOrder()) + ", " + col(c().eventId()) + "::text, " +
+                "coalesce(" + cause + ", " + NULL_MARK + "), coalesce(" + col(c().correlationId()) + "::text, " + NULL_MARK + "), " + col(c().eventType()) + "::text, " +
+                col(c().eventRevision()) + "::text::smallint::text, (extract(epoch FROM " + col(c().timestamp()) + ") * 1e6)::bigint, " +
+                (withPayload ? col(c().eventPayload()) + "::text, " + col(c().eventMetaData()) + "::text, " : "") +
+                "coalesce(" + col(c().tenant()) + "::text, " + NULL_MARK + "))";
+    }
+
+    /** §6.1: the same rendering of an event log row; the type name comes from {@code el_event_types} */
+    private static String newRowText(boolean withPayload) {
+        return "concat_ws('|', e.global_order, e.aggregate_id, e.event_order, e.event_id::text, coalesce(e.caused_by_event_id::text, " + NULL_MARK + "), " +
+                "coalesce(e.correlation_id::text, " + NULL_MARK + "), coalesce(y.name, " + NULL_MARK + "), e.event_revision::text, " +
+                "(extract(epoch FROM e.timestamp) * 1e6)::bigint, " + (withPayload ? "e.event_payload::text, e.event_metadata::text, " : "") +
+                "coalesce(e.tenant, " + NULL_MARK + "))";
+    }
+
+    private String oldRange() {
+        return " FROM " + source.tableName() + " o WHERE " + col(c().globalOrder()) + " > ? AND " + col(c().globalOrder()) + " <= ?";
+    }
+
+    private String newRange() {
+        return " FROM " + target.eventTable() + " e LEFT JOIN " + EventLogSchema.EVENT_TYPES_TABLE + " y ON y.id = e.event_type WHERE e.global_order > ? AND e.global_order <= ?";
+    }
+
+    /** The old range's row count and its hash: the md5 of the rows' md5s in {@code global_order} order */
+    String oldRangeHash(boolean withPayload) {
+        return "SELECT count(*), coalesce(md5(string_agg(md5(" + oldRowText(withPayload) + "), '' ORDER BY " + col(c().globalOrder()) + ")), '')" + oldRange();
+    }
+
+    String newRangeHash(boolean withPayload) {
+        return "SELECT count(*), coalesce(md5(string_agg(md5(" + newRowText(withPayload) + "), '' ORDER BY e.global_order)), '')" + newRange();
+    }
+
+    /** Per row of the old range: its {@code global_order} and hash (bisection's last step) */
+    String oldRowHashes(boolean withPayload) {
+        return "SELECT " + col(c().globalOrder()) + ", md5(" + oldRowText(withPayload) + ")" + oldRange() + " ORDER BY " + col(c().globalOrder());
+    }
+
+    String newRowHashes(boolean withPayload) {
+        return "SELECT e.global_order, md5(" + newRowText(withPayload) + ")" + newRange() + " ORDER BY e.global_order";
+    }
+
+    /**
+     * §6.1: the streams with an event in {@code (?, ?]} whose head is missing or differs from the stream's
+     * {@code max(event_order)}: their count and up to 10 of their ids
+     */
+    String headMismatches() {
+        var mismatch = "SELECT d.aggregate_id FROM (SELECT DISTINCT aggregate_id FROM " + target.eventTable() + " WHERE global_order > ? AND global_order <= ?) d " +
+                "LEFT JOIN " + target.headTable() + " h USING (aggregate_id) " +
+                "WHERE h.version IS DISTINCT FROM (SELECT max(x.event_order) FROM " + target.eventTable() + " x WHERE x.aggregate_id = d.aggregate_id)";
+        return "SELECT count(*), (array_agg(aggregate_id ORDER BY aggregate_id))[1:10] FROM (" + mismatch + ") m";
+    }
+
+    /** §6.1: heads without a stream (there must be as many heads as streams) */
+    String orphanHeads() {
+        return "SELECT count(*) FROM " + target.headTable() + " h WHERE NOT EXISTS (SELECT 1 FROM " + target.eventTable() + " e WHERE e.aggregate_id = h.aggregate_id)";
+    }
+
+    String targetMaxGlobalOrderUpTo() {
+        return "SELECT coalesce(max(global_order), 0) FROM " + target.eventTable() + " WHERE global_order <= ?";
+    }
+
+    /** The event table's identity sequence {@code last_value}, 0 if nothing was ever drawn or set */
+    String targetSequenceLastValue() {
+        return "SELECT coalesce((SELECT s.last_value FROM pg_sequences s WHERE quote_ident(s.schemaname) || '.' || quote_ident(s.sequencename) = " +
+                "pg_get_serial_sequence('" + target.eventTable() + "', 'global_order')), 0)";
+    }
+
+    /** §6.3: the old rows above the copied maximum: count and max */
+    String lateRows() {
+        return "SELECT count(*), coalesce(max(" + c().globalOrder() + "), 0) FROM " + source.tableName() + " WHERE " + c().globalOrder() + " > ?";
+    }
+
+    /** §6.3: the first 10 of them, with their timestamps */
+    String lateRowSamples() {
+        return "SELECT " + c().globalOrder() + ", " + c().timestamp() + " FROM " + source.tableName() + " WHERE " + c().globalOrder() + " > ? ORDER BY " +
+                c().globalOrder() + " LIMIT 10";
+    }
 }

@@ -100,6 +100,6 @@ class MigrationHeadsIT extends AbstractMigrationIT {
 
     @Test
     void must_fail_heads_HEADS_NOT_WRITTEN() throws Exception {
-        assertThat(firstAppends(HEADS_NOT_WRITTEN).rightOrderFailed()).as("appends with the right expected order refused").isEqualTo(6);
+        assertThat(firstAppends(HEADS_NOT_WRITTEN, CUTOVER_WITHOUT_VERIFY).rightOrderFailed()).as("appends with the right expected order refused").isEqualTo(6);
     }
 }

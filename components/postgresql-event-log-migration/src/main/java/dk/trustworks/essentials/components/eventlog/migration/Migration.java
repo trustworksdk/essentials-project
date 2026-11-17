@@ -422,10 +422,12 @@ public final class Migration {
      * The final pass, with every old-engine node stopped: in one transaction, {@code SHARE}-lock the old tables (in name
      * order, under {@code lockTimeout}), copy each type's {@code (copied_through, max]}, write their heads, set each
      * event table's identity sequence to {@code greatest(old sequence last_value, max copied global_order)}, run the
-     * plan's {@link CutoverStep}s, and mark every type {@code CUT_OVER}. Any failure rolls all of it back to the state
-     * after the last epoch.
+     * verify exactly the range the final pass copied, plus any range below it no online {@link #verify()} found equal,
+     * and the heads and identity sequences (§6.2, §16.7), run the plan's {@link CutoverStep}s, and mark every type
+     * {@code CUT_OVER}. Any failure rolls all of it back to the state after the last epoch.
      *
      * @throws CutoverLockTimeoutException if writers still hold the old tables; nothing was copied
+     * @throws VerificationFailedException if the verification found a difference; its report names the windows and rows
      * @throws IllegalStateException       if a type is not {@code COPYING}
      */
     public CutoverReport cutover() throws SQLException {
@@ -489,6 +491,9 @@ public final class Migration {
                     }
                     types.add(new CutoverReport.TypeCutover(table.aggregateType(), copied.get(i)[0], copied.get(i)[1], copied.get(i)[2], value));
                 }
+                if (!seams.has(CUTOVER_WITHOUT_VERIFY)) {
+                    new Verifier(plan, seams).cutoverStep().run(connection, List.copyOf(types));
+                }
                 for (var step : plan.cutoverSteps()) {
                     step.run(connection, List.copyOf(types));
                 }
@@ -524,6 +529,79 @@ public final class Migration {
         return plan.tables().stream().map(t -> "REVOKE INSERT ON " + t.tableName() + " FROM <old application role>").toList();
     }
 
+    // ------------------------------------------------------------------ verification (§6)
+
+    /**
+     * Online verification (§6.2), while the old engine runs or at any time after: per aggregate type, the copied range
+     * not verified yet, {@code (verified maximum, copied_through]}, hashed per window over every column on both sides;
+     * a differing window is bisected down to its rows. Then the heads of the range's streams. The outcome and the
+     * windows' hashes are recorded in {@code el_migration.report}; the cut-over later verifies only what it copies,
+     * plus any range no online run verified equal.
+     *
+     * @return the report; {@link VerificationReport#equal()} says whether the copy is equal
+     * @throws IllegalStateException if a type was never prepared
+     */
+    public VerificationReport verify() throws SQLException {
+        try (var connection = connection()) {
+            return new Verifier(plan, seams).online(connection, false);
+        }
+    }
+
+    /**
+     * As {@link #verify()}, but over every copied row, {@code (0, copied_through]}, whatever was verified before, and
+     * with a check that no head lacks a stream. Replaces the recorded windows when equal; a difference lowers the
+     * verified maximum, so that the cut-over verifies the range again.
+     */
+    public VerificationReport verifyAll() throws SQLException {
+        try (var connection = connection()) {
+            return new Verifier(plan, seams).online(connection, true);
+        }
+    }
+
+    /**
+     * {@code verify --after-cutover} (§6.3, decision 6): per cut-over aggregate type, the old table's rows above the
+     * copied maximum recorded at the cut-over. Such a row was appended by an old-engine node that should have been
+     * stopped; it exists only in the old table and is reported, never merged. Read-only.
+     *
+     * @throws IllegalStateException if a type is not {@code CUT_OVER}
+     */
+    public LateRowsReport verifyAfterCutover() throws SQLException {
+        try (var connection = connection()) {
+            var types = new ArrayList<LateRowsReport.TypeLateRows>();
+            for (var table : plan.tables()) {
+                var status = status(connection, table.aggregateType(), false)
+                        .filter(s -> s.state() == MigrationStatus.State.CUT_OVER)
+                        .orElseThrow(() -> new IllegalStateException("Aggregate type '" + table.aggregateType() + "' is not cut over"));
+                var  storage = storage(connection, table);
+                long count, max;
+                try (var statement = connection.prepareStatement(storage.lateRows())) {
+                    statement.setLong(1, status.copiedThrough());
+                    try (var resultSet = statement.executeQuery()) {
+                        resultSet.next();
+                        count = resultSet.getLong(1);
+                        max = resultSet.getLong(2);
+                    }
+                }
+                var samples = new ArrayList<LateRowsReport.LateRow>();
+                if (count > 0) {
+                    try (var statement = connection.prepareStatement(storage.lateRowSamples())) {
+                        statement.setLong(1, status.copiedThrough());
+                        try (var resultSet = statement.executeQuery()) {
+                            while (resultSet.next()) {
+                                samples.add(new LateRowsReport.LateRow(resultSet.getLong(1), resultSet.getObject(2, OffsetDateTime.class)));
+                            }
+                        }
+                    }
+                    log.error("LATE ROWS: {} rows of '{}' above the copied maximum {} (up to global_order {}), written after the cut-over by an old-engine node " +
+                                      "that should have been stopped. They exist only in the old table and are not merged. First: {}", count, table.tableName(),
+                              status.copiedThrough(), max, samples);
+                }
+                types.add(new LateRowsReport.TypeLateRows(table.aggregateType(), table.tableName(), status.copiedThrough(), count, max, samples));
+            }
+            return new LateRowsReport(types);
+        }
+    }
+
     // ------------------------------------------------------------------ status
 
     /**
@@ -535,7 +613,7 @@ public final class Migration {
         }
     }
 
-    private static Optional<MigrationStatus> status(Connection connection, String aggregateType, boolean forUpdate) throws SQLException {
+    static Optional<MigrationStatus> status(Connection connection, String aggregateType, boolean forUpdate) throws SQLException {
         if (!forUpdate && !exists(connection, EventLogSchema.MIGRATION_TABLE)) {
             return Optional.empty();
         }
@@ -579,7 +657,7 @@ public final class Migration {
         }
     }
 
-    private static MigrationStorage storage(Connection connection, SourceTable table) throws SQLException {
+    static MigrationStorage storage(Connection connection, SourceTable table) throws SQLException {
         var catalog = SourceCatalog.read(connection, table);
         if (!catalog.exists()) {
             throw new IllegalStateException("Old table '" + table.tableName() + "' does not exist");

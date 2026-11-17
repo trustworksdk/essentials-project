@@ -52,7 +52,13 @@ class MigrationResumeIT extends AbstractMigrationIT {
         migration.seams(mutants(mutants));
         migration.copyEpoch();
         assertThat(migration.status(TYPE).orElseThrow().copiedThrough()).isEqualTo(40);
-        return differingRows(old, TYPE, 40);
+        // the migration's own verification sees what the test's comparison sees (§6.1)
+        var verification = migration.verify().type(TYPE).orElseThrow();
+        var differing    = differingRows(old, TYPE, 40);
+        assertThat(verification.differingRows()).hasSize((int) differing)
+                                                .allSatisfy(r -> assertThat(r.kind()).isEqualTo(VerificationReport.RowDifference.Kind.MISSING_IN_EVENT_LOG));
+        assertThat(verification.equal()).isEqualTo(differing == 0);
+        return differing;
     }
 
     @Test

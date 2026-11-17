@@ -34,5 +34,12 @@ enum MigrationMutant {
     /** The identity sequence is set to the highest copied row, not to {@code greatest(old last_value, max)} (§3.6) */
     SEQUENCE_AT_MAX_ROW,
     /** The copy writes no head rows (§3.6) */
-    HEADS_NOT_WRITTEN
+    HEADS_NOT_WRITTEN,
+    /** The verification hashes leave out the payload and the metadata (§6.1) */
+    VERIFY_WITHOUT_PAYLOAD,
+    /**
+     * The cut-over runs without its verification step (§6.2). Not a defect a test looks for: it lets the tests whose
+     * oracle is the engine's behaviour after a cut-over (heads, sequence, payload bytes) commit a divergent copy
+     */
+    CUTOVER_WITHOUT_VERIFY
 }
