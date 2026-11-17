@@ -1828,6 +1828,13 @@ class EventLogGateSpikeIT {
             }
             SpikeDb.record(P7_RENEWAL, String.format("  passes over 100 ms (client statement): %d of %d [pass=ms: %s]", slow.isEmpty() ? 0 : slow.toString().split(",").length,
                                                      renewals.size(), slow));
+            var first = new StringBuilder();
+            for (int i = 0; i < Math.min(15, renewals.size()); i++) {
+                first.append(i == 0 ? "" : ", ").append(String.format("%.1f", renewals.get(i)[2] / 1_000_000.0));
+            }
+            SpikeDb.record(P7_RENEWAL, String.format("  cold start (unit D): first %d passes in the window, client statement ms [%s] | el_progress analysed %d times by the window's end",
+                                                     Math.min(15, renewals.size()), first,
+                                                     SpikeDb.queryLong(db.observer, "SELECT analyze_count + autoanalyze_count FROM pg_stat_user_tables WHERE relname = 'el_progress'")));
             subscriptions.forEach(Subscription::stop);
         }
     }

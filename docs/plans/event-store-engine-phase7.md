@@ -1,6 +1,6 @@
 # Event store redesign, phase 7: engine design
 
-**Status:** decided 2026-11-16 (§14); being built on `feature/event-store-engine-phase7` (from phase 6, `ccbbdd15e`).
+**Status:** built 2026-11-17 on `feature/event-store-engine-phase7`; gate passed, with the two §10.3 rows' idle-timeout cost accepted by the maintainer (§15.4). Decided 2026-11-16 (§14), (from phase 6, `ccbbdd15e`).
 When phase 7 is done, this file moves to `docs/archive/` or is folded into the redesign's record (`docs/plans/README.md`).
 **Scope:** phase 7 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): engine leases on the
 progress row, batched renewal, exclusive subscriptions fenced (§9), with no `FencedLockManager`; the progress row and
@@ -77,19 +77,24 @@ So phase 7 needs **no new table and no new column** (§5); it is code, statement
 A standby subscription is claimed by the keeper's pass, batched for every standby subscription of the `EventLog`:
 
 ```sql
--- LEASE_CLAIM: $1 owner, $2 lease (interval), $3 subscribers text[], $4 aggregate types text[]
+-- LEASE_CLAIM (shape of unit D, §15.5): $1 subscribers text[], $2 aggregate types text[], $3 owner, $4 lease (interval)
+WITH k AS MATERIALIZED (
+    SELECT k.subscriber, k.aggregate_type, ''::text AS instance_name, true AS exclusive, now() AS claim_time
+      FROM unnest($1::text[], $2::text[]) AS k(subscriber, aggregate_type))
 UPDATE el_progress p
-   SET lease_owner = $1,
+   SET lease_owner = $3,
        lease_fence = nextval('el_lease_fence_seq'),
-       lease_until = now() + $2::interval
-  FROM unnest($3::text[], $4::text[]) AS k(subscriber, aggregate_type)
- WHERE p.subscriber = k.subscriber AND p.aggregate_type = k.aggregate_type AND p.instance_name = ''
-   AND p.exclusive
-   AND (p.lease_owner IS NULL OR p.lease_until < now())
+       lease_until = now() + $4::interval
+  FROM k
+ WHERE p.subscriber = k.subscriber AND p.aggregate_type = k.aggregate_type AND p.instance_name = k.instance_name
+   AND p.exclusive = k.exclusive
+   AND (p.lease_owner IS NULL OR p.lease_until < k.claim_time)
 RETURNING p.subscriber, p.aggregate_type, p.lease_fence, p.resume_from, p.reset_epoch, p.consistency_mode, p.progress_model
 ```
 
-- One statement, index nested loop over the primary key per key; a held lease is not matched and not locked.
+- One statement, linear in the keys: a nested loop that probes the primary key once per key, or a hash join. Every
+  condition compares an `el_progress` column with a column of `k`, so `el_progress` has no restriction of its own and no
+  statistics can make the planner rescan the key list per row (§15.5). A held lease is not matched and not locked.
 - Two claimants racing for an expired lease: the second waits for the first's row lock, PostgreSQL re-checks the `WHERE`
   against the new version, `lease_until < now()` is false, no row. A claim that arrives late (§9's "claim delayed past a
   newer owner's") finds a live lease and matches nothing. `now()` is the claimant's transaction start; a claim that waited
@@ -108,13 +113,16 @@ RETURNING p.subscriber, p.aggregate_type, p.lease_fence, p.resume_from, p.reset_
 ### 2.3 Renewal
 
 ```sql
--- LEASE_RENEW: $1 owner, $2 lease, $3 subscribers text[], $4 aggregate types text[], $5 fences bigint[]
+-- LEASE_RENEW (shape of unit D, §15.5): $1 owner, $2 subscribers text[], $3 aggregate types text[], $4 fences bigint[], $5 lease
+WITH k AS MATERIALIZED (
+    SELECT k.subscriber, k.aggregate_type, ''::text AS instance_name, k.fence, $1::text AS owner
+      FROM unnest($2::text[], $3::text[], $4::bigint[]) AS k(subscriber, aggregate_type, fence))
 UPDATE el_progress p
-   SET lease_until = now() + $2::interval
-  FROM unnest($3::text[], $4::text[], $5::bigint[]) AS k(subscriber, aggregate_type, fence)
- WHERE p.subscriber = k.subscriber AND p.aggregate_type = k.aggregate_type AND p.instance_name = ''
+   SET lease_until = now() + $5::interval
+  FROM k
+ WHERE p.subscriber = k.subscriber AND p.aggregate_type = k.aggregate_type AND p.instance_name = k.instance_name
    AND p.lease_fence = k.fence
-   AND p.lease_owner = $1
+   AND p.lease_owner = k.owner
 RETURNING p.subscriber, p.aggregate_type
 ```
 
@@ -590,6 +598,9 @@ applied: an `ANALYZE el_progress` after creating rows in bulk, or writing the st
 `lease_owner`'s statistics (for example moving the owner predicate out of the join's estimate, or a join on the
 primary key that the planner always prefers).
 
+**Resolved by unit D (§15.5):** the maintainer chose the statement shape; re-measured, N = 1 000 renews at p99
+14.3 ms with no slow opening passes, and the row passes.
+
 ### 15.3 Append and delivery unaffected (§10.3)
 
 Steady shape (phase 6's tier-2 arm: one engine, `afterCommit`, tier 1 off; 5 `FRESH` periodic and 5 `CONTIGUOUS`
@@ -645,10 +656,10 @@ none beyond one sample, as expected.
 | §10.1 pause | no landed write by the paused owner | 0 in 40 repetitions | **Passes** |
 | §10.2 statements | one renewal statement per pass at every N | 1.00 at N = 1-1 000 | **Passes** |
 | §10.2 HOT | ≥ 0.95 | 0.997-1.000 | **Passes** |
-| §10.2 renewal p99, N = 1 000 | < 100 ms | 118.2-118.5 ms (p50 11.0-11.3) | **Fails**: the plan before `el_progress`'s first analyse (about 9-11 passes); expected again after each owner restart |
+| §10.2 renewal p99, N = 1 000 | < 100 ms | Before unit D: 118.2-118.5 ms (the plan before `el_progress`'s first analyse). After unit D's statement shape (§15.5): 14.27-14.29 ms (p50 11.6-11.7); N = 5 000: 42.6-43.1 ms | **Passes** (after unit D) |
 | §10.3 appends/s | within the noise | 21 958-22 000 against 21 643-22 328 | **Passes** |
-| §10.3 latency | p50 and p99 within the noise | `FRESH` and `CONTIGUOUS` p50 within; `CONTIGUOUS` p99 +0.5-0.9 ms | **Fails for `CONTIGUOUS` p99**: decision 6's per-page `set_config` round trip |
-| §10.3 statements per delivery | ≤ baseline + 0.25 statements/s | 1.606 against 1.105 (+0.5) | **Fails**: decision 6's per-page `set_config` |
+| §10.3 latency | p50 and p99 within the noise | `FRESH` and `CONTIGUOUS` p50 within; `CONTIGUOUS` p99 +0.5-0.9 ms | **Fails as written; cost accepted by the maintainer** (below): decision 6's per-page `set_config` round trip |
+| §10.3 statements per delivery | ≤ baseline + 0.25 statements/s | 1.606 against 1.105 (+0.5) | **Fails as written; cost accepted by the maintainer** (below): decision 6's per-page `set_config` |
 
 The lease does what the phase is for: takeovers inside the decided bounds with decision 10's timings, no landed write by
 a stale owner, no duplicated effect in the in-transaction model, one renewal statement per pass whatever N, HOT updates,
@@ -656,3 +667,84 @@ and no effect on appends. Three rows miss as written, with two causes, both left
 before `el_progress` has statistics (and after an owner restart), and the per-page idle-timeout statement, which could
 ride in the fenced progress update at the price of not covering a page that dies inside the handler. No default was
 tuned and no main code changed.
+
+**Maintainer's decisions on the misses (2026-11-17).** Row §10.2's renewal p99 is fixed in the statement, not by
+`ANALYZE`: unit D's shape (§15.5) brings N = 1 000 to 14.3 ms, and the row passes. The per-page
+`idle_in_transaction_session_timeout` cost behind both §10.3 misses (statements per delivery, `CONTIGUOUS` p99) is
+**accepted as it is**: an exclusive in-transaction subscription pays one extra round trip per page, so the cost per
+event shrinks as pages grow (at 100 ev/s each page holds one event, the worst case measured), and covering a page that
+dies idle inside the handler, before the progress update, is worth more for takeover safety than that round trip. The
+`set_config` stays the page's first statement; it does not move into the fenced progress `UPDATE`.
+
+### 15.5 Renewal statement shape (unit D)
+
+**Before.** `LEASE_RENEW` joined `unnest(...) k` to `el_progress p` with `p.instance_name = ''` and
+`p.lease_owner = $owner` as restrictions of `p` alone; `LEASE_CLAIM` likewise with `p.instance_name = ''`, `p.exclusive`
+and the lease-free condition. Without statistics the planner multiplies their default selectivities (0.005 per
+equality) and expects about one row of `el_progress`, so a nested loop with `el_progress` outside and the key list's
+function scan inside looks cheapest, and that is what the generic plan becomes, rescanning all N keys for each of the N
+rows. A new owner id after a restart is equally absent from `lease_owner`'s statistics.
+
+**After.** The key list is a `MATERIALIZED` CTE that also carries every value the row is checked against
+(`instance_name`, owner and fence for the renewal; `instance_name`, `exclusive` and the claim time for the claim), and
+every condition compares an `el_progress` column with a column of `k` (SQL in §2.2 and §2.3). `el_progress` then has no
+restriction of its own: its estimate is the table's size, which PostgreSQL derives from the relation's current page
+count whatever the statistics hold, so a nested loop that rescans the key list per `el_progress` row never looks cheap.
+The remaining choices are a hash join or a nested loop with the key list outside that probes the primary key once per
+key; both are linear in N, and the owner and fence checks are join filters. Still one statement per pass, no hints, no
+`SET enable_*`, no `ANALYZE`; fence semantics unchanged (the owner and fence must still match the row). `MERGE` with the
+checks in `WHEN MATCHED AND ...` was considered and rejected: `MERGE ... RETURNING` needs PostgreSQL 17, and the module
+supports 16. The claim had the same exposure, and it bites at the worst moment: a takeover claiming many expired leases.
+
+**EXPLAIN** (PostgreSQL 18.4, autovacuum off, `el_progress` never analysed, `PREPARE` + `EXPLAIN ANALYZE EXECUTE` with the
+real arrays, `plan_cache_mode` forced):
+
+| Statement, leases | Plan mode | Before: plan, time | After: plan, time |
+|---|---|---|---|
+| Renewal, 1 000 | custom | hash join, 2.7 ms | hash join, 2.9 ms |
+| Renewal, 1 000 | generic | **nested loop, seq scan of `el_progress` outside, function scan of `k` inside (loops = 1 000, 999 000 rows removed by the join filter), 104 ms** | hash join, 2.9 ms |
+| Renewal, 5 000 | custom | hash join, 14.2 ms | hash join, 13.2 ms |
+| Renewal, 5 000 | generic | nested loop, `k` outside, primary-key probe, 18.0 ms | nested loop, CTE scan of `k` outside, primary-key index scan inside (loops = 5 000), 19.4 ms |
+| Claim (expired leases), 1 000 | custom | hash join, 2.7 ms | hash join, 2.8 ms |
+| Claim (expired leases), 1 000 | generic | **nested loop, seq scan outside, function scan inside (loops = 1 000), 80 ms** | hash join, 2.9 ms |
+| Claim (expired leases), 5 000 | custom | hash join, 11.1 ms | hash join, 13.2 ms |
+| Claim (expired leases), 5 000 | generic | nested loop, `k` outside, memoized primary-key probe, 18.9 ms | nested loop, `k` outside, primary-key probe, 18.7 ms |
+
+At 5 000 rows the old shape escaped only because the table had grown past the size where a sequential scan per pass
+looked cheaper than ten index probes; the exposure is a band of table sizes, not a fixed N.
+
+**Re-measured §10.2** (same harness as §15.2: suite `p7-gate`, `renewalCost`, a fresh container and database per arm,
+5 min window, 75 passes, two runs, `fsync=off`):
+
+| N | `LEASE_RENEW` per pass | Server mean / max (ms) | Client statement p50 / p99 (ms) | Pass p50 / p99 (ms) | WAL per pass (statement's own) | HOT ratio | Passes over 100 ms |
+|---|---|---|---|---|---|---|---|
+| 1 | 1.00 | 0.21-0.24 / 0.68-0.92 | 1.5-2.0 / 3.8-6.2 | 2.5-3.6 / 7.5-7.8 | 126 B | 1.000 | 0 |
+| 10 | 1.00 | 0.28-0.29 / 0.48-0.87 | 1.6-2.0 / 3.0-3.7 | 2.6-3.5 / 5.5-5.9 | 0.8 kB | 1.000 | 0 |
+| 100 | 1.00 | 0.93 / 1.3-4.2 | 2.3-2.6 / 4.5-5.8 | 3.3-3.8 / 5.6-7.3 | 8.2 kB | 1.000 | 0 |
+| 1 000 | 1.00 | 8.3-8.5 / 11.7 | 11.6-11.7 / **14.27-14.29** (before: 11.0-11.3 / 118.2-118.5) | 12.6-12.8 / 15.4-15.8 | 84 kB | 0.999-1.000 | 0 (before: about 9-11) |
+| 5 000 | 1.00 | 30.2 / 34.3-37.3 | 37.1-38.2 / **42.6-43.1** | 38.0-39.2 / 43.4-43.9 | 423-425 kB | 0.999-1.000 | 0 |
+
+Cold start, the first 15 passes of the window (client statement ms; unit C's diagnostic run had passes 1-11 at
+119-127 ms for N = 1 000):
+
+- N = 1 000: run 1 `8.4, 8.7, 5.3, 7.4, 8.5, 8.4, 7.6, 14.3, 9.4, 7.8, 7.6, 6.4, 11.3, 11.5, 10.5`; run 2
+  `8.1, 7.9, 7.7, 8.1, 7.7, 8.2, 8.4, 7.7, 8.3, 8.2, 8.7, 5.0, 11.7, 5.4, 12.3`.
+- N = 5 000: run 1 `38.8, 39.6, 39.6, 22.2, 38.9, 40.0, 37.4, 36.6, 43.0, 36.1, 40.8, 26.2, 33.2, 32.8, 38.7`; run 2
+  `27.4, 22.8, 24.6, 30.7, 25.4, 24.5, 26.9, 25.2, 23.8, 24.5, 25.1, 27.7, 37.8, 39.0, 31.4`.
+
+The opening stretch is now as fast as the rest of the window: there is no slow plan before the first analyse to wait
+out. (Autovacuum stayed on in the spike, and `el_progress` had been analysed 1-6 times by each window's end; the
+never-analysed case itself is what `EventLogLeasePlanIT` pins down.) The steady-state server mean at N = 1 000 is
+8.3-8.5 ms against 23.5-24.2 ms before, the old figure having carried the slow opening passes. N = 5 000 renews in
+under 45 ms at p99, about 1 % of the 4 s renewal interval, against the multi-second passes the old plan's O(N²) would
+have given on a table in the exposed size band.
+
+**Tests.** `EventLogLeasePlanIT`: on a never-analysed `el_progress` (autovacuum off, `pg_stat_user_tables` checked)
+holding 1 000 and 5 000 exclusive leases of one owner, the renewal's and the claim's plans (live and expired leases)
+under `force_custom_plan` and `force_generic_plan` contain no nested loop whose inner side reads the key list; a
+must-fail control shows the pre-unit-D renewal doing exactly that at 1 000 under a generic plan; a 5 000-lease renewal,
+bound as the keeper binds it, runs seven times (pgjdbc's custom then server-prepared generic plan) in under 1 s each and
+renews every lease. `LeaseStatementVariantsTest` checks that the mutant variants `LEASE_RENEW_WITHOUT_FENCE` and
+`LEASE_CLAIM_IGNORING_LEASE`, derived by text replacement, still differ from the real statements in exactly the
+condition they drop. `EventLogGenericPlanIT`'s primary-key check, every lease IT and every `must_fail_*` test pass
+unchanged.

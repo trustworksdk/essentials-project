@@ -219,11 +219,11 @@ final class LeaseKeeper {
         var renewed = new HashSet<KeyPair>();
         try (var statement = connection.prepareStatement(current.has(RENEW_WITHOUT_FENCE) ? EventLogStorage.LEASE_RENEW_WITHOUT_FENCE : EventLogStorage.LEASE_RENEW)) {
             statement.setQueryTimeout(timeoutSeconds());
-            statement.setString(1, leaseInterval());
+            statement.setString(1, owner);
             statement.setArray(2, connection.createArrayOf("text", leases.stream().map(l -> l.key().subscriber()).toArray(String[]::new)));
             statement.setArray(3, connection.createArrayOf("text", leases.stream().map(l -> l.key().aggregateType()).toArray(String[]::new)));
             statement.setArray(4, connection.createArrayOf("bigint", leases.stream().map(fences::get).toArray(Long[]::new)));
-            statement.setString(5, owner);
+            statement.setString(5, leaseInterval());
             renewStatements++;
             try (var resultSet = statement.executeQuery()) {
                 while (resultSet.next()) {
@@ -243,10 +243,10 @@ final class LeaseKeeper {
         var claimed = new HashSet<KeyPair>();
         try (var statement = connection.prepareStatement(current.has(CLAIM_IGNORES_LIVE_LEASE) ? EventLogStorage.LEASE_CLAIM_IGNORING_LEASE : EventLogStorage.LEASE_CLAIM)) {
             statement.setQueryTimeout(timeoutSeconds());
-            statement.setString(1, owner);
-            statement.setString(2, leaseInterval());
-            statement.setArray(3, connection.createArrayOf("text", keys.stream().map(ProgressStore.Key::subscriber).toArray(String[]::new)));
-            statement.setArray(4, connection.createArrayOf("text", keys.stream().map(ProgressStore.Key::aggregateType).toArray(String[]::new)));
+            statement.setArray(1, connection.createArrayOf("text", keys.stream().map(ProgressStore.Key::subscriber).toArray(String[]::new)));
+            statement.setArray(2, connection.createArrayOf("text", keys.stream().map(ProgressStore.Key::aggregateType).toArray(String[]::new)));
+            statement.setString(3, owner);
+            statement.setString(4, leaseInterval());
             try (var resultSet = statement.executeQuery()) {
                 while (resultSet.next()) {
                     var pair  = new KeyPair(resultSet.getString(1), resultSet.getString(2));

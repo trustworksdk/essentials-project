@@ -94,20 +94,30 @@ final class EventLogStorage {
 
     // ---- leases (phase 7 §2); all lease time is the server's now() ----
     /**
-     * Claim every standby key whose lease is free or expired, in one statement (§2.2): owner, lease interval, then
-     * {@code text[]} subscribers and aggregate types. Returns subscriber, aggregate type, fence, resume_from, reset_epoch,
-     * consistency_mode, progress_model of each row claimed
+     * Claim every standby key whose lease is free or expired, in one statement (§2.2): {@code text[]} subscribers and
+     * aggregate types, then owner, lease interval. Returns subscriber, aggregate type, fence, resume_from, reset_epoch,
+     * consistency_mode, progress_model of each row claimed.
+     * <p>
+     * Shape (§15.5, unit D): the key list is a {@code MATERIALIZED} CTE that also carries every value the row is checked
+     * against ({@code instance_name}, {@code exclusive}, the claim time), and every condition compares a column of
+     * {@code el_progress} with a column of {@code k}. {@code el_progress} therefore has no restriction of its own, so the
+     * planner's estimate of its side is the table's size whatever the statistics hold, and it never picks a nested loop
+     * that rescans the key list for every row of a filter it guessed returns one: the plan is a hash join or a nested loop
+     * that probes the primary key once per key, both linear in the keys
      */
     static final String LEASE_CLAIM =
-            "UPDATE " + PROGRESS_TABLE + " p\n" +
+            "WITH k AS MATERIALIZED (\n" +
+                    "    SELECT k.subscriber, k.aggregate_type, ''::text AS instance_name, true AS exclusive, now() AS claim_time\n" +
+                    "      FROM unnest(?::text[], ?::text[]) AS k(subscriber, aggregate_type))\n" +
+                    "UPDATE " + PROGRESS_TABLE + " p\n" +
                     "   SET lease_owner = ?, lease_fence = nextval('" + LEASE_FENCE_SEQUENCE + "'), lease_until = now() + ?::interval\n" +
-                    "  FROM unnest(?::text[], ?::text[]) AS k(subscriber, aggregate_type)\n" +
-                    " WHERE p.subscriber = k.subscriber AND p.aggregate_type = k.aggregate_type AND p.instance_name = ''\n" +
-                    "   AND p.exclusive\n" +
-                    "   AND (p.lease_owner IS NULL OR p.lease_until < now())\n" +
+                    "  FROM k\n" +
+                    " WHERE p.subscriber = k.subscriber AND p.aggregate_type = k.aggregate_type AND p.instance_name = k.instance_name\n" +
+                    "   AND p.exclusive = k.exclusive\n" +
+                    "   AND (p.lease_owner IS NULL OR p.lease_until < k.claim_time)\n" +
                     "RETURNING p.subscriber, p.aggregate_type, p.lease_fence, p.resume_from, p.reset_epoch, p.consistency_mode, p.progress_model";
     /** Mutant {@code CLAIM_IGNORES_LIVE_LEASE}: {@link #LEASE_CLAIM} without the lease condition */
-    static final String LEASE_CLAIM_IGNORING_LEASE = LEASE_CLAIM.replace("   AND (p.lease_owner IS NULL OR p.lease_until < now())\n", "");
+    static final String LEASE_CLAIM_IGNORING_LEASE = LEASE_CLAIM.replace("   AND (p.lease_owner IS NULL OR p.lease_until < k.claim_time)\n", "");
     /**
      * The first claim of an exclusive row that does not exist yet (§2.2): subscriber, aggregate type, consistency_mode,
      * progress_model, resume_from, owner, lease interval. No row returned: another node created it
@@ -118,20 +128,26 @@ final class EventLogStorage {
                     "ON CONFLICT (subscriber, aggregate_type, instance_name) DO NOTHING\n" +
                     "RETURNING lease_fence, resume_from, reset_epoch";
     /**
-     * Renew every owned lease in one statement (§2.3): owner, lease interval, then {@code text[]} subscribers, aggregate
-     * types and {@code bigint[]} fences. Returns subscriber, aggregate type of each lease renewed
+     * Renew every owned lease in one statement (§2.3): owner, then {@code text[]} subscribers, aggregate types and
+     * {@code bigint[]} fences, then the lease interval. Returns subscriber, aggregate type of each lease renewed. Shaped
+     * as {@link #LEASE_CLAIM}: the owner and the fence are checked against columns of the key list, never as a
+     * restriction of {@code el_progress} alone, so no statistics (or their absence) can make the planner rescan the key
+     * list per row (§15.5)
      */
     static final String LEASE_RENEW =
-            "UPDATE " + PROGRESS_TABLE + " p\n" +
+            "WITH k AS MATERIALIZED (\n" +
+                    "    SELECT k.subscriber, k.aggregate_type, ''::text AS instance_name, k.fence, ?::text AS owner\n" +
+                    "      FROM unnest(?::text[], ?::text[], ?::bigint[]) AS k(subscriber, aggregate_type, fence))\n" +
+                    "UPDATE " + PROGRESS_TABLE + " p\n" +
                     "   SET lease_until = now() + ?::interval\n" +
-                    "  FROM unnest(?::text[], ?::text[], ?::bigint[]) AS k(subscriber, aggregate_type, fence)\n" +
-                    " WHERE p.subscriber = k.subscriber AND p.aggregate_type = k.aggregate_type AND p.instance_name = ''\n" +
+                    "  FROM k\n" +
+                    " WHERE p.subscriber = k.subscriber AND p.aggregate_type = k.aggregate_type AND p.instance_name = k.instance_name\n" +
                     "   AND p.lease_fence = k.fence\n" +
-                    "   AND p.lease_owner = ?\n" +
+                    "   AND p.lease_owner = k.owner\n" +
                     "RETURNING p.subscriber, p.aggregate_type";
     /** Mutant {@code RENEW_WITHOUT_FENCE}: {@link #LEASE_RENEW} keyed by the subscription only (the owner still binds, unused) */
     static final String LEASE_RENEW_WITHOUT_FENCE = LEASE_RENEW.replace("   AND p.lease_fence = k.fence\n", "   AND k.fence IS NOT NULL\n")
-                                                               .replace("   AND p.lease_owner = ?\n", "   AND ?::text IS NOT NULL\n");
+                                                               .replace("   AND p.lease_owner = k.owner\n", "   AND k.owner IS NOT NULL\n");
     /** Release an in-transaction subscription's lease (§2.5): the key, then fence, owner */
     static final String LEASE_RELEASE =
             "UPDATE " + PROGRESS_TABLE + " SET lease_owner = NULL, lease_until = NULL, updated_at = now()\n" +
