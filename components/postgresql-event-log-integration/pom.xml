@@ -54,6 +54,15 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- provided: only MigrationSourceTables (design phase 9 §2.1, unit 9-F) uses it. The migration tool is used once
+             per application and is deleted with the old engine, so it must not ride on every adopter's classpath -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-event-log-migration</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- provided: third-party integrations are never transitive (root CLAUDE.md) -->
         <dependency>
             <groupId>org.postgresql</groupId>

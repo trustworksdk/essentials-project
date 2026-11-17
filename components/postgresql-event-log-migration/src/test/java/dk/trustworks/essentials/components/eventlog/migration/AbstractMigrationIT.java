@@ -8,6 +8,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.TenantSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.PostgresqlDurableSubscriptionRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
@@ -254,7 +255,85 @@ abstract class AbstractMigrationIT {
                 .as("streams of %s whose head differs from max(event_order)", type).isZero();
     }
 
+    // ------------------------------------------------------------------ the I8 fixture (MigrationInvariantIT, MigrationCliIT)
+
+    /** The I8 fixture's names and values; see {@link #i8Source()} */
+    static final class I8 {
+        static final String ORDERS     = "Orders";
+        static final String PAYMENTS   = "Payments";
+        static final String OLD_ORDERS = "orders-projector";
+        static final String OLD_LEGACY = "payments-legacy";
+
+        static final long R         = 17;
+        static final long OPEN_HOLE = 7;
+        static final long GAP_FILL  = 13;
+
+        private I8() {
+        }
+    }
+
+    /**
+     * The old engine's side of invariant I8 (MigrationInvariantIT's class comment), up to and excluding the sequence jump:
+     * {@code Orders} 1..16 with holes, permanent gaps, a gap fill and the old subscriber's resume point {@code R = 17} with
+     * its open transient gaps 7 and 13; {@code Payments} with a hole and an unmapped old subscriber
+     */
+    protected OldEngine i8Source() throws Exception {
+        var old  = new OldEngine(true, IdentifierColumnType.UUID, JSONColumnType.JSONB, I8.ORDERS, I8.PAYMENTS);
+        var gaps = old.gapHandler;
+        old.streams(I8.ORDERS, 2, 3);                                               // 1..6
+        old.burn(I8.ORDERS, 1);                                                     // 7
+        old.burn(I8.ORDERS, 1);                                                     // 8
+        old.factory.usingUnitOfWork(uow -> gaps.registerPermanentGaps(AggregateType.of(I8.ORDERS), List.of(GlobalEventOrder.of(8)), "rolled back"));
+        var lateForPermanent = old.held(I8.ORDERS);                                 // 9, in flight
+        lateForPermanent.awaitInserted();
+        old.streams(I8.ORDERS, 1, 3);                                               // 10..12
+        var gapFill = old.held(I8.ORDERS);                                          // 13, in flight
+        gapFill.awaitInserted();
+        old.streams(I8.ORDERS, 1, 3);                                               // 14..16
+
+        // The old subscriber polls past the in-flight appends: its gap handler records them as open transient gaps
+        var subscriber = SubscriberId.of(I8.OLD_ORDERS);
+        var seen = old.eventStore.pollEvents(AggregateType.of(I8.ORDERS), 1L, Optional.of(100), Optional.of(Duration.ofMillis(20)), Optional.empty(),
+                                             Optional.of(subscriber), Optional.empty())
+                                 .map(e -> e.globalEventOrder().longValue())
+                                 .takeUntil(g -> g == I8.R - 1)
+                                 .collectList()
+                                 .block(Duration.ofSeconds(30));
+        assertThat(seen).as("delivered to the old subscriber").containsExactly(1L, 2L, 3L, 4L, 5L, 6L, 10L, 11L, 12L, 14L, 15L, 16L);
+        // It gives up on 9 (promoted to a permanent gap), and saves its resume point
+        old.factory.usingUnitOfWork(uow -> gaps.gapHandlerFor(subscriber).giveUpTransientGaps(AggregateType.of(I8.ORDERS), List.of(GlobalEventOrder.of(9))));
+        var resumePoints = new PostgresqlDurableSubscriptionRepository(old.jdbi, old.eventStore);
+        var point        = resumePoints.createResumePoint(subscriber, AggregateType.of(I8.ORDERS), GlobalEventOrder.of(1));
+        resumePoints.saveResumePoints(List.of(point.setResumeFromAndIncluding(GlobalEventOrder.of(I8.R))));
+        resumePoints.createResumePoint(SubscriberId.of(I8.OLD_LEGACY), AggregateType.of(I8.PAYMENTS), GlobalEventOrder.of(2));
+
+        // Both late appends commit before the cut-over
+        lateForPermanent.releaseAndJoin();
+        gapFill.releaseAndJoin();
+        assertThat(longs("SELECT gap_global_event_order FROM transient_subscriber_gaps WHERE subscriber_id = '" + I8.OLD_ORDERS + "' ORDER BY 1"))
+                .as("open transient gaps").containsExactly(I8.OPEN_HOLE, I8.GAP_FILL);
+        assertThat(longs("SELECT gap_global_event_order FROM permanent_gaps WHERE aggregate_type = '" + I8.ORDERS + "' ORDER BY 1")).as("permanent gaps")
+                                                                                                                                 .containsExactly(8L, 9L);
+        assertThat(queryLong("SELECT resume_from_and_including_global_eventorder FROM durable_subscriptions WHERE subscriber_id = '" + I8.OLD_ORDERS + "'"))
+                .isEqualTo(I8.R);
+
+        old.streams(I8.PAYMENTS, 2, 2);
+        old.burn(I8.PAYMENTS, 1);
+        old.stream(I8.PAYMENTS, 1);
+        return old;
+    }
+
     // ------------------------------------------------------------------ SQL helpers
+
+    protected List<Long> longs(String sql) throws SQLException {
+        var result = new ArrayList<Long>();
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement(); var resultSet = statement.executeQuery(sql)) {
+            while (resultSet.next()) {
+                result.add(resultSet.getLong(1));
+            }
+        }
+        return result;
+    }
 
     protected long queryLong(String sql) throws SQLException {
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement(); var resultSet = statement.executeQuery(sql)) {

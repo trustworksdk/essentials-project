@@ -54,14 +54,14 @@ import static org.assertj.core.api.Assertions.*;
  * Expected import: {@code I = least(17, 13) = 13}. Run against another major with {@code -Dmigration.it.image=postgres:16.15}.
  */
 class MigrationInvariantIT extends AbstractMigrationIT {
-    private static final String ORDERS     = "Orders";
-    private static final String PAYMENTS   = "Payments";
-    private static final String OLD_ORDERS = "orders-projector";
-    private static final String OLD_LEGACY = "payments-legacy";
+    private static final String ORDERS     = I8.ORDERS;
+    private static final String PAYMENTS   = I8.PAYMENTS;
+    private static final String OLD_ORDERS = I8.OLD_ORDERS;
+    private static final String OLD_LEGACY = I8.OLD_LEGACY;
 
-    private static final long R         = 17;
-    private static final long OPEN_HOLE = 7;
-    private static final long GAP_FILL  = 13;
+    private static final long R         = I8.R;
+    private static final long OPEN_HOLE = I8.OPEN_HOLE;
+    private static final long GAP_FILL  = I8.GAP_FILL;
 
     /** One per mode and model, plus a per-instance arm with two instances */
     private record Arm(String subscriber, ConsistencyMode consistency, ProgressModel model, List<String> instances) {
@@ -89,46 +89,7 @@ class MigrationInvariantIT extends AbstractMigrationIT {
     // ------------------------------------------------------------------ the source
 
     private void source(MigrationMutant... mutants) throws Exception {
-        old = new OldEngine(true, IdentifierColumnType.UUID, JSONColumnType.JSONB, ORDERS, PAYMENTS);
-        var gaps = old.gapHandler;
-        old.streams(ORDERS, 2, 3);                                                  // 1..6
-        old.burn(ORDERS, 1);                                                        // 7
-        old.burn(ORDERS, 1);                                                        // 8
-        old.factory.usingUnitOfWork(uow -> gaps.registerPermanentGaps(AggregateType.of(ORDERS), List.of(GlobalEventOrder.of(8)), "rolled back"));
-        var lateForPermanent = old.held(ORDERS);                                    // 9, in flight
-        lateForPermanent.awaitInserted();
-        old.streams(ORDERS, 1, 3);                                                  // 10..12
-        var gapFill = old.held(ORDERS);                                             // 13, in flight
-        gapFill.awaitInserted();
-        old.streams(ORDERS, 1, 3);                                                  // 14..16
-
-        // The old subscriber polls past the in-flight appends: its gap handler records them as open transient gaps
-        var subscriber = SubscriberId.of(OLD_ORDERS);
-        var seen = old.eventStore.pollEvents(AggregateType.of(ORDERS), 1L, Optional.of(100), Optional.of(Duration.ofMillis(20)), Optional.empty(),
-                                             Optional.of(subscriber), Optional.empty())
-                                 .map(e -> e.globalEventOrder().longValue())
-                                 .takeUntil(g -> g == R - 1)
-                                 .collectList()
-                                 .block(Duration.ofSeconds(30));
-        assertThat(seen).as("delivered to the old subscriber").containsExactly(1L, 2L, 3L, 4L, 5L, 6L, 10L, 11L, 12L, 14L, 15L, 16L);
-        // It gives up on 9 (promoted to a permanent gap), and saves its resume point
-        old.factory.usingUnitOfWork(uow -> gaps.gapHandlerFor(subscriber).giveUpTransientGaps(AggregateType.of(ORDERS), List.of(GlobalEventOrder.of(9))));
-        var resumePoints = new PostgresqlDurableSubscriptionRepository(old.jdbi, old.eventStore);
-        var point        = resumePoints.createResumePoint(subscriber, AggregateType.of(ORDERS), GlobalEventOrder.of(1));
-        resumePoints.saveResumePoints(List.of(point.setResumeFromAndIncluding(GlobalEventOrder.of(R))));
-        resumePoints.createResumePoint(SubscriberId.of(OLD_LEGACY), AggregateType.of(PAYMENTS), GlobalEventOrder.of(2));
-
-        // Both late appends commit before the cut-over
-        lateForPermanent.releaseAndJoin();
-        gapFill.releaseAndJoin();
-        assertThat(longs("SELECT gap_global_event_order FROM transient_subscriber_gaps WHERE subscriber_id = '" + OLD_ORDERS + "' ORDER BY 1"))
-                .as("open transient gaps").containsExactly(OPEN_HOLE, GAP_FILL);
-        assertThat(longs("SELECT gap_global_event_order FROM permanent_gaps WHERE aggregate_type = '" + ORDERS + "' ORDER BY 1")).as("permanent gaps").containsExactly(8L, 9L);
-        assertThat(queryLong("SELECT resume_from_and_including_global_eventorder FROM durable_subscriptions WHERE subscriber_id = '" + OLD_ORDERS + "'")).isEqualTo(R);
-
-        old.streams(PAYMENTS, 2, 2);
-        old.burn(PAYMENTS, 1);
-        old.stream(PAYMENTS, 1);
+        old = i8Source();
 
         var builder = ResumePointImport.builder(eventLog.admin());
         ARMS.forEach(arm -> builder.addSubscription(arm.imported()));
@@ -309,15 +270,5 @@ class MigrationInvariantIT extends AbstractMigrationIT {
                                      CopySettings.defaults(), List.of(other));
         assertThatThrownBy(() -> new Migration(plan).cutover()).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no row in 'durable_subscriptions'");
         assertThat(migration.status(ORDERS).orElseThrow().state()).isEqualTo(MigrationStatus.State.COPYING);
-    }
-
-    private List<Long> longs(String sql) throws SQLException {
-        var result = new ArrayList<Long>();
-        try (var connection = dataSource.getConnection(); var statement = connection.createStatement(); var resultSet = statement.executeQuery(sql)) {
-            while (resultSet.next()) {
-                result.add(resultSet.getLong(1));
-            }
-        }
-        return result;
     }
 }

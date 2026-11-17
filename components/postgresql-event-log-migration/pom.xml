@@ -61,6 +61,14 @@
             <artifactId>slf4j-api</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- provided: only the CLI (MigrationCli, MigrationConfigYaml) reads YAML; the Migration API and MigrationConfig
+             work without it. Running the CLI puts it on the classpath, like the pgjdbc driver. Version from the
+             Spring Boot BOM -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <scope>provided</scope>
+        </dependency>
 
         <dependency>
             <groupId>org.junit.jupiter</groupId>

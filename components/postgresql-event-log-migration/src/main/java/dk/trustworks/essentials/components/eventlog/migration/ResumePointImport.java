@@ -104,7 +104,47 @@ public final class ResumePointImport implements CutoverStep {
 
     @Override
     public void run(Connection connection, List<CutoverReport.TypeCutover> copied) throws SQLException {
-        var types = copied.stream().map(CutoverReport.TypeCutover::aggregateType).toList();
+        report = importAll(connection, copied.stream().map(CutoverReport.TypeCutover::aggregateType).toList(), false);
+    }
+
+    /**
+     * The import preview: what {@link #run} would import if the cut-over ran now, in a transaction that is rolled back.
+     * Writes nothing that survives, and only reads the old engine's tables, taking the same {@code SHARE} locks on its
+     * subscription and gap tables as the cut-over, under {@code lockTimeout}, for the duration of the preview.
+     * <p>
+     * It sees the event log as the last epoch left it: the replay rows and the filled open gaps count only copied events,
+     * so the cut-over's final pass may find more. The progress-row checks run, so a mapping the cut-over would refuse (an
+     * existing progress row with another resume point, an old subscriber with no resume point) is refused here as well.
+     * Does not change {@link #report()}.
+     *
+     * @param connection     a connection to the database of both engines; its auto-commit is restored
+     * @param aggregateTypes the aggregate types the migration plan copies
+     * @param lockTimeout    how long to wait for the {@code SHARE} locks
+     * @throws CutoverLockTimeoutException if old subscribers hold the tables longer than {@code lockTimeout}
+     * @throws IllegalStateException       if the cut-over would refuse a mapping
+     */
+    public ImportReport preview(Connection connection, List<String> aggregateTypes, java.time.Duration lockTimeout) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        requireNonNull(aggregateTypes, "No aggregateTypes provided");
+        requireTrue(requireNonNull(lockTimeout, "No lockTimeout provided").toMillis() > 0, "lockTimeout must be at least 1 ms");
+        var autoCommit = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try {
+            try (var statement = connection.createStatement()) {
+                statement.execute("SET LOCAL lock_timeout = '" + lockTimeout.toMillis() + "ms'");
+            }
+            return importAll(connection, List.copyOf(aggregateTypes), true);
+        } catch (CutoverLockTimeoutException e) {
+            throw new CutoverLockTimeoutException("Old subscribers held the subscription and gap tables longer than " + lockTimeout +
+                                                          " (the preview takes the same SHARE locks as the cut-over): try again, or with a longer lockTimeout",
+                                                  e.getCause());
+        } finally {
+            connection.rollback();
+            connection.setAutoCommit(autoCommit);
+        }
+    }
+
+    private ImportReport importAll(Connection connection, List<String> types, boolean preview) throws SQLException {
         for (var s : subscriptions) {
             if (!types.contains(s.aggregateType())) {
                 throw new IllegalStateException("Imported subscription '" + s.definition().subscriber() + "' is of aggregate type '" + s.aggregateType() +
@@ -122,6 +162,9 @@ public final class ResumePointImport implements CutoverStep {
         }
         var unmapped = durableExists ? unmapped(connection, types) : List.<UnmappedSubscriber>of();
         var result   = new ImportReport(imported, unmapped, gapTracking);
+        if (preview) {
+            return result;
+        }
         if (!gapTracking && !subscriptions.isEmpty()) {
             log.warn("The old engine's '{}' table does not exist: it tracked no gaps, so late commits it skipped cannot be identified; every resume point " +
                              "is imported unchanged", transientGapsTable);
@@ -136,7 +179,7 @@ public final class ResumePointImport implements CutoverStep {
             log.warn("Old subscriber '{}' of '{}' (resume point {}) is not mapped and not imported; a new subscription of it starts where its StartFrom says",
                      u.subscriberId(), u.aggregateType(), u.resumeFrom());
         }
-        report = result;
+        return result;
     }
 
     private SubscriptionImport importOne(Connection connection, ImportedSubscription s, boolean durableExists, boolean gapTracking, boolean permanentExists) throws SQLException {
