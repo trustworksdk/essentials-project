@@ -951,3 +951,142 @@ and 4 588 append eps, with p99 132 and 212 ms. Pool size does not explain the ga
 
   A quiet-workload profile (a throttled `producer-rate-hz`, as in the lab's notify-polling studies) would isolate
   wake-up latency, and is the next run to make on the dedicated server.
+
+## 18. Results 8b (2026-11-17)
+
+This section is about unit **8b-D**: the gate measurement of §10.3, the `EventStore` adapter's appends and loads
+against `PostgresqlEventStore`. It was measured by `integration/spike/EventLogAdapterGateSpikeIT` in
+`postgresql-event-log-integration` (`scripts/run-phase0-spikes.sh --container --suite p8b-gate`: `append`, `contended`,
+`fetch`). Results files: `components/postgresql-event-log-integration/target/spike-results/p8-d-append.txt`,
+`p8-d-contended.txt`, `p8-d-fetch.txt`.
+
+**The VM caveat.** As in §16, this is the shared development VM, not the dedicated server: PostgreSQL 18.4 in a
+container, 8 CPUs shared by client and server, other agents' builds possibly running. Unlike §16, the containers ran with
+**`fsync=on`**, as §10.3 asks; on this VM's container storage a commit's flush is cheap (a one-event unit of work takes
+0.16-0.42 ms), so the dedicated server will show a larger fixed commit cost in both arms. Absolute times and rates need
+the dedicated server. Statement counts, round trips, WAL per event and burned values do not depend on it. Every arm ran
+twice, each in a fresh container, with the arm order alternating.
+
+### 18.1 Harness
+
+Both arms are wired as the Spring starter wires the old engine: `Jdbi.create(new TransactionAwareDataSourceProxy(pool))`
+with the `PostgresPlugin` and `SqlExecutionTimeLogger`, and a `SpringTransactionAwareEventStoreUnitOfWorkFactory` on a
+`DataSourceTransactionManager` with `READ_COMMITTED` (the starter's default). The old arm uses
+`SeparateTablePerAggregateTypePersistenceStrategy` with `TEXT` ids and `JSONB`, and `NoEventStreamGapHandler` (the gap
+handler acts on the subscription side only). The adapter arm uses `new EventLogEventStore(eventLog, factory, serializer,
+mapper)` on an `EventLog` with `EventLogSettings.defaults()`, so cross-JVM wake-up is on. Every unit of work runs on the
+application pool (role `writer`). The event log's own `DataSource` runs on role `reader`; in these arms it only sends
+the coalesced wake-up `NOTIFY`s. The aggregate is the repository ITs' `modern.Order` with `TestPersistableEventMapper`
+(metadata, causation and correlation set).
+
+- **Append** (P0.4's shapes): one new aggregate with 1, 10 or 100 events (`OrderAdded` and `ProductAddedToOrder`s), and
+  5 new aggregates × 10 events, saved through `StatefulAggregateRepository.save` in one unit of work. Single thread, 50
+  warm-up units of work, then 1 000 / 1 000 / 300 / 500 measured.
+- **Contended** (P0.4's shape, on the `EventStore` directly): 8 writers on 10 aggregates for 20 s, after a 2 s warm-up on
+  a throwaway type. Each unit of work calls `loadLastPersistedEventRelatedTo`, then appends one event with that expected
+  order. Going through the repository would load the whole stream, which grows by thousands of events in the window, so
+  the measurement would be dominated by the load. **Burned** values are how far the `global_order` identity sequence
+  advanced, minus the rows appended.
+- **Fetch**: one aggregate of 1 000 events. FETCH is a unit of work around `fetchStream(type, id).eventList()`. LOAD is a
+  unit of work around `StatefulAggregateRepository.load(id)`, which also rehydrates the aggregate. 50 warm-up calls, then
+  300 measured.
+- **Round trips** are counted by P0.4's TCP proxy (`RoundTripCountingProxy`, copied into the spike package), which counts
+  client flights over a separate pass of 100 units of work (50 for fetch) on a second pool through the proxy.
+  Statements come from `pg_stat_statements` by role. The transaction count is `BEGIN` calls: one per unit of work in
+  every arm. `pg_stat_statements` records neither pgjdbc's `COMMIT` nor a statement that failed, a point that matters
+  in §18.3.
+
+### 18.2 Results
+
+Append, per unit of work (runs 1 / 2):
+
+| Shape | Arm | p50 ms | p99 ms | Round trips | Writer statements (non-utility) | WAL per event | Events/s |
+|---|---|---|---|---|---|---|---|
+| 1 event | OLD | 0.421 / 0.161 | 0.980 / 0.255 | 3.00 / 3.00 | 3.00 (1.00) | 974 / 962 B | 2 156 / 5 946 |
+| | ADAPTER | 0.305 / 0.184 | 0.671 / 0.319 | 3.00 / 3.00 | 3.00 (1.00) | 1 036 / 1 038 B | 2 974 / 5 162 |
+| 10 events | OLD | 0.337 / 0.272 | 0.574 / 0.355 | 3.00 / 3.00 | 12.00 (10.00) | 943 / 940 B | 27 314 / 34 649 |
+| | ADAPTER | 0.409 / 0.273 | 0.992 / 0.470 | 3.00 / 3.00 | 3.00 (1.00) | 745 / 744 B | 21 643 / 33 598 |
+| 100 events | OLD | 1.428 / 1.385 | 1.744 / 1.576 | 3.74 / 3.80 | 102.0 (100.0) | 944 / 940 B | 67 290 / 69 965 |
+| | ADAPTER | 1.053 / 0.972 | 1.526 / 1.416 | 3.01 / 3.00 | 3.01 (1.00) | 718 / 719 B | 84 622 / 93 270 |
+| 5 aggregates × 10 | OLD | 0.937 / 0.875 | 1.473 / 1.143 | 7.00 / 7.00 | 52.0 (50.0) | 940 / 942 B | 49 574 / 53 967 |
+| | ADAPTER | 0.802 / 0.747 | 1.114 / 0.943 | 7.00 / 7.00 | 7.00 (5.00) | 740 / 741 B | 60 176 / 64 804 |
+
+Both arms make three round trips per unit of work for one aggregate. The first is `SHOW TRANSACTION ISOLATION LEVEL`,
+which pgjdbc sends because the factory sets `READ_COMMITTED` on every transaction. The second is `BEGIN` together with
+the insert: one JDBI `PreparedBatch` in the old arm, one engine statement in the adapter arm. The third is `COMMIT`. In
+the old arm, 100 events cost 3.74-3.80 round trips, because pgjdbc splits a large `RETURNING` batch. The adapter's
+reader role sent 0.10-0.52 `pg_notify` statements per unit of work. This is the cross-JVM wake-up, coalesced on the
+engine's own connection and outside the unit of work.
+
+Contended (8 writers, 10 aggregates, 20 s):
+
+| Run | Arm | Attempts | Appended (appends/s) | Conflicts | Burned `global_order` per 1 000 appends | Successful UoW p50 / p99 ms | Writer statements per attempt (counted) | WAL per appended event |
+|---|---|---|---|---|---|---|---|---|
+| 1 | OLD | 330 749 | 208 425 (10 421) | 37.0 % | **586.9** (one per conflict) | 0.478 / 0.837 | 3.63 | 1 360 B |
+| 1 | ADAPTER | 345 489 | 218 795 (10 940) | 36.7 % | **0** | 0.459 / 0.690 | 4.37 | 895 B |
+| 2 | ADAPTER | 345 551 | 218 891 (10 945) | 36.7 % | **0** | 0.459 / 0.690 | 4.37 | 895 B |
+| 2 | OLD | 352 059 | 222 098 (11 105) | 36.9 % | **585.2** (one per conflict) | 0.455 / 0.679 | 3.63 | 1 360 B |
+
+Fetch of a 1 000-event aggregate:
+
+| Mode | Arm | p50 ms (runs 1 / 2) | p99 ms | Round trips | Writer statements |
+|---|---|---|---|---|---|
+| FETCH | OLD | 2.164 / 1.931 | 2.680 / 2.342 | 13.00 | 3.00 (1 non-utility) |
+| | ADAPTER | 1.168 / 1.126 | 1.378 / 1.232 | 3.00 | 3.00 (1 non-utility) |
+| LOAD | OLD | 2.700 / 2.572 | 3.097 / 3.001 | 13.00 | 3.00 |
+| | ADAPTER | 1.672 / 1.665 | 1.992 / 1.904 | 3.00 | 3.00 |
+
+The old arm reads the stream through JDBI in fetch-size pages, which costs ten extra `Execute` round trips for 1 000
+rows. The adapter reads it in one.
+
+### 18.3 Against the pass lines
+
+| Pass line (§10.3) | Measured | Verdict |
+|---|---|---|
+| Round trips per unit of work ≤ the old engine's in every shape | 1, 10 events: 3.00 = 3.00. 100 events: 3.00 against 3.74-3.80. Contended winners: equal. Contended **losers: one more** (see below) | **missed** for conflict losers; met in every other shape |
+| … and lower for 5 aggregates | 7.00 against 7.00 | **missed** (equal) |
+| Append p50 ≤ the old engine's or within the noise | 1 event: 0.305 / 0.184 against 0.421 / 0.161. 10 events: 0.409 / 0.273 against 0.337 / 0.272. 100 events: 26-30 % lower. 5 × 10: 14-15 % lower. Contended winners: level | met (1 and 10 events within run-to-run noise; the run-1 spread is JVM warm-up) |
+| Burned `global_order` values per 1 000 appends, committed-conflict losers (I10) | 0 in both runs (old engine: 585-587, one per conflict) | **met** |
+| `fetchStream` of a 1 000-event aggregate: p50 within the noise or better | 1.13-1.17 ms against 1.93-2.16 ms (−42-46 %). `load` −35-38 % | met (better) |
+| Recorded: appends/s, WAL per event | Single thread: level at 1 and 10 events, +26-33 % at 100 events, +20-21 % at 5 × 10. Contended 10 940 against 10 421-11 105 appends/s. WAL per event: 718-745 B against 940-944 B with ≥ 10 events, 1 036 B against 962-974 B for a lone event (the head row), 895 B against 1 360 B contended | recorded |
+
+**Miss 1: five aggregates make the same number of round trips as the old engine, not fewer.** `StatefulAggregateRepository`
+appends each aggregate on its own in its `beforeCommit` callback, one `appendToStream` call per aggregate. The adapter
+turns each call into one `EventLog.append(connection, request)`, so five aggregates cost five statements and five round
+trips. The old engine's JDBI batch is also one round trip per aggregate, so both arms are at 7. The engine can already
+take several streams in one call (`EventLog.append(Connection, List<AppendRequest>)`, grouped by statement text), but
+nothing above the adapter ever gives it more than one stream at a time. The gain the pass line expects would need the
+appends of one unit of work to be collected and sent together. The adapter could do that at the unit of work's `Flush`
+stage, but `appendToStream` returns the persisted stream, with its global orders, synchronously. A repository that hands
+the adapter all its aggregates at once (a new `EventStore` operation that appends several streams) would avoid that
+problem, but it changes the repository and the `EventStore` API. **For the maintainer to decide:** accept "equal" for
+this shape in 8b, since the statement count is already ten times lower (7 against 52) and p50 14-15 % lower, or open a
+follow-up for a multi-stream append path from the repositories.
+
+**Miss 2: a conflict loser makes one more round trip than in the old engine.** The counted statements per attempt are
+4.37 against 3.63. The 3.63 understates the old engine, because `pg_stat_statements` does not record its failed
+insert: each of its 0.37 losers per attempt also sent an `INSERT` that raised a unique violation, which brings it to 4.00.
+The adapter's append statement returns zero rows for a loser, and the engine then reads `SELECT version FROM <heads>`
+(0.37 per attempt, one per conflict) to put the actual stream version into `StreamAppendConflictException`. So a winner
+costs the same in both arms, and a loser costs one more round trip in the adapter. The adapter does not use that version:
+the old engine's message, which it copies, names only the expected range. **Proposed fix:** return the head's current
+version from the append statement itself, for example a final `SELECT` from the head table when `h` is empty, or make
+the version in the exception optional and skip the read. Either change is in the engine's main code, so it is not made
+here. In throughput terms the extra read is small: contended appends/s are level with the old engine (10 940 against
+10 421-11 105), with zero burned values instead of 585 per 1 000 appends.
+
+### 18.4 Notes
+
+- The adapter's lone-event WAL (1 036 B against 962-974 B) is the head-row insert of a new stream. From 10 events up, the
+  single `unnest` insert writes about 22 % less WAL per event than the old batch. Under contention it writes 34 % less,
+  because a loser writes nothing (the old engine's failed insert has already written its heap tuple and burned its
+  sequence value).
+- In the contended arm, the adapter's p50/p99 were identical to the microsecond in both runs (0.459 / 0.690 ms), while
+  attempts and conflicts differed. That is a coincidence of the histogram, not a reused result: each run's statement
+  block in `p8-d-contended.txt` comes from its own container.
+- `SHOW TRANSACTION ISOLATION LEVEL` is one round trip in every unit of work of both arms. It comes from the starter's
+  explicit `READ_COMMITTED`, not from either engine. Removing it (the `DATABASE_DEFAULT` setting) would take a third of
+  the round trips out of a one-aggregate append, in both engines alike.
+- No main code was changed. Test code: `EventLogAdapterGateSpikeIT` (new), `RoundTripCountingProxy` (a copy of the old
+  engine module's spike class), and `SpikeDb.hostAndPort()`/`poolVia(...)` for the proxied pool. The `p8b-gate` suite was
+  added to `scripts/run-phase0-spikes.sh`.

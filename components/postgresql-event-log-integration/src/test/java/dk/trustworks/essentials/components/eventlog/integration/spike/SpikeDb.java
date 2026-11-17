@@ -156,6 +156,26 @@ final class SpikeDb implements AutoCloseable {
         return new HikariDataSource(config);
     }
 
+    /** The server's host and port, from the JDBC URL */
+    String hostAndPort() {
+        var m = URL.matcher(jdbcUrl);
+        if (!m.matches()) throw new IllegalStateException("unsupported JDBC URL " + jdbcUrl);
+        return m.group(1);
+    }
+
+    /** A pool of {@code logical}'s role through a local TCP proxy listening on {@code proxyPort} (unit 8b-D's round-trip count) */
+    HikariDataSource poolVia(String logical, int size, int proxyPort) {
+        var m = URL.matcher(jdbcUrl);
+        if (!m.matches()) throw new IllegalStateException("unsupported JDBC URL " + jdbcUrl);
+        var config = new HikariConfig();
+        config.setJdbcUrl("jdbc:postgresql://127.0.0.1:" + proxyPort + (m.group(2) == null ? "" : m.group(2)) + (m.group(3) == null ? "" : m.group(3)));
+        config.setUsername(role(logical));
+        config.setPassword(password(logical));
+        config.setMaximumPoolSize(size);
+        config.setPoolName(logical + "-proxied-" + UUID.randomUUID().toString().substring(0, 4));
+        return new HikariDataSource(config);
+    }
+
     Connection connect(String logical) throws SQLException {
         return DriverManager.getConnection(jdbcUrl, role(logical), password(logical));
     }
