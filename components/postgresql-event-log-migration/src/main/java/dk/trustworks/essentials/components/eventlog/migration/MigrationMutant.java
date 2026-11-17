@@ -39,7 +39,15 @@ enum MigrationMutant {
     VERIFY_WITHOUT_PAYLOAD,
     /**
      * The cut-over runs without its verification step (§6.2). Not a defect a test looks for: it lets the tests whose
-     * oracle is the engine's behaviour after a cut-over (heads, sequence, payload bytes) commit a divergent copy
+     * oracle is the engine's behaviour after a cut-over (heads, sequence, payload bytes) commit a divergent copy. It also skips
+     * {@link ResumePointImport}'s progress-row checks, so I8's must-fail can show the loss those checks would refuse
      */
-    CUTOVER_WITHOUT_VERIFY
+    CUTOVER_WITHOUT_VERIFY,
+    /** The import writes the old resume point unchanged, {@code I = R}: a gap fill committed before the cut-over is lost (§4.2, I8's must-fail) */
+    IMPORT_RESUME_UNCHANGED,
+    /**
+     * The import resumes from the lowest open transient gap, filled or not (§12.4's stricter rule). Not a correctness
+     * mutant: it only replays more; the test asserts the replay length to show the tighter rule is in use (§4.2)
+     */
+    IMPORT_LOWEST_GAP_UNFILTERED
 }

@@ -3,7 +3,7 @@ package dk.trustworks.essentials.components.eventlog.migration;
 import dk.trustworks.essentials.components.eventlog.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.NoEventStreamGapHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
@@ -36,8 +36,27 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @Testcontainers
 abstract class AbstractMigrationIT {
+    /**
+     * Overrides the PostgreSQL image of every IT of this module, e.g. {@code -Dmigration.it.image=postgres:16.15}, to run
+     * them against another supported major (16, 17 and 18, as the engine's {@code -Deventlog.it.image}). Unset:
+     * {@link EssentialsTestContainers#POSTGRES_IMAGE}
+     */
+    static final String IMAGE_PROPERTY = "migration.it.image";
+
     @Container
-    static final PostgreSQLContainer postgres = EssentialsTestContainers.postgres();
+    static final PostgreSQLContainer postgres = postgresContainer();
+
+    private static PostgreSQLContainer postgresContainer() {
+        var image = System.getProperty(IMAGE_PROPERTY, "");
+        if (image.isBlank()) {
+            return EssentialsTestContainers.postgres();
+        }
+        var defaults = EssentialsTestContainers.postgres();
+        return new PostgreSQLContainer(org.testcontainers.utility.DockerImageName.parse(image).asCompatibleSubstituteFor("postgres"))
+                .withDatabaseName(defaults.getDatabaseName())
+                .withUsername(defaults.getUsername())
+                .withPassword(defaults.getPassword());
+    }
 
     protected PGSimpleDataSource dataSource;
     protected EventLog           eventLog;
@@ -93,11 +112,18 @@ abstract class AbstractMigrationIT {
         final EventStoreManagedUnitOfWorkFactory                                   factory;
         final PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
         volatile TenantId                                                          tenant;
+        final Jdbi                                                                 jdbi;
+        /** The old engine's gap handler, when built with {@code gapHandling}; else null */
+        PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> gapHandler;
+
+        OldEngine(IdentifierColumnType idType, JSONColumnType jsonType, String... types) {
+            this(false, idType, jsonType, types);
+        }
 
         @SuppressWarnings("unchecked")
-        OldEngine(IdentifierColumnType idType, JSONColumnType jsonType, String... types) {
+        OldEngine(boolean gapHandling, IdentifierColumnType idType, JSONColumnType jsonType, String... types) {
             this.types = List.of(types);
-            var jdbi = Jdbi.create(dataSource);
+            jdbi = Jdbi.create(dataSource);
             jdbi.installPlugin(new PostgresPlugin());
             factory = new EventStoreManagedUnitOfWorkFactory(jdbi);
             PersistableEventMapper mapper = (aggregateId, configuration, event, eventOrder) ->
@@ -115,7 +141,8 @@ abstract class AbstractMigrationIT {
             eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
                                              .setUnitOfWorkFactory(factory)
                                              .setPersistenceStrategy(strategy)
-                                             .setEventStreamGapHandlerFactory(es -> new NoEventStreamGapHandler<>())
+                                             .setEventStreamGapHandlerFactory(es -> gapHandling ? (gapHandler = new PostgresqlEventStreamGapHandler<>(factory))
+                                                                                                    : new NoEventStreamGapHandler<>())
                                              .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver())
                                              .build();
             for (var type : types) {
