@@ -37,9 +37,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 
 /**
- * {@link AbstractEventProcessor#logRedeliveryPolicy}: the start line names the derived failover default only when the
- * policy in use is that default - the same delays <em>and</em> the same {@link MessageDeliveryErrorHandler}. A policy that
- * keeps the derived delays but classifies errors with its own handler is logged as the processor's own, handler included.
+ * {@link AbstractEventProcessor#logRedeliveryPolicy}: the start line names the default policy, or the derived failover
+ * policy, only when the policy in use is that one - the same delays <em>and</em> the same
+ * {@link MessageDeliveryErrorHandler}. A policy that keeps the delays but classifies errors with its own handler is logged
+ * as the processor's own, handler included.
  */
 class ProcessorRedeliveryPolicyLogTest {
     private static final String PROCESSOR_NAME = "ThingsEventProcessor";
@@ -59,20 +60,32 @@ class ProcessorRedeliveryPolicyLogTest {
     }
 
     @Test
-    void the_derived_default_is_logged_as_the_default() {
-        var derivedDefault = FailoverRedeliveryPolicy.outlasting(Optional.empty(), Optional.empty());
-        // A fresh build of the same default, as getDurableQueueRedeliveryPolicy() returns it
+    void the_processors_default_policy_is_logged_as_the_default() {
+        var processor = new ThingsEventProcessor();
+        var inUse     = processor.getInboxRedeliveryPolicy();
+
+        processor.logRedeliveryPolicy(PROCESSOR_NAME, inUse, FailoverRedeliveryPolicy.outlasting(Optional.empty(), Optional.empty()));
+
+        assertThat(inUse.getMaximumNumberOfRedeliveries()).isEqualTo(20);
+        assertThat(redeliveryPolicyLines()).singleElement()
+                                           .satisfies(line -> assertThat(line).contains("Uses the default RedeliveryPolicy"));
+    }
+
+    @Test
+    void the_derived_failover_policy_is_logged_with_what_it_was_derived_from() {
+        var derivedFailover = FailoverRedeliveryPolicy.outlasting(Optional.empty(), Optional.empty());
+        // A fresh build of the same policy, as an override of getInboxRedeliveryPolicy() returns it
         var inUse = FailoverRedeliveryPolicy.outlasting(Optional.empty(), Optional.empty()).policy();
 
-        new ThingsEventProcessor().logRedeliveryPolicy(PROCESSOR_NAME, inUse, derivedDefault);
+        new ThingsEventProcessor().logRedeliveryPolicy(PROCESSOR_NAME, inUse, derivedFailover);
 
         assertThat(redeliveryPolicyLines()).singleElement()
-                                           .satisfies(line -> assertThat(line).contains(derivedDefault.describe())
+                                           .satisfies(line -> assertThat(line).contains(derivedFailover.describe())
                                                                               .doesNotContain("Uses its own RedeliveryPolicy"));
     }
 
     @Test
-    void the_derived_delays_with_an_own_error_handler_are_logged_as_the_processors_own_policy() {
+    void the_failover_delays_with_an_own_error_handler_are_logged_as_the_processors_own_policy() {
         var derivedDefault = FailoverRedeliveryPolicy.outlasting(Optional.empty(), Optional.empty());
         var inUse = withDelaysOf(derivedDefault.policy(),
                                  MessageDeliveryErrorHandler.builder()
@@ -90,7 +103,7 @@ class ProcessorRedeliveryPolicyLogTest {
     }
 
     @Test
-    void the_derived_delays_with_a_different_stateless_handler_are_logged_as_the_processors_own_policy() {
+    void the_failover_delays_with_a_different_stateless_handler_are_logged_as_the_processors_own_policy() {
         var derivedDefault = FailoverRedeliveryPolicy.outlasting(Optional.empty(), Optional.empty());
         var inUse = withDelaysOf(derivedDefault.policy(), new MessageDeliveryErrorHandler.NeverRetry());
 

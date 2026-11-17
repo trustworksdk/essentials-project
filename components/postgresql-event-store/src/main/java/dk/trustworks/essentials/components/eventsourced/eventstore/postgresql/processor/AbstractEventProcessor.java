@@ -690,18 +690,36 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     /**
      * Get the {@link RedeliveryPolicy} used when consuming messages from the underlying Durable queue.
      * <p>
-     * Default: {@link #failoverRedeliveryPolicy(Optional)} - quick first retries, and retrying for long enough to outlast a
-     * failover, so a handler that waits for another processor's work does not dead-letter while that work moves to
-     * another instance. Override for a different budget.
+     * Default: {@link #defaultRedeliveryPolicy()} - 20 redeliveries, from 200 ms growing x1.1 to 3 s, about 10 s in all.
+     * A handler that throws until another processor's work is there ("not yet") can dead-letter during a failover with
+     * that budget; such a processor overrides this with {@link #failoverRedeliveryPolicy(Optional)}, which retries for
+     * long enough to outlast one.
      *
      * @return the {@link RedeliveryPolicy} used when consuming messages from the underlying Durable queue
      */
     protected RedeliveryPolicy getDurableQueueRedeliveryPolicy() {
-        return failoverRedeliveryPolicy(Optional.empty()).policy();
+        return defaultRedeliveryPolicy();
     }
 
     /**
-     * A {@link FailoverRedeliveryPolicy} for this processor: from the lock timeout of its subscription manager's
+     * The default {@link RedeliveryPolicy} of an event processor's queue or {@link dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.Inbox}:
+     * 20 redeliveries, from 200 ms growing x1.1 to 3 s, about 10 s in all.
+     *
+     * @return a new instance of the default policy
+     */
+    static RedeliveryPolicy defaultRedeliveryPolicy() {
+        return RedeliveryPolicy.exponentialBackoff()
+                               .setInitialRedeliveryDelay(Duration.ofMillis(200))
+                               .setFollowupRedeliveryDelay(Duration.ofMillis(200))
+                               .setFollowupRedeliveryDelayMultiplier(1.1d)
+                               .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofSeconds(3))
+                               .setMaximumNumberOfRedeliveries(20)
+                               .build();
+    }
+
+    /**
+     * A {@link FailoverRedeliveryPolicy} for this processor - opt-in, for a processor whose handler waits for another
+     * processor's work and so must not dead-letter while that work moves to another instance. Derived from the lock timeout of its subscription manager's
      * {@link FencedLockManager} and the given queue window ({@code DurableQueues#maxUnservedAfterInstanceLoss()}),
      * each falling back to its default when unknown.
      *
@@ -714,20 +732,28 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     }
 
     /**
-     * Says at start which retry budget a queue consumer runs with: the derived default's, or that the processor chose its
-     * own. One line, so an operator reading a dead letter can tell how long it was retried.
+     * Says at start which retry budget a queue consumer runs with: the {@link #defaultRedeliveryPolicy() default}, the
+     * {@link FailoverRedeliveryPolicy} derived for this processor (with what it was derived from), or that the processor
+     * chose its own. One line, so an operator reading a dead letter can tell how long it was retried.
      * <p>
-     * The policy in use counts as the default only when it has the default's delays <em>and</em> classifies errors the
-     * same way: {@link RedeliveryPolicy#equals(Object)} leaves the {@link MessageDeliveryErrorHandler} out, so a policy
-     * that keeps the derived delays but sets its own handler (for example {@code alwaysRetryOn(...)}) is logged as the
-     * processor's own, with its handler.
+     * The policy in use counts as one of the two only when it has its delays <em>and</em> classifies errors the same way:
+     * {@link RedeliveryPolicy#equals(Object)} leaves the {@link MessageDeliveryErrorHandler} out, so a policy that keeps
+     * the delays but sets its own handler (for example {@code alwaysRetryOn(...)}) is logged as the processor's own, with
+     * its handler.
      */
-    protected final void logRedeliveryPolicy(String processorName, RedeliveryPolicy inUse, FailoverRedeliveryPolicy derivedDefault) {
-        if (inUse.equals(derivedDefault.policy()) && sameDeliveryErrorHandler(inUse.getDeliveryErrorHandler(), derivedDefault.policy().getDeliveryErrorHandler())) {
-            log.info("[{}] {}", processorName, derivedDefault.describe());
+    protected final void logRedeliveryPolicy(String processorName, RedeliveryPolicy inUse, FailoverRedeliveryPolicy derivedFailover) {
+        var defaultPolicy = defaultRedeliveryPolicy();
+        if (samePolicy(inUse, defaultPolicy)) {
+            log.info("[{}] Uses the default RedeliveryPolicy: {}", processorName, inUse);
+        } else if (samePolicy(inUse, derivedFailover.policy())) {
+            log.info("[{}] {}", processorName, derivedFailover.describe());
         } else {
             log.info("[{}] Uses its own RedeliveryPolicy: {}", processorName, inUse);
         }
+    }
+
+    private static boolean samePolicy(RedeliveryPolicy inUse, RedeliveryPolicy other) {
+        return inUse.equals(other) && sameDeliveryErrorHandler(inUse.getDeliveryErrorHandler(), other.getDeliveryErrorHandler());
     }
 
     /**
