@@ -46,6 +46,7 @@ public record AggregateTypeTables(String aggregateType, String eventTable, Strin
     static final String EVENT_ID_INDEX_SUFFIX   = "_event_id";
     static final String EVENT_TYPE_INDEX_SUFFIX = "_type_order";
     static final String TENANT_INDEX_SUFFIX     = "_tenant_order";
+    static final String CAUSED_BY_INDEX_SUFFIX  = "_caused_by";
 
     /**
      * The longest aggregate type whose derived names all fit in {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH}
@@ -87,6 +88,17 @@ public record AggregateTypeTables(String aggregateType, String eventTable, Strin
      */
     public String tenantIndex() {
         var name = eventTable + TENANT_INDEX_SUFFIX;
+        PostgresqlUtil.checkIsValidTableOrColumnName(name, "aggregate type '" + aggregateType + "'");
+        return name;
+    }
+
+    /**
+     * @return {@code el_<type>_events_caused_by}, the partial {@code caused_by_event_id} index behind the causation
+     * lookup (phase 8 §14 question 8); shorter than {@link #streamOrderConstraint()}, so it fits whenever the other
+     * names do
+     */
+    public String causedByIndex() {
+        var name = eventTable + CAUSED_BY_INDEX_SUFFIX;
         PostgresqlUtil.checkIsValidTableOrColumnName(name, "aggregate type '" + aggregateType + "'");
         return name;
     }

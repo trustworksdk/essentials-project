@@ -720,6 +720,244 @@ public final class EventLog {
         }
     }
 
+    // ---- phase 8 unit 8b-A: the reads the EventStore adapter needs (§5.2) ----
+
+    /**
+     * The last event of a stream (the adapter's {@code loadLastPersistedEventRelatedTo}): one row, read backwards on the
+     * {@code (aggregate_id, event_order)} constraint, on the caller's connection.
+     *
+     * @return the stream's event with the highest event order, or empty for a stream with no events
+     */
+    public Optional<StoredEvent> findLastEvent(Connection connection, String aggregateType, String aggregateId) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        requireNonBlank(aggregateId, "No aggregateId provided");
+        requireStarted();
+        var type = registered(aggregateType);
+        try (var statement = connection.prepareStatement(type.reads.lastEvent())) {
+            statement.setString(1, aggregateId);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next() ? Optional.of(read(aggregateType, resultSet)) : Optional.empty();
+            }
+        }
+    }
+
+    /**
+     * The events with the given ids (the adapter's {@code loadEvents}): one statement on the event-id index, on the
+     * caller's connection. An id with no event is skipped; a repeated id is returned once.
+     *
+     * @return the events found, in global order
+     */
+    public List<StoredEvent> findEvents(Connection connection, String aggregateType, Collection<UUID> eventIds) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        requireNonNull(eventIds, "No eventIds provided");
+        requireStarted();
+        var type = registered(aggregateType);
+        if (eventIds.isEmpty()) {
+            return List.of();
+        }
+        var ids = eventIds.toArray(UUID[]::new);
+        for (var id : ids) {
+            requireNonNull(id, "An eventId is null");
+        }
+        try (var statement = connection.prepareStatement(type.reads.findEvents())) {
+            statement.setArray(1, connection.createArrayOf("uuid", ids));
+            return readAll(aggregateType, statement);
+        }
+    }
+
+    /**
+     * Read events by global order (the adapter's {@code loadEventsByGlobalOrder}) on the caller's connection, streamed:
+     * the statement runs with {@link GlobalOrderRead#fetchSize()}, which pgjdbc honours only while the connection's
+     * autocommit is off (a unit of work's connection); with autocommit on, every row is fetched at once. Reads the
+     * rows committed when the statement runs; it is not a subscription and makes no hole guarantee.
+     * <p>
+     * The caller must close the returned stream (try-with-resources), and before its transaction ends; closing it
+     * closes the statement, never the connection. An event-type name never registered matches nothing; a read whose
+     * names are all unknown, or with an empty range and no additional orders, returns an empty stream without a
+     * statement. Additional orders are read first, in one statement, and merged into the streamed range in global order.
+     *
+     * @return the matching events, in global order
+     */
+    public java.util.stream.Stream<StoredEvent> loadByGlobalOrder(Connection connection, GlobalOrderRead read) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        return openGlobalOrderRead(connection, read, () -> {
+        });
+    }
+
+    /**
+     * {@link #loadByGlobalOrder(Connection, GlobalOrderRead)} on a connection borrowed from the engine's
+     * {@code DataSource} with autocommit off, so the read is streamed in {@link GlobalOrderRead#fetchSize()} rows.
+     * Closing the stream rolls the read-only transaction back and returns the connection; until then it is held.
+     */
+    public java.util.stream.Stream<StoredEvent> loadByGlobalOrder(GlobalOrderRead read) throws SQLException {
+        requireNonNull(read, "No read provided");
+        requireStarted();
+        var connection = dataSource.getConnection();
+        try {
+            connection.setAutoCommit(false);
+            return openGlobalOrderRead(connection, read, () -> {
+                try {
+                    connection.rollback();
+                } finally {
+                    connection.close();
+                }
+            });
+        } catch (SQLException | RuntimeException e) {
+            try {
+                connection.close();
+            } catch (SQLException closing) {
+                e.addSuppressed(closing);
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * @param release run when the stream closes, or at once when no stream is returned
+     */
+    private java.util.stream.Stream<StoredEvent> openGlobalOrderRead(Connection connection, GlobalOrderRead read, ResultSetStream.Release release) throws SQLException {
+        requireNonNull(read, "No read provided");
+        requireStarted();
+        var type    = registered(read.aggregateType());
+        Short[] typeIds = null;
+        if (!read.eventTypes().isEmpty()) {
+            var ids = new ArrayList<Short>(read.eventTypes().size());
+            for (var name : read.eventTypes()) {
+                var id = eventTypes.knownIdOf(name);
+                if (id != null) {
+                    ids.add(id);
+                }
+            }
+            typeIds = ids.toArray(Short[]::new);
+        }
+        if (read.isEmpty() || (typeIds != null && typeIds.length == 0)) {
+            release.run();
+            return java.util.stream.Stream.empty();
+        }
+        PreparedStatement statement = null;
+        try {
+            var additional = List.<StoredEvent>of();
+            if (!read.additionalGlobalOrders().isEmpty()) {
+                try (var extra = connection.prepareStatement(type.reads.additional())) {
+                    extra.setArray(1, connection.createArrayOf("bigint", read.additionalGlobalOrders().toArray(Long[]::new)));
+                    extra.setLong(2, read.fromInclusive());
+                    extra.setLong(3, read.toInclusive());
+                    bindReadFilter(connection, extra, 4, typeIds, read.tenant());
+                    additional = readAll(read.aggregateType(), extra);
+                }
+            }
+            statement = connection.prepareStatement(type.reads.range());
+            statement.setFetchSize(read.fetchSize());
+            statement.setLong(1, read.fromInclusive());
+            statement.setLong(2, read.toInclusive());
+            bindReadFilter(connection, statement, 3, typeIds, read.tenant());
+            var resultSet = statement.executeQuery();
+            var opened    = statement;
+            var range = ResultSetStream.of(resultSet, rs -> read(read.aggregateType(), rs), () -> {
+                try {
+                    opened.close();
+                } finally {
+                    release.run();
+                }
+            });
+            return additional.isEmpty() ? range : ResultSetStream.merge(range, additional, Comparator.comparingLong(StoredEvent::globalOrder));
+        } catch (SQLException | RuntimeException e) {
+            try {
+                if (statement != null) {
+                    statement.close();
+                }
+            } catch (SQLException closing) {
+                e.addSuppressed(closing);
+            }
+            try {
+                release.run();
+            } catch (SQLException releasing) {
+                e.addSuppressed(releasing);
+            }
+            throw e;
+        }
+    }
+
+    /** Binds {@link EventLogStorage.ReadStatements#FILTER_PARAMETERS} parameters: the type ids twice, the tenant twice */
+    private static int bindReadFilter(Connection connection, PreparedStatement statement, int p, Short[] typeIds, String tenant) throws SQLException {
+        for (var i = 0; i < 2; i++) {
+            if (typeIds == null) {
+                statement.setNull(p++, Types.ARRAY);
+            } else {
+                statement.setArray(p++, connection.createArrayOf("int2", typeIds));
+            }
+        }
+        for (var i = 0; i < 2; i++) {
+            statement.setString(p++, tenant);
+        }
+        return p;
+    }
+
+    /**
+     * @return the highest {@code global_order} of the aggregate type's table (the adapter's
+     * {@code findHighestGlobalEventOrderPersisted}), or empty for an empty table; read on the primary key. An order
+     * drawn by a transaction that rolled back is never returned, but one of an uncommitted transaction is not seen
+     * either, so a lower order may still commit
+     */
+    public OptionalLong findHighestGlobalOrder(Connection connection, String aggregateType) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        requireStarted();
+        return readOptionalLong(connection, registered(aggregateType).reads.highest());
+    }
+
+    /**
+     * @return the lowest {@code global_order} of the aggregate type's table (the adapter's
+     * {@code findLowestGlobalEventOrderPersisted}), or empty for an empty table; read on the primary key
+     */
+    public OptionalLong findLowestGlobalOrder(Connection connection, String aggregateType) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        requireStarted();
+        return readOptionalLong(connection, registered(aggregateType).reads.lowest());
+    }
+
+    private static OptionalLong readOptionalLong(Connection connection, String sql) throws SQLException {
+        try (var statement = connection.prepareStatement(sql); var resultSet = statement.executeQuery()) {
+            resultSet.next();
+            var value = resultSet.getLong(1);
+            return resultSet.wasNull() ? OptionalLong.empty() : OptionalLong.of(value);
+        }
+    }
+
+    /**
+     * The events caused by an event (the adapter's {@code loadEventsCausedBy}): one statement per aggregate type
+     * registered with this event log, each on the partial {@code caused_by_event_id} index the schema creates with
+     * the event table (§14 question 8), on the caller's connection.
+     *
+     * @return the events whose {@code caused_by_event_id} is {@code causedByEventId}: aggregate types by event table
+     * name, each in global order; empty if none
+     */
+    public List<StoredEvent> findCausedBy(Connection connection, UUID causedByEventId) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        requireNonNull(causedByEventId, "No causedByEventId provided");
+        requireStarted();
+        var types = new ArrayList<>(aggregateTypes.keySet());
+        types.sort(Comparator.comparing(name -> aggregateTypes.get(name).tables.eventTable()));
+        var events = new ArrayList<StoredEvent>();
+        for (var aggregateType : types) {
+            var type = registered(aggregateType);
+            try (var statement = connection.prepareStatement(type.reads.causedBy())) {
+                statement.setObject(1, causedByEventId);
+                events.addAll(readAll(aggregateType, statement));
+            }
+        }
+        return events;
+    }
+
+    private List<StoredEvent> readAll(String aggregateType, PreparedStatement statement) throws SQLException {
+        try (var resultSet = statement.executeQuery()) {
+            var events = new ArrayList<StoredEvent>();
+            while (resultSet.next()) {
+                events.add(read(aggregateType, resultSet));
+            }
+            return events;
+        }
+    }
+
     private StoredEvent read(String aggregateType, ResultSet resultSet) throws SQLException {
         return new StoredEvent(aggregateType,
                                resultSet.getLong(1),
@@ -759,11 +997,13 @@ public final class EventLog {
     private static final class RegisteredAggregateType {
         final AggregateTypeTables             tables;
         final EventLogStorage.TableStatements statements;
+        final EventLogStorage.ReadStatements  reads;
         volatile boolean                      verified;
 
         RegisteredAggregateType(AggregateTypeTables tables) {
             this.tables = tables;
             this.statements = EventLogStorage.TableStatements.of(tables);
+            this.reads = EventLogStorage.ReadStatements.of(tables.eventTable());
         }
 
         void verify(Connection connection) throws SQLException {

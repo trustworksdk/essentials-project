@@ -444,6 +444,59 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
     }
 
     /**
+     * The read statements the {@code EventStore} adapter needs (phase 8 §5.2, unit 8b-A), generated once per aggregate
+     * type. Each reaches the event table through an index condition under a generic plan ({@code EventLogGenericPlanIT}).
+     * <p>
+     * The global-order range reads bind {@code fromInclusive, toInclusive}, then the filter parameters
+     * {@link #FILTER_PARAMETERS}: {@code int2[] types} twice (null = every type) and {@code text tenant} twice (null =
+     * every tenant; otherwise that tenant's events and the events without a tenant, as {@code PostgresqlEventStore}
+     * reads them). The filters are plain {@code Filter} conditions on the primary-key range, never an {@code OR} with an
+     * index condition. The requested orders outside the range are a statement of their own ({@code additional}:
+     * {@code bigint[] orders, fromInclusive, toInclusive}, then the filters), merged with the range in the JVM: never an
+     * {@code OR} with the range, and never a {@code UNION ALL} under one {@code ORDER BY}, whose generic plan sorts the
+     * whole range before its first row.
+     *
+     * @param lastEvent           {@code aggregate_id}: the stream's highest event order, backwards on the stream-order constraint
+     * @param findEvents          {@code uuid[] ids}: on the event-id index, in global order
+     * @param range               the range read, in global order, walking the primary key (no sort)
+     * @param additional          the additional orders outside the range, in global order
+     * @param highest             {@code max(global_order)}, null on an empty table
+     * @param lowest              {@code min(global_order)}, null on an empty table
+     * @param causedBy            {@code uuid caused_by_event_id}: on the partial caused-by index, in global order
+     */
+    record ReadStatements(String lastEvent, String findEvents, String range, String additional, String highest, String lowest, String causedBy) {
+        static final int FILTER_PARAMETERS = 4;
+
+        static ReadStatements of(String events) {
+            var filters = " AND (?::int2[] IS NULL OR event_type = ANY(?::int2[])) AND (?::text IS NULL OR tenant IS NULL OR tenant = ?::text)";
+            var range = "SELECT " + EVENT_COLUMNS + " FROM " + events + " WHERE global_order >= ? AND global_order <= ?" + filters;
+            var additional = "SELECT " + EVENT_COLUMNS + " FROM " + events + " WHERE global_order = ANY(?::bigint[]) AND (global_order < ? OR global_order > ?)" + filters;
+            return new ReadStatements("SELECT " + EVENT_COLUMNS + " FROM " + events + " WHERE aggregate_id = ? ORDER BY event_order DESC LIMIT 1",
+                                      "SELECT " + EVENT_COLUMNS + " FROM " + events + " WHERE event_id = ANY(?::uuid[]) ORDER BY global_order",
+                                      range + " ORDER BY global_order",
+                                      additional + " ORDER BY global_order",
+                                      "SELECT max(global_order) FROM " + events,
+                                      "SELECT min(global_order) FROM " + events,
+                                      "SELECT " + EVENT_COLUMNS + " FROM " + events + " WHERE caused_by_event_id = ? ORDER BY global_order");
+        }
+
+        /**
+         * @return every statement by its name, for the plan check
+         */
+        java.util.Map<String, String> all() {
+            var all = new java.util.LinkedHashMap<String, String>();
+            all.put("lastEvent", lastEvent);
+            all.put("findEvents", findEvents);
+            all.put("range", range);
+            all.put("additional", additional);
+            all.put("highest", highest);
+            all.put("lowest", lowest);
+            all.put("causedBy", causedBy);
+            return all;
+        }
+    }
+
+    /**
      * The statements generated once per aggregate type. Every append binds, after its head-path parameters,
      * {@code aggregate_id, tenant} and the eight arrays {@code uuid[] id, uuid[] caused_by, uuid[] correlation,
      * int2[] type, int2[] revision, text[] timestamp, text[] payload, text[] metadata}.

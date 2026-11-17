@@ -231,7 +231,7 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
 
     /**
      * @param tables the validated names of one aggregate type
-     * @return its event table, head table and registry row, each statement safe against existing objects (design §2.1,
+     * @return its event table (with its event-id and caused-by indexes), head table and registry row, each statement safe against existing objects (design §2.1,
      * §2.2, §2.4). The registry insert does nothing on any conflict; the engine checks afterwards that the row maps back
      * to this aggregate type
      */
@@ -256,6 +256,12 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
                         ")",
                 createIndexUnlessPresent(events, tables.eventIdIndex(),
                                          "CREATE INDEX IF NOT EXISTS " + tables.eventIdIndex() + " ON " + events + " (event_id)"),
+                // Phase 8 §14 question 8: the causation lookup ("what did this event cause?"). Partial: events without a cause
+                // stay out of it, so an append without one pays nothing. Created with the table; on a table created before
+                // phase 8b it is built (not concurrently) when the aggregate type next registers
+                createIndexUnlessPresent(events, tables.causedByIndex(),
+                                         "CREATE INDEX IF NOT EXISTS " + tables.causedByIndex() + " ON " + events +
+                                                 " (caused_by_event_id) WHERE caused_by_event_id IS NOT NULL"),
                 "CREATE TABLE IF NOT EXISTS " + tables.headTable() + " (\n" +
                         "    aggregate_id text   PRIMARY KEY,\n" +
                         "    version      bigint NOT NULL\n" +

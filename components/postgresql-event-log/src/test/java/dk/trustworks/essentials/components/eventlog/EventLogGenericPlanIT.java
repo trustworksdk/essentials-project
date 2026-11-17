@@ -71,6 +71,43 @@ class EventLogGenericPlanIT extends AbstractEventLogIT {
         }
     }
 
+    /**
+     * Phase 8 unit 8b-A: every read the {@code EventStore} adapter needs reaches the event table by an index condition
+     * under a generic plan, and the three that have an index of their own use it: the stream's last event walks the
+     * {@code (aggregate_id, event_order)} constraint backwards, the id lookup the event-id index, the causation lookup
+     * the partial caused-by index (§14 question 8)
+     */
+    @Test
+    void every_adapter_read_statement_reads_the_event_table_by_index_only() throws SQLException {
+        execute("UPDATE " + tables.eventTable() + " SET caused_by_event_id = gen_random_uuid(), tenant = 't' || (global_order % 7) WHERE global_order % 10 = 0");
+        execute("ANALYZE " + tables.eventTable());
+        var statements = EventLogStorage.ReadStatements.of(tables.eventTable()).all();
+        assertThat(statements).containsOnlyKeys("lastEvent", "findEvents", "range", "additional", "highest", "lowest", "causedBy");
+        for (var entry : statements.entrySet()) {
+            var plan = genericPlan(entry.getValue());
+            assertThat(primaryKeyWalks(plan)).as("%s's generic plan:%n%s", entry.getKey(), String.join("\n", plan)).isEmpty();
+            assertThat(plan).as("%s's generic plan reads the event table:%n%s", entry.getKey(), String.join("\n", plan))
+                            .anyMatch(line -> line.contains(" on " + tables.eventTable()));
+        }
+        assertThat(String.join("\n", genericPlan(statements.get("lastEvent")))).contains("Index Scan Backward using " + tables.streamOrderConstraint());
+        assertThat(String.join("\n", genericPlan(statements.get("findEvents")))).contains(tables.eventIdIndex());
+        assertThat(String.join("\n", genericPlan(statements.get("causedBy")))).contains(tables.causedByIndex());
+        var range = genericPlan(statements.get("range"));
+        assertThat(range.getFirst()).as("the range streams in primary-key order, never sorting it first:%n%s", String.join("\n", range))
+                                    .contains("Index Scan using " + tables.eventTable() + "_pkey");
+    }
+
+    /**
+     * Must-fail control for the causation index decision: without the partial caused-by index the causation lookup scans
+     * the event table
+     */
+    @Test
+    void control_the_caused_by_lookup_scans_the_table_without_its_index() throws SQLException {
+        execute("DROP INDEX " + tables.causedByIndex());
+        var plan = genericPlan(EventLogStorage.ReadStatements.of(tables.eventTable()).causedBy());
+        assertThat(primaryKeyWalks(plan)).as("must-fail control, plan:%n%s", String.join("\n", plan)).isNotEmpty();
+    }
+
     @Test
     void control_the_or_form_walks_the_primary_key_under_a_generic_plan() throws SQLException {
         var or = "SELECT global_order FROM " + tables.eventTable() + " WHERE global_order > ? OR global_order = ANY(?::bigint[]) ORDER BY global_order LIMIT ?";
