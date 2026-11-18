@@ -962,7 +962,10 @@ Not published; listed because they are the reference for how to use the framewor
   engines (`config/CLAUDE.md`, "One handler body, two engine wrappers"). The three EF-2 measurement processors in
   `_demo_harness` stay classic-only, and under `event-log` CDC is off, since the new engine does not use it.
   `TradingDemoEventLogIT` starts the whole demo on the new engine and runs a customer from deposit to a filled order
-  through all three processor kinds.
+  through all three processor kinds. On the new engine a reaction forwards a whole page of events into its inbox in one
+  transaction, the page's, which also moves the subscription's progress, so every event is forwarded exactly once and
+  the forward costs one commit per page instead of one per event; the page size is `essentials.event-log.page-size`,
+  and for the order flow's two reactions `trading-demo.orders.forwarding.batch-size`, as on the classic engine.
 
 ## 6. Documentation
 

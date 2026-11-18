@@ -15,6 +15,7 @@
  */
 package dk.trustworks.essentials.examples.trading.config;
 
+import dk.trustworks.essentials.components.eventlog.ErrorSettings;
 import dk.trustworks.essentials.components.eventlog.integration.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.FailoverRedeliveryPolicy;
@@ -32,12 +33,17 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * The new-engine twin of {@link TradingDemoEventProcessor}: an {@link EventLogForwarder} reads the aggregate types'
- * events ({@code FRESH}, one instance at a time) and puts each one whose payload a {@code @MessageHandler} method of
- * this class handles into the {@link Inbox} named after the processor - the same inbox, consumption mode, parallel
+ * The new-engine twin of {@link TradingDemoEventProcessor}: an {@link EventLogPageForwarder} reads the aggregate types'
+ * events ({@code CONTIGUOUS}, from the beginning as the classic processor's subscription starts, one instance at a time)
+ * and puts each one whose payload a {@code @MessageHandler} method of this class handles into the {@link Inbox} named
+ * after the processor - the same inbox, consumption mode, parallel
  * consumers and failover redelivery policy as the classic processor - and the inbox's consumer calls those methods
  * through foundation's {@link PatternMatchingMessageHandler}, so a handler keeps its classic shape: payload and an
  * optional {@code OrderedMessage}, with {@link CausationContext} bound to the event.
+ * <p>
+ * A whole page of up to {@link #forwardPageSize()} events is forwarded in one transaction, the page's: the enqueues
+ * commit together with the subscription's progress, so an event is forwarded exactly once, and the forward costs one
+ * commit per page rather than one per event (the classic processor's {@code getForwardBatchSize()} equivalent).
  * <p>
  * The event is forwarded with its payload (the classic processor forwards a reference and reads the event back). Each
  * {@code @MessageHandler} runs in its own unit of work ({@code UnitOfWorkMode} as declared on it), as in the classic
@@ -53,7 +59,7 @@ public abstract class TradingDemoEventLogInboxProcessor implements Lifecycle {
     private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
     private final PatternMatchingMessageHandler                             handler;
     private       Inbox                                                     inbox;
-    private       EventLogForwarder                                         forwarder;
+    private       EventLogPageForwarder                                     forwarder;
     private volatile boolean                                                started;
 
     protected TradingDemoEventLogInboxProcessor(String name,
@@ -86,6 +92,13 @@ public abstract class TradingDemoEventLogInboxProcessor implements Lifecycle {
         return FailoverRedeliveryPolicy.outlasting(Optional.empty(), inboxes.maxUnservedAfterInstanceLoss()).policy();
     }
 
+    /**
+     * @return the most events forwarded in one transaction: the engine's {@code essentials.event-log.page-size} unless overridden
+     */
+    protected int forwardPageSize() {
+        return Math.min(dependencies.eventLog().settings().pageSize(), ErrorSettings.MAX_PAGE_SIZE);
+    }
+
     public String name() {
         return name;
     }
@@ -107,7 +120,7 @@ public abstract class TradingDemoEventLogInboxProcessor implements Lifecycle {
             inbox.consume(new InboxConsumer());
         }
         if (forwarder == null) {
-            forwarder = new EventLogForwarder(name, aggregateTypes, dependencies, this::forward);
+            forwarder = new EventLogPageForwarder(name, aggregateTypes, dependencies, forwardPageSize(), this::forward);
         }
         try {
             forwarder.start();
@@ -137,12 +150,17 @@ public abstract class TradingDemoEventLogInboxProcessor implements Lifecycle {
         return started;
     }
 
+    /**
+     * Runs inside the page transaction: the demo's unit of work factory is Spring transaction aware, so the inbox's
+     * enqueue joins the page's transaction and commits with the page and its progress. Outside a page it fails.
+     */
     private void forward(DeliveredEvent event) {
         if (!handler.handlesMessageWithPayload(event.payload().getClass())) {
             return;
         }
         var message = new EventLogForwarder.ForwardedEvent(event.payload(), event.raw().aggregateId(), event.eventOrder().longValue(), EventLogForwarder.messageMetaData(event));
-        unitOfWorkFactory.usingUnitOfWork(() -> inbox.addMessageReceived(message));
+        unitOfWorkFactory.getRequiredUnitOfWork();
+        inbox.addMessageReceived(message);
     }
 
     @Override

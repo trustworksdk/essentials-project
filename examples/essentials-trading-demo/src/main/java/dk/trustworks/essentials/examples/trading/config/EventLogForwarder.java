@@ -26,9 +26,9 @@ import java.util.function.Consumer;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The reader half of {@link TradingDemoEventLogInboxProcessor} and {@link TradingDemoEventLogPartitionedViewProcessor}:
- * an {@link EventLogReactor} ({@code FRESH}, per-aggregate order, one instance at a time) whose single handler takes
- * every event and hands it on. It is not a bean: the twin that owns it starts and stops it.
+ * The reader half of {@link TradingDemoEventLogPartitionedViewProcessor}: an {@link EventLogReactor} ({@code FRESH},
+ * per-aggregate order, one instance at a time) whose single handler takes every event and hands it on (the inbox twin
+ * reads through {@link EventLogPageForwarder} instead). It is not a bean: the twin that owns it starts and stops it.
  * <p>
  * Kept apart from the twin because {@link EventLogReactor} dispatches to the {@code @MessageHandler} methods of
  * {@code this}: were the twin itself the reactor, the reactor would call the twin's own handlers directly instead of

@@ -37,14 +37,17 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public class ExchangeOrderRouterEventLogReaction extends TradingDemoEventLogInboxProcessor {
     private final ExchangeOrderRouter       router;
     private final OrderProcessingProperties consumers;
+    private final OrderForwardingProperties forwarding;
 
     public ExchangeOrderRouterEventLogReaction(EventLogProcessorDependencies dependencies,
                                                Inboxes inboxes,
                                                EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
-                                               ExchangeOrderRouter router, OrderProcessingProperties consumers) {
+                                               ExchangeOrderRouter router, OrderProcessingProperties consumers,
+                                               OrderForwardingProperties forwarding) {
         super(ExchangeOrderRouter.PROCESSOR_NAME, ExchangeOrderRouter.AGGREGATE_TYPES, dependencies, inboxes, unitOfWorkFactory);
         this.router = requireNonNull(router, "No router provided");
         this.consumers = requireNonNull(consumers, "No consumers provided");
+        this.forwarding = requireNonNull(forwarding, "No forwarding provided");
     }
 
     /**
@@ -53,6 +56,15 @@ public class ExchangeOrderRouterEventLogReaction extends TradingDemoEventLogInbo
     @Override
     protected int numberOfParallelInboxMessageConsumers() {
         return consumers.getExchangeRouter();
+    }
+
+    /**
+     * As many events per forward transaction as the classic reaction's {@code getForwardBatchSize()}:
+     * {@code trading-demo.orders.forwarding.batch-size}.
+     */
+    @Override
+    protected int forwardPageSize() {
+        return forwarding.getBatchSize();
     }
 
     @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)

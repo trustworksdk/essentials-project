@@ -30,7 +30,11 @@ Porting a processor (pilot: `accounts/views/uncleared_deposits/`):
    `TradingDemoEventLogInboxProcessor`) carry the `@MessageHandler`s with the classic `UnitOfWorkMode`, so the
    transaction boundary stays on the wrapper. A parallel-consumers override is
    `getNumberOfParallelInboxMessageConsumers()` on classic, `numberOfParallelInboxMessageConsumers()` on the twin;
-   `getForwardBatchSize()` is classic-only (the twin forwards one event per unit of work).
+   The twin forwards a whole page per transaction: an `EventLogPageForwarder` (an `EventLogViewProcessor`,
+   `CONTIGUOUS`, from the beginning as classic's subscription) enqueues every event of the page inside the page's
+   transaction, so the forward commits atomically with the progress - never open a unit of work per event there.
+   The page size is `forwardPageSize()` (default `essentials.event-log.page-size`); a classic `getForwardBatchSize()`
+   override becomes a `forwardPageSize()` override returning the same property (`OrderLedgerEventLogReaction`).
 6. **Partitioned views** (pilot: `accounts/views/account_overview/`): same split, wrappers `<Name>ClassicView` (extends
    `TradingDemoPartitionedViewEventProcessor`) and `<Name>EventLogView` (extends the twin, which also takes
    `DurableQueues`). Handlers keep the `(<Event>, OrderedMessage)` shape on both; the projection gets
