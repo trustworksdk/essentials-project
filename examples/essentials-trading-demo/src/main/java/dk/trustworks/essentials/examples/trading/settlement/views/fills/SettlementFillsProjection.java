@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.settlement.views.fills;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
@@ -54,6 +55,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
                     OrderPlaced.class,
                     OrderRejected.class,
                     OrderSubmitted.class})
+@ClassicEngine
 @Service
 public class SettlementFillsProjection extends TradingDemoViewEventProcessor {
 

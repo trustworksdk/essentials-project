@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading._demo_harness;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
@@ -34,6 +35,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * reader's ceiling: subscription, dispatch and the unit of work per event. Started fresh it reads the stream from the
  * beginning, so the existing backlog is the workload. Off unless {@code trading-demo.ef2.noop-view-processor=true}.
  */
+@ClassicEngine
 @Service
 @ConditionalOnProperty(prefix = "trading-demo.ef2", name = "noop-view-processor", havingValue = "true")
 public class NoOpAccountsViewProcessor extends ViewEventProcessor {

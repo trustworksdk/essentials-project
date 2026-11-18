@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.accounts.views.uncleared_deposits;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
@@ -61,6 +62,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
                     TradeSettled.class,
                     UnknownReferenceIgnored.class,
                     WithdrawalReturnCredited.class})
+@ClassicEngine
 @Service
 public class UnclearedDepositsProjection extends TradingDemoViewEventProcessor {
     public UnclearedDepositsProjection(ViewEventProcessorDependencies dependencies) {

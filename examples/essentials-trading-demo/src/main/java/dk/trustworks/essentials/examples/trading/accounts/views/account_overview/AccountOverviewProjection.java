@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.accounts.views.account_overview;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
@@ -53,6 +54,7 @@ import java.util.List;
  */
 // Deliberately not handled: the startup summary warns about every sealed-hierarchy leaf a view neither handles nor lists here
 @IgnoresEventTypes({UnknownReferenceIgnored.class})
+@ClassicEngine
 @Service
 public class AccountOverviewProjection extends TradingDemoPartitionedViewEventProcessor {
     private static final BigDecimal ZERO = BigDecimal.ZERO;

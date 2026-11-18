@@ -16,7 +16,6 @@
 package dk.trustworks.essentials.examples.trading._demo_harness;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
 import dk.trustworks.essentials.examples.trading.accounts.types.AccountsAggregateTypes;
 import dk.trustworks.essentials.examples.trading.orders.external_systems.exchange.RouterStageTimings;
@@ -74,11 +73,11 @@ public class LoadRunReport {
     }
 
     private final JdbcTemplate                                                            jdbcTemplate;
-    private final ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
+    private final ConfigurableEventStore<?> eventStore;
     private final DurableQueues                                                           durableQueues;
     private final RouterStageTimings                                                      routerStageTimings;
 
-    public LoadRunReport(JdbcTemplate jdbcTemplate, ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore, DurableQueues durableQueues,
+    public LoadRunReport(JdbcTemplate jdbcTemplate, ConfigurableEventStore<?> eventStore, DurableQueues durableQueues,
                          RouterStageTimings routerStageTimings) {
         this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
@@ -103,24 +102,22 @@ public class LoadRunReport {
                                   .filter(e -> !Set.of("FILLED", "CANCELLED", "REJECTED", "EXPIRED").contains(e.getKey()))
                                   .mapToLong(Map.Entry::getValue).sum();
 
-        var orders   = eventStore.getAggregateEventStreamConfiguration(OrdersAggregateTypes.ORDERS);
-        var accounts = eventStore.getAggregateEventStreamConfiguration(AccountsAggregateTypes.ACCOUNTS);
-        var o        = orders.eventStreamTableColumnNames;
-        var a        = accounts.eventStreamTableColumnNames;
+        var o        = EventTable.of(eventStore, OrdersAggregateTypes.ORDERS);
+        var a        = EventTable.of(eventStore, AccountsAggregateTypes.ACCOUNTS);
         // Table and column names come from the event store's configuration, not from a request
-        var placed = jdbcTemplate.queryForObject("SELECT count(*) FROM " + orders.eventStreamTableName + " WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderPlaced'",
+        var placed = jdbcTemplate.queryForObject("SELECT count(*) FROM " + o.from() + " WHERE " + o.aggregateId() + " LIKE ? AND " + o.eventType() + " LIKE '%.OrderPlaced'",
                                                  Long.class, runPrefix + "%");
         // MATERIALIZED: the planner estimates one row for each LIKE, so without it it nests the joins and re-runs the
         // submitted and booked scans once per fill - 190 s instead of 0.3 s for a 3-day run on a database holding earlier runs
         var executions = jdbcTemplate.query(
-                "WITH placed AS MATERIALIZED (SELECT " + o.aggregateIdColumn + " AS order_id, " + o.timestampColumn + " AS at FROM " + orders.eventStreamTableName
-                + "                WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderPlaced'),"
-                + " submitted AS MATERIALIZED (SELECT " + o.aggregateIdColumn + " AS order_id, min(" + o.timestampColumn + ") AS at FROM " + orders.eventStreamTableName
-                + "                WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderSubmitted' GROUP BY 1),"
-                + " fills AS MATERIALIZED (SELECT " + o.aggregateIdColumn + " AS order_id, " + o.eventPayloadColumn + "->>'executionId' AS execution_id, " + o.timestampColumn + " AS at"
-                + "             FROM " + orders.eventStreamTableName + " WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderFilled'),"
-                + " booked AS MATERIALIZED (SELECT " + a.eventPayloadColumn + "->'trade'->>'executionId' AS execution_id, min(" + a.timestampColumn + ") AS at FROM " + accounts.eventStreamTableName
-                + "              WHERE " + a.aggregateIdColumn + " LIKE ? AND " + a.eventTypeColumn + " LIKE '%.TradeBooked' GROUP BY 1)"
+                "WITH placed AS MATERIALIZED (SELECT " + o.aggregateId() + " AS order_id, " + o.timestamp() + " AS at FROM " + o.from()
+                + "                WHERE " + o.aggregateId() + " LIKE ? AND " + o.eventType() + " LIKE '%.OrderPlaced'),"
+                + " submitted AS MATERIALIZED (SELECT " + o.aggregateId() + " AS order_id, min(" + o.timestamp() + ") AS at FROM " + o.from()
+                + "                WHERE " + o.aggregateId() + " LIKE ? AND " + o.eventType() + " LIKE '%.OrderSubmitted' GROUP BY 1),"
+                + " fills AS MATERIALIZED (SELECT " + o.aggregateId() + " AS order_id, " + o.payload() + "->>'executionId' AS execution_id, " + o.timestamp() + " AS at"
+                + "             FROM " + o.from() + " WHERE " + o.aggregateId() + " LIKE ? AND " + o.eventType() + " LIKE '%.OrderFilled'),"
+                + " booked AS MATERIALIZED (SELECT " + a.payload() + "->'trade'->>'executionId' AS execution_id, min(" + a.timestamp() + ") AS at FROM " + a.from()
+                + "              WHERE " + a.aggregateId() + " LIKE ? AND " + a.eventType() + " LIKE '%.TradeBooked' GROUP BY 1)"
                 + " SELECT f.order_id, p.at, s.at, f.at, b.at FROM fills f JOIN placed p ON p.order_id = f.order_id"
                 + "   LEFT JOIN submitted s ON s.order_id = f.order_id LEFT JOIN booked b ON b.execution_id = f.execution_id",
                 (rs, row) -> new Execution(rs.getString(1), rs.getTimestamp(2).toInstant(), rs.getTimestamp(3) == null ? null : rs.getTimestamp(3).toInstant(),
@@ -150,7 +147,7 @@ public class LoadRunReport {
         }
 
         var placedPerBucket = new TreeMap<Instant, Long>();
-        jdbcTemplate.query("SELECT " + o.timestampColumn + " FROM " + orders.eventStreamTableName + " WHERE " + o.aggregateIdColumn + " LIKE ? AND " + o.eventTypeColumn + " LIKE '%.OrderPlaced'",
+        jdbcTemplate.query("SELECT " + o.timestamp() + " FROM " + o.from() + " WHERE " + o.aggregateId() + " LIKE ? AND " + o.eventType() + " LIKE '%.OrderPlaced'",
                            rs -> {
                                placedPerBucket.merge(bucketOf(rs.getTimestamp(1).toInstant(), bucket), 1L, Long::sum);
                            },

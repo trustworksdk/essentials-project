@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.market_data.views.instrument_details;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessorDependencies;
@@ -45,6 +46,7 @@ import java.util.List;
  * constructor's DDL and the reset run where none is active, so they go through
  * {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)}, which opens one.
  */
+@ClassicEngine
 @Service
 public class InstrumentDetailsProjection extends TradingDemoViewEventProcessor {
     public InstrumentDetailsProjection(ViewEventProcessorDependencies dependencies) {

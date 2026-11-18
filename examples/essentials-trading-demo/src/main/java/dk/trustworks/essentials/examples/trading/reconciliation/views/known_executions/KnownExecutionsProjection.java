@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.reconciliation.views.known_executions;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
@@ -51,6 +52,7 @@ import java.util.List;
                     OrderPlaced.class,
                     OrderRejected.class,
                     OrderSubmitted.class})
+@ClassicEngine
 @Service
 public class KnownExecutionsProjection extends TradingDemoViewEventProcessor {
     public KnownExecutionsProjection(ViewEventProcessorDependencies dependencies) {

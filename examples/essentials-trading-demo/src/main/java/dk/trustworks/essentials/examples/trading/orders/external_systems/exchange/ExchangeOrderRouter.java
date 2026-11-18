@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.orders.external_systems.exchange;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
@@ -44,6 +45,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * run out the order is rejected {@value #EXCHANGE_UNAVAILABLE} and its hold released. Should the exchange have taken it
  * after all, its fills still arrive and are booked as facts (design Q-3).
  */
+@ClassicEngine
 @Service
 public class ExchangeOrderRouter extends TradingDemoEventProcessor {
     public static final String EXCHANGE_UNAVAILABLE = "EXCHANGE_UNAVAILABLE";

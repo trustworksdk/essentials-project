@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.funding.automations.apply_payment_to_account;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
@@ -41,6 +42,7 @@ import java.util.List;
  * The ledger's commands are sent on the bus, one per event; the account stream's optimistic append serialises two
  * payments of one account, and the processor redelivers the loser.
  */
+@ClassicEngine
 @Service
 public class FundingLedgerProcessor extends TradingDemoEventProcessor {
 

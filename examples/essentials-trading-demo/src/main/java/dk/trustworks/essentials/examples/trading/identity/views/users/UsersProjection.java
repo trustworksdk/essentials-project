@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.identity.views.users;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
@@ -40,6 +41,7 @@ import java.util.stream.Collectors;
  * constructor's DDL and the reset run where none is active, so they go through
  * {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)}, which opens one.
  */
+@ClassicEngine
 @Service
 public class UsersProjection extends TradingDemoViewEventProcessor {
     public UsersProjection(ViewEventProcessorDependencies dependencies) {

@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.market_data.use_cases.risk_approve_instrument;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorDependencies;
@@ -70,6 +71,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * command, the same shape as {@code postgresql-cqrs}' {@code banking.transfer_money}. The instrument's risk state is
  * observable through {@code views/instrument_details}.
  */
+@ClassicEngine
 @Service
 public class InstrumentRiskApprovalProcessor extends TradingDemoEventProcessor {
     private static final Logger log = LoggerFactory.getLogger(InstrumentRiskApprovalProcessor.class);

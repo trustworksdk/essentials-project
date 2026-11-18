@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotRepositoryProvider;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.examples.trading.accounts.aggregates.*;
 import dk.trustworks.essentials.examples.trading.accounts.events.AccountEvent;
@@ -76,7 +76,7 @@ public class AccountsConfiguration {
     }
 
     @Bean
-    public StatefulAggregateRepository<AccountGenerationId, AccountEvent, Account> accountStreamRepository(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+    public StatefulAggregateRepository<AccountGenerationId, AccountEvent, Account> accountStreamRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                                                                          Optional<AggregateSnapshotRepositoryProvider> aggregateSnapshotRepositoryProvider) {
         return StatefulAggregateRepository.builder(eventStore)
                                           .setAggregateType(Accounts.AGGREGATE_TYPE)

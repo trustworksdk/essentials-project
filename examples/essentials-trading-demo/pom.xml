@@ -67,6 +67,16 @@
             <version>${project.version}</version>
         </dependency>
         <!--
+            The new event store engine (preview), off unless trading-demo.engine=event-log (the `event-log`
+            profile sets it and essentials.event-log.enabled=true). While enabled, the starter's import filter
+            drops the old starter's EventStoreConfiguration; with it off, nothing of it is built.
+        -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>spring-boot-starter-postgresql-event-log</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!--
             The shard-owned queue engine. Experimental and unpublished, which is exactly why the demo
             carries it: this app is where the engine gets exercised against a real workload — two
             lanes, sustained traffic and spikes — rather than only against its own tests.

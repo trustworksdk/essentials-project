@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.funding.views.payments;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
@@ -39,6 +40,7 @@ import java.util.List;
  * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
  * which opens one.
  */
+@ClassicEngine
 @Service
 public class PaymentsProjection extends TradingDemoViewEventProcessor {
     public PaymentsProjection(ViewEventProcessorDependencies dependencies) {

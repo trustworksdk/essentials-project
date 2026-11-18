@@ -1,0 +1,22 @@
+# Runs the demo on the new event store engine (preview; docs/plans/event-store-engine-phase10.md §6.3).
+# Combine with the other profiles: `compose,event-log` or `compose,simulators,event-log`. Use a fresh database
+# (`./reset-stack.sh`): the engine has its own tables (el_*), so events written by the classic engine are not read.
+#
+# trading-demo.engine picks which wrapper of each ported processor is a bean (config/CLAUDE.md); processors not yet
+# ported are classic-only and absent under this profile.
+trading-demo:
+  engine: event-log
+
+essentials:
+  event-log:
+    enabled: true
+    # The compose profile polls the classic engine's subscriptions every 200 ms in pages of 100. The new engine is woken
+    # by the commit callback (and across JVMs by its wake-up channel); the backstop only bounds how late a missed wake-up is
+    # noticed, so it mirrors that polling interval.
+    backstop-interval: 200ms
+    tail-page-size: 100
+    page-size: 100
+  event-store:
+    # The engine has no CDC path; the classic engine's tailer would only hold a replication slot nobody reads
+    cdc:
+      enabled: false

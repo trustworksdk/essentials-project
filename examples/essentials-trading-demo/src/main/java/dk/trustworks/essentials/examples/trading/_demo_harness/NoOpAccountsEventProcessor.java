@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading._demo_harness;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
@@ -33,6 +34,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * the inbox consumer only counts. Compared with {@link NoOpAccountsViewProcessor}, the difference is the cost of the
  * forward. Off unless {@code trading-demo.ef2.noop-event-processor=true}.
  */
+@ClassicEngine
 @Service
 @ConditionalOnProperty(prefix = "trading-demo.ef2", name = "noop-event-processor", havingValue = "true")
 public class NoOpAccountsEventProcessor extends EventProcessor {

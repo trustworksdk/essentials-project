@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.accounts.views.positions;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
@@ -53,6 +54,7 @@ import java.util.List;
                     FundsReleased.class,
                     UnknownReferenceIgnored.class,
                     WithdrawalReturnCredited.class})
+@ClassicEngine
 @Service
 public class PositionsProjection extends TradingDemoViewEventProcessor {
     public PositionsProjection(ViewEventProcessorDependencies dependencies) {

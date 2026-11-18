@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.settlement.automations.apply_settlement_to_account;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
@@ -34,6 +35,7 @@ import java.util.List;
  * {@code SettleTrade}; abandoned → {@code ReverseTradeBooking} with the exchange's reason (Q-1); a corrected amount →
  * {@code CorrectSettlementAmount} with the change (Q-2). Every ledger command is idempotent per execution.
  */
+@ClassicEngine
 @Service
 public class SettlementLedgerProcessor extends TradingDemoEventProcessor {
 

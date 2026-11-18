@@ -15,6 +15,7 @@
  */
 package dk.trustworks.essentials.examples.trading.orders.views.late_fills;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
@@ -46,6 +47,7 @@ import java.util.List;
                     OrderPlaced.class,
                     OrderRejected.class,
                     OrderSubmitted.class})
+@ClassicEngine
 @Service
 public class LateFillsProjection extends TradingDemoViewEventProcessor {
     public LateFillsProjection(ViewEventProcessorDependencies dependencies) {

@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.orders.automations.apply_order_to_account;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
@@ -44,6 +45,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The ledger's commands are idempotent ({@code executionId}, hold and reservation ids), so a redelivered event books or
  * releases nothing twice. A collision on the account's stream is redelivered by the processor.
  */
+@ClassicEngine
 @Service
 public class OrderLedgerProcessor extends TradingDemoEventProcessor {
 
