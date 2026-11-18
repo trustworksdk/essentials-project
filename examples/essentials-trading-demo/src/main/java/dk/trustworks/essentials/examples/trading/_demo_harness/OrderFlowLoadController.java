@@ -1,0 +1,62 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.examples.trading._demo_harness;
+
+import org.springframework.http.*;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
+/**
+ * {@code /api/admin/order-flow}: start a run and read its result. Operator only, like every harness endpoint.
+ * <pre>
+ * POST /api/admin/order-flow/start?customers=200&amp;ordersPerCustomer=50&amp;threads=32&amp;marketSharePercent=40&amp;restingSharePercent=10&amp;instrument=ACME
+ * GET  /api/admin/order-flow
+ * </pre>
+ */
+@RestController
+@RequestMapping("/api/admin/order-flow")
+public class OrderFlowLoadController {
+    private final OrderFlowLoadGenerator generator;
+
+    public OrderFlowLoadController(OrderFlowLoadGenerator generator) {
+        this.generator = requireNonNull(generator, "No generator provided");
+    }
+
+    @PostMapping("/start")
+    public OrderFlowResultView start(@RequestParam(defaultValue = "200") int customers,
+                                     @RequestParam(defaultValue = "50") int ordersPerCustomer,
+                                     @RequestParam(defaultValue = "32") int threads,
+                                     @RequestParam(defaultValue = "40") int marketSharePercent,
+                                     @RequestParam(defaultValue = "10") int restingSharePercent,
+                                     @RequestParam(defaultValue = "ACME") String instrument) {
+        return generator.start(new OrderFlowLoadGenerator.Settings(customers, ordersPerCustomer, threads, marketSharePercent, restingSharePercent, instrument));
+    }
+
+    @GetMapping
+    public ResponseEntity<OrderFlowResultView> status() {
+        var status = generator.status();
+        return status == null ? ResponseEntity.noContent().build() : ResponseEntity.ok(status);
+    }
+
+    @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
+    public ResponseEntity<Map<String, Object>> refused(RuntimeException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("status", 409, "message", e.getMessage()));
+    }
+}

@@ -145,7 +145,7 @@ whose documents were written by the old Jackson 2 mapper. Build every mapper use
 such as `@JsonProperty`/`@JsonCreator`, are shared by Jackson 3 and stay as they are), and replace
 `JacksonJSONSerializer`/`JacksonJSONEventSerializer` with `Jackson3JSONSerializer`/`Jackson3JSONEventSerializer`
 (or simply `EssentialsObjectMappers.createJSONSerializer()` / `EssentialsJSONEventSerializers.create()`).
-See [MIGRATION-0.60.md](docs/MIGRATION-0.60.md).
+See [MIGRATION-0.60.md](docs/releases/MIGRATION-0.60.md).
 
 #### Two things to check in your own event/payload classes when upgrading from Jackson 2
 
@@ -779,7 +779,7 @@ public class ImmutableOrder extends ImmutableValueObject {
 
 ## Version Compatibility
 
-> **Upgrading from 0.40.x?** Read [docs/RELEASE-NOTES-0.50.0.md](docs/RELEASE-NOTES-0.50.0.md) first — it lists
+> **Upgrading from 0.40.x?** Read [docs/releases/RELEASE-NOTES-0.50.0.md](docs/releases/RELEASE-NOTES-0.50.0.md) first — it lists
 > what you must change (Java 21, Spring Boot 4, Jackson 3, the removed Vaadin UI) and the three behaviour
 > changes that are silent at compile time.
 
@@ -825,10 +825,10 @@ functions the bytecode calls, so the artifacts run on the `kotlin-stdlib` Spring
 neutral defaults, and marked the old constructors `@Deprecated(forRemoval = true)`. **0.60 removes them.** Where an old
 constructor was what its builder delegated to, it survives as package-private, so the builder is the only public way
 in. Code that still calls one no longer compiles; the replacement for each is listed in
-[docs/MIGRATION-NEXT_MAJOR.md](docs/MIGRATION-NEXT_MAJOR.md), and [docs/MIGRATION-0.60.md](docs/MIGRATION-0.60.md)
+[docs/releases/MIGRATION-NEXT_MAJOR.md](docs/releases/MIGRATION-NEXT_MAJOR.md), and [docs/releases/MIGRATION-0.60.md](docs/releases/MIGRATION-0.60.md)
 covers what else 0.60 changes.
 
-The design rationale is in `docs/constructor-ergonomics-and-optional-policy.md`.
+The design rationale is in `docs/design/constructor-ergonomics-and-optional-policy.md`.
 
 ---
 

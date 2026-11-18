@@ -152,6 +152,110 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
 
 
     @Test
+    void a_quiet_stream_whose_server_position_moves_is_not_reconnected_as_stale() throws Exception {
+        // The server's keepalives carry its WAL position; with a 2 s wal_sender_timeout it sends one every second.
+        // WAL that decodes to no message (a checkpoint) moves that position on while no data message arrives.
+        var streamErrors = runQuietTailer(true);
+        assertThat(streamErrors).as("a live connection is never treated as stale").isEmpty();
+    }
+
+    @Test
+    void a_stream_that_shows_no_sign_of_life_is_still_reconnected_as_stale() throws Exception {
+        var streamErrors = runQuietTailer(false);
+        assertThat(streamErrors).isNotEmpty();
+        assertThat(streamErrors.getFirst()).isInstanceOf(StaleReplicationStreamException.class);
+    }
+
+    /**
+     * Runs a tailer with a 3 s max-idle on a publication that stays quiet for 9 s, optionally writing WAL that decodes
+     * to nothing, and returns the stream errors it reported.
+     */
+    private List<Exception> runQuietTailer(boolean moveTheServerPosition) throws Exception {
+        String slotName     = "slot_" + UUID.randomUUID().toString().replace("-", "");
+        var    streamErrors = new CopyOnWriteArrayList<Exception>();
+        var handler = new WalReplicationTailerErrorHandler() {
+            @Override
+            public Decision onMessageError(String slot, String json, Exception error) {
+                return Decision.RETRY_CONNECTION;
+            }
+
+            @Override
+            public Decision onStreamError(String slot, Exception error) {
+                streamErrors.add(error);
+                return Decision.RETRY_CONNECTION;
+            }
+        };
+        var props = WalReplicationTailerProperties.defaults(Duration.ofMillis(25), Duration.ofMillis(100), Duration.ofSeconds(1), Duration.ofMillis(200));
+        props.setMaxIdleDuration(Duration.ofSeconds(3));
+        jdbi.useHandle(h -> {
+            h.execute("alter system set wal_sender_timeout = '2s'");
+            h.execute("select pg_reload_conf()");
+        });
+        var tailer = inboxTailer(slotName, inboxRepository, props, PgSlotMode.CREATE_IF_MISSING, new CdcAvailability(), Optional.empty(), Optional.of(handler));
+        try {
+            tailer.startAndAwaitReady(Duration.ofSeconds(10));
+            var until = System.nanoTime() + Duration.ofSeconds(9).toNanos();
+            while (System.nanoTime() < until) {
+                if (moveTheServerPosition) {
+                    jdbi.useHandle(h -> h.execute("checkpoint"));
+                }
+                Thread.sleep(300);
+            }
+            return List.copyOf(streamErrors);
+        } finally {
+            tailer.stop();
+            jdbi.useHandle(h -> {
+                h.execute("alter system reset wal_sender_timeout");
+                h.execute("select pg_reload_conf()");
+                h.execute("select pg_drop_replication_slot(slot_name) from pg_replication_slots where slot_name = ? and not active", slotName);
+            });
+        }
+    }
+
+    @Test
+    void writes_a_burst_of_messages_to_the_inbox_in_batches() {
+        // One transaction per message capped CDC at ~1 500 events/s; a burst must be written a batch at a time
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+        var batchSizes = new CopyOnWriteArrayList<Integer>();
+        var recordingInbox = new CdcInboxRepository(unitOfWorkFactory) {
+            @Override
+            public boolean[] insertAllIfAbsent(String slot, List<InboxInsert> messages) {
+                batchSizes.add(messages.size());
+                return inboxRepository.insertAllIfAbsent(slot, messages);
+            }
+        };
+
+        var tailer = inboxTailer(slotName,
+                                 recordingInbox,
+                                 WalReplicationTailerProperties.defaults(Duration.ofMillis(20), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                                 PgSlotMode.CREATE_IF_MISSING,
+                                 new CdcAvailability(),
+                                 Optional.empty(),
+                                 Optional.empty());
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+
+        var messages = 300;
+        // Separate transactions - wal2json emits one message per transaction
+        jdbi.useHandle(h -> {
+            for (var i = 0; i < messages; i++) {
+                h.execute("insert into " + TEST_TABLE + "(payload) values(?)", "burst-" + i);
+            }
+        });
+
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(15))
+                  .pollInterval(Duration.ofMillis(100))
+                  .untilAsserted(() -> assertThat(batchSizes.stream().mapToInt(Integer::intValue).sum()).isGreaterThanOrEqualTo(messages));
+        assertThat(anyInboxPayloadContains(slotName, "burst-" + (messages - 1))).isTrue();
+        assertThat(inboxRepository.countByStatus(slotName, CdcInboxRepository.InboxStatus.RECEIVED.name())).isGreaterThanOrEqualTo(messages);
+        assertThat(batchSizes).as("written a batch at a time, not one transaction per message: %s", batchSizes)
+                              .hasSizeLessThan(messages / 2);
+        assertThat(Collections.max(batchSizes)).isGreaterThan(1);
+
+        tailer.stop();
+    }
+
+    @Test
     void stops_and_does_not_persist_after_stop() {
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
@@ -205,6 +309,15 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
                     throw new RuntimeException("Simulated inbox write failure");
                 }
                 return inboxRepository.insertIfAbsent(slot, lsn, payloadBytes);
+            }
+
+            // The tailer writes batches; a failed batch is written again message by message, through the override above
+            @Override
+            public boolean[] insertAllIfAbsent(String slot, List<InboxInsert> messages) {
+                if (failuresLeft.get() > 0) {
+                    throw new RuntimeException("Simulated inbox batch write failure");
+                }
+                return inboxRepository.insertAllIfAbsent(slot, messages);
             }
 
             @Override
@@ -274,6 +387,15 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
                 }
                 return inboxRepository.insertIfAbsent(slot, lsn, payloadBytes);
             }
+
+            // The tailer writes batches; a failed batch is written again message by message, through the override above
+            @Override
+            public boolean[] insertAllIfAbsent(String slot, List<InboxInsert> messages) {
+                if (failuresLeft.get() > 0) {
+                    throw new RuntimeException("Simulated inbox batch write failure");
+                }
+                return inboxRepository.insertAllIfAbsent(slot, messages);
+            }
         };
 
         var handler = new WalReplicationTailerErrorHandler() {
@@ -330,6 +452,11 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
             public boolean insertIfAbsent(String slot, String lsn, byte[] payloadBytes) {
                 throw new RuntimeException("Simulated fatal inbox write failure");
             }
+
+            @Override
+            public boolean[] insertAllIfAbsent(String slot, List<InboxInsert> messages) {
+                throw new RuntimeException("Simulated fatal inbox batch write failure");
+            }
         };
 
         var handler = new WalReplicationTailerErrorHandler() {
@@ -376,6 +503,65 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
 
         tailer.stop();
         assertThat(tailer.isStarted()).isFalse();
+    }
+
+    @Test
+    void a_stop_while_writing_a_failed_batch_one_by_one_acknowledges_nothing_also_not_through_the_idle_lsn_push() {
+        // A STOP in flushInbox's message-by-message fallback leaves the batch unwritten. The idle LSN push that follows
+        // an empty poll used to acknowledge the stream's received position anyway, moving the slot past WAL that never
+        // reached the inbox, so it was never streamed again
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+        var messageErrors = new AtomicInteger(0);
+        CdcInboxRepository alwaysFailingInbox = new CdcInboxRepository(unitOfWorkFactory) {
+            @Override
+            public boolean insertIfAbsent(String slot, String lsn, byte[] payloadBytes) {
+                throw new RuntimeException("Simulated fatal inbox write failure");
+            }
+
+            @Override
+            public boolean[] insertAllIfAbsent(String slot, List<InboxInsert> messages) {
+                throw new RuntimeException("Simulated fatal inbox batch write failure");
+            }
+        };
+        var handler = new WalReplicationTailerErrorHandler() {
+            @Override
+            public Decision onMessageError(String slot, String json, Exception error) {
+                messageErrors.incrementAndGet();
+                return Decision.STOP;
+            }
+
+            @Override
+            public Decision onStreamError(String slot, Exception error) {
+                return Decision.STOP;
+            }
+        };
+        var props = WalReplicationTailerProperties.defaults(Duration.ofMillis(20), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100));
+        // A 1 ns interval makes every empty poll due for an idle LSN push, so without the stop check the poll that writes the batch would be followed by one
+        props.setIdleLsnPushInterval(Duration.ofNanos(1));
+        var tailer = inboxTailer(slotName, alwaysFailingInbox, props, PgSlotMode.CREATE_IF_MISSING, new CdcAvailability(), Optional.empty(), Optional.of(handler));
+        try {
+            tailer.startAndAwaitReady(Duration.ofSeconds(10));
+            var walPositionBeforeTheMessage = jdbi.withHandle(h -> h.createQuery("select pg_current_wal_lsn()::text").mapTo(String.class).one());
+            jdbi.useHandle(h -> h.execute("insert into " + TEST_TABLE + "(payload) values(?)", "payload-stop-idle-push-" + UUID.randomUUID()));
+
+            Awaitility.await()
+                      .atMost(Duration.ofSeconds(10))
+                      .pollInterval(Duration.ofMillis(50))
+                      .untilAsserted(() -> {
+                          assertThat(messageErrors.get()).isGreaterThanOrEqualTo(1);
+                          assertThat(tailer.getStatus().slotLockAcquired()).isFalse();
+                      });
+
+            var confirmedPastTheUnwrittenMessage = jdbi.withHandle(h -> h.createQuery("select confirmed_flush_lsn > cast(:before as pg_lsn) from pg_replication_slots where slot_name = :slot")
+                                                                          .bind("before", walPositionBeforeTheMessage)
+                                                                          .bind("slot", slotName)
+                                                                          .mapTo(Boolean.class)
+                                                                          .one());
+            assertThat(confirmedPastTheUnwrittenMessage).as("the slot is not confirmed past the message the STOP left unwritten").isFalse();
+        } finally {
+            tailer.stop();
+            jdbi.useHandle(h -> h.execute("select pg_drop_replication_slot(slot_name) from pg_replication_slots where slot_name = ? and not active", slotName));
+        }
     }
 
     @Test

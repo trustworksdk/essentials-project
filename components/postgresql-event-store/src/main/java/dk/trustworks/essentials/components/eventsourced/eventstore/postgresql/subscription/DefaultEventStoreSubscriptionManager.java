@@ -228,7 +228,10 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         requireNonNull(eventStorePollingInterval, "No eventStorePollingInterval provided");
         this.fencedLockManager = requireNonNull(fencedLockManager, "No fencedLockManager provided");
-        this.durableSubscriptionRepository = requireNonNull(durableSubscriptionRepository, "No durableSubscriptionRepository provided");
+        // Every resume point a managed subscription saves passes through it: an event store that keeps the gaps a subscription
+        // opens in memory records them before each save (see DeferredGapRecording)
+        this.durableSubscriptionRepository = GapRecordingBeforeSaveDurableSubscriptionRepository.wrapIfDeferringGapRecording(requireNonNull(durableSubscriptionRepository, "No durableSubscriptionRepository provided"),
+                                                                                                                            eventStore);
         this.snapshotResumePointsEvery = requireNonNull(snapshotResumePointsEvery, "No snapshotResumePointsEvery provided");
         this.snapshotResumePointsAfterEvents = snapshotResumePointsAfterEvents;
         this.eventStoreSubscriptionObserver = eventStore.getEventStoreSubscriptionObserver();
@@ -408,6 +411,29 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         return eventStore;
     }
 
+    @Override
+    public void resetStoredResumePoint(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder resumeFromAndIncluding) {
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(resumeFromAndIncluding, "No resumeFromAndIncluding provided");
+        var subscription = subscribers.get(Pair.of(subscriberId, aggregateType));
+        if (subscription != null && subscription.isActive()) {
+            throw new IllegalStateException(msg("Cannot move the stored resume point of '{}' for '{}': its subscription is active in this instance - " +
+                                                "reset it through EventStoreSubscription#resetFrom, or stop it first", subscriberId, aggregateType));
+        }
+        var resumePoint = durableSubscriptionRepository.getOrCreateResumePoint(subscriberId, aggregateType, resumeFromAndIncluding);
+        resumePoint.setResumeFromAndIncluding(resumeFromAndIncluding);
+        durableSubscriptionRepository.saveResumePoint(resumePoint);
+        // As EventStoreSubscription#resetFrom: a middle of a wide gap awaited below the old resume point must not be delivered after the reset
+        eventStore.forgetGapMiddlesAwaitedInMemory(subscriberId, aggregateType);
+        log.info("[{}-{}] Moved the stored resume point to start from-and-including-globalOrder {}", subscriberId, aggregateType, resumeFromAndIncluding);
+    }
+
+    @Override
+    public Optional<FencedLockManager> getFencedLockManager() {
+        return Optional.of(fencedLockManager);
+    }
+
     /**
      * @return what the asynchronous subscriptions created by this manager do when their handler throws a non-I/O exception
      * @see EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)
@@ -452,7 +478,7 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         // conservative w.r.t. resume-point resets (it never advances past an unprocessed event).
         // Advancing the checkpoint for active subscribers (as stop() does) would trim that one-event
         // overlap, but risks skipping an in-flight event if the "is this boundary clean?" decision is
-        // wrong — turning a harmless duplicate into a loss. Tracked as S4 in docs/subscription-improvements.md.
+        // wrong — turning a harmless duplicate into a loss. Tracked as S4 in docs/plans/subscription-improvements.md.
         saveResumePointsOfActiveSubscribers(resumePoint -> true);
     }
 
@@ -468,7 +494,7 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     /**
      * Only ever called on the single resume-point scheduler thread. A save in flight here cannot overwrite a reset that
      * commits concurrently on another thread: the repository refuses a write from an older reposition epoch - see
-     * {@link SubscriptionResumePoint} and S6 in docs/subscription-improvements.md
+     * {@link SubscriptionResumePoint} and S6 in docs/plans/subscription-improvements.md
      */
     private void saveResumePointsOfActiveSubscribers(Predicate<SubscriptionResumePoint> filter) {
         try {
@@ -481,6 +507,13 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                                           .collect(Collectors.toList());
             if (!resumePoints.isEmpty()) {
                 durableSubscriptionRepository.saveResumePoints(resumePoints);
+            }
+        } catch (GapRecordingBeforeSaveDurableSubscriptionRepository.GapsNotRecordedException e) {
+            // The other resume points were saved; these stay changed, so the next periodic save tries them again
+            if (IOExceptionUtil.isIOException(e)) {
+                log.debug("Not all ResumePoint's were stored - Experienced a Connection issue, this can happen during JVM or application shutdown: {}", e.getMessage());
+            } else {
+                log.warn("Not all ResumePoint's were stored - the next periodic save tries again", e);
             }
         } catch (Exception e) {
             if (IOExceptionUtil.isIOException(e)) {
@@ -614,6 +647,28 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                                                                                fencedLockManager,
                                                                                fencedLockAwareSubscriber,
                                                                                eventHandler));
+    }
+
+    @Override
+    public EventStoreSubscription exclusivelyBatchSubscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
+                                                                                           AggregateType forAggregateType,
+                                                                                           Function<AggregateType, GlobalEventOrder> onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
+                                                                                           Optional<Tenant> onlyIncludeEventsForTenant,
+                                                                                           int maxBatchSize,
+                                                                                           Duration maxLatency,
+                                                                                           FencedLockAwareSubscriber fencedLockAwareSubscriber,
+                                                                                           BatchedPersistedEventHandler eventHandler) {
+        requireNonNull(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder, "No onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder provided");
+        requireNonNull(onlyIncludeEventsForTenant, "No onlyIncludeEventsForTenant option provided");
+        return addEventStoreSubscription(subscriberId,
+                                         forAggregateType,
+                                         new ExclusiveBatchedAsynchronousSubscription(subscriptionContext(subscriberId, forAggregateType, onlyIncludeEventsForTenant),
+                                                                                      new DurableSubscriptionContext(durableSubscriptionRepository,
+                                                                                                                     onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
+                                                                                                                     eventStoreSubscriptionManagerSettings),
+                                                                                      fencedLockManager,
+                                                                                      fencedLockAwareSubscriber,
+                                                                                      new ExclusiveBatchedAsynchronousSubscription.BatchedDelivery(maxBatchSize, maxLatency, eventHandler)));
     }
 
     @Override

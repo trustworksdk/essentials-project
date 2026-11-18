@@ -1,0 +1,26 @@
+schemaVersion: "1.1"
+slice: reconciliation.track_breaks
+kind: command
+bc: reconciliation
+owner: reconciliation-team
+status: live
+summary: "Opens a case for a break that persisted to the next close, and clears it when the break goes."
+generator: essentials
+language: java
+
+handles: [OpenCase, ClearCase]
+publishes: [CaseOpened, CaseCleared]
+writes: [ReconciliationCase]
+reads:
+  - { name: ReconciliationCase }
+endpoints: []
+invariants:
+  - id: INV-TB-1
+    text: "One case per break key; opening an existing case and clearing a closed one are no-ops"
+    enforcedBy: ReconciliationCase
+forbidden:
+  - cross-slice-internal:reconciliation
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/aggregates/ReconciliationCaseTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/ClearingReconciliationIT.java" }
+  contract: { present: false }

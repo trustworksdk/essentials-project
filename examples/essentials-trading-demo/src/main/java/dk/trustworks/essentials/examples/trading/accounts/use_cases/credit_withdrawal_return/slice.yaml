@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: accounts.credit_withdrawal_return
+kind: command
+bc: accounts
+owner: accounts-team
+status: live
+summary: "The bank returned a completed withdrawal: credit settled cash again."
+generator: essentials
+language: java
+
+handles: [CreditWithdrawalReturn]
+# AccountBooksClosed/AccountOpened are emitted when the ON_ACCESS closing-books policy rolls the account while it is
+# being loaded for this command.
+publishes: [WithdrawalReturnCredited, AccountBooksClosed, AccountOpened]
+writes: [Account]
+reads:
+  - { name: Account }
+endpoints:
+  - { method: POST, path: "/api/admin/accounts/{accountId}/withdrawal-returns", auth: operator }
+forbidden:
+  - cross-slice-internal:accounts
+tests:
+  unit: { present: true }
+  integration: { present: true }
+  contract: { present: false }

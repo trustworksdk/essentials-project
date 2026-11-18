@@ -193,4 +193,22 @@ class DurableQueueInboxesTest {
         verify(durableQueues).queueMessage(eq(inboxName.asQueueName()),
                                            eq(testMessage));
     }
+
+    @Test
+    void durable_queue_based_inboxes_keep_key_order_across_instances_exactly_when_their_durable_queues_do() {
+        var durableQueues = mock(DurableQueues.class);
+        var inboxes       = Inboxes.durableQueueBasedInboxes(durableQueues, mock(FencedLockManager.class));
+
+        when(durableQueues.keepsKeyOrderAcrossInstances()).thenReturn(true);
+        assertThat(inboxes.keepsKeyOrderAcrossInstances()).isTrue();
+
+        when(durableQueues.keepsKeyOrderAcrossInstances()).thenReturn(false);
+        assertThat(inboxes.keepsKeyOrderAcrossInstances()).isFalse();
+    }
+
+    @Test
+    void durable_queues_and_inboxes_do_not_claim_key_order_across_instances_by_default() {
+        assertThat(mock(DurableQueues.class, CALLS_REAL_METHODS).keepsKeyOrderAcrossInstances()).isFalse();
+        assertThat(mock(Inboxes.class, CALLS_REAL_METHODS).keepsKeyOrderAcrossInstances()).isFalse();
+    }
 }

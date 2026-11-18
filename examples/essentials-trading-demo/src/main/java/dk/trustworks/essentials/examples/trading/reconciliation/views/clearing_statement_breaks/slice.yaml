@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: reconciliation.clearing_statement_breaks
+kind: view
+bc: reconciliation
+owner: reconciliation-team
+status: live
+summary: "Each clearing statement's differences from the brokerage's executions, and obligations that do not add up."
+generator: essentials
+language: java
+
+serves: [GetClearingStatements, GetClearingStatementBreaks]
+endpoints:
+  - { method: GET, path: "/api/admin/reconciliation/clearing-statements", auth: operator }
+  - { method: GET, path: "/api/admin/reconciliation/clearing-statements/{statementId}/breaks", auth: operator }
+reads:
+  - { name: ClearingStatement }
+  - { name: KnownExecution }
+invariants:
+  - id: INV-CSB-1
+    text: "Breaks are worked out when read; an obligation is checked against the statement's own lines, so a wrong line is reported once"
+    enforcedBy: ClearingStatementBreaksQuery
+forbidden:
+  - cross-slice-internal:reconciliation
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/ClearingReconciliationIT.java" }
+  contract: { present: false }

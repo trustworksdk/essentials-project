@@ -115,7 +115,8 @@ COMMAND_HANDLER_BASES = {"AnnotatedCommandHandler", "CommandHandler"}
 HANDLER_ANNS = EVENT_HANDLER_ANNS | {"CmdHandler", "EventHandler", "KafkaListener", "RabbitListener", "JmsListener"}
 MAPPING_ANNS = {"GetMapping": "GET", "PostMapping": "POST", "PutMapping": "PUT", "PatchMapping": "PATCH",
                 "DeleteMapping": "DELETE", "RequestMapping": None}
-PROCESSOR_BASES = {"EventProcessor", "ViewEventProcessor", "InTransactionEventProcessor"}
+PROCESSOR_BASES = {"EventProcessor", "ViewEventProcessor", "InTransactionEventProcessor", "PartitionedEventProcessor",
+                   "PartitionedViewEventProcessor"}
 DECIDER_BASES = {"Decider", "EventStreamDecider"}
 ENVELOPES = {"OrderedMessage", "Message", "PersistedEvent", "Object", "Any"}
 EVENT_STORE_SYMBOLS = {"EventStore", "ConfigurableEventStore", "PostgresqlEventStore", "AggregateType", "EventOrder",

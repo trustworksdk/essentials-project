@@ -1,0 +1,26 @@
+schemaVersion: "1.1"
+slice: orders.apply_order_to_account
+kind: automation
+bc: orders
+owner: orders-team
+status: live
+summary: "Books every fill on the order's account and releases what is left of its hold or reservation when the order closes."
+generator: essentials
+language: java
+
+reactsTo: [OrderFilled, OrderClosed]
+sends: [BookTrade, ReleaseHold, ReleaseShares]
+endpoints: []
+invariants:
+  - id: INV-AOA-1
+    text: "An order's release never overtakes its bookings: one processor, one order's events in order"
+    enforcedBy: OrderLedgerProcessor
+  - id: INV-AOA-2
+    text: "A redelivered event books or releases nothing twice (the ledger's ids)"
+    enforcedBy: Account
+forbidden:
+  - cross-slice-internal:orders
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
+  contract: { present: false }

@@ -1,0 +1,26 @@
+schemaVersion: "1.1"
+slice: orders.cancel_order
+kind: command
+bc: orders
+owner: orders-team
+status: live
+summary: "Ask for an open order to be cancelled; the exchange confirms the cancellation."
+generator: essentials
+language: java
+
+handles: [CancelOrder]
+emits: [OrderCancelRequested]
+writes:
+  - { name: Order }
+endpoints:
+  - { method: POST, path: "/api/accounts/{accountId}/orders/{orderId}/cancellation", auth: customer }
+invariants:
+  - id: INV-CO-1
+    text: "A closed order cannot be cancelled, and an order is cancelled only through its own account"
+    enforcedBy: Order
+forbidden:
+  - cross-slice-internal:orders
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/aggregates/OrderTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
+  contract: { present: false }

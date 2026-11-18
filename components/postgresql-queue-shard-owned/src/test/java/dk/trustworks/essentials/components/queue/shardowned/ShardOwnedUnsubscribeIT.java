@@ -898,7 +898,8 @@ class ShardOwnedUnsubscribeIT {
             }
         };
         var settings = settingsWith(Duration.ofMillis(300), leaseTtl).withStuckHandlerTimeout(stuckHandlerTimeout);
-        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settings)) {
+        var clock    = new TestNanoClock();
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settings).useNanoTime(clock)) {
             try {
                 var first = queue.consume((messageId, key, payload, payloadType) -> {
                     if (key != null) {
@@ -909,24 +910,23 @@ class ShardOwnedUnsubscribeIT {
                 var firstLanes = queue.registeredConsumers();
                 queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
-                var enteredAt = System.nanoTime();
+                var enteredAt = clock.getAsLong();
 
                 first.unsubscribe();
                 var kept = keptOrderedFence(INSTANCE_ID);
                 assertThat(firstLanes.getFirst().metrics().keptUnitsInHandler()).as("the kept unit whose key is in its handler").isEqualTo(1);
 
                 var second = queue.consume(recording, ConsumerOptions.defaults());
-                assertThat(Duration.ofNanos(System.nanoTime() - enteredAt)).as("premise: before the bound").isLessThan(stuckHandlerTimeout);
+                assertThat(clock.since(enteredAt)).as("premise: before the bound").isLessThan(stuckHandlerTimeout);
                 assertThat(registeredInstances()).as("before the bound the instance id is out of use")
                                                  .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
                 second.unsubscribe();
 
                 // No lane of the first subscription runs, so nothing logs or changes as the bound passes - the next
                 // consume() reviews the kept unit - and asked here, the review would be the test's, not that consume()'s.
-                // So wait on the clock the bound is measured by: past it from the handler's entry, it is past it from the
-                // key's dispatch, which came first.
-                Awaitility.await().atMost(stuckHandlerTimeout.plusSeconds(5))
-                          .until(() -> Duration.ofNanos(System.nanoTime() - enteredAt).compareTo(stuckHandlerTimeout) > 0);
+                // So move the clock the bound is measured by (TestNanoClock) past it: past it from the handler's entry, it is
+                // past it from the key's dispatch, which came first.
+                clock.advance(stuckHandlerTimeout);
                 var third = queue.consume(recording, ConsumerOptions.defaults());
                 assertThat(third.isStarted()).isTrue();
                 assertThat(registeredInstances()).as("past the bound the caller's own instance id is free again")
@@ -981,6 +981,7 @@ class ShardOwnedUnsubscribeIT {
         // to hold that thread, and not the unordered lane's, which hands back first.
         var settings = settingsWith(Duration.ofSeconds(3), leaseTtl).withStuckHandlerTimeout(stuckHandlerTimeout);
         var holding  = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
+        var clock    = new TestNanoClock();
         try (var queue = PostgresqlMessageQueue.builder()
                                                .setDataSource(holding)
                                                .setQueueId(QUEUE_ID)
@@ -988,7 +989,8 @@ class ShardOwnedUnsubscribeIT {
                                                .setInstanceId(INSTANCE_ID)
                                                .setSettings(settings)
                                                .setLifecycleHook(PostgresqlMessageQueue.LifecycleHook.NONE)
-                                               .build()) {
+                                               .build()
+                                               .useNanoTime(clock)) {
             try {
                 var first = queue.consume((messageId, key, payload, payloadType) -> {
                     if (key != null) {
@@ -1002,7 +1004,7 @@ class ShardOwnedUnsubscribeIT {
                 var ordered   = lanes.get(1);
                 queue.enqueue(Message.ordered("in-handler".getBytes(StandardCharsets.UTF_8), 1, "ACC-1", 0));
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the key is in its handler").isTrue();
-                var enteredAt = System.nanoTime();
+                var enteredAt = clock.getAsLong();
 
                 var unsubscribing = CompletableFuture.runAsync(first::unsubscribe);
                 // The unordered lane stops first; once it has handed back and the ordered lane's stop is draining, hold the
@@ -1013,7 +1015,6 @@ class ShardOwnedUnsubscribeIT {
                 unsubscribing.get(20, TimeUnit.SECONDS);
                 // A unit still waiting for its stop's flush is given up once kept longer than stopFlushGiveUpAfter, timed from
                 // when the stop kept it, which came before the unsubscribe returned.
-                var unsubscribedAt = System.nanoTime();
                 var giveUpAfter    = ordered.stopFlushGiveUpAfter(settings);
                 assertThat(giveUpAfter).as("premise: the flush is waited for longer than stuckHandlerTimeout")
                                        .isEqualTo(ShardOwnedQueue.SHUTDOWN_BUDGET.plus(leaseTtl));
@@ -1030,14 +1031,14 @@ class ShardOwnedUnsubscribeIT {
                                                                       .doesNotContain("hand-back of its lanes to the database"));
 
                 var second = queue.consume(recording, ConsumerOptions.defaults());
-                assertThat(Duration.ofNanos(System.nanoTime() - enteredAt)).as("premise: before the unit is given up").isLessThan(giveUpAfter);
+                assertThat(clock.since(enteredAt)).as("premise: before the unit is given up").isLessThan(giveUpAfter);
                 assertThat(registeredInstances()).as("before the unit is given up the instance id is out of use")
                                                  .containsExactly(INSTANCE_ID, INSTANCE_ID + "-1");
                 second.unsubscribe();
 
-                // Past the give-up from when the stop kept the unit; the next consume() reviews the kept unit and gives it up.
-                Awaitility.await().atMost(giveUpAfter.plusSeconds(5))
-                          .until(() -> Duration.ofNanos(System.nanoTime() - unsubscribedAt).compareTo(giveUpAfter) > 0);
+                // Past the give-up from when the stop kept the unit, by the queue's clock (TestNanoClock); the next consume()
+                // reviews the kept unit and gives it up.
+                clock.advance(giveUpAfter);
                 var third = queue.consume(recording, ConsumerOptions.defaults());
                 assertThat(third.isStarted()).isTrue();
                 assertThat(ordered.handBackStillRunning()).as("premise: the stop's flush still hangs").isTrue();
@@ -1089,6 +1090,7 @@ class ShardOwnedUnsubscribeIT {
         // to hold that thread, and not the unordered lane's, which hands back first.
         var settings = settingsWith(Duration.ofSeconds(3), leaseTtl).withStuckHandlerTimeout(stuckHandlerTimeout);
         var holding  = new FlushHoldingDataSource(dataSource, FlushHoldingDataSource.STOP_BUDGET_THREAD);
+        var clock    = new TestNanoClock();
         try (var queue = PostgresqlMessageQueue.builder()
                                                .setDataSource(holding)
                                                .setQueueId(QUEUE_ID)
@@ -1096,7 +1098,8 @@ class ShardOwnedUnsubscribeIT {
                                                .setInstanceId(INSTANCE_ID)
                                                .setSettings(settings)
                                                .setLifecycleHook(PostgresqlMessageQueue.LifecycleHook.NONE)
-                                               .build()) {
+                                               .build()
+                                               .useNanoTime(clock)) {
             try {
                 var first = queue.consume((messageId, key, payload, payloadType) -> {
                     if (key != null) {
@@ -1119,7 +1122,7 @@ class ShardOwnedUnsubscribeIT {
                 holding.holdConnections();
                 unsubscribing.get(20, TimeUnit.SECONDS);
                 // The give-up is timed from when the stop kept the unit, which came before the unsubscribe returned.
-                var unsubscribedAt = System.nanoTime();
+                var unsubscribedAt = clock.getAsLong();
                 var giveUpAfter    = ordered.stopFlushGiveUpAfter(settings);
                 assertThat(giveUpAfter).as("premise: the wait for the stop's flush").isEqualTo(stuckHandlerTimeout);
                 assertThat(holding.awaitConnectionHeld(Duration.ofSeconds(10))).as("premise: the ordered lane's stop flush hangs").isTrue();
@@ -1131,13 +1134,12 @@ class ShardOwnedUnsubscribeIT {
                 release.countDown();
                 Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(
                         () -> assertThat(ordered.metrics().keptUnitsInHandler()).as("premise: the kept key has left its handler").isZero());
-                assertThat(Duration.ofNanos(System.nanoTime() - unsubscribedAt)).as("premise: the handler returned soon after the unsubscribe")
-                                                                               .isLessThan(giveUpAfter.minusSeconds(1));
+                assertThat(clock.since(unsubscribedAt)).as("premise: the handler returned soon after the unsubscribe")
+                                                       .isLessThan(giveUpAfter.minusSeconds(1));
 
-                // Past the give-up from when the stop kept the unit. Nothing has handed the unit back meanwhile: the flush
-                // still hangs, and the ended subscription's lanes run no heartbeat.
-                Awaitility.await().atMost(giveUpAfter.plusSeconds(5))
-                          .until(() -> Duration.ofNanos(System.nanoTime() - unsubscribedAt).compareTo(giveUpAfter.plusMillis(500)) > 0);
+                // Past the give-up from when the stop kept the unit, by the queue's clock (TestNanoClock). Nothing has handed
+                // the unit back meanwhile: the flush still hangs, and the ended subscription's lanes run no heartbeat.
+                clock.advance(giveUpAfter.plusMillis(500));
                 assertThat(ownerOf(keptUnit)).as("premise: nothing hands the unit back while the flush hangs").isEqualTo(INSTANCE_ID);
                 assertThat(fenceOf(keptUnit)).as("premise: nor takes it over").isEqualTo(keptFence);
                 assertThat(orderedMessagesLeft()).as("premise: the handled message is not acknowledged yet").isEqualTo(1);
@@ -1188,7 +1190,8 @@ class ShardOwnedUnsubscribeIT {
         var entered             = new CountDownLatch(1);
         var release             = new CountDownLatch(1);
         var settings            = settingsWith(Duration.ofMillis(300), leaseTtl).withStuckHandlerTimeout(stuckHandlerTimeout);
-        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settings);
+        var clock               = new TestNanoClock();
+        try (var queue = newQueue(PostgresqlMessageQueue.LifecycleHook.NONE, settings).useNanoTime(clock);
              var other = newQueue("other", settings)) {
             try {
                 queue.consume((messageId, key, payload, payloadType) -> {
@@ -1205,6 +1208,8 @@ class ShardOwnedUnsubscribeIT {
                 queue.stop();
                 var kept = keptOrderedFence(INSTANCE_ID);
                 queue.start();
+                // Past the bound by the queue's clock (TestNanoClock) rather than by waiting it out.
+                clock.advance(stuckHandlerTimeout);
                 Awaitility.await().atMost(Duration.ofSeconds(15))
                           .untilAsserted(() -> {
                               assertThat(fenceOf(kept.shard())).as("premise: taken over past the bound").isGreaterThan(kept.fence());
@@ -3346,7 +3351,7 @@ class ShardOwnedUnsubscribeIT {
      * {@code COMMIT} goes through on the server after all. Returns once it has.
      */
     private void releaseOnRequestWhoseDeadLetterMoveCommitsPastTheBound(PostgresqlMessageQueue queue, int unit, Duration bound) throws SQLException {
-        delayDeadLetterCommits(bound.plusSeconds(3));
+        var hold = delayDeadLetterCommits(bound.plusSeconds(3));
         try {
             var failure = new AtomicReference<SQLException>();
             Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> {
@@ -3364,6 +3369,8 @@ class ShardOwnedUnsubscribeIT {
             });
             assertThat((Throwable) failure.get()).as("premise: the request threw once its move had waited the bound").isNotNull();
         } finally {
+            // The request has stopped waiting: let the held COMMIT through on the server.
+            hold.release();
             // Waits for the held COMMIT: the transaction that fired the trigger holds a lock on the table until it ends
             dropDeadLetterCommitDelay();
         }
@@ -3373,17 +3380,22 @@ class ShardOwnedUnsubscribeIT {
     }
 
     /**
-     * Hold the {@code COMMIT} of every transaction inserting a dead letter on the server for {@code delay}, then let it
-     * through: a deferred constraint trigger runs at {@code COMMIT}.
+     * Hold the {@code COMMIT} of every transaction inserting a dead letter on the server until the returned hold is
+     * released, or for at most {@code delay}, then let it through: a deferred constraint trigger runs at {@code COMMIT}.
      */
-    private void delayDeadLetterCommits(Duration delay) throws SQLException {
+    private StatementHold delayDeadLetterCommits(Duration delay) throws SQLException {
+        var hold = StatementHold.arm(postgres);
         try (var connection = dataSource.getConnection();
              var statement = connection.createStatement()) {
             statement.execute("CREATE OR REPLACE FUNCTION delay_dead_letter_commit() RETURNS trigger LANGUAGE plpgsql AS $$ "
-                                      + "BEGIN PERFORM pg_sleep(" + delay.toMillis() / 1000.0 + "); RETURN NULL; END $$");
+                                      + "BEGIN " + StatementHold.performHold(delay) + " RETURN NULL; END $$");
             statement.execute("CREATE CONSTRAINT TRIGGER delay_dead_letter_commit AFTER INSERT ON " + ShardOwnedSchema.DLQ_TABLE
                                       + " DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION delay_dead_letter_commit()");
+        } catch (SQLException | RuntimeException e) {
+            hold.release();
+            throw e;
         }
+        return hold;
     }
 
     private void dropDeadLetterCommitDelay() throws SQLException {

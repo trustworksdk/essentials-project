@@ -1,0 +1,22 @@
+schemaVersion: "1.1"
+slice: identity.unlock_user
+kind: command
+bc: identity
+owner: identity-team
+status: live
+summary: Let a locked user log in again.
+generator: essentials
+language: java
+
+handles: [UnlockUser]
+publishes: [UserUnlocked]
+writes: [User]
+reads: []
+endpoints:
+  - { method: POST, path: "/api/admin/users/{userId}/unlock", auth: operator }
+forbidden:
+  - cross-slice-internal:identity
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

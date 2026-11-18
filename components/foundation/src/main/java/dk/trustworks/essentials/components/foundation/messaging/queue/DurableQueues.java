@@ -274,6 +274,75 @@ public interface DurableQueues extends Lifecycle {
     }
 
     /**
+     * Whether this implementation delivers one {@link OrderedMessage#getKey()}'s messages in
+     * {@link OrderedMessage#getOrder()} even when several instances (processes) consume the same queue as competing
+     * consumers.
+     * <p>
+     * Most implementations coordinate ordered delivery within one {@link DurableQueues} instance only, so in a cluster an
+     * ordered queue needs a single consumer ({@link MessageConsumptionMode#SingleGlobalConsumer} for an {@link Inbox}).
+     * An implementation that gives each key a single owner across instances - and fences a former owner out - can
+     * answer {@code true}, letting every instance consume the queue without reordering a key. Callers use it to decide
+     * whether competing consumers are safe for ordered messages ({@code EventProcessor}'s opt-in to competing inbox
+     * consumers).
+     * <p>
+     * Answer {@code true} only for a guarantee, never for a likelihood: a caller acting on it gives up the single consumer.
+     *
+     * @return {@code true} if a key's ordered messages stay in order across competing consumers on several instances;
+     * {@code false} by default
+     */
+    default boolean keepsKeyOrderAcrossInstances() {
+        return false;
+    }
+
+    /**
+     * The longest a message being handled by an instance that dies stays unserved before another instance can deliver
+     * it again: the time until delivery can actually resume after the instance is lost. That is the time until the
+     * implementation gives up on the dead consumer (a message-handling timeout, a lease) <b>plus</b> the implementation's
+     * own detection interval - how long it can take before a surviving instance acts on that (a heartbeat tick, a
+     * stuck-message reset that runs on a cadence). Callers size retries that must outlast a failover by it - a handler
+     * that waits for another processor's work, for example, must keep retrying until that work has failed over.
+     * <p>
+     * An implementation may leave out a latency that does not depend on the window it reports - a consumer's poll
+     * interval, the query that claims the message - and says in its own documentation what it leaves out and why.
+     * <p>
+     * This is not how long a handler may run before its message can be delivered a second time beside it: that is
+     * {@link #messageHandlingTimeout()}.
+     *
+     * @return the window, or {@link Optional#empty()} (the default) for an implementation that does not say
+     */
+    default Optional<Duration> maxUnservedAfterInstanceLoss() {
+        return Optional.empty();
+    }
+
+    /**
+     * How long a delivery may run before the implementation may take its message back as stuck and deliver it again,
+     * while the first handler may still be running: the message-handling timeout of an implementation that resets
+     * stuck deliveries by age. The consumers WARN about a handler that ran longer ({@code HandlerTimeoutOverrun}).
+     * <p>
+     * Shorter than {@link #maxUnservedAfterInstanceLoss()} when the implementation only looks for stuck deliveries on a
+     * cadence: a delivery can be taken back as soon as it is this old, but may stay unserved for longer.
+     *
+     * @return the timeout, or {@link Optional#empty()} (the default) for an implementation that does not take a delivery
+     * back on a timeout, or does not say
+     */
+    default Optional<Duration> messageHandlingTimeout() {
+        return Optional.empty();
+    }
+
+    /**
+     * Who may be handling the queue's messages right now, cluster-wide, by the implementation's own record of its
+     * consumers - see {@link QueueConsumers}. A caller that must know nothing handles the queue anywhere - a partitioned
+     * processor's reset, which truncates a view a handler still running elsewhere would write an old row into - asks this.
+     * Answer only from a cluster-wide record, never from this instance's consumers alone.
+     *
+     * @param queueName the queue
+     * @return the queue's consumers; {@link Optional#empty()} (the default) for an implementation that cannot tell
+     */
+    default Optional<QueueConsumers> getQueueConsumers(QueueName queueName) {
+        return Optional.empty();
+    }
+
+    /**
      * Start an asynchronous message consumer.<br>
      * Note: There can only be one {@link DurableQueueConsumer} per {@link QueueName} per {@link DurableQueues} instance<br>
      * Log levels of interest:
@@ -788,6 +857,31 @@ public interface DurableQueues extends Lifecycle {
      * @return true if there are ordered messages queued with the specified key in the given queue, otherwise false
      */
     boolean hasOrderedMessageQueuedForKey(QueueName queueName, String key);
+
+    /**
+     * Which of the given keys have ordered messages queued (ignoring the dead letter message flag) in the given queue -
+     * {@link #hasOrderedMessageQueuedForKey(QueueName, String)} asked once for many keys. A batched
+     * {@code ViewEventProcessor} asks it once per batch instead of once per event.
+     * <p>
+     * The default asks {@link #hasOrderedMessageQueuedForKey(QueueName, String)} for each key; an implementation
+     * answers it in one query where it can. Called inside a {@link UnitOfWork}, an implementation should answer it on
+     * that unit of work's connection rather than take a second one from the pool while the first is held.
+     *
+     * @param queueName the name of the queue to check
+     * @param keys      the keys to check for
+     * @return the keys among {@code keys} that have ordered messages queued in the given queue
+     */
+    default Set<String> getKeysWithOrderedMessagesQueued(QueueName queueName, Collection<String> keys) {
+        requireNonNull(queueName, "No queueName provided");
+        requireNonNull(keys, "No keys provided");
+        var queued = new HashSet<String>();
+        for (var key : keys) {
+            if (hasOrderedMessageQueuedForKey(queueName, key)) {
+                queued.add(key);
+            }
+        }
+        return queued;
+    }
 
     /**
      * Get the total number of messages queued (i.e. not including Dead Letter Messages) for the given queue

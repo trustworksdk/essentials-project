@@ -178,6 +178,10 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
      * So rather than guessing when the in-flight work has drained, save and re-check
      * {@link SubscriptionResumePoint#isChanged()} - which is value-based and stays true when the resume
      * point advanced past what was written - until it reports clean or the timeout expires.
+     * <p>
+     * A save that could not record the gaps kept in memory for the resume point (see
+     * {@code GapRecordingBeforeSaveDurableSubscriptionRepository}) ends the settling at once: a WARN, or during shutdown
+     * a failed cleanup step, which marks the database unreachable when the failure was an IO failure.
      *
      * @param durableSubscriptionRepository the repository to persist to
      * @param resumePoint                   the resume point to persist
@@ -199,7 +203,18 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
                       aggregateType,
                       resumePoint.getResumeFromAndIncluding());
             if (shutdown == null) {
-                durableSubscriptionRepository.saveResumePoint(resumePoint);
+                try {
+                    durableSubscriptionRepository.saveResumePoint(resumePoint);
+                } catch (GapRecordingBeforeSaveDurableSubscriptionRepository.GapsNotRecordedException e) {
+                    // Saving again would fail the same way until the deadline - and the stop or lock release must go on
+                    log.warn("[{}-{}] Gave up saving the ResumePoint {}: the gaps kept in memory could not be recorded. " +
+                                     "Events from the last saved resume point on may be redelivered on the next start",
+                             subscriberId,
+                             aggregateType,
+                             resumePoint.getResumeFromAndIncluding(),
+                             e);
+                    return;
+                }
             } else if (!shutdown.attemptCleanup(msg("[{}-{}] save resume point", subscriberId, aggregateType),
                                                 () -> durableSubscriptionRepository.saveResumePoint(resumePoint))) {
                 return;

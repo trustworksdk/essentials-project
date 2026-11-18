@@ -56,6 +56,9 @@ public final class PostgresqlFencedLockManagerBuilder {
     boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation = false;
     private Optional<EventBus>                                            eventBus              = Optional.empty();
     private SchemaOwnership                                               schemaOwnership       = SchemaOwnership.COMPONENT;
+    private boolean                                                       spreadLocks;
+    private Duration                                                      spreadLocksAcquireGrace;
+    private Duration                                                      spreadLocksRebalanceInterval;
 
     /**
      * @param jdbi the jdbi instance used
@@ -183,7 +186,44 @@ public final class PostgresqlFencedLockManagerBuilder {
                                                lockConfirmationInterval,
                                                releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
                                                eventBus,
-                                               schemaOwnership);
+                                               schemaOwnership,
+                                               LockSpreading.from(spreadLocks, spreadLocksAcquireGrace, spreadLocksRebalanceInterval, lockConfirmationInterval));
+    }
+
+    /**
+     * Spread the locks acquired asynchronously over the live lock manager instances - see {@link LockSpreading}, and its
+     * costs, before enabling it. Default {@code false}.
+     *
+     * @param spreadLocks whether to spread locks
+     * @return this builder instance
+     */
+    public PostgresqlFencedLockManagerBuilder setSpreadLocks(boolean spreadLocks) {
+        this.spreadLocks = spreadLocks;
+        return this;
+    }
+
+    /**
+     * See {@link LockSpreading#acquireGrace()}. {@code null} (the default) means two lock confirmation intervals. Only
+     * used when {@link #setSpreadLocks(boolean)} is {@code true}.
+     *
+     * @param spreadLocksAcquireGrace the grace, or {@code null} for the default
+     * @return this builder instance
+     */
+    public PostgresqlFencedLockManagerBuilder setSpreadLocksAcquireGrace(Duration spreadLocksAcquireGrace) {
+        this.spreadLocksAcquireGrace = spreadLocksAcquireGrace;
+        return this;
+    }
+
+    /**
+     * See {@link LockSpreading#rebalanceInterval()}. {@code null} (the default) means two lock confirmation intervals;
+     * {@link Duration#ZERO} turns rebalancing off. Only used when {@link #setSpreadLocks(boolean)} is {@code true}.
+     *
+     * @param spreadLocksRebalanceInterval the interval, {@link Duration#ZERO} for none, or {@code null} for the default
+     * @return this builder instance
+     */
+    public PostgresqlFencedLockManagerBuilder setSpreadLocksRebalanceInterval(Duration spreadLocksRebalanceInterval) {
+        this.spreadLocksRebalanceInterval = spreadLocksRebalanceInterval;
+        return this;
     }
 
     /**

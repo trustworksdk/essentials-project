@@ -114,6 +114,34 @@ class DefaultAggregateClosingBooksConfigurationResolverTest {
         assertThat(resolved.enabled()).isTrue();
     }
 
+    @Test
+    void resolves_the_period_source_from_override_then_annotation_then_global_default() {
+        var properties = new EssentialsEventStoreProperties();
+        var registry   = new InMemoryAggregateClosingBooksPolicyRegistry();
+        registry.register(new AggregateClosingBooksPolicyDescriptor(BusinessCalendarAggregate.class,
+                                                                   Optional.of("Ledgers"),
+                                                                   BusinessCalendarAggregate.class.getAnnotation(AggregateClosingBooksPolicy.class)));
+        var resolver = new DefaultAggregateClosingBooksConfigurationResolver(properties, registry);
+
+        assertThat(resolver.resolve(AggregateType.of("Orders"), OrdersAggregate.class).periodSource()).isEqualTo(ClosingBooksPeriodSource.CLOCK);
+        assertThat(resolver.resolve(AggregateType.of("Ledgers"), BusinessCalendarAggregate.class).periodSource()).isEqualTo(ClosingBooksPeriodSource.BUSINESS_CALENDAR);
+
+        properties.getClosingBooks().setPeriodSource(ClosingBooksPeriodSource.BUSINESS_CALENDAR);
+        assertThat(resolver.resolve(AggregateType.of("Orders"), OrdersAggregate.class).periodSource()).isEqualTo(ClosingBooksPeriodSource.BUSINESS_CALENDAR);
+
+        var override = new EssentialsEventStoreProperties.AggregateClosingBooksPolicyProperties();
+        override.setPeriodSource(ClosingBooksPeriodSource.CLOCK);
+        properties.getClosingBooks().getAggregates().put("Ledgers", override);
+        assertThat(resolver.resolve(AggregateType.of("Ledgers"), BusinessCalendarAggregate.class).periodSource()).isEqualTo(ClosingBooksPeriodSource.CLOCK);
+    }
+
+    @AggregateClosingBooksPolicy(aggregateType = "Ledgers",
+                                 defaultPolicy = ClosingBooksDefaultPolicyType.TIME_BOUNDARY,
+                                 timeBoundary = ClosingBooksTimeBoundary.END_OF_DAY,
+                                 periodSource = ClosingBooksPeriodSource.BUSINESS_CALENDAR)
+    static class BusinessCalendarAggregate {
+    }
+
     @AggregateClosingBooksPolicy(aggregateType = "Orders",
                                  enabled = false,
                                  triggerMode = ClosingBooksTriggerMode.EXPLICIT_COMMAND,

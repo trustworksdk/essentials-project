@@ -63,7 +63,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * Both arms run the same code otherwise, including the {@link CausationContext} bindings at every delivery site - those
  * are unconditional, so they are part of the baseline both arms share, not part of what is compared. See the performance
- * gate in {@code docs/event-causation.md}.
+ * gate in {@code docs/design/event-causation.md}.
  * <p>
  * Two shapes:
  * <ul>

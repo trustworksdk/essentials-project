@@ -148,6 +148,49 @@ public final class ClosingBooksTimeBoundaryCalculator {
         };
     }
 
+    /**
+     * The period id an aggregate created <em>now</em> belongs to under {@link ClosingBooksPeriodSource#BUSINESS_CALENDAR}:
+     * the calendar's open business date, as {@code yyyy-MM-dd} - the business-calendar counterpart of
+     * {@link #currentPeriodId(ClosingBooksTimeBoundary, ZoneId, Clock, Integer)} for {@code END_OF_DAY}.
+     *
+     * @param businessCalendar the calendar
+     * @return the period id, or empty while the calendar does not know the open business date yet
+     */
+    public static Optional<String> currentPeriodId(ClosingBooksBusinessCalendar businessCalendar) {
+        requireNonNull(businessCalendar, "No businessCalendar provided");
+        return businessCalendar.currentBusinessDate().map(date -> date.format(DAY_FORMATTER));
+    }
+
+    /**
+     * Evaluates an {@link ClosingBooksTimeBoundary#END_OF_DAY} boundary against a business calendar
+     * ({@link ClosingBooksPeriodSource#BUSINESS_CALENDAR}) instead of a clock.
+     * <ul>
+     *     <li>{@code resolvedPeriodId} is the calendar's open business date, or the current period id when that is
+     *     later (a calendar never moves an aggregate's period backwards);</li>
+     *     <li>{@code advancedPeriods} is the number of business days that closed from the current period up to the
+     *     open business date - Friday to Monday is one, not three - and at least one when the open business date is
+     *     later, even if the calendar is missing a close in between;</li>
+     *     <li>while the calendar does not know the open business date, nothing advances.</li>
+     * </ul>
+     *
+     * @param businessCalendar the calendar
+     * @param currentPeriodId  the aggregate's current period id, {@code yyyy-MM-dd}
+     * @return the evaluation
+     * @throws IllegalArgumentException if {@code currentPeriodId} is not a {@code yyyy-MM-dd} date
+     */
+    public static ClosingBooksTimeBoundaryEvaluation evaluate(ClosingBooksBusinessCalendar businessCalendar,
+                                                              String currentPeriodId) {
+        requireNonNull(businessCalendar, "No businessCalendar provided");
+        var current = parseIsoLocalDate(validateCurrentPeriodId(ClosingBooksTimeBoundary.END_OF_DAY, currentPeriodId)).orElseThrow();
+        var open    = businessCalendar.currentBusinessDate();
+        if (open.isEmpty() || !open.get().isAfter(current)) {
+            return new ClosingBooksTimeBoundaryEvaluation(currentPeriodId, 0);
+        }
+        // At least one: the open business date is later, so a day closed even if the calendar is missing its close
+        return new ClosingBooksTimeBoundaryEvaluation(open.get().format(DAY_FORMATTER),
+                                                      Math.max(1, businessCalendar.businessDaysClosedBetween(current, open.get())));
+    }
+
     static String resolveFixedIntervalPeriodId(LocalDate now, String currentPeriodId, Integer intervalDays) {
         return resolveFixedIntervalEvaluation(now, currentPeriodId, intervalDays).resolvedPeriodId();
     }

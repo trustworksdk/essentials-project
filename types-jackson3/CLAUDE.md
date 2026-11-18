@@ -17,7 +17,7 @@ Sole Jackson integration for types since 0.60 (Jackson 2 `types-jackson` deleted
 | `EssentialTypesJacksonModule` | `SimpleModule` subclass; registers all ser/deser in `setupModule()`; exposes `createObjectMapper()` factory |
 | `CharSequenceTypeJsonSerializer` | `ToStringSerializerBase` → serializes any `CharSequenceType` as JSON string via `toString()` |
 | `NumberTypeJsonSerializer` | `NumberSerializer` subclass → unwraps `NumberType.value()` before delegating to parent |
-| `MoneyDeserializer` | `StdDeserializer<Money>` → reads `{"amount":…,"currency":…}` nodes explicitly; no generic magic |
+| `MoneyDeserializer` | `StdDeserializer<Money>` → streams `{"amount":…,"currency":…}` explicitly; amount a JSON number (scale kept) or a quoted number; both properties required; no generic magic |
 | `NumberTypeJsonDeserializer` | Counterpart to `NumberTypeJsonSerializer`; reads a JSON number at the width the concrete type wraps, refuses a fraction for integral bases, accepts quoted numbers |
 | `NumberTypeJsonDeserializers` | `Deserializers` SPI resolving the above per concrete `NumberType`; needed because deserializer lookup is exact-type, not supertype-walking |
 | `JSR310SingleValueTypeMixIn` (private interface) | Mix-in applied to `JSR310SingleValueType` to attach `@JsonValue` on `value()` → ISO-8601 output |

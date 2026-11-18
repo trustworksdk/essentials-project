@@ -155,7 +155,7 @@ public class QueueLoadGenerator {
     private final String blockedKeyPrefix;
 
     /**
-     * Its own scheduler, like {@code TradingLoadGeneratorManager}, rather than {@code @Scheduled}.
+     * Its own scheduler rather than {@code @Scheduled}.
      * The demo has no {@code @EnableScheduling}, so the annotation is inert here — it binds, it
      * validates, and it never fires, which is the quietest way for a load generator to generate no
      * load.

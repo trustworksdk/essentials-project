@@ -40,14 +40,14 @@
           NOT a published artifact yet. The project's rule is that central APIs are stable and break
           only on a major version; this SPI is still changing, so publishing it would commit to a
           contract that is not ready. The open gaps are listed under "Known gaps" in
-          docs/durable-queue-shard-owned.md §13. It builds and tests with the reactor so it does not
+          docs/design/durable-queue-shard-owned.md §13. It builds and tests with the reactor so it does not
           rot, and the flag comes off when those gaps close.
 
-          See docs/durable-queue-shard-owned.md and docs/durable-queue-measurements.md.
+          See docs/design/durable-queue-shard-owned.md and docs/design/durable-queue-measurements.md.
         -->
         <!--
              PUBLISHED as of this change. The gate this flag named was the "No admin UI" gap in
-             docs/durable-queue-shard-owned.md §15, and that gap is now closed: the engine has an
+             docs/design/durable-queue-shard-owned.md §15, and that gap is now closed: the engine has an
              administrative contract, a controller, an entry in EssentialsAdminApiSpec and a console
              page. The other listed gap — no semantic type for instanceId — is recorded there as
              deliberate rather than outstanding.

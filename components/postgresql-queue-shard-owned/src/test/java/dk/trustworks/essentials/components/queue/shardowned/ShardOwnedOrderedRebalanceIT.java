@@ -438,7 +438,8 @@ class ShardOwnedOrderedRebalanceIT {
         var settings            = fast(Duration.ofMillis(500), Duration.ofMillis(1000), stuckHandlerTimeout);
         var maxAttemptsOne      = RedeliveryPolicy.fixed(Duration.ofMillis(100), 1);
 
-        var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-young-a");
+        var clock  = new TestNanoClock();
+        var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-young-a").useNanoTime(clock);
         var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-young-b");
         try {
             first.startConsumingOrdered((messageId, key, payload, payloadType) -> {
@@ -455,10 +456,12 @@ class ShardOwnedOrderedRebalanceIT {
             var fenceBefore = fenceOf(stuckUnit);
             // The stuck key past the bound before the young key enters its handler, and the shed asked for at once after: it
             // completes once its grace has run out, with the one past the bound and the other in its handler for well under it.
-            Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
+            // Past the bound by the incumbent's clock (TestNanoClock) rather than by waiting it out; the young key enters its
+            // handler after the advance, so it is under the bound by construction.
+            clock.advance(stuckHandlerTimeout.plusMillis(500));
             first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(youngKey, 0, "young".getBytes(StandardCharsets.UTF_8), 1)));
             assertThat(youngEntered.await(15, TimeUnit.SECONDS)).as("premise: the young key is in its handler, in the same unit").isTrue();
-            var youngEnteredAtNanos = System.nanoTime();
+            var youngEnteredAtNanos = clock.getAsLong();
 
             second.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                 if (youngKey.equals(key)) {
@@ -468,13 +471,13 @@ class ShardOwnedOrderedRebalanceIT {
             }, settings, SHARD_COUNT, maxAttemptsOne);
 
             // The release WARN follows the charge, so seen while the young key is under the bound, the charge was made under it.
-            var youngKeyUnderTheBoundFor = stuckHandlerTimeout.minus(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos));
+            var youngKeyUnderTheBoundFor = stuckHandlerTimeout.minus(clock.since(youngEnteredAtNanos));
             assertThat(youngKeyUnderTheBoundFor).as("premise: the young key is still under the bound once the joining instance has started")
                                                 .isPositive();
             Awaitility.await("premise: the shed released the unit while the young key is still under the bound")
                       .atMost(youngKeyUnderTheBoundFor)
                       .until(() -> !queueWarnings(logged, "so those handlers were not waited for").isEmpty());
-            assertThat(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos)).as("premise: the young key was still under the bound at the release")
+            assertThat(clock.since(youngEnteredAtNanos)).as("premise: the young key was still under the bound at the release")
                                                                                .isLessThan(stuckHandlerTimeout);
 
             Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
@@ -534,7 +537,8 @@ class ShardOwnedOrderedRebalanceIT {
         var maxAttemptsThree    = RedeliveryPolicy.fixed(Duration.ofMillis(100), 3);
         var queueIds            = new short[]{QUEUE_ID};
 
-        var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-mixed-a");
+        var clock  = new TestNanoClock();
+        var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-mixed-a").useNanoTime(clock);
         var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-mixed-b");
         try {
             first.startConsumingOrdered((messageId, key, payload, payloadType) -> {
@@ -549,17 +553,19 @@ class ShardOwnedOrderedRebalanceIT {
             first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(stuckKey, 0, "stuck".getBytes(StandardCharsets.UTF_8), 1)));
             assertThat(stuckEntered.await(15, TimeUnit.SECONDS)).as("premise: the stuck key is in its handler").isTrue();
             var fenceBefore = fenceOf(stuckUnit);
-            Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
+            // Past the bound by the incumbent's clock (TestNanoClock) rather than by waiting it out; the young key enters its
+            // handler after the advance, so it is under the bound by construction.
+            clock.advance(stuckHandlerTimeout.plusMillis(500));
             first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(youngKey, 0, "young".getBytes(StandardCharsets.UTF_8), 1)));
             assertThat(youngEntered.await(15, TimeUnit.SECONDS)).as("premise: the young key is in its handler, in the same unit").isTrue();
-            var youngEnteredAtNanos = System.nanoTime();
+            var youngEnteredAtNanos = clock.getAsLong();
 
             LeaseReleaseRefusals.failLeaseReleasesOf(dataSource, queueIds, "ordered", stuckUnit, true);
             try {
                 second.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, settings, SHARD_COUNT, maxAttemptsThree);
 
                 // Each refusal follows a charge that went through: the trigger refuses the lease row's release, not the charge.
-                var youngKeyUnderTheBoundFor = stuckHandlerTimeout.minus(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos));
+                var youngKeyUnderTheBoundFor = stuckHandlerTimeout.minus(clock.since(youngEnteredAtNanos));
                 assertThat(youngKeyUnderTheBoundFor).as("premise: the young key is still under the bound once the joining instance has started")
                                                     .isPositive();
                 Awaitility.await("premise: the shed's release refused while the young key is still under the bound")
@@ -567,7 +573,7 @@ class ShardOwnedOrderedRebalanceIT {
                           .until(() -> LeaseReleaseRefusals.releasesRefused(dataSource, QUEUE_ID, stuckUnit) > 0);
                 second.stop();
                 first.stop();
-                assertThat(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos))
+                assertThat(clock.since(youngEnteredAtNanos))
                         .as("premise: the young key was under the bound until the stop ended the run, so no shed charged it")
                         .isLessThan(stuckHandlerTimeout);
             } finally {
@@ -631,9 +637,11 @@ class ShardOwnedOrderedRebalanceIT {
         var entries       = new java.util.concurrent.atomic.AtomicInteger();
         var attemptsOnRedelivery = new CompletableFuture<Integer>();
         var logged        = ShardOwnedRebalanceIT.captureQueueLog();
-        var settings      = fast(Duration.ofMillis(500), Duration.ofMillis(1000), Duration.ofSeconds(10));
+        var stuckHandlerTimeout = Duration.ofSeconds(10);
+        var settings      = fast(Duration.ofMillis(500), Duration.ofMillis(1000), stuckHandlerTimeout);
+        var clock         = new TestNanoClock();
 
-        var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-charge-a");
+        var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-charge-a").useNanoTime(clock);
         var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-charge-b");
         try {
             first.startConsumingOrdered((messageId, key, payload, payloadType) -> {
@@ -649,10 +657,11 @@ class ShardOwnedOrderedRebalanceIT {
                       .untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS));
             first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(failingKey, 0, "failing".getBytes(StandardCharsets.UTF_8), 1)));
             assertThat(failingEntered.await(15, TimeUnit.SECONDS)).as("premise: the failing unit's key is in its handler").isTrue();
-            // This gap is the window between the failing key passing stuckHandlerTimeout and the later key passing it: the
-            // failing charge must be refused, and the later handler let go, inside it. Wide, so a stalled heartbeat on a
-            // loaded build does not carry the later key past its bound first (that fails the premise below, not vacuously).
-            Thread.sleep(5_000);
+            // The failing key past stuckHandlerTimeout by the incumbent's clock (TestNanoClock) before the later key enters its
+            // handler, so the later key passes it a whole stuckHandlerTimeout after: the window in which the failing charge must
+            // be refused, and the later handler let go. Wide, so a stalled heartbeat on a loaded build does not carry the later
+            // key past its bound first (that fails the premise below, not vacuously).
+            clock.advance(stuckHandlerTimeout);
             first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(laterKey, 0, "later".getBytes(StandardCharsets.UTF_8), 1)));
             assertThat(laterEntered.await(15, TimeUnit.SECONDS)).as("premise: the later unit's key is in its handler").isTrue();
             var failingFence = fenceOf(failingUnit);
@@ -727,7 +736,8 @@ class ShardOwnedOrderedRebalanceIT {
         var logged        = ShardOwnedRebalanceIT.captureQueueLog();
         var settings      = fast(Duration.ofMillis(500), Duration.ofMillis(1000), stuckHandlerTimeout);
 
-        var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-kept-a");
+        var clock         = new TestNanoClock();
+        var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-kept-a").useNanoTime(clock);
         var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-kept-b");
         try {
             // The first delivery of each key holds its handler for the whole test; a later one returns at once.
@@ -744,7 +754,7 @@ class ShardOwnedOrderedRebalanceIT {
                       .untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS));
             first.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(keptKey, 0, "kept".getBytes(StandardCharsets.UTF_8), 1)));
             assertThat(keptEntered.await(15, TimeUnit.SECONDS)).as("premise: the kept unit's key is in its handler").isTrue();
-            var keptSince = System.nanoTime();
+            var keptSince = clock.getAsLong();
 
             first.stop();
             var keptFence = fenceOf(keptUnit);
@@ -758,10 +768,12 @@ class ShardOwnedOrderedRebalanceIT {
             try {
                 var failingFence = fenceOf(failingUnit);
                 second.startConsumingOrdered((messageId, key, payload, payloadType) -> { }, settings, SHARD_COUNT);
-                assertThat(Duration.ofNanos(System.nanoTime() - keptSince))
+                assertThat(clock.since(keptSince))
                         .as("premise: the joining instance started well before the kept key passed the bound")
                         .isLessThan(stuckHandlerTimeout.minusSeconds(2));
                 assertThat(fenceOf(keptUnit)).as("premise: the kept unit not taken over yet").isEqualTo(keptFence);
+                // The kept key past the bound by the incumbent's clock (TestNanoClock) rather than by waiting it out.
+                clock.advance(stuckHandlerTimeout);
 
                 Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
                     assertThat(chargeFailuresOf(logged, failingUnit)).as("premise: the charge was refused").isNotEmpty();

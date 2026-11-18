@@ -27,9 +27,10 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                         measured hole resolution latency tracking this value almost exactly, which
  *                         means the cost of a hole is set here rather than by the database — holes
  *                         resolve as fast as the owner bothers to look
- * @param holeExpiry       how long a missing value is chased before being written off as an aborted
- *                         transaction. Must exceed the longest expected enqueue transaction, or live
- *                         messages get abandoned
+ * @param holeExpiry       how long a missing value is chased before it is taken for an aborted
+ *                         transaction and no longer looked for. Should exceed the longest expected enqueue
+ *                         transaction: a message committed after it is not lost, but only the head sweep
+ *                         delivers it, up to {@code maxSweepInterval} late
  * @param sweepInterval    cadence of the head sweep, the backstop that makes correctness independent of
  *                         the in-memory hole set being perfect
  * @param ackFlushInterval upper bound on how long a handled message waits before its delete is issued

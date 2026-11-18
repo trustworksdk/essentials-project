@@ -11,8 +11,8 @@ This module implements the `MessageQueue` SPI it ships — it is **not** an impl
 [postgresql-queue-shard-owned-adapter](../postgresql-queue-shard-owned-adapter/README.md).
 
 **LLM Context:** [LLM-postgresql-queue-shard-owned.md](../../LLM/LLM-postgresql-queue-shard-owned.md)
-**Design & internals:** [docs/durable-queue-shard-owned.md](../../docs/durable-queue-shard-owned.md)
-**Every number quoted here:** [docs/durable-queue-measurements.md](../../docs/durable-queue-measurements.md)
+**Design & internals:** [docs/design/durable-queue-shard-owned.md](../../docs/design/durable-queue-shard-owned.md)
+**Every number quoted here:** [docs/design/durable-queue-measurements.md](../../docs/design/durable-queue-measurements.md)
 
 ## Table of Contents
 - [Overview](#overview)
@@ -98,7 +98,7 @@ actually uses. Micrometer is only needed if you use `MicrometerQueueObserver`.
 
 ## Prerequisites
 
-Full detail and the failure modes: [docs/durable-queue-shard-owned.md](../../docs/durable-queue-shard-owned.md) §17.
+Full detail and the failure modes: [docs/design/durable-queue-shard-owned.md](../../docs/design/durable-queue-shard-owned.md) §17.
 
 | Requirement | Why |
 |---|---|
@@ -123,7 +123,7 @@ because the heartbeat is blocked inside a read on a connection the pool still co
 
 The survivors are unaffected either way and take the shards over after one lease TTL. The cut-off
 instance is the one that keeps delivering duplicates until its read returns. See
-[docs/durable-queue-measurements.md](../../docs/durable-queue-measurements.md) §3.4.1.
+[docs/design/durable-queue-measurements.md](../../docs/design/durable-queue-measurements.md) §3.4.1.
 
 ## Security
 
@@ -336,7 +336,7 @@ bookkeeping error. The engine counts what that costs instead of claiming it cann
 | Cause | What happens | What to do |
 |---|---|---|
 | **Producer numbered and committed in different orders** | Two transactions enqueue for one key; the one holding the lower `key_order` commits second. The higher one was already delivered | Enqueue a key's messages from **one** transaction, or keep one writer per key. This is the only cause that is a producer bug |
-| **`Message.delayedOrdered`** | Only rows with `visible_at <= now()` are dispatched, so an undelayed later `key_order` overtakes a delayed earlier one. `postgresql-queue` blocks the key instead, and the adapter reaches this from `queueMessage(queue, orderedMessage, deliveryDelay)` — so the same `DurableQueues` call behaves differently on the two engines. Left as it is, with the reasoning and the trigger to revisit in [§18.3](../../docs/durable-queue-shard-owned.md) | A per-key delay *is* a reordering instruction. Keep a key's messages either all delayed or all not, with the same delay; otherwise enqueue undelayed and let the handler decide when to act |
+| **`Message.delayedOrdered`** | Only rows with `visible_at <= now()` are dispatched, so an undelayed later `key_order` overtakes a delayed earlier one. `postgresql-queue` blocks the key instead, and the adapter reaches this from `queueMessage(queue, orderedMessage, deliveryDelay)` — so the same `DurableQueues` call behaves differently on the two engines. Left as it is, with the reasoning and the trigger to revisit in [§18.3](../../docs/design/durable-queue-shard-owned.md) | A per-key delay *is* a reordering instruction. Keep a key's messages either all delayed or all not, with the same delay; otherwise enqueue undelayed and let the handler decide when to act |
 | **`watermarkCap` fires** | A write transaction older than the cap (60 s) is stepped over rather than waited out. Its rows are still delivered — the head sweep finds them — but late, relative to their key | Find the long-running write transaction. The cap is an escape hatch, not a knob |
 | **An instance is declared dead** | Its units are taken while its handlers may still be running. The staleness gate stops it *dispatching*, not the handler already in flight | Nothing; this is the same window at-least-once delivery comes from |
 | **At-least-once redelivery** | A message handled but not yet acknowledged when its unit moves is delivered again by the successor, after the key has moved on | Make handlers idempotent — the contract requires it anyway |
@@ -393,7 +393,7 @@ owner as it reads it, so the ordered lane never holds rows it cannot deliver.
 | **What clears it** | Resurrecting or deleting the dead letter. Both are noticed, including when done from another process |
 | **Telling the two kinds apart** | `DeadLetter.neverDelivered()`, backed by the `blocked_by_key_order` column — which also names the message recovery has to start from. Do not use `attempts`; a takeover bumps it on rows that were never delivered |
 | **Noticing it** | One WARN per key when it blocks. For what is stopped **now**, `depth().blockedKeys()` and `depth().parkedBehindDeadLetter()`, read from the dead-letter table and served on the admin API's queue status as `blockedKeys` and `parkedBehindDeadLetterDepth` — both return to zero once the key is resurrected. `keysBlockedByDeadLetter` and `messagesPoisonedBehindDeadLetter` on `statistics()` are per-instance running totals that never fall; read them as history, not state. **Not** the lane depths: the backlog moves out of the lane, so they fall |
-| **What it costs** | 1.70x WAL per message and 75% of throughput while stalled, and **241 B per message in a dead-letter table shared by every queue on the database** — about 87 MB for an hour at 100 msg/s. Alert on it in minutes, not days ([measurements](../../docs/durable-queue-measurements.md) §3.11) |
+| **What it costs** | 1.70x WAL per message and 75% of throughput while stalled, and **241 B per message in a dead-letter table shared by every queue on the database** — about 87 MB for an hour at 100 msg/s. Alert on it in minutes, not days ([measurements](../../docs/design/durable-queue-measurements.md) §3.11) |
 
 **Recovery is per key.** Restore the whole key in one call:
 
@@ -429,7 +429,7 @@ strategies carry the clause, so the barrier holds across processes the same way 
 |---|---|---|
 | Producer numbered and committed in different orders | Reorders, and reports nothing | Reorders, counted as `orderViolations` |
 | Retry backoff | Key blocked | Key blocked |
-| Delayed message on a key | Key blocked behind it | **Overtaken** — the one row where this engine is weaker, [deliberately](../../docs/durable-queue-shard-owned.md) (§18.3) |
+| Delayed message on a key | Key blocked behind it | **Overtaken** — the one row where this engine is weaker, [deliberately](../../docs/design/durable-queue-shard-owned.md) (§18.3) |
 | Dead letter | Key blocked until the message is resurrected or deleted; the messages behind it stay queued | Key blocked the same way, but the messages behind it are **dead-lettered rather than left queued**, so the lane holds nothing undeliverable |
 | Resurrecting a dead letter | Delivered first; the key was waiting for it, and its successors are still queued | Delivered first; its successors are dead letters too, so recovery walks the key in ascending `key_order` |
 | At-least-once duplicates | Yes | Yes |
@@ -445,7 +445,7 @@ where postgresql-queue reports nothing at all.
 
 **Where that leaves the choice.** For a key carrying state transitions that must never be applied
 with one missing — an aggregate's events, a balance, a state machine — the two engines now behave the
-same way on the case that matters: the key stops ([§9.1](../../docs/durable-queue-shard-owned.md)).
+same way on the case that matters: the key stops ([§9.1](../../docs/design/durable-queue-shard-owned.md)).
 Two things are left to check before adopting this one: a stalled key's backlog lands in the
 dead-letter table rather than staying queued, and **a delayed message does not block its key**. If you
 put delays on ordered messages, that second one is the question to answer first — the reasoning for

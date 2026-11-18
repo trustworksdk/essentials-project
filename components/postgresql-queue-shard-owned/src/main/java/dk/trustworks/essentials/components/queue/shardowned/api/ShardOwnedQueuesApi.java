@@ -187,7 +187,7 @@ public interface ShardOwnedQueuesApi {
      * and the answer - outcome, keys in a handler, keys the charge dead-lettered - is
      * what the operator's follow-up is decided from, so it is given at once. Behind a load balancer, send the request to
      * that process's own address (a pod address, or a tunnel such as {@code kubectl port-forward}) rather than the
-     * balancer's. Design notes: {@code docs/durable-queue-shard-owned.md} §13.7 and §18.3.
+     * balancer's. Design notes: {@code docs/design/durable-queue-shard-owned.md} §13.7 and §18.3.
      * <p>
      * A default method, so an implementation of this interface written before it existed still compiles: the default
      * releases nothing and answers {@link ApiShardOwnedKeptUnitReleases#NONE}. {@link DefaultShardOwnedQueuesApi}

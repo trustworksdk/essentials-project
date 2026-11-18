@@ -1737,8 +1737,16 @@ unitOfWorkFactory.usingUnitOfWork(uow -> {
 | `load(id)` | Load from the open generation; throws if no generation is open |
 | `resolveCurrentGeneration(id)` / `resolveOrOpenCurrentGeneration(id)` | Inspect, or open generation `1` on demand |
 | `loadOrOpen(id, …)` | Load, opening the first generation if the aggregate is new |
-| `closeAndOpenNextGeneration(id, …)` | Explicit rollover; returns the aggregate in the new generation |
+| `closeAndOpenNextGeneration(id, …)` | Explicit rollover; returns the aggregate in the new generation. Closes whichever generation is open under the generation lock |
+| `closeAndOpenNextGenerationGuarded(id, currentAggregate, hint, factory)` | The same rollover for an aggregate loaded before the call: throws `ClosingBooksGenerationMovedException`, closing nothing, when the generation `currentAggregate` was loaded from is no longer the open one |
 | `save(aggregate)` | Delegates to the underlying `StatefulAggregateRepository` |
+
+> **Warning - `ClosingBooksGenerationMovedException`.** The guarded methods
+> (`closeAndOpenNextGenerationGuarded(...)` here, and `ClosingBooksCoordinator`'s
+> `closeAndOpenNextGeneration(AggregateGeneration)` and `evaluatePolicy(AggregateGeneration loadedFrom, ...)`) throw it
+> when the generation the aggregate was loaded from is no longer open. A refusal leaves the unit of work rollback-only.
+> Catch it outside the unit of work, reload and retry in a new unit of work. Do not catch it and carry on inside the
+> same unit of work or `@Transactional` method: nothing written there afterwards commits.
 
 `closeAndOpenNextGeneration(...)` runs the close + open pair inside a **single** `UnitOfWork`: a crash between the
 two rolls the close back, leaving the previous generation `OPEN` for a safe retry rather than stranding the

@@ -25,8 +25,10 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -110,6 +112,106 @@ class ClosingBooksLogicalAggregateRepositoryTest {
                                                                   currentAggregate,
                                                                   "next-period",
                                                                   (aggregate, context, hint) -> new TestAggregate(context.streamAggregateId() + "-" + hint));
+
+        assertThat(nextAggregate.aggregateId()).isEqualTo("account-1#2-next-period");
+    }
+
+    @Test
+    void guarded_close_and_open_next_generation_refuses_an_aggregate_from_a_generation_that_was_rolled_since_it_was_loaded() {
+        var aggregateType = AggregateType.of("Accounts");
+        var generationRepository = new InMemoryClosingBooksGenerationResolver<String>();
+        @SuppressWarnings("unchecked")
+        var delegate = mock(StatefulAggregateRepository.class);
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        generationRepository,
+                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation,
+                                                        InlineUnitOfWorkFactories.inline());
+        var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
+                                                                                                               delegate,
+                                                                                                               coordinator,
+                                                                                                               ClosingBooksIdSerializer.stringBased());
+        var logicalAggregateId = new LogicalAggregateId<>("account-1");
+        when(delegate.save(any(TestAggregate.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        var generation1Aggregate = repository.open(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId()));
+        // Another caller rolls to generation 2 after generation 1's aggregate was loaded.
+        repository.closeAndOpenNextGeneration(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId()));
+        var factoryCalls = new AtomicInteger();
+
+        assertThatThrownBy(() -> repository.closeAndOpenNextGenerationGuarded(logicalAggregateId,
+                                                                              generation1Aggregate,
+                                                                              "next-period",
+                                                                              (aggregate, context, hint) -> {
+                                                                                  factoryCalls.incrementAndGet();
+                                                                                  return new TestAggregate(context.streamAggregateId());
+                                                                              }))
+                .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class,
+                                        e -> assertThat(e.expectedStreamAggregateId()).isEqualTo("account-1#1"));
+
+        assertThat(factoryCalls).hasValue(0);
+        assertThat(generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId))
+                .hasValueSatisfying(open -> assertThat(open.generation()).isEqualTo(2));
+        assertThat(generationRepository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
+    }
+
+    @Test
+    void guarded_close_and_open_next_generation_refuses_unwrapped_when_the_unit_of_work_wraps_exceptions() {
+        var aggregateType        = AggregateType.of("Accounts");
+        var unitOfWorkFactory    = InlineUnitOfWorkFactories.wrapping();
+        var generationRepository = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
+        @SuppressWarnings("unchecked")
+        var delegate = mock(StatefulAggregateRepository.class);
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        generationRepository,
+                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation,
+                                                        unitOfWorkFactory);
+        var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
+                                                                                                               delegate,
+                                                                                                               coordinator,
+                                                                                                               ClosingBooksIdSerializer.stringBased());
+        var logicalAggregateId = new LogicalAggregateId<>("account-1");
+        when(delegate.save(any(TestAggregate.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        var generation1Aggregate = repository.open(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId()));
+        repository.closeAndOpenNextGeneration(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId()));
+        var factoryCalls = new AtomicInteger();
+
+        assertThatThrownBy(() -> repository.closeAndOpenNextGenerationGuarded(logicalAggregateId,
+                                                                              generation1Aggregate,
+                                                                              "next-period",
+                                                                              (aggregate, context, hint) -> {
+                                                                                  factoryCalls.incrementAndGet();
+                                                                                  return new TestAggregate(context.streamAggregateId());
+                                                                              }))
+                .isInstanceOf(ClosingBooksGenerationMovedException.class);
+
+        assertThat(factoryCalls).hasValue(0);
+        assertThat(generationRepository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
+    }
+
+    @Test
+    void guarded_close_and_open_next_generation_rolls_the_generation_the_aggregate_was_loaded_from() {
+        var aggregateType = AggregateType.of("Accounts");
+        var generationRepository = new InMemoryClosingBooksGenerationResolver<String>();
+        @SuppressWarnings("unchecked")
+        var delegate = mock(StatefulAggregateRepository.class);
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        generationRepository,
+                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation,
+                                                        InlineUnitOfWorkFactories.inline());
+        var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
+                                                                                                               delegate,
+                                                                                                               coordinator,
+                                                                                                               ClosingBooksIdSerializer.stringBased());
+        var logicalAggregateId = new LogicalAggregateId<>("account-1");
+        when(delegate.save(any(TestAggregate.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        var currentAggregate = repository.open(logicalAggregateId, context -> new TestAggregate(context.streamAggregateId()));
+
+        var nextAggregate = repository.closeAndOpenNextGenerationGuarded(logicalAggregateId,
+                                                                         currentAggregate,
+                                                                         "next-period",
+                                                                         (aggregate, context, hint) -> new TestAggregate(context.streamAggregateId() + "-" + hint));
 
         assertThat(nextAggregate.aggregateId()).isEqualTo("account-1#2-next-period");
     }

@@ -61,7 +61,7 @@ import java.math.BigDecimal;
  * <br>
  * <b>Migrating an existing column</b>: a column created by {@link BaseBigDecimalTypeAttributeConverter} is a
  * <code>double precision</code> column, so switching to this converter requires a schema migration - see
- * <code>docs/MIGRATION-0.60.md</code>. Note that the migration preserves whatever is in the column; it does not repair a
+ * <code>docs/releases/MIGRATION-0.60.md</code>. Note that the migration preserves whatever is in the column; it does not repair a
  * value that floating-point accumulation has already corrupted.
  *
  * @param <T> the concrete type of {@link BigDecimalType} supported by this converter

@@ -64,6 +64,10 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
 
     private final AggregateSnapshotStateAdapter                                       snapshotStateAdapter;
     private final PostgresqlAggregateSnapshotStore                                     snapshotStore;
+    /**
+     * The newest snapshot found when each aggregate was loaded - saves re-querying it on the update that follows
+     */
+    private final LoadedSnapshotOrders loadedSnapshotOrders = new LoadedSnapshotOrders();
     private final AggregateSnapshotMeasurementSupport                                 measurementSupport;
     private final AddNewAggregateSnapshotStrategy                                     addNewSnapshotStrategy;
     private final AggregateSnapshotDeletionStrategy                                   snapshotDeletionStrategy;
@@ -296,10 +300,14 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
                                                                                                        ID aggregateId,
                                                                                                        EventOrder withLastIncludedEventOrderLessThanOrEqualTo,
                                                                                                        Class<AGGREGATE_IMPL_TYPE> aggregateImplType) {
-        return snapshotStore.loadSnapshot(aggregateType,
-                                          aggregateId,
-                                          withLastIncludedEventOrderLessThanOrEqualTo,
-                                          aggregateImplType);
+        return loadedSnapshotOrders.recordLoaded(aggregateType,
+                                                 aggregateId,
+                                                 withLastIncludedEventOrderLessThanOrEqualTo,
+                                                 aggregateImplType,
+                                                 snapshotStore.loadSnapshot(aggregateType,
+                                                                            aggregateId,
+                                                                            withLastIncludedEventOrderLessThanOrEqualTo,
+                                                                            aggregateImplType));
     }
 
     @Override
@@ -308,9 +316,12 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
         requireNonNull(persistedEvents, "No persistedEvents stream supplied");
         var aggregateType = persistedEvents.aggregateType();
         var aggregateImplType = (Class<AGGREGATE_IMPL_TYPE>) aggregate.getClass();
-        var mostRecentlyStoredSnapshotLastIncludedEventOrder = snapshotStore.findMostRecentLastIncludedEventOrder(aggregateType,
-                                                                                                                   persistedEvents.aggregateId(),
-                                                                                                                   aggregateImplType);
+        var mostRecentlyStoredSnapshotLastIncludedEventOrder = loadedSnapshotOrders.newestSnapshotEventOrder(aggregateType,
+                                                                                                              persistedEvents.aggregateId(),
+                                                                                                              aggregateImplType,
+                                                                                                              () -> snapshotStore.findMostRecentLastIncludedEventOrder(aggregateType,
+                                                                                                                                                                       persistedEvents.aggregateId(),
+                                                                                                                                                                       aggregateImplType));
         if (shouldWeAddANewAggregateSnapshot(aggregate, persistedEvents, aggregateType, aggregateImplType.getName(), mostRecentlyStoredSnapshotLastIncludedEventOrder)) {
             var lastAppliedEventOrder = Lists.last(persistedEvents.eventList()).get().eventOrder();
             deleteHistoricSnapShotsIfNecessary(aggregate, persistedEvents, aggregateType, aggregateImplType, lastAppliedEventOrder);
@@ -408,11 +419,13 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
 
     @Override
     public <AGGREGATE_IMPL_TYPE> void deleteAllSnapshots(Class<AGGREGATE_IMPL_TYPE> ofAggregateImplementationType) {
+        loadedSnapshotOrders.forgetAll(ofAggregateImplementationType);
         snapshotStore.deleteAllSnapshots(ofAggregateImplementationType);
     }
 
     @Override
     public <ID, AGGREGATE_IMPL_TYPE> void deleteSnapshots(AggregateType aggregateType, ID aggregateId, Class<AGGREGATE_IMPL_TYPE> withAggregateImplementationType) {
+        loadedSnapshotOrders.forget(aggregateType, aggregateId, withAggregateImplementationType);
         snapshotStore.deleteSnapshots(aggregateType, aggregateId, withAggregateImplementationType);
     }
 
@@ -421,6 +434,7 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
                                                           ID aggregateId,
                                                           Class<AGGREGATE_IMPL_TYPE> withAggregateImplementationType,
                                                           List<EventOrder> snapshotEventOrdersToDelete) {
+        loadedSnapshotOrders.forget(aggregateType, aggregateId, withAggregateImplementationType);
         snapshotStore.deleteSnapshots(aggregateType,
                                       aggregateId,
                                       withAggregateImplementationType,

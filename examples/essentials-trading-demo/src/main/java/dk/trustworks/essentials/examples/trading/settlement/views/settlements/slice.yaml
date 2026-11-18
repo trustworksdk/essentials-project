@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: settlement.settlements
+kind: view
+bc: settlement
+owner: settlement-team
+status: live
+summary: "Every execution's settlement, and the exceptions the exchange abandoned."
+generator: essentials
+language: java
+
+serves: [GetSettlements, GetSettlementExceptions]
+endpoints:
+  - { method: GET, path: "/api/admin/settlements?accountId=", auth: operator }
+  - { method: GET, path: "/api/admin/settlements/exceptions", auth: operator }
+reads:
+  - { name: SettlementView }
+projections:
+  - name: SettlementsProjection
+    from: [SettlementInstructed, SettlementPostponed, SettlementSettled, SettlementAbandoned, SettlementAmountChanged]
+    consistency: eventual
+    store: postgresql
+forbidden:
+  - cross-slice-internal:settlement
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/settlement/SettlementIT.java" }
+  contract: { present: false }

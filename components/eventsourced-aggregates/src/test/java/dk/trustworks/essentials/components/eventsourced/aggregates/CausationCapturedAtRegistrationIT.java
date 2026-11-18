@@ -49,7 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The three lazily appending repositories - {@link StatefulAggregateRepository}, {@link FlexAggregateRepository} and the
  * decider {@link CommandHandler} - append when the {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWork}
  * commits, which need not be where the cause is bound. They record the cause bound when the aggregate joined the
- * UnitOfWork instead (phase 4 of {@code docs/event-causation.md}).
+ * UnitOfWork instead (phase 4 of {@code docs/design/event-causation.md}).
  */
 @Testcontainers
 class CausationCapturedAtRegistrationIT {

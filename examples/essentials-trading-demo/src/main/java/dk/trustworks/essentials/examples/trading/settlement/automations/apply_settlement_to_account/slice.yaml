@@ -1,0 +1,23 @@
+schemaVersion: "1.1"
+slice: settlement.apply_settlement_to_account
+kind: automation
+bc: settlement
+owner: settlement-team
+status: live
+summary: "Books every settlement outcome on the trading account: settle, reverse an abandoned one, correct an amount."
+generator: essentials
+language: java
+
+reactsTo: [SettlementSettled, SettlementAbandoned, SettlementAmountChanged]
+sends: [SettleTrade, ReverseTradeBooking, CorrectSettlementAmount]
+endpoints: []
+invariants:
+  - id: INV-ASA-1
+    text: "A redelivered outcome books nothing twice (the ledger's per-execution idempotency)"
+    enforcedBy: Account
+forbidden:
+  - cross-slice-internal:settlement
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/settlement/SettlementIT.java" }
+  contract: { present: false }

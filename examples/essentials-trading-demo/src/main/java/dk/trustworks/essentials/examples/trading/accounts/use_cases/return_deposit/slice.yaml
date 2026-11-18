@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: accounts.return_deposit
+kind: command
+bc: accounts
+owner: accounts-team
+status: live
+summary: "The bank reversed a completed deposit."
+generator: essentials
+language: java
+
+handles: [ReturnDeposit]
+# AccountBooksClosed/AccountOpened are emitted when the ON_ACCESS closing-books policy rolls the account while it is
+# being loaded for this command.
+publishes: [DepositReturned, AccountBooksClosed, AccountOpened]
+writes: [Account]
+reads:
+  - { name: Account }
+endpoints:
+  - { method: POST, path: "/api/admin/accounts/{accountId}/deposit-returns", auth: operator }
+forbidden:
+  - cross-slice-internal:accounts
+tests:
+  unit: { present: true }
+  integration: { present: true }
+  contract: { present: false }

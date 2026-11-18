@@ -49,8 +49,14 @@ check_ref() {
     esac
 }
 
+# docs/design/ and docs/releases/ exist from the release after 0.60.1 on; a tag cut before that has those
+# documents directly under docs/, so a link into either folder is pointed at the path the tag has.
 rewrite_links() {
-    sed "s#](\.\./#](https://github.com/trustworksdk/essentials-project/blob/$ref/#g"
+    case $ref in
+        0.[0-9].* | 0.[0-5][0-9].* | 0.60.0 | 0.60.1)
+            sed -e "s#](\.\./docs/design/#](../docs/#g" -e "s#](\.\./docs/releases/#](../docs/#g" ;;
+        *) cat ;;
+    esac | sed "s#](\.\./#](https://github.com/trustworksdk/essentials-project/blob/$ref/#g"
 }
 
 if [ "${1:-}" = "--filter" ]; then

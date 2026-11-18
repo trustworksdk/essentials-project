@@ -92,7 +92,7 @@ Order deserialized = objectMapper.readValue(json, Order.class);
 |---------------|---------------|---------|
 | `CharSequenceType` | JSON string | `"ORD-123"` |
 | `NumberType` (`IntegerType`, `LongType`, `BigDecimalType`, etc.) | JSON number | `99.99` |
-| `Money` | JSON object | `{"amount":"99.99","currency":"USD"}` |
+| `Money` | JSON object | `{"amount":99.99,"currency":"USD"}` |
 | `JSR310SingleValueType` | ISO-8601 string | `"2024-01-15T10:30:00Z"` |
 
 ## CharSequenceType Requirements

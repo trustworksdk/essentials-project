@@ -35,7 +35,7 @@ import static dk.trustworks.essentials.components.queue.shardowned.SingleRowQuer
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * What a key stalled behind a dead letter costs the database — {@code docs/durable-queue-shard-owned.md} §9.1.
+ * What a key stalled behind a dead letter costs the database — {@code docs/design/durable-queue-shard-owned.md} §9.1.
  * <p>
  * A key never advances past a dead letter, and the messages behind it are moved to the dead-letter
  * table rather than left queued. That keeps undeliverable rows out of the cursor's way, and it is not

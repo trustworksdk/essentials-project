@@ -17,7 +17,9 @@
 package dk.trustworks.essentials.components.queue.shardowned;
 
 import com.zaxxer.hikari.*;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.slf4j.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
@@ -44,6 +46,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * The figures are printed and asserted only against limits a container can actually survive, so that
  * the rework has a before-picture to be measured against.
+ * <p>
+ * The recording itself ({@link #records_what_several_idle_queues_cost_in_threads_connections_and_queries})
+ * idles for over a minute, so it runs only with {@code -Dbenchmark.run=true}, like the other cost
+ * recordings in this module ({@code ShardOwnedUnorderedReadCostIT}, {@code ShardOwnedOrderedLoadedCostIT},
+ * {@code ShardOwnedStalledKeyCostIT}). Its one regression guard that is a property of the design rather
+ * than a recording - held connections do not scale with the number of queues - stays in the default
+ * build as {@link #held_connections_do_not_scale_with_the_number_of_queues}, and so does
+ * {@link #several_queues_do_not_manufacture_holes_for_each_other}.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ShardOwnedMultiQueueCostIT {
@@ -144,7 +154,48 @@ class ShardOwnedMultiQueueCostIT {
         return java.lang.management.ManagementFactory.getThreadMXBean().getThreadCount();
     }
 
+    /**
+     * The connection half of the recording below, without its idle period: once every queue owns all of its
+     * units, the connections the engine holds must be a property of the process ({@code pumpThreads} plus the
+     * listener and the heartbeat), not of how many queues it runs. Before one {@link ShardRuntime} served every
+     * queue in the process, each queue held its own pumps' connections.
+     */
     @Test
+    void held_connections_do_not_scale_with_the_number_of_queues() throws Exception {
+        var connectionsBefore = heldConnections();
+        var queues = new ArrayList<ShardOwnedQueue>();
+        var runtime = new ShardRuntime(dataSource, settings());
+        try {
+            for (short queueId = 1; queueId <= QUEUES; queueId++) {
+                var unordered = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(queueId).setShardCount(SHARD_COUNT).setInstanceId("held-u-" + queueId).setRuntime(runtime).build();
+                unordered.startConsuming((messageId, payload, payloadType) -> {
+                }, settings(), SHARD_COUNT);
+                var ordered = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(queueId).setShardCount(SHARD_COUNT).setInstanceId("held-o-" + queueId).setRuntime(runtime).build();
+                ordered.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                }, settings(), SHARD_COUNT);
+                queues.add(unordered);
+                queues.add(ordered);
+            }
+            // Every owner up: SHARD_COUNT unordered shards and every ordered unit per queue.
+            var expectedUnits = QUEUES * (SHARD_COUNT + ShardOwnedSchema.ORDERED_UNITS);
+            Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                    assertThat(queues.stream().mapToInt(ShardOwnedQueue::shardsHeld).sum()).isEqualTo(expectedUnits));
+
+            // Eventually rather than at once: a lease acquisition borrows a connection for a moment, and
+            // what this guards is what the engine keeps, not what it borrows on the way up.
+            Awaitility.await().atMost(Duration.ofSeconds(15)).untilAsserted(() ->
+                    assertThat(heldConnections() - connectionsBefore)
+                            .as("held connections must not scale with the number of queues")
+                            .isPositive()
+                            .isLessThanOrEqualTo(PUMP_THREADS + 2));
+        } finally {
+            queues.forEach(ShardOwnedQueue::stop);
+            runtime.close();
+        }
+    }
+
+    @Test
+    @EnabledIfSystemProperty(named = "benchmark.run", matches = "true")
     void records_what_several_idle_queues_cost_in_threads_connections_and_queries() throws Exception {
         // Settle first: taken immediately, the baseline includes threads a previous test class is
         // still winding down, and the delta comes out negative.

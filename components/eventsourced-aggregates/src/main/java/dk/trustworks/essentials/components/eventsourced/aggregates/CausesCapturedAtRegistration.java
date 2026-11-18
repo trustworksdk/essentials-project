@@ -33,7 +33,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The two can differ, and when they do the commit-time binding is the wrong one: an in-transaction event handler runs
  * inside the <em>appending</em> {@link UnitOfWork}'s commit, so an aggregate it changes is appended in a later pass of
  * that commit - after the handler's own binding has ended, under the cause of the work that appended the event the
- * handler was given. See {@code docs/event-causation.md}, phase 4.
+ * handler was given. See {@code docs/design/event-causation.md}, phase 4.
  * <p>
  * Rules:
  * <ul>

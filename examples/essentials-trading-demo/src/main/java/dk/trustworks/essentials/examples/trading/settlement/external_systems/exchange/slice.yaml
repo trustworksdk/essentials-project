@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: settlement.exchange
+kind: external_system
+bc: settlement
+owner: settlement-team
+status: live
+summary: "Receives the exchange's settlement events for the firm's executions."
+generator: essentials
+language: java
+
+reactsTo: [SettlementPending, SettlementDelayed, SettlementCompleted, SettlementFailed, SettlementCancelled, SettlementRejected, SettlementCorrected]
+sends: [RecordSettlementReport]
+endpoints:
+  # The exchange's signed webhook (subscription demo-settlement); its event log is read as well
+  - { method: POST, path: "/webhooks/exchange/settlements", auth: service }
+invariants:
+  - id: INV-SX-1
+    text: "Each settlement event reaches the settlement once, whether by webhook or by the event-log catch-up"
+    enforcedBy: ExternalEventIntake
+forbidden:
+  - cross-slice-internal:settlement
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/settlement/external_systems/exchange/SettlementEventTranslationTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/settlement/SettlementIT.java" }
+  contract: { present: false }

@@ -1,0 +1,29 @@
+schemaVersion: "1.1"
+slice: identity.register_user
+kind: command
+bc: identity
+owner: identity-team
+status: live
+summary: Register a user with an email, display name, roles and initial password.
+generator: essentials
+language: java
+
+handles: [RegisterUser]
+publishes: [UserRegistered]
+writes: [User]
+reads: []
+endpoints:
+  - { method: POST, path: /api/admin/users, auth: operator }
+invariants:
+  - id: INV-RU-1
+    text: "An email belongs to at most one user; the unique column of user_credentials enforces it, in the same unit of work as UserRegistered"
+    enforcedBy: UserCredentials
+  - id: INV-RU-2
+    text: "No credential ever reaches the event store, a durable queue or a log line"
+    enforcedBy: RegisterUser
+forbidden:
+  - cross-slice-internal:identity
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

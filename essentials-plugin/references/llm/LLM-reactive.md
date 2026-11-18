@@ -323,6 +323,10 @@ through. `send` called inside your own `withUnitOfWork` arrives as `UnitOfWorkEx
 DomainException`. So `catch (DomainException e)` around `send` never matches (`AnnotatedCommandHandler` already
 unwraps the reflective `InvocationTargetException`, so that is not the extra level).
 
+`AnnotatedCommandHandler` logs the exception it rethrows at DEBUG (since 0.61; ERROR with stack trace before), because the
+sender reports it: `send` throws it, a `sendAndDontWait`'s `SendAndDontWaitErrorHandler` logs it, a durable command bus
+keeps it on the queued message and logs the dead letter. Override `getExceptionLogLevel(Exception)` to log here too.
+
 ```java
 try {
     commandBus.send(new ConfirmOrder(orderId));

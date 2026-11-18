@@ -572,8 +572,13 @@ class ShardOwnedTakeoverExhaustionRetryIT {
         }
 
         @Override
-        public long parkDeadlineMillis() {
-            return delegate.parkDeadlineMillis();
+        public long nextAttentionNanos() {
+            return delegate.nextAttentionNanos();
+        }
+
+        @Override
+        public ShardWakeup wakeup() {
+            return delegate.wakeup();
         }
 
         @Override

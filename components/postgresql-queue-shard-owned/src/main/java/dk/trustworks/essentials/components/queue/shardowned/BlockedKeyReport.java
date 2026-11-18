@@ -45,21 +45,22 @@ final class BlockedKeyReport {
     private BlockedKeyReport() {
     }
 
-    static void keyBlocked(ShardOwnerMetrics metrics, short queueId, int shard, String key, long keyOrder) {
+    static void keyBlocked(ShardOwnerMetrics metrics, ShardOwnedStorage storage, int shard, String key, long keyOrder) {
         metrics.blockedKeysSinceLastWarning.increment();
         var now  = System.nanoTime();
         var next = metrics.nextBlockedKeyWarningNanos.get();
         if (now - next >= 0 && metrics.nextBlockedKeyWarningNanos.compareAndSet(next, now + WARN_EVERY_NANOS)) {
             // Includes this key, so one less is "others".
             var others = metrics.blockedKeysSinceLastWarning.sumThenReset() - 1;
+            // Named, not numbered: "Queue 30" told the operator nothing about which queue's dead letters to open
             log.warn("Queue {}, ordered shard {}: key '{}' is blocked at key_order {} — its message was dead-lettered, so "
                              + "nothing above that order will be delivered and anything arriving for it is dead-lettered "
                              + "too. Resurrect or delete the dead letter to release the key. {} other key(s) were blocked "
                              + "since the last of these warnings; this is logged at most once a minute, every key at DEBUG",
-                     queueId, shard, key, keyOrder, others);
-        } else {
+                     storage.queueLabel(), shard, key, keyOrder, others);
+        } else if (log.isDebugEnabled()) {
             log.debug("Queue {}, ordered shard {}: key '{}' is blocked at key_order {} — its message was dead-lettered",
-                      queueId, shard, key, keyOrder);
+                      storage.queueLabel(), shard, key, keyOrder);
         }
     }
 }

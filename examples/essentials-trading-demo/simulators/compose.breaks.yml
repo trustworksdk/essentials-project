@@ -1,0 +1,14 @@
+# Seeded reconciliation breaks for phase 6's fault F-5 (docs/design/phase-6-realistic-load.md §10), layered over
+# compose.yml by run-faults.sh. Lower rates than the phase 5 ITs (0.3): under load a statement has thousands of lines,
+# and every break becomes a case. One phantom line per statement either way.
+services:
+  exchange:
+    environment:
+      EXCHANGE__CLEARING__BREAKS__OMIT_PROBABILITY: "0.02"
+      EXCHANGE__CLEARING__BREAKS__ALTER_PROBABILITY: "0.02"
+      EXCHANGE__CLEARING__BREAKS__PHANTOM_PROBABILITY: "1.0"
+  payment-gateway:
+    environment:
+      GATEWAY__STATEMENT__BREAKS__OMIT_PROBABILITY: "0.05"
+      GATEWAY__STATEMENT__BREAKS__ALTER_PROBABILITY: "0.05"
+      GATEWAY__STATEMENT__BREAKS__PHANTOM_PROBABILITY: "1.0"

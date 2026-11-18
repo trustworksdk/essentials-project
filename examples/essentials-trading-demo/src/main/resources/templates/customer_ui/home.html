@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head th:replace="~{customer_ui/layout :: head('Accounts')}"></head>
+<body th:attr="data-user-id=${userId}">
+<header th:replace="~{customer_ui/layout :: header}"></header>
+<main>
+    <div th:replace="~{customer_ui/layout :: messages}"></div>
+    <section class="card">
+        <h1>Your accounts</h1>
+        <p id="accounts-loading" class="muted">Loading…</p>
+        <ul id="accounts" class="account-list" hidden></ul>
+        <p id="no-accounts" class="muted" hidden>You have no account yet.</p>
+    </section>
+    <section class="card">
+        <h2>Open an account</h2>
+        <p class="muted">A cash account in US dollars. Link a bank account and deposit on the Funding page to start trading.</p>
+        <form id="open-account">
+            <button type="submit">Open account</button>
+        </form>
+    </section>
+</main>
+<script type="module" th:src="@{/customer_ui/home.js}"></script>
+</body>
+</html>

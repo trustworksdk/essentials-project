@@ -158,6 +158,7 @@ public final class MongoFencedLockManager extends DBFencedLockManager<ClientSess
      *                                                                       If releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation is true, then {@link FencedLock}'s will be released locally,
      *                                                                       otherwise we will retain the {@link FencedLock}'s as locked.
      * @param eventBus                                                       optional {@link LocalEventBus} where {@link FencedLockEvents} will be published
+     * @param lockSpreading                                                  see {@link LockSpreading}
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     MongoFencedLockManager(MongoTemplate mongoTemplate,
@@ -167,7 +168,8 @@ public final class MongoFencedLockManager extends DBFencedLockManager<ClientSess
                                   Duration lockTimeOut,
                                   Duration lockConfirmationInterval,
                                   boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
-                                  Optional<EventBus> eventBus) {
+                                  Optional<EventBus> eventBus,
+                                  LockSpreading lockSpreading) {
         super(new MongoFencedLockStorage(mongoTemplate,
                                          fencedLocksCollectionName),
               unitOfWorkFactory,
@@ -176,6 +178,7 @@ public final class MongoFencedLockManager extends DBFencedLockManager<ClientSess
                                        .setLockTimeOut(lockTimeOut)
                                        .setLockConfirmationInterval(lockConfirmationInterval)
                                        .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation)
+                                       .setLockSpreading(requireNonNull(lockSpreading, "No lockSpreading provided"))
                                        .build(),
               requireNonNull(eventBus, "No eventBus option provided").orElse(null));
     }
@@ -209,7 +212,8 @@ public final class MongoFencedLockManager extends DBFencedLockManager<ClientSess
              lockTimeOut,
              lockConfirmationInterval,
              releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
-             eventBus
+             eventBus,
+             LockSpreading.disabled()
             );
     }
 }

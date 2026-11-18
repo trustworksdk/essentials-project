@@ -3157,6 +3157,11 @@ components:
         intervalDays:
           type: integer
           format: int32
+        periodSource:
+          type: string
+          enum:
+          - CLOCK
+          - BUSINESS_CALENDAR
     ApiAggregateClosingBooksStatistics:
       type: object
       properties:

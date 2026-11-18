@@ -1,0 +1,28 @@
+schemaVersion: "1.1"
+slice: orders.expire_order
+kind: command
+bc: orders
+owner: orders-team
+status: live
+summary: "Expire a DAY order still open when its business day closes: ask the exchange to cancel it, and close it EXPIRED once it has."
+generator: essentials
+language: java
+
+handles: [ExpireOrder]
+emits: [OrderExpiryRequested]
+writes:
+  - { name: Order }
+endpoints: []
+invariants:
+  - id: INV-EO-1
+    text: "Only an open DAY order is expired; a GTC order, a closed one and one already being cancelled are left as they are"
+    enforcedBy: Order
+  - id: INV-EO-2
+    text: "The order closes EXPIRED only when the exchange confirms the cancellation; a fill before that is still booked"
+    enforcedBy: Order
+forbidden:
+  - cross-slice-internal:orders
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/aggregates/OrderTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
+  contract: { present: false }

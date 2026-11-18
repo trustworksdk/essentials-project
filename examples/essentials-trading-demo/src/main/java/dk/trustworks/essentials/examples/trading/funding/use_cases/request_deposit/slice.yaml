@@ -1,0 +1,29 @@
+schemaVersion: "1.1"
+slice: funding.request_deposit
+kind: command
+bc: funding
+owner: funding-team
+status: live
+summary: "The customer asks to deposit from the linked bank account."
+generator: essentials
+language: java
+
+handles: [RequestDeposit]
+publishes: [DepositRequested]
+sends: []
+writes: [Deposit]
+reads:
+  - { name: BankAccountLink }
+  - { name: AccountOwner, via: FundingAccountOwnersQuery }
+endpoints:
+  - { method: POST, path: "/api/accounts/{accountId}/deposits", auth: customer }
+invariants:
+  - id: INV-RD-1
+    text: "A deposit needs a linked bank account and takes the one linked when it is requested"
+    enforcedBy: RequestDepositHandler
+forbidden:
+  - cross-slice-internal:funding
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/aggregates/FundingAggregatesTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/FundingIT.java" }
+  contract: { present: false }

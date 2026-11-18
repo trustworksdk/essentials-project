@@ -351,7 +351,8 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
                   .pollInterval(Duration.ofMillis(50))
                   .untilAsserted(() -> {
                       assertThat(inboxRepository.statusForLsn(slotName, "0/POISON-1")).contains("POISON");
-                      assertThat(inboxRepository.statusForLsn(slotName, "0/VALID-1")).contains("DISPATCHED");
+                      // DispatchedRowPolicy.DELETE (the default): the dispatched row is gone, the poison row is kept
+                      assertThat(inboxRepository.statusForLsn(slotName, "0/VALID-1")).isEmpty();
 
                       assertThat(dispatched).hasSize(1);
                       assertThat(dispatched.get(0).globalEventOrder().longValue()).isEqualTo(42L);

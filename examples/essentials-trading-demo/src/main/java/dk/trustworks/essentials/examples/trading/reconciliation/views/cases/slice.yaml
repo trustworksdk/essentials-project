@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: reconciliation.cases
+kind: view
+bc: reconciliation
+owner: reconciliation-team
+status: live
+summary: "The reconciliation cases and their history, for the operator."
+generator: essentials
+language: java
+
+serves: [GetReconciliationCases, GetReconciliationCase]
+endpoints:
+  - { method: GET, path: "/api/admin/reconciliation/cases", auth: operator }
+  - { method: GET, path: "/api/admin/reconciliation/cases/{caseId}", auth: operator }
+reads:
+  - { name: ReconciliationCase }
+projections:
+  - name: CasesProjection
+    from: [CaseOpened, CaseAssigned, CaseResolved, CaseCleared]
+    consistency: eventual
+    store: postgresql
+forbidden:
+  - cross-slice-internal:reconciliation
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/ClearingReconciliationIT.java" }
+  contract: { present: false }

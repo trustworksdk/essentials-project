@@ -43,7 +43,7 @@ _Added 2026-10-16; origin: resolve:F-285_
 
 Not a defect: the reference comparison is the intended semantics. Run is a private class with no equals/hashCode whose identity is the object (javadoc 'Why the run's identity'); equals() would be the same identity test.
 
-_Added 2026-10-17; origin: resolve:F-354_
+_Added 2026-10-17; origin: resolve:F-354; merges 3 events_
 
 ## D-feat-slice-atlas-F-491 — Not a defect: tryLock(STOP_WAITS_FOR_START) returns as soon as the lock is relea…
 
@@ -134,3 +134,33 @@ _Added 2026-10-27; origin: teach_
 Don't flag PMD CompareObjectsWithEquals in test code: the tests compare Thread objects, proxies and private run objects by identity on purpose; those types define no value equality, so equals() would mean the same and say it less plainly.
 
 _Added 2026-10-27; origin: teach_
+
+## D-feature-trading-demo-expansion-files-9cf85a-F-010 — Not a defect: published demo credential / test fixture
+
+Not a defect: published demo credential / test fixture
+
+_Added 2026-11-08; origin: resolve:F-010_
+
+## D-feature-trading-demo-expansion-files-9cf85a-F-291 — Not a defect: published demo credential / test fixture
+
+Not a defect: published demo credential / test fixture
+
+_Added 2026-11-08; origin: resolve:F-291_
+
+## D-feature-trading-demo-expansion-files-9cf85a-F-293 — Not a defect: published demo credential / test fixture
+
+Not a defect: published demo credential / test fixture
+
+_Added 2026-11-08; origin: resolve:F-293_
+
+## L-009 — Don't flag PMD ConstructorCallsOverridableMethod in examples/** aggregates and p…
+
+Don't flag PMD ConstructorCallsOverridableMethod in examples/** aggregates and projections (examples/**/aggregates/**) - it is Essentials' registerEventHandler/apply-in-constructor pattern
+
+_Added 2026-11-08; origin: teach_
+
+## L-010 — Don't flag PMD ConstructorCallsOverridableMethod in examples/** aggregates and p…
+
+Don't flag PMD ConstructorCallsOverridableMethod in examples/** aggregates and projections (examples/**/views/**) - it is Essentials' registerEventHandler/apply-in-constructor pattern
+
+_Added 2026-11-08; origin: teach_

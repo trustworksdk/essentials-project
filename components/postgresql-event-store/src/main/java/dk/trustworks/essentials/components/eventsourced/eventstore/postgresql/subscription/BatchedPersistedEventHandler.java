@@ -69,6 +69,48 @@ public interface BatchedPersistedEventHandler {
     }
 
     /**
+     * Offer a failed batch back to the handler instead of letting the {@link SubscriptionErrorPolicy} give up on it - the
+     * batched counterpart of {@link PersistedEventHandler#handOffFailedEvent(PersistedEvent, Throwable)}.
+     * <p>
+     * Called by {@link BatchedPersistedEventSubscriber} on its batch-handling thread when {@link #handleBatch(List)} failed
+     * and the {@link SubscriptionErrorPolicy} has run out of options: after its retries, in place of skipping the batch or
+     * stopping at its first event. The {@link UnitOfWork} the batch was handled in has been rolled back by then and none is
+     * active, so a handler that takes the batch over - e.g. by handling its events one at a time, each in a
+     * {@link UnitOfWork} of its own - must open its own.
+     * <p>
+     * Not called for a failure the subscriber's I/O retry handles, nor when the subscription was stopped while the batch
+     * was being handled (the restarted subscription handles the batch again).
+     *
+     * @param events  the batch whose handling failed, in order
+     * @param failure the failure the {@link SubscriptionErrorPolicy} gave up on
+     * @return true if the handler took the batch over: the subscriber then carries on as if the batch had been handled -
+     * the policy does not skip or stop, the failure is not reported to the observer, and the resume point moves past the
+     * batch. false (the default) to let the {@link SubscriptionErrorPolicy} give up as usual, which it also does if this
+     * method throws - except an I/O or connection failure ({@code IOExceptionUtil.isIOException}): then the subscriber
+     * stops at the batch's first event whatever the policy, resumes as a stopping policy's auto-resume does, and hands
+     * the whole batch on again
+     */
+    default boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure) {
+        return false;
+    }
+
+    /**
+     * {@link #handOffFailedBatch(List, Throwable)}, also given the {@link SubscriptionErrorPolicy} that gave up on the
+     * batch - the policy the {@link BatchedPersistedEventSubscriber} was built with, so the handler need not work out for
+     * itself which policy applies (its own {@link #subscriptionErrorPolicy()} or the {@link EventStoreSubscriptionManager}'s).
+     * This is the method the {@link BatchedPersistedEventSubscriber} calls; override it instead of the two-argument one
+     * when what the handler does depends on whether the policy stops or skips.
+     *
+     * @param events                  the batch whose handling failed, in order
+     * @param failure                 the failure the {@link SubscriptionErrorPolicy} gave up on
+     * @param subscriptionErrorPolicy the policy the subscriber handles the batch's failures with
+     * @return see {@link #handOffFailedBatch(List, Throwable)}; the default delegates to it
+     */
+    default boolean handOffFailedBatch(List<PersistedEvent> events, Throwable failure, SubscriptionErrorPolicy subscriptionErrorPolicy) {
+        return handOffFailedBatch(events, failure);
+    }
+
+    /**
      * The {@link SubscriptionErrorPolicy} for the batched subscription this handler is subscribed with, in place of the
      * policy of the {@link EventStoreSubscriptionManager}. See {@link SubscriptionErrorPolicy} for which setting wins.
      * <p>

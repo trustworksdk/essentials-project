@@ -169,8 +169,8 @@ class ShardPumpDeliveryFailureTest {
         var metrics = new ShardOwnerMetrics();
         var failing = new StubOwner((short) 7, 1, metrics, () -> new IllegalStateException("pass refused"), Integer.MAX_VALUE) {
             @Override
-            public long parkDeadlineMillis() {
-                return 0L;
+            public long nextAttentionNanos() {
+                return System.nanoTime();
             }
         };
         var idle = new IdleStubOwner((short) 7, 2, metrics);
@@ -204,8 +204,8 @@ class ShardPumpDeliveryFailureTest {
             }
 
             @Override
-            public long parkDeadlineMillis() {
-                return IdleStubOwner.FAR_DEADLINE_MILLIS;
+            public long nextAttentionNanos() {
+                return System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(IdleStubOwner.FAR_DEADLINE_MILLIS);
             }
         };
         var idle = new IdleStubOwner((short) 7, 2, metrics);
@@ -461,6 +461,7 @@ class ShardPumpDeliveryFailureTest {
         var statement = (PreparedStatement) Proxy.newProxyInstance(loader, new Class<?>[]{PreparedStatement.class},
                                                                    (proxy, method, args) -> switch (method.getName()) {
                                                                        case "setArray", "setShort", "setInt", "setLong", "close" -> null;
+                                                                       case "isWrapperFor" -> false; // not pgjdbc's, so prepareFreshlyPlanned leaves it alone
                                                                        case "executeQuery" -> resultSet;
                                                                        case "hashCode" -> System.identityHashCode(proxy);
                                                                        case "equals" -> proxy == args[0];
@@ -533,9 +534,17 @@ class ShardPumpDeliveryFailureTest {
         }
 
         @Override
-        public long parkDeadlineMillis() {
-            // A short park, so the throwing case passes several times a second as a real owner with a retry due would
-            return 20L;
+        public long nextAttentionNanos() {
+            // Due now, as needsAttention always says: the pump's schedule mirrors it. A failing pass is paced by the pump's
+            // retry schedule, not by this
+            return System.nanoTime();
+        }
+
+        private final ShardWakeup wakeup = new ShardWakeup();
+
+        @Override
+        public ShardWakeup wakeup() {
+            return wakeup;
         }
 
         @Override
@@ -620,8 +629,8 @@ class ShardPumpDeliveryFailureTest {
         }
 
         @Override
-        public long parkDeadlineMillis() {
-            return FAR_DEADLINE_MILLIS;
+        public long nextAttentionNanos() {
+            return System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(FAR_DEADLINE_MILLIS);
         }
     }
 

@@ -153,11 +153,9 @@ class CdcEventStoreAdaptiveLiveSourceTest {
         // Subscribe while availability is still INACTIVE (NOT calling active() first).
         var received = subscribe(fx);
 
-        // CDC finishes warming up and becomes ACTIVE for the first time. Give the cut-over debounce
-        // time to fire (the warm-up ACTIVE transition is debounced like a recovery so polling can
-        // drain to head before switching to the non-replaying bus).
+        // CDC finishes warming up and becomes ACTIVE for the first time
         fx.availability.active("slot");
-        Thread.sleep(debounce.toMillis() + 200);
+        Thread.sleep(200);
 
         // Events published to the bus after the cut-over must now reach the subscriber.
         fx.bus.publish(List.of(event(1), event(2), event(3)));
@@ -166,6 +164,58 @@ class CdcEventStoreAdaptiveLiveSourceTest {
         assertThat(globalOrders(received)).containsExactly(1L, 2L, 3L);
         // Starting on polling before CDC was ever active is warm-up, and the cut-over is not a fallback either
         assertThat(fx.availability.getFallbackCount()).isZero();
+    }
+
+    @Test
+    void warmup_cut_over_to_the_cdc_bus_is_not_debounced() throws Exception {
+        // The debounce guards a recovery against an oscillating pipeline. The first activation after boot is no
+        // recovery: debounced, every subscription started during boot polled for the whole window (60 s by default),
+        // which in the trading demo held the order flow at polling speed for its first ~40 s
+        var fx = fixture(Duration.ofSeconds(30));
+
+        var pollingSink = Sinks.many().unicast().<PersistedEvent>onBackpressureBuffer();
+        stubPollingSource(fx, pollingSink.asFlux());
+
+        var received = subscribe(fx);
+
+        fx.availability.active("slot");
+        Thread.sleep(200);
+        fx.bus.publish(List.of(event(1), event(2)));
+
+        // Well within the 30 s debounce
+        await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 2);
+        assertThat(globalOrders(received)).containsExactly(1L, 2L);
+    }
+
+    @Test
+    void recovery_after_an_interruption_is_still_debounced() throws Exception {
+        // Subscribed during warm-up, cut over at once, then CDC is interrupted: its recovery waits the debounce out
+        Duration debounce = Duration.ofSeconds(30);
+        var fx = fixture(debounce);
+
+        // Subscribed twice - during warm-up and after the interruption - so multicast, kept alive when warm-up cancels
+        var pollingSink = Sinks.many().multicast().<PersistedEvent>onBackpressureBuffer(16, false);
+        stubPollingSource(fx, pollingSink.asFlux());
+
+        var received = subscribe(fx);
+
+        fx.availability.active("slot");
+        Thread.sleep(200);
+        fx.bus.publish(List.of(event(1)));
+        await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 1);
+
+        fx.availability.failed("slot", "stall");
+        pollingSink.tryEmitNext(event(2));
+        await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 2);
+
+        // Recovered, but still within the debounce: polling stays the live source, the bus is not attached
+        fx.availability.active("slot");
+        Thread.sleep(500);
+        fx.bus.publish(List.of(event(99)));
+        pollingSink.tryEmitNext(event(3));
+        await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 3);
+        Thread.sleep(300);
+        assertThat(globalOrders(received)).containsExactly(1L, 2L, 3L);
     }
 
     @Test

@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: settlement.fills
+kind: view
+bc: settlement
+owner: settlement-team
+status: live
+summary: "Which account, instrument and side each execution belongs to."
+generator: essentials
+language: java
+
+serves: [GetFill]
+endpoints: []
+reads:
+  - { name: Fill }
+projections:
+  - name: SettlementFillsProjection
+    from: [OrderFilled]
+    consistency: eventual
+    store: postgresql
+forbidden:
+  - cross-slice-internal:settlement
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/settlement/SettlementIT.java" }
+  contract: { present: false }

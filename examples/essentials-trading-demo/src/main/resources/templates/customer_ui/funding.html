@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head th:replace="~{customer_ui/layout :: head('Funding')}"></head>
+<body th:attr="data-account-id=${accountId}">
+<header th:replace="~{customer_ui/layout :: header}"></header>
+<main>
+    <div th:replace="~{customer_ui/layout :: messages}"></div>
+    <section class="card">
+        <h1>Funding</h1>
+        <div class="figures">
+            <div><span class="label">Settled cash</span><span class="figure" id="settled-cash">–</span></div>
+            <div><span class="label">Uncleared deposits</span><span class="figure" id="uncleared">–</span></div>
+            <div><span class="label">Withdrawable</span><span class="figure" id="withdrawable">–</span></div>
+        </div>
+    </section>
+    <div class="split three">
+        <section class="card">
+            <h2>Bank account</h2>
+            <p class="muted small" id="bank-known">Deposits are collected from, and withdrawals paid to, the linked bank account.</p>
+            <form id="bank-account" class="form-grid">
+                <label>IBAN <input name="iban" required autocomplete="off" placeholder="DK50 0040 0440 1162 43"></label>
+                <label>Account holder <input name="holderName" required autocomplete="name"></label>
+                <button type="submit">Link bank account</button>
+            </form>
+        </section>
+        <section class="card">
+            <h2>Deposit</h2>
+            <p class="muted small">Collected from the linked bank account. Buying power at once; withdrawable once it clears.</p>
+            <form id="deposit" class="form-grid">
+                <label>Amount <input name="amount" type="number" min="0.01" step="0.01" required></label>
+                <button type="submit">Deposit</button>
+            </form>
+        </section>
+        <section class="card">
+            <h2>Withdraw</h2>
+            <p class="muted small">Paid to the linked bank account, up to what is withdrawable.</p>
+            <form id="withdraw" class="form-grid">
+                <label>Amount <input name="amount" type="number" min="0.01" step="0.01" required></label>
+                <button type="submit">Withdraw</button>
+            </form>
+        </section>
+    </div>
+    <section class="card">
+        <h2>Payments</h2>
+        <div class="table-wrap">
+            <table>
+                <thead><tr>
+                    <th>Requested</th><th>Kind</th><th>Reference</th><th class="num">Amount</th><th>Status</th><th>Value date</th><th>Bank account</th><th>Reason</th>
+                </tr></thead>
+                <tbody id="payments"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
+            </table>
+        </div>
+    </section>
+</main>
+<script type="module" th:src="@{/customer_ui/funding.js}"></script>
+</body>
+</html>

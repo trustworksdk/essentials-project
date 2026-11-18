@@ -5,7 +5,7 @@
 > as-of-writing and several are now false; its section numbering is the order the work happened in,
 > not a structure.
 >
-> **For how the engine actually works, read [`docs/durable-queue-shard-owned.md`](../durable-queue-shard-owned.md).**
+> **For how the engine actually works, read [`docs/design/durable-queue-shard-owned.md`](../design/durable-queue-shard-owned.md).**
 >
 > This file is kept because `§4.3`-style references in source comments point into it, and because the
 > defect log and the retractions are the reasoning behind several non-obvious invariants.

@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: reconciliation.clearinghouse
+kind: external_system
+bc: reconciliation
+owner: reconciliation-team
+status: live
+summary: "Receives the clearinghouse's end-of-day statements of the firm's trades."
+generator: essentials
+language: java
+
+reactsTo: [ClearingStatementIssued]
+sends: []
+endpoints:
+  # The exchange's signed webhook (subscription demo-clearing); its event log is read as well
+  - { method: POST, path: "/webhooks/exchange/clearing-statements", auth: service }
+invariants:
+  - id: INV-CH-1
+    text: "A statement is stored once, as the clearinghouse issued it; breaks are worked out when read, never at intake"
+    enforcedBy: ClearingStatements
+forbidden:
+  - cross-slice-internal:reconciliation
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/ClearingReconciliationIT.java" }
+  contract: { present: false }

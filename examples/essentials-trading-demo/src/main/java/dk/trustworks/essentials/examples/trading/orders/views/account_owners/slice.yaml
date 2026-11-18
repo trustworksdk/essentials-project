@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: orders.account_owners
+kind: view
+bc: orders
+owner: orders-team
+status: live
+summary: "Who owns which account, as order entry needs it to refuse somebody else's account."
+generator: essentials
+language: java
+
+serves: [MayTradeOn]
+endpoints: []
+projections:
+  - name: AccountOwnersProjection
+    from: [AccountOpened]
+    consistency: eventual
+    store: postgresql
+invariants:
+  - id: INV-OAO-1
+    text: "Somebody else's account answers 404 at order entry"
+    enforcedBy: AccountOwnersQuery
+forbidden:
+  - cross-slice-internal:orders
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
+  contract: { present: false }

@@ -11,7 +11,7 @@ Why this exists
 `--fix-manifests` never writes a human-owned field, so a project whose manifests predate schema 1.4
 never gains `flow:` or `scenarios:` and the Slice Atlas falls back to one derived journey per command.
 `/essentials:slice-enrich` lets a model draft those fields — but only from evidence, and a person
-writes each one by accepting it (docs/slice-enrich-design.md, references/slice/manifest-reconciliation.md
+writes each one by accepting it (docs/design/slice-enrich-design.md, references/slice/manifest-reconciliation.md
 §1). This script is the mechanical half: it finds every candidate and its evidence, and it writes what
 was accepted. The model writes prose; it never edits a slice.yaml.
 
@@ -28,7 +28,7 @@ Usage
     slice-enrich.py verify  ROOT PATH=SHA256 ...
 
     propose   every absent field a manifest could gain, with the evidence for it (contract P1,
-              docs/slice-enrich-design.md §5.2). FILE is `slice-source.py ROOT --json` on the same ROOT:
+              docs/design/slice-enrich-design.md §5.2). FILE is `slice-source.py ROOT --json` on the same ROOT:
               `-` for standard input, or a process substitution, so no file need be written. What
               slice-source left unparsed is named on stderr, since evidence in it was not seen.
               --bc keeps that context's slices (journeys are computed over the whole project);

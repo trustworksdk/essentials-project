@@ -13,6 +13,8 @@ serves: [ListInstruments, GetInstrumentDetails]
 endpoints:
   - { method: GET, path: /api/admin/instruments, auth: anonymous }
   - { method: GET, path: "/api/admin/instruments/{instrumentId}", auth: anonymous }
+  - { method: GET, path: /api/market-data/instruments, auth: anonymous }
+  - { method: GET, path: "/api/market-data/instruments/{instrumentId}", auth: anonymous }
 reads:
   - { name: InstrumentDetails }
 projections:

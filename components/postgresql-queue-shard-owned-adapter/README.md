@@ -8,7 +8,7 @@ Presents the [shard-owned queue engine](../postgresql-queue-shard-owned/README.m
 
 **LLM Context:** [LLM-postgresql-queue-shard-owned.md](../../LLM/LLM-postgresql-queue-shard-owned.md)
 **Engine README:** [postgresql-queue-shard-owned](../postgresql-queue-shard-owned/README.md)
-**Design & internals:** [docs/durable-queue-shard-owned.md](../../docs/durable-queue-shard-owned.md)
+**Design & internals:** [docs/design/durable-queue-shard-owned.md](../../docs/design/durable-queue-shard-owned.md)
 
 ## Table of Contents
 - [Overview](#overview)
@@ -328,9 +328,12 @@ Everything else is served, including the three that used to throw and should not
 `int` carries `FORMAT_VERSION`, so a future format is distinguishable per row — it is the only field
 outside the envelope, hence the only one readable before deciding how to parse.
 
-Payload and metadata are nested JSON **strings**, which is why they appear escaped in the
-`*_readable` views. Metadata travels as its own envelope field rather than merged into the payload; a
-payload with its own `metaData` property would otherwise collide.
+Format 2, written since 0.61.0, embeds payload and metadata as JSON:
+`{"payloadType":"<class name>","payload":{...},"metaData":{...}}`. Format 1, written by 0.60.x, held
+them as JSON **strings**, so they appear escaped in the `*_readable` views for rows written then. Rows in
+format 1 — queued or dead-lettered — are still read, and a resurrected dead letter keeps its format.
+Metadata travels as its own envelope field rather than merged into the payload; a payload with its own
+`metaData` property would otherwise collide.
 
 ## Reading Queue Counts Correctly
 
@@ -376,7 +379,7 @@ visible, so a later `order` for that key which is *not* delayed is delivered fir
 Everything else about ordering now matches, including a key never advancing past a dead letter. This
 one is left as it is deliberately, because fixing it means the owner holding not-yet-due rows in
 memory and widening the read on the delivery path; the reasoning and what would reopen it are in
-[docs/durable-queue-shard-owned.md](../../docs/durable-queue-shard-owned.md) §18.3.
+[docs/design/durable-queue-shard-owned.md](../../docs/design/durable-queue-shard-owned.md) §18.3.
 
 **What to do:** keep an ordering key's messages either all delayed or all not, with the same delay. If
 you need one message held back and the rest to wait for it, enqueue it undelayed and let the handler

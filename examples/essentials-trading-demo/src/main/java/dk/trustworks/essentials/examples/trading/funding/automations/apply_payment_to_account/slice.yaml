@@ -1,0 +1,23 @@
+schemaVersion: "1.1"
+slice: funding.apply_payment_to_account
+kind: automation
+bc: funding
+owner: funding-team
+status: live
+summary: "Books every deposit and withdrawal outcome on the trading account with the ledger's own command."
+generator: essentials
+language: java
+
+reactsTo: [DepositCompleted, DepositReturnedByBank, WithdrawalCompleted, WithdrawalFailed, WithdrawalReturnedByBank]
+sends: [CreditDeposit, ReturnDeposit, WithdrawCash, ReleaseHold, CreditWithdrawalReturn]
+endpoints: []
+invariants:
+  - id: INV-APA-1
+    text: "A redelivered outcome books nothing twice (the ledger's per-reference idempotency)"
+    enforcedBy: Account
+forbidden:
+  - cross-slice-internal:funding
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/FundingIT.java" }
+  contract: { present: false }

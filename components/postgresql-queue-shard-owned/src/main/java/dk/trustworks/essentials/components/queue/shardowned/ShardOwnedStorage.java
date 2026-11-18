@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import org.postgresql.PGStatement;
+
 import javax.sql.DataSource;
 import java.sql.*;
 import java.time.*;
@@ -23,6 +25,7 @@ import java.util.*;
 
 import static dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 
 /**
  * The storage seam of the shard-owned engine — every statement the design's hot path issues, and
@@ -115,6 +118,28 @@ public final class ShardOwnedStorage {
         }
     }
 
+    /**
+     * A statement PostgreSQL plans afresh on every execution, from the parameters and the table as it is now - for the
+     * shard-scoped reads and acknowledgements a pump or owner repeats on its one long-lived connection.
+     * <p>
+     * pgjdbc server-prepares a statement from its fifth use on a connection, and PostgreSQL then switches to a generic
+     * plan if that costs no more than the custom ones it has made. A queue table vacuumed or analyzed while drained has
+     * statistics saying it is empty ({@code relpages = 0, reltuples = 0}), which the planner trusts; the generic plan
+     * made then is a sequential scan plus sort per shard, and it stays cached until the next analyze. When a burst
+     * follows, a multi-shard read scans the whole table once per shard: 70 ms against 0.4 ms for 32 units of 1 000 rows
+     * (the custom plan uses the {@code seq} index, planned in 0.08 ms). In the trading demo autovacuum drained-vacuumed
+     * the ordered table just before the order flow in about half the runs, and one pump's queues then crawled at ~50
+     * messages/s until auto-analyze 30-40 s later - so the flow ran at one of two speeds. Never server-prepared, each
+     * execution is planned with the parameters and the table's current size. {@code ShardOwnedOrderedReadPlanIT}.
+     */
+    private static PreparedStatement prepareFreshlyPlanned(Connection connection, String sql) throws SQLException {
+        var statement = connection.prepareStatement(sql);
+        if (statement.isWrapperFor(PGStatement.class)) {
+            statement.unwrap(PGStatement.class).setPrepareThreshold(0);
+        }
+        return statement;
+    }
+
     @FunctionalInterface
     private interface SqlCall<T> {
         T call() throws SQLException;
@@ -123,6 +148,60 @@ public final class ShardOwnedStorage {
     /**
      * The queue every statement on this handle binds.
      */
+    private volatile String queueLabel;
+
+    /**
+     * The queue's name for a log line - {@code 'Inbox:Orders:ExchangeReports' (id 30)} - read from the registry the first
+     * time it is asked for and kept. The id alone ("Queue 30") told an operator nothing about where to look. Falls back
+     * to the id when the registry cannot be read; never throws, since it is only ever called to log.
+     */
+    public String queueLabel() {
+        var label = queueLabel;
+        if (label != null) {
+            return label;
+        }
+        try (var connection = open();
+             var statement = connection.prepareStatement("SELECT queue_name FROM " + REGISTRY_TABLE + " WHERE queue_id = ?")) {
+            statement.setShort(1, queueId);
+            try (var resultSet = statement.executeQuery()) {
+                label = resultSet.next() ? "'" + resultSet.getString(1) + "' (id " + queueId + ")" : "id " + queueId;
+            }
+        } catch (SQLException | RuntimeException e) {
+            return "id " + queueId;
+        }
+        queueLabel = label;
+        return label;
+    }
+
+    /**
+     * Read one dead letter by the id its message had in its lane - the same id {@link #findMessage} answers for a live
+     * message, and that a dead letter keeps when it is parked.
+     */
+    public Optional<DeadLetter> findDeadLetter(int shard, long seq, boolean ordered) throws SQLException {
+        try (var connection = open();
+             var statement = connection.prepareStatement(
+                     "SELECT source_lane, msg_key, seq, payload, attempts, last_error, shard, payload_type,"
+                             + " blocked_by_key_order, COALESCE(key_order, 0) FROM " + DLQ_TABLE
+                             + " WHERE queue_id = ? AND shard = ? AND seq = ? AND source_lane = ?")) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            statement.setLong(3, seq);
+            statement.setString(4, ordered ? "ordered" : "unordered");
+            try (var resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return Optional.empty();
+                }
+                // wasNull() answers for the most recent get: read blocked_by_key_order first (see deadLetters)
+                var blockedBy         = resultSet.getLong(9);
+                var blockedByKeyOrder = resultSet.wasNull() ? null : blockedBy;
+                return Optional.of(new DeadLetter(resultSet.getString(1), resultSet.getString(2), resultSet.getInt(7),
+                                                  resultSet.getLong(3), resultSet.getBytes(4), resultSet.getInt(5),
+                                                  resultSet.getString(6), resultSet.getInt(8),
+                                                  blockedByKeyOrder, resultSet.getLong(10)));
+            }
+        }
+    }
+
     public short queueId() {
         return queueId;
     }
@@ -160,10 +239,18 @@ public final class ShardOwnedStorage {
      * @return the allocated sequence values, ascending
      */
     public List<Long> enqueueRows(Connection connection, int shard, List<PayloadRow> rows) throws SQLException {
-        return inTransaction(connection, () -> enqueueBatchInternal(connection, shard, rows));
+        return enqueueRows(connection, shard, rows, true);
     }
 
-    private List<Long> enqueueBatchInternal(Connection connection, int shard, List<PayloadRow> rows) throws SQLException {
+    /**
+     * @param notify whether to issue the shard's wake-up notification inside the transaction. {@code false} leaves
+     *               waking the owner to the caller, after commit - see {@code PostgresqlMessageQueue#wakeUp}
+     */
+    public List<Long> enqueueRows(Connection connection, int shard, List<PayloadRow> rows, boolean notify) throws SQLException {
+        return inTransaction(connection, () -> enqueueBatchInternal(connection, shard, rows, notify));
+    }
+
+    private List<Long> enqueueBatchInternal(Connection connection, int shard, List<PayloadRow> rows, boolean notify) throws SQLException {
         // visible_at is now() plus the requested delay, computed by the SERVER. A client timestamp
         // here would make delayed delivery depend on the enqueueing node's clock, which is the one
         // thing the rest of this engine is careful never to do.
@@ -192,7 +279,9 @@ public final class ShardOwnedStorage {
         // In the same transaction as the inserts: delivered at commit, discarded on rollback. One
         // hint per batch per shard rather than one per message — coalescing is what keeps the
         // notification queue from becoming the bottleneck it is famous for being.
-        ShardWakeupListener.notifyShard(connection, queueId, "unordered", shard);
+        if (notify) {
+            ShardWakeupListener.notifyShard(connection, queueId, "unordered", shard);
+        }
         return seqs;
     }
 
@@ -285,7 +374,7 @@ public final class ShardOwnedStorage {
                 + " AND (lease IS NULL OR lease <> ?)"
                 + notRowLeasedClause()
                 + " ORDER BY seq LIMIT " + limit;
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setLong(3, cursor);
@@ -316,7 +405,7 @@ public final class ShardOwnedStorage {
         // obvious shape and would reintroduce exactly the skew this engine avoids everywhere else:
         // a node whose clock runs five seconds behind the database would wait five seconds too long
         // for every delayed message. An interval is clock-free by construction.
-        try (var statement = connection.prepareStatement(
+        try (var statement = prepareFreshlyPlanned(connection,
                 "SELECT EXTRACT(EPOCH FROM (min(visible_at) - now())) * 1000 FROM " + table
                         + " WHERE queue_id = ? AND shard = ? AND visible_at > now()")) {
             statement.setShort(1, queueId);
@@ -345,7 +434,7 @@ public final class ShardOwnedStorage {
         var sql = "SELECT seq, payload, payload_type FROM " + UNORDERED_TABLE
                 + " WHERE queue_id = ? AND shard = ? AND seq = ANY(?) AND visible_at <= now()"
                 + notRowLeasedClause();
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setArray(3, connection.createArrayOf("bigint", seqs.toArray(Long[]::new)));
@@ -375,7 +464,7 @@ public final class ShardOwnedStorage {
                 + notRowLeasedClause()
                 + " AND (lease IS NULL OR lease <> ? OR enqueued_at <= now() - make_interval(secs => ? / 1000.0))"
                 + " ORDER BY seq LIMIT " + limit;
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setLong(3, ownFence);
@@ -405,13 +494,15 @@ public final class ShardOwnedStorage {
      * A new owner starts its cursor just below the shard's first readable row instead of at 0, and a message whose
      * sequence value was allocated before that point but committed after it is delivered by the head sweep. The
      * range delete must not reach down to it before it is delivered, so the owner bounds the range at that point and
-     * acknowledges anything at or below it by exact sequence value.
+     * acknowledges anything at or below it by exact sequence value. The same holds above that point for a late commit
+     * whose hole expired, so {@link ShardOwner} passes the seq just below the first one it acknowledges in the range,
+     * never lower: every value in the range is then one it handled.
      */
     public int acknowledge(Connection connection, int shard, long rangeAbove, long contiguousThrough, Collection<Long> stragglers,
                            String owner, long fence) throws SQLException {
         var deleted = 0;
         if (contiguousThrough > rangeAbove) {
-            try (var statement = connection.prepareStatement(
+            try (var statement = prepareFreshlyPlanned(connection,
                     "DELETE FROM " + UNORDERED_TABLE + " u WHERE u.queue_id = ? AND u.shard = ? AND u.seq <= ? AND u.seq > ?"
                             // A row a session holds is not the owner's to delete. Without this the range
                             // delete would remove it once its hole expired — undelivered, and while a
@@ -434,7 +525,7 @@ public final class ShardOwnedStorage {
             }
         }
         if (!stragglers.isEmpty()) {
-            try (var statement = connection.prepareStatement(
+            try (var statement = prepareFreshlyPlanned(connection,
                     "DELETE FROM " + UNORDERED_TABLE + " u WHERE u.queue_id = ? AND u.shard = ? AND u.seq = ANY(?)"
                             + stillOwnedClause())) {
                 statement.setShort(1, queueId);
@@ -1348,6 +1439,26 @@ public final class ShardOwnedStorage {
         }
     }
 
+    /**
+     * How many instances that are no longer live (their membership row is older than {@code ttlMillis}, or gone) still
+     * own a unit of this queue, either lane. Such an owner either crashed, or stopped while a handler was still running
+     * and kept the unit until that handler returns - the database cannot tell the two apart, so a caller that must know
+     * nothing may still be handling a message counts both. {@link #ownedShardsPerLane(long)} leaves them out.
+     */
+    public int countDepartedOwnersHoldingUnits(long ttlMillis) throws SQLException {
+        try (var connection = open();
+             var statement = connection.prepareStatement(
+                     "SELECT count(DISTINCT l.owner) FROM " + LEASE_TABLE + " l"
+                             + " WHERE l.owner IS NOT NULL AND" + ownerIsGoneClause() + " AND l.queue_id = ?")) {
+            statement.setLong(1, ttlMillis);
+            statement.setShort(2, queueId);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
+            }
+        }
+    }
+
     public long countRemaining(int shard) throws SQLException {
         try (var connection = open();
              var statement = connection.prepareStatement(
@@ -1362,32 +1473,33 @@ public final class ShardOwnedStorage {
     }
 
     /**
-     * How many messages one unordered shard holds, and when the oldest of them that is ready for delivery
-     * became ready - in one statement, so {@link PostgresqlMessageQueue#depth()} costs no more round trips
-     * than counting alone. A row a live pull session holds is out for delivery, not ready; see
-     * {@link dk.trustworks.essentials.components.queue.shardowned.spi.QueueDepth#oldestReadyAt()} for what
+     * How many messages this queue's unordered lane holds, and when the oldest of them that is ready for delivery
+     * became ready - in one statement for every shard. A row a live pull session holds is out for delivery, not
+     * ready; see {@link dk.trustworks.essentials.components.queue.shardowned.spi.QueueDepth#oldestReadyAt()} for what
      * "ready" cannot exclude.
+     * <p>
+     * Not one statement per shard. Shards only ever grow, so the
+     * queue-wide count is exactly the sum the per-shard loop added up - at one statement per lane instead of one per
+     * shard, which for the ordered lane's 64 units was the difference between 3 and 69 statements per depth read.
      */
-    public ShardDepth depthOf(int shard) throws SQLException {
-        return shardDepth("SELECT count(*), min(visible_at) FILTER (WHERE visible_at <= now()" + notRowLeasedClause() + ")"
-                                  + " FROM " + UNORDERED_TABLE + " WHERE queue_id = ? AND shard = ?", shard);
+    public ShardDepth unorderedDepth() throws SQLException {
+        return queueDepth("SELECT count(*), min(visible_at) FILTER (WHERE visible_at <= now()" + notRowLeasedClause() + ")"
+                                  + " FROM " + UNORDERED_TABLE + " WHERE queue_id = ?");
     }
 
     /**
-     * {@link #depthOf(int)} for one unit of the ordered lane. The ordered lane has no pull sessions, so
-     * every visible row counts as ready - including one waiting behind its key's head while the head is
-     * being handled.
+     * {@link #unorderedDepth()} for the ordered lane. The ordered lane has no pull sessions, so every visible row
+     * counts as ready - including one waiting behind its key's head while the head is being handled.
      */
-    public ShardDepth orderedDepthOf(int unit) throws SQLException {
-        return shardDepth("SELECT count(*), min(visible_at) FILTER (WHERE visible_at <= now())"
-                                  + " FROM " + ORDERED_TABLE + " WHERE queue_id = ? AND shard = ?", unit);
+    public ShardDepth orderedDepth() throws SQLException {
+        return queueDepth("SELECT count(*), min(visible_at) FILTER (WHERE visible_at <= now())"
+                                  + " FROM " + ORDERED_TABLE + " WHERE queue_id = ?");
     }
 
-    private ShardDepth shardDepth(String sql, int shard) throws SQLException {
+    private ShardDepth queueDepth(String sql) throws SQLException {
         try (var connection = open();
              var statement = connection.prepareStatement(sql)) {
             statement.setShort(1, queueId);
-            statement.setInt(2, shard);
             try (var resultSet = statement.executeQuery()) {
                 resultSet.next();
                 var oldestReady = resultSet.getTimestamp(2);
@@ -1397,7 +1509,7 @@ public final class ShardOwnedStorage {
     }
 
     /**
-     * @param count         messages in the shard
+     * @param count         messages in the lane
      * @param oldestReadyAt when the oldest ready one became ready, or {@code null} when none is ready
      */
     public record ShardDepth(long count, Instant oldestReadyAt) {
@@ -1442,10 +1554,18 @@ public final class ShardOwnedStorage {
      * an identity, and returning it as one produced ids that no by-id operation could resolve.
      */
     public List<Long> enqueueOrderedBatch(Connection connection, int shard, List<OrderedPayload> messages) throws SQLException {
-        return inTransaction(connection, () -> enqueueOrderedBatchInternal(connection, shard, messages));
+        return enqueueOrderedBatch(connection, shard, messages, true);
     }
 
-    private List<Long> enqueueOrderedBatchInternal(Connection connection, int shard, List<OrderedPayload> messages) throws SQLException {
+    /**
+     * @param notify whether to issue the shard's wake-up notification inside the transaction. {@code false} leaves
+     *               waking the owner to the caller, after commit - see {@code PostgresqlMessageQueue#wakeUp}
+     */
+    public List<Long> enqueueOrderedBatch(Connection connection, int shard, List<OrderedPayload> messages, boolean notify) throws SQLException {
+        return inTransaction(connection, () -> enqueueOrderedBatchInternal(connection, shard, messages, notify));
+    }
+
+    private List<Long> enqueueOrderedBatchInternal(Connection connection, int shard, List<OrderedPayload> messages, boolean notify) throws SQLException {
         assignTransactionIdBeforeAllocating(connection);
         var sql = "INSERT INTO " + ORDERED_TABLE
                 + " (queue_id, shard, msg_key, key_order, seq, payload, payload_type, visible_at)"
@@ -1471,8 +1591,92 @@ public final class ShardOwnedStorage {
             }
         }
         Collections.sort(seqs);
-        ShardWakeupListener.notifyShard(connection, queueId, "ordered", shard);
+        if (notify) {
+            ShardWakeupListener.notifyShard(connection, queueId, "ordered", shard);
+        }
         return seqs;
+    }
+
+    /**
+     * {@link #enqueueOrderedBatch(Connection, int, List, boolean)}, but a message whose {@code (msg_key, key_order)} is
+     * already queued in the shard is not inserted and not refused: the ordered lane's primary key would otherwise fail the
+     * whole batch. For a producer whose key and order identify the message - an event processor's reader re-forwarding the
+     * events since its last resume point after an unclean failover - enqueuing it again while it is queued is a no-op.
+     * <p>
+     * A skipped message still uses up a sequence value ({@code nextval} runs before the conflict is found). The ordered
+     * lane's watermark does not care about holes; the unordered lane, whose holes are chased, is never written this way.
+     *
+     * @return per message, in the order given (not sorted): the sequence value inserted, the sequence value of the row
+     * already queued under its key and order, or {@code 0} - which addresses nothing - when that row was delivered and
+     * acknowledged between the insert and the lookup
+     */
+    public List<Long> enqueueOrderedBatchIfAbsent(Connection connection, int shard, List<OrderedPayload> messages, boolean notify) throws SQLException {
+        return inTransaction(connection, () -> enqueueOrderedBatchIfAbsentInternal(connection, shard, messages, notify));
+    }
+
+    private List<Long> enqueueOrderedBatchIfAbsentInternal(Connection connection, int shard, List<OrderedPayload> messages, boolean notify) throws SQLException {
+        assignTransactionIdBeforeAllocating(connection);
+        var sql = "INSERT INTO " + ORDERED_TABLE
+                + " (queue_id, shard, msg_key, key_order, seq, payload, payload_type, visible_at)"
+                + " VALUES (?, ?, ?, ?, nextval(?::regclass), ?, ?, now() + make_interval(secs => ? / 1000.0))"
+                + " ON CONFLICT (queue_id, shard, msg_key, key_order) DO NOTHING";
+        var inserted = new HashMap<OrderedKey, Long>();
+        try (var statement = connection.prepareStatement(sql, new String[]{"seq", "msg_key", "key_order"})) {
+            for (var message : messages) {
+                statement.setShort(1, queueId);
+                statement.setInt(2, shard);
+                statement.setString(3, message.key());
+                statement.setLong(4, message.keyOrder());
+                statement.setString(5, ShardOwnedSchema.orderedSequenceName(queueId));
+                statement.setBytes(6, message.payload());
+                statement.setInt(7, message.payloadType());
+                statement.setLong(8, message.delayMillis());
+                statement.addBatch();
+            }
+            statement.executeBatch();
+            try (var keys = statement.getGeneratedKeys()) {
+                while (keys.next()) {
+                    inserted.put(new OrderedKey(keys.getString(2), keys.getLong(3)), keys.getLong(1));
+                }
+            }
+        }
+        var alreadyQueued = inserted.size() == messages.size()
+                            ? Map.<OrderedKey, Long>of()
+                            : queuedSeqs(connection, shard, messages.stream()
+                                                                    .map(message -> new OrderedKey(message.key(), message.keyOrder()))
+                                                                    .filter(key -> !inserted.containsKey(key))
+                                                                    .toList());
+        var seqs = new ArrayList<Long>(messages.size());
+        for (var message : messages) {
+            var key = new OrderedKey(message.key(), message.keyOrder());
+            seqs.add(inserted.getOrDefault(key, alreadyQueued.getOrDefault(key, 0L)));
+        }
+        if (notify) {
+            ShardWakeupListener.notifyShard(connection, queueId, "ordered", shard);
+        }
+        return seqs;
+    }
+
+    private Map<OrderedKey, Long> queuedSeqs(Connection connection, int shard, List<OrderedKey> keys) throws SQLException {
+        var sql = "SELECT o.msg_key, o.key_order, o.seq FROM " + ORDERED_TABLE + " o"
+                + " JOIN unnest(?::text[], ?::bigint[]) AS k(msg_key, key_order) ON o.msg_key = k.msg_key AND o.key_order = k.key_order"
+                + " WHERE o.queue_id = ? AND o.shard = ?";
+        var seqs = new HashMap<OrderedKey, Long>();
+        try (var statement = connection.prepareStatement(sql)) {
+            statement.setArray(1, connection.createArrayOf("text", keys.stream().map(OrderedKey::key).toArray()));
+            statement.setArray(2, connection.createArrayOf("bigint", keys.stream().map(OrderedKey::keyOrder).toArray()));
+            statement.setShort(3, queueId);
+            statement.setInt(4, shard);
+            try (var resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    seqs.put(new OrderedKey(resultSet.getString(1), resultSet.getLong(2)), resultSet.getLong(3));
+                }
+            }
+        }
+        return seqs;
+    }
+
+    private record OrderedKey(String key, long keyOrder) {
     }
 
     /**
@@ -1488,7 +1692,7 @@ public final class ShardOwnedStorage {
         var sql = "SELECT seq, msg_key, key_order, payload, payload_type FROM " + ORDERED_TABLE
                 + " WHERE queue_id = ? AND shard = ? AND seq > ? AND visible_at <= now()"
                 + " ORDER BY seq LIMIT " + limit;
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setLong(3, cursor);
@@ -1511,7 +1715,7 @@ public final class ShardOwnedStorage {
      * transaction holding an assigned xid sits at or above it and appears in neither the in-progress
      * list nor below {@code xmax} — a single running writer reads as {@code 55486:55486:}, an
      * apparently empty snapshot. Deciding safety from {@code pg_current_snapshot()} alone therefore
-     * steps over live writers. See {@code docs/durable-queue-ordered-routing-design.md} §3.
+     * steps over live writers. See {@code docs/design/durable-queue-ordered-routing-design.md} §3.
      * <p>
      * Read <em>after</em> the value it protects, never before: a transaction that allocates a
      * sequence value after this returns is not in the set, and must not be treated as retired.
@@ -1575,7 +1779,7 @@ public final class ShardOwnedStorage {
                 + "          WHERE o.queue_id = ? AND o.shard = cur.shard::smallint AND o.seq > cur.cursor"
                 + "            AND o.visible_at <= now()"
                 + "          ORDER BY o.seq LIMIT " + perShardLimit + ") x";
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setArray(1, connection.createArrayOf("int", boxed(shards)));
             statement.setArray(2, connection.createArrayOf("bigint", boxed(cursors)));
             statement.setShort(3, forQueueId);
@@ -1598,7 +1802,7 @@ public final class ShardOwnedStorage {
                 + "          FROM " + ORDERED_TABLE + " o"
                 + "          WHERE o.queue_id = ? AND o.shard = s.shard::smallint AND o.visible_at <= now()"
                 + "          ORDER BY o.seq LIMIT " + perShardLimit + ") x";
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setArray(1, connection.createArrayOf("int", boxed(shards)));
             statement.setShort(2, forQueueId);
             return readOrderedRowsByShard(statement);
@@ -1617,7 +1821,7 @@ public final class ShardOwnedStorage {
         if (shards.length == 0) {
             return Map.of();
         }
-        try (var statement = connection.prepareStatement(
+        try (var statement = prepareFreshlyPlanned(connection,
                 "SELECT shard, EXTRACT(EPOCH FROM (min(visible_at) - now())) * 1000 FROM " + table
                         + " WHERE queue_id = ? AND shard = ANY(?) AND visible_at > now() GROUP BY shard")) {
             statement.setShort(1, forQueueId);
@@ -1663,10 +1867,116 @@ public final class ShardOwnedStorage {
         return boxed;
     }
 
+    /**
+     * What a head sweep found: the rows, and how long until this unit's next delayed row becomes visible.
+     *
+     * @param rows                   visible rows from the head, in {@code seq} order
+     * @param millisUntilNextVisible empty when nothing is delayed
+     */
+    public record OrderedSweep(List<OrderedRow> rows, OptionalLong millisUntilNextVisible) {
+    }
+
+    /**
+     * {@link #sweepOrderedFromHead} and {@link #millisUntilNextVisible(Connection, String, int)} in ONE statement: every
+     * sweep asked both, as two round trips. Each half of the {@code UNION ALL} is exactly the statement it replaces, so
+     * each keeps its own plan; the interval comes back as one extra row whose {@code seq} is NULL (the aggregate always
+     * returns a row, its value NULL when nothing is delayed). Still computed by the SERVER - see
+     * {@link #millisUntilNextVisible(Connection, String, int)}.
+     */
+    public OrderedSweep sweepOrderedFromHeadWithNextVisible(Connection connection, int shard, int limit) throws SQLException {
+        var sql = "(SELECT seq, msg_key, key_order, payload, payload_type, NULL::float8 AS until_ms FROM " + ORDERED_TABLE
+                + "  WHERE queue_id = ? AND shard = ? AND visible_at <= now() ORDER BY seq LIMIT " + limit + ")"
+                + " UNION ALL"
+                + " (SELECT NULL, NULL, NULL, NULL, NULL, (EXTRACT(EPOCH FROM (min(visible_at) - now())) * 1000)::float8"
+                + "  FROM " + ORDERED_TABLE + " WHERE queue_id = ? AND shard = ? AND visible_at > now())";
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            statement.setShort(3, queueId);
+            statement.setInt(4, shard);
+            try (var resultSet = statement.executeQuery()) {
+                var rows      = new ArrayList<OrderedRow>();
+                var untilNext = OptionalLong.empty();
+                while (resultSet.next()) {
+                    var seq = resultSet.getLong(1);
+                    if (resultSet.wasNull()) {
+                        var millis = resultSet.getDouble(6);
+                        if (!resultSet.wasNull()) {
+                            untilNext = OptionalLong.of(Math.max(0L, (long) millis));
+                        }
+                        continue;
+                    }
+                    rows.add(new OrderedRow(seq, resultSet.getString(2), resultSet.getLong(3),
+                                            resultSet.getBytes(4), resultSet.getInt(5)));
+                }
+                return new OrderedSweep(rows, untilNext);
+            }
+        }
+    }
+
+    /**
+     * What a batched head sweep found, by unit.
+     *
+     * @param rows                   rows by unit; a unit with none is absent
+     * @param millisUntilNextVisible by unit; a unit with nothing delayed is absent
+     */
+    public record BatchedOrderedSweep(Map<Integer, List<OrderedRow>> rows, Map<Integer, Long> millisUntilNextVisible) {
+        public static final BatchedOrderedSweep NONE = new BatchedOrderedSweep(Map.of(), Map.of());
+    }
+
+    /**
+     * {@link #sweepOrderedFromHeads} and {@link #millisUntilNextVisibleByShard} in ONE statement, for the same reason and
+     * in the same way as {@link #sweepOrderedFromHeadWithNextVisible}: each half of the {@code UNION ALL} is the
+     * statement it replaces (the {@code LATERAL} half keeps its structural nested loop), and an interval row is told
+     * apart by its NULL {@code seq}. The queue id is a PARAMETER - see {@link #readOrderedFromCursors}.
+     */
+    public BatchedOrderedSweep sweepOrderedFromHeadsWithNextVisible(Connection connection, short forQueueId,
+                                                                    int[] shards, int perShardLimit) throws SQLException {
+        if (shards.length == 0) {
+            return BatchedOrderedSweep.NONE;
+        }
+        var sql = "SELECT x.shard, x.seq, x.msg_key, x.key_order, x.payload, x.payload_type, NULL::float8 AS until_ms"
+                + " FROM unnest(?::int[]) AS s(shard),"
+                + " LATERAL (SELECT o.shard, o.seq, o.msg_key, o.key_order, o.payload, o.payload_type"
+                + "          FROM " + ORDERED_TABLE + " o"
+                + "          WHERE o.queue_id = ? AND o.shard = s.shard::smallint AND o.visible_at <= now()"
+                + "          ORDER BY o.seq LIMIT " + perShardLimit + ") x"
+                + " UNION ALL"
+                + " SELECT shard, NULL, NULL, NULL, NULL, NULL, (EXTRACT(EPOCH FROM (min(visible_at) - now())) * 1000)::float8"
+                + " FROM " + ORDERED_TABLE
+                + " WHERE queue_id = ? AND shard = ANY(?) AND visible_at > now() GROUP BY shard";
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
+            var shardArray = connection.createArrayOf("int", boxed(shards));
+            statement.setArray(1, shardArray);
+            statement.setShort(2, forQueueId);
+            statement.setShort(3, forQueueId);
+            statement.setArray(4, shardArray);
+            try (var resultSet = statement.executeQuery()) {
+                var rows      = new HashMap<Integer, List<OrderedRow>>();
+                var untilNext = new HashMap<Integer, Long>();
+                while (resultSet.next()) {
+                    var shard = resultSet.getInt(1);
+                    var seq   = resultSet.getLong(2);
+                    if (resultSet.wasNull()) {
+                        var millis = resultSet.getDouble(7);
+                        if (!resultSet.wasNull()) {
+                            untilNext.put(shard, Math.max(0L, (long) millis));
+                        }
+                        continue;
+                    }
+                    rows.computeIfAbsent(shard, ignored -> new ArrayList<>())
+                        .add(new OrderedRow(seq, resultSet.getString(3), resultSet.getLong(4),
+                                            resultSet.getBytes(5), resultSet.getInt(6)));
+                }
+                return new BatchedOrderedSweep(rows, untilNext);
+            }
+        }
+    }
+
     public List<OrderedRow> sweepOrderedFromHead(Connection connection, int shard, int limit) throws SQLException {
         var sql = "SELECT seq, msg_key, key_order, payload, payload_type FROM " + ORDERED_TABLE
                 + " WHERE queue_id = ? AND shard = ? AND visible_at <= now() ORDER BY seq LIMIT " + limit;
-        try (var statement = connection.prepareStatement(sql)) {
+        try (var statement = prepareFreshlyPlanned(connection, sql)) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             return readOrderedRows(statement);
@@ -1689,7 +1999,7 @@ public final class ShardOwnedStorage {
         }
         // Fenced, exactly as the unordered lane is. Its absence here was the gap: the lane whose
         // purpose is ordering was the one lane a superseded owner could still delete from.
-        try (var statement = connection.prepareStatement(
+        try (var statement = prepareFreshlyPlanned(connection,
                 "DELETE FROM " + ORDERED_TABLE + " o WHERE o.queue_id = ? AND o.shard = ? AND o.seq = ANY(?)"
                         + " AND EXISTS (SELECT 1 FROM " + LEASE_TABLE + " l"
                         + " WHERE l.queue_id = o.queue_id AND l.lane = 'ordered' AND l.shard = o.shard"
@@ -1921,10 +2231,19 @@ public final class ShardOwnedStorage {
      * there, which happens once per event on the producing thread.
      */
     public boolean hasOrderedMessagesForKey(int shard, String key) throws SQLException {
-        try (var connection = open();
-             var statement = connection.prepareStatement(
-                     "SELECT 1 FROM " + ORDERED_TABLE
-                             + " WHERE queue_id = ? AND shard = ? AND msg_key = ? LIMIT 1")) {
+        try (var connection = open()) {
+            return hasOrderedMessagesForKey(connection, shard, key);
+        }
+    }
+
+    /**
+     * As {@link #hasOrderedMessagesForKey(int, String)}, on the caller's connection - the one its transaction holds, so
+     * asking from inside that transaction does not take a second connection from the pool while the first sits idle.
+     */
+    public boolean hasOrderedMessagesForKey(Connection connection, int shard, String key) throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "SELECT 1 FROM " + ORDERED_TABLE
+                        + " WHERE queue_id = ? AND shard = ? AND msg_key = ? LIMIT 1")) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             statement.setString(3, key);
@@ -1932,6 +2251,36 @@ public final class ShardOwnedStorage {
                 return resultSet.next();
             }
         }
+    }
+
+    /**
+     * Which of the keys already have anything waiting on the ordered lane, in one statement on the caller's connection:
+     * the prefix seek of {@link #hasOrderedMessagesForKey(Connection, int, String)}, once per {@code (shard, key)} pair,
+     * under {@code EXISTS}.
+     *
+     * @param shards the ordered unit of each key, index for index
+     * @param keys   the keys
+     */
+    public Set<String> keysWithOrderedMessages(Connection connection, int[] shards, String[] keys) throws SQLException {
+        requireTrue(shards.length == keys.length, "shards and keys must pair up");
+        var queued = new HashSet<String>();
+        if (keys.length == 0) {
+            return queued;
+        }
+        try (var statement = connection.prepareStatement(
+                "SELECT k.msg_key FROM unnest(?::int[], ?::text[]) AS k(shard, msg_key)"
+                        + " WHERE EXISTS (SELECT 1 FROM " + ORDERED_TABLE + " o"
+                        + "               WHERE o.queue_id = ? AND o.shard = k.shard AND o.msg_key = k.msg_key)")) {
+            statement.setArray(1, connection.createArrayOf("int4", Arrays.stream(shards).boxed().toArray()));
+            statement.setArray(2, connection.createArrayOf("text", keys));
+            statement.setShort(3, queueId);
+            try (var resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    queued.add(resultSet.getString(1));
+                }
+            }
+        }
+        return queued;
     }
 
     public long countOrderedRemaining(int shard) throws SQLException {

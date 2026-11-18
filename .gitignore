@@ -29,6 +29,9 @@ __pycache__/
 
 /.m2/
 
+# Trading demo: the Finnhub API key (template: finnhub.env.example)
+examples/essentials-trading-demo/simulators/secrets/finnhub.env
+
 # Claude
 /.claude/worktrees/
 CLAUDE.local.md

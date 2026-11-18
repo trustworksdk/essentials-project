@@ -152,16 +152,19 @@ public final class PgOutputToPersistedEventConverter {
             throw new IllegalStateException("event_type was blank");
         }
 
+        // The payload and metadata are passed on as the column text, exactly as the polling path reads them. Nothing
+        // persists this text, so there is nothing to normalise; parsing and re-serializing it cost every event a
+        // full JSON round trip, and made the two delivery paths hand out differently formatted text
         var event = new EventJSON(
                 jsonSerializer,
                 EventType.of(eventTypeValue),
-                canonicalJson(requiredObject(values, "event_payload"))
+                requiredText(values, "event_payload")
         );
 
         var meta = new EventMetaDataJSON(
                 jsonSerializer,
                 EventMetaData.class.getName(),
-                canonicalJson(optionalObject(values, "event_metadata").orElse("{}"))
+                optionalText(values, "event_metadata").orElse("{}")
         );
 
         Optional<EventId> causedBy = optionalText(values, "caused_by_event_id")
@@ -190,26 +193,6 @@ public final class PgOutputToPersistedEventConverter {
                 correlationId,
                 tenant
         );
-    }
-
-    /**
-     * Normalises a WAL column value into the JSON string that gets persisted as the event payload/metadata.
-     * <p>
-     * A {@code String} column already holds JSON text, so it is parsed and re-serialized to normalise formatting.
-     * The round-trip goes through untyped binding, which is why {@code EssentialsObjectMappers} enables
-     * {@code USE_BIG_DECIMAL_FOR_FLOATS} on both majors: without it a JSON float would bind to {@code Double} and
-     * {@code 1.10} would come back out as {@code 1.1}, silently rewriting persisted payloads.
-     */
-    private String canonicalJson(Object raw) {
-        try {
-            if (raw == null) return "null";
-            var value = (raw instanceof String stringValue)
-                        ? jsonSerializer.deserialize(stringValue, Object.class)
-                        : raw;
-            return jsonSerializer.serialize(value);
-        } catch (Exception e) {
-            throw new JSONSerializationException("Failed to canonicalize JSON", e);
-        }
     }
 
     private static OffsetDateTime parsePostgresTimestamp(String value) {

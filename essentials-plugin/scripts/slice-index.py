@@ -38,7 +38,7 @@ Usage
 
     map     the slice-map data contract (commands/slice-map.md §6) as JSON on stdout
     html    the same data substituted into the slice-map page, written to --out
-    atlas   the Slice Atlas page (docs/slice-atlas-design.md): the map plus a diff against a baseline
+    atlas   the Slice Atlas page (docs/design/slice-atlas-design.md): the map plus a diff against a baseline
             (--before-ref builds it from `git archive REF`, --before-map reads an earlier `map` JSON)
             and the layout, inlined into references/slice/atlas/atlas.html and its lens-*.js; prints
             one summary line. The computation is scripts/slice_atlas.py and slice_atlas_layout.py.
@@ -52,7 +52,7 @@ Usage
             application is a build root (pom.xml, build.gradle, build.gradle.kts) owning at least one
             manifest; a manifest belongs to the nearest build root above it, or to ROOT when there is
             none. Id: the build root's directory name, its relative path with '/' as '-' on a clash
-            (docs/slice-enrich-design.md §4.1); `slices` counts its manifests. `map ROOT` without
+            (docs/design/slice-enrich-design.md §4.1); `slices` counts its manifests. `map ROOT` without
             --per-app still maps the whole ROOT as one map; `map --per-app DIR` writes DIR/<id>.json
             per application, the baselines --before-map-dir reads. With --source-facts / --source-check
             (one slice-source run at ROOT), each application takes the rows under its root, re-rooted

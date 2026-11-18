@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: orders.record_expiry
+kind: command
+bc: orders
+owner: orders-team
+status: live
+summary: "Record the exchange's expiry of what was left of a DAY order at the end of its business day."
+generator: essentials
+language: java
+
+handles: [RecordExpiry]
+emits: [OrderExpired, OrderClosed]
+writes:
+  - { name: Order }
+endpoints: []
+invariants:
+  - id: INV-RE-1
+    text: "An expiry of an order that already closed adds nothing"
+    enforcedBy: Order
+forbidden:
+  - cross-slice-internal:orders
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/aggregates/OrderTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/orders/OrdersIT.java" }
+  contract: { present: false }

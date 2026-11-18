@@ -89,6 +89,13 @@ class ShardOwnedDeadPumpHandBackIT {
     static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource dataSource;
+    /**
+     * The clock the queues of a test time {@code stuckHandlerTimeout} by ({@link TestNanoClock}): a test moves a key past the
+     * bound with {@link TestNanoClock#advance} instead of sleeping through it.
+     * {@link #an_ordered_unit_on_a_dead_pump_is_handed_back_once_its_key_has_been_in_its_handler_past_the_stuck_handler_timeout}
+     * keeps the default clock and waits for its bound, so the wiring to real time stays covered.
+     */
+    private final TestNanoClock clock = new TestNanoClock();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -254,7 +261,8 @@ class ShardOwnedDeadPumpHandBackIT {
         var attemptsOnRedelivery = new CompletableFuture<Integer>();
         var logged    = captureQueueLog();
         try (var runtime = new ShardRuntime(dataSource, settings)) {
-            var queue = queue(runtime, "dead-pump-stuck");
+            // On its default clock: this test waits for its bound in real time, which covers the wiring to real time.
+            var queue = queueOnRealTime(runtime, QUEUE_ID, "dead-pump-stuck");
             try {
                 queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                     if (!"HOLD".equals(key)) {
@@ -356,11 +364,11 @@ class ShardOwnedDeadPumpHandBackIT {
                 var fenceBefore = fenceOf("ordered", unit);
                 // The stuck key past the bound before the young key enters its handler, and the pump killed at once after:
                 // the first hand-back after the death finds the one past the bound and the other in its handler for well under it.
-                Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
+                clock.advance(stuckHandlerTimeout.plusMillis(500));
                 youngKey.complete(OrderedUnitKeys.keyInUnit("YOUNG-", unit, ShardOwnedSchema.ORDERED_UNITS, "HOLD"));
                 queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(youngKey.get(), 0, "YOUNG-0".getBytes(StandardCharsets.UTF_8), 1)));
                 assertThat(youngEntered.await(20, TimeUnit.SECONDS)).as("premise: the young key is in its handler, in the same unit").isTrue();
-                var youngEnteredAtNanos = System.nanoTime();
+                var youngEnteredAtNanos = clock.getAsLong();
 
                 kill(doomed);
 
@@ -375,7 +383,7 @@ class ShardOwnedDeadPumpHandBackIT {
                                                              .contains("1 message(s) in a handler longer than stuckHandlerTimeout were charged an attempt",
                                                                        "1 dead-lettered at their attempt limit [HOLD]");
                 });
-                assertThat(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos)).as("premise: the young key was still under the bound at the hand-back")
+                assertThat(clock.since(youngEnteredAtNanos)).as("premise: the young key was still under the bound at the hand-back")
                                                                                    .isLessThan(stuckHandlerTimeout);
                 assertThat(release.getCount()).as("premise: both handlers are still held").isEqualTo(1);
                 assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("only the message in a handler past the bound was charged").isEqualTo(1);
@@ -440,11 +448,11 @@ class ShardOwnedDeadPumpHandBackIT {
                 var doomed      = runtime.pumpFor(QUEUE_ID, "ordered", unit);
                 var fenceBefore = fenceOf("ordered", unit);
                 // The stuck key past the bound before the young key enters its handler, as in the test above.
-                Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
+                clock.advance(stuckHandlerTimeout.plusMillis(500));
                 youngKey.complete(OrderedUnitKeys.keyInUnit("YOUNG-", unit, ShardOwnedSchema.ORDERED_UNITS, "HOLD"));
                 queue.enqueueOrdered(List.of(new ShardOwnedStorage.OrderedPayload(youngKey.get(), 0, "YOUNG-0".getBytes(StandardCharsets.UTF_8), 1)));
                 assertThat(youngEntered.await(20, TimeUnit.SECONDS)).as("premise: the young key is in its handler, in the same unit").isTrue();
-                var youngEnteredAtNanos = System.nanoTime();
+                var youngEnteredAtNanos = clock.getAsLong();
 
                 failLeaseReleases("ordered", true);
                 try {
@@ -452,13 +460,15 @@ class ShardOwnedDeadPumpHandBackIT {
 
                     // Each refusal follows a charge that went through: the trigger refuses the lease row's release, not the charge.
                     awaitReleasesRefused(QUEUE_ID, List.of(unit), "while the young key is under the bound");
-                    assertThat(Duration.ofNanos(System.nanoTime() - youngEnteredAtNanos)).as("premise: the young key was still under the bound at those hand-backs")
+                    assertThat(clock.since(youngEnteredAtNanos)).as("premise: the young key was still under the bound at those hand-backs")
                                                                                        .isLessThan(stuckHandlerTimeout);
                     assertThat(queue.metrics().takeoverAttemptBumps.sum()).as("the stuck key's message charged once, not on every retry, the young one's not yet")
                                                                          .isEqualTo(1);
                     assertThat(attemptsOf(seqByKey.get("HOLD"))).as("the stuck key's stored attempts").isEqualTo(1);
                     assertThat(attemptsOf(seqByKey.get(youngKey.get()))).as("the young key's stored attempts").isZero();
 
+                    // The young key past the bound too, by the queue's clock (TestNanoClock) rather than by waiting it out.
+                    clock.advance(stuckHandlerTimeout);
                     Awaitility.await("the young key's message charged by a retry once past the bound").atMost(Duration.ofSeconds(20))
                               .until(() -> queue.metrics().takeoverAttemptBumps.sum() >= 2);
                     assertThat(fenceOf("ordered", unit)).as("premise: still held, every release refused").isEqualTo(fenceBefore);
@@ -526,7 +536,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 assertThat(idleUnits).as("premise: the dead pump serves other units too").isNotEmpty();
                 // Past the bound before the pump dies, so the first hand-back after the death finds the held unit stuck and
                 // the idle units ready together.
-                Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
+                clock.advance(stuckHandlerTimeout.plusMillis(500));
 
                 failOrderedAttemptCharges(true);
                 try {
@@ -590,7 +600,7 @@ class ShardOwnedDeadPumpHandBackIT {
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                        .setInstanceId("dead-pump-observer").setRuntime(runtime)
-                                       .setMetrics(new ShardOwnerMetrics(observer)).build();
+                                       .setMetrics(new ShardOwnerMetrics(observer)).build().useNanoTime(clock);
             try {
                 queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                     if ("HOLD".equals(key) && heldUnit.complete(messageId.shard())) {
@@ -604,7 +614,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 var doomed      = runtime.pumpFor(QUEUE_ID, "ordered", unit);
                 var fenceBefore = fenceOf("ordered", unit);
                 // Past the bound before the pump dies, so the first hand-back after the death charges the message.
-                Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
+                clock.advance(stuckHandlerTimeout.plusMillis(500));
 
                 kill(doomed);
 
@@ -689,7 +699,7 @@ class ShardOwnedDeadPumpHandBackIT {
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                        .setInstanceId("dead-pump-owed-move").setRuntime(runtime)
-                                       .setMetrics(new ShardOwnerMetrics(observer)).build();
+                                       .setMetrics(new ShardOwnerMetrics(observer)).build().useNanoTime(clock);
             try {
                 queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                     if (!"HOLD".equals(key)) {
@@ -714,7 +724,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 var doomed      = runtime.pumpFor(QUEUE_ID, "ordered", unit);
                 var fenceBefore = fenceOf("ordered", unit);
                 // Past the bound before the pump dies, so the first hand-back after the death charges the message.
-                Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
+                clock.advance(stuckHandlerTimeout.plusMillis(500));
 
                 failDeadLetterMoves(true);
                 try {
@@ -837,7 +847,7 @@ class ShardOwnedDeadPumpHandBackIT {
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                        .setInstanceId("dead-pump-owed-move-u").setRuntime(runtime)
-                                       .setMetrics(new ShardOwnerMetrics(observer)).build();
+                                       .setMetrics(new ShardOwnerMetrics(observer)).build().useNanoTime(clock);
             try {
                 queue.startConsuming((messageId, payload, payloadType) -> {
                     if (deliveries.incrementAndGet() == 1) {
@@ -857,7 +867,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 int shard       = heldShard.get();
                 var doomed      = runtime.pumpFor(QUEUE_ID, "unordered", shard);
                 var fenceBefore = fenceOf("unordered", shard);
-                Thread.sleep(stuckHandlerTimeout.toMillis() + 300);
+                clock.advance(stuckHandlerTimeout.plusMillis(300));
 
                 failDeadLetterMoves(true);
                 try {
@@ -977,7 +987,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 assertThat(reached.await(20, TimeUnit.SECONDS)).as("premise: every message reached its handler").isTrue();
                 assertThat(hungSeq).as("premise: a message of the first shard shed hangs").isDone();
                 var fenceBefore = fenceOf("unordered", hungShard);
-                Thread.sleep(stuckHandlerTimeout.toMillis() + 300);
+                clock.advance(stuckHandlerTimeout.plusMillis(300));
 
                 failDeadLetterMoves(true);
                 try {
@@ -1084,7 +1094,7 @@ class ShardOwnedDeadPumpHandBackIT {
         try (var runtime = new ShardRuntime(dataSource, settings)) {
             var queue = ShardOwnedQueue.builder().setDataSource(movesDataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT)
                                        .setInstanceId(instanceId).setRuntime(runtime)
-                                       .setMetrics(new ShardOwnerMetrics(observer)).build();
+                                       .setMetrics(new ShardOwnerMetrics(observer)).build().useNanoTime(clock);
             try {
                 Runnable holdTheFirst = () -> {
                     entered.countDown();
@@ -1116,7 +1126,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 var doomed      = runtime.pumpFor(QUEUE_ID, lane, unit);
                 var fenceBefore = fenceOf(lane, unit);
                 var chargeFailure = "could not charge the messages in a handler of " + ("ordered".equals(lane) ? "ordered unit" : "unordered shard");
-                Thread.sleep(stuckHandlerTimeout.toMillis() + 500);
+                clock.advance(stuckHandlerTimeout.plusMillis(500));
 
                 failDeadLetterMoves(true);
                 try {
@@ -1230,7 +1240,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 assertThat(entered.await(20, TimeUnit.SECONDS)).as("premise: the message is in its handler").isTrue();
                 var shard       = heldShard.get();
                 var fenceBefore = fenceOf("unordered", shard);
-                Thread.sleep(stuckHandlerTimeout.toMillis() + 300);
+                clock.advance(stuckHandlerTimeout.plusMillis(300));
 
                 kill(runtime.pumpFor(QUEUE_ID, "unordered", shard));
 
@@ -1291,7 +1301,7 @@ class ShardOwnedDeadPumpHandBackIT {
                 assertThat(idleShards).as("premise: the dead pump serves other shards too").isNotEmpty();
                 // Past the bound before the pump dies, so the first hand-back after the death finds the message stuck and the
                 // idle shards ready together.
-                Thread.sleep(stuckHandlerTimeout.toMillis() + 300);
+                clock.advance(stuckHandlerTimeout.plusMillis(300));
 
                 failUnorderedAttemptCharges(true);
                 try {
@@ -2645,7 +2655,17 @@ class ShardOwnedDeadPumpHandBackIT {
         return queue(runtime, QUEUE_ID, instanceId);
     }
 
+    /**
+     * A queue timing {@code stuckHandlerTimeout} by the test's {@link #clock}.
+     */
     private ShardOwnedQueue queue(ShardRuntime runtime, short queueId, String instanceId) {
+        return queueOnRealTime(runtime, queueId, instanceId).useNanoTime(clock);
+    }
+
+    /**
+     * A queue timing {@code stuckHandlerTimeout} by its default clock, {@link System#nanoTime()}.
+     */
+    private ShardOwnedQueue queueOnRealTime(ShardRuntime runtime, short queueId, String instanceId) {
         return ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(queueId).setShardCount(SHARD_COUNT)
                               .setInstanceId(instanceId).setRuntime(runtime).build();
     }
@@ -3145,8 +3165,15 @@ class ShardOwnedDeadPumpHandBackIT {
         }
 
         @Override
-        public long parkDeadlineMillis() {
-            return Long.MAX_VALUE;
+        public long nextAttentionNanos() {
+            return System.nanoTime() + TimeUnit.DAYS.toNanos(1);
+        }
+
+        private final ShardWakeup wakeup = new ShardWakeup();
+
+        @Override
+        public ShardWakeup wakeup() {
+            return wakeup;
         }
 
         @Override
@@ -3315,8 +3342,15 @@ class ShardOwnedDeadPumpHandBackIT {
         }
 
         @Override
-        public long parkDeadlineMillis() {
-            return Long.MAX_VALUE;
+        public long nextAttentionNanos() {
+            return System.nanoTime() + TimeUnit.DAYS.toNanos(1);
+        }
+
+        private final ShardWakeup wakeup = new ShardWakeup();
+
+        @Override
+        public ShardWakeup wakeup() {
+            return wakeup;
         }
 
         @Override
@@ -3407,8 +3441,15 @@ class ShardOwnedDeadPumpHandBackIT {
         }
 
         @Override
-        public long parkDeadlineMillis() {
-            return Long.MAX_VALUE;
+        public long nextAttentionNanos() {
+            return System.nanoTime() + TimeUnit.DAYS.toNanos(1);
+        }
+
+        private final ShardWakeup wakeup = new ShardWakeup();
+
+        @Override
+        public ShardWakeup wakeup() {
+            return wakeup;
         }
 
         @Override

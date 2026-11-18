@@ -76,7 +76,7 @@ public final class EventJSON {
     public <T> Optional<T> getJsonDeserialized() {
         if (jsonDeserialized == null && jsonSerializer != null) {
             eventTypeOrName.ifHasEventType(eventJavaType -> {
-                jsonDeserialized = jsonSerializer.deserialize(json, eventJavaType.toJavaClass(jsonSerializer.getClassLoader()));
+                jsonDeserialized = jsonSerializer.deserialize(json, jsonSerializer.resolveClass(eventJavaType.getJavaTypeName()));
             });
         }
         return Optional.ofNullable((T) jsonDeserialized);
@@ -161,15 +161,15 @@ public final class EventJSON {
     /**
      * If {@link #getEventType()} is non-empty then the event's corresponding Java class is returned.
      * If the {@link EventJSON} contains a reference to the associated {@link JSONSerializer} then
-     * {@link EventType#toJavaClass(ClassLoader)} (which is compatible with SpringBoot DevTools) will be used to convert,
-     * otherwise {@link EventType#toJavaClass()} is used
+     * {@link JSONSerializer#resolveClass(String)} is used - its class loader, so compatible with SpringBoot DevTools, and
+     * cached where the serializer caches - otherwise {@link EventType#toJavaClass()} is used
      *
      * @return the optional {@link EventType}'s Java class
      */
     public Optional<Class<?>> getEventTypeAsJavaClass() {
         return getEventType()
                 .map(eventType -> jsonSerializer != null ?
-                                  eventType.toJavaClass(jsonSerializer.getClassLoader()) :
+                                  jsonSerializer.resolveClass(eventType.getJavaTypeName()) :
                                   eventType.toJavaClass());
     }
 

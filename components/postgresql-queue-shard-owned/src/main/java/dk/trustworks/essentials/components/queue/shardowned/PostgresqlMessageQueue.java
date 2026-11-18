@@ -90,6 +90,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * nothing, while the queues ran on a shared one holding three more.
      */
     private final ShardRuntime       runtime;
+    /**
+     * Sends wake-ups when this queue has no {@link #runtime} and borrows none; created on first use. Its thread exits
+     * when idle, so a queue that is never stopped holds nothing for it.
+     */
+    private volatile ShardWakeupNotifier ownNotifier;
+    /**
+     * The clock each subscription's lanes time {@code stuckHandlerTimeout} and their kept units by
+     * ({@code ShardOwnedQueue.useNanoTime}). {@link System#nanoTime()} unless a test set another ({@link #useNanoTime}).
+     */
+    private volatile LongSupplier       nanoTime = System::nanoTime;
 
     /**
      * Added to and removed from only under {@link #lifecycleLock} - removed from by a {@link Subscription#unsubscribe()}
@@ -300,6 +310,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     /**
      * The interned id this queue addresses.
      */
+    /**
+     * Have the lanes of every later {@link #consume} time {@code stuckHandlerTimeout} and the units their stops keep by
+     * {@code nanoTime} instead of {@link System#nanoTime()} ({@code ShardOwnedQueue.useNanoTime}), so a test can move past
+     * those bounds instead of waiting them out. Tests only.
+     */
+    PostgresqlMessageQueue useNanoTime(LongSupplier nanoTime) {
+        this.nanoTime = requireNonNull(nanoTime, "No nanoTime provided");
+        return this;
+    }
+
     public short queueId() {
         return queueId;
     }
@@ -447,7 +467,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         var unorderedByShard = routed.unordered();
         var orderedByShard   = routed.ordered();
 
-        var ids = new MessageId[messages.size()];
+        var ids           = new MessageId[messages.size()];
+        var committedHere = false;
         try (var connection = dataSource.getConnection()) {
             // One connection and one transaction for the whole call, both lanes included. Two
             // connections meant a mixed batch could commit its unordered half and fail its ordered
@@ -458,9 +479,12 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                 connection.setAutoCommit(false);
             }
             try {
-                writeBatch(connection, messages, unorderedByShard, orderedByShard, ids);
+                // Committed here only when the connection came in autocommit mode; then the owners are woken after the
+                // commit (see wakeUp). Otherwise something else commits, and the notification has to ride along
+                writeBatch(connection, messages, unorderedByShard, orderedByShard, ids, !autoCommit, false);
                 if (autoCommit) {
                     connection.commit();
+                    committedHere = true;
                 }
             } catch (SQLException e) {
                 if (autoCommit) {
@@ -472,6 +496,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                     connection.setAutoCommit(true);
                 }
             }
+        }
+        if (committedHere) {
+            wakeUp(Arrays.asList(ids));
         }
         notifyEnqueued(unorderedByShard, orderedByShard);
         return List.of(ids);
@@ -499,10 +526,148 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         return enqueueOnConnection(messages, connection);
     }
 
-    private List<MessageId> enqueueOnConnection(List<Message> messages, Connection connection) throws SQLException {
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Validated as {@link #enqueue(Connection, List)} is, and intercepted the same way: an interceptor sees an
+     * {@code EnqueueMessages} either way.
+     */
+    @Override
+    public List<MessageId> enqueueWithoutWakeup(Connection connection, List<Message> messages) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        requireNonNull(messages, "No messages provided");
+        if (messages.isEmpty()) {
+            return List.of();
+        }
+        requireTrue(!connection.getAutoCommit(),
+                    "The connection is in autocommit mode, so it cannot carry a transaction for the "
+                            + "enqueue to join. Begin a transaction first, or use enqueue(List) instead");
+        if (!interceptors.isEmpty()) {
+            return intercepted(messages, connection, this::enqueueOnConnectionWithoutWakeup);
+        }
+        return enqueueOnConnectionWithoutWakeup(messages, connection);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Validated and intercepted as {@link #enqueue(Connection, List)} is.
+     */
+    @Override
+    public List<MessageId> enqueueIfAbsent(Connection connection, List<Message> messages) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        requireNonNull(messages, "No messages provided");
+        if (messages.isEmpty()) {
+            return List.of();
+        }
+        requireTrue(!connection.getAutoCommit(),
+                    "The connection is in autocommit mode, so it cannot carry a transaction for the "
+                            + "enqueue to join. Begin a transaction first");
+        if (!interceptors.isEmpty()) {
+            return intercepted(messages, connection, this::enqueueOnConnectionIfAbsent);
+        }
+        return enqueueOnConnectionIfAbsent(messages, connection);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Validated and intercepted as {@link #enqueue(Connection, List)} is.
+     */
+    @Override
+    public List<MessageId> enqueueWithoutWakeupIfAbsent(Connection connection, List<Message> messages) throws SQLException {
+        requireNonNull(connection, "No connection provided");
+        requireNonNull(messages, "No messages provided");
+        if (messages.isEmpty()) {
+            return List.of();
+        }
+        requireTrue(!connection.getAutoCommit(),
+                    "The connection is in autocommit mode, so it cannot carry a transaction for the "
+                            + "enqueue to join. Begin a transaction first");
+        if (!interceptors.isEmpty()) {
+            return intercepted(messages, connection, this::enqueueOnConnectionWithoutWakeupIfAbsent);
+        }
+        return enqueueOnConnectionWithoutWakeupIfAbsent(messages, connection);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * A unit an owner of this process serves actively is signalled in memory, through the runtime this queue's
+     * consumers run on (its own, or the one shared per {@code DataSource} if some queue borrows it - never one stood
+     * up for the purpose). Every other unit is notified through that runtime's {@link ShardWakeupNotifier}, or this
+     * queue's own when it has no runtime.
+     */
+    @Override
+    public void wakeUp(Collection<MessageId> enqueued) {
+        requireNonNull(enqueued, "No enqueued ids provided");
+        if (enqueued.isEmpty()) {
+            return;
+        }
+        var runtimeServing = runtime != null ? runtime : ShardRuntime.sharedIfPresent(dataSource);
+        var units          = new HashSet<String>();
+        var elsewhere      = new ArrayList<String>();
+        for (var id : enqueued) {
+            var lane = laneName(id.lane());
+            var key  = ShardWakeupListener.key(queueId, lane, id.shard());
+            if (units.add(key) && (runtimeServing == null || !runtimeServing.wakeIfServedHere(queueId, lane, id.shard()))) {
+                elsewhere.add(key);
+            }
+        }
+        if (!elsewhere.isEmpty()) {
+            notifier(runtimeServing).submit(elsewhere);
+        }
+    }
+
+    private static String laneName(MessageId.Lane lane) {
+        return lane == MessageId.Lane.ORDERED ? "ordered" : "unordered";
+    }
+
+    private ShardWakeupNotifier notifier(ShardRuntime runtimeServing) {
+        if (runtimeServing != null) {
+            return runtimeServing.notifier();
+        }
+        var own = ownNotifier;
+        if (own == null) {
+            synchronized (this) {
+                own = ownNotifier;
+                if (own == null) {
+                    own = new ShardWakeupNotifier(dataSource);
+                    ownNotifier = own;
+                }
+            }
+        }
+        return own;
+    }
+
+    private List<MessageId> enqueueOnConnectionWithoutWakeup(List<Message> messages, Connection connection) throws SQLException {
+        return enqueueOnConnectionWithoutWakeup(messages, connection, false);
+    }
+
+    private List<MessageId> enqueueOnConnectionWithoutWakeupIfAbsent(List<Message> messages, Connection connection) throws SQLException {
+        return enqueueOnConnectionWithoutWakeup(messages, connection, true);
+    }
+
+    private List<MessageId> enqueueOnConnectionWithoutWakeup(List<Message> messages, Connection connection, boolean ifAbsent) throws SQLException {
         var routed = route(messages);
         var ids    = new MessageId[messages.size()];
-        writeBatch(connection, messages, routed.unordered(), routed.ordered(), ids);
+        writeBatch(connection, messages, routed.unordered(), routed.ordered(), ids, false, ifAbsent);
+        notifyEnqueued(routed.unordered(), routed.ordered());
+        return List.of(ids);
+    }
+
+    private List<MessageId> enqueueOnConnection(List<Message> messages, Connection connection) throws SQLException {
+        return enqueueOnConnection(messages, connection, false);
+    }
+
+    private List<MessageId> enqueueOnConnectionIfAbsent(List<Message> messages, Connection connection) throws SQLException {
+        return enqueueOnConnection(messages, connection, true);
+    }
+
+    private List<MessageId> enqueueOnConnection(List<Message> messages, Connection connection, boolean ifAbsent) throws SQLException {
+        var routed = route(messages);
+        var ids    = new MessageId[messages.size()];
+        writeBatch(connection, messages, routed.unordered(), routed.ordered(), ids, true, ifAbsent);
         // Observers are told now rather than on commit: this method does not know when, or whether,
         // the caller commits. An observer counting enqueues on a rolled-back transaction is a
         // documented inaccuracy of the transactional path, not a defect in the engine.
@@ -598,7 +763,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                             List<Message> messages,
                             Map<Integer, List<Integer>> unorderedByShard,
                             Map<Integer, List<Integer>> orderedByShard,
-                            MessageId[] ids) throws SQLException {
+                            MessageId[] ids,
+                            boolean notify,
+                            boolean ifAbsent) throws SQLException {
         for (var entry : unorderedByShard.entrySet()) {
             var positions = entry.getValue();
             var rows = positions.stream()
@@ -607,7 +774,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                                                                  message.payloadType(),
                                                                                  message.delay()))
                                 .toList();
-            var seqs = storage.enqueueRows(connection, entry.getKey(), rows);
+            var seqs = storage.enqueueRows(connection, entry.getKey(), rows, notify);
             assign(ids, positions, seqs, MessageId.Lane.UNORDERED, entry.getKey());
         }
         for (var entry : orderedByShard.entrySet()) {
@@ -620,7 +787,11 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                                                                      message.payloadType(),
                                                                                      message.delay()))
                                 .toList();
-            var seqs = storage.enqueueOrderedBatch(connection, entry.getKey(), rows);
+            // Both return one sequence value per row, in the order given (the plain batch's are ascending, which is also
+            // the order given: nextval runs in batch order)
+            var seqs = ifAbsent
+                       ? storage.enqueueOrderedBatchIfAbsent(connection, entry.getKey(), rows, notify)
+                       : storage.enqueueOrderedBatch(connection, entry.getKey(), rows, notify);
             assign(ids, positions, seqs, MessageId.Lane.ORDERED, entry.getKey());
         }
     }
@@ -711,7 +882,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                                .setMetrics(engineMetrics)
                                                .setParallelConsumers(options.parallelConsumers())
                                                .setRuntime(runtime)
-                                               .build();
+                                               .build()
+                                               .useNanoTime(nanoTime);
         unorderedConsumer.configureUnordered((messageId, payload, payloadType) -> invoke(handler, messageId, null, 0L, payload, payloadType),
                                              settings, options.maxShards(), policy);
         // setShardCount is INERT on this consumer and is passed only because the builder requires a
@@ -730,7 +902,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                              .setMetrics(engineMetrics)
                                              .setParallelConsumers(options.parallelConsumers())
                                              .setRuntime(runtime)
-                                             .build();
+                                             .build()
+                                             .useNanoTime(nanoTime);
         orderedConsumer.configureOrdered(new OrderedPayloadHandler() {
                                             @Override
                                             public void handle(MessageId messageId, String key, byte[] payload, int payloadType) {
@@ -1399,6 +1572,33 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     @Override
+    public boolean hasOrderedMessagesForKey(Connection connection, String key) throws SQLException {
+        requireNonNull(key, "No key provided");
+        if (connection == null) {
+            return hasOrderedMessagesForKey(key);
+        }
+        return storage.hasOrderedMessagesForKey(connection, ShardOwnedSchema.unitForKey(key, orderedUnits()), key);
+    }
+
+    @Override
+    public Set<String> keysWithOrderedMessages(Connection connection, Collection<String> keys) throws SQLException {
+        requireNonNull(keys, "No keys provided");
+        var distinct = new ArrayList<>(new LinkedHashSet<>(keys));
+        var units    = orderedUnits();
+        var shards   = new int[distinct.size()];
+        for (var index = 0; index < shards.length; index++) {
+            shards[index] = ShardOwnedSchema.unitForKey(distinct.get(index), units);
+        }
+        var keyArray = distinct.toArray(String[]::new);
+        if (connection != null) {
+            return storage.keysWithOrderedMessages(connection, shards, keyArray);
+        }
+        try (var own = storage.connection()) {
+            return storage.keysWithOrderedMessages(own, shards, keyArray);
+        }
+    }
+
+    @Override
     public QueueStatistics statistics() {
         // No lock: consumers is copy-on-write, and the lifecycle lock is held across a consume()'s
         // database work, which would hold a metrics scrape up with it.
@@ -1414,22 +1614,13 @@ public final class PostgresqlMessageQueue implements MessageQueue {
 
     @Override
     public QueueDepth depth() throws SQLException {
-        var     unordered   = 0L;
-        Instant oldestReady = null;
-        for (var shard = 0; shard < shardCount; shard++) {
-            var depth = storage.depthOf(shard);
-            unordered += depth.count();
-            oldestReady = earliest(oldestReady, depth.oldestReadyAt());
-        }
-        // Counted against the ordered lane's own, fixed space rather than the unordered shard count.
-        var ordered = 0L;
-        for (var unit = 0; unit < orderedUnits(); unit++) {
-            var depth = storage.orderedDepthOf(unit);
-            ordered += depth.count();
-            oldestReady = earliest(oldestReady, depth.oldestReadyAt());
-        }
+        // One statement per lane, never one per shard or unit: the ordered lane alone has 64 units, and a depth
+        // read is what admin endpoints, health checks and gauges poll.
+        var unordered   = storage.unorderedDepth();
+        var ordered     = storage.orderedDepth();
+        var oldestReady = earliest(unordered.oldestReadyAt(), ordered.oldestReadyAt());
         var deadLetters = storage.deadLetterSummary();
-        return new QueueDepth(unordered, ordered, deadLetters.total(), oldestReady,
+        return new QueueDepth(unordered.count(), ordered.count(), deadLetters.total(), oldestReady,
                               deadLetters.parked(), deadLetters.blockedKeys());
     }
 
@@ -1437,6 +1628,12 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         if (a == null) return b;
         if (b == null) return a;
         return a.isBefore(b) ? a : b;
+    }
+
+    @Override
+    public int departedInstancesHoldingUnits() throws SQLException {
+        // The same staleness bound health() counts live instances by, so the two answers partition the owners
+        return storage.countDepartedOwnersHoldingUnits(Math.max(1_000L, settings.leaseTtlMillis()));
     }
 
     @Override
@@ -1458,6 +1655,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                       .map(stored -> new QueuedMessage(messageId, stored.key(), stored.keyOrder(), stored.payload(),
                                                        stored.payloadType(), stored.attempts(),
                                                        stored.enqueuedAt(), stored.visibleAt()));
+    }
+
+    @Override
+    public Optional<DeadLetter> getDeadLetter(MessageId messageId) throws SQLException {
+        requireNonNull(messageId, "No messageId provided");
+        return storage.findDeadLetter(messageId.shard(), messageId.sequence(), isOrdered(messageId))
+                      .map(row -> new DeadLetter(messageId, row.key(), row.keyOrder(), row.payload(), row.payloadType(),
+                                                 row.attempts(), row.error(), row.blockedByKeyOrder()));
     }
 
     @Override
@@ -1766,6 +1971,11 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     @Override
     public void stop() {
+        // First, whatever the lifecycle holds: a queue that only produces is never started, and its queued wake-ups still go out
+        var own = ownNotifier;
+        if (own != null) {
+            own.flushAndStop(Duration.ofSeconds(2));
+        }
         if (lifecycleLock.isHeldByCurrentThread()) {
             stopFromInsideTheHolder();
             return;

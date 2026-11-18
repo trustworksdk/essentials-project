@@ -66,6 +66,50 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
     EventStore getEventStore();
 
     /**
+     * The {@link FencedLockManager} behind this manager's exclusive subscriptions, if it has one. Processors read its lock
+     * timeout to size retries that must outlast a failover.
+     *
+     * @return the lock manager, or {@link Optional#empty()} (the default) when the implementation does not expose one
+     */
+    default Optional<FencedLockManager> getFencedLockManager() {
+        return Optional.empty();
+    }
+
+    /**
+     * The {@link LockName} an exclusive subscription of the subscriber to the aggregate type holds while it reads - the one
+     * place the name is made, so a caller that must keep the subscription from reading (a partitioned processor's reset)
+     * takes the same lock.
+     *
+     * @param subscriberId  the subscriber
+     * @param aggregateType the aggregate type
+     * @return the lock name
+     */
+    static LockName exclusiveSubscriptionLockName(SubscriberId subscriberId, AggregateType aggregateType) {
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        return LockName.of(dk.trustworks.essentials.shared.MessageFormatter.msg("[{}-{}]", subscriberId, aggregateType));
+    }
+
+    /**
+     * Move the stored resume point of a subscriber that is <b>not running</b> - on this instance or any other - so its next
+     * subscription starts from and including <code>resumeFromAndIncluding</code>; the resume point is created if the
+     * subscriber never had one. For a reset that runs while the processor is stopped cluster-wide, from any instance,
+     * where {@link EventStoreSubscription#resetFrom} needs the running subscription on the instance that holds it.
+     * <p>
+     * The caller guarantees that no instance runs the subscriber (a partitioned processor holds the subscriber's lock
+     * while it calls this); an implementation refuses when a subscription of the pair is active in this manager.
+     *
+     * @param subscriberId           the subscriber
+     * @param aggregateType          the aggregate type
+     * @param resumeFromAndIncluding where the next subscription starts
+     * @throws IllegalStateException         if a subscription of the pair is active in this manager
+     * @throws UnsupportedOperationException (the default) if the implementation cannot move a stored resume point
+     */
+    default void resetStoredResumePoint(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder resumeFromAndIncluding) {
+        throw new UnsupportedOperationException(getClass().getName() + " cannot move a stored resume point");
+    }
+
+    /**
      * Create a builder for the {@link EventStoreSubscriptionManager}
      *
      * @return a builder for the {@link EventStoreSubscriptionManager}
@@ -319,6 +363,39 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
                                                                                Optional<Tenant> onlyIncludeEventsForTenant,
                                                                                FencedLockAwareSubscriber fencedLockAwareSubscriber,
                                                                                PersistedEventHandler eventHandler);
+
+    /**
+     * Create an exclusive asynchronous subscription, as
+     * {@link #exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, Function, Optional, FencedLockAwareSubscriber, PersistedEventHandler)},
+     * that delivers its events in batches: each batch is handled in ONE unit of work, which also advances the resume
+     * point, instead of one unit of work per event. The same fenced lock - one subscriber per <code>subscriberId</code>
+     * across the cluster - so a subscriber can switch between the two without moving its resume point.
+     * <p>
+     * Added after the interface shipped, so it has a default that refuses: an implementation other than
+     * {@link DefaultEventStoreSubscriptionManager} keeps compiling and does not have to offer batching.
+     *
+     * @param subscriberId                                            the unique id for the subscriber
+     * @param forAggregateType                                        the type of aggregate that we're subscribing for {@link PersistedEvent}'s related to
+     * @param onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder If it's the first time the given <code>subscriberId</code> is subscribing then the subscription will be using the returned {@link GlobalEventOrder} as the starting point in the
+     *                                                                EventStream associated with the <code>aggregateType</code>
+     * @param onlyIncludeEventsForTenant                              if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
+     * @param maxBatchSize                                            the maximum number of events in a batch
+     * @param maxLatency                                              the longest a partial batch waits for more events before it is handled
+     * @param fencedLockAwareSubscriber                               Callback interface that will be called when the exclusive/fenced lock is acquired or released
+     * @param eventHandler                                            the handler receiving the batches. Exceptions it throws are handled according to the
+     *                                                                {@link SubscriptionErrorPolicy}, applied to the batch as a whole
+     * @return the subscription handle
+     */
+    default EventStoreSubscription exclusivelyBatchSubscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
+                                                                                            AggregateType forAggregateType,
+                                                                                            Function<AggregateType, GlobalEventOrder> onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
+                                                                                            Optional<Tenant> onlyIncludeEventsForTenant,
+                                                                                            int maxBatchSize,
+                                                                                            Duration maxLatency,
+                                                                                            FencedLockAwareSubscriber fencedLockAwareSubscriber,
+                                                                                            BatchedPersistedEventHandler eventHandler) {
+        throw new UnsupportedOperationException(getClass().getName() + " does not support exclusive batched subscriptions");
+    }
 
     /**
      * Create an exclusive asynchronous subscription that will receive {@link PersistedEvent} after they have been committed to the {@link EventStore}<br>

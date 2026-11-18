@@ -6,7 +6,7 @@ retractions are the useful part — several plausible figures here turned out to
 harness rather than properties of the engine, and the same traps are easy to fall into again.
 
 **Nothing in this file is a current result.** Current numbers, each stamped with the date it was
-measured, are in [`../durable-queue-measurements.md`](../durable-queue-measurements.md). Where an
+measured, are in [`../design/durable-queue-measurements.md`](../design/durable-queue-measurements.md). Where an
 entry below contradicts that document, that document is right.
 
 Entries are in the order they happened.

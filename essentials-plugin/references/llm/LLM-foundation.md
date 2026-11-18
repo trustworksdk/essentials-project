@@ -575,6 +575,33 @@ public interface FencedLock extends AutoCloseable {
 
 **Rule**: `lockConfirmationInterval` should be 2-3x smaller than `lockTimeOut`.
 
+### Spreading async-acquired locks over instances (opt-in)
+
+Off by default. `FencedLockManagerSettings.builder().setSpreadLocks(true)` (or the PostgreSQL/MongoDB manager builders'
+`setSpreadLocks`, Spring Boot `essentials.fenced-lock-manager.spread-locks=true`) makes the locks taken through
+`acquireLockAsync` - every exclusive `EventProcessor`, `Inbox` and consumer - spread over the live instances instead of
+going to whichever instance asks first. Each manager holds a membership lock `__member:<instanceId>`, so live instances
+are read from the lock table, with no schema change. Every instance computes the same preferred owner per lock (rendezvous
+hashing). A free lock is taken by its preferred owner; another instance takes it only once it has seen it free for
+`spreadLocksAcquireGrace` (default 2 x `lockConfirmationInterval`), so no lock is left unserved. Instances do not start
+at once, so a held lock also moves: an instance releases at most one lock per `spreadLocksRebalanceInterval` (default
+2 x `lockConfirmationInterval`, `0` = off) whose preferred owner is another live instance, and that owner takes it on its
+next tick. A lock its preferred owner does not take is taken back and not released again until the membership changes.
+
+Costs - weigh them before enabling it:
+
+- **Every moved lock pauses its consumer** for a few seconds (release, `lockReleased`, the new holder takes it on its next
+  tick and resubscribes), on every membership change - an instance joining, leaving or restarting. A staggered start of
+  three instances moves about two thirds of the locks, one per rebalance interval. With rebalancing off nothing moves, and
+  spreading then only helps when a holder crashes.
+- **A free lock waits up to the grace longer** when its preferred owner does not take it: the consumer behind it idles
+  that long after a failover.
+- **Whole locks only**: one busy consumer is still one instance's work (for that, see `PartitionedEventProcessor`).
+- **Extra reads**: each instance reads the membership rows once per `lockConfirmationInterval`, and a non-preferred
+  instance reads a free lock's row each tick while it waits. The `__member:` rows show in the lock table and admin API.
+- **Instances may disagree on membership for one `lockConfirmationInterval`** after a join or leave. Exclusion is still
+  decided by the fence token; only who takes a free lock is affected.
+
 ### Ownership is per lock-manager instance, not per caller or thread
 
 A `FencedLock` excludes **other lock-manager instances** (other JVMs), never other callers in the same JVM:
@@ -768,13 +795,13 @@ Kafka → KafkaListener → Inbox.addMessageReceived() → UnitOfWork.commit() �
 ```java
 Inbox orderEventsInbox = inboxes.getOrCreateInbox(
     InboxConfig.builder()
-        .setInboxName(InboxName.of("OrderService:KafkaEvents"))
-        .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff()
+        .inboxName(InboxName.of("OrderService:KafkaEvents"))
+        .redeliveryPolicy(RedeliveryPolicy.fixedBackoff()
             .setRedeliveryDelay(Duration.ofMillis(100))
             .setMaximumNumberOfRedeliveries(10)
             .build())
-        .setMessageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
-        .setNumberOfParallelMessageConsumers(5)
+        .messageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
+        .numberOfParallelMessageConsumers(5)
         .build(),
     new PatternMatchingMessageHandler() {
         @MessageHandler
@@ -900,6 +927,14 @@ public class OrderedMessage extends Message {
 
 Messages with same `key` processed in `order` sequence. Different `key`s can be parallel.
 
+**`IdentifiedByKeyAndOrder`** (same package, marker interface, since 0.61): put it on an `OrderedMessage` subclass
+whose key and order identify the message. A `DurableQueues` that keeps ordered messages unique per key and order (the
+shard-owned engine) then leaves one already queued in place instead of refusing it - only when every ordered message of
+the `queueMessage(s)` call carries it, and on shard-owned only after a first refusal (that call fails; its retry, and the
+queue's such calls for 10 minutes, are written "if absent"). `EventProcessor`'s forwarded event references do, so a reader
+re-forwarding after an unclean failover no longer stops. Never put it on a message a reused key/order could describe
+differently: that message would be dropped instead of refused. `PostgresqlDurableQueues` and MongoDB ignore it.
+
 ### Single-Node Ordering
 
 Automatic - no configuration:
@@ -924,10 +959,10 @@ durableQueues.consumeFromQueue(
 ```java
 Inbox inbox = inboxes.getOrCreateInbox(
     InboxConfig.builder()
-        .setInboxName(InboxName.of("OrderEventsInbox"))
-        .setMessageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)  // Required!
-        .setNumberOfParallelMessageConsumers(10)
-        .setRedeliveryPolicy(redeliveryPolicy)
+        .inboxName(InboxName.of("OrderEventsInbox"))
+        .messageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)  // Required!
+        .numberOfParallelMessageConsumers(10)
+        .redeliveryPolicy(redeliveryPolicy)
         .build(),
     messageHandler);
 ```
@@ -1041,7 +1076,7 @@ Optional<EventId> cause = CausationContext.current();     // read
 ## Database Schema Harness
 
 **Package**: `dk.trustworks.essentials.components.foundation.schema` (SPI), PostgreSQL appliers in `.postgresql`.
-Design and rationale: [docs/database-schema-harness.md](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/database-schema-harness.md).
+Design and rationale: [docs/design/database-schema-harness.md](https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/database-schema-harness.md).
 
 Every Essentials component that owns tables *describes* its schema as `SchemaChange`s; an applier decides what
 happens to them. In Spring, `essentials.schema.mode` selects the applier - see
@@ -1142,6 +1177,30 @@ primitive reading as its default, unknown properties ignored, untyped floats as 
 primitives when `types-jackson3` is present. Each `WireFormatDeviation` carries `aspect`, `expected`, `actual`. The
 Spring Boot starters run it on every `Jackson3JSONSerializer`-backed serializer bean (`essentials.json.wire-format-check`,
 [starters](./LLM-spring-boot-starter-modules.md#json-wire-format-check)).
+
+`readProperties(byte[] json, JSONPropertyReader reader)` reads a JSON object's top-level properties one at a time, in
+document order, for a document whose shape depends on one of its own properties - a type name, a version. Read the
+deciding property first, then the rest with what it said; a value the reader does not ask for is skipped. The deciding
+property must come first in the document. `Jackson3JSONSerializer` reads in a single pass; every other implementation
+inherits a default that deserializes each requested value on its own, through that implementation's `deserialize`.
+
+```java
+serializer.readProperties(bytes, (name, value) -> {
+    switch (name) {
+        case "type" -> type = value.asString();
+        case "body" -> body = value.as(type);           // or value.as(Order.class)
+        default -> { }                                  // skipped
+    }
+});
+```
+
+A `JSONPropertyValue` is readable once, and only during its `read` call. A malformed document or a value that does not
+fit the requested type throws `JSONDeserializationException`; an exception thrown by the reader reaches the caller
+unwrapped.
+
+`resolveClass(String javaType)` turns a stored type name into a `Class` the way the by-name `deserialize` methods do,
+with the serializer's class loader (Spring Boot DevTools safe). `Jackson3JSONSerializer` caches the result per class
+loader, so prefer it over `Class.forName` for a name read from storage.
 
 ⚠️ `EssentialsJacksonModules.modules()` (used by `EssentialsObjectMappers`) throws `IllegalStateException` when a
 0.50-era Jackson 2 `types-jackson` / `immutable-jackson` jar is on the classpath (same FQCNs, wrong Jackson major) —

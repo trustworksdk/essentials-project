@@ -1,0 +1,6 @@
+# Test-only overrides, read in addition to src/main/resources/application.yml (Spring Boot loads classpath:/config/
+# after classpath:/ and lets it win). A file named application.yml at the classpath root would hide the main one.
+trading-demo:
+  identity:
+    # No funded demo account (_demo_harness/DemoAccountsSeeder): the tests open the accounts they count.
+    seed-accounts: false

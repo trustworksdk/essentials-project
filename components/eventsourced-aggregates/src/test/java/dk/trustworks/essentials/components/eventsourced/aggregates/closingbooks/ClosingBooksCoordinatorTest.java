@@ -29,6 +29,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -213,6 +214,168 @@ class ClosingBooksCoordinatorTest {
         assertThat(generation.isOpen()).isTrue();
         assertThat(generation.streamAggregateId()).isEqualTo("Account-123#2");
         assertThat(repository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
+    }
+
+    @Test
+    void guarded_close_and_open_next_generation_refuses_a_generation_that_was_rolled_since_it_was_loaded() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var repository         = new InMemoryClosingBooksGenerationResolver<String>();
+        var meterRegistry      = new SimpleMeterRegistry();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline(),
+                                                        Clock.systemUTC(),
+                                                        Optional.of(meterRegistry));
+        var generation1 = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        // Another caller rolls to generation 2 after generation 1's aggregate was loaded.
+        coordinator.closeAndOpenNextGeneration(logicalAggregateId);
+
+        assertThatThrownBy(() -> coordinator.closeAndOpenNextGeneration(generation1))
+                .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class, e -> {
+                    assertThat(e.expectedStreamAggregateId()).isEqualTo("Account-123#1");
+                    assertThat(e.openGeneration()).hasValueSatisfying(open -> assertThat(open.generation()).isEqualTo(2));
+                });
+
+        assertThat(repository.resolveCurrentGeneration(aggregateType, logicalAggregateId))
+                .hasValueSatisfying(open -> assertThat(open.generation()).isEqualTo(2));
+        assertThat(repository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
+        assertThat(meterRegistry.get("essentials.aggregate_closing_books.rollover.outcome")
+                                .tag("outcome", "generation_moved").counter().count()).isEqualTo(1.0);
+        assertThat(meterRegistry.find("essentials.aggregate_closing_books.rollover.outcome").tag("outcome", "failed").counter()).isNull();
+    }
+
+    /**
+     * A real {@code UnitOfWorkFactory.withUnitOfWork} wraps whatever is thrown inside it in a {@code UnitOfWorkException},
+     * and the PostgreSQL generation lock runs in one too. The refusal must still reach the caller as
+     * {@link ClosingBooksGenerationMovedException} and be counted as {@code generation_moved}, not {@code failed}.
+     */
+    @Test
+    void guarded_close_and_open_next_generation_refuses_unwrapped_when_the_unit_of_work_wraps_exceptions() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var unitOfWorkFactory  = InlineUnitOfWorkFactories.wrapping();
+        var repository         = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
+        var meterRegistry      = new SimpleMeterRegistry();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        unitOfWorkFactory,
+                                                        Clock.systemUTC(),
+                                                        Optional.of(meterRegistry));
+        var generation1 = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        coordinator.closeAndOpenNextGeneration(logicalAggregateId);
+
+        assertThatThrownBy(() -> coordinator.closeAndOpenNextGeneration(generation1))
+                .isInstanceOfSatisfying(ClosingBooksGenerationMovedException.class,
+                                        e -> assertThat(e.expectedStreamAggregateId()).isEqualTo("Account-123#1"));
+
+        assertThat(repository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
+        assertThat(meterRegistry.get("essentials.aggregate_closing_books.rollover.outcome")
+                                .tag("outcome", "generation_moved").counter().count()).isEqualTo(1.0);
+        assertThat(meterRegistry.find("essentials.aggregate_closing_books.rollover.outcome").tag("outcome", "failed").counter()).isNull();
+    }
+
+    @Test
+    void guarded_evaluate_policy_refuses_unwrapped_when_the_unit_of_work_wraps_exceptions() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var unitOfWorkFactory  = InlineUnitOfWorkFactories.wrapping();
+        var repository         = InlineUnitOfWorkFactories.<String>generationLockInUnitOfWork(unitOfWorkFactory);
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        unitOfWorkFactory);
+        var generation1 = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        coordinator.closeAndOpenNextGeneration(logicalAggregateId);
+        var policyCalls = new AtomicInteger();
+
+        assertThatThrownBy(() -> coordinator.evaluatePolicy(generation1,
+                                                            "generation-1-aggregate",
+                                                            ClosingBooksTriggerMode.ON_ACCESS,
+                                                            context -> {
+                                                                policyCalls.incrementAndGet();
+                                                                return ClosingBooksDecision.CLOSE_AND_OPEN_NEXT;
+                                                            },
+                                                            context -> coordinator.closeAndOpenNextGeneration(context.logicalAggregateId())))
+                .isInstanceOf(ClosingBooksGenerationMovedException.class);
+
+        assertThat(policyCalls).hasValue(0);
+        assertThat(repository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
+    }
+
+    @Test
+    void guarded_close_and_open_next_generation_rolls_the_generation_it_was_given_while_it_is_open() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var repository         = new InMemoryClosingBooksGenerationResolver<String>();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline());
+        var generation1 = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+
+        var generation2 = coordinator.closeAndOpenNextGeneration(generation1);
+
+        assertThat(generation2.generation()).isEqualTo(2);
+        assertThat(generation2.isOpen()).isTrue();
+    }
+
+    @Test
+    void guarded_evaluate_policy_refuses_an_aggregate_from_a_generation_that_was_rolled_since_it_was_loaded() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var repository         = new InMemoryClosingBooksGenerationResolver<String>();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline());
+        var generation1 = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        // Generation 1's aggregate is loaded, then an on-access rollover moves the logical aggregate to generation 2.
+        coordinator.closeAndOpenNextGeneration(logicalAggregateId);
+        var policyCalls   = new AtomicInteger();
+        var rolloverCalls = new AtomicInteger();
+
+        assertThatThrownBy(() -> coordinator.evaluatePolicy(generation1,
+                                                            "generation-1-aggregate",
+                                                            ClosingBooksTriggerMode.ON_ACCESS,
+                                                            context -> {
+                                                                policyCalls.incrementAndGet();
+                                                                return ClosingBooksDecision.CLOSE_AND_OPEN_NEXT;
+                                                            },
+                                                            context -> {
+                                                                rolloverCalls.incrementAndGet();
+                                                                coordinator.closeAndOpenNextGeneration(context.logicalAggregateId());
+                                                            }))
+                .isInstanceOf(ClosingBooksGenerationMovedException.class);
+
+        assertThat(policyCalls).hasValue(0);
+        assertThat(rolloverCalls).hasValue(0);
+        assertThat(repository.resolveCurrentGeneration(aggregateType, logicalAggregateId))
+                .hasValueSatisfying(open -> assertThat(open.generation()).isEqualTo(2));
+        assertThat(repository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
+    }
+
+    @Test
+    void guarded_evaluate_policy_decides_on_the_generation_it_was_given_while_it_is_open() {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var repository         = new InMemoryClosingBooksGenerationResolver<String>();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline());
+        var generation1 = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+
+        var generation = coordinator.evaluatePolicy(generation1,
+                                                    "generation-1-aggregate",
+                                                    ClosingBooksTriggerMode.ON_ACCESS,
+                                                    ClosingBooksDecisionPolicies.closeAndOpenNext(),
+                                                    context -> coordinator.closeAndOpenNextGeneration(context.logicalAggregateId()));
+
+        assertThat(generation.generation()).isEqualTo(2);
+        assertThat(generation.isOpen()).isTrue();
     }
 
     /**

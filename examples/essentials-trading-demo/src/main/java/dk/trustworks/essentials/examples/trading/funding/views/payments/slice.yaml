@@ -1,0 +1,28 @@
+schemaVersion: "1.1"
+slice: funding.payments
+kind: view
+bc: funding
+owner: funding-team
+status: live
+summary: "An account's deposits and withdrawals, with status and value date."
+generator: essentials
+language: java
+
+serves: [GetPayments, GetPayment]
+endpoints:
+  - { method: GET, path: "/api/accounts/{accountId}/payments", auth: customer }
+  - { method: GET, path: "/api/accounts/{accountId}/payments/{reference}", auth: customer }
+reads:
+  - { name: PaymentView }
+projections:
+  - name: PaymentsProjection
+    from: [DepositRequested, DepositInitiated, DepositCompleted, DepositFailed, DepositReturnedByBank,
+           WithdrawalRequested, WithdrawalInitiated, WithdrawalCompleted, WithdrawalFailed, WithdrawalReturnedByBank]
+    consistency: eventual
+    store: postgresql
+forbidden:
+  - cross-slice-internal:funding
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/funding/FundingIT.java" }
+  contract: { present: false }

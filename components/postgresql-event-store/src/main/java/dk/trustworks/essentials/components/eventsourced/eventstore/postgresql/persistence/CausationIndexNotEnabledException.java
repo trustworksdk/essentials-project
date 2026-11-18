@@ -20,7 +20,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.p
  * Thrown when the events caused by an event are requested but the caused-by-event-id index is not enabled. The lookup
  * refuses rather than scanning every event-stream table; enable the index with
  * {@code essentials.eventstore.causation.index-enabled=true} (or {@code enableCausationIndex()} on the persistence
- * strategy) - see {@code docs/event-causation.md}.
+ * strategy) - see {@code docs/design/event-causation.md}.
  */
 public final class CausationIndexNotEnabledException extends IllegalStateException {
     public CausationIndexNotEnabledException(String message) {

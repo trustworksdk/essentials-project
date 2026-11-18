@@ -1,0 +1,54 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.examples.trading.market_data.views.market_quotes;
+
+import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
+import dk.trustworks.essentials.types.Money;
+
+import java.time.Instant;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
+/**
+ * One instrument's top of book as the exchange's market-data feed last reported it (SR-12/SR-13). {@code mdSequence}
+ * is the feed's per-instrument sequence, monotonic within one {@code epoch}: the exchange numbers each instrument's
+ * messages from 1 every time it starts, so the feed starts a new epoch on every (re)subscription. Quotes are ordered by
+ * epoch, then sequence ({@link #isOlderThan}); an older one never replaces a newer one.
+ */
+public record MarketQuote(InstrumentId instrumentId,
+                          Money bid,
+                          Money ask,
+                          Money last,
+                          long epoch,
+                          long mdSequence,
+                          Instant receivedAt,
+                          boolean stale) {
+    public MarketQuote {
+        requireNonNull(instrumentId, "No instrumentId provided");
+        requireNonNull(bid, "No bid provided");
+        requireNonNull(ask, "No ask provided");
+        requireNonNull(receivedAt, "No receivedAt provided");
+    }
+
+    MarketQuote asStale() {
+        return new MarketQuote(instrumentId, bid, ask, last, epoch, mdSequence, receivedAt, true);
+    }
+
+    boolean isOlderThan(MarketQuote other) {
+        return epoch != other.epoch ? epoch < other.epoch : mdSequence < other.mdSequence;
+    }
+}

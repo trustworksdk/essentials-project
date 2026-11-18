@@ -1,0 +1,25 @@
+# The exchange-simulator and the payment-gateway. Activate together with `compose`:
+#
+#   ./run-instance.sh 1 simulators
+#
+# which starts both next to PostgreSQL - they are behind the `simulators` compose profile, so a run without this
+# Spring profile starts PostgreSQL only. Needs the images exchange-simulator:dev and payment-gateway:dev locally.
+# Exchange: http://localhost:18080   Payment gateway: http://localhost:18081
+spring:
+  docker:
+    compose:
+      # A list, and not merged with other profiles' value: run-instance.sh passes the union when several
+      # compose-backed profiles are active (e.g. `observability,simulators`).
+      profiles:
+        active: simulators
+      start:
+        skip: never
+
+trading-demo:
+  simulators:
+    exchange:
+      base-url: http://localhost:18080
+    payment-gateway:
+      base-url: http://localhost:18081
+    # The same file the simulators sign with (compose.yml mounts it as a Docker secret). Relative to the module.
+    webhook-secret-file: simulators/secrets/webhook-secret.txt

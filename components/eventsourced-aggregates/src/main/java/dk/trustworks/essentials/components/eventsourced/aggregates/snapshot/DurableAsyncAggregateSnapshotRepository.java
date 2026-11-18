@@ -56,6 +56,10 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
 
     private final ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore;
     private final AggregateSnapshotStore                                              snapshotStore;
+    /**
+     * The newest snapshot found when each aggregate was loaded - saves re-querying it on the update that follows
+     */
+    private final LoadedSnapshotOrders loadedSnapshotOrders = new LoadedSnapshotOrders();
     private final AggregateSnapshotJobRepository                                      jobRepository;
     private final AggregateSnapshotStateAdapter                                       snapshotStateAdapter;
     private final AggregateSnapshotMeasurementSupport                                 measurementSupport;
@@ -156,7 +160,8 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
 
     @Override
     public <ID, AGGREGATE_IMPL_TYPE> Optional<AggregateSnapshot<ID, AGGREGATE_IMPL_TYPE>> loadSnapshot(AggregateType aggregateType, ID aggregateId, EventOrder withLastIncludedEventOrderLessThanOrEqualTo, Class<AGGREGATE_IMPL_TYPE> aggregateImplType) {
-        return snapshotStore.loadSnapshot(aggregateType, aggregateId, withLastIncludedEventOrderLessThanOrEqualTo, aggregateImplType);
+        return loadedSnapshotOrders.recordLoaded(aggregateType, aggregateId, withLastIncludedEventOrderLessThanOrEqualTo, aggregateImplType,
+                                                 snapshotStore.loadSnapshot(aggregateType, aggregateId, withLastIncludedEventOrderLessThanOrEqualTo, aggregateImplType));
     }
 
     @Override
@@ -172,7 +177,8 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
         var aggregateType = persistedEvents.aggregateType();
         var aggregateId = persistedEvents.aggregateId();
         var aggregateImplType = (Class<AGGREGATE_IMPL_TYPE>) aggregate.getClass();
-        var latestSnapshotEventOrder = snapshotStore.findMostRecentLastIncludedEventOrder(aggregateType, aggregateId, aggregateImplType);
+        var latestSnapshotEventOrder = loadedSnapshotOrders.newestSnapshotEventOrder(aggregateType, aggregateId, aggregateImplType,
+                                                                                     () -> snapshotStore.findMostRecentLastIncludedEventOrder(aggregateType, aggregateId, aggregateImplType));
         if (!shouldSchedule(aggregate, persistedEvents, aggregateImplType.getName(), latestSnapshotEventOrder)) return;
 
         var config = eventStore.getAggregateEventStreamConfiguration(aggregateType);
@@ -256,16 +262,19 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
 
     @Override
     public <AGGREGATE_IMPL_TYPE> void deleteAllSnapshots(Class<AGGREGATE_IMPL_TYPE> ofAggregateImplementationType) {
+        loadedSnapshotOrders.forgetAll(ofAggregateImplementationType);
         snapshotStore.deleteAllSnapshots(ofAggregateImplementationType);
     }
 
     @Override
     public <ID, AGGREGATE_IMPL_TYPE> void deleteSnapshots(AggregateType aggregateType, ID aggregateId, Class<AGGREGATE_IMPL_TYPE> withAggregateImplementationType) {
+        loadedSnapshotOrders.forget(aggregateType, aggregateId, withAggregateImplementationType);
         snapshotStore.deleteSnapshots(aggregateType, aggregateId, withAggregateImplementationType);
     }
 
     @Override
     public <ID, AGGREGATE_IMPL_TYPE> void deleteSnapshots(AggregateType aggregateType, ID aggregateId, Class<AGGREGATE_IMPL_TYPE> withAggregateImplementationType, List<EventOrder> snapshotEventOrdersToDelete) {
+        loadedSnapshotOrders.forget(aggregateType, aggregateId, withAggregateImplementationType);
         snapshotStore.deleteSnapshots(aggregateType, aggregateId, withAggregateImplementationType, snapshotEventOrdersToDelete);
     }
 

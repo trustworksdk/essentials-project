@@ -122,8 +122,8 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
 
         // For CDC legs, wait for the WAL tailer to bring availability to ACTIVE before subscribing,
         // so the subscription is established directly on the CDC bus (push) path. Subscribing while
-        // still INACTIVE would spend the warm-up + activeCutbackDebounce window on the polling
-        // fallback before cutting over (see cdc-improvements.md P9), contaminating the latency
+        // still INACTIVE would spend the warm-up on the polling fallback before cutting over
+        // (see cdc-improvements.md P9), contaminating the latency
         // measurement with polling latency. Bounded wait; if CDC never activates we subscribe
         // anyway and the run self-labels cdc-fallback.
         boolean subscribedWhileCdcActive = awaitCdcActiveBeforeSubscribe();

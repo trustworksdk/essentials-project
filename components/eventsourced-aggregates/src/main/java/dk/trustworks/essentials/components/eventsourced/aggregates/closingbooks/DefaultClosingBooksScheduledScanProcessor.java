@@ -24,6 +24,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -52,6 +53,11 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
     private final ClosingBooksManagementMeasurementSupport            measurementSupport;
     private final Clock                                               clock;
     private final Duration                                            scanRetryDelay;
+    /**
+     * Set by the {@link Builder} only; {@code null} rolls only the generation row (see {@link ClosingBooksScanRollover}).
+     */
+    private volatile ClosingBooksScanRollover<ID, AGGREGATE>          scanRollover;
+    private final java.util.concurrent.atomic.AtomicBoolean          warnedRowOnlyRollover = new java.util.concurrent.atomic.AtomicBoolean();
 
     /**
      * Constructs a DefaultClosingBooksScheduledScanProcessor instance with the specified components.
@@ -59,7 +65,7 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
      *
      * @param aggregateType the type of aggregate being processed
      * @param generationRepository the repository responsible for accessing open generations of closing books
-     * @param aggregateLoader the loader used to load the aggregate data
+     * @param aggregateLoader the loader used to load the aggregate of a scanned generation; called under the generation lock, in the unit of work the decision and the rollover run in
      * @param policy the decision policy applied to the aggregates during processing
      * @param coordinator the coordinator responsible for managing the overall processing workflow
      */
@@ -77,7 +83,7 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
      *
      * @param aggregateType the type of aggregate being processed
      * @param generationRepository the repository responsible for accessing open generations of closing books
-     * @param aggregateLoader the loader used to load the aggregate data
+     * @param aggregateLoader the loader used to load the aggregate of a scanned generation; called under the generation lock, in the unit of work the decision and the rollover run in
      * @param policy the decision policy applied to the aggregates during processing
      * @param coordinator the coordinator responsible for managing the overall processing workflow
      * @param meterRegistryOptional an optional registry used to track and measure processing metrics
@@ -103,7 +109,7 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
      *
      * @param aggregateType the type of aggregate being processed
      * @param generationRepository the repository responsible for accessing open generations of closing books
-     * @param aggregateLoader the loader used to load the aggregate data
+     * @param aggregateLoader the loader used to load the aggregate of a scanned generation; called under the generation lock, in the unit of work the decision and the rollover run in
      * @param policy the decision policy applied to the aggregates during processing
      * @param coordinator the coordinator responsible for managing the overall processing workflow
      * @param meterRegistryOptional an optional registry used to track and measure processing metrics
@@ -150,22 +156,34 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
         int processedCount = 0;
         for (var generation : openGenerations) {
             try {
-                var aggregate = aggregateLoader.load(generation.streamAggregateId());
-                if (aggregate.isEmpty()) {
-                    log.warn("Closing books scan skipped streamAggregateId '{}' for aggregateType '{}' because the aggregate could not be loaded — deferring it for {}",
-                             generation.streamAggregateId(),
-                             aggregateType,
-                             scanRetryDelay);
-                    measurementSupport.incrementProcessOutcome(aggregateType, "aggregate_missing");
-                    deferScan(generation, now);
-                    continue;
-                }
-
-                var finalGeneration = generation;
+                // The coordinator loads the aggregate under the generation lock, in the unit of work the decision and
+                // the rollover run in, and only while the generation read here is still the open one.
+                var evaluation = new AtomicReference<ClosingBooksCoordinator.ScanEvaluation<ID>>();
                 measurementSupport.recordProcessGeneration(aggregateType,
-                                                           finalGeneration.generation(),
-                                                           () -> applyDecision(finalGeneration, aggregate.get()));
-                processedCount++;
+                                                           generation.generation(),
+                                                           () -> evaluation.set(coordinator.evaluateScannedGeneration(generation, aggregateLoader, policy, scanRollover)));
+                switch (evaluation.get().outcome()) {
+                    case AGGREGATE_MISSING -> {
+                        log.warn("Closing books scan skipped streamAggregateId '{}' for aggregateType '{}' because the aggregate could not be loaded — deferring it for {}",
+                                 generation.streamAggregateId(),
+                                 aggregateType,
+                                 scanRetryDelay);
+                        measurementSupport.incrementProcessOutcome(aggregateType, "aggregate_missing");
+                        deferScan(generation, now);
+                    }
+                    case GENERATION_MOVED -> {
+                        log.debug("Closing books scan left aggregateType '{}' logicalAggregateId '{}' alone: generation '{}' was rolled or closed after the scan read it",
+                                  aggregateType,
+                                  generation.logicalAggregateId(),
+                                  generation.generation());
+                        measurementSupport.incrementProcessOutcome(aggregateType, "generation_moved");
+                        processedCount++;
+                    }
+                    case DECIDED -> {
+                        recordDecision(generation, evaluation.get().generation());
+                        processedCount++;
+                    }
+                }
             } catch (Exception e) {
                 log.warn("Closing books scan failed for logicalAggregateId '{}' and aggregateType '{}' — deferring it for {}",
                          generation.logicalAggregateId(),
@@ -199,13 +217,15 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
         }
     }
 
-    private void applyDecision(AggregateGeneration<ID> generation,
-                               AGGREGATE aggregate) {
-        var resultingGeneration = coordinator.evaluatePolicy(generation.logicalAggregateId(),
-                                                             aggregate,
-                                                             ClosingBooksTriggerMode.SCHEDULED_SCAN,
-                                                             policy);
+    private void recordDecision(AggregateGeneration<ID> generation,
+                                AggregateGeneration<ID> resultingGeneration) {
         if (resultingGeneration.generation() > generation.generation()) {
+            if (scanRollover == null && warnedRowOnlyRollover.compareAndSet(false, true)) {
+                log.warn("Closing books scan rolled aggregateType '{}' without a ClosingBooksScanRollover: the next generation starts with an empty " +
+                                 "stream - no closing event, no state carried forward, no period id. Set one on the scan processor's builder " +
+                                 "(setScanRollover) to roll as on access. Logged once",
+                         aggregateType);
+            }
             log.info("Closing books scan rolled aggregateType '{}' logicalAggregateId '{}' from generation '{}' to '{}'",
                      aggregateType,
                      generation.logicalAggregateId(),
@@ -248,6 +268,20 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
         private MeterRegistry meterRegistryOptional;
         private Clock clock;
         private Duration scanRetryDelay;
+        private ClosingBooksScanRollover<ID, AGGREGATE> scanRollover;
+
+        /**
+         * How a scan rolls an aggregate on {@link ClosingBooksDecision#CLOSE_AND_OPEN_NEXT}: the application's own
+         * rollover - its closing event and its next generation through its next-generation factory - as on access.
+         * Without one a scan rolls only the generation row and the next generation starts empty (EF-1b).
+         *
+         * @param scanRollover optional
+         * @return this builder
+         */
+        public Builder<ID, AGGREGATE> setScanRollover(ClosingBooksScanRollover<ID, AGGREGATE> scanRollover) {
+            this.scanRollover = scanRollover;
+            return this;
+        }
 
         /**
          * @param aggregateType required
@@ -268,7 +302,9 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
         }
 
         /**
-         * @param aggregateLoader required
+         * @param aggregateLoader required; called under the generation lock, in the unit of work the decision and the rollover run in, so a repository load inside it joins that unit of work. Report a missing
+         *                        aggregate by returning {@code Optional.empty()} (e.g. via {@code tryLoad}), never by catching an exception from a nested
+         *                        {@code withUnitOfWork}: that leaves the shared unit of work rollback-only (see {@link ClosingBooksAggregateLoader#load(String)})
          * @return this builder
          */
         public Builder<ID, AGGREGATE> setAggregateLoader(ClosingBooksAggregateLoader<AGGREGATE> aggregateLoader) {
@@ -337,7 +373,7 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
          * @return the new {@link DefaultClosingBooksScheduledScanProcessor}
          */
         public DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> build() {
-            return new DefaultClosingBooksScheduledScanProcessor<>(aggregateType,
+            var processor = new DefaultClosingBooksScheduledScanProcessor<>(aggregateType,
                                                                                 generationRepository,
                                                                                 aggregateLoader,
                                                                                 policy,
@@ -345,6 +381,8 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
                                                                                 Optional.ofNullable(meterRegistryOptional),
                                                                                 clock,
                                                                                 scanRetryDelay);
+            processor.scanRollover = scanRollover;
+            return processor;
         }
     }
 

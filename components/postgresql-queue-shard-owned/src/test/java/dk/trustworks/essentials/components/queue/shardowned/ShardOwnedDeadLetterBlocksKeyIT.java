@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * A key never advances past a dead letter — {@code docs/durable-queue-shard-owned.md} §9.1.
+ * A key never advances past a dead letter — {@code docs/design/durable-queue-shard-owned.md} §9.1.
  * <p>
  * The engine used to release the key when a message exhausted its attempts, so 6, 7 and 8 were
  * delivered after 5 could not be. For a work queue that is the right trade; for a key carrying state

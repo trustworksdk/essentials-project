@@ -513,11 +513,9 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
     /**
      * Compare JSON payloads by structure, not by their exact text.
      * <p>
-     * The two paths legitimately differ in formatting: the polling path returns the {@code jsonb} column as
-     * Postgres renders it ({@code {"orderId": "…"}}), while the CDC converter re-serializes what it decodes
-     * and so emits the canonical compact form ({@code {"orderId":"…"}}). That re-serialization is deliberate
-     * — it is what keeps the persisted payload byte-identical across Jackson majors. Values, ordering and
-     * types must still agree exactly, which is what parsing and comparing the structures checks.
+     * Both paths now hand out the {@code jsonb} column text as Postgres renders it ({@code {"orderId": "…"}}),
+     * so the texts agree today. The comparison stays structural because the text is not the contract: values,
+     * ordering and types are, and that is what parsing and comparing the structures checks.
      */
     private String parsedJson(String json) {
         return String.valueOf(jacksonJSONSerializer.deserialize(json, Object.class));

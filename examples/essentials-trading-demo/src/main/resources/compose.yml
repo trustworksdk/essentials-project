@@ -17,6 +17,12 @@ services:
     restart: unless-stopped
     ports:
       - "5432:5432"
+    # A named volume, like the simulators' below. Without one the image's VOLUME made it anonymous: recreating the
+    # container (Docker Desktop, up --force-recreate) started an empty database while the simulators kept their state,
+    # and each old database stayed behind as a hash-named volume. Named, it survives a recreate like the simulators'
+    # do, and `down -v` (reset-stack.sh) removes all three together.
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
     environment:
       POSTGRES_USER: essentials
       POSTGRES_PASSWORD: password
@@ -24,7 +30,55 @@ services:
     # shared_preload_libraries is set here, and only here: the official image has no environment
     # variable for it. Loading pg_stat_statements is not enough on its own - the extension also has to
     # be created in the database, which the application does at startup when it can.
-    command: ["postgres", "-c", "shared_preload_libraries=pg_cron,pg_stat_statements", "-c", "cron.database_name=essentials-trading-demo", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10", "-c", "max_slot_wal_keep_size=2GB"]
+    # max_connections=200: two demo instances at their pool of 60 (application-compose.yml) need 120 plus the CDC
+    # tailers and psql, more than the default of 100.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_cron,pg_stat_statements", "-c", "cron.database_name=essentials-trading-demo", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10", "-c", "max_slot_wal_keep_size=2GB", "-c", "max_connections=200"]
+
+  # ---- Simulators, behind the `simulators` compose profile ---------------------------------------
+  # The exchange-simulator and the payment-gateway (docs/SIMULATOR_REQUIREMENTS.md). Built locally from the
+  # simulators' own repository as exchange-simulator:dev and payment-gateway:dev; nothing here builds them. Host
+  # ports 18080/18081, because 8080/8081 are the demo's own two instances. Activated by the `simulators` Spring
+  # profile (application-simulators.yml). Both sign their webhooks with the same demo secret.
+  exchange:
+    profiles: [simulators]
+    container_name: essentials-trading-demo-exchange
+    image: exchange-simulator:dev
+    ports:
+      - "18080:8080"
+    environment:
+      EXCHANGE_CONFIG: /etc/exchange/exchange.yaml
+    # The Finnhub API key for live prices (FINNHUB_API_KEY), kept out of the repository: copy
+    # simulators/secrets/finnhub.env.example to finnhub.env (gitignored) and fill it in. Optional - without
+    # the file the exchange starts as before, with no live price feed.
+    env_file:
+      - path: ../../simulators/secrets/finnhub.env
+        required: false
+    volumes:
+      - ../../simulators/exchange.yaml:/etc/exchange/exchange.yaml:ro
+      - exchange-data:/var/lib/exchange
+    secrets:
+      - webhook_secret
+    # Webhooks are delivered to the demo, which runs on the host, not in this network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  payment-gateway:
+    profiles: [simulators]
+    container_name: essentials-trading-demo-payment-gateway
+    image: payment-gateway:dev
+    ports:
+      - "18081:8081"
+    environment:
+      GATEWAY_CONFIG: /etc/gateway/gateway.yaml
+    volumes:
+      - ../../simulators/gateway.yaml:/etc/gateway/gateway.yaml:ro
+      - gateway-data:/var/lib/gateway
+    secrets:
+      - webhook_secret
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
 
   # ---- Observability, behind the `observability` compose profile ----------------------------------
   # Started only when that profile is active - the `observability` Spring profile activates it, see
@@ -124,6 +178,13 @@ services:
       - "3000:3000"
     restart: unless-stopped
 
+secrets:
+  webhook_secret:
+    file: ../../simulators/secrets/webhook-secret.txt
+
 volumes:
+  postgres-data:
+  exchange-data:
+  gateway-data:
   prometheus:
   tempo:

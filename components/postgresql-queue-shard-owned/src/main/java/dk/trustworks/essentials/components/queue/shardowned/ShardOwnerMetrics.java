@@ -95,8 +95,10 @@ public final class ShardOwnerMetrics {
      * Ordered lane only. The hole counters above describe the unordered lane's mechanism; the ordered
      * lane replaced it with a safe watermark and these describe that one.
      * <p>
-     * {@code horizonProbes} counts the extra round trip a poll pays to ask which write transactions
-     * are running. {@code watermarkAdvances} counts how often that answer let the cursor move.
+     * {@code horizonProbes} counts the round trips taken to ask which write transactions are running.
+     * The pump takes one per pass for every owner that needs it, in every queue it serves, and charges it
+     * to one of them - so a queue's count can be lower than its share, and only the sum over the queues
+     * a runtime serves is the number of statements issued. {@code watermarkAdvances} counts how often that answer let the cursor move.
      * {@code watermarkCapped} counts advances forced by the wall-clock cap instead — an advance the
      * horizon had not authorised, which is the ordered lane's remaining exposure to a late commit and
      * therefore the number to watch. A non-zero value means some transaction outlived
@@ -209,19 +211,16 @@ public final class ShardOwnerMetrics {
     public final LongAdder     batchedReadFailures              = new LongAdder();
     /**
      * Pump passes that ended because something outside the pump's per-shard guards threw: an unchecked exception or a
-     * non-critical {@code Error} from the connection pool, from the pump's own bookkeeping, or from an owner's
-     * {@code parkDeadlineMillis}. One owner's {@code pumpOnce}, {@code onTakeover} or selection checks
-     * ({@code leaseHeld}, {@code deliveryPermitted}, {@code needsAttention}) throwing is not counted here: that is the
+     * non-critical {@code Error} from the connection pool or from the pump's own bookkeeping. One owner's
+     * {@code pumpOnce}, {@code onTakeover} or selection checks ({@code leaseHeld}, {@code deliveryPermitted},
+     * {@code needsAttention}, {@code nextAttentionNanos}) throwing is not counted here: that is the
      * owner's alone ({@link #pumpFailures}, {@link #takeoverFailures}). The pump treats it like a lost connection: it
      * reconnects 200 ms later, runs every shard's takeover again (safe, it runs on every reconnect) and goes on serving.
      * Counted on the metrics of every queue the pump serves, since a pass is not one queue's, and on the runtime's own. A
      * pump that is stopping counts nothing here: it logs the throw at WARN and exits.
      * <p>
-     * What a steadily rising count costs depends on where it is thrown. A pool that keeps failing ends every pass before
-     * any shard on the pump delivers: while it persists, the pump delivers nothing, for every shard it serves. An owner's
-     * {@code parkDeadlineMillis} is asked only on a pass that delivered nothing, after every attentive shard was pumped:
-     * while it keeps throwing, every idle pass ends in a reconnect that reruns every shard's takeover, about five times a
-     * second, and a message arriving meanwhile waits up to 200 ms for the reconnect instead of being woken for. The ERROR
+     * A pool that keeps failing ends every pass before any shard on the pump delivers: while it persists, the pump
+     * delivers nothing, for every shard it serves. The ERROR
      * log is at most once a minute per pump, every failure at DEBUG, an INFO when a pass completes again. See
      * {@code ShardPump.serve}.
      * <p>
@@ -252,7 +251,7 @@ public final class ShardOwnerMetrics {
      * {@code QueueObserver.takeoverStalled}), so for a queue used through {@code MessageQueue} (the Spring starter, the
      * {@code DurableQueues} adapter) the pump's ERROR log is the only signal of the death; the hand-back that follows
      * reaches the observer as ownership changes ({@code QueueObserver.shardOwnershipChanged}). Whether to add one is open:
-     * {@code docs/durable-queue-shard-owned.md} §18.3.
+     * {@code docs/design/durable-queue-shard-owned.md} §18.3.
      */
     public final AtomicInteger shardsOnDeadPumps                = new AtomicInteger();
     /**
@@ -311,6 +310,12 @@ public final class ShardOwnerMetrics {
     public final LongAdder     wakeupsHonoured                  = new LongAdder();
     public final LongAdder     backstopPolls                    = new LongAdder();
     /**
+     * Owners the pump's periodic full scan found needing attention that it had neither been signalled for nor
+     * scheduled - a state change that did not signal, or a time-based case {@code nextAttentionNanos} does not mirror.
+     * Each cost that owner up to a full-scan interval of latency, never a message. Should stay at zero.
+     */
+    public final LongAdder     attentionFoundOnlyByFullScan     = new LongAdder();
+    /**
      * Messages delivered without ever being read back, because the enqueuing JVM owned the shard.
      */
     public final LongAdder     localHandoffs                    = new LongAdder();
@@ -356,6 +361,12 @@ public final class ShardOwnerMetrics {
      * Connections lost underneath an owner and reconnected. Routine in production; not fatal.
      */
     public final LongAdder     connectionFailures               = new LongAdder();
+    /**
+     * Connections a pump beyond {@link PumpConnections#minHeld()} gave back to the pool, once it had delivered nothing for
+     * {@link PumpConnections#releaseIdleAfter()}. A quiet pump borrows for each pass with database work and gives the
+     * connection back after it, so this grows with the sweeps of the owners it serves while quiet
+     */
+    public final LongAdder     pumpConnectionsReleased          = new LongAdder();
     /**
      * Units taken, <b>including the first acquisition at start-up</b>. It counted only rebalance
      * acquisitions until the admin API began publishing it, so a single instance holding every unit
@@ -616,12 +627,14 @@ public final class ShardOwnerMetrics {
         snapshot.put("deadLettered", deadLettered.sum());
         snapshot.put("wakeupsHonoured", wakeupsHonoured.sum());
         snapshot.put("backstopPolls", backstopPolls.sum());
+        snapshot.put("attentionFoundOnlyByFullScan", attentionFoundOnlyByFullScan.sum());
         snapshot.put("localHandoffs", localHandoffs.sum());
         snapshot.put("readsSkippedByHandoff", readsSkippedByHandoff.sum());
         snapshot.put("fencedOutAcks", fencedOutAcks.sum());
         snapshot.put("leaseRenewals", leaseRenewals.sum());
         snapshot.put("leasesLost", leasesLost.sum());
         snapshot.put("connectionFailures", connectionFailures.sum());
+        snapshot.put("pumpConnectionsReleased", pumpConnectionsReleased.sum());
         snapshot.put("shardsAcquired", shardsAcquired.sum());
         snapshot.put("shardsReleased", shardsReleased.sum());
         snapshot.put("keyHeadOfLineBlocks", keyHeadOfLineBlocks.sum());

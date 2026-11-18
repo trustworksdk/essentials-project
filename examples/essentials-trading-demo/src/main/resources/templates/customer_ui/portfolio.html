@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head th:replace="~{customer_ui/layout :: head('Portfolio')}"></head>
+<body th:attr="data-account-id=${accountId}">
+<header th:replace="~{customer_ui/layout :: header}"></header>
+<main>
+    <div th:replace="~{customer_ui/layout :: messages}"></div>
+    <section class="card">
+        <div class="card-head">
+            <h1>Portfolio</h1>
+            <span id="restricted" class="badge bad" hidden>Restricted</span>
+        </div>
+        <div class="figures" id="totals">
+            <div><span class="label">Total value</span><span class="figure big" id="total-value">–</span></div>
+            <div><span class="label">Cash</span><span class="figure" id="cash-balance">–</span></div>
+            <div><span class="label">Positions</span><span class="figure" id="market-value">–</span></div>
+            <div><span class="label">Buying power</span><span class="figure" id="buying-power">–</span></div>
+            <div><span class="label">Withdrawable</span><span class="figure" id="withdrawable">–</span></div>
+        </div>
+        <p class="muted small" id="valued-on"></p>
+    </section>
+    <section class="card">
+        <h2>Cash</h2>
+        <p class="muted small">Pending amounts are trades booked but not settled; uncleared is deposited cash not yet cleared for withdrawal.</p>
+        <dl class="buckets" id="buckets"></dl>
+    </section>
+    <section class="card">
+        <h2>Positions</h2>
+        <div class="table-wrap">
+            <table>
+                <thead><tr>
+                    <th>Instrument</th><th class="num">Held</th><th class="num">Settled</th><th class="num">Pending in / out</th>
+                    <th class="num">Reserved</th><th class="num">Average cost</th><th class="num">Closing price</th><th class="num">Value</th>
+                </tr></thead>
+                <tbody id="positions"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
+            </table>
+        </div>
+    </section>
+    <section class="card">
+        <h2>Recent activity</h2>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>What</th><th>Reference</th><th>Details</th><th class="num">Cash</th></tr></thead>
+                <tbody id="activity"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+            </table>
+        </div>
+    </section>
+</main>
+<script type="module" th:src="@{/customer_ui/portfolio.js}"></script>
+</body>
+</html>

@@ -11,7 +11,7 @@ you want it.
 
 ## What the devcontainer installs
 
-All of it is gated behind `INSTALL_*` flags in `.devcontainer/devcontainer.json`
+All of it is gated behind flags in `.devcontainer/devcontainer.json`
 and set up by `.devcontainer/scripts/post-create.sh` (reverse with
 `.devcontainer/scripts/uninstall-stack.sh`):
 
@@ -20,6 +20,10 @@ and set up by `.devcontainer/scripts/post-create.sh` (reverse with
 | [graphify](https://github.com/safishamsi/graphify) | Whole-repo knowledge graph (code + SQL + docs) as an agent skill + CLI. Code indexing is 100% local — no model calls, nothing leaves the machine. | `INSTALL_GRAPHIFY` |
 | [rtk](https://github.com/rtk-ai/rtk) | Compresses CLI command output (60–90%) before it reaches the agent's context. | `INSTALL_RTK` |
 | [headroom](https://github.com/headroomlabs-ai/headroom) | On-demand context compression exposed as an MCP server. | `INSTALL_HEADROOM` |
+| [Claude Code](https://claude.com/claude-code) | The agent CLI itself. | `INSTALL_CLAUDE` |
+| Kotlin LSP | JetBrains' Kotlin language server, used by the agent's LSP tool for Kotlin sources. Runs on the JVM; adds ~800 MB to the image. | `INSTALL_KOTLIN_LSP` |
+| Review analysers | gitleaks, spotbugs + FindSecBugs, detekt, PMD, markdownlint and semgrep (offline rules) for the tw-code-review plugin. | `INSTALL_REVIEW_TOOLS` |
+| Headless Chromium | Playwright's `chromium-headless-shell`, for the essentials plugin's render-check of the slice-map and Slice Atlas pages. | `INSTALL_PLAYWRIGHT` |
 | Native LSP plugins | Compiler-accurate go-to-def / find-refs / diagnostics for the agent (jdtls, kotlin, pyright, typescript). | `ENABLE_LSP_TOOL` |
 
 ## graphify and version control

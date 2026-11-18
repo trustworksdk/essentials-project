@@ -58,6 +58,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * the batch: neither the <code>onErrorHandler</code> nor the observer is told, and the resume point stays at the batch,
  * so the restarted subscription handles it again (see {@link SubscriptionStoppedDuringRetryException}).
  * <p>
+ * Before the {@link SubscriptionErrorPolicy} skips or stops a batch, the event handler may take the failed batch over
+ * instead - see {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable)}.
+ * <p>
  * Acknowledgement: the subscriber acknowledges a batch through its {@link SubscriberAcknowledgement} (see
  * {@link BatchedPersistedEventSubscriberBuilder#setSubscriberAcknowledgement(SubscriberAcknowledgement)}) inside the unit of
  * work that handled it, after {@link BatchedPersistedEventHandler#handleBatch(List)} returned - so an event store that
@@ -617,6 +620,26 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                                stoppedWhileHandling(firstEvent, lastEvent, failure);
                                return;
                            }
+                           boolean handedOff;
+                           try {
+                               handedOff = handedOffToEventHandler(immutableBatch, failure);
+                           } catch (RuntimeException handOffIOFailure) {
+                               // The hand-off failed with an I/O error: whatever the policy, the batch is not skipped -
+                               // stop at it, resumed as by a stopping policy, and hand the whole batch on again
+                               eventStore.getEventStoreSubscriptionObserver().handleEventBatchFailed(immutableBatch,
+                                                                                                     eventHandler,
+                                                                                                     failure,
+                                                                                                     eventStoreSubscription);
+                               stopAt(firstEvent, handOffIOFailure, SubscriptionErrorPolicy.stop().withAutoResume(subscriptionErrorPolicy.autoResume()));
+                               return;
+                           }
+                           if (handedOff) {
+                               // Taken over by the event handler - done with here
+                               acknowledgeGivenUp(immutableBatch);
+                               movedPast(lastEvent);
+                               eventStoreSubscription.request(immutableBatch.size());
+                               return;
+                           }
                            eventStore.getEventStoreSubscriptionObserver().handleEventBatchFailed(immutableBatch,
                                                                                                  eventHandler,
                                                                                                  failure,
@@ -624,7 +647,7 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                            var cause = failure.getCause() != null ? failure.getCause() : failure;
                            if (subscriptionErrorPolicy.stopsOnError() && !skippingAfterAutoResumes(firstEvent, lastEvent, cause)) {
                                // Not acknowledged: the restarted subscription resumes at the batch
-                               stopAt(firstEvent, cause);
+                               stopAt(firstEvent, cause, subscriptionErrorPolicy);
                            } else {
                                // Skipped - done with
                                acknowledgeGivenUp(immutableBatch);
@@ -632,6 +655,44 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                                onErrorHandler.accept(lastEvent, failure.getCause());
                            }
                        });
+    }
+
+    /**
+     * Offer the failed batch to {@link BatchedPersistedEventHandler#handOffFailedBatch(List, Throwable, SubscriptionErrorPolicy)},
+     * with this subscriber's policy, before the
+     * {@link SubscriptionErrorPolicy} gives up on it. Runs before the {@code doFinally} that advances the resume point, so
+     * the resume point only moves past the batch once the handler has taken it over
+     *
+     * @return true if the handler took the batch over
+     * @throws RuntimeException the hand-off's failure, when it is an I/O failure ({@link IOExceptionUtil#isIOException(Throwable)}):
+     *                          the subscriber then stops at the batch instead of letting the policy give up on it
+     */
+    // Package-private for BatchedPersistedEventSubscriberHandOffTest
+    boolean handedOffToEventHandler(List<PersistedEvent> batch, Throwable failure) {
+        try {
+            if (eventHandler.handOffFailedBatch(batch, failure, subscriptionErrorPolicy)) {
+                log.debug("[{}-{}] The {} event handler took over the failed batch [#{} - #{}] - the {} SubscriptionErrorPolicy does not give up on it",
+                          eventStoreSubscription.subscriberId(),
+                          eventStoreSubscription.aggregateType(),
+                          eventHandler,
+                          batch.getFirst().globalEventOrder(),
+                          batch.getLast().globalEventOrder(),
+                          subscriptionErrorPolicy.mode());
+                return true;
+            }
+        } catch (RuntimeException handOffFailure) {
+            if (IOExceptionUtil.isIOException(handOffFailure)) {
+                throw handOffFailure;
+            }
+            failure.addSuppressed(handOffFailure);
+            log.warn(msg("[{}-{}] The event handler failed to take over the failed batch [#{} - #{}] - the {} SubscriptionErrorPolicy applies",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType(),
+                         batch.getFirst().globalEventOrder(),
+                         batch.getLast().globalEventOrder(),
+                         subscriptionErrorPolicy.mode()), handOffFailure);
+        }
+        return false;
     }
 
     /**
@@ -678,13 +739,21 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
     /**
      * {@link SubscriptionErrorPolicy.Mode#STOP}: keep the resume point at the first event of the failed batch and stop
      * handling events. See {@code PersistedEventSubscriber#stopAt} - the same reasoning applies, per batch.
+     *
+     * @param stoppingPolicy the stopping policy the subscription is resumed by: the subscriber's own, or - when an I/O
+     *                       failure of the hand-off stops a skipping policy - {@link SubscriptionErrorPolicy#stop()} with
+     *                       its auto-resume
      */
-    private void stopAt(PersistedEvent firstEventOfFailedBatch, Throwable cause) {
+    private void stopAt(PersistedEvent firstEventOfFailedBatch, Throwable cause, SubscriptionErrorPolicy stoppingPolicy) {
         // Set before the resume point is held, so the observer below already sees isStoppedByErrorPolicy() == true
         stoppedByErrorPolicy = true;
         var resumeFrom = holdResumePointAt(firstEventOfFailedBatch);
         cancelScheduledProcessing();
-        log.error(msg("[{}-{}] Stopping the subscription because handling the batch starting at #{} failed and the SubscriptionErrorPolicy is {}. " +
+        var reason = stoppingPolicy == subscriptionErrorPolicy
+                     ? "the SubscriptionErrorPolicy is " + subscriptionErrorPolicy.mode()
+                     : "handing the failed batch off failed with an I/O failure, so the batch is redelivered instead of skipped (the SubscriptionErrorPolicy is " +
+                       subscriptionErrorPolicy.mode() + ")";
+        log.error(msg("[{}-{}] Stopping the subscription because handling the batch starting at #{} failed and {}. " +
                               "The resume point stays at #{}, so no event is skipped: no further events are handled until the subscription is resumed " +
                               "(automatically, unless the policy's auto-resume is disabled, or by EventStoreSubscription#resumeIfStoppedByErrorPolicy or the admin API) " +
                               "or started again (restart, resetFrom or unsubscribe/subscribe), " +
@@ -692,7 +761,7 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                       eventStoreSubscription.subscriberId(),
                       eventStoreSubscription.aggregateType(),
                       firstEventOfFailedBatch.globalEventOrder(),
-                      subscriptionErrorPolicy.mode(),
+                      reason,
                       resumeFrom), cause);
         try {
             eventStore.getEventStoreSubscriptionObserver().subscriptionStoppedByErrorPolicy(firstEventOfFailedBatch.globalEventOrder(), cause, eventStoreSubscription);
@@ -703,7 +772,7 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
         }
         Schedulers.boundedElastic().schedule(this::dispose);
         if (autoResumer != null) {
-            autoResumer.stoppedAt(firstEventOfFailedBatch.globalEventOrder(), subscriptionErrorPolicy);
+            autoResumer.stoppedAt(firstEventOfFailedBatch.globalEventOrder(), stoppingPolicy);
         }
     }
 

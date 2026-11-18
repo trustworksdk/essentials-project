@@ -1,0 +1,23 @@
+schemaVersion: "1.1"
+slice: accounts.account_valuation
+kind: view
+bc: accounts
+owner: accounts-team
+status: live
+summary: "An account's positions at the exchange's latest closing prices, with its cash balance."
+generator: essentials
+language: java
+
+serves: [GetAccountValuation]
+endpoints:
+  - { method: GET, path: "/api/accounts/{accountId}/valuation", auth: customer }
+reads:
+  - { name: AccountOverview, via: AccountOverviewQuery }
+  - { name: PositionView, via: PositionsQuery }
+  - { name: ClosingPrice, via: ClosingPrices }
+forbidden:
+  - cross-slice-internal:accounts
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/accounts/views/account_valuation/AccountValuationIT.java" }
+  contract: { present: false }

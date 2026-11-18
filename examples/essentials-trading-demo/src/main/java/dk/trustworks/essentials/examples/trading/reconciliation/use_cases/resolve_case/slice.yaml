@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: reconciliation.resolve_case
+kind: command
+bc: reconciliation
+owner: reconciliation-team
+status: live
+summary: "An operator closes a reconciliation case with a resolution; nothing is booked by it."
+generator: essentials
+language: java
+
+handles: [ResolveCase]
+publishes: [CaseResolved]
+writes: [ReconciliationCase]
+reads:
+  - { name: ReconciliationCase }
+endpoints:
+  - { method: POST, path: "/api/admin/reconciliation/cases/{caseId}/resolution", auth: operator }
+invariants:
+  - id: INV-RC-1
+    text: "Resolving never books; LEDGER_CORRECTED records the operator's adjustment and requires it"
+    enforcedBy: ReconciliationCase
+forbidden:
+  - cross-slice-internal:reconciliation
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/aggregates/ReconciliationCaseTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/reconciliation/ClearingReconciliationIT.java" }
+  contract: { present: false }

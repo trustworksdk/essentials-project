@@ -53,8 +53,12 @@ class RuntimeScopedSettingsTest {
     }
 
     private static DescribedPredicate<JavaMethodCall> anAccessorOfShardOwnerSettingsOtherThanRuntimeScoped() {
+        // Instance methods only: a static factory (ShardRuntime.Builder's ShardOwnerSettings.defaults()) reads no setting
         return DescribedPredicate.describe("a method of ShardOwnerSettings other than runtimeScoped()",
                                            call -> call.getTargetOwner().isEquivalentTo(ShardOwnerSettings.class)
-                                                   && !"runtimeScoped".equals(call.getName()));
+                                                   && !"runtimeScoped".equals(call.getName())
+                                                   && call.getTarget().resolveMember()
+                                                          .map(method -> !method.getModifiers().contains(JavaModifier.STATIC))
+                                                          .orElse(true));
     }
 }

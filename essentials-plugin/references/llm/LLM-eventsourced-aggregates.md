@@ -763,6 +763,11 @@ The Spring Boot starter's `AggregateDeclarationPolicyRegistrar` reads the annota
 registers the descriptors before configuration validation runs. The aggregate type is taken from the annotation's own
 `aggregateType()` attribute when set, otherwise from the declaration.
 
+The declaration wins: with the starter's default policy registries, a declared class's annotation is what the registry
+answers with, even when the same class is also registered with an explicit `register(...)` or, being a Spring bean
+too, by the policy `BeanPostProcessor` - whichever came first. A policy registry bean you supply yourself decides this
+itself.
+
 **Test refs**: `EssentialsAggregateDeclarationsTest`, `AggregateDeclarationPolicyRegistrarTest`
 
 ---
@@ -875,6 +880,10 @@ essentials.eventstore.snapshots.durable.retry-delay=5s
 essentials.eventstore.snapshots.durable.processing-timeout=5m
 essentials.eventstore.snapshots.aggregates.Orders.mode=async-in-memory
 ```
+Interval precedence: per-aggregate property > `@AggregateSnapshotPolicy.everyNEvents` (default 100) >
+`default-every-n-events` (default 1000; 10 before 0.61.0). Annotations on a non-bean aggregate apply only if it is
+declared through `EssentialsAggregateDeclarations`; before 0.61.0 they were silently ignored for repositories built as
+beans at startup.
 ⚠️ `snapshot-table-name` / `durable.job-table-name` are concatenated into SQL — hardcoded values only, see [Security](#security).
 
 **Test refs**: `PostgresqlAggregateSnapshotRepositoryTest`, `PostgresqlAggregateSnapshotRepository_keepALimitedNumberOfHistoricSnapshotsIT`, `AsyncAggregateSnapshotRepositoryTest`, `DurableAsyncAggregateSnapshotRepositoryTest`, `PostgresqlAggregateSnapshotJobProcessorTest`, `PostgresqlAggregateSnapshotStoreIT`
@@ -919,8 +928,46 @@ public class Account extends AggregateRoot<String, AccountEvent, Account> implem
 | `ClosingBooksDefaultPolicyType` | `UNSPECIFIED`, `MANUAL_ONLY`, `EVENT_COUNT`, `TIME_BOUNDARY`, `EVENT_COUNT_OR_TIME_BOUNDARY`, `EXPLICIT_ONLY` |
 | `ClosingBooksTimeBoundary` | `NONE`, `END_OF_DAY`, `EVERY_N_DAYS`, `END_OF_WEEK`, `END_OF_MONTH`, `END_OF_YEAR` |
 | `ClosingBooksDecision` | `KEEP_OPEN`, `CLOSE_ONLY`, `CLOSE_AND_OPEN_NEXT` |
+| `ClosingBooksPeriodSource` | `CLOCK` (default), `BUSINESS_CALENDAR` |
 
 **Period-id format must match the boundary**: `END_OF_DAY`/`EVERY_N_DAYS` → `yyyy-MM-dd`, `END_OF_WEEK` → `yyyy-Www`, `END_OF_MONTH` → `yyyy-MM`, `END_OF_YEAR` → `yyyy`.
+
+### Business-day boundary (`periodSource = BUSINESS_CALENDAR`)
+
+Books that roll at an exchange's or bank's close, not at midnight: keep `timeBoundary = END_OF_DAY` and set
+`periodSource = ClosingBooksPeriodSource.BUSINESS_CALENDAR` (annotation member, or `period-source` property). The days
+then come from a `ClosingBooksBusinessCalendar` the application supplies — `Optional<LocalDate> currentBusinessDate()` and
+`businessDaysClosedBetween(from, to)` — instead of `Clock` + zone. Period ids stay `yyyy-MM-dd`, so switching an existing
+aggregate needs no migration.
+
+```java
+var calendar = new InMemoryClosingBooksBusinessCalendar();          // thread-safe, volatile snapshot, no I/O per call
+calendar.recordClose(LocalDate.parse("2030-01-11"), LocalDate.parse("2030-01-14"));  // feed it from your own store/signal
+
+var evaluator = BuiltInClosingBooksPolicyEvaluator.<Account>builder()
+        .setAggregateType(ACCOUNTS)
+        .setDefaultPolicy(ClosingBooksDefaultPolicyType.TIME_BOUNDARY)
+        .setTimeBoundary(ClosingBooksTimeBoundary.END_OF_DAY)
+        .setBusinessCalendar(calendar)                               // clock and zone not needed
+        .setEventCountProvider(Account::eventCount)
+        .setCurrentPeriodIdProvider(Account::periodId)
+        .build();
+ClosingBooksTimeBoundaryCalculator.currentPeriodId(calendar);       // Optional<String>: seed for a new aggregate
+```
+
+- Friday → Monday is **one** period (`advancedPeriods` counts recorded closes, not calendar days); a gap is > 1.
+- **Unknown business date** (empty calendar, e.g. cold start) → **no rollover**, WARN once, counter
+  `essentials.closing_books.business_date_unknown`. Load recorded closes into the calendar before serving commands.
+- The calendar never moves an aggregate's period backwards; redelivered closes are no-ops, out-of-order closes fill
+  their place; a conflicting close (same date, other next date) keeps the first and is counted.
+- **The library does not persist closes** — store them yourself (a table fed by your end-of-day signal) and feed every
+  instance's calendar (e.g. LISTEN/NOTIFY plus a poll). Between instances a few mutations just after a close may book
+  into the closing day.
+- Only `END_OF_DAY`: any other boundary with a calendar fails `build()` and startup validation — except `NONE` under a
+  policy other than `TIME_BOUNDARY`/`EVENT_COUNT_OR_TIME_BOUNDARY`, which never reads the calendar. (`nextPeriodId`
+  evaluates the boundary for every policy, so e.g. `EVENT_COUNT` with `END_OF_DAY` takes its period ids from the calendar.)
+- Gap counter gains tag `period_source`. Idle aggregates roll on a scheduled scan only with
+  `asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)` plus a `ClosingBooksScanRollover` (below).
 
 ### Decision Policies
 `BuiltInClosingBooksPolicyEvaluator` implements the `ClosingBooksDefaultPolicyType` rules — **application code constructs it**, the framework never does. Custom rules via `ClosingBooksDecisionPolicies`:
@@ -997,14 +1044,47 @@ unitOfWorkFactory.usingUnitOfWork(uow -> repository.load(new LogicalAggregateId<
 | `tryLoad(id)` / `load(id)` | From the open generation; `load` throws if none is open |
 | `resolveCurrentGeneration(id)` / `resolveOrOpenCurrentGeneration(id)` | Inspect, or open generation 1 on demand |
 | `loadOrOpen(id, …)` | Load, opening the first generation for a new aggregate |
-| `closeAndOpenNextGeneration(id, …)` | Explicit rollover — close + open in ONE UoW |
+| `closeAndOpenNextGeneration(id, …)` | Explicit rollover — close + open in ONE UoW. Closes whichever generation is open under the generation lock: safe for an aggregate loaded while holding that lock (a scan rollover) |
+| `closeAndOpenNextGenerationGuarded(id, currentAggregate, hint, factory)` | Same, for an aggregate loaded before the call (on access, a command handler): throws `ClosingBooksGenerationMovedException`, closing nothing, when the generation `currentAggregate`'s stream id names is no longer the open one |
 | `save(aggregate)` | Delegates to the underlying `StatefulAggregateRepository` |
+
+`ClosingBooksCoordinator` has the same guard: `closeAndOpenNextGeneration(AggregateGeneration expected)` and
+`evaluatePolicy(AggregateGeneration loadedFrom, aggregate, triggerMode, policy, rollover)`. The unguarded
+`evaluatePolicy(id, aggregate, …)` decides on whatever generation is open once the lock is held.
+
+⚠️ `ClosingBooksGenerationMovedException`: a refusal leaves the unit of work rollback-only. Catch it outside the unit of
+work, reload and retry in a new unit of work. Do not catch it and carry on inside the same unit of work or
+`@Transactional` method: nothing written there afterwards commits.
 
 `ClosingBooksStatefulAggregateRepository` is the thinner variant (3 type params) that only maps logical id → open generation's stream id.
 
 ### Scheduled Scans
 `ClosingBooksManager` (`Lifecycle`) polls `ClosingBooksScheduledScanProcessor`s under a `FencedLockManager` lock — one node at a time. Required for `SCHEDULED_SCAN` and for time-boundary policies on idle aggregates.
+
+**A scan rolls only the generation row unless given a `ClosingBooksScanRollover`** - the next generation then starts
+with an empty stream: no closing event, no carried-forward state, no period id (logged WARN once). Give the scan the
+same rollover the app does on access; it runs inside the generation lock and a unit of work, and a throw rolls the
+decision back and defers the generation. The scan calls the aggregate loader in that same lock and unit of work, from
+the generation it decides on: `context.aggregate()` belongs to `context.currentGeneration()` and may be mutated - a
+closing event recorded on it is persisted with the rollover when the loader's repository joins the unit of work, as a
+`StatefulAggregateRepository` does. A generation rolled or closed after the scan read it is left alone. The built-in
+evaluator's `asDecisionPolicy()` never rolls on a scan; `asDecisionPolicyRollingOn(ON_ACCESS, SCHEDULED_SCAN)` does.
+
 ```java
+var scanProcessor = DefaultClosingBooksScheduledScanProcessor.<AccountId, Account>builder()
+        .setAggregateType(ACCOUNTS)
+        .setGenerationRepository(generationRepository)                  // a ClosingBooksOpenGenerationRepository (PostgresqlClosingBooksGenerationRepository)
+        .setAggregateLoader(streamId -> accountRepository.tryLoadGeneration(streamId))   // your loader
+        .setPolicy(evaluator.asDecisionPolicyRollingOn(ClosingBooksTriggerMode.ON_ACCESS, ClosingBooksTriggerMode.SCHEDULED_SCAN))
+        .setCoordinator(setup.coordinator())
+        .setScanRollover(context -> {                                   // what you do on access
+            var account    = context.aggregate();
+            var nextPeriod = evaluator.nextPeriodId(account);
+            account.closeBooks(nextPeriod);                             // the domain's closing event
+            logicalRepository.closeAndOpenNextGeneration(context.logicalAggregateId(), account, nextPeriod, nextGenerationFactory);
+        })
+        .build();
+
 new ClosingBooksManager(List.of(scanProcessor),
                         new ClosingBooksManagerSettings(Duration.ofMinutes(5), 100, Duration.ofSeconds(5)),
                         fencedLockManager,
@@ -1041,11 +1121,12 @@ essentials.eventstore.archives.filesystem-root-directory=/var/lib/essentials/arc
 - an automatic close-and-open-next policy and no `TypedClosingBooksNextGenerationFactory` for that aggregate
 - a `TIME_BOUNDARY`/`EVENT_COUNT_OR_TIME_BOUNDARY` policy and the resolved `time-boundary` is `NONE` — the boundary could never advance (use `EVENT_COUNT` if only the event-count half was intended)
 - a `TIME_BOUNDARY`/`EVENT_COUNT_OR_TIME_BOUNDARY` policy and the aggregate does not implement `HasClosingBooksPeriodId` — opt out with `essentials.eventstore.closing-books[.aggregates.<Type>].period-id-provided-externally=true` when a custom `currentPeriodIdProvider` supplies it
-- `zone-id` is not a valid IANA zone
+- `zone-id` is not a valid IANA zone (not checked with `period-source=business-calendar`)
+- `period-source=business-calendar` with any `time-boundary` other than `END_OF_DAY` — except `NONE` under a policy other than `TIME_BOUNDARY`/`EVENT_COUNT_OR_TIME_BOUNDARY` (the calendar is never read there, so such an aggregate may inherit a global `business-calendar`)
 
 **Gotcha**: closing a generation does **not** carry balances forward — emit an opening event via `TypedClosingBooksNextGenerationFactory`.
 
-**Test refs**: `ClosingBooksCoordinatorTest`, `ClosingBooksDecisionPoliciesTest`, `ClosingBooksLogicalAggregateRepositoryTest`, `BuiltInClosingBooksPolicyEvaluatorTest`, `ClosingBooksTimeBoundaryCalculatorTest`, `PostgresqlClosingBooksGenerationRepositoryIT`
+**Test refs**: `ClosingBooksCoordinatorTest`, `ClosingBooksDecisionPoliciesTest`, `ClosingBooksLogicalAggregateRepositoryTest`, `BuiltInClosingBooksPolicyEvaluatorTest`, `ClosingBooksTimeBoundaryCalculatorTest`, `BusinessCalendarClosingBooksTest`, `InMemoryClosingBooksBusinessCalendarTest`, `PostgresqlClosingBooksGenerationRepositoryIT`
 
 ---
 

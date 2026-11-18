@@ -51,4 +51,13 @@ public @interface AggregateClosingBooksPolicy {
     int intervalDays() default -1;
 
     String aggregateType() default "";
+
+    /**
+     * Where an {@link ClosingBooksTimeBoundary#END_OF_DAY} boundary takes its days from: the clock in {@link #zoneId()}
+     * (the default), or an application-supplied {@link ClosingBooksBusinessCalendar}, in which case the books roll at
+     * each recorded business-day close and {@link #zoneId()} is not used. The application hands the calendar to the
+     * {@link BuiltInClosingBooksPolicyEvaluator} it builds; {@link ClosingBooksPeriodSource#BUSINESS_CALENDAR} requires
+     * {@code END_OF_DAY}.
+     */
+    ClosingBooksPeriodSource periodSource() default ClosingBooksPeriodSource.CLOCK;
 }

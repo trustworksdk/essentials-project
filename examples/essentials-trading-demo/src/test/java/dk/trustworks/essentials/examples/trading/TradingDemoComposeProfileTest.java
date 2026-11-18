@@ -39,7 +39,7 @@ class TradingDemoComposeProfileTest {
         assertThat(composeProfile).contains("password: password");
         assertThat(composeProfile).contains("immutable-jackson-module-enabled: true");
         assertThat(composeProfile).contains("scheduler:");
-        assertThat(composeProfile).contains("event-store-polling-batch-size: 5");
+        assertThat(composeProfile).contains("event-store-polling-batch-size: 100");
         assertThat(composeProfile).contains("snapshots:");
         assertThat(composeProfile).contains("closing-books:");
     }

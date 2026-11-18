@@ -16,9 +16,7 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
-import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.ClosingBooksDefaultPolicyType;
-import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.ClosingBooksTimeBoundary;
-import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.ClosingBooksTriggerMode;
+import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.*;
 
 /**
  * Represents the resolved configuration used for managing the automatic or
@@ -43,6 +41,88 @@ public record ResolvedAggregateClosingBooksConfiguration(
         Long eventThreshold,
         ClosingBooksTimeBoundary timeBoundary,
         String zoneId,
-        Integer intervalDays
+        Integer intervalDays,
+        ClosingBooksPeriodSource periodSource
 ) {
+    /**
+     * The constructor before {@code periodSource} was added; the period source defaults to
+     * {@link ClosingBooksPeriodSource#CLOCK}.
+     *
+     * @deprecated use {@link #builder()}, which also takes the {@code periodSource}
+     */
+    @Deprecated(forRemoval = true, since = "0.61.0")
+    public ResolvedAggregateClosingBooksConfiguration(boolean enabled,
+                                                      ClosingBooksTriggerMode triggerMode,
+                                                      ClosingBooksDefaultPolicyType defaultPolicy,
+                                                      Long eventThreshold,
+                                                      ClosingBooksTimeBoundary timeBoundary,
+                                                      String zoneId,
+                                                      Integer intervalDays) {
+        this(enabled, triggerMode, defaultPolicy, eventThreshold, timeBoundary, zoneId, intervalDays, ClosingBooksPeriodSource.CLOCK);
+    }
+
+    /**
+     * @return a builder; {@code periodSource} defaults to {@link ClosingBooksPeriodSource#CLOCK}
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link ResolvedAggregateClosingBooksConfiguration}, obtained from {@link #builder()}.
+     */
+    public static final class Builder {
+        private boolean enabled = false;
+        private ClosingBooksTriggerMode triggerMode;
+        private ClosingBooksDefaultPolicyType defaultPolicy;
+        private Long eventThreshold;
+        private ClosingBooksTimeBoundary timeBoundary;
+        private String zoneId;
+        private Integer intervalDays;
+        private ClosingBooksPeriodSource periodSource = ClosingBooksPeriodSource.CLOCK;
+
+        public Builder setEnabled(boolean enabled) {
+            this.enabled = enabled;
+            return this;
+        }
+
+        public Builder setTriggerMode(ClosingBooksTriggerMode triggerMode) {
+            this.triggerMode = triggerMode;
+            return this;
+        }
+
+        public Builder setDefaultPolicy(ClosingBooksDefaultPolicyType defaultPolicy) {
+            this.defaultPolicy = defaultPolicy;
+            return this;
+        }
+
+        public Builder setEventThreshold(Long eventThreshold) {
+            this.eventThreshold = eventThreshold;
+            return this;
+        }
+
+        public Builder setTimeBoundary(ClosingBooksTimeBoundary timeBoundary) {
+            this.timeBoundary = timeBoundary;
+            return this;
+        }
+
+        public Builder setZoneId(String zoneId) {
+            this.zoneId = zoneId;
+            return this;
+        }
+
+        public Builder setIntervalDays(Integer intervalDays) {
+            this.intervalDays = intervalDays;
+            return this;
+        }
+
+        public Builder setPeriodSource(ClosingBooksPeriodSource periodSource) {
+            this.periodSource = periodSource;
+            return this;
+        }
+
+        public ResolvedAggregateClosingBooksConfiguration build() {
+            return new ResolvedAggregateClosingBooksConfiguration(enabled, triggerMode, defaultPolicy, eventThreshold, timeBoundary, zoneId, intervalDays, periodSource);
+        }
+    }
 }

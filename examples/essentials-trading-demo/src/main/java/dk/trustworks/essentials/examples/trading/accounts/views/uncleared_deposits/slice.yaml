@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: accounts.uncleared_deposits
+kind: view
+bc: accounts
+owner: accounts-team
+status: live
+summary: "Credited deposits still inside their return window, with the business day each clears on."
+generator: essentials
+language: java
+
+serves: [UnclearedDepositsClearingOnOrBefore]
+endpoints: []
+reads:
+  - { name: UnclearedDeposit }
+projections:
+  - name: UnclearedDepositsProjection
+    from: [DepositCredited, DepositCleared, DepositReturned]
+    consistency: eventual
+    store: postgresql
+forbidden:
+  - cross-slice-internal:accounts
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/accounts/automations/clear_deposits/ClearDepositsIT.java" }
+  contract: { present: false }

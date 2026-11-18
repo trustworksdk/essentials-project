@@ -1,7 +1,7 @@
 {
   "schema": 2,
-  "projected_through": 31,
-  "asOf": "2026-10-27T09:57:39Z",
+  "projected_through": 60,
+  "asOf": "2026-11-08T06:57:04Z",
   "active_learnings": [
     {
       "id": "L-001",
@@ -256,6 +256,66 @@
         29
       ],
       "text": "Don't flag PMD CompareObjectsWithEquals in test code: the tests compare Thread objects, proxies and private run objects by identity on purpose; those types define no value equality, so equals() would mean the same and say it less plainly."
+    },
+    {
+      "id": "D-feature-trading-demo-expansion-files-9cf85a-F-010",
+      "predicate": {
+        "file": "examples/essentials-trading-demo/run-faults.sh",
+        "rule": "curl-auth-user"
+      },
+      "action": "suppress",
+      "origin_event": [
+        56
+      ],
+      "text": "Not a defect: published demo credential / test fixture"
+    },
+    {
+      "id": "D-feature-trading-demo-expansion-files-9cf85a-F-291",
+      "predicate": {
+        "file": "examples/essentials-trading-demo/src/test/java/dk/trustworks/essentials/examples/trading/integration/ExternalEventIntakeIT.java",
+        "rule": "generic-api-key"
+      },
+      "action": "suppress",
+      "origin_event": [
+        57
+      ],
+      "text": "Not a defect: published demo credential / test fixture"
+    },
+    {
+      "id": "D-feature-trading-demo-expansion-files-9cf85a-F-293",
+      "predicate": {
+        "file": "examples/essentials-trading-demo/src/test/java/dk/trustworks/essentials/examples/trading/integration/WebhookSignatureVerifierTest.java",
+        "rule": "generic-api-key"
+      },
+      "action": "suppress",
+      "origin_event": [
+        58
+      ],
+      "text": "Not a defect: published demo credential / test fixture"
+    },
+    {
+      "id": "L-009",
+      "predicate": {
+        "file": "examples/**/aggregates/**",
+        "rule": "ConstructorCallsOverridableMethod"
+      },
+      "action": "suppress",
+      "origin_event": [
+        59
+      ],
+      "text": "Don't flag PMD ConstructorCallsOverridableMethod in examples/** aggregates and projections (examples/**/aggregates/**) - it is Essentials' registerEventHandler/apply-in-constructor pattern"
+    },
+    {
+      "id": "L-010",
+      "predicate": {
+        "file": "examples/**/views/**",
+        "rule": "ConstructorCallsOverridableMethod"
+      },
+      "action": "suppress",
+      "origin_event": [
+        60
+      ],
+      "text": "Don't flag PMD ConstructorCallsOverridableMethod in examples/** aggregates and projections (examples/**/views/**) - it is Essentials' registerEventHandler/apply-in-constructor pattern"
     }
   ]
 }

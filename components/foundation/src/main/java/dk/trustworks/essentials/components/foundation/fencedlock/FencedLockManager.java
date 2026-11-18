@@ -57,6 +57,16 @@ public interface FencedLockManager extends Lifecycle {
     Optional<FencedLock> lookupLock(LockName lockName);
 
     /**
+     * How long a lock held by an instance that stopped confirming it (a crash, a long pause) stays held before another
+     * instance can take it. Callers size retries that must outlast a failover by it.
+     *
+     * @return the lock timeout, or {@link Optional#empty()} (the default) for an implementation that does not say
+     */
+    default Optional<Duration> getLockTimeOut() {
+        return Optional.empty();
+    }
+
+    /**
      * Try to acquire the lock using this Lock Manager instance
      * <p>
      * If this lock manager instance already holds the lock, this returns the <b>same</b> {@link FencedLock} that the earlier

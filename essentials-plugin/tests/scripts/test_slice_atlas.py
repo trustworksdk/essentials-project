@@ -17,7 +17,7 @@ by method name, one by @DisplayName and one that does not; a column no inbound e
 (`OrderListView.discount`); a `with` key that is no payload field; a `given` event nothing publishes; and
 `orders/use_cases/amend_order`, whose manifest does not parse (an unquoted braced path).
 
-`tests/fixtures/atlas-multi/` is the multi-application case (design: docs/slice-enrich-design.md §4): an
+`tests/fixtures/atlas-multi/` is the multi-application case (design: docs/design/slice-enrich-design.md §4): an
 aggregating parent pom over two applications, `alpha` and `beta`, that reuse the slice ids
 `ledger.post_entry` and `ledger.entry_list`; only `alpha` holds the test its scenario names.
 

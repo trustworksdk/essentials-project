@@ -315,6 +315,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * queue runs.
      */
     private final    AdoptionHook             adoptionHook;
+    /**
+     * The clock {@code stuckHandlerTimeout} and {@link #stopFlushGiveUpAfter} are timed by: handed to every owner this queue
+     * builds, which stamps and times its messages in a handler by it, and to every {@link KeptUnit}, which times how long
+     * it has been kept by it. {@link System#nanoTime()} unless a test set another ({@link #useNanoTime}). Nothing else
+     * reads it: lease TTLs, heartbeats, the shed grace and the shutdown budget stay on real time.
+     */
+    private volatile LongSupplier             nanoTime            = System::nanoTime;
 
     /**
      * Set before {@link #start()}. Per consumer, not per process — see {@code ConsumerOptions}.
@@ -332,10 +339,44 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         return new ShardOwnedQueueBuilder();
     }
 
+    /**
+     * The longest an ordered unit or shard of an instance that died stays unserved before a surviving instance takes
+     * it, for queues configured with {@code leaseTtl}: the lease TTL the queue runs with (the configured one, raised to
+     * 1 s when shorter) plus one heartbeat interval. A dead instance's units become takeable once its instance row is
+     * older than the lease TTL, and a survivor only takes them on its next heartbeat tick, which runs every third of
+     * that lease TTL. The survivor's acquisition and its read of the unit's messages come on top.
+     *
+     * @param leaseTtl the configured lease TTL ({@code ShardOwnerSettings.leaseTtl()})
+     * @return the lease TTL the queue runs with plus one heartbeat interval
+     */
+    public static Duration maxUnservedAfterInstanceLoss(Duration leaseTtl) {
+        requireNonNull(leaseTtl, "No leaseTtl provided");
+        var leaseTtlMillis = effectiveLeaseTtlMillis(leaseTtl.toMillis());
+        return Duration.ofMillis(leaseTtlMillis + heartbeatIntervalMillis(leaseTtlMillis));
+    }
+
+    /**
+     * The lease TTL a queue runs with for a configured one: never shorter than 1 s. Keep in step with the floor each
+     * start applies when it sets {@link #leaseTtlMillis}.
+     */
+    static long effectiveLeaseTtlMillis(long configuredLeaseTtlMillis) {
+        return Math.max(1_000L, configuredLeaseTtlMillis);
+    }
+
     private volatile long lastSharedInstanceIdWarningNanos;
 
     public ShardOwnedQueue(DataSource dataSource, short queueId, int shardCount, String instanceId) {
         this(dataSource, queueId, shardCount, instanceId, new ShardOwnerMetrics());
+    }
+
+    /**
+     * Time {@code stuckHandlerTimeout} and {@link #stopFlushGiveUpAfter} by {@code nanoTime} instead of
+     * {@link System#nanoTime()} ({@link #nanoTime}), so a test can move past those bounds instead of waiting them out.
+     * Set before {@link #start()}: an owner or a kept unit built before keeps the clock it was built with. Tests only.
+     */
+    ShardOwnedQueue useNanoTime(LongSupplier nanoTime) {
+        this.nanoTime = requireNonNull(nanoTime, "No nanoTime provided");
+        return this;
     }
 
     /**
@@ -391,7 +432,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var owner = run != null ? run.ownedShards.get(shard) : null;
         if (owner == null) {
             try (var connection = dataSource.getConnection()) {
-                storage.enqueueBatch(connection, shard, payloads, payloadType);
+                var wakeAfterCommit = wakesAfterCommit(connection);
+                storage.enqueueRows(connection, shard, payloads.stream().map(payload -> new ShardOwnedStorage.PayloadRow(payload, payloadType)).toList(),
+                                    !wakeAfterCommit);
+                if (wakeAfterCommit) {
+                    wakeUp("unordered", shard);
+                }
             }
             return;
         }
@@ -437,10 +483,39 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                    .add(message);
         }
         try (var connection = dataSource.getConnection()) {
+            var wakeAfterCommit = wakesAfterCommit(connection);
             for (var entry : byShard.entrySet()) {
-                storage.enqueueOrderedBatch(connection, entry.getKey(), entry.getValue());
+                storage.enqueueOrderedBatch(connection, entry.getKey(), entry.getValue(), !wakeAfterCommit);
+                if (wakeAfterCommit) {
+                    wakeUp("ordered", entry.getKey());
+                }
             }
         }
+    }
+
+    /**
+     * Whether an enqueue on {@code connection} can wake the owner after its commit instead of notifying inside the
+     * transaction: the storage call commits it (autocommit), and there is a runtime to wake through. Otherwise
+     * something else commits, or nothing in this process could deliver the wake-up, and the notification rides along
+     * in the transaction as before - see {@link ShardWakeupNotifier} for why the difference matters.
+     */
+    private boolean wakesAfterCommit(java.sql.Connection connection) throws SQLException {
+        return connection.getAutoCommit() && wakeUpRuntime() != null;
+    }
+
+    /**
+     * After the enqueue's commit: in memory if an owner of this process serves the unit, batched notification if not.
+     */
+    private void wakeUp(String lane, int shard) {
+        var serving = wakeUpRuntime();
+        if (serving != null && !serving.wakeIfServedHere(queueId, lane, shard)) {
+            serving.notifier().submit(List.of(ShardWakeupListener.key(queueId, lane, shard)));
+        }
+    }
+
+    private ShardRuntime wakeUpRuntime() {
+        var own = runtime;
+        return own != null ? own : ShardRuntime.sharedIfPresent(dataSource);
     }
 
     /**
@@ -849,7 +924,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         return adoptAtStart(run, "ordered", leased, (entry, wakeup) -> {
             var owner = new OrderedShardOwner(storage, entry.shard(), entry.grant().fence(), settings, handler, metrics,
                                               redeliveryPolicy, instanceId, wakeup,
-                                              dispatch, entry.grant().previousOwnerReleased());
+                                              dispatch, entry.grant().previousOwnerReleased(), nanoTime);
             owner.setDeliveryGate(this::deliveryPermitted);
             return owner;
         });
@@ -911,7 +986,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         return adoptAtStart(run, "unordered", leased, (entry, wakeup) -> {
             var owner = new ShardOwner(storage, entry.shard(), entry.grant().fence(), settings, handler, metrics,
                                        redeliveryPolicy, wakeup,
-                                       instanceId, dispatch, entry.grant().previousOwnerReleased());
+                                       instanceId, dispatch, entry.grant().previousOwnerReleased(), nanoTime);
             owner.setDeliveryGate(this::deliveryPermitted);
             return owner;
         });
@@ -1304,6 +1379,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * than every 200 ms.
      */
     private long heartbeatIntervalMillis() {
+        return heartbeatIntervalMillis(leaseTtlMillis);
+    }
+
+    /**
+     * The heartbeat interval for a lease TTL the queue runs with: a third of it, and no more often than every 200 ms.
+     */
+    static long heartbeatIntervalMillis(long leaseTtlMillis) {
         return Math.max(200L, leaseTtlMillis / 3);
     }
 
@@ -1962,7 +2044,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                            wakeup -> {
                                                var owner = new ShardOwner(storage, unit, fence, activeSettings, activeHandler, metrics,
                                                                           activePolicy, wakeup,
-                                                                          instanceId, dispatch, previousOwnerReleased);
+                                                                          instanceId, dispatch, previousOwnerReleased, nanoTime);
                                                owner.setDeliveryGate(this::deliveryPermitted);
                                                return owner;
                                            });
@@ -2182,7 +2264,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                            wakeup -> {
                                                var owner = new OrderedShardOwner(storage, unit, fence, activeSettings, activeOrderedHandler,
                                                                                  metrics, activePolicy, instanceId, wakeup,
-                                                                                 dispatch, previousOwnerReleased);
+                                                                                 dispatch, previousOwnerReleased, nanoTime);
                                                owner.setDeliveryGate(this::deliveryPermitted);
                                                return owner;
                                            });
@@ -4432,7 +4514,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // (handBackWithinBudget), or until the notStarted callback below lets it out when that thread could not be
         // started: a heartbeat tick, a restart or a consume() may try one before then.
         var kept    = stillInHandler.stream().filter(owner -> "ordered".equals(owner.lane())).toList();
-        var keptNow = kept.stream().map(KeptUnit::new).toList();
+        var clock   = nanoTime;
+        var keptNow = kept.stream().map(owner -> new KeptUnit(owner, clock)).toList();
         // Units an earlier stop kept and that are not handed back yet, in three kinds, each owner's in-flight count and
         // phase read once, so none falls between them. Those whose key is still in its handler: this run did not take them
         // (keptUnitsNotHandedBack), and their rows still name this instance, so they keep it registered as this run's own
@@ -5039,9 +5122,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
          */
         private final AtomicLong             heldUpWarning = new AtomicLong(ErrorWindow.NEVER_TAKEN);
         /**
-         * When the stop kept the unit ({@link System#nanoTime()}): when it entered {@link Phase#STOP_FLUSHING}.
+         * The clock {@link #keptFor()} reads: the queue's ({@code ShardOwnedQueue.nanoTime}).
          */
-        private final long                   keptAtNanos   = System.nanoTime();
+        private final LongSupplier           nanoTime;
+        /**
+         * When the stop kept the unit ({@link #nanoTime}): when it entered {@link Phase#STOP_FLUSHING}.
+         */
+        private final long                   keptAtNanos;
 
         /**
          * A unit the stop ending a run keeps, in {@link Phase#STOP_FLUSHING} until that stop's budget thread has flushed it,
@@ -5049,7 +5136,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
          * ({@link #reviewStuckKeptUnits()}).
          */
         KeptUnit(LeasedOwner owner) {
+            this(owner, System::nanoTime);
+        }
+
+        /**
+         * @param nanoTime the clock {@link #keptFor()} reads; {@link System#nanoTime()} outside tests
+         */
+        KeptUnit(LeasedOwner owner, LongSupplier nanoTime) {
             this.owner = requireNonNull(owner, "No owner provided");
+            this.nanoTime = requireNonNull(nanoTime, "No nanoTime provided");
+            this.keptAtNanos = nanoTime.getAsLong();
         }
 
         LeasedOwner owner() {
@@ -5060,7 +5156,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
          * How long ago the stop kept the unit: how long it has stood at {@link Phase#STOP_FLUSHING} while it still does.
          */
         Duration keptFor() {
-            return Duration.ofNanos(System.nanoTime() - keptAtNanos);
+            return Duration.ofNanos(nanoTime.getAsLong() - keptAtNanos);
         }
 
         /**

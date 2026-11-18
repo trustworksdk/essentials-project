@@ -167,6 +167,49 @@ class ShardOwnedBatchedReadIT {
     }
 
     @Test
+    void a_sweep_with_its_next_visible_in_one_statement_returns_what_the_two_statements_return() throws Exception {
+        var delayedShard = ShardOwnedSchema.shardForKey("delayed-key", SHARD_COUNT);
+        var shards       = new int[SHARD_COUNT];
+        for (var shard = 0; shard < SHARD_COUNT; shard++) {
+            shards[shard] = shard;
+        }
+        try (var connection = dataSource.getConnection()) {
+            storage.enqueueOrderedBatch(connection, delayedShard,
+                                        List.of(new OrderedPayload("delayed-key", 0,
+                                                                   "later".getBytes(StandardCharsets.UTF_8), 1,
+                                                                   java.time.Duration.ofSeconds(60))));
+
+            var batched = storage.sweepOrderedFromHeadsWithNextVisible(connection, QUEUE_ID, shards, BATCH_SIZE);
+            var delayedSeen = false;
+            for (var shard : shards) {
+                var rows      = storage.sweepOrderedFromHead(connection, shard, BATCH_SIZE);
+                var untilNext = storage.millisUntilNextVisible(connection, ShardOwnedSchema.ORDERED_TABLE, shard);
+                var single    = storage.sweepOrderedFromHeadWithNextVisible(connection, shard, BATCH_SIZE);
+
+                assertThat(seqsOf(single.rows())).as("shard %d, one-statement sweep", shard).isEqualTo(seqsOf(rows));
+                assertThat(seqsOf(batched.rows().getOrDefault(shard, List.of())))
+                        .as("shard %d, batched one-statement sweep", shard)
+                        .isEqualTo(seqsOf(rows));
+                assertThat(single.rows()).as("shard %d, row contents", shard)
+                                         .usingRecursiveFieldByFieldElementComparator().isEqualTo(rows);
+                if (untilNext.isPresent()) {
+                    delayedSeen = true;
+                    // Server-computed intervals taken moments apart: close, not equal
+                    assertThat(single.millisUntilNextVisible().getAsLong())
+                            .isCloseTo(untilNext.getAsLong(), org.assertj.core.data.Offset.offset(2_000L));
+                    assertThat(batched.millisUntilNextVisible().get(shard))
+                            .isCloseTo(untilNext.getAsLong(), org.assertj.core.data.Offset.offset(2_000L));
+                } else {
+                    assertThat(single.millisUntilNextVisible()).as("shard %d has nothing delayed", shard).isEmpty();
+                    assertThat(batched.millisUntilNextVisible()).as("shard %d has nothing delayed", shard)
+                                                                .doesNotContainKey(shard);
+                }
+            }
+            assertThat(delayedSeen).as("the delayed row must be found, or the interval half was never compared").isTrue();
+        }
+    }
+
+    @Test
     void the_batched_next_visible_matches_the_per_shard_answer() throws Exception {
         var delayedShard = ShardOwnedSchema.shardForKey("delayed-key", SHARD_COUNT);
         try (var connection = dataSource.getConnection()) {

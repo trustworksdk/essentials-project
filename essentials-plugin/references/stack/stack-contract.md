@@ -229,7 +229,7 @@ way to construct the type, Jackson 3 uses the sole constructor regardless.
 > Kotlin persistence serializer is in `kotlin-spring-boot.md`. Spring Boot manages Jackson 3 through
 > `spring-boot-dependencies`' `jackson-bom.version` property and its `tools.jackson:jackson-bom`
 > import; the next minor's missing-primitive behaviour, and why Essentials holds back from it, is
-> recorded in the Essentials repository's `docs/ROADMAP-0.6x.md` (DU-1).
+> recorded in the Essentials repository's `docs/plans/ROADMAP-0.6x.md` (DU-1).
 
 ## S4 — The typed edge (MUST if any endpoint takes a semantic type)
 

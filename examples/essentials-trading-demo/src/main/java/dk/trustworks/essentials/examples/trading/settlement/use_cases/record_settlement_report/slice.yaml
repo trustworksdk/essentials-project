@@ -1,0 +1,26 @@
+schemaVersion: "1.1"
+slice: settlement.record_settlement_report
+kind: command
+bc: settlement
+owner: settlement-team
+status: live
+summary: "Record what the exchange's settlement simulator reported about an execution's settlement."
+generator: essentials
+language: java
+
+handles: [RecordSettlementReport]
+publishes: [SettlementInstructed, SettlementPostponed, SettlementSettled, SettlementAbandoned, SettlementAmountChanged]
+writes: [TradeSettlement]
+reads:
+  - { name: Fill, via: SettlementFillsProjection }
+endpoints: []
+invariants:
+  - id: INV-RSR-1
+    text: "Every report is a fact, recorded once in any order; settled and abandoned are final, the first wins; a correction waits for its completion"
+    enforcedBy: TradeSettlement
+forbidden:
+  - cross-slice-internal:settlement
+tests:
+  unit: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/settlement/aggregates/TradeSettlementTest.java" }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/settlement/SettlementIT.java" }
+  contract: { present: false }

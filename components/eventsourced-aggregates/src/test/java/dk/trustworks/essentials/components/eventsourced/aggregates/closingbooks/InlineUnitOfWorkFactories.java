@@ -16,10 +16,16 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkStatus;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.shared.functional.CheckedConsumer;
 import dk.trustworks.essentials.shared.functional.CheckedFunction;
+
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -52,5 +58,131 @@ final class InlineUnitOfWorkFactories {
             throw new RuntimeException(e);
         }
         return factory;
+    }
+
+    /**
+     * Like {@link #inline()}, but each outermost {@code withUnitOfWork}/{@code usingUnitOfWork} gets its own mock
+     * {@link HandleAwareUnitOfWork}, a nested call joins it, and {@code getCurrentUnitOfWork()} answers the one in
+     * progress on the calling thread - as the real factories do. Lets a test tell which unit of work a call ran in.
+     * <p>
+     * As in {@code UnitOfWorkFactory.withUnitOfWork}, a nested {@code withUnitOfWork} that throws marks the joined unit
+     * of work rollback-only - its {@code status()} turns {@link UnitOfWorkStatus#MarkedForRollbackOnly} and
+     * {@code getCauseOfRollback()} answers the exception - and rethrows it wrapped in a {@link UnitOfWorkException}.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    static HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> joining() {
+        HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> factory = mock(HandleAwareUnitOfWorkFactory.class);
+        var current = new ThreadLocal<HandleAwareUnitOfWork>();
+        try {
+            when(factory.getCurrentUnitOfWork()).thenAnswer(invocation -> java.util.Optional.ofNullable(current.get()));
+            when(factory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(invocation -> {
+                CheckedFunction<HandleAwareUnitOfWork, ?> function = invocation.getArgument(0);
+                if (current.get() != null) {
+                    var joined = current.get();
+                    try {
+                        return function.apply(joined);
+                    } catch (Exception e) {
+                        joined.markAsRollbackOnly(e);
+                        throw new UnitOfWorkException(e);
+                    }
+                }
+                current.set(trackingRollbackOnly(mock(HandleAwareUnitOfWork.class)));
+                try {
+                    return function.apply(current.get());
+                } finally {
+                    current.remove();
+                }
+            });
+            doAnswer(invocation -> {
+                CheckedConsumer<HandleAwareUnitOfWork> consumer = invocation.getArgument(0);
+                if (current.get() != null) {
+                    var joined = current.get();
+                    try {
+                        consumer.accept(joined);
+                    } catch (Exception e) {
+                        joined.markAsRollbackOnly(e);
+                        throw new UnitOfWorkException(e);
+                    }
+                    return null;
+                }
+                current.set(trackingRollbackOnly(mock(HandleAwareUnitOfWork.class)));
+                try {
+                    consumer.accept(current.get());
+                } finally {
+                    current.remove();
+                }
+                return null;
+            }).when(factory).usingUnitOfWork(any(CheckedConsumer.class));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return factory;
+    }
+
+    /**
+     * Make the mock {@code unitOfWork} answer {@link UnitOfWorkStatus#Started} until {@code markAsRollbackOnly} is
+     * called, then {@link UnitOfWorkStatus#MarkedForRollbackOnly} with that call's cause.
+     */
+    private static HandleAwareUnitOfWork trackingRollbackOnly(HandleAwareUnitOfWork unitOfWork) {
+        var status = new AtomicReference<>(UnitOfWorkStatus.Started);
+        var cause  = new AtomicReference<Throwable>();
+        when(unitOfWork.status()).thenAnswer(invocation -> status.get());
+        when(unitOfWork.getCauseOfRollback()).thenAnswer(invocation -> cause.get());
+        doAnswer(invocation -> {
+            cause.set(invocation.getArgument(0));
+            status.set(UnitOfWorkStatus.MarkedForRollbackOnly);
+            return null;
+        }).when(unitOfWork).markAsRollbackOnly(any());
+        return unitOfWork;
+    }
+
+    /**
+     * Like {@link #inline()}, but every exception thrown inside {@code withUnitOfWork}/{@code usingUnitOfWork} reaches
+     * the caller wrapped in a {@link UnitOfWorkException}, whether the call is outermost or nested - as
+     * {@code UnitOfWorkFactory.withUnitOfWork} does. {@link #inline()} passes exceptions through unwrapped, so a test
+     * that asserts which exception a caller gets from a real factory uses this one.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    static HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> wrapping() {
+        HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> factory = mock(HandleAwareUnitOfWorkFactory.class);
+        var uow = mock(HandleAwareUnitOfWork.class);
+        try {
+            when(factory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(invocation -> {
+                CheckedFunction<HandleAwareUnitOfWork, ?> function = invocation.getArgument(0);
+                try {
+                    return function.apply(uow);
+                } catch (Exception e) {
+                    throw new UnitOfWorkException(e);
+                }
+            });
+            doAnswer(invocation -> {
+                CheckedConsumer<HandleAwareUnitOfWork> consumer = invocation.getArgument(0);
+                try {
+                    consumer.accept(uow);
+                } catch (Exception e) {
+                    throw new UnitOfWorkException(e);
+                }
+                return null;
+            }).when(factory).usingUnitOfWork(any(CheckedConsumer.class));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return factory;
+    }
+
+    /**
+     * An in-memory generation repository whose {@code withGenerationLock} runs inside
+     * {@code unitOfWorkFactory.withUnitOfWork}, as {@code PostgresqlClosingBooksGenerationRepository}'s does. With
+     * {@link #wrapping()}, an exception thrown under the lock reaches the caller wrapped by the lock too.
+     */
+    static <ID> InMemoryClosingBooksGenerationResolver<ID> generationLockInUnitOfWork(HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> unitOfWorkFactory) {
+        return new InMemoryClosingBooksGenerationResolver<>() {
+            @Override
+            public <R> R withGenerationLock(AggregateType aggregateType,
+                                            LogicalAggregateId<ID> logicalAggregateId,
+                                            Supplier<R> rollover) {
+                return unitOfWorkFactory.withUnitOfWork(uow -> super.withGenerationLock(aggregateType, logicalAggregateId, rollover));
+            }
+        };
     }
 }

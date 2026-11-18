@@ -2,7 +2,7 @@
 
 Spring Boot auto-configuration for `postgresql-queue-shard-owned`. Published, like the engine it configures — no `maven.deploy.skip`; only the `examples/` modules carry one.
 
-Engine docs: `docs/durable-queue-shard-owned.md`. Consumer reference: `LLM/LLM-postgresql-queue-shard-owned.md`.
+Engine docs: `docs/design/durable-queue-shard-owned.md`. Consumer reference: `LLM/LLM-postgresql-queue-shard-owned.md`.
 
 ## What it wires
 

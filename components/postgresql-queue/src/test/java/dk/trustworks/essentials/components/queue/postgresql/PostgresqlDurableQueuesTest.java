@@ -51,6 +51,23 @@ class PostgresqlDurableQueuesTest {
         assertThat(durableQueues.getSharedQueueTableName()).isEqualTo(overriddenTableName);
     }
 
+    /**
+     * The stuck-message reset takes back claims at least one timeout old and runs at most once per timeout, so a claim
+     * made just after a reset is taken back by the one after the next: up to two timeouts unserved. A handler may
+     * still be overrun after one timeout.
+     */
+    @Test
+    void a_dead_consumers_message_stays_unserved_for_up_to_two_message_handling_timeouts() {
+        try (var durableQueues = PostgresqlDurableQueues.builder()
+                                                        .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
+                                                        .setJsonSerializer(mock(JSONSerializer.class))
+                                                        .setMessageHandlingTimeout(Duration.ofSeconds(30))
+                                                        .build()) {
+            assertThat(durableQueues.maxUnservedAfterInstanceLoss()).contains(Duration.ofSeconds(60));
+            assertThat(durableQueues.messageHandlingTimeout()).contains(Duration.ofSeconds(30));
+        }
+    }
+
     @Test
     void initializeWithInvalidOverriddenTableName() {
         assertThatThrownBy(() ->
