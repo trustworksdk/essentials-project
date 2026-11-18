@@ -13,17 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package dk.trustworks.essentials.examples.trading.accounts.views.uncleared_deposits;
 
-import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
-import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.examples.trading.accounts.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
+import org.jdbi.v3.core.Handle;
 import org.springframework.stereotype.Service;
 
 import java.sql.Date;
@@ -40,77 +36,47 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Idempotent per deposit, so a redelivered event changes nothing; keyed by deposit id, not by stream, because an
  * uncleared deposit carries into the account's next generation and clears there.
  * <p>
- * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
- * {@link ViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
- * with Spring's {@code JdbcTemplate}, only while the Spring wiring binds both to one connection. The
- * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
- * which opens one; {@link #clearingOnOrBefore(LocalDate)} reads through {@code getUnitOfWorkFactory().withUnitOfWork(uow -> …)},
- * which joins the caller's unit of work or opens one.
+ * Engine-neutral: the table, the event logic and the query, on either event store engine. What feeds it is the engine's
+ * processor - {@link UnclearedDepositsClassicView} or {@link UnclearedDepositsEventLogView} - which hands each event
+ * here with the handle of the transaction it handles the event in, so the row commits together with that processor's
+ * progress. The constructor's DDL and {@link #clearingOnOrBefore(LocalDate)} open (or join) a unit of work of their own.
  */
-// Deliberately not handled: the startup summary warns about every sealed-hierarchy leaf a view neither handles nor lists here
-@IgnoresEventTypes({AccountBooksClosed.class,
-                    AccountOpened.class,
-                    CashAdjusted.class,
-                    CashWithdrawn.class,
-                    FundsHeld.class,
-                    FundsReleased.class,
-                    SettlementAmountCorrected.class,
-                    SharesReleased.class,
-                    SharesReserved.class,
-                    TradeBooked.class,
-                    TradeBookingReversed.class,
-                    TradeSettled.class,
-                    UnknownReferenceIgnored.class,
-                    WithdrawalReturnCredited.class})
-@ClassicEngine
 @Service
-public class UnclearedDepositsProjection extends TradingDemoViewEventProcessor {
-    public UnclearedDepositsProjection(ViewEventProcessorDependencies dependencies) {
-        super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
-                                                                                   CREATE TABLE IF NOT EXISTS projection_uncleared_deposit (
-                                                                                       deposit_id VARCHAR PRIMARY KEY,
-                                                                                       account_id VARCHAR NOT NULL,
-                                                                                       clears_on DATE NOT NULL
-                                                                                   )
-                                                                                   """));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "CREATE INDEX IF NOT EXISTS projection_uncleared_deposit_clears_on ON projection_uncleared_deposit (clears_on)"));
+public class UnclearedDepositsProjection {
+    private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
+
+    public UnclearedDepositsProjection(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
+        unitOfWorkFactory.usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
+                                                                              CREATE TABLE IF NOT EXISTS projection_uncleared_deposit (
+                                                                                  deposit_id VARCHAR PRIMARY KEY,
+                                                                                  account_id VARCHAR NOT NULL,
+                                                                                  clears_on DATE NOT NULL
+                                                                              )
+                                                                              """));
+        unitOfWorkFactory.usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "CREATE INDEX IF NOT EXISTS projection_uncleared_deposit_clears_on ON projection_uncleared_deposit (clears_on)"));
     }
 
-    @Override
-    public String getProcessorName() {
-        return "UnclearedDepositsProjection";
+    void on(Handle handle, DepositCredited e) {
+        handle.createUpdate("INSERT INTO projection_uncleared_deposit (deposit_id, account_id, clears_on) VALUES (:depositId, :accountId, :clearsOn) ON CONFLICT (deposit_id) DO NOTHING")
+              .bind("depositId", e.depositId().toString())
+              .bind("accountId", e.accountId().toString())
+              .bind("clearsOn", Date.valueOf(e.clearsOn()))
+              .execute();
     }
 
-    @Override
-    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-        return List.of(AccountsAggregateTypes.ACCOUNTS);
+    void on(Handle handle, DepositCleared e) {
+        removeDeposit(handle, e.depositId());
     }
 
-    @MessageHandler
-    void handle(DepositCredited e) {
-        getRequiredUnitOfWork().handle()
-                                .createUpdate("INSERT INTO projection_uncleared_deposit (deposit_id, account_id, clears_on) VALUES (:depositId, :accountId, :clearsOn) ON CONFLICT (deposit_id) DO NOTHING")
-                                .bind("depositId", e.depositId().toString())
-                                .bind("accountId", e.accountId().toString())
-                                .bind("clearsOn", Date.valueOf(e.clearsOn()))
-                                .execute();
+    void on(Handle handle, DepositReturned e) {
+        removeDeposit(handle, e.depositId());
     }
 
-    @MessageHandler
-    void handle(DepositCleared e) {
-        getRequiredUnitOfWork().handle()
-                                .createUpdate("DELETE FROM projection_uncleared_deposit WHERE deposit_id = :depositId")
-                                .bind("depositId", e.depositId().toString())
-                                .execute();
-    }
-
-    @MessageHandler
-    void handle(DepositReturned e) {
-        getRequiredUnitOfWork().handle()
-                                .createUpdate("DELETE FROM projection_uncleared_deposit WHERE deposit_id = :depositId")
-                                .bind("depositId", e.depositId().toString())
-                                .execute();
+    private static void removeDeposit(Handle handle, DepositId depositId) {
+        handle.createUpdate("DELETE FROM projection_uncleared_deposit WHERE deposit_id = :depositId")
+              .bind("depositId", depositId.toString())
+              .execute();
     }
 
     /**
@@ -118,11 +84,11 @@ public class UnclearedDepositsProjection extends TradingDemoViewEventProcessor {
      */
     public List<UnclearedDeposit> clearingOnOrBefore(LocalDate businessDate) {
         requireNonNull(businessDate, "No businessDate provided");
-        return getUnitOfWorkFactory().withUnitOfWork(uow -> uow.handle()
-                                                               .createQuery("SELECT account_id, deposit_id, clears_on FROM projection_uncleared_deposit WHERE clears_on <= :businessDate ORDER BY clears_on, deposit_id")
-                                                               .bind("businessDate", Date.valueOf(businessDate))
-                                                               .map((rs, ctx) -> new UnclearedDeposit(AccountId.of(rs.getString(1)), DepositId.of(rs.getString(2)), rs.getDate(3).toLocalDate()))
-                                                               .list());
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle()
+                                                          .createQuery("SELECT account_id, deposit_id, clears_on FROM projection_uncleared_deposit WHERE clears_on <= :businessDate ORDER BY clears_on, deposit_id")
+                                                          .bind("businessDate", Date.valueOf(businessDate))
+                                                          .map((rs, ctx) -> new UnclearedDeposit(AccountId.of(rs.getString(1)), DepositId.of(rs.getString(2)), rs.getDate(3).toLocalDate()))
+                                                          .list());
     }
 
     public record UnclearedDeposit(AccountId accountId, DepositId depositId, LocalDate clearsOn) {
