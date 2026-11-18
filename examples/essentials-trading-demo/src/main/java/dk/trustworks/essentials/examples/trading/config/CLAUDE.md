@@ -31,7 +31,16 @@ Porting a processor (pilot: `accounts/views/uncleared_deposits/`):
    transaction boundary stays on the wrapper. A parallel-consumers override is
    `getNumberOfParallelInboxMessageConsumers()` on classic, `numberOfParallelInboxMessageConsumers()` on the twin;
    `getForwardBatchSize()` is classic-only (the twin forwards one event per unit of work).
-6. Partitioned views: the twin queues to `<name>:queue` keyed by aggregate; `UnitOfWorkMode.NONE` handlers are refused.
+6. **Partitioned views** (pilot: `accounts/views/account_overview/`): same split, wrappers `<Name>ClassicView` (extends
+   `TradingDemoPartitionedViewEventProcessor`) and `<Name>EventLogView` (extends the twin, which also takes
+   `DurableQueues`). Handlers keep the `(<Event>, OrderedMessage)` shape on both; the projection gets
+   `on(Handle, <Event>, long eventOrder)` and each wrapper passes `message.getOrder()` - on the twin the message's key is
+   the plain aggregate id and its order the event's `EventOrder`, as on classic. The twin writes through
+   `messageHandle()`, the unit of work each queued message is handled in. It forwards every event it has a handler for
+   to `<name>:queue` keyed by `<aggregateType>|<id>` (the classic queue name and key), consumed on every instance with
+   `trading-demo.views.partitioned-consumers` threads, so per-account order and the spread over instances match classic.
+   `trading-demo.views.partitioned-forward-payloads` is classic-only: the twin always forwards the payload.
+   `UnitOfWorkMode.NONE` handlers are refused on both.
 7. Tests: an `@ActiveProfiles("event-log")` IT per ported processor. `UnclearedDepositsEventLogViewIT` is the template;
    no processor needs mocking any more. `PaymentRouterEventLogReactionIT` is the reaction template (event log ->
    forwarder -> inbox -> handler, spying on the external gateway).
@@ -44,3 +53,11 @@ Porting a processor (pilot: `accounts/views/uncleared_deposits/`):
 Unit of work on the view twin (proven by `UnclearedDepositsEventLogViewIT`): inside a page a Spring transaction is
 active, `pageHandle()`'s connection is the page connection (`DataSourceUtils.getConnection`), auto-commit is off,
 and the write commits with the page, together with the subscription's progress. No extra transaction code needed.
+
+## Classic-only by decision
+
+The three EF-2 measurement processors in `_demo_harness/` (`NoOpAccountsEventProcessor`, `NoOpAccountsViewProcessor`,
+`BatchedAccountsForwarder`) stay `@ClassicEngine` and are not ported: they measure the classic engine's forwarding
+paths and only exist behind a `trading-demo.ef2.*` flag (`docs/plans/event-store-engine-phase10.md` §6.3). Every other
+processor has both wrappers; `TradingDemoEventLogIT` starts the whole demo on the `event-log` profile and asserts that
+no classic processor bean and no `EventStoreSubscriptionManager` exist there.

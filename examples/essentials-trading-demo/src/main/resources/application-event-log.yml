@@ -2,8 +2,8 @@
 # Combine with the other profiles: `compose,event-log` or `compose,simulators,event-log`. Use a fresh database
 # (`./reset-stack.sh`): the engine has its own tables (el_*), so events written by the classic engine are not read.
 #
-# trading-demo.engine picks which wrapper of each ported processor is a bean (config/CLAUDE.md); processors not yet
-# ported are classic-only and absent under this profile.
+# trading-demo.engine picks which wrapper of each processor is a bean (config/CLAUDE.md); only the EF-2 measurement
+# processors in _demo_harness/ are classic-only and absent under this profile.
 trading-demo:
   engine: event-log
 

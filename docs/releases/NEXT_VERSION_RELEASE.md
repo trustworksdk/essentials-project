@@ -952,6 +952,17 @@ Not published; listed because they are the reference for how to use the framewor
   part not returned counted as cleared at once. It now reduces the uncleared amount by the event's `unclearedReleased`
   and removes the deposit only when nothing is left; `DepositReturned` is unchanged, and replaying old events gives the
   corrected state.
+- **`essentials-trading-demo` runs on either event store engine.** `trading-demo.engine` picks it: `classic` (the
+  default) or `event-log`, which the `event-log` profile sets (combine it with the others, e.g. `compose,event-log`, on
+  a fresh database - the new engine has its own `el_*` tables and does not read events the classic engine wrote). Every
+  processor, view, partitioned view and reaction alike, was ported by one pattern: the projection or reaction keeps its
+  class name and holds the handler bodies, engine-neutral, and two thin wrappers - a classic processor and its
+  new-engine twin, each a bean on its own engine only - carry the `@MessageHandler`s and call into it. Processor names,
+  inbox and queue names, per-account ordering and the partitioned views' every-instance consumption are the same on both
+  engines (`config/CLAUDE.md`, "One handler body, two engine wrappers"). The three EF-2 measurement processors in
+  `_demo_harness` stay classic-only, and under `event-log` CDC is off, since the new engine does not use it.
+  `TradingDemoEventLogIT` starts the whole demo on the new engine and runs a customer from deposit to a filled order
+  through all three processor kinds.
 
 ## 6. Documentation
 
