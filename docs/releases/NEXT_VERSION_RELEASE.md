@@ -32,6 +32,8 @@ and two lock waits removed.
   `FailoverRedeliveryPolicy` retries for long enough to outlast a failover (§2.18).
 - Command handlers: an `AnnotatedCommandHandler` failure is logged at DEBUG, not ERROR - the sender reports it (§1.1.4).
 - CDC: the inbox deletes a row once it is dispatched by default, instead of keeping it until the TTL job (§1.1.5).
+- Spring Boot starters: the tracing and queue metrics interceptors are registered when the Micrometer beans are
+  present, not only with `management.tracing.enabled=true`, which Spring Boot 4 no longer reads (§1.1.6).
 - Fenced locks: opt-in spreading of async-acquired locks, and so of exclusive processors, over the instances (§2.9).
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1). The
@@ -204,6 +206,39 @@ What you see: after an upgrade, `select count(*) from eventstore_cdc_inbox where
 published. Then set `essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy=MARK_DISPATCHED` (or
 `CdcDispatcherProperties.setDispatchedRowPolicy(DispatchedRowPolicy.MARK_DISPATCHED)`) to keep the old behaviour.
 Note the key is `cdc-dispatcher`: a `dispatcher:` block binds to nothing, silently.
+
+#### 1.1.6 Tracing and queue metrics interceptors follow the Micrometer beans, not `management.tracing.enabled` (Spring Boot starters)
+
+The PostgreSQL and MongoDB starters registered `DurableQueuesMicrometerTracingInterceptor` and
+`DurableQueuesMicrometerInterceptor`, and the event store starter `MicrometerTracingEventStoreInterceptor`, only with
+`management.tracing.enabled=true`. Spring Boot 4 replaced that property with `management.tracing.export.enabled` and no
+longer reads it, so an application that moved to the new property lost all three. A durable queue consumer then ran
+without the enqueuer's trace context (no trace or span id in its logs), and the per-queue counters and gauges
+(`DurableQueues_QueuedMessages_Processed`, `…_Handled`, `…_Retries`, `DurableQueues_DeadLetterMessages_Processed` and the
+queued/dead-letter gauges) were missing. This was also the case in 0.50.0.
+
+They are now registered by what is present:
+
+- the two tracing interceptors when a Micrometer `Tracer`, `Propagator` and `ObservationRegistry` bean are all present;
+- `DurableQueuesMicrometerInterceptor` whenever a `MeterRegistry` bean is present, independent of tracing.
+
+Each has its own switch, default `true`: `essentials.durable-queues.tracing-enabled`,
+`essentials.durable-queues.queue-metrics-enabled` and `essentials.eventstore.tracing-enabled`. The starters are also
+ordered after Spring Boot's Micrometer auto-configurations, so these checks, and the existing one for
+`MicrometerDurableQueueMessageObserver`, see the beans Spring Boot creates.
+
+`management.tracing.export.enabled` is not read: whether spans are exported is Spring Boot's concern. Note that with the
+OpenTelemetry bridge and export disabled, Spring Boot itself installs a no-op propagator, so the trace context is then not
+carried across a queue, just as for HTTP and Kafka.
+
+**How to observe it:** with `management.tracing.export.enabled=true` and no `management.tracing.enabled`, a message
+enqueued inside a span used to be handled with no trace or span id in the consumer's MDC, and
+`/actuator/metrics/DurableQueues_QueuedMessages_Processed` answered 404. Now the consumer logs the enqueuer's trace id
+and the metric is present.
+
+**What to do:** remove a `management.tracing.enabled: true` kept only for Essentials. An application with tracing or a
+`MeterRegistry` but without that property gets the interceptors now; if you do not want them, set the matching switch
+above to `false`.
 
 ---
 
@@ -683,6 +718,7 @@ message a second time as soon as its claim is that old.
 
 | Area | Fix | Commit |
 |---|---|---|
+| Tracing and queue metrics (Spring Boot starters) | `DurableQueuesMicrometerTracingInterceptor`, `DurableQueuesMicrometerInterceptor` and `MicrometerTracingEventStoreInterceptor` were registered only with `management.tracing.enabled=true`, which Spring Boot 4 no longer reads - see §1.1.6. They now follow the Micrometer beans, with an opt-out switch each | - |
 | Shard-owned queues (`postgresql-queue-shard-owned`, admin API) | Opening a dead letter's details in the admin UI answered 404 (`No message 'o-62-2252' in shard-owned queue …`): looking a message up by id searched queued messages only, though a dead letter keeps its id. It now finds dead letters too, with the error that parked them. The `MessageQueue` SPI gains `getDeadLetter(MessageId)` (a `default` returning empty); `getMessage` stays live-only | - |
 | Shard-owned queues (`postgresql-queue-shard-owned`) | The blocked-key warning named the queue by its internal number (`Queue 30, ordered shard 61: …`), so an operator could not tell which queue's dead letters to open. It now gives the registered name with the id (`Queue 'Inbox:Orders:ExchangeReports' (id 30), …`), read once from the registry when first logged | - |
 | CDC (`postgresql-event-store`) | A CDC subscription that falls more than a page behind the bus under a burst - routine, and healed within milliseconds by catching up from the event store - logged a WARN and an INFO line every time, a screenful per burst. Each occurrence is now DEBUG, and each subscription logs one INFO line a minute counting them; the `live_source.overflow.count` metric is unchanged | - |
@@ -707,6 +743,8 @@ message a second time as soon as its claim is that old.
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md).
 
+- `0.60.1-11` - the LLM docs describe when the starters register the tracing and queue metrics interceptors, and
+  their opt-out switches (§1.1.6).
 - `0.60.1-3` - the LLM docs show `Money`'s `amount` as a JSON number, the form it is written in, and say a quoted
   amount is also read (§3).
 - `0.60.1-2` - the LLM docs describe elastic pump connections, wake-after-commit, `JSONSerializer.readProperties` and

@@ -3,6 +3,15 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-11 — targets Essentials 0.60.1
+
+- **Tracing and queue metrics interceptors** — the spring-boot-starter-modules reference says the durable-queue and
+  event-store tracing interceptors are registered when a Micrometer `Tracer`, `Propagator` and `ObservationRegistry` are
+  present, and `DurableQueuesMicrometerInterceptor` whenever a `MeterRegistry` is, each with an opt-out switch
+  (`essentials.durable-queues.tracing-enabled`, `essentials.durable-queues.queue-metrics-enabled`,
+  `essentials.eventstore.tracing-enabled`), instead of only with `management.tracing.enabled=true`, which Spring Boot 4
+  no longer reads. No skill, rule or script changed.
+
 ## 0.60.1-10 — targets Essentials 0.60.1
 
 - **Event processor retry default** — the postgresql-event-store reference no longer says the default retry budget of
