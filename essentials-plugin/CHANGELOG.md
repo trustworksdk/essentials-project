@@ -3,6 +3,14 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-10 — targets Essentials 0.60.1
+
+- **Event processor retry default** — the postgresql-event-store reference no longer says the default retry budget of
+  an `EventProcessor` or `ViewEventProcessor` outlasts a failover: the default stays about 10 s (20 redeliveries, 200 ms
+  growing ×1.1 to 3 s), and `FailoverRedeliveryPolicy` is an opt-in override of `getInboxRedeliveryPolicy()` /
+  `getDurableQueueRedeliveryPolicy()` for a processor whose handler waits for another processor's work. Corrects the
+  0.60.1-2 entry. No skill, rule or script changed.
+
 ## 0.60.1-9 — targets Essentials 0.60.1
 
 - **Release documents moved** — the Essentials repository now keeps its release notes and migration guides under
