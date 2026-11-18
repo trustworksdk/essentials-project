@@ -78,6 +78,10 @@
                 th:title="${canReadSubscriptions} ? null : 'Requires essentials_subscription_reader'">
             <span class="ic">⇄</span> CDC
         </button>
+        <button class="nav-item" data-view="eventLogSubscriptions" th:disabled="${!canReadSubscriptions}"
+                th:title="${canReadSubscriptions} ? null : 'Requires essentials_subscription_reader'">
+            <span class="ic">⇶</span> Event-log subscriptions
+        </button>
         <button class="nav-item" data-view="postgresql" th:disabled="${!canReadStatistics}"
                 th:title="${canReadStatistics} ? null : 'Requires essentials_postgresql_stats_reader'">
             <span class="ic">▤</span> PostgreSQL stats
@@ -121,6 +125,7 @@
     <section class="section" data-section="locks"></section>
     <section class="section" data-section="queues"></section>
     <section class="section" data-section="shardOwnedQueues"></section>
+    <section class="section" data-section="eventLogSubscriptions"></section>
     <section class="section" data-section="scheduler"></section>
     <section class="section" data-section="subscriptions"></section>
     <section class="section" data-section="cdc"></section>

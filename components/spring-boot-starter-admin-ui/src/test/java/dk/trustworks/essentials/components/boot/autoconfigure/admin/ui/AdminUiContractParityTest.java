@@ -107,11 +107,11 @@ class AdminUiContractParityTest {
             "/event-store/statistics/table-cache-hit-ratio");
 
     /**
-     * Contract paths the console does not call yet, deliberately. The new event store engine's subscription admin
-     * operations (tag {@code event-log-subscriptions}) get their UI view in phase 10 of the event-store redesign
-     * ({@code docs/plans/event-store-engine-phase8.md} §4.4); until then they are served to API clients only.
+     * The new event store engine's subscription admin operations (tag {@code event-log-subscriptions}), surfaced by the
+     * console's event-log subscriptions view (phase 10 of the event-store redesign). Named here as well as covered by
+     * {@link #every_contract_path_is_surfaced_by_the_ui()}, so a view that stops calling one fails with the path named.
      */
-    private static final Set<String> NOT_YET_IN_THE_UI_PATHS = Set.of(
+    private static final Set<String> EVENT_LOG_SUBSCRIPTION_PATHS = Set.of(
             "/event-log/subscriptions",
             "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}",
             "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events",
@@ -121,11 +121,16 @@ class AdminUiContractParityTest {
             "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/instances/{instanceName}");
 
     @Test
+    void every_event_log_subscription_path_is_called_by_the_ui() {
+        assertThat(contractPaths).containsAll(EVENT_LOG_SUBSCRIPTION_PATHS);
+        assertThat(calledPaths()).containsAll(EVENT_LOG_SUBSCRIPTION_PATHS);
+    }
+
+    @Test
     void every_contract_path_is_surfaced_by_the_ui() {
         var uncovered = new TreeSet<>(contractPaths);
         uncovered.removeAll(calledPaths());
         uncovered.removeAll(SUPERSEDED_PATHS);
-        uncovered.removeAll(NOT_YET_IN_THE_UI_PATHS);
 
         assertThat(uncovered)
                 .as("""

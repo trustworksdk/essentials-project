@@ -1097,6 +1097,91 @@ const actions = {
            table. Not recoverable.</p>`,
         run: () => api(`/shard-owned-queues/${encodeURIComponent(name)}/messages`, { method: 'DELETE' })
     }),
+    /* The event-log subscription operations answer from the database, so they act on whichever instance takes the
+       request; a retry or discard is stored on the parked head and served by the instance running the subscription. */
+    eventLogRetry: (globalOrder, data) => ({
+        title: 'Retry parked head?', danger: false, confirmLabel: 'Retry',
+        body: `<p>Retries the parked head at global order <code class="mono">${esc(globalOrder)}</code> of
+           ${eventLogKeyLabel(eventLogKeyOf(data))}. If it succeeds, the events of its aggregate held behind it are
+           handled next. If it fails again it stays parked.</p>
+           <p>The request is stored on the head: the instance running the subscription serves it at once when that is
+           the instance taking this request, else at its next parked check.</p>`,
+        run: async () => {
+            const k = eventLogKeyOf(data);
+            const answer = await api(`/event-log/subscriptions/${encodeURIComponent(k.subscriber)}/aggregate-types/${encodeURIComponent(k.aggregateType)}/parked-events/${encodeURIComponent(globalOrder)}/retry?instanceName=${encodeURIComponent(k.instanceName)}`, { method: 'POST' });
+            eventLogState.lastRequest = { key: k, action: 'Retry', globalOrder: Number(globalOrder), result: answer?.result };
+        }
+    }),
+    eventLogDiscard: (globalOrder, data) => ({
+        title: 'Discard parked head?', danger: true, confirmLabel: 'Discard event',
+        body: `<p>Deletes the parked head at global order <code class="mono">${esc(globalOrder)}</code> of
+           ${eventLogKeyLabel(eventLogKeyOf(data))} <strong>without handling it</strong>. The subscriber never sees
+           that event; the events of its aggregate held behind it are handled next.</p>
+           <p>The request is stored on the head and served as a retry is.</p>`,
+        run: async () => {
+            const k = eventLogKeyOf(data);
+            const answer = await api(`/event-log/subscriptions/${encodeURIComponent(k.subscriber)}/aggregate-types/${encodeURIComponent(k.aggregateType)}/parked-events/${encodeURIComponent(globalOrder)}/discard?instanceName=${encodeURIComponent(k.instanceName)}`, { method: 'POST' });
+            eventLogState.lastRequest = { key: k, action: 'Discard', globalOrder: Number(globalOrder), result: answer?.result };
+        }
+    }),
+    /* "The head" is not an operation of the contract: it is the row's resume point plus its lag, read again when the
+       reset is confirmed, so the figure is no older than the click. */
+    eventLogReset: (subscriber, data) => ({
+        title: 'Reset resume point?', danger: true, confirmLabel: 'Reset',
+        body: `<p>Moves the resume point of ${eventLogKeyLabel(eventLogKeyOf(data))} and <strong>deletes its parked events
+           and waiting requests</strong>. Moving it back replays events to the subscriber; moving it forward skips them.
+           The instance running the subscription picks the new resume point up. Current resume point:
+           <code class="mono">${esc(data.elResumePoint)}</code>.</p>
+           <label><input type="radio" name="eventLogResetTo" value="order" checked> To a global order</label>
+           <label for="eventLogResumeFrom">First global order to handle after the reset</label>
+           <input type="number" id="eventLogResumeFrom" min="1" step="1" value="${esc(data.elResumePoint)}" autocomplete="off">
+           <label><input type="radio" name="eventLogResetTo" value="head" ${data.elLag === '' ? 'disabled' : ''}>
+             To the head - skip every event of the aggregate type not yet handled${data.elLag === ''
+               ? ' (unavailable: the lag is unknown, the aggregate type is not registered in the database)' : ''}</label>`,
+        run: async () => {
+            const k = eventLogKeyOf(data);
+            const sub = encodeURIComponent(k.subscriber);
+            const type = encodeURIComponent(k.aggregateType);
+            const instance = encodeURIComponent(k.instanceName);
+            let resumeFrom;
+            if (document.querySelector('input[name="eventLogResetTo"]:checked')?.value === 'head') {
+                const current = await api(`/event-log/subscriptions/${sub}/aggregate-types/${type}?instanceName=${instance}`);
+                if (current?.lag == null) {
+                    throw { status: 409, message: 'The head is unknown: the aggregate type is not registered in the database. Reset to a global order instead.' };
+                }
+                resumeFrom = Math.max(1, current.resumePoint + current.lag);
+            } else {
+                const raw = document.getElementById('eventLogResumeFrom')?.value ?? '';
+                resumeFrom = Number(raw);
+                if (raw.trim() === '' || !Number.isInteger(resumeFrom) || resumeFrom < 1) {
+                    throw { status: 400, message: 'Enter the global order to resume from as a whole number of at least 1.' };
+                }
+            }
+            const result = await api(`/event-log/subscriptions/${sub}/aggregate-types/${type}/reset?instanceName=${instance}&resumeFrom=${resumeFrom}`, { method: 'POST' });
+            /* reset=false is a 200, not an error: there is no such subscription, and none was created. */
+            if (!result?.reset) {
+                throw { status: 404, message: 'Not reset: there is no such subscription, and none was created.' };
+            }
+            eventLogState.after = 0;
+            eventLogState.previous = [];
+            eventLogState.lastRequest = null;
+        }
+    }),
+    eventLogDeleteInstance: (subscriber, data) => ({
+        title: 'Delete retired instance?', danger: true, confirmLabel: 'Delete row', requireText: data.elInstance,
+        body: `<p>Deletes the progress row and the parked events of ${eventLogKeyLabel(eventLogKeyOf(data))}. Only for an
+           instance that has been retired for good. Not recoverable.</p>
+           <p>Refused for a row whose lease is held, and for one the instance taking this request runs.</p>`,
+        run: async () => {
+            const k = eventLogKeyOf(data);
+            const result = await api(`/event-log/subscriptions/${encodeURIComponent(k.subscriber)}/aggregate-types/${encodeURIComponent(k.aggregateType)}/instances/${encodeURIComponent(k.instanceName)}`, { method: 'DELETE' });
+            if (!result?.deleted) {
+                throw { status: 409, message: 'Not deleted: there is no such per-instance row, its lease is held, or the instance that took the request runs it.' };
+            }
+            if (sameEventLogKey(eventLogState.selected, k)) eventLogState.selected = null;
+            eventLogState.lastRequest = null;
+        }
+    }),
     resumeSubscription: (subscriberId, data) => ({
         title: 'Resume subscription?', danger: false, confirmLabel: 'Resume',
         body: `<p>Resumes <code class="mono">${esc(subscriberId)}</code> on
@@ -1759,6 +1844,198 @@ async function openShardOwnedDrawer(queueName, id) {
       </div>`;
 }
 
+/* ── Event-log subscriptions ─────────────────────────────────────────────────────────────────
+   The new event store engine's subscriptions, read from the database, so any instance answers for all of them. A
+   subscription is keyed by (subscriber, aggregate type, instance name); an exclusive subscription's instance name is
+   empty, and the contract takes it as an optional instanceName query parameter rather than a path segment. The engine
+   is optional: without it every path answers 404, which the list shows through errorState like any absent area. */
+let eventLogState = { aggregateType: '', selected: null, after: 0, previous: [], lastRequest: null };
+
+const PARKED_PAGE_SIZE = 50;
+
+const sameEventLogKey = (a, b) => a && b && a.subscriber === b.subscriber && a.aggregateType === b.aggregateType
+    && a.instanceName === b.instanceName;
+
+/* The data attributes every write action and the row selection read the key from (actions get the button's dataset). */
+const eventLogKeyAttrs = (k) => `data-el-subscriber="${esc(k.subscriber)}" data-el-aggregate-type="${esc(k.aggregateType)}"
+      data-el-instance="${esc(k.instanceName ?? '')}"`;
+
+const eventLogKeyOf = (data) => ({ subscriber: data.elSubscriber, aggregateType: data.elAggregateType, instanceName: data.elInstance ?? '' });
+
+const eventLogKeyLabel = (k) => `<code class="mono">${esc(k.subscriber)}</code> on <code class="mono">${esc(k.aggregateType)}</code>${k.instanceName
+    ? `, instance <code class="mono">${esc(k.instanceName)}</code>` : ' (exclusive)'}`;
+
+/* Not a field of the contract: a reading of the row's own fields, worst first. */
+function eventLogStatus(s) {
+    if (s.parkedHeads > 0) return badge('serious', `${num(s.parkedHeads)} parked`);
+    if (!s.exclusive) return badge('neutral', 'Per instance');
+    if (s.leaseOwner == null) return badge('warning', 'Not leased');
+    return badge('good', 'Leased');
+}
+
+const parkedRequestOutcome = {
+    ACCEPTED: () => badge('neutral', 'Accepted - stored on the parked head; the instance running the subscription serves it at its next parked check'),
+    DONE: () => badge('good', 'Done - served by the instance that took the request'),
+    FAILED: () => badge('serious', 'Failed again - the instance that took the request retried it, and it stays parked'),
+    NOT_A_HEAD: () => badge('warning', 'Not a parked head - nothing parked heads its aggregate at that global order any more'),
+    NO_SUCH_SUBSCRIPTION: () => badge('warning', 'No such subscription')
+};
+
+views.eventLogSubscriptions = async () => {
+    const filter = eventLogState.aggregateType;
+    let subs;
+    try {
+        /* Two literal calls: an empty aggregateType would filter for the empty type rather than none. */
+        subs = await (filter ? api(`/event-log/subscriptions?aggregateType=${encodeURIComponent(filter)}`)
+                             : api('/event-log/subscriptions'));
+    } catch (e) {
+        return card('Event-log subscriptions', errorState(e, 'essentials_subscription_reader'), 'GET /event-log/subscriptions', true);
+    }
+
+    const selected = eventLogState.selected;
+    const row = (s) => {
+        const key = { subscriber: s.subscriber, aggregateType: s.aggregateType, instanceName: s.instanceName ?? '' };
+        const isSelected = sameEventLogKey(key, selected);
+        return `<tr${isSelected ? ' class="is-selected"' : ''}>
+      <td><button class="link" data-el-select="1" ${eventLogKeyAttrs(key)} ${isSelected ? 'aria-current="true"' : ''}
+            title="Show its parked events and operations">${esc(s.subscriber)}</button></td>
+      <td>${esc(s.aggregateType)}</td>
+      <td>${s.exclusive ? nil('exclusive') : `<span class="mono">${esc(s.instanceName)}</span>`}</td>
+      <td>${badge('neutral', s.consistencyMode)}</td>
+      <td>${esc(s.progressModel)}</td>
+      <td>${eventLogStatus(s)}</td>
+      <td class="num">${num(s.resumePoint)}</td>
+      <td class="num">${s.lag == null ? nil('unknown') : num(s.lag)}</td>
+      <td>${s.leaseOwner ? `<span class="mono" title="${s.leaseUntil ? 'until ' + esc(s.leaseUntil) : ''}">${esc(s.leaseOwner)}</span>` : nil()}</td>
+      <td class="num">${num(s.fence)}</td>
+      <td class="num">${s.parkedTotal > 0 ? `${num(s.parkedTotal)} <span class="nil">(${num(s.parkedHeads)} head${s.parkedHeads === 1 ? '' : 's'})</span>` : num(0)}</td>
+    </tr>`;
+    };
+
+    const cols = [
+        { label: 'Subscriber' }, { label: 'Aggregate type' }, { label: 'Instance' }, { label: 'Mode' },
+        { label: 'Progress model' }, { label: 'Status' }, { label: 'Resume point', num: true }, { label: 'Lag', num: true },
+        { label: 'Lease owner' }, { label: 'Fence', num: true }, { label: 'Parked', num: true }
+    ];
+
+    const toolbar = `
+    <div class="toolbar">
+      <label for="eventLogTypeFilter">Aggregate type</label>
+      <input type="text" id="eventLogTypeFilter" placeholder="All - press Enter to filter" size="28"
+             value="${esc(filter)}" autocomplete="off" spellcheck="false">
+      ${filter ? `<button class="btn btn-sm" data-el-clear-filter="1">Show all</button>` : ''}
+      <div class="spacer"></div>
+      <span class="chip">${num(subs.length)} subscription${subs.length === 1 ? '' : 's'}</span>
+    </div>`;
+
+    const list = card('Subscriptions — every instance, from the database',
+        table(cols, subs.map(row), {
+            empty: filter ? `No event-log subscription of aggregate type ${filter}` : 'No event-log subscriptions yet'
+        })
+        + `<p class="hint">Read from the database, so this covers every instance, not only the one serving this console.
+             An exclusive subscription is run by the instance holding its lease; a per-instance one by the instance it
+             names. Lag counts the global orders of the aggregate type past the resume point. At most the event log's
+             admin list limit of rows is shown.</p>`,
+        'GET /event-log/subscriptions', true);
+
+    return toolbar + list + (selected ? await eventLogDetail(selected) : '');
+};
+
+async function eventLogDetail(k) {
+    const sub = encodeURIComponent(k.subscriber);
+    const type = encodeURIComponent(k.aggregateType);
+    const instance = encodeURIComponent(k.instanceName);
+    const settled = await Promise.allSettled([
+        api(`/event-log/subscriptions/${sub}/aggregate-types/${type}?instanceName=${instance}`),
+        api(`/event-log/subscriptions/${sub}/aggregate-types/${type}/parked-events?instanceName=${instance}&afterGlobalOrder=${eventLogState.after}&limit=${PARKED_PAGE_SIZE}`)
+    ]);
+    const [s, page] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+    const heading = `<h2 class="card-title" id="eventLogDetailTitle" tabindex="-1" style="margin:16px 0 8px">${eventLogKeyLabel(k)}</h2>`;
+
+    if (!s) {
+        return heading + card('Subscription', errorState(settled[0].reason, 'essentials_subscription_reader'),
+            'GET /event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}', true);
+    }
+
+    const kvItem = (key, v) => `<div class="kv-item"><span class="kv-key">${esc(key)}</span><span class="kv-val">${v}</span></div>`;
+    const writeDisabled = CAN.writeSubscriptions ? '' : 'disabled title="Requires essentials_subscription_writer"';
+    const request = eventLogState.lastRequest && sameEventLogKey(eventLogState.lastRequest.key, k) ? eventLogState.lastRequest : null;
+
+    const parkedRow = (p) => {
+        const head = p.blockedBy == null;
+        return `<tr>
+      <td class="num">${num(p.globalOrder)}</td>
+      <td class="mono">${esc(p.aggregateId)}</td>
+      <td>${head ? badge('serious', 'Parked head') : `${badge('neutral', 'Held behind')} ${num(p.blockedBy)}`}</td>
+      <td class="num">${num(p.attempts)}</td>
+      <td class="truncate" title="${esc(p.errorMessage ?? '')}">${p.errorType ? esc(p.errorType) : nil()}${p.errorMessage
+            ? `<br><span class="nil">${esc(p.errorMessage)}</span>` : ''}</td>
+      <td>${ts(p.parkedAt)}</td>
+      <td>${p.requested ? `${badge('warning', p.requested)} <span class="nil">${ts(p.requestedAt)}</span>` : nil()}</td>
+      <td class="actions">${head ? `
+        <button class="btn btn-sm" data-act="eventLogRetry" data-name="${esc(p.globalOrder)}" ${eventLogKeyAttrs(k)}
+                aria-label="Retry parked head ${esc(p.globalOrder)}" ${writeDisabled}>Retry</button>
+        <button class="btn btn-sm btn-danger" data-act="eventLogDiscard" data-name="${esc(p.globalOrder)}" ${eventLogKeyAttrs(k)}
+                aria-label="Discard parked head ${esc(p.globalOrder)}" ${writeDisabled}>Discard</button>` : ''}</td>
+    </tr>`;
+    };
+
+    const parkedCols = [
+        { label: 'Global order', num: true }, { label: 'Aggregate id' }, { label: 'Role' }, { label: 'Attempts', num: true },
+        { label: 'Last error' }, { label: 'Parked' }, { label: 'Waiting request' }, { label: '', width: '170px', sticky: true }
+    ];
+
+    const pager = page ? `<div class="toolbar" style="margin:8px 12px">
+        <span class="chip">${eventLogState.after > 0 ? `after global order ${num(eventLogState.after)}` : 'first page'}</span>
+        <div class="spacer"></div>
+        <button class="btn btn-sm" data-el-page="first" ${eventLogState.after > 0 ? '' : 'disabled'}>First page</button>
+        <button class="btn btn-sm" data-el-page="previous" ${eventLogState.previous.length ? '' : 'disabled'}>Previous page</button>
+        <button class="btn btn-sm" data-el-page="next" data-el-next="${page.nextAfter ?? ''}" ${page.nextAfter == null ? 'disabled' : ''}>Next page</button>
+      </div>` : '';
+
+    return `${heading}
+    ${request ? `<div class="banner banner-info"><span aria-hidden="true">○</span><div>
+        <strong>${esc(request.action)} of the parked head at global order ${num(request.globalOrder)}:</strong>
+        ${(parkedRequestOutcome[request.result] ?? (() => badge('neutral', request.result)))()}</div></div>` : ''}
+
+    <div class="toolbar">
+      <div class="spacer"></div>
+      <button class="btn btn-sm btn-danger" data-act="eventLogReset" data-name="${esc(k.subscriber)}" ${eventLogKeyAttrs(k)}
+              data-el-resume-point="${esc(s.resumePoint)}" data-el-lag="${s.lag ?? ''}" ${writeDisabled}>Reset resume point</button>
+      ${s.exclusive ? '' : `<button class="btn btn-sm btn-danger" data-act="eventLogDeleteInstance" data-name="${esc(k.subscriber)}"
+              ${eventLogKeyAttrs(k)} title="Only a retired instance's row: not leased, and not run by the instance taking the request"
+              ${writeDisabled}>Delete retired instance</button>`}
+      <button class="btn btn-sm" data-el-close="1">Close</button>
+    </div>
+
+    ${card('Subscription', `<div class="kv">
+        ${kvItem('Subscriber', `<span class="mono">${esc(s.subscriber)}</span>`)}
+        ${kvItem('Aggregate type', esc(s.aggregateType))}
+        ${kvItem('Instance', s.exclusive ? nil('exclusive') : `<span class="mono">${esc(s.instanceName)}</span>`)}
+        ${kvItem('Mode', badge('neutral', s.consistencyMode))}
+        ${kvItem('Progress model', esc(s.progressModel))}
+        ${kvItem('Status', eventLogStatus(s))}
+        ${kvItem('Resume point', num(s.resumePoint))}
+        ${kvItem('Lag', s.lag == null ? nil('unknown') : num(s.lag))}
+        ${kvItem('Reset epoch', num(s.resetEpoch))}
+        ${kvItem('Lease owner', s.leaseOwner ? `<span class="mono">${esc(s.leaseOwner)}</span>` : nil())}
+        ${kvItem('Lease until', ts(s.leaseUntil))}
+        ${kvItem('Fence', num(s.fence))}
+        ${kvItem('Parked', `${num(s.parkedTotal)} (${num(s.parkedHeads)} head${s.parkedHeads === 1 ? '' : 's'})`)}
+        ${kvItem('Filter digest', s.filterDigest ? `<span class="mono">${esc(s.filterDigest)}</span>` : nil())}
+        ${kvItem('Updated', ts(s.updatedAt))}
+      </div>`, 'GET /event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}')}
+
+    ${card('Parked events', page
+        ? table(parkedCols, page.events.map(parkedRow), { empty: eventLogState.after > 0 ? 'No more parked events' : 'No parked events' })
+          + pager
+          + `<p class="hint">A parked head is an event whose handling failed; the later events of its aggregate are held
+               behind it and are handled once it is retried successfully or discarded. A request is stored on the head
+               and served by the instance running the subscription.</p>`
+        : errorState(settled[1].reason, 'essentials_subscription_reader'),
+        'GET /event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events', true)}`;
+}
+
 /* ── Event causation ─────────────────────────────────────────────────────────────────────────
    "Why did this happen?" walks back through recorded causes; "what did it cause?" lists direct effects and needs the
    opt-in caused-by-event-id index, so a 409 there is explained rather than shown as a failure. Event ids are links:
@@ -1956,6 +2233,7 @@ const titles = {
     locks: ['Fenced locks', 'Distributed locks held across service instances'],
     queues: ['Durable queues', 'Queued and dead-letter messages, delivery statistics'],
     shardOwnedQueues: ['Shard-owned queues', 'Per-lane depth, shard ownership and dead letters'],
+    eventLogSubscriptions: ['Event-log subscriptions', 'Subscriptions of the new event store engine, their parked events and resume points'],
     scheduler: ['Scheduler', 'pg_cron jobs, run history and executor jobs'],
     subscriptions: ['Subscriptions', 'Event-store subscription resume points'],
     cdc: ['Change Data Capture', 'Replication slot, tailer and dispatcher state'],
@@ -2054,6 +2332,41 @@ document.addEventListener('click', async (e) => {
     }
 
     if (e.target.closest('[data-retry]')) return render(currentView);
+
+    const eventLogSelect = e.target.closest('[data-el-select]');
+    if (eventLogSelect) {
+        const picked = eventLogKeyOf(eventLogSelect.dataset);
+        if (!sameEventLogKey(picked, eventLogState.selected)) {
+            eventLogState = { ...eventLogState, selected: picked, after: 0, previous: [], lastRequest: null };
+        }
+        await render('eventLogSubscriptions');
+        document.getElementById('eventLogDetailTitle')?.focus();
+        return;
+    }
+    const eventLogPage = e.target.closest('[data-el-page]');
+    if (eventLogPage && !eventLogPage.disabled) {
+        const to = eventLogPage.dataset.elPage;
+        if (to === 'next') {
+            eventLogState.previous.push(eventLogState.after);
+            eventLogState.after = Number(eventLogPage.dataset.elNext);
+        } else if (to === 'previous') {
+            eventLogState.after = eventLogState.previous.pop() ?? 0;
+        } else {
+            eventLogState.after = 0;
+            eventLogState.previous = [];
+        }
+        await render('eventLogSubscriptions');
+        document.querySelector(`[data-el-page="${to}"]:not([disabled])`)?.focus();
+        return;
+    }
+    if (e.target.closest('[data-el-close]')) {
+        eventLogState = { ...eventLogState, selected: null, after: 0, previous: [], lastRequest: null };
+        return render('eventLogSubscriptions');
+    }
+    if (e.target.closest('[data-el-clear-filter]')) {
+        eventLogState.aggregateType = '';
+        return render('eventLogSubscriptions');
+    }
 
     const act = e.target.closest('[data-act]');
     if (act && !act.disabled) {
@@ -2175,6 +2488,12 @@ document.addEventListener('keydown', (e) => {
     causationState.aggregateId = document.getElementById('causationAggregateId').value;
     causationState.eventId = '';
     render('causation');
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.target.id !== 'eventLogTypeFilter') return;
+    eventLogState.aggregateType = e.target.value.trim();
+    render('eventLogSubscriptions').then(() => document.getElementById('eventLogTypeFilter')?.focus());
 });
 
 document.addEventListener('keydown', async (e) => {

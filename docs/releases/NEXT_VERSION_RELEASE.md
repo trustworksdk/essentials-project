@@ -692,7 +692,7 @@ leave it out to address an exclusive subscription.
 (`DefaultEventLogSubscriptionsApi` over an `EventLog`). The new `spring-boot-starter-postgresql-event-log` declares one
 when it is enabled (§2.20); an existing application serves nothing new and changes nothing; the paths answer 404 as any area without its SPI bean does. The
 starter now depends on `postgresql-event-log-integration`, as it does on the shard-owned queue engine. The admin console
-does not show these operations yet. (Event store redesign, phase 8b.)
+shows them in its event-log subscriptions view (§2.23). (Event store redesign, phase 8b.)
 
 ### 2.20 Spring Boot starter for the new event store engine, preview (`spring-boot-starter-postgresql-event-log`)
 
@@ -778,6 +778,24 @@ public class OrderSummaryView extends EventLogViewProcessor {
 - **Not carried over** from the old processors: `MessageHandlerInterceptor`s, `@MessageHandler(unitOfWork = ...)`, the
   built-in permanent-error list (an `IllegalArgumentException` is retried and then parked like any other failure),
   inbox redelivery and the `RedeliveryPolicy`, Reactor, and the `FencedLock` (exclusivity is the engine's lease).
+
+### 2.23 Admin console: a view for the new event-log engine's subscriptions (`spring-boot-starter-admin-ui`)
+
+The admin console has a new **Event-log subscriptions** view under *Event store*, for the subscriptions of the new event
+store engine. It uses only the seven `event-log-subscriptions` operations of the admin API (§2.19). It lists every
+instance's subscriptions from the database, and you can filter the list by aggregate type. For each subscription it
+shows the subscriber, aggregate type, instance, mode, progress model, a status, resume point, lag, lease owner and fence,
+and the number of parked events. Pick a subscription to see its details and its parked events, page by page. From there
+you can retry or discard a parked head, reset the resume point to a global order or to the head, and delete a retired
+per-instance subscription. Each write asks for confirmation on the page first. Deleting a retired instance also asks you
+to type the instance name.
+
+You need `SUBSCRIPTION_READER` (or `ESSENTIALS_ADMIN`) to open the view and `SUBSCRIPTION_WRITER` to use its write
+buttons. Without the role, the nav item or button is shown disabled, as in the other views. An application without the
+new engine serves no `EventLogSubscriptionsApi`, so the view shows the API's 404, as any area without its SPI bean does.
+The status column is the console's own summary of the row (parked, not leased, leased, per instance), not a field of
+the contract. "Reset to the head" means the row's resume point plus its lag, read again when you confirm the reset.
+(Event store redesign, phase 10.)
 
 ## 3. Bug fixes
 
