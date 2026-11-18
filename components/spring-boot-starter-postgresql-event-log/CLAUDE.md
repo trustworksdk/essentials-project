@@ -26,4 +26,18 @@ Spring Boot auto-configuration for the new event store engine (`postgresql-event
 
 ## Tests
 
-Unit: `EssentialsEventLogPropertiesTest`, `EventLogImportFilterTest`, `MissingDependencyFailureAnalyzerRegistrationTest`. Integration tests: phase 10 unit 10-A part 2.
+Unit: `EssentialsEventLogPropertiesTest`, `EventLogImportFilterTest`, `MissingDependencyFailureAnalyzerRegistrationTest`.
+
+Integration (one static container, `public` schema recreated per test): `EventLogAutoConfigurationIT`, `EventLogSchemaModeIT`,
+`EventLogAdminApiIT`. They import every auto-configuration on the class path through `@EnableAutoConfiguration`, never
+`AutoConfigurations.of(...)` alone: only the former consults `AutoConfigurationImportFilter`s, so only it exercises
+`EventLogImportFilter`. The must-fail arm imports the configurations directly and shows the context failing on the
+duplicate `essentialsEventStore`; removing the filter from `spring.factories` fails four of the IT's tests.
+
+- **An aggregate type registered while the context is built reaches the engine's tables before the schema harness runs**
+  (`EssentialsSchemaHarnessRunner` runs after the singletons). In `create` mode the engine created them as it started;
+  in `validate` and `emit` on an empty database the registration fails with the database's error, not the harness's.
+- **A `ViewProjection` / `EventReactor` needs its aggregate type registered before it starts.** A repository bean
+  registers it; a projection-only application must register it itself.
+- The tests need `micrometer-core` and `spring-boot-health` (test scope): `EssentialsComponentsConfiguration` cannot be
+  introspected without them.
