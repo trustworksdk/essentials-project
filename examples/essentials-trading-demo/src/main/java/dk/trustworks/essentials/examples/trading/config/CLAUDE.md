@@ -26,8 +26,10 @@ Porting a processor (pilot: `accounts/views/uncleared_deposits/`):
    shape (payload, optional `OrderedMessage`, `UnitOfWorkMode`), each in its own unit of work.
 6. Partitioned views: the twin queues to `<name>:queue` keyed by aggregate; `UnitOfWorkMode.NONE` handlers are refused.
 7. Tests: an `@ActiveProfiles("event-log")` IT per ported processor. `UnclearedDepositsEventLogViewIT` is the template;
-   it `@MockitoBean`s the processors not yet ported that fail the event-log context (`CasesProjection`,
-   `SettlementFillsProjection`, `InstrumentRiskApprovalProcessor`). Drop each mock once its processor is ported.
+   it `@MockitoBean`s the processors not yet ported that fail the event-log context (now only
+   `InstrumentRiskApprovalProcessor`). Drop each mock once its processor is ported.
+8. Classic-only hooks such as `onSubscriptionsReset` stay on the `ClassicView`, delegating to a package-private
+   projection method (`UsersProjection.truncate()`). The event-log twin has no such hook.
 
 Unit of work on the view twin (proven by `UnclearedDepositsEventLogViewIT`): inside a page a Spring transaction is
 active, `pageHandle()`'s connection is the page connection (`DataSourceUtils.getConnection`), auto-commit is off,

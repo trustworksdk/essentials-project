@@ -25,8 +25,6 @@ import dk.trustworks.essentials.examples.trading.accounts.use_cases.open_account
 import dk.trustworks.essentials.examples.trading.config.TradingDemoEventLogViewProcessor;
 import dk.trustworks.essentials.examples.trading.identity.types.UserId;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.risk_approve_instrument.InstrumentRiskApprovalProcessor;
-import dk.trustworks.essentials.examples.trading.reconciliation.views.cases.CasesProjection;
-import dk.trustworks.essentials.examples.trading.settlement.views.fills.SettlementFillsProjection;
 import dk.trustworks.essentials.reactive.command.CommandBus;
 import dk.trustworks.essentials.types.*;
 import org.junit.jupiter.api.Test;
@@ -58,8 +56,8 @@ import static org.awaitility.Awaitility.await;
  * starter's {@code SpringPageTransactions} that unit of work must join the engine's page transaction - same
  * connection, committed with the page - rather than open a transaction of its own.
  * <p>
- * Runs the demo on the {@code event-log} profile. Beans that still inject a classic-only processor (not ported yet)
- * are mocked: {@link CasesProjection}, {@link SettlementFillsProjection}, {@link InstrumentRiskApprovalProcessor}.
+ * Runs the demo on the {@code event-log} profile. A bean that still injects a classic-only processor (not ported yet)
+ * is mocked: {@link InstrumentRiskApprovalProcessor}.
  */
 @Testcontainers
 @SpringBootTest(properties = {
@@ -85,10 +83,6 @@ class UnclearedDepositsEventLogViewIT {
         registry.add("spring.datasource.driver-class-name", postgres::getDriverClassName);
     }
 
-    @MockitoBean
-    private CasesProjection                 casesProjection;
-    @MockitoBean
-    private SettlementFillsProjection       settlementFillsProjection;
     @MockitoBean
     private InstrumentRiskApprovalProcessor instrumentRiskApprovalProcessor;
 

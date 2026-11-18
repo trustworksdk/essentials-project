@@ -16,82 +16,57 @@
 
 package dk.trustworks.essentials.examples.trading.reconciliation.views.known_executions;
 
-import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
-import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.examples.trading.orders.events.*;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
-import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
+import org.jdbi.v3.core.Handle;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.sql.Date;
-import java.util.List;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * {@code reconciliation}'s own record of the brokerage's executions, projected from {@code orders}' {@link OrderFilled}
  * - a cross-BC {@code events/} import: instrument, side, quantity, amount and trade date per execution. What a clearing
  * statement is checked against.
  * <p>
- * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
- * {@link ViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
- * with Spring's {@code JdbcTemplate}, only while the Spring wiring binds both to one connection. The
- * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
- * which opens one.
+ * Engine-neutral: the tables, the event logic and the queries, on either event store engine. What feeds it is the
+ * engine's processor - {@link KnownExecutionsClassicView} or {@link KnownExecutionsEventLogView} - which hands each event here with
+ * the handle of the transaction it handles the event in, so the row commits together with that processor's progress.
+ * The constructor's DDL opens a unit of work of its own.
  */
-// Deliberately not handled: the startup summary warns about every sealed-hierarchy leaf a view neither handles nor lists here
-@IgnoresEventTypes({OrderAccepted.class,
-                    OrderCancelRequested.class,
-                    OrderCancelled.class,
-                    OrderClosed.class,
-                    OrderExpired.class,
-                    OrderExpiryRequested.class,
-                    OrderFilledAfterClose.class,
-                    OrderPlaced.class,
-                    OrderRejected.class,
-                    OrderSubmitted.class})
-@ClassicEngine
 @Service
-public class KnownExecutionsProjection extends TradingDemoViewEventProcessor {
-    public KnownExecutionsProjection(ViewEventProcessorDependencies dependencies) {
-        super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
-                                                                                   CREATE TABLE IF NOT EXISTS projection_reconciliation_execution (
-                                                                                       execution_id VARCHAR PRIMARY KEY,
-                                                                                       instrument_id VARCHAR NOT NULL,
-                                                                                       side VARCHAR NOT NULL,
-                                                                                       quantity BIGINT NOT NULL,
-                                                                                       amount NUMERIC(24, 6) NOT NULL,
-                                                                                       trade_date DATE NOT NULL
-                                                                                   )
-                                                                                   """));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "CREATE INDEX IF NOT EXISTS projection_reconciliation_execution_trade_date ON projection_reconciliation_execution (trade_date)"));
+public class KnownExecutionsProjection {
+    private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
+
+    public KnownExecutionsProjection(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
+        unitOfWorkFactory.usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
+                                                                              CREATE TABLE IF NOT EXISTS projection_reconciliation_execution (
+                                                                                  execution_id VARCHAR PRIMARY KEY,
+                                                                                  instrument_id VARCHAR NOT NULL,
+                                                                                  side VARCHAR NOT NULL,
+                                                                                  quantity BIGINT NOT NULL,
+                                                                                  amount NUMERIC(24, 6) NOT NULL,
+                                                                                  trade_date DATE NOT NULL
+                                                                              )
+                                                                              """));
+        unitOfWorkFactory.usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "CREATE INDEX IF NOT EXISTS projection_reconciliation_execution_trade_date ON projection_reconciliation_execution (trade_date)"));
     }
 
-    @Override
-    public String getProcessorName() {
-        return "ReconciliationKnownExecutionsProjection";
-    }
-
-    @Override
-    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-        return List.of(OrdersAggregateTypes.ORDERS);
-    }
-
-    @MessageHandler
-    void handle(OrderFilled e) {
-        getRequiredUnitOfWork().handle().createUpdate("""
-                                                          INSERT INTO projection_reconciliation_execution (execution_id, instrument_id, side, quantity, amount, trade_date)
-                                                          VALUES (:executionId, :instrumentId, :side, :quantity, :amount, :tradeDate) ON CONFLICT (execution_id) DO NOTHING
-                                                          """)
-                                        .bind("executionId", e.executionId().toString())
-                                        .bind("instrumentId", e.instrumentId().toString())
-                                        .bind("side", e.side().name())
-                                        .bind("quantity", e.quantity().value())
-                                        .bind("amount", e.price().getAmount().value().multiply(BigDecimal.valueOf(e.quantity().value())))
-                                        .bind("tradeDate", Date.valueOf(e.tradeDate()))
-                                        .execute();
+    void on(Handle handle, OrderFilled e) {
+        handle.createUpdate("""
+                                INSERT INTO projection_reconciliation_execution (execution_id, instrument_id, side, quantity, amount, trade_date)
+                                VALUES (:executionId, :instrumentId, :side, :quantity, :amount, :tradeDate) ON CONFLICT (execution_id) DO NOTHING
+                                """)
+              .bind("executionId", e.executionId().toString())
+              .bind("instrumentId", e.instrumentId().toString())
+              .bind("side", e.side().name())
+              .bind("quantity", e.quantity().value())
+              .bind("amount", e.price().getAmount().value().multiply(BigDecimal.valueOf(e.quantity().value())))
+              .bind("tradeDate", Date.valueOf(e.tradeDate()))
+              .execute();
     }
 }

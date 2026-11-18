@@ -16,16 +16,12 @@
 
 package dk.trustworks.essentials.examples.trading.settlement.views.fills;
 
-import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
-import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.examples.trading.orders.events.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
-import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
+import org.jdbi.v3.core.Handle;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -37,70 +33,46 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * {@code orders}' {@link OrderFilled} - a cross-BC {@code events/} import, so settlement never calls into
  * {@code orders}. Eventually consistent: a settlement report for a fill not projected yet is redelivered.
  * <p>
- * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
- * {@link ViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
- * with Spring's {@code JdbcTemplate}, only while the Spring wiring binds both to one connection. The
- * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
- * which opens one; {@link #fill(ExecutionId)} reads through {@code getUnitOfWorkFactory().withUnitOfWork(uow -> …)}, which
- * joins the caller's unit of work or opens one.
+ * Engine-neutral: the tables, the event logic and the queries, on either event store engine. What feeds it is the
+ * engine's processor - {@link SettlementFillsClassicView} or {@link SettlementFillsEventLogView} - which hands each event here with
+ * the handle of the transaction it handles the event in, so the row commits together with that processor's progress.
+ * The constructor's DDL and {@link #fill(ExecutionId)} open (or join) a unit of work of their own.
  */
-// Deliberately not handled: the startup summary warns about every sealed-hierarchy leaf a view neither handles nor lists here
-@IgnoresEventTypes({OrderAccepted.class,
-                    OrderCancelRequested.class,
-                    OrderCancelled.class,
-                    OrderClosed.class,
-                    OrderExpired.class,
-                    OrderExpiryRequested.class,
-                    OrderFilledAfterClose.class,
-                    OrderPlaced.class,
-                    OrderRejected.class,
-                    OrderSubmitted.class})
-@ClassicEngine
 @Service
-public class SettlementFillsProjection extends TradingDemoViewEventProcessor {
+public class SettlementFillsProjection {
+    private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
+
 
     public record Fill(ExecutionId executionId, AccountId accountId, InstrumentId instrumentId, TradeSide side) {
     }
 
-    public SettlementFillsProjection(ViewEventProcessorDependencies dependencies) {
-        super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
-                                                                                   CREATE TABLE IF NOT EXISTS projection_settlement_fill (
-                                                                                       execution_id VARCHAR PRIMARY KEY,
-                                                                                       account_id VARCHAR NOT NULL,
-                                                                                       instrument_id VARCHAR NOT NULL,
-                                                                                       side VARCHAR NOT NULL
-                                                                                   )
-                                                                                   """));
+    public SettlementFillsProjection(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
+        unitOfWorkFactory.usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
+                                                                              CREATE TABLE IF NOT EXISTS projection_settlement_fill (
+                                                                                  execution_id VARCHAR PRIMARY KEY,
+                                                                                  account_id VARCHAR NOT NULL,
+                                                                                  instrument_id VARCHAR NOT NULL,
+                                                                                  side VARCHAR NOT NULL
+                                                                              )
+                                                                              """));
     }
 
-    @Override
-    public String getProcessorName() {
-        return "SettlementFillsProjection";
-    }
-
-    @Override
-    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-        return List.of(OrdersAggregateTypes.ORDERS);
-    }
-
-    @MessageHandler
-    void handle(OrderFilled e) {
-        getRequiredUnitOfWork().handle()
-                                .createUpdate("INSERT INTO projection_settlement_fill (execution_id, account_id, instrument_id, side) VALUES (:executionId, :accountId, :instrumentId, :side) ON CONFLICT (execution_id) DO NOTHING")
-                                .bind("executionId", e.executionId().toString())
-                                .bind("accountId", e.accountId().toString())
-                                .bind("instrumentId", e.instrumentId().toString())
-                                .bind("side", e.side().name())
-                                .execute();
+    void on(Handle handle, OrderFilled e) {
+        handle.createUpdate("INSERT INTO projection_settlement_fill (execution_id, account_id, instrument_id, side) VALUES (:executionId, :accountId, :instrumentId, :side) ON CONFLICT (execution_id) DO NOTHING")
+              .bind("executionId", e.executionId().toString())
+              .bind("accountId", e.accountId().toString())
+              .bind("instrumentId", e.instrumentId().toString())
+              .bind("side", e.side().name())
+              .execute();
     }
 
     public Optional<Fill> fill(ExecutionId executionId) {
         requireNonNull(executionId, "No executionId provided");
-        return getUnitOfWorkFactory().withUnitOfWork(uow -> uow.handle()
-                                                               .createQuery("SELECT account_id, instrument_id, side FROM projection_settlement_fill WHERE execution_id = :executionId")
-                                                               .bind("executionId", executionId.toString())
-                                                               .map((rs, ctx) -> new Fill(executionId, AccountId.of(rs.getString(1)), InstrumentId.of(rs.getString(2)), TradeSide.valueOf(rs.getString(3))))
-                                                               .findFirst());
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle()
+                                                          .createQuery("SELECT account_id, instrument_id, side FROM projection_settlement_fill WHERE execution_id = :executionId")
+                                                          .bind("executionId", executionId.toString())
+                                                          .map((rs, ctx) -> new Fill(executionId, AccountId.of(rs.getString(1)), InstrumentId.of(rs.getString(2)), TradeSide.valueOf(rs.getString(3))))
+                                                          .findFirst());
     }
 }
