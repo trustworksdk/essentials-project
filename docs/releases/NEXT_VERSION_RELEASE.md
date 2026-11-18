@@ -689,10 +689,52 @@ delete a retired per-instance subscription with `SUBSCRIPTION_WRITER`. `ESSENTIA
 leave it out to address an exclusive subscription.
 
 `spring-boot-starter-admin-api` serves these paths only when the application has an `EventLogSubscriptionsApi` bean
-(`DefaultEventLogSubscriptionsApi` over an `EventLog`). No Essentials auto-configuration declares one yet, so an existing
-application serves nothing new and changes nothing; the paths answer 404 as any area without its SPI bean does. The
+(`DefaultEventLogSubscriptionsApi` over an `EventLog`). The new `spring-boot-starter-postgresql-event-log` declares one
+when it is enabled (§2.20); an existing application serves nothing new and changes nothing; the paths answer 404 as any area without its SPI bean does. The
 starter now depends on `postgresql-event-log-integration`, as it does on the shard-owned queue engine. The admin console
 does not show these operations yet. (Event store redesign, phase 8b.)
+
+### 2.20 Spring Boot starter for the new event store engine, preview (`spring-boot-starter-postgresql-event-log`)
+
+**Preview:** the starter, its properties and the engine's API may change in a minor release. The old event store stays
+the default and fully supported.
+
+The new module `spring-boot-starter-postgresql-event-log` auto-configures the new event store engine
+(`postgresql-event-log`) and its `EventStore` adapter (`EventLogEventStore`, `postgresql-event-log-integration`). It is
+**off by default**: nothing happens until you set `essentials.event-log.enabled=true`. Enabled, it declares:
+
+- the `EventLog`, started when the context is built and stopped on shutdown. `essentials.schema.mode` decides who creates
+  the schema: the engine itself in `create`, the schema harness through the `EventLogSchemaContributor` bean in the other
+  modes;
+- `EventLogEventStore` as the `essentialsEventStore` bean. The unit-of-work factory, the local event bus, the JSON event
+  serializer, the `PersistableEventMapper` and the causation beans (`essentials.eventstore.causation.enabled`) are built as
+  the old starter builds them, and each backs off from a bean of your own;
+- a `PageTransactionSource` for `ViewProjection`s (Spring-managed when there is a `PlatformTransactionManager`);
+- a lifecycle bean that starts every `ViewProjection` and `EventReactor` bean once the context is refreshed and stops them
+  before the engine stops (not in schema mode `emit`);
+- with the admin API starter and an `EssentialsSecurityProvider` present, the `EventLogSubscriptionsApi` the admin API's
+  event-log subscription endpoints need (§2.19).
+
+Every `EventLogSettings` value is a property under `essentials.event-log.*` (for example `backstop-interval`,
+`lease-duration`, `node-name`), with the engine's defaults.
+
+**Beside the old event-store starter.** If `spring-boot-starter-postgresql-event-store` is on the class path too, the new
+starter removes the old starter's `EventStoreConfiguration` from the auto-configurations while it is enabled, through an
+`AutoConfigurationImportFilter`. That stops the old subscription manager, gap handler and CDC beans from being built on
+top of the adapter, which does not support them. The old starter's snapshot, closing-books and aggregate admin
+configurations stay and run on the adapter (§2.21). The old processors (`EventProcessor`, `ViewEventProcessor`) do not
+start under the new engine, because the beans they need are no longer declared: port them to `ViewProjection` and
+`EventReactor`. With `essentials.event-log.enabled` unset or `false`, the filter removes nothing.
+
+### 2.21 The snapshot beans accept any `ConfigurableEventStore` (`spring-boot-starter-postgresql-event-store`)
+
+`SnapshotConfiguration`'s snapshot store, snapshot job processor and snapshot repository factory beans, and
+`DefaultAggregateSnapshotRepositoryFactory` (its constructors, builder field and `Builder.setEventStore`), now take
+`ConfigurableEventStore<? extends AggregateEventStreamConfiguration>` instead of
+`ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration>`. They only pass the store on to
+`PostgresqlAggregateSnapshotRepository`, which already accepted any configuration type, so snapshots now also work on the
+new engine's adapter (§2.20). Source- and behaviour-compatible: code that passes the old `PostgresqlEventStore` compiles
+and works as before.
 
 ## 3. Bug fixes
 

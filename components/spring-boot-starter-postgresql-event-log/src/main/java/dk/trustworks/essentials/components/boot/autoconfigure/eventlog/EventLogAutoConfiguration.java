@@ -1,0 +1,232 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package dk.trustworks.essentials.components.boot.autoconfigure.eventlog;
+
+import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsProperties;
+import dk.trustworks.essentials.components.eventlog.*;
+import dk.trustworks.essentials.components.eventlog.integration.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.EventStoreEventBus;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptor;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.TenantSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.SpringTransactionAwareEventStoreUnitOfWorkFactory;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventTypeOrName;
+import dk.trustworks.essentials.components.foundation.causation.CausationCommandContextPropagator;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
+import dk.trustworks.essentials.components.foundation.messaging.queue.CausationDurableQueuesInterceptor;
+import dk.trustworks.essentials.components.foundation.schema.SchemaMode;
+import dk.trustworks.essentials.reactive.*;
+import dk.trustworks.essentials.reactive.command.AbstractCommandBus;
+import org.jdbi.v3.core.Jdbi;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.*;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.transaction.PlatformTransactionManager;
+
+import javax.sql.DataSource;
+import java.sql.SQLException;
+import java.util.*;
+
+/**
+ * Spring Boot auto-configuration of the new event store engine ({@link EventLog}) and its {@link EventStore} adapter
+ * ({@link EventLogEventStore}). <b>Preview</b>, and off by default: {@code essentials.event-log.enabled=true} turns it on.
+ * <p>
+ * With it on, {@link EventLogImportFilter} drops the old event-store starter's {@code EventStoreConfiguration} from the
+ * auto-configurations, while its {@code SnapshotConfiguration}, {@code ClosingBooksConfiguration} and aggregate admin
+ * configurations stay and run on the adapter. This configuration therefore declares what {@code EventStoreConfiguration}
+ * would otherwise have declared for them - the {@link EventStoreUnitOfWorkFactory}, the {@link EventStoreEventBus}, the
+ * {@link JSONEventSerializer}, the {@link PersistableEventMapper} and the causation beans - built the same way, and is
+ * ordered before those configurations, whose beans are {@code @ConditionalOnBean} of them.
+ * <p>
+ * Ordered by name before {@code EssentialsComponentsConfiguration}, as the other starters are, so there is no compile-time
+ * ordering dependency on the other auto-configurations.
+ */
+@AutoConfiguration(after = DataSourceAutoConfiguration.class,
+                   beforeName = {"dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsConfiguration",
+                                 // Their beans are @ConditionalOnBean(ConfigurableEventStore, EventStoreUnitOfWorkFactory, JSONEventSerializer)
+                                 "dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.SnapshotConfiguration",
+                                 "dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.ClosingBooksConfiguration"})
+@ConditionalOnClass(EventLog.class)
+@ConditionalOnBean(DataSource.class)
+@ConditionalOnProperty(prefix = "essentials.event-log", name = "enabled", havingValue = "true")
+@EnableConfigurationProperties({EssentialsEventLogProperties.class, EssentialsComponentsProperties.class})
+public class EventLogAutoConfiguration {
+
+    /**
+     * The engine, started here so that aggregate types can be registered with the adapter while the context is being
+     * built. Its schema ownership follows {@code essentials.schema.mode}: {@code create} lets the engine create its own
+     * schema at start, every other mode hands it to the schema harness through the {@link EventLogSchemaContributor}.
+     */
+    @Bean(destroyMethod = "stop")
+    @ConditionalOnMissingBean
+    public EventLog eventLog(DataSource dataSource,
+                             EssentialsEventLogProperties properties,
+                             EssentialsComponentsProperties componentsProperties,
+                             ObjectProvider<EventLogSchemaContributor> schemaContributor,
+                             ObjectProvider<EventLogObserver> observer) throws SQLException {
+        var builder = EventLog.builder()
+                              .setDataSource(dataSource)
+                              .setSettings(properties.toSettings())
+                              .setSchemaOwnership(componentsProperties.getSchema().getMode().schemaOwnership());
+        schemaContributor.ifAvailable(builder::setSchemaContributor);
+        observer.ifAvailable(builder::setObserver);
+        var eventLog = builder.build();
+        eventLog.start();
+        return eventLog;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.event-log", name = "initialize-schema", havingValue = "true", matchIfMissing = true)
+    public EventLogSchemaContributor eventLogSchemaContributor(DataSource dataSource) {
+        return new EventLogSchemaContributor(dataSource);
+    }
+
+    @Bean("essentialsEventStore")
+    @ConditionalOnMissingBean(EventStore.class)
+    public ConfigurableEventStore<EventLogAggregateEventStreamConfiguration> eventStore(EventLog eventLog,
+                                                                                       EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+                                                                                       JSONEventSerializer jsonSerializer,
+                                                                                       PersistableEventMapper eventMapper,
+                                                                                       Optional<TenantSerializer<?>> tenantSerializer,
+                                                                                       List<PersistableEventEnricher> enrichers,
+                                                                                       EventStoreEventBus eventStoreEventBus,
+                                                                                       List<EventStoreInterceptor> eventStoreInterceptors) {
+        // Optional is idiomatic at the @Bean injection point and is unwrapped on the spot
+        var eventStore = new EventLogEventStore(eventLog,
+                                                unitOfWorkFactory,
+                                                jsonSerializer,
+                                                eventMapper,
+                                                tenantSerializer.orElseGet(TenantSerializer.NoSupportForMultiTenancySerializer::new),
+                                                enrichers,
+                                                Optional.of(eventStoreEventBus));
+        eventStore.addEventStoreInterceptors(eventStoreInterceptors);
+        return eventStore;
+    }
+
+    /**
+     * As the old event-store starter builds it: joins Spring-managed transactions ({@code @Transactional}).
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory(Jdbi jdbi,
+                                                                                                   PlatformTransactionManager transactionManager,
+                                                                                                   EssentialsComponentsProperties properties) {
+        var unitOfWorkFactory = new SpringTransactionAwareEventStoreUnitOfWorkFactory(jdbi, transactionManager);
+        unitOfWorkFactory.setTransactionIsolation(properties.getUnitOfWork().getTransactionIsolation());
+        return unitOfWorkFactory;
+    }
+
+    @Bean("essentialsEventBus")
+    @ConditionalOnMissingBean
+    public EventStoreEventBus eventBus(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+                                       Optional<OnErrorHandler> onErrorHandler,
+                                       EssentialsComponentsProperties properties) {
+        var localEventBusBuilder = LocalEventBus.builder()
+                                                .busName("EventStoreLocalBus")
+                                                .overflowMaxRetries(properties.getReactive().getOverflowMaxRetries())
+                                                .parallelThreads(properties.getReactive().getEventBusParallelThreads())
+                                                .backpressureBufferSize(properties.getReactive().getEventBusBackpressureBufferSize())
+                                                .queuedTaskCapFactor(properties.getReactive().getQueuedTaskCapFactor());
+        // Optional is idiomatic at the @Bean injection point and is unwrapped on the spot
+        onErrorHandler.ifPresent(localEventBusBuilder::onErrorHandler);
+        return new EventStoreEventBus(localEventBusBuilder.build(), unitOfWorkFactory);
+    }
+
+    /**
+     * Same mapping as the old event-store starter's default: aggregate type, aggregate id, event type and event order;
+     * no correlation id and no tenant.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public PersistableEventMapper persistableEventMapper() {
+        return (aggregateId, aggregateTypeConfiguration, event, eventOrder) ->
+                PersistableEvent.builder()
+                                .setEvent(event)
+                                .setAggregateType(aggregateTypeConfiguration.aggregateType)
+                                .setAggregateId(aggregateId)
+                                .setEventTypeOrName(EventTypeOrName.with(event.getClass()))
+                                .setEventOrder(eventOrder)
+                                .build();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public JSONEventSerializer jsonSerializer(EssentialsComponentsProperties properties) {
+        return new Jackson3JSONEventSerializer(EssentialsObjectMappers.createJackson3ObjectMapper(properties.isImmutableJacksonModuleEnabled()));
+    }
+
+    /**
+     * The causation beans the old event-store starter declares, under the same {@code essentials.eventstore.causation.enabled}
+     * (default on): the enricher records the causing event on every appended event, the queue interceptor and the command
+     * context propagator carry the cause across queue and async command hand-offs.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CausationPersistableEventEnricher causationPersistableEventEnricher() {
+        return new CausationPersistableEventEnricher();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CausationDurableQueuesInterceptor causationDurableQueuesInterceptor() {
+        return new CausationDurableQueuesInterceptor();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CausationCommandContextPropagator causationCommandContextPropagator(List<AbstractCommandBus> commandBuses) {
+        var propagator = new CausationCommandContextPropagator();
+        commandBuses.forEach(commandBus -> commandBus.addContextPropagator(propagator));
+        return propagator;
+    }
+
+    /**
+     * The page transactions of in-transaction subscriptions ({@link ViewProjection}): Spring-managed when a
+     * {@link PlatformTransactionManager} exists, so a projection's repository joins the page's transaction; else the
+     * unit-of-work factory's.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public PageTransactionSource pageTransactionSource(ObjectProvider<PlatformTransactionManager> transactionManager,
+                                                       DataSource dataSource,
+                                                       EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory) {
+        var manager = transactionManager.getIfAvailable();
+        return manager != null ? new SpringPageTransactions(manager, dataSource) : new UnitOfWorkPageTransactions(unitOfWorkFactory);
+    }
+
+    /**
+     * Starts every {@link ViewProjection} and {@link EventReactor} bean once the context is refreshed and stops them
+     * before the {@link EventLog} stops. Not in schema mode {@code emit}, where the application only writes the script.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public EventLogProcessorLifecycle eventLogProcessorLifecycle(ObjectProvider<ViewProjection> viewProjections,
+                                                                 ObjectProvider<EventReactor> eventReactors,
+                                                                 EssentialsComponentsProperties properties) {
+        return new EventLogProcessorLifecycle(viewProjections, eventReactors, properties.getSchema().getMode() == SchemaMode.EMIT);
+    }
+}

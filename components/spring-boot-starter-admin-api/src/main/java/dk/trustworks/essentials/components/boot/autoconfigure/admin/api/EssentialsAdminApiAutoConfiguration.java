@@ -211,8 +211,10 @@ public class EssentialsAdminApiAutoConfiguration {
      * they were outside its package scope a 404 reached the client as a 500.
      */
     /**
-     * The new event store engine's subscription endpoints. Conditional on its {@code EventLogSubscriptionsApi}, which no
-     * Essentials auto-configuration declares yet: an application that builds one from its {@code EventLog} as a bean gets them.
+     * The new event store engine's subscription endpoints. Conditional on its {@code EventLogSubscriptionsApi}, which
+     * {@code spring-boot-starter-postgresql-event-log} declares ({@code EventLogAdminApiAutoConfiguration}) when
+     * {@code essentials.event-log.enabled=true}; an application that builds one from its {@code EventLog} as a bean gets
+     * them too.
      */
     @Bean
     @ConditionalOnBean(EventLogSubscriptionsApi.class)

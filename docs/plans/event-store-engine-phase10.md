@@ -277,7 +277,7 @@ Each unit is one commit with its release-note entry; 10-E's release notes collec
 | E2 | `spring-boot-starter-admin-ui` | The view (§4): `index.html`, `admin.js`, the controller's role flags if a new one is needed | No (the plan puts the UI in phase 10) |
 | E3 | `examples/essentials-trading-demo` | The port (§6) | No (the gate) |
 | E4 | `LLM/`, `essentials-plugin/`, `docs/` | §5 | No |
-| E5 | `spring-boot-starter-postgresql-event-store` | Only under §3.3 (b) | Yes, with (a) or (c) |
+| E5 | `spring-boot-starter-postgresql-event-store` | `SnapshotConfiguration`: the snapshot store, snapshot job processor and snapshot repository factory bean methods take `ConfigurableEventStore<? extends AggregateEventStreamConfiguration>` instead of `<SeparateTablePerAggregateEventStreamConfiguration>`, and so does `DefaultAggregateSnapshotRepositoryFactory` (field, both constructors, its builder's field and `setEventStore`; it only passes the store on), so snapshots work on the adapter (`PostgresqlAggregateSnapshotRepository` already accepts the wide type). Source- and behaviour-compatible | Approved 2026-11-18 (`QP-de09f3313b`); found by 10-A |
 | E6 | `spring-boot-starter-admin-api` | Javadoc at `EssentialsAdminApiAutoConfiguration.java:214` ("no auto-configuration declares the bean yet") | Comment only |
 
 ---
