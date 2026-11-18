@@ -294,3 +294,124 @@ Each unit is one commit with its release-note entry; 10-E's release notes collec
 Settled by Claude, unless the maintainer says otherwise: one `EventLog` per `DataSource` (phase-8
 question 10); the gate's run plan and pass lines (§8); the documentation layout (§5); the admin UI view shape (§4); a
 fresh database per gate arm (§6.4).
+
+---
+
+## 12. Gate results (10-D)
+
+Measured 2026-11-18 on `cae69a1c8`, in this devcontainer (8 cores, 15 GB; PostgreSQL, the simulators, the demo JVMs and
+the load driver share the machine).
+
+### Setup
+
+- **Arms.** *classic*: Spring profiles `compose,simulators` (`trading-demo.engine=classic`, CDC on). *event-log*: the same
+  plus `event-log` (`trading-demo.engine=event-log`, CDC off, backstop 200 ms, pages of 100). Both with configuration J
+  as `application-compose.yml` now ships it: order-flow inbox consumers 16 / 16 / 16, pool 60.
+- **Per run:** `reset-stack.sh` (fresh PostgreSQL, exchange and gateway volumes), `compose.yml --profile simulators up`,
+  the instances started from `target/classes` on the runtime classpath (as `run-faults.sh` does: full JIT, PostgreSQL at
+  the container's IP, not through the port proxy; `-Xmx3g` each with two instances), `pg_stat_statements_reset()` once
+  they answer, then `run-load.sh --population=2000 --active-per-day=1000 --orders-per-second=100
+  --burst-orders-per-second=600 --business-days=10 --max-in-flight=2048`, then the extracts below, then the instances
+  stopped. Palindrome order classic, event-log, event-log, classic, classic, event-log, for one and then two instances.
+  A smoke pair (2 business days, 200 customers) ran first; both arms completed with every check passing.
+- **Per-order cost** is over the whole driver run, the 2 000 customers' registration and funding included (the same
+  in both arms), divided by orders placed: `pg_stat_statements` calls, `pg_current_wal_lsn()` difference, PostgreSQL
+  container CPU (cgroup `usage_usec`) and the demo JVMs' process CPU.
+- **Booked latency outside bursts** is computed from the events, not taken from the report: per fill, `OrderPlaced` to
+  the first `TradeBooked` with its execution id. A business day's open is the first placement after a gap of over 10 s;
+  its burst is the driver's own window, the first `burst-fraction` (6 s) from it. "Outside" is every fill placed outside
+  those windows; the first two minutes of the run are dropped. These orders still queue behind the burst's backlog. The
+  report's own `placedToBooked` p50 / p99 (all fills, whole run) is shown beside it.
+- **View rows** checked at the end of every run, against the events: `projection_orders` (one row per placed order,
+  none without events, no duplicates, `last_event_order` equal to the stream's last event), `projection_funding_payment`
+  (one row per deposit and withdrawal aggregate), `projection_account_overview` (`last_event_order` equal to the
+  account stream's last event, one row per account), `projection_account_activity` (no duplicate or phantom
+  `(stream, event_order)`). The other projections were not checked.
+
+### One instance
+
+| Run | Arm | Bursts | Booked p50 / p99, all (ms) | Booked p50 / p99 outside bursts (ms) | Completed ops | Statements / order | WAL / order | PG CPU / order | JVM CPU / order | Steady state |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | classic | 10 | 620 / 6 293 | 171 / 446 | 39 269 | 246 | 60.3 kB | 12.9 ms | 21.4 ms | pass |
+| 2 | event-log | 9 | 1 734 / 5 246 | 20 / 2 129 | 35 483 | 301 | 51.3 kB | 15.7 ms | 24.2 ms | pass |
+| 3 | event-log | 10 | 2 083 / 5 522 | 21 / 2 661 | 39 475 | 304 | 51.4 kB | 15.7 ms | 23.0 ms | pass |
+| 4 | classic | 10 | 691 / 5 660 | 172 / 1 020 | 39 178 | 247 | 60.8 kB | 13.2 ms | 22.1 ms | pass |
+| 5 | classic | 10 | 642 / 5 347 | 174 / 442 | 39 317 | 246 | 60.7 kB | 13.0 ms | 21.7 ms | pass |
+| 6 | event-log | 9 | 1 884 / 5 802 | 21 / 3 079 | 35 385 | 301 | 50.9 kB | 15.8 ms | 24.2 ms | pass |
+
+Completed operations: fills booked plus deposits and withdrawals completed. Two of the three event-log runs traded 9
+business days, so the comparable set at 10 bursts is classic n = 3 against event-log n = 1 (run 3). The per-order costs
+barely depend on the day count, and the 9-day runs agree with run 3 on them.
+
+| Median, 10 bursts | classic (n = 3) | event-log (n = 1) | event-log / classic |
+|---|---|---|---|
+| Completed ops | 39 269 | 39 475 | 1.01 |
+| Booked p50 / p99, all | 642 / 5 660 ms | 2 083 / 5 522 ms | 3.2 / 0.98 |
+| Booked p50 / p99, outside bursts | 172 / 446 ms | 21 / 2 661 ms | 0.12 / **6.0** |
+| Statements / order | 246 | 304 | 1.24 |
+| WAL / order | 60.7 kB | 51.4 kB | 0.85 |
+| PostgreSQL CPU / order | 13.0 ms | 15.7 ms | 1.21 |
+| JVM CPU / order | 21.7 ms | 23.0 ms | 1.06 |
+
+### Two instances
+
+| Run | Arm | Bursts | Booked p50 / p99, all (ms) | Booked p50 / p99 outside bursts (ms) | Completed ops | Statements / order | WAL / order | PG CPU / order | JVM CPU / order | Steady state |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | classic | 10 | 1 717 / 9 673 | 241 / 2 060 | 39 222 | 271 | 62.3 kB | 15.8 ms | 24.9 ms | pass |
+| 2 | event-log | 10 | 5 253 / 11 365 | 3 179 / 8 141 | 39 350 | 349 | 52.2 kB | 21.2 ms | 27.3 ms | pass |
+| 3 | event-log | 10 | 5 008 / 11 677 | 2 837 / 7 823 | 39 312 | 340 | 52.2 kB | 20.6 ms | 27.1 ms | pass |
+| 4 | classic | 10 | 1 411 / 10 170 | 232 / 2 502 | 39 185 | 269 | 61.9 kB | 15.3 ms | 24.3 ms | pass |
+| 5 | classic | 10 | 1 537 / 9 128 | 231 / 1 513 | 39 129 | 271 | 62.0 kB | 15.4 ms | 24.3 ms | pass |
+| 6 | event-log | 10 | 4 833 / 11 224 | 2 574 / 6 744 | 39 253 | 352 | 51.7 kB | 20.8 ms | 27.1 ms | **fail** (one burst took 51 s to recover) |
+
+| Median, 10 bursts | classic (n = 3) | event-log (n = 3) | event-log / classic |
+|---|---|---|---|
+| Completed ops | 39 185 | 39 312 | 1.00 |
+| Booked p50 / p99, all | 1 537 / 9 673 ms | 5 008 / 11 365 ms | 3.3 / **1.17** |
+| Booked p50 / p99, outside bursts | 232 / 2 060 ms | 2 837 / 7 823 ms | 12 / **3.8** |
+| Statements / order | 271 | 349 | 1.29 |
+| WAL / order | 62.0 kB | 52.2 kB | 0.84 |
+| PostgreSQL CPU / order | 15.4 ms | 20.8 ms | 1.35 |
+| JVM CPU / order | 24.3 ms | 27.1 ms | 1.12 |
+
+### Verdict per pass line
+
+| Pass line (§8) | One instance | Two instances |
+|---|---|---|
+| Completed operations not below classic | **Pass** (1.01×; n = 1 at equal bursts) | **Pass** (1.00×) |
+| Booked p99 outside bursts ≤ 1.1× classic | **Fail** (2 661 against 446 ms, 6.0×; the whole-run p99 is 0.98×) | **Fail** (7 823 against 2 060 ms, 3.8×; whole-run p99 1.17×) |
+| Zero lost or duplicated view rows | **Pass** (four projections, every run of both arms) | **Pass** (the same) |
+| Steady-state check passing | **Pass** (every run) | **Fail** in one of three event-log runs (burst recovery 51 s); every classic run passed |
+
+**The gate does not pass.** The new engine is correct under this load (every order, fill and payment reached its
+outcome, no dead letters, no reconciliation cases, every checked view row matches its events, no `ERROR` in any
+application log) and completes the same work, but the order flow is slower at the opens, and more so with two instances.
+
+### Where the time goes
+
+The report's stage split (p50 / p99, ms, medians of the runs above):
+
+| Stage | classic, 1 instance | event-log, 1 instance | classic, 2 instances | event-log, 2 instances |
+|---|---|---|---|---|
+| Placed → submitted | ~410-510 / 3 000-4 800 | ~120-240 / 2 300-2 900 | ~620-790 / 2 500-5 100 | ~1 700-2 000 / 6 000-6 500 |
+| Submitted → filled | 2-3 / 2 400-3 100 | 33-39 / 160-240 | 55-99 / 5 200-7 400 | 18-21 / 580-2 500 |
+| Filled → booked | 165-179 / 465-777 | 1 530-1 740 / 2 700-3 100 | 233-246 / 1 200-2 000 | 2 700-3 200 / 4 000-5 500 |
+
+- **Filled → booked is the regression.** On the classic engine the ledger leg takes ~0.2 s at the median; on the new
+  engine 1.6 s with one instance and ~3 s with two. Placement to submission is faster on the new engine with one
+  instance and slower with two. Away from the bursts the new engine is much faster at the median (21 ms against
+  172 ms with one instance): the latency is in draining the open's backlog, not in the per-event path when idle.
+- **More statements, less WAL.** Per order, 24-29 % more statements and 21-35 % more PostgreSQL CPU, but 15 % less
+  WAL (no CDC inbox rows). Among the statements only the new engine issues: an `el_progress` `UPDATE` plus a
+  `set_config('idle_in_transaction_session_timeout', …)` per handled batch (~580 000 each in a one-instance run,
+  ~480 000 with two), and with two instances ~530 000 `pg_notify` calls. The shard-owned queue's
+  `pg_stat_activity` `backend_xid` probe ran 2.3× (one instance) to 2.7× (two instances) as often as on the classic
+  arm, at 120 s of total execution time in one two-instance run.
+- Not investigated further here (10-D measures; it does not tune).
+
+### Not measured
+
+Connections held, the admin page under load, whole-machine CPU (only the PostgreSQL container's and the demo JVMs'),
+and the projections other than the four listed. Latency percentiles come from three runs per arm at most and, at one
+instance, from a single event-log run at equal burst count; p99 moved by up to 2× between runs of the same arm
+(classic, one instance: 442-1 020 ms outside bursts).
