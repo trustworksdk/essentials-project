@@ -46,6 +46,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Every statement is safe against existing objects; fillfactor is set at {@code CREATE} only.
  */
 public final class EventLogSchemaContributor implements DynamicSchemaContributor {
+    private volatile boolean scriptOnly;
     private static final Logger log = LoggerFactory.getLogger(EventLogSchemaContributor.class);
 
     /**
@@ -88,7 +89,7 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
     public void attach(SchemaChangeSink sink) {
         requireNonNull(sink, "No sink provided");
         this.sink.set(sink);
-        if (!sink.createsSchema()) {
+        if (!sink.createsSchema() && !scriptOnly) {
             if (warned.compareAndSet(false, true)) {
                 log.warn("The schema harness is not creating the schema in this mode, but the event log creates each aggregate type's event and head " +
                                  "tables itself when the aggregate type registers. The database user this application connects as therefore needs the " +
@@ -101,12 +102,26 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
     }
 
     /**
+     * For a harness that only writes a script (schema mode {@code emit}): an aggregate type's tables go to the harness -
+     * into the script - instead of being created directly when the harness does not create the schema. Without it, an
+     * aggregate type registered before or after {@link #attach} is created on the database in every mode but
+     * {@code create}, which in {@code emit} writes to a database that is meant to be left alone (and fails on an empty
+     * one). Call it before the harness runs.
+     *
+     * @return this contributor
+     */
+    public EventLogSchemaContributor scriptOnly() {
+        this.scriptOnly = true;
+        return this;
+    }
+
+    /**
      * @return the executor to register aggregate types with when the harness owns the schema
      */
     public AggregateTypeDdlExecutor aggregateTypeDdl() {
         return (tables, statements) -> {
             var current = sink.get();
-            if (current != null && !current.createsSchema()) {
+            if (current != null && !current.createsSchema() && !scriptOnly) {
                 createDirectly(statements);
                 return;
             }

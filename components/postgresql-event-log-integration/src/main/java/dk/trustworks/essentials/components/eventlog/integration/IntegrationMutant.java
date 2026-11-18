@@ -30,5 +30,7 @@ enum IntegrationMutant {
     /** The adapter lets the engine's StreamAppendConflictException escape instead of OptimisticAppendToStreamException (§9.4) */
     CONFLICT_UNMAPPED,
     /** The adapter wakes the engine at append, before commit, instead of through the commit callback (§9.4) */
-    PUBLISH_BEFORE_COMMIT
+    PUBLISH_BEFORE_COMMIT,
+    /** EventLogViewProcessor / EventLogReactor catch a {@code @MessageHandler}'s exception: the event counts as handled (phase 10 §3.5) */
+    ANNOTATED_DISPATCH_SWALLOWS_FAILURE
 }

@@ -32,17 +32,22 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * gives them one. Their {@link EventLog} is a dependency of every processor bean, so it is started (at creation) before
  * this starts them, and stopped (its {@code destroyMethod}) only after this has stopped them.
  * <p>
+ * Each processor's aggregate type is registered with the {@link EventLog} (default tables) before it starts. {@link EventLogViewProcessor}
+ * and {@link EventLogReactor} beans are foundation {@code Lifecycle}s, started by the components starter's lifecycle manager instead.
+ * <p>
  * In schema mode {@code emit} nothing is started: the application only writes the schema script and stops.
  */
 public final class EventLogProcessorLifecycle implements SmartLifecycle {
     private static final Logger log = LoggerFactory.getLogger(EventLogProcessorLifecycle.class);
 
+    private final EventLog                       eventLog;
     private final ObjectProvider<ViewProjection> viewProjections;
     private final ObjectProvider<EventReactor>   eventReactors;
     private final boolean                        emitOnly;
     private volatile boolean                     running;
 
-    public EventLogProcessorLifecycle(ObjectProvider<ViewProjection> viewProjections, ObjectProvider<EventReactor> eventReactors, boolean emitOnly) {
+    public EventLogProcessorLifecycle(EventLog eventLog, ObjectProvider<ViewProjection> viewProjections, ObjectProvider<EventReactor> eventReactors, boolean emitOnly) {
+        this.eventLog = requireNonNull(eventLog, "No eventLog provided");
         this.viewProjections = requireNonNull(viewProjections, "No viewProjections provided");
         this.eventReactors = requireNonNull(eventReactors, "No eventReactors provided");
         this.emitOnly = emitOnly;
@@ -61,10 +66,13 @@ public final class EventLogProcessorLifecycle implements SmartLifecycle {
         var projections = viewProjections.orderedStream().toList();
         var reactors    = eventReactors.orderedStream().toList();
         try {
+            // A projection-only application registers no aggregate type itself: register it (default tables) before subscribing
             for (var projection : projections) {
+                eventLog.registerAggregateType(projection.definition().aggregateType());
                 projection.start();
             }
             for (var reactor : reactors) {
+                eventLog.registerAggregateType(reactor.definition().aggregateType());
                 reactor.start();
             }
         } catch (SQLException e) {

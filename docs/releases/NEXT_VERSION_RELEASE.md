@@ -711,7 +711,9 @@ The new module `spring-boot-starter-postgresql-event-log` auto-configures the ne
   the old starter builds them, and each backs off from a bean of your own;
 - a `PageTransactionSource` for `ViewProjection`s (Spring-managed when there is a `PlatformTransactionManager`);
 - a lifecycle bean that starts every `ViewProjection` and `EventReactor` bean once the context is refreshed and stops them
-  before the engine stops (not in schema mode `emit`);
+  before the engine stops (not in schema mode `emit`). It registers each one's aggregate type with the engine first, so
+  a projection-only application need not;
+- an `EventLogProcessorDependencies` bean for the annotated processor base classes (§2.22);
 - with the admin API starter and an `EssentialsSecurityProvider` present, the `EventLogSubscriptionsApi` the admin API's
   event-log subscription endpoints need (§2.19).
 
@@ -723,8 +725,12 @@ starter removes the old starter's `EventStoreConfiguration` from the auto-config
 `AutoConfigurationImportFilter`. That stops the old subscription manager, gap handler and CDC beans from being built on
 top of the adapter, which does not support them. The old starter's snapshot, closing-books and aggregate admin
 configurations stay and run on the adapter (§2.21). The old processors (`EventProcessor`, `ViewEventProcessor`) do not
-start under the new engine, because the beans they need are no longer declared: port them to `ViewProjection` and
-`EventReactor`. With `essentials.event-log.enabled` unset or `false`, the filter removes nothing.
+start under the new engine, because the beans they need are no longer declared: port them to `EventLogReactor` and
+`EventLogViewProcessor` (§2.22), or to `ViewProjection` and `EventReactor`.
+
+**Schema modes.** In `validate`, the engine's own schema is validated when the `EventLog` bean is built, so a missing one
+fails start-up with a `SchemaValidationException` even when an aggregate type is registered while the context is built.
+In `emit`, an aggregate type's tables go into the emitted script and nothing is created on the database. With `essentials.event-log.enabled` unset or `false`, the filter removes nothing.
 
 ### 2.21 The snapshot beans accept any `ConfigurableEventStore` (`spring-boot-starter-postgresql-event-store`)
 
@@ -735,6 +741,43 @@ start under the new engine, because the beans they need are no longer declared: 
 `PostgresqlAggregateSnapshotRepository`, which already accepted any configuration type, so snapshots now also work on the
 new engine's adapter (§2.20). Source- and behaviour-compatible: code that passes the old `PostgresqlEventStore` compiles
 and works as before.
+
+### 2.22 Annotated processor base classes for the new event store engine, preview (`postgresql-event-log-integration`)
+
+**Preview**, as §2.20. Two abstract classes port an existing processor to the new engine by swapping its superclass:
+`EventLogViewProcessor` for a `ViewEventProcessor`, `EventLogReactor` for an `EventProcessor`. Each is a thin shell over
+the engine's processor of the same kind - one `ViewProjection` (`CONTIGUOUS`, exclusive, each page in one transaction
+with the resume point) or one `EventReactor` (`FRESH`, exclusive, at least once) per aggregate type - so retries, page
+shrinking and parking are the engine's.
+
+```java
+public class OrderSummaryView extends EventLogViewProcessor {
+    public OrderSummaryView(EventLogProcessorDependencies dependencies, EventStoreUnitOfWorkFactory<?> unitOfWorkFactory) {
+        super("order-summary", List.of("Orders"), dependencies);
+        this.unitOfWorkFactory = unitOfWorkFactory;
+    }
+
+    @MessageHandler
+    void on(OrderPlaced placed, DeliveredEvent event) {
+        unitOfWorkFactory.getRequiredUnitOfWork().handle().execute("INSERT ...");
+    }
+}
+```
+
+- The constructor takes the processor name, the aggregate types (one subscription each, started and stopped together)
+  and `EventLogProcessorDependencies` (the event log, the JSON event serializer, the page transactions) - a bean of the
+  Spring Boot starter. `consistency()`, `startFrom()`, `errorSettings()` and `tenant()` can be overridden.
+- `@MessageHandler` methods take the payload, optionally followed by a `DeliveredEvent` (it replaces the old
+  `PersistedEvent` second parameter); the most specific payload type wins, and a payload with no handler counts as
+  handled. In a view processor the page's unit of work (or Spring transaction) is bound, so `getRequiredUnitOfWork()` and
+  its `Handle` work as before, and the writes commit with the page.
+- A handler's exception reaches the engine unchanged: retried, then parked; a `ParkEventException` parks at once.
+- An aggregate type not yet registered with the `EventLog` is registered (with the engine's default tables) at `start()`.
+- Both are foundation `Lifecycle`s: in Spring the components starter's lifecycle manager starts them, as it starts the
+  old processors (not in schema mode `emit`).
+- **Not carried over** from the old processors: `MessageHandlerInterceptor`s, `@MessageHandler(unitOfWork = ...)`, the
+  built-in permanent-error list (an `IllegalArgumentException` is retried and then parked like any other failure),
+  inbox redelivery and the `RedeliveryPolicy`, Reactor, and the `FencedLock` (exclusivity is the engine's lease).
 
 ## 3. Bug fixes
 

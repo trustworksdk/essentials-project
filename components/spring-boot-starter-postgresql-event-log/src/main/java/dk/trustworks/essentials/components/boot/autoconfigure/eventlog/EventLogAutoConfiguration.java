@@ -31,7 +31,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.causation.CausationCommandContextPropagator;
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.messaging.queue.CausationDurableQueuesInterceptor;
-import dk.trustworks.essentials.components.foundation.schema.SchemaMode;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.reactive.*;
 import dk.trustworks.essentials.reactive.command.AbstractCommandBus;
 import org.jdbi.v3.core.Jdbi;
@@ -83,6 +83,7 @@ public class EventLogAutoConfiguration {
                              EssentialsEventLogProperties properties,
                              EssentialsComponentsProperties componentsProperties,
                              ObjectProvider<EventLogSchemaContributor> schemaContributor,
+                             ObjectProvider<SchemaApplier> schemaApplier,
                              ObjectProvider<EventLogObserver> observer) throws SQLException {
         var builder = EventLog.builder()
                               .setDataSource(dataSource)
@@ -90,6 +91,13 @@ public class EventLogAutoConfiguration {
                               .setSchemaOwnership(componentsProperties.getSchema().getMode().schemaOwnership());
         schemaContributor.ifAvailable(builder::setSchemaContributor);
         observer.ifAvailable(builder::setObserver);
+        var contributor = schemaContributor.getIfAvailable();
+        var applier     = schemaApplier.getIfAvailable();
+        if (componentsProperties.getSchema().getMode() == SchemaMode.VALIDATE && contributor != null && applier != null) {
+            // Aggregate types register while the context is built, before the harness runs: validate the engine's fixed
+            // schema now, so a missing one fails as a SchemaValidationException rather than as the first statement's error
+            applier.apply(List.of(new SchemaChangeSet(contributor.moduleId(), contributor.order(), contributor.contribute(SchemaContext.empty()))));
+        }
         var eventLog = builder.build();
         eventLog.start();
         return eventLog;
@@ -98,8 +106,10 @@ public class EventLogAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.event-log", name = "initialize-schema", havingValue = "true", matchIfMissing = true)
-    public EventLogSchemaContributor eventLogSchemaContributor(DataSource dataSource) {
-        return new EventLogSchemaContributor(dataSource);
+    public EventLogSchemaContributor eventLogSchemaContributor(DataSource dataSource, EssentialsComponentsProperties componentsProperties) {
+        var contributor = new EventLogSchemaContributor(dataSource);
+        // emit: an aggregate type's tables go into the script, never onto the database
+        return componentsProperties.getSchema().getMode() == SchemaMode.EMIT ? contributor.scriptOnly() : contributor;
     }
 
     @Bean("essentialsEventStore")
@@ -224,9 +234,20 @@ public class EventLogAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public EventLogProcessorLifecycle eventLogProcessorLifecycle(ObjectProvider<ViewProjection> viewProjections,
+    public EventLogProcessorLifecycle eventLogProcessorLifecycle(EventLog eventLog,
+                                                                 ObjectProvider<ViewProjection> viewProjections,
                                                                  ObjectProvider<EventReactor> eventReactors,
                                                                  EssentialsComponentsProperties properties) {
-        return new EventLogProcessorLifecycle(viewProjections, eventReactors, properties.getSchema().getMode() == SchemaMode.EMIT);
+        return new EventLogProcessorLifecycle(eventLog, viewProjections, eventReactors, properties.getSchema().getMode() == SchemaMode.EMIT);
+    }
+
+    /**
+     * What an {@link EventLogViewProcessor} / {@link EventLogReactor} subclass bean is built with. Those are foundation
+     * {@code Lifecycle}s, started by the components starter's lifecycle manager (not in schema mode {@code emit}).
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public EventLogProcessorDependencies eventLogProcessorDependencies(EventLog eventLog, JSONEventSerializer serializer, PageTransactionSource pageTransactionSource) {
+        return new EventLogProcessorDependencies(eventLog, serializer, pageTransactionSource);
     }
 }

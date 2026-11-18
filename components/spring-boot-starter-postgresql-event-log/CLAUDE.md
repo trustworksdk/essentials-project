@@ -12,7 +12,8 @@ Spring Boot auto-configuration for the new event store engine (`postgresql-event
 | `EventLogEventStore` (`essentialsEventStore`) | `@ConditionalOnMissingBean(EventStore.class)`; enrichers, interceptors, optional `TenantSerializer` from the context |
 | `EventStoreUnitOfWorkFactory`, `EventStoreEventBus`, `JSONEventSerializer`, `PersistableEventMapper`, causation enricher / queue interceptor / command propagator | Built exactly as the old `EventStoreConfiguration` builds them, each `@ConditionalOnMissingBean` |
 | `PageTransactionSource` | `SpringPageTransactions` with a `PlatformTransactionManager`, else `UnitOfWorkPageTransactions` |
-| `EventLogProcessorLifecycle` | `SmartLifecycle` that starts every `ViewProjection` / `EventReactor` bean, stops them before the `EventLog`; nothing in schema mode `emit` |
+| `EventLogProcessorLifecycle` | `SmartLifecycle` that registers each `ViewProjection` / `EventReactor` bean's aggregate type, starts it, stops them before the `EventLog`; nothing in schema mode `emit` |
+| `EventLogProcessorDependencies` | For `EventLogViewProcessor` / `EventLogReactor` subclass beans. Those are foundation `Lifecycle`s: the base starter's `DefaultLifecycleManager` starts them (off in `emit`), not `EventLogProcessorLifecycle` |
 | `EventLogSubscriptionsApi` | `EventLogAdminApiAutoConfiguration`, with the admin API starter and an `EssentialsSecurityProvider` |
 
 ## Gotchas
@@ -34,10 +35,13 @@ Integration (one static container, `public` schema recreated per test): `EventLo
 `EventLogImportFilter`. The must-fail arm imports the configurations directly and shows the context failing on the
 duplicate `essentialsEventStore`; removing the filter from `spring.factories` fails four of the IT's tests.
 
-- **An aggregate type registered while the context is built reaches the engine's tables before the schema harness runs**
-  (`EssentialsSchemaHarnessRunner` runs after the singletons). In `create` mode the engine created them as it started;
-  in `validate` and `emit` on an empty database the registration fails with the database's error, not the harness's.
-- **A `ViewProjection` / `EventReactor` needs its aggregate type registered before it starts.** A repository bean
-  registers it; a projection-only application must register it itself.
+- **Aggregate types register while the context is built, before the schema harness runs** (`EssentialsSchemaHarnessRunner`
+  runs after the singletons). Rules that keep that safe: in `validate` the `EventLog` bean validates the engine's fixed
+  schema through the `SchemaApplier` bean before it starts, so a missing schema fails as `SchemaValidationException`
+  (otherwise `EventLogSchemaContributor.attach` would create the pending type tables first and fail with the database's
+  error); in `emit` the contributor bean is `scriptOnly()`, so a type's tables go into the script and nothing is written
+  to the database. `EventLogSchemaModeIT` covers both with a type registered during the build.
+- **Processors register their own aggregate type** before subscribing: `EventLogProcessorLifecycle` for `ViewProjection` /
+  `EventReactor` beans, the base classes at `start()`. Registration creates the engine's default tables (in `create`).
 - The tests need `micrometer-core` and `spring-boot-health` (test scope): `EssentialsComponentsConfiguration` cannot be
   introspected without them.

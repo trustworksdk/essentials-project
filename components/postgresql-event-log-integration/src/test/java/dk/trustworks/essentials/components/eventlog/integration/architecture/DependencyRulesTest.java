@@ -16,6 +16,9 @@
 
 package dk.trustworks.essentials.components.eventlog.integration.architecture;
 
+import com.tngtech.archunit.base.DescribedPredicate;
+import com.tngtech.archunit.core.domain.JavaClass;
+import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.*;
 import org.junit.jupiter.api.*;
@@ -47,11 +50,13 @@ class DependencyRulesTest {
 
     @Test
     void the_old_subscription_model_is_not_used() {
-        noClasses().should().dependOnClassesThat().resideInAnyPackage("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription..",
-                                                                     "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor..",
-                                                                     "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap..",
-                                                                     "dk.trustworks.essentials.components.foundation.fencedlock..",
-                                                                     "dk.trustworks.essentials.components.foundation.messaging..")
+        // foundation messaging is the durable queues' world; only the @MessageHandler annotation is used here (phase 10 §3.5)
+        noClasses().should().dependOnClassesThat(JavaClass.Predicates.resideInAnyPackage("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription..",
+                                                                                         "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor..",
+                                                                                         "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap..",
+                                                                                         "dk.trustworks.essentials.components.foundation.fencedlock..",
+                                                                                         "dk.trustworks.essentials.components.foundation.messaging..")
+                                                                     .and(DescribedPredicate.not(JavaClass.Predicates.equivalentTo(MessageHandler.class))))
                    .check(moduleClasses);
     }
 

@@ -75,9 +75,9 @@ the LLM doc lead with it. The old engine stays the default and fully supported. 
 One `EventLog` per `DataSource`, so the notifier, listener and lease keeper stay per `EventLog` (phase-8 open question 10
 settled: nothing in phase 10 needs several).
 
-**Proposed:** builder helpers in the starter, `EventLogProcessors.viewProjection(name, type)` and `.eventReactor(...)`,
-that pre-fill the event log, the serializer and the page source from the context, so an application bean is one builder
-chain. They add no behaviour of their own.
+~~Proposed: builder helpers `EventLogProcessors.viewProjection(name, type)` / `.eventReactor(...)`.~~ **Dropped** (unit
+10-A2): superseded by the starter's `EventLogProcessorDependencies` bean (event log, serializer, page source), which the
+§3.5 base classes take and a lambda-builder bean can read its three values from.
 
 ### 3.3 Living beside the old event-store starter
 

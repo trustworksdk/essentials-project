@@ -144,6 +144,15 @@ abstract class AbstractProcessorIT {
         }
     }
 
+    /** Append one event of {@code payload}'s class to {@code aggregateType}'s stream {@code aggregateId}, committed at once */
+    void appendOne(String aggregateType, String aggregateId, Object payload) throws SQLException {
+        try (var connection = engineDataSource.getConnection()) {
+            var event = new EventToAppend(UUID.randomUUID(), null, null, "FQCN:" + payload.getClass().getName(), 1, Instant.now(), serializer.serialize(payload),
+                                          serializer.serialize(EventMetaData.empty()));
+            eventLog.append(connection, AppendRequest.withoutExpectedOrder(aggregateType, aggregateId, List.of(event)));
+        }
+    }
+
     /** The reference fold: per order, the sum of every applied global order */
     static Map<String, Long> fold(Set<Long> excluded) {
         var totals = new TreeMap<String, Long>();

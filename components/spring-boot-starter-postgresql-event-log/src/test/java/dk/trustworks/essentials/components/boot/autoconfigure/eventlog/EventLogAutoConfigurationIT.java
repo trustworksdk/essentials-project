@@ -28,6 +28,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.shared.security.*;
+import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.support.BeanDefinitionOverrideException;
 import org.springframework.boot.autoconfigure.*;
@@ -61,10 +62,12 @@ class EventLogAutoConfigurationIT {
     static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17.5-bookworm");
 
     static final List<TestOrder.OrderPlaced> PROJECTED = new CopyOnWriteArrayList<>();
+    static final List<TestOrder.OrderPlaced> ANNOTATED = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void emptyDatabase() throws SQLException {
         PROJECTED.clear();
+        ANNOTATED.clear();
         var dataSource = new DriverManagerDataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
             statement.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public");
@@ -140,6 +143,10 @@ class EventLogAutoConfigurationIT {
             assertThat(ctx.getBean("ordersView", ViewProjection.class).isRunning()).isTrue();
             await().atMost(Duration.ofSeconds(20))
                    .untilAsserted(() -> assertThat(PROJECTED).containsExactly(new TestOrder.OrderPlaced(orderId, 7)));
+            // An EventLogViewProcessor bean is started by the components starter's lifecycle manager, on the starter's dependencies bean
+            assertThat(ctx.getBean(OrdersAnnotatedView.class).isStarted()).isTrue();
+            await().atMost(Duration.ofSeconds(20))
+                   .untilAsserted(() -> assertThat(ANNOTATED).containsExactly(new TestOrder.OrderPlaced(orderId, 7)));
             var loaded = (TestOrder) unitOfWorkFactory.withUnitOfWork(() -> repository.load(orderId));
             assertThat(loaded.total).isEqualTo(7);
         });
@@ -214,11 +221,28 @@ class EventLogAutoConfigurationIT {
         }
 
         @Bean
+        OrdersAnnotatedView ordersAnnotatedView(EventLogProcessorDependencies dependencies) {
+            return new OrdersAnnotatedView(dependencies);
+        }
+
+        @Bean
         ViewProjection ordersView(EventLog eventLog, JSONEventSerializer serializer, PageTransactionSource transactions) {
             return ViewProjection.builder("orders-view", ORDERS.toString())
                                  .on(TestOrder.OrderPlaced.class, (event, context) -> PROJECTED.add(event.payloadAs(TestOrder.OrderPlaced.class)))
                                  .transactions(transactions)
                                  .build(eventLog, serializer);
+        }
+    }
+
+    /** An annotated view processor bean (phase 10 §3.5) */
+    static class OrdersAnnotatedView extends EventLogViewProcessor {
+        OrdersAnnotatedView(EventLogProcessorDependencies dependencies) {
+            super("orders-annotated-view", List.of(ORDERS.toString()), dependencies);
+        }
+
+        @MessageHandler
+        void on(TestOrder.OrderPlaced placed, DeliveredEvent event) {
+            ANNOTATED.add(placed);
         }
     }
 }

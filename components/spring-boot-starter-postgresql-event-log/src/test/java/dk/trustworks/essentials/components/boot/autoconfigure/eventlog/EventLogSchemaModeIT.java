@@ -113,6 +113,34 @@ class EventLogSchemaModeIT {
         assertThat(tableExists(EventLogSchema.PROGRESS_TABLE)).isFalse();
     }
 
+    /** Finding 1 of unit 10-A: a type registered while the context is built must not reach the database before the schema is validated */
+    @Test
+    void validate_mode_with_an_aggregate_type_registered_during_the_build_fails_on_the_schema_not_the_database() {
+        runner().withPropertyValues("essentials.schema.mode=validate")
+                .run(ctx -> {
+                    assertThat(ctx).hasFailed();
+                    assertThat(rootCause(ctx.getStartupFailure())).isInstanceOf(SchemaValidationException.class);
+                });
+    }
+
+    /** Finding 1 of unit 10-A: in emit an aggregate type registered during the build goes into the script, not onto the database */
+    @Test
+    void emit_mode_writes_an_aggregate_type_registered_during_the_build_to_the_script_only(@TempDir Path scriptDirectory) throws Exception {
+        var script = scriptDirectory.resolve("schema.sql");
+        runner().withPropertyValues("essentials.schema.mode=emit",
+                                    "essentials.schema.emit.exit=false",
+                                    "essentials.schema.emit.script-file=" + script)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx.getBean("ordersView", ViewProjection.class).isRunning()).isFalse();
+                });
+
+        var eventTable = AggregateTypeTables.of(TestOrder.ORDERS.toString()).eventTable();
+        assertThat(tableExists(EventLogSchema.PROGRESS_TABLE)).isFalse();
+        assertThat(tableExists(eventTable)).isFalse();
+        assertThat(java.nio.file.Files.readString(script)).contains(eventTable);
+    }
+
     @Test
     void no_contribution_when_a_migration_tool_owns_the_schema() {
         runner().withPropertyValues("essentials.event-log.initialize-schema=false")
