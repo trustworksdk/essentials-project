@@ -22,12 +22,19 @@ Porting a processor (pilot: `accounts/views/uncleared_deposits/`):
    `pageHandle()` (view) or `messageHandle()` (partitioned view). No `@IgnoresEventTypes`: unhandled events are skipped.
 4. **The processor name stays the classic one** — pass the old processor's name (for a view: the old class name,
    e.g. `"UnclearedDepositsProjection"`) to the twin's constructor, so admin views, logs, inbox and queue names match.
-5. Reactions (inbox kind) are named `<Name>ClassicReaction` / `<Name>EventLogReaction`; handlers keep their classic
-   shape (payload, optional `OrderedMessage`, `UnitOfWorkMode`), each in its own unit of work.
+5. **Reactions (inbox kind)** (pilot: `market_data/use_cases/risk_approve_instrument/`): the engine-neutral bean keeps
+   the class name (`InstrumentRiskApprovalProcessor`), drops the base class, and holds package-private `on(<Event>)`
+   bodies plus `PROCESSOR_NAME` / `AGGREGATE_TYPES` constants the wrappers share. `getCommandBus()` becomes an injected
+   `CommandBus`; `usingUnitOfWork` / `withUnitOfWork` go through an injected `EventStoreUnitOfWorkFactory`. The wrappers
+   `<Name>ClassicReaction` (extends `TradingDemoEventProcessor`) and `<Name>EventLogReaction` (extends
+   `TradingDemoEventLogInboxProcessor`) carry the `@MessageHandler`s with the classic `UnitOfWorkMode`, so the
+   transaction boundary stays on the wrapper. A parallel-consumers override is
+   `getNumberOfParallelInboxMessageConsumers()` on classic, `numberOfParallelInboxMessageConsumers()` on the twin;
+   `getForwardBatchSize()` is classic-only (the twin forwards one event per unit of work).
 6. Partitioned views: the twin queues to `<name>:queue` keyed by aggregate; `UnitOfWorkMode.NONE` handlers are refused.
 7. Tests: an `@ActiveProfiles("event-log")` IT per ported processor. `UnclearedDepositsEventLogViewIT` is the template;
-   it `@MockitoBean`s the processors not yet ported that fail the event-log context (now only
-   `InstrumentRiskApprovalProcessor`). Drop each mock once its processor is ported.
+   no processor needs mocking any more. `PaymentRouterEventLogReactionIT` is the reaction template (event log ->
+   forwarder -> inbox -> handler, spying on the external gateway).
 8. Classic-only hooks such as `onSubscriptionsReset` stay on the `ClassicView`, delegating to a package-private
    projection method (`UsersProjection.truncate()`). The event-log twin has no such hook.
 9. **A handler that reads `OrderedMessage#getOrder()`** (the event's `EventOrder` in its stream) gets it as a `long`

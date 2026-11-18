@@ -16,10 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.funding.external_systems.payment_gateway;
 
-import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.examples.trading.accounts.types.AccountId;
 import dk.trustworks.essentials.examples.trading.funding.aggregates.*;
@@ -41,10 +38,16 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * answer goes through {@link PaymentReports}. An unreachable gateway is retried within the one delivery, with a
  * doubling backoff, then the payment is recorded failed {@code GATEWAY_UNAVAILABLE}; a refusal is recorded failed with
  * the gateway's code. A payment the gateway took despite the failure still completes (see {@code Deposit}).
+ * <p>
+ * Engine-neutral: the handler bodies, fed by {@link PaymentRouterClassicReaction} on the classic engine and
+ * {@link PaymentRouterEventLogReaction} on the event-log engine under the processor name {@value #PROCESSOR_NAME}. The
+ * wrappers declare each handler's {@code UnitOfWorkMode}, so a body runs in the unit of work its wrapper opens.
  */
-@ClassicEngine
 @Service
-public class PaymentRouter extends TradingDemoEventProcessor {
+public class PaymentRouter {
+    static final String              PROCESSOR_NAME  = "PaymentRouter";
+    static final List<AggregateType> AGGREGATE_TYPES = List.of(Deposits.AGGREGATE_TYPE, Withdrawals.AGGREGATE_TYPE);
+
     public static final String GATEWAY_UNAVAILABLE = "GATEWAY_UNAVAILABLE";
 
     private static final Logger log = LoggerFactory.getLogger(PaymentRouter.class);
@@ -53,29 +56,16 @@ public class PaymentRouter extends TradingDemoEventProcessor {
     private final PaymentReports              reports;
     private final PaymentSubmissionProperties submission;
 
-    public PaymentRouter(EventProcessorDependencies dependencies, PaymentGateway gateway, PaymentReports reports, PaymentSubmissionProperties submission) {
-        super(dependencies);
+    public PaymentRouter(PaymentGateway gateway, PaymentReports reports, PaymentSubmissionProperties submission) {
         this.gateway = requireNonNull(gateway, "No gateway provided");
         this.reports = requireNonNull(reports, "No reports provided");
         this.submission = requireNonNull(submission, "No submission provided");
     }
 
-    @Override
-    public String getProcessorName() {
-        return "PaymentRouter";
-    }
-
-    @Override
-    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-        return List.of(Deposits.AGGREGATE_TYPE, Withdrawals.AGGREGATE_TYPE);
-    }
-
-    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
     void on(DepositRequested e) {
         initiate(PaymentKind.DEPOSIT, e.depositId().toString(), e.accountId(), e.amount(), e.bankAccount());
     }
 
-    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
     void on(WithdrawalRequested e) {
         initiate(PaymentKind.WITHDRAWAL, e.withdrawalId().toString(), e.accountId(), e.amount(), e.bankAccount());
     }

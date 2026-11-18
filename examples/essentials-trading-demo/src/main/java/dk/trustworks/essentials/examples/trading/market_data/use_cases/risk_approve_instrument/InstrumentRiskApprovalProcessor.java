@@ -16,10 +16,8 @@
 
 package dk.trustworks.essentials.examples.trading.market_data.use_cases.risk_approve_instrument;
 
-import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorDependencies;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.messaging.UnitOfWorkMode;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
@@ -70,45 +68,43 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * An automation has no external API: nothing calls it, it reacts. It writes one aggregate per handler and issues no
  * command, the same shape as {@code postgresql-cqrs}' {@code banking.transfer_money}. The instrument's risk state is
  * observable through {@code views/instrument_details}.
+ * <p>
+ * <b>Engine-neutral.</b> This bean holds the handler body and opens no unit of work except the explicit tail; it is fed
+ * by {@link InstrumentRiskApprovalClassicReaction} on the classic engine and {@link InstrumentRiskApprovalEventLogReaction}
+ * on the event-log engine, which both declare the handler {@link UnitOfWorkMode#NONE} and run under the processor name
+ * {@value #PROCESSOR_NAME} (so the inbox is {@code Inbox:InstrumentRiskApprovalProcessor} on both).
  */
-@ClassicEngine
 @Service
-public class InstrumentRiskApprovalProcessor extends TradingDemoEventProcessor {
+public class InstrumentRiskApprovalProcessor {
+    static final String              PROCESSOR_NAME  = "InstrumentRiskApprovalProcessor";
+    static final List<AggregateType> AGGREGATE_TYPES = List.of(Instruments.AGGREGATE_TYPE);
+
     private static final Logger log = LoggerFactory.getLogger(InstrumentRiskApprovalProcessor.class);
 
-    private final Instruments           instruments;
-    private final RiskAssessmentGateway riskAssessmentGateway;
+    private final Instruments                                                 instruments;
+    private final RiskAssessmentGateway                                       riskAssessmentGateway;
+    private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
 
-    public InstrumentRiskApprovalProcessor(EventProcessorDependencies eventProcessorDependencies,
-                                           Instruments instruments,
-                                           RiskAssessmentGateway riskAssessmentGateway) {
-        super(eventProcessorDependencies);
+    public InstrumentRiskApprovalProcessor(Instruments instruments,
+                                           RiskAssessmentGateway riskAssessmentGateway,
+                                           EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory) {
         this.instruments = requireNonNull(instruments, "No instruments provided");
         this.riskAssessmentGateway = requireNonNull(riskAssessmentGateway, "No riskAssessmentGateway provided");
-    }
-
-    @Override
-    public String getProcessorName() {
-        return "InstrumentRiskApprovalProcessor";
-    }
-
-    @Override
-    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-        return List.of(Instruments.AGGREGATE_TYPE);
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     /**
-     * The blocking half runs with no {@link UnitOfWork}; the transactional tail is wrapped explicitly.
+     * The blocking half runs with no {@link UnitOfWork} (the calling {@link MessageHandler} is
+     * {@link UnitOfWorkMode#NONE}); the transactional tail is wrapped explicitly.
      * <p>
      * Touching a transactional resource between the two -- loading the instrument before the call, say -- would fail
      * fast rather than silently open a transaction, because with {@link UnitOfWorkMode#NONE} there is no ambient one to
      * join.
      */
-    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
     void on(InstrumentRegistered e) {
         var assessment = riskAssessmentGateway.assess(e.instrumentId(), e.symbol());
 
-        usingUnitOfWork(() -> recordDecision(e.instrumentId(), assessment));
+        unitOfWorkFactory.usingUnitOfWork(() -> recordDecision(e.instrumentId(), assessment));
     }
 
     private void recordDecision(InstrumentId instrumentId,

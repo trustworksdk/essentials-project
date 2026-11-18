@@ -16,16 +16,14 @@
 
 package dk.trustworks.essentials.examples.trading.orders.external_systems.exchange;
 
-import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.examples.trading.orders.aggregates.Orders;
 import dk.trustworks.essentials.examples.trading.orders.config.*;
 import dk.trustworks.essentials.examples.trading.orders.events.*;
 import dk.trustworks.essentials.examples.trading.orders.types.OrderId;
 import dk.trustworks.essentials.examples.trading.orders.use_cases.record_exchange_answer.RecordExchangeAnswer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import org.slf4j.*;
 import org.springframework.stereotype.Service;
 
@@ -44,10 +42,16 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * An unreachable exchange is retried with a doubling backoff ({@link ExchangeSubmissionProperties}); when the attempts
  * run out the order is rejected {@value #EXCHANGE_UNAVAILABLE} and its hold released. Should the exchange have taken it
  * after all, its fills still arrive and are booked as facts (design Q-3).
+ * <p>
+ * Engine-neutral: the handler bodies, fed by {@link ExchangeOrderRouterClassicReaction} on the classic engine and
+ * {@link ExchangeOrderRouterEventLogReaction} on the event-log engine under the processor name {@value #PROCESSOR_NAME}. The
+ * wrappers declare each handler's {@code UnitOfWorkMode}, so a body runs in the unit of work its wrapper opens.
  */
-@ClassicEngine
 @Service
-public class ExchangeOrderRouter extends TradingDemoEventProcessor {
+public class ExchangeOrderRouter {
+    static final String              PROCESSOR_NAME  = "ExchangeOrderRouter";
+    static final List<AggregateType> AGGREGATE_TYPES = List.of(Orders.AGGREGATE_TYPE);
+
     public static final String EXCHANGE_UNAVAILABLE = "EXCHANGE_UNAVAILABLE";
 
     private static final Logger log = LoggerFactory.getLogger(ExchangeOrderRouter.class);
@@ -56,53 +60,24 @@ public class ExchangeOrderRouter extends TradingDemoEventProcessor {
     private final ExchangeReports              reports;
     private final Orders                       orders;
     private final ExchangeSubmissionProperties submission;
-    private final OrderProcessingProperties    consumers;
-    private final OrderForwardingProperties    forwarding;
-
     private final RouterStageTimings           stageTimings;
 
-    public ExchangeOrderRouter(EventProcessorDependencies dependencies,
-                               ExchangeGateway gateway,
+    private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
+
+    public ExchangeOrderRouter(ExchangeGateway gateway,
                                ExchangeReports reports,
                                Orders orders,
                                ExchangeSubmissionProperties submission,
-                               OrderProcessingProperties consumers,
-                               OrderForwardingProperties forwarding,
-                               RouterStageTimings stageTimings) {
-        super(dependencies);
+                               RouterStageTimings stageTimings,
+                               EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.stageTimings = requireNonNull(stageTimings, "No stageTimings provided");
-        this.consumers = requireNonNull(consumers, "No consumers provided");
-        this.forwarding = requireNonNull(forwarding, "No forwarding provided");
         this.gateway = requireNonNull(gateway, "No gateway provided");
         this.reports = requireNonNull(reports, "No reports provided");
         this.orders = requireNonNull(orders, "No orders provided");
         this.submission = requireNonNull(submission, "No submission provided");
     }
 
-    @Override
-    public String getProcessorName() {
-        return "ExchangeOrderRouter";
-    }
-
-    @Override
-    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-        return List.of(Orders.AGGREGATE_TYPE);
-    }
-
-    /**
-     * One order's events stay in order on any number of threads, so its cancel still follows its submission.
-     */
-    @Override
-    protected int getNumberOfParallelInboxMessageConsumers() {
-        return consumers.getExchangeRouter();
-    }
-
-    @Override
-    protected int getForwardBatchSize() {
-        return forwarding.getBatchSize();
-    }
-
-    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
     void on(OrderPlaced e) {
         log.debug("Submitting order '{}' to the exchange", e.orderId());
         var handlingStarted = stageTimings.isEnabled() ? Instant.now() : null;
@@ -127,7 +102,6 @@ public class ExchangeOrderRouter extends TradingDemoEventProcessor {
      * the submission's answer to be recorded. This inbox delivers one order's events in order, so the order was submitted
      * before its cancel request arrives here. An order that closed meanwhile (rejected, filled) is let go.
      */
-    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
     void on(OrderCancelRequested e) {
         cancelAtExchange(e.orderId());
     }
@@ -136,13 +110,12 @@ public class ExchangeOrderRouter extends TradingDemoEventProcessor {
      * The brokerage's end-of-day expiry of a {@code DAY} order is a cancel at the exchange; the order expires when the
      * exchange confirms it.
      */
-    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
     void on(OrderExpiryRequested e) {
         cancelAtExchange(e.orderId());
     }
 
     private void cancelAtExchange(OrderId orderId) {
-        var status = withUnitOfWork(() -> orders.statusOf(orderId))
+        var status = unitOfWorkFactory.withUnitOfWork(() -> orders.statusOf(orderId))
                 .orElseThrow(() -> new IllegalStateException("Order '" + orderId + "' not found"));
         if (status.isTerminal()) {
             return;

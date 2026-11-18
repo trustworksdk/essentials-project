@@ -16,11 +16,8 @@
 
 package dk.trustworks.essentials.examples.trading.funding.automations.apply_payment_to_account;
 
-import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
-import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.reactive.command.CommandBus;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.accounts.use_cases.credit_deposit.CreditDeposit;
 import dk.trustworks.essentials.examples.trading.accounts.use_cases.credit_withdrawal_return.CreditWithdrawalReturn;
@@ -33,6 +30,8 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Books each payment outcome on the trading account with the ledger's own command (design §2, §3): a completed deposit
  * is credited for its value date, a returned one reversed; a completed withdrawal consumes its hold and debits settled
@@ -41,47 +40,39 @@ import java.util.List;
  * <p>
  * The ledger's commands are sent on the bus, one per event; the account stream's optimistic append serialises two
  * payments of one account, and the processor redelivers the loser.
+ * <p>
+ * Engine-neutral: the handler bodies, fed by {@link FundingLedgerClassicReaction} on the classic engine and
+ * {@link FundingLedgerEventLogReaction} on the event-log engine under the processor name {@value #PROCESSOR_NAME}. The
+ * wrappers declare each handler's {@code UnitOfWorkMode}, so a body runs in the unit of work its wrapper opens.
  */
-@ClassicEngine
 @Service
-public class FundingLedgerProcessor extends TradingDemoEventProcessor {
+public class FundingLedgerProcessor {
+    static final String              PROCESSOR_NAME  = "FundingLedgerProcessor";
+    static final List<AggregateType> AGGREGATE_TYPES = List.of(Deposits.AGGREGATE_TYPE, Withdrawals.AGGREGATE_TYPE);
 
-    public FundingLedgerProcessor(EventProcessorDependencies dependencies) {
-        super(dependencies);
+    private final CommandBus commandBus;
+
+    public FundingLedgerProcessor(CommandBus commandBus) {
+        this.commandBus = requireNonNull(commandBus, "No commandBus provided");
     }
 
-    @Override
-    public String getProcessorName() {
-        return "FundingLedgerProcessor";
-    }
-
-    @Override
-    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-        return List.of(Deposits.AGGREGATE_TYPE, Withdrawals.AGGREGATE_TYPE);
-    }
-
-    @MessageHandler
     void on(DepositCompleted e) {
-        getCommandBus().send(new CreditDeposit(e.accountId(), e.depositId(), e.amount(), e.valueDate()));
+        commandBus.send(new CreditDeposit(e.accountId(), e.depositId(), e.amount(), e.valueDate()));
     }
 
-    @MessageHandler
     void on(DepositReturnedByBank e) {
-        getCommandBus().send(new ReturnDeposit(e.accountId(), e.depositId(), e.amount()));
+        commandBus.send(new ReturnDeposit(e.accountId(), e.depositId(), e.amount()));
     }
 
-    @MessageHandler
     void on(WithdrawalCompleted e) {
-        getCommandBus().send(new WithdrawCash(e.accountId(), e.withdrawalId(), HoldId.of(e.withdrawalId()), e.amount()));
+        commandBus.send(new WithdrawCash(e.accountId(), e.withdrawalId(), HoldId.of(e.withdrawalId()), e.amount()));
     }
 
-    @MessageHandler
     void on(WithdrawalFailed e) {
-        getCommandBus().send(new ReleaseHold(e.accountId(), HoldId.of(e.withdrawalId())));
+        commandBus.send(new ReleaseHold(e.accountId(), HoldId.of(e.withdrawalId())));
     }
 
-    @MessageHandler
     void on(WithdrawalReturnedByBank e) {
-        getCommandBus().send(new CreditWithdrawalReturn(e.accountId(), e.withdrawalId(), e.amount()));
+        commandBus.send(new CreditWithdrawalReturn(e.accountId(), e.withdrawalId(), e.amount()));
     }
 }

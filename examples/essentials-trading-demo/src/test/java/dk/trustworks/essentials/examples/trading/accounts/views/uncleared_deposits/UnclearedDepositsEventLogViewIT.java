@@ -24,7 +24,6 @@ import dk.trustworks.essentials.examples.trading.accounts.use_cases.credit_depos
 import dk.trustworks.essentials.examples.trading.accounts.use_cases.open_account.OpenAccount;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoEventLogViewProcessor;
 import dk.trustworks.essentials.examples.trading.identity.types.UserId;
-import dk.trustworks.essentials.examples.trading.market_data.use_cases.risk_approve_instrument.InstrumentRiskApprovalProcessor;
 import dk.trustworks.essentials.reactive.command.CommandBus;
 import dk.trustworks.essentials.types.*;
 import org.junit.jupiter.api.Test;
@@ -36,7 +35,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceUtils;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.*;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -56,8 +54,7 @@ import static org.awaitility.Awaitility.await;
  * starter's {@code SpringPageTransactions} that unit of work must join the engine's page transaction - same
  * connection, committed with the page - rather than open a transaction of its own.
  * <p>
- * Runs the demo on the {@code event-log} profile. A bean that still injects a classic-only processor (not ported yet)
- * is mocked: {@link InstrumentRiskApprovalProcessor}.
+ * Runs the demo on the {@code event-log} profile.
  */
 @Testcontainers
 @SpringBootTest(properties = {
@@ -82,9 +79,6 @@ class UnclearedDepositsEventLogViewIT {
         registry.add("spring.datasource.password", postgres::getPassword);
         registry.add("spring.datasource.driver-class-name", postgres::getDriverClassName);
     }
-
-    @MockitoBean
-    private InstrumentRiskApprovalProcessor instrumentRiskApprovalProcessor;
 
     @Autowired
     private CommandBus                  commandBus;

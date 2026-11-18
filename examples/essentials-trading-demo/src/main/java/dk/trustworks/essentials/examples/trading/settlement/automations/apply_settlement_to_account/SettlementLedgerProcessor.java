@@ -16,11 +16,8 @@
 
 package dk.trustworks.essentials.examples.trading.settlement.automations.apply_settlement_to_account;
 
-import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoEventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
-import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.reactive.command.CommandBus;
 import dk.trustworks.essentials.examples.trading.accounts.use_cases.correct_settlement_amount.CorrectSettlementAmount;
 import dk.trustworks.essentials.examples.trading.accounts.use_cases.reverse_trade_booking.ReverseTradeBooking;
 import dk.trustworks.essentials.examples.trading.accounts.use_cases.settle_trade.SettleTrade;
@@ -30,41 +27,37 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Books each settlement outcome on the trading account with the ledger's own command (design §3-§5): settled →
  * {@code SettleTrade}; abandoned → {@code ReverseTradeBooking} with the exchange's reason (Q-1); a corrected amount →
  * {@code CorrectSettlementAmount} with the change (Q-2). Every ledger command is idempotent per execution.
+ * <p>
+ * Engine-neutral: the handler bodies, fed by {@link SettlementLedgerClassicReaction} on the classic engine and
+ * {@link SettlementLedgerEventLogReaction} on the event-log engine under the processor name {@value #PROCESSOR_NAME}. The
+ * wrappers declare each handler's {@code UnitOfWorkMode}, so a body runs in the unit of work its wrapper opens.
  */
-@ClassicEngine
 @Service
-public class SettlementLedgerProcessor extends TradingDemoEventProcessor {
+public class SettlementLedgerProcessor {
+    static final String              PROCESSOR_NAME  = "SettlementLedgerProcessor";
+    static final List<AggregateType> AGGREGATE_TYPES = List.of(TradeSettlements.AGGREGATE_TYPE);
 
-    public SettlementLedgerProcessor(EventProcessorDependencies dependencies) {
-        super(dependencies);
+    private final CommandBus commandBus;
+
+    public SettlementLedgerProcessor(CommandBus commandBus) {
+        this.commandBus = requireNonNull(commandBus, "No commandBus provided");
     }
 
-    @Override
-    public String getProcessorName() {
-        return "SettlementLedgerProcessor";
-    }
-
-    @Override
-    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-        return List.of(TradeSettlements.AGGREGATE_TYPE);
-    }
-
-    @MessageHandler
     void on(SettlementSettled e) {
-        getCommandBus().send(new SettleTrade(e.accountId(), e.executionId()));
+        commandBus.send(new SettleTrade(e.accountId(), e.executionId()));
     }
 
-    @MessageHandler
     void on(SettlementAbandoned e) {
-        getCommandBus().send(new ReverseTradeBooking(e.accountId(), e.executionId(), "SETTLEMENT_" + e.outcome() + ": " + e.reason()));
+        commandBus.send(new ReverseTradeBooking(e.accountId(), e.executionId(), "SETTLEMENT_" + e.outcome() + ": " + e.reason()));
     }
 
-    @MessageHandler
     void on(SettlementAmountChanged e) {
-        getCommandBus().send(new CorrectSettlementAmount(e.accountId(), e.executionId(), e.instrumentId(), e.side(), e.amount().subtract(e.previousAmount())));
+        commandBus.send(new CorrectSettlementAmount(e.accountId(), e.executionId(), e.instrumentId(), e.side(), e.amount().subtract(e.previousAmount())));
     }
 }
