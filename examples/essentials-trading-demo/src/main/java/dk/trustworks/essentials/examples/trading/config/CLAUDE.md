@@ -30,6 +30,9 @@ Porting a processor (pilot: `accounts/views/uncleared_deposits/`):
    `InstrumentRiskApprovalProcessor`). Drop each mock once its processor is ported.
 8. Classic-only hooks such as `onSubscriptionsReset` stay on the `ClassicView`, delegating to a package-private
    projection method (`UsersProjection.truncate()`). The event-log twin has no such hook.
+9. **A handler that reads `OrderedMessage#getOrder()`** (the event's `EventOrder` in its stream) gets it as a `long`
+   parameter on the projection: `on(Handle, <Event>, long eventOrder)`. The classic wrapper passes `message.getOrder()`,
+   the twin `DeliveredEvent#eventOrder().longValue()` from its optional second parameter (`OrdersProjection`).
 
 Unit of work on the view twin (proven by `UnclearedDepositsEventLogViewIT`): inside a page a Spring transaction is
 active, `pageHandle()`'s connection is the page connection (`DataSourceUtils.getConnection`), auto-commit is off,

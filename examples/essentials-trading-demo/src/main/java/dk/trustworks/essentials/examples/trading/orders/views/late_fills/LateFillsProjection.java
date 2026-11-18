@@ -13,87 +13,62 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package dk.trustworks.essentials.examples.trading.orders.views.late_fills;
 
-import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
-import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
-import dk.trustworks.essentials.examples.trading.orders.events.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
-import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
+import dk.trustworks.essentials.examples.trading.orders.events.*;
+import org.jdbi.v3.core.Handle;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Projects the late-fill operator cases (design Q-3) into {@code projection_late_fills}, one row per execution.
  * <p>
- * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
- * {@link ViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
- * with Spring's {@code JdbcTemplate}, only while the Spring wiring binds both to one connection. The
- * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
- * which opens one.
+ * Engine-neutral: the tables, the event logic and the queries, on either event store engine. What feeds it is the
+ * engine's processor - {@link LateFillsClassicView} or {@link LateFillsEventLogView} - which hands each event here with
+ * the handle of the transaction it handles the event in, so the row commits together with that processor's progress.
+ * The constructor's DDL opens a unit of work of its own.
  */
-// Deliberately not handled: the startup summary warns about every sealed-hierarchy leaf a view neither handles nor lists here
-@IgnoresEventTypes({OrderAccepted.class,
-                    OrderCancelRequested.class,
-                    OrderCancelled.class,
-                    OrderClosed.class,
-                    OrderExpired.class,
-                    OrderExpiryRequested.class,
-                    OrderFilled.class,
-                    OrderPlaced.class,
-                    OrderRejected.class,
-                    OrderSubmitted.class})
-@ClassicEngine
 @Service
-public class LateFillsProjection extends TradingDemoViewEventProcessor {
-    public LateFillsProjection(ViewEventProcessorDependencies dependencies) {
-        super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
-                                                                                   CREATE TABLE IF NOT EXISTS projection_late_fills (
-                                                                                       execution_id VARCHAR PRIMARY KEY,
-                                                                                       order_id VARCHAR NOT NULL,
-                                                                                       account_id VARCHAR NOT NULL,
-                                                                                       instrument_id VARCHAR NOT NULL,
-                                                                                       side VARCHAR NOT NULL,
-                                                                                       quantity BIGINT NOT NULL,
-                                                                                       price NUMERIC(24, 6) NOT NULL,
-                                                                                       currency VARCHAR NOT NULL,
-                                                                                       closed_as VARCHAR NOT NULL,
-                                                                                       recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                                                                   )
-                                                                                   """));
+public class LateFillsProjection {
+    private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
+
+    public LateFillsProjection(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
+        unitOfWorkFactory.usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
+                                                                              CREATE TABLE IF NOT EXISTS projection_late_fills (
+                                                                                  execution_id VARCHAR PRIMARY KEY,
+                                                                                  order_id VARCHAR NOT NULL,
+                                                                                  account_id VARCHAR NOT NULL,
+                                                                                  instrument_id VARCHAR NOT NULL,
+                                                                                  side VARCHAR NOT NULL,
+                                                                                  quantity BIGINT NOT NULL,
+                                                                                  price NUMERIC(24, 6) NOT NULL,
+                                                                                  currency VARCHAR NOT NULL,
+                                                                                  closed_as VARCHAR NOT NULL,
+                                                                                  recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                                              )
+                                                                              """));
     }
 
-    @Override
-    public String getProcessorName() {
-        return "LateFillsProjection";
-    }
-
-    @Override
-    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-        return List.of(OrdersAggregateTypes.ORDERS);
-    }
-
-    @MessageHandler
-    void handle(OrderFilledAfterClose e) {
-        getRequiredUnitOfWork().handle().createUpdate("""
-                                                          INSERT INTO projection_late_fills (execution_id, order_id, account_id, instrument_id, side, quantity, price, currency, closed_as)
-                                                          VALUES (:executionId, :orderId, :accountId, :instrumentId, :side, :quantity, :price, :currency, :closedAs)
-                                                          ON CONFLICT (execution_id) DO NOTHING
-                                                          """)
-                                        .bind("executionId", e.executionId().toString())
-                                        .bind("orderId", e.orderId().toString())
-                                        .bind("accountId", e.accountId().toString())
-                                        .bind("instrumentId", e.instrumentId().toString())
-                                        .bind("side", e.side().name())
-                                        .bind("quantity", e.quantity().value())
-                                        .bind("price", e.price().getAmount().value())
-                                        .bind("currency", e.price().getCurrency().toString())
-                                        .bind("closedAs", e.closedAs().name())
-                                        .execute();
+    void on(Handle handle, OrderFilledAfterClose e) {
+        handle.createUpdate("""
+                                INSERT INTO projection_late_fills (execution_id, order_id, account_id, instrument_id, side, quantity, price, currency, closed_as)
+                                VALUES (:executionId, :orderId, :accountId, :instrumentId, :side, :quantity, :price, :currency, :closedAs)
+                                ON CONFLICT (execution_id) DO NOTHING
+                                """)
+              .bind("executionId", e.executionId().toString())
+              .bind("orderId", e.orderId().toString())
+              .bind("accountId", e.accountId().toString())
+              .bind("instrumentId", e.instrumentId().toString())
+              .bind("side", e.side().name())
+              .bind("quantity", e.quantity().value())
+              .bind("price", e.price().getAmount().value())
+              .bind("currency", e.price().getCurrency().toString())
+              .bind("closedAs", e.closedAs().name())
+              .execute();
     }
 }

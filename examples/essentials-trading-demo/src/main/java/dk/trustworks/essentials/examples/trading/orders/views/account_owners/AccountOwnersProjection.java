@@ -16,77 +16,45 @@
 
 package dk.trustworks.essentials.examples.trading.orders.views.account_owners;
 
-import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
-import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
-import dk.trustworks.essentials.examples.trading.accounts.events.*;
-import dk.trustworks.essentials.examples.trading.accounts.types.AccountsAggregateTypes;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
+import dk.trustworks.essentials.examples.trading.accounts.events.AccountOpened;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
+import org.jdbi.v3.core.Handle;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * {@code orders}' own record of who owns which account, projected from the ledger's {@link AccountOpened} — a cross-BC
  * {@code events/} import, so order entry never calls into {@code accounts}. Every generation repeats the owner, so the
  * upsert is idempotent.
  * <p>
- * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
- * {@link ViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
- * with Spring's {@code JdbcTemplate}, only while the Spring wiring binds both to one connection. The
- * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
- * which opens one.
+ * Engine-neutral: the tables, the event logic and the queries, on either event store engine. What feeds it is the
+ * engine's processor - {@link AccountOwnersClassicView} or {@link AccountOwnersEventLogView} - which hands each event here with
+ * the handle of the transaction it handles the event in, so the row commits together with that processor's progress.
+ * The constructor's DDL opens a unit of work of its own.
  */
-// Deliberately not handled: the startup summary warns about every sealed-hierarchy leaf a view neither handles nor lists here
-@IgnoresEventTypes({AccountBooksClosed.class,
-                    CashAdjusted.class,
-                    CashWithdrawn.class,
-                    DepositCleared.class,
-                    DepositCredited.class,
-                    DepositReturned.class,
-                    FundsHeld.class,
-                    FundsReleased.class,
-                    SettlementAmountCorrected.class,
-                    SharesReleased.class,
-                    SharesReserved.class,
-                    TradeBooked.class,
-                    TradeBookingReversed.class,
-                    TradeSettled.class,
-                    UnknownReferenceIgnored.class,
-                    WithdrawalReturnCredited.class})
-@ClassicEngine
 @Service
-public class AccountOwnersProjection extends TradingDemoViewEventProcessor {
-    public AccountOwnersProjection(ViewEventProcessorDependencies dependencies) {
-        super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
-                                                                                   CREATE TABLE IF NOT EXISTS projection_orders_account_owner (
-                                                                                       account_id VARCHAR PRIMARY KEY,
-                                                                                       owner_id VARCHAR NOT NULL
-                                                                                   )
-                                                                                   """));
+public class AccountOwnersProjection {
+    private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
+
+    public AccountOwnersProjection(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
+        unitOfWorkFactory.usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
+                                                                              CREATE TABLE IF NOT EXISTS projection_orders_account_owner (
+                                                                                  account_id VARCHAR PRIMARY KEY,
+                                                                                  owner_id VARCHAR NOT NULL
+                                                                              )
+                                                                              """));
     }
 
-    @Override
-    public String getProcessorName() {
-        return "OrdersAccountOwnersProjection";
-    }
-
-    @Override
-    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-        return List.of(AccountsAggregateTypes.ACCOUNTS);
-    }
-
-    @MessageHandler
-    void handle(AccountOpened event) {
-        getRequiredUnitOfWork().handle().createUpdate("""
-                                                          INSERT INTO projection_orders_account_owner (account_id, owner_id) VALUES (:accountId, :ownerId)
-                                                          ON CONFLICT (account_id) DO NOTHING
-                                                          """)
-                                        .bind("accountId", event.accountId().toString())
-                                        .bind("ownerId", event.ownerId().toString())
-                                        .execute();
+    void on(Handle handle, AccountOpened event) {
+        handle.createUpdate("""
+                                INSERT INTO projection_orders_account_owner (account_id, owner_id) VALUES (:accountId, :ownerId)
+                                ON CONFLICT (account_id) DO NOTHING
+                                """)
+              .bind("accountId", event.accountId().toString())
+              .bind("ownerId", event.ownerId().toString())
+              .execute();
     }
 }
