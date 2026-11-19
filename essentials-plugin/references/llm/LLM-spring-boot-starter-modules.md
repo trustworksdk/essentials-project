@@ -182,7 +182,7 @@ Package: `dk.trustworks.essentials.components.boot.autoconfigure.eventlog`. Off 
 - `EventLogProcessorLifecycle` - starts `ViewProjection` / `EventReactor` beans after refresh, stops them before the engine (not in schema mode `emit`)
 - `EventLogSubscriptionsApi` - with the Admin API starter and an `EssentialsSecurityProvider`
 
-With the Event Store starter also on the class path, an `AutoConfigurationImportFilter` drops its `EventStoreConfiguration` while enabled: no `EventStoreSubscriptionManager`, gap handler, CDC, `EventProcessorDependencies` or `ViewEventProcessorDependencies`. Classic `EventProcessor`/`ViewEventProcessor` beans then fail start-up; port them to the event-log base classes.
+With the Event Store starter also on the class path, an `AutoConfigurationImportFilter` drops its `EventStoreConfiguration` while enabled: no `EventStoreSubscriptionManager`, gap handler, CDC, `EventProcessorDependencies` or `ViewEventProcessorDependencies`. Classic `EventProcessor`/`ViewEventProcessor`/`InTransactionEventProcessor` beans then fail start-up with a message naming each bean and the event-log base class to port it to.
 
 **Properties:** every `EventLogSettings` value under `essentials.event-log.*` (for example `page-size`, `backstop-interval`, `lease-duration`, `node-name`, `hole-probe-wait-max`) - see [Settings](LLM-postgresql-event-log.md#settings).
 

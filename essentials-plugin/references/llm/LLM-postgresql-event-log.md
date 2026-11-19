@@ -325,9 +325,10 @@ cut-over except restoring a backup; rehearse it on a copy first.
 
 ## Gotchas
 
-- ⚠️ **A classic `EventProcessor` or `ViewEventProcessor` bean fails start-up** once `essentials.event-log.enabled=true`:
-  the `EventProcessorDependencies`, `ViewEventProcessorDependencies` and `EventStoreSubscriptionManager` beans it needs are
-  no longer declared. The error names the missing bean, not the engine switch. Port it (above).
+- ⚠️ **A classic `EventProcessor`, `ViewEventProcessor` or `InTransactionEventProcessor` bean fails start-up** once
+  `essentials.event-log.enabled=true`, before any bean is created, with one line per such bean naming it, its class and
+  its port target, for example `Bean 'orderProjection' (com.x.OrderProjection) is an old-engine ViewEventProcessor. With essentials.event-log.enabled=true it must be ported to EventLogViewProcessor - see LLM-postgresql-event-log.md § Porting from the EventProcessor family.`
+  Port it (above).
 - ⚠️ **Forward to an inbox only inside the page transaction.** A hand-written forwarder that enqueues in a unit of work of
   its own (or from a `FRESH` reactor) forwards events again when a page fails after the enqueue. Use
   `EventLogInboxProcessor`.

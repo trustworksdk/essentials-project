@@ -26,9 +26,9 @@ import org.springframework.core.env.Environment;
  * Its event store bean would be displaced by the adapter, but its subscription manager, durable subscription repository,
  * gap handler and CDC beans would not, and would be built on an adapter whose polling methods throw. The same starter's
  * {@code SnapshotConfiguration}, {@code ClosingBooksConfiguration} and aggregate admin configurations are kept: they need
- * only what {@link EventLogAutoConfiguration} declares. Old processors ({@code EventProcessor}, {@code ViewEventProcessor})
- * then fail to start for want of their {@code *Dependencies} beans, which is intended: they must be ported to
- * {@code ViewProjection} / {@code EventReactor}.
+ * only what {@link EventLogAutoConfiguration} declares. Old processors ({@code EventProcessor}, {@code ViewEventProcessor},
+ * {@code InTransactionEventProcessor}) cannot run, which is intended: {@link UnportedEventProcessorGuard} fails start-up
+ * naming each one before its missing {@code *Dependencies} bean is reached.
  * <p>
  * Registered in {@code META-INF/spring.factories}, Spring Boot's own mechanism for this.
  */

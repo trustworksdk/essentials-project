@@ -35,8 +35,9 @@ who creates the schema, as for every other Essentials component.
 
 If `spring-boot-starter-postgresql-event-store` is on the class path too, this starter removes that starter's
 `EventStoreConfiguration` while `essentials.event-log.enabled=true`. Snapshots, closing books and the aggregate admin
-operations keep working on the new engine. The old `EventProcessor` and `ViewEventProcessor` do not run on it: port them
-by swapping the superclass to `EventLogViewProcessor`, `EventLogReactor` or `EventLogInboxProcessor`.
+operations keep working on the new engine. The old `EventProcessor`, `ViewEventProcessor` and `InTransactionEventProcessor`
+do not run on it: start-up fails with a message naming each such bean, its class and the base class to port it to
+(`EventLogViewProcessor`, `EventLogReactor` or `EventLogInboxProcessor`); port it by swapping the superclass.
 
 Requires the same provided dependencies as `spring-boot-starter-postgresql` (PostgreSQL driver, JDBI, Jackson 3, Reactor).
 

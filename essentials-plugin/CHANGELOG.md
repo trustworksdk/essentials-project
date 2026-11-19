@@ -9,6 +9,10 @@ targets, with a `-N` suffix for plugin-only releases.
   handler throws from a connection of its own (SQLState `08*`, `SQLTransientConnectionException`) is retried and then
   parked like any other handler failure; only the engine's own page connection or statements are retried
   indefinitely. The traps index retires the trap that described the old stall. No skill, rule or script changed.
+- **Event log: a clear start-up error for unported processors** — with `essentials.event-log.enabled=true` the starter
+  now fails start-up with a message naming each classic `EventProcessor`, `ViewEventProcessor` or
+  `InTransactionEventProcessor` bean and the event-log base class to port it to, instead of a bare missing-bean error.
+  `ESS-138` and the event-log and starter references say so. No skill, rule or script changed.
 
 ## 0.60.1-12 — targets Essentials 0.60.1
 

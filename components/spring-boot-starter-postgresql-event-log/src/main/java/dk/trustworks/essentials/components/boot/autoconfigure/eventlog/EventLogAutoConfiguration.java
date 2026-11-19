@@ -73,6 +73,16 @@ import java.util.*;
 public class EventLogAutoConfiguration {
 
     /**
+     * ESS-138: fails start-up with a message naming every classic processor bean ({@code EventProcessor},
+     * {@code ViewEventProcessor}, {@code InTransactionEventProcessor}) and what to port it to, before any bean is created.
+     * {@code static}, as a {@link org.springframework.beans.factory.config.BeanFactoryPostProcessor} bean must be.
+     */
+    @Bean
+    static UnportedEventProcessorGuard unportedEventProcessorGuard() {
+        return new UnportedEventProcessorGuard();
+    }
+
+    /**
      * The engine, started here so that aggregate types can be registered with the adapter while the context is being
      * built. Its schema ownership follows {@code essentials.schema.mode}: {@code create} lets the engine create its own
      * schema at start, every other mode hands it to the schema harness through the {@link EventLogSchemaContributor}.

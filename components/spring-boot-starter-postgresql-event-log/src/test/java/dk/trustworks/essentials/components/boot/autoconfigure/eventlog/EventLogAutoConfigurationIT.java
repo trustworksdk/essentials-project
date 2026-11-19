@@ -189,6 +189,25 @@ class EventLogAutoConfigurationIT {
     }
 
     @Test
+    void an_unported_old_processor_bean_fails_start_up_naming_it_before_its_missing_dependencies() {
+        // ESS-138: the guard runs before any bean is created, so the missing ViewEventProcessorDependencies is never reached
+        enabled().withUserConfiguration(OldProcessorConfiguration.class)
+                 .run(ctx -> assertThat(ctx.getStartupFailure())
+                         .isInstanceOf(IllegalStateException.class)
+                         .hasMessage("Bean 'orderProjection' (" + UnportedEventProcessorGuardTest.OrderProjection.class.getName() + ") is an old-engine ViewEventProcessor. " +
+                                             "With essentials.event-log.enabled=true it must be ported to EventLogViewProcessor - " +
+                                             "see LLM-postgresql-event-log.md § Porting from the EventProcessor family."));
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class OldProcessorConfiguration {
+        @Bean
+        UnportedEventProcessorGuardTest.OrderProjection orderProjection(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessorDependencies dependencies) {
+            throw new AssertionError("an old processor must never be created");
+        }
+    }
+
+    @Test
     void closing_books_configuration_starts_on_the_adapter() {
         enabled().withPropertyValues("essentials.eventstore.closing-books.enabled=true")
                  .run(ctx -> {

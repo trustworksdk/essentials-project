@@ -728,9 +728,11 @@ Every `EventLogSettings` value is a property under `essentials.event-log.*` (for
 starter removes the old starter's `EventStoreConfiguration` from the auto-configurations while it is enabled, through an
 `AutoConfigurationImportFilter`. That stops the old subscription manager, gap handler and CDC beans from being built on
 top of the adapter, which does not support them. The old starter's snapshot, closing-books and aggregate admin
-configurations stay and run on the adapter (§2.21). The old processors (`EventProcessor`, `ViewEventProcessor`) do not
-start under the new engine, because the beans they need are no longer declared: port them to `EventLogReactor` and
-`EventLogViewProcessor` (§2.22), or to `ViewProjection` and `EventReactor`.
+configurations stay and run on the adapter (§2.21). The old processors (`EventProcessor`, `ViewEventProcessor`,
+`InTransactionEventProcessor`) do not run under the new engine: start-up fails before any bean is created, with one line
+per such bean naming it, its class and the base class to port it to, instead of a bare missing-bean error (ESS-138).
+Port them to `EventLogReactor`, `EventLogInboxProcessor` and `EventLogViewProcessor` (§2.22), or to `ViewProjection`
+and `EventReactor`.
 
 **Schema modes.** In `validate`, the engine's own schema is validated when the `EventLog` bean is built, so a missing one
 fails start-up with a `SchemaValidationException` even when an aggregate type is registered while the context is built.

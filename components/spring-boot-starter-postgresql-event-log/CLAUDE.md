@@ -14,6 +14,7 @@ Spring Boot auto-configuration for the new event store engine (`postgresql-event
 | `PageTransactionSource` | `SpringPageTransactions` with a `PlatformTransactionManager`, else `UnitOfWorkPageTransactions` |
 | `EventLogProcessorLifecycle` | `SmartLifecycle` that registers each `ViewProjection` / `EventReactor` bean's aggregate type, starts it, stops them before the `EventLog`; nothing in schema mode `emit` |
 | `EventLogProcessorDependencies` | For `EventLogViewProcessor` / `EventLogReactor` / `EventLogInboxProcessor` subclass beans (the last also takes the `Inboxes` and the transaction-aware `UnitOfWorkFactory`). Those are foundation `Lifecycle`s: the base starter's `DefaultLifecycleManager` starts them (off in `emit`), not `EventLogProcessorLifecycle` |
+| `UnportedEventProcessorGuard` | `static` `BeanFactoryPostProcessor` bean (ESS-138): fails start-up naming each classic `EventProcessor`/`ViewEventProcessor`/`InTransactionEventProcessor` bean + port target. BFPP, not `FailureAnalyzer`: runs after all definitions, before any singleton, so it beats the missing `*Dependencies` error; a `FailureAnalyzer` only rewrites the report of that error. Types via `getType(name, false)`, matched by class name |
 | `EventLogSubscriptionsApi` | `EventLogAdminApiAutoConfiguration`, with the admin API starter and an `EssentialsSecurityProvider` |
 
 ## Gotchas
@@ -27,7 +28,7 @@ Spring Boot auto-configuration for the new event store engine (`postgresql-event
 
 ## Tests
 
-Unit: `EssentialsEventLogPropertiesTest`, `EventLogImportFilterTest`, `MissingDependencyFailureAnalyzerRegistrationTest`.
+Unit: `EssentialsEventLogPropertiesTest`, `EventLogImportFilterTest`, `MissingDependencyFailureAnalyzerRegistrationTest`, `UnportedEventProcessorGuardTest` (`ApplicationContextRunner`; the real-wiring arm is in `EventLogAutoConfigurationIT`).
 
 Integration (one static container, `public` schema recreated per test): `EventLogAutoConfigurationIT`, `EventLogSchemaModeIT`,
 `EventLogAdminApiIT`. They import every auto-configuration on the class path through `@EnableAutoConfiguration`, never
