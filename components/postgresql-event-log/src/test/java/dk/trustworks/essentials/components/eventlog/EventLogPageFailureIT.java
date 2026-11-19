@@ -27,9 +27,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * I14, plan §16 (design phase 4 §4, §8.1): a failing event is isolated by the step-down shrink, retried, then parked;
+ * I14: a failing event is isolated by the step-down shrink, retried, then parked;
  * nothing else is lost or applied twice. Pages of 100 over 1 000 seeded events, one of them (offset 37 of the third
- * page) the poison. Also §8.2's "I/O failure retried without shrinking". Failed pages are counted through the page
+ * page) the poison. Also an I/O failure, retried without shrinking. Failed pages are counted through the page
  * hooks: a page that started and did not commit failed.
  */
 class EventLogPageFailureIT extends AbstractPageIT {

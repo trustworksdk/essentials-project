@@ -28,24 +28,24 @@ import java.util.function.Supplier;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Tier 1's sending half (design phase 6 §3.2, P0.10's decided shape): one per {@link EventLog}, one virtual thread
+ * Tier 1's sending half (P0.10's decided shape): one per {@link EventLog}, one virtual thread
  * started on the first {@link #add}, parked while idle. {@link #add} puts a committed aggregate type in a concurrent set;
  * the thread takes the whole set and sends it as one autocommit {@code SELECT pg_notify(…) FROM unnest(?)} on a
  * connection borrowed from the engine's {@code DataSource} and returned at once. What accumulates while a send is in
  * flight goes out in the next one. A failed send is logged at debug and dropped, never retried: the backstop delivers
- * anyway (I7).
+ * anyway (I7; see docs/design/event-log.md §11).
  * <p>
- * <b>Send coalescing</b> (phase 6 §10.8): a send starts no sooner than {@code sendMin} after the previous one started; the
+ * <b>Send coalescing</b>: a send starts no sooner than {@code sendMin} after the previous one started; the
  * types added meanwhile wait in the set and go out together in that send. A {@link #stop} sends what is pending at once.
  * <p>
- * Payload {@code <instance>:<aggregateType>} on channel {@link #CHANNEL} (§3.1). {@link #kick} sends
+ * Payload {@code <instance>:<aggregateType>} on channel {@link #CHANNEL}. {@link #kick} sends
  * {@code <instance>:} (no type), which wakes this event log's own {@link WakeListener} out of its blocking read so it
  * notices a stop at once; every listener ignores it.
  */
 final class WakeNotifier {
     private static final Logger log = LoggerFactory.getLogger(WakeNotifier.class);
 
-    /** The wake channel: one per database, so a listener needs one {@code LISTEN} (§3.1) */
+    /** The wake channel: one per database, so a listener needs one {@code LISTEN} */
     static final String CHANNEL = "el_wake";
     static final String SEND    = "SELECT pg_notify(?, p) FROM unnest(?::text[]) p";
 

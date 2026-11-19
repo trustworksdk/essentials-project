@@ -16,8 +16,8 @@
 package dk.trustworks.essentials.components.eventlog;
 
 /**
- * The step-down page size of an in-transaction subscription (design {@code docs/archive/event-store-engine-phase4.md}
- * §4.2). The size starts at {@code pageSize}. A page of size {@code n} over {@code [a, last]} that fails with a handler
+ * The step-down page size of an in-transaction subscription. The size starts at {@code pageSize}. A page of size
+ * {@code n} over {@code [a, last]} that fails with a handler
  * failure makes {@code [a, last]} the <b>suspect range</b> and halves the size (at least 1). A page that commits keeps the
  * size while it starts inside the suspect range; once a page starts above it, the range is forgotten and the size doubles
  * after each committed page, up to {@code pageSize}. Isolating one failing event in a page of 100 so costs at most

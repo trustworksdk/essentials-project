@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Phase 3 §2.3: the inbox's bound counts events, an empty inbox accepts any batch, watermark-only batches coalesce
+ * The inbox's bound counts events, an empty inbox accepts any batch, watermark-only batches coalesce
  * in order, and a closed inbox accepts and hands out nothing.
  */
 class InboxTest {

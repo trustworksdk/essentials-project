@@ -16,7 +16,7 @@
 package dk.trustworks.essentials.components.eventlog;
 
 /**
- * What a subscription hands its events to (design phase 8 §2.3). The kind decides the progress model: a
+ * What a subscription hands its events to. The kind decides the progress model: a
  * {@link PeriodicHandler} gets one event at a time and the engine saves the resume point periodically; a
  * {@link PageHandler} gets pages inside a transaction whose last statement moves the resume point.
  */

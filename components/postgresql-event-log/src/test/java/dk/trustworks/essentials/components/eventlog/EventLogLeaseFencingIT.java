@@ -27,12 +27,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Gate row I5 (design phase 7 §9.1): a stale owner's write never lands once another event log claimed the lease. Owner
+ * Gate row I5: a stale owner's write never lands once another event log claimed the lease. Owner
  * A runs on event log 1, standby B on event log 2. A is held in a hook with its write still to come, its keeper is held
  * so its lease can be made to lapse, B claims, and A is released. Each arm has a must-fail variant.
  * <p>
  * The in-transaction arms run with a local deadline of 3 s (lease 4 s), so A's page is not stopped by the deadline before
- * its commit: the deadline only avoids wasted work (§2.4), and the fence alone must stop the page.
+ * its commit: the deadline only avoids wasted work, and the fence alone must stop the page.
  */
 class EventLogLeaseFencingIT extends AbstractLeaseIT {
     static final String SUB  = "projection";
@@ -74,7 +74,7 @@ class EventLogLeaseFencingIT extends AbstractLeaseIT {
 
         renewGate.arm().awaitReached();
         if (rewindFence) {
-            // §3.2's failover: the standby hands out A's fence again
+            // Failover: the standby hands out A's fence again
             execute("SELECT setval('el_lease_fence_seq', " + fenceA + ", false)");
         }
         lapse(SUB);
@@ -145,7 +145,7 @@ class EventLogLeaseFencingIT extends AbstractLeaseIT {
     /**
      * A's page of events 1..10 is written and held before its progress update; B claims; A is released, then B commits
      * the same page (B's reader waits for A's open page transaction, so B cannot commit first).
-     * A runs without phase 4's expected-value guard ({@link WatermarkMutant#PROGRESS_WITHOUT_EXPECTED_RESUME}), which
+     * A runs without the expected-value guard ({@link WatermarkMutant#PROGRESS_WITHOUT_EXPECTED_RESUME}), which
      * would also refuse A's page here: the fence alone must stop it.
      *
      * @return rows A committed to the view
@@ -206,7 +206,7 @@ class EventLogLeaseFencingIT extends AbstractLeaseIT {
      * A's page is held before its progress update. The lease is made to lapse and a side transaction keeps the row locked; B's
      * claim queues on that lock, then A is released and its update queues behind B's claim. The side transaction
      * commits: B claims, and A's update runs against B's row version. So A's fence was valid when A was released and is
-     * not when its update runs - the window a separate fence check cannot close (§9.1 (c)).
+     * not when its update runs - the window a separate fence check cannot close.
      *
      * @return rows A committed to the view
      */

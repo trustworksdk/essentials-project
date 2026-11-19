@@ -23,8 +23,8 @@ import java.util.stream.LongStream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Design phase 4 §1.1, decision 5: consistency mode and progress model are independent strategies, so the two pairs
- * phase 4 does not gate work too. One smoke test each: {@code FRESH} with in-transaction pages, and {@code CONTIGUOUS}
+ * Consistency mode and progress model are independent strategies, so the two less common
+ * pairs work too. One smoke test each: {@code FRESH} with in-transaction pages, and {@code CONTIGUOUS}
  * with a per-event handler and periodic saves.
  */
 class EventLogModePairsIT extends AbstractPageIT {

@@ -22,11 +22,10 @@ import java.util.List;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Tier 2's glue to foundation's {@link UnitOfWork} (design phase 6 §2.2): register an appended aggregate type's name as a
+ * Tier 2's glue to foundation's {@link UnitOfWork}: register an appended aggregate type's name as a
  * resource with this callback ({@link UnitOfWork#registerLifecycleCallbackForResource}) and the unit of work calls
  * {@link EventLog#afterCommit(java.util.Collection)} with every registered type once it has committed. Before the commit
  * there is nothing to do, and a rollback wakes nothing: a rolled-back writer's hole retires on a later probe.
- * Package-private until phase 8's {@code EventStore} adapter registers it.
  */
 final class EventLogCommitCallback implements UnitOfWorkLifecycleCallback<String> {
     private final EventLog eventLog;

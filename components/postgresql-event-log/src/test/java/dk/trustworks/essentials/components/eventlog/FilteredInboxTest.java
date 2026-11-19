@@ -23,7 +23,7 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Phase 5 §2.4: a filtered inbox counts matching rows only; a batch with no matching row is stored as watermark-only and
+ * A filtered inbox counts matching rows only; a batch with no matching row is stored as watermark-only and
  * merged into a trailing one; counting until released, only the matching rows counted are released. The mutant
  * {@link WatermarkMutant#INBOX_COUNTS_UNMATCHED} counts every row.
  */

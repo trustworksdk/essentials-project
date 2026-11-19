@@ -17,11 +17,11 @@ package dk.trustworks.essentials.components.eventlog;
 
 
 /**
- * Which received rows a subscription may hand on (plan §7); the values {@code el_progress} stores
+ * Which received rows a subscription may hand on; the values {@code el_progress} stores
  */
 public enum ConsistencyMode {
-    /** Every received row as soon as it is received, above holes; per-aggregate order only (plan §7.1) */
+    /** Every received row as soon as it is received, above holes; per-aggregate order only */
     FRESH,
-    /** Only rows at or below a received watermark, in strict {@code global_order} (plan §7.2) */
+    /** Only rows at or below a received watermark, in strict {@code global_order} */
     CONTIGUOUS
 }

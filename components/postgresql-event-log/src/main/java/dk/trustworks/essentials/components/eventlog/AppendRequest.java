@@ -20,7 +20,7 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * The events to append to one aggregate's stream in one statement (design §3.1).
+ * The events to append to one aggregate's stream in one statement.
  *
  * @param aggregateType      a registered aggregate type
  * @param aggregateId        the stream

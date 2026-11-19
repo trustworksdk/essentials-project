@@ -26,8 +26,8 @@ import java.util.function.BooleanSupplier;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Shared harness of the phase-7 lease ITs (design {@code docs/archive/event-store-engine-phase7.md} §9): "another JVM" is
- * a second {@link EventLog} on its own {@code DataSource}; the test lease timings of §6 (2 s lease, 500 ms renewal, 1 s
+ * Shared harness of the phase-7 lease ITs: "another JVM" is
+ * a second {@link EventLog} on its own {@code DataSource}; the test lease timings (2 s lease, 500 ms renewal, 1 s
  * local deadline, 1 s statement timeout); {@link Gate}s that hold a keeper or delivery thread in a hook; and the
  * test-only progress log, a trigger on {@code el_progress} that records every row version a transaction writes, so an IT
  * asserts on what <b>committed</b> (a rolled-back write leaves no log row), in write order.
@@ -35,10 +35,10 @@ import static org.awaitility.Awaitility.await;
 abstract class AbstractLeaseIT extends AbstractEventLogIT {
     static final String   TYPE = "Orders";
     static final Duration WAIT = Duration.ofSeconds(30);
-    /** The progress log's table (§9): never created by the engine */
+    /** The progress log's table: never created by the engine */
     static final String   LOG  = "el_test_progress_log";
 
-    /** §6's test timings */
+    /** The test lease timings */
     static final EventLogSettings LEASE = EventLogSettings.defaults()
                                                           .withBackstopInterval(Duration.ofMillis(25))
                                                           .withProbeBackoff(Duration.ofMillis(25), Duration.ofMillis(100))
@@ -184,7 +184,7 @@ abstract class AbstractLeaseIT extends AbstractEventLogIT {
     }
 
     /**
-     * Installs the progress log (§9): every row version written to {@code el_progress} is recorded with its
+     * Installs the progress log: every row version written to {@code el_progress} is recorded with its
      * transaction id and the clock time, in write order ({@code id})
      */
     void installProgressLog() throws SQLException {

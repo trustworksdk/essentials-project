@@ -16,7 +16,7 @@
 package dk.trustworks.essentials.components.eventlog;
 
 /**
- * What became of an operator's retry or discard request (design {@code docs/archive/event-store-engine-phase8.md} §4.3)
+ * What became of an operator's retry or discard request
  */
 public enum ParkedRequestResult {
     /** Stored on the parked head; the node that runs the subscription serves it at its next parked check */

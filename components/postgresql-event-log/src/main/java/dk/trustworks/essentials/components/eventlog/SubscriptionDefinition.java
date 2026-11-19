@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * What a subscription is (design phase 8 §2.2). The progress model is not a field: it follows from the handler kind
+ * What a subscription is. The progress model is not a field: it follows from the handler kind
  * ({@link PeriodicHandler} or {@link PageHandler}).
  *
  * @param subscriber    the subscriber name: 1 to 100 letters, digits, {@code _ - . :}; shown in admin, logged, keyed
@@ -31,8 +31,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param ownership     {@link Ownership#exclusive()} or {@link Ownership#perInstance(String)}
  * @param startFrom     where a subscription whose progress row does not exist yet starts
  * @param consistency   {@link ConsistencyMode#FRESH} or {@link ConsistencyMode#CONTIGUOUS}
- * @param eventTypes    the event types delivered; the others count as handled (phase 5)
- * @param tenant        only events of this tenant are delivered; the others count as handled (in memory, §2.6)
+ * @param eventTypes    the event types delivered; the others count as handled
+ * @param tenant        only events of this tenant are delivered; the others count as handled (in memory)
  * @param errors        the subscription's retry, backoff and page size; empty for {@link ErrorSettings#defaults(EventLogSettings)}
  */
 public record SubscriptionDefinition(String subscriber, String aggregateType, Ownership ownership, StartFrom startFrom, ConsistencyMode consistency,
@@ -67,7 +67,7 @@ public record SubscriptionDefinition(String subscriber, String aggregateType, Ow
     }
 
     /**
-     * @return the filter digest stored on the progress row (phase-5 §1.2): {@code null} without an event-type or tenant
+     * @return the filter digest stored on the progress row: {@code null} without an event-type or tenant
      * filter, else the hex SHA-256 of the sorted event types and the tenant
      */
     public String filterDigest() {

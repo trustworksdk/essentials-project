@@ -25,7 +25,7 @@ import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Hold the rest of the aggregate (design phase 4 §4.5, §8.2): once an event is parked, every later event of its
+ * Hold the rest of the aggregate: once an event is parked, every later event of its
  * aggregate is parked behind it ({@code blocked_by}) and never handled, while every other aggregate continues; the held
  * set survives a restart; {@code retryParked} applies the aggregate in order, {@code discardParked} without its head; a
  * reset deletes the parked rows. {@code A1} (the first event of aggregate {@code A}) fails while the handler is broken.

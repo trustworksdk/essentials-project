@@ -21,10 +21,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * A {@code CONTIGUOUS} subscription's rows received above its received prefix {@code R}, sorted by
- * {@code global_order} (design phase 4 §2.2). Rows move to the pending list only when a received watermark covers
+ * {@code global_order}. Rows move to the pending list only when a received watermark covers
  * them; rows a deferred-bridge read returns are dropped from here. Memory only, delivery thread only.
  * <p>
- * Each row remembers the inbox that counts it (phase 4 §2.3), so whoever removes it can release it there.
+ * Each row remembers the inbox that counts it, so whoever removes it can release it there.
  */
 final class HeldBack {
     /** A received row and the inbox that counts it until released, {@code null} if none does */

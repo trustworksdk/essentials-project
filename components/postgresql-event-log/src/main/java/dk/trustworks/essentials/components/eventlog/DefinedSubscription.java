@@ -21,7 +21,7 @@ import java.util.concurrent.CompletableFuture;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The public face of a {@link Subscription} started from a {@link SubscriptionDefinition} (design phase 8 §2.5, decision 12)
+ * The public face of a {@link Subscription} started from a {@link SubscriptionDefinition}
  */
 final class DefinedSubscription implements SubscriptionHandle {
     private final SubscriptionDefinition definition;

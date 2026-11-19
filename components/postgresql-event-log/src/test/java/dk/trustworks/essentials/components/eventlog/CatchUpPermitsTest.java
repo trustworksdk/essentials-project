@@ -22,7 +22,7 @@ import java.util.concurrent.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Phase 5 §4.2: one set of permits per database key, sized by the first caller, fair */
+/** One set of permits per database key, sized by the first caller, fair */
 class CatchUpPermitsTest {
     @Test
     void one_set_per_database_sized_by_the_first() {

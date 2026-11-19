@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * The progress table (design §2.5, §3.4): create and resume, mode and model stored and checked, the reset-epoch
+ * The progress table: create and resume, mode and model stored and checked, the reset-epoch
  * compare-and-set, non-exclusive rows per instance with no lease, and a subscription that repositions on a reset.
  */
 class ProgressStoreIT extends AbstractSubscriptionIT {

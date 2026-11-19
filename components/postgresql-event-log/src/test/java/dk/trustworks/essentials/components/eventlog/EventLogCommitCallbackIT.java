@@ -25,7 +25,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Tier 2 through foundation's unit of work (design phase 6 §2.2): an append in a JDBI unit of work that registers its
+ * Tier 2 through foundation's unit of work: an append in a JDBI unit of work that registers its
  * aggregate type with {@link EventLogCommitCallback} wakes the type's reader after the commit, so with a 30 s backstop
  * the event arrives at once; a rollback wakes nothing and delivers nothing.
  */

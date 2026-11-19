@@ -22,7 +22,7 @@ import java.util.function.Consumer;
 import java.util.stream.*;
 
 /**
- * A lazily read {@link ResultSet} as an ordered {@link Stream} (phase 8 §5.2, {@code loadEventsByGlobalOrder}): a row
+ * A lazily read {@link ResultSet} as an ordered {@link Stream} ({@code loadEventsByGlobalOrder}): a row
  * is mapped when the stream asks for it, so with a fetch size on a connection with autocommit off only one fetch is
  * held at a time. Closing the stream closes the result set and runs {@code onClose}, once; the caller must close it. A
  * failure while reading is an {@link IllegalStateException} with the {@link SQLException} as its cause.

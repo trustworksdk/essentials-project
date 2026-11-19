@@ -24,7 +24,7 @@ import java.util.concurrent.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * The per-database cap on catch-up reads (design phase 5 §4, decision 1): one fair {@link Semaphore} per database per
+ * The per-database cap on catch-up reads: one fair {@link Semaphore} per database per
  * JVM, shared by every {@link EventLog} on that database. A delivery thread takes a permit for one catch-up, skip-ahead,
  * bridge or deferred-bridge statement - before it borrows a connection - and returns it after the result set is closed
  * and the connection returned, before any row is handled. The reader loop, page transactions, progress saves,

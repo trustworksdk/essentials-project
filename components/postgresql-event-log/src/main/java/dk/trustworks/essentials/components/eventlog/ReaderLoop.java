@@ -29,18 +29,18 @@ import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The shared tail reader of one {@link EventLog} (design phase 3 §2, decision 1): one platform thread and one held
+ * The shared tail reader of one {@link EventLog}: one platform thread and one held
  * connection serve every active aggregate type, each with its own {@link TailReader} state machine and its own list of
  * attached {@link Inbox}es.
  * <ul>
- *     <li><b>Iteration</b> (§2.2): drain the request queue - the <b>quiescent point</b>, where no read is in flight and
+ *     <li><b>Iteration</b>: drain the request queue - the <b>quiescent point</b>, where no read is in flight and
  *     every row read has been offered, so attach and detach are race-free; read each due type and offer the
  *     {@link Batch} to its attached inboxes; park until the earliest due time or a request.</li>
- *     <li><b>Publishing</b> (§2.3): never waits. A refused offer is an overflow: the inbox is closed with
+ *     <li><b>Publishing</b>: never waits. A refused offer is an overflow: the inbox is closed with
  *     {@link Inbox.CloseReason#OVERFLOW} and removed; a closed inbox is removed.</li>
- *     <li><b>Types</b> (§2.4): a type becomes active with its first subscription and inactive with its last; the thread
+ *     <li><b>Types</b>: a type becomes active with its first subscription and inactive with its last; the thread
  *     and connection start with the first active type and end with the last. Every reader starts at the head (F4).</li>
- *     <li><b>Restart</b> (§2.4): a failed read or start closes the connection, closes every attached inbox with
+ *     <li><b>Restart</b>: a failed read or start closes the connection, closes every attached inbox with
  *     {@link Inbox.CloseReason#READER_RESTART}, discards every reader, and after one backstop interval reconnects and
  *     starts every active type at the head again.</li>
  * </ul>
@@ -66,11 +66,11 @@ final class ReaderLoop {
     private final List<ActiveType>                   types     = new ArrayList<>();
     private Connection                               connection;
     private long                                     reconnectAtNanos;
-    /** Multi-type flush statements by text (phase 6 §4.2), least recently used first */
+    /** Multi-type flush statements by text, least recently used first */
     private final LinkedHashMap<String, PreparedStatement> flushes = new LinkedHashMap<>(16, 0.75f, true);
     /** The loop's connection, published for tests that terminate its backend */
     private volatile Connection                      published;
-    /** Told when the first type becomes active ({@code true}) and the last one inactive; under {@code this} (phase 6 §3.3) */
+    /** Told when the first type becomes active ({@code true}) and the last one inactive; under {@code this} */
     private volatile java.util.function.Consumer<Boolean> activity = any -> {
     };
 
@@ -88,7 +88,7 @@ final class ReaderLoop {
      * @param watermark {@code W}, the reader's watermark
      * @param holes     the unresolved holes, all in {@code (W, C]}
      * @param ranges    the unresolved ranges (low to high, inclusive), all in {@code (W, C]}
-     * @param unknownWatermark {@code true} if attached while the watermark is unknown (design phase 5 §6.3): {@code watermark}
+     * @param unknownWatermark {@code true} if attached while the watermark is unknown: {@code watermark}
      *                  is then {@link Long#MIN_VALUE}, and the subscription hands its gaps off after the bridge
      */
     record AttachReply(boolean accepted, long cursor, long watermark, SortedSet<Long> holes, SortedMap<Long, Long> ranges, boolean unknownWatermark) {
@@ -99,7 +99,7 @@ final class ReaderLoop {
         }
     }
 
-    /** The answer to a hand-off (design phase 5 §6.3) */
+    /** The answer to a hand-off */
     enum HandOffReply {
         /** The inbox is no longer attached (a reader restart closed it): nothing was handed off */
         REFUSED,
@@ -146,7 +146,7 @@ final class ReaderLoop {
         /** The last published reader state; survives a restart, since a watermark once read is final */
         private volatile TailReader.State    state;
         private final Object                 signal = new Object();
-        /** Set by a wake (phase 6 §4.1), taken by the loop before it reads; any thread */
+        /** Set by a wake, taken by the loop before it reads; any thread */
         private final AtomicBoolean          wake   = new AtomicBoolean();
         /** {@link WatermarkMutant#BACKSTOP_REARMED_ON_LISTENER_RESTART} only; any thread */
         private final AtomicBoolean          rearm  = new AtomicBoolean();
@@ -157,14 +157,14 @@ final class ReaderLoop {
         private final List<Inbox>            attached = new ArrayList<>();
         private long                         nextDueNanos;
         private Long                         lastPublishedWatermark;
-        /** The probe clock (phase 6 §5): when the last running set was read, and what that read cost */
+        /** The probe clock: when the last running set was read, and what that read cost */
         private long                         lastProbeNanos;
         private long                         lastProbeCostNanos;
         /** A wake arrived since the last running-set read: the probe waits {@link EventLogSettings#wokenProbeWait} */
         private boolean                      wokenSinceProbe;
         /** The read about to run follows a wake */
         private boolean                      wokenRead;
-        /** When the last read of this type started: the woken-read clock (phase 6 §10.8) */
+        /** When the last read of this type started: the woken-read clock */
         private long                         lastReadNanos;
         /** A wake was taken and its read deferred by {@link EventLogSettings#wokenReadMin()}; the next read serves it */
         private boolean                      wakePending;
@@ -283,7 +283,7 @@ final class ReaderLoop {
 
     /**
      * Ask to attach {@code inbox} at the next quiescent point; with {@code unknownAllowed} also while the watermark is
-     * unknown (design phase 5 §6.3, {@code attachUnknown}), the reply then saying so
+     * unknown ({@code attachUnknown}), the reply then saying so
      */
     CompletableFuture<AttachReply> attach(ActiveType type, Inbox inbox, String subscriber, TestSeams.Hooks hooks, boolean unknownAllowed) {
         var reply = new CompletableFuture<AttachReply>();
@@ -292,8 +292,7 @@ final class ReaderLoop {
     }
 
     /**
-     * Hand the gaps a bridge under the unknown watermark found to the reader, at the next quiescent point (design phase 5
-     * §6.3)
+     * Hand the gaps a bridge under the unknown watermark found to the reader, at the next quiescent point
      */
     CompletableFuture<HandOffReply> handOff(ActiveType type, Inbox inbox, String subscriber, TestSeams.Hooks hooks, List<HandledSet.Gap> gaps) {
         var reply = new CompletableFuture<HandOffReply>();
@@ -307,7 +306,7 @@ final class ReaderLoop {
     }
 
     /**
-     * Read {@code type} now instead of at its next due time (phase 6 §4.1): set its wake flag and unpark the loop. Never
+     * Read {@code type} now instead of at its next due time: set its wake flag and unpark the loop. Never
      * blocks, never starts the loop, moves no reader state; any thread
      */
     void wake(ActiveType type) {
@@ -320,7 +319,7 @@ final class ReaderLoop {
     }
 
     /**
-     * {@link #wake(ActiveType)} for {@code aggregateType} if it is active; nothing otherwise (tier 2, phase 6 §2.2)
+     * {@link #wake(ActiveType)} for {@code aggregateType} if it is active; nothing otherwise (tier 2)
      */
     void wake(String aggregateType) {
         var type = active.get(aggregateType);
@@ -329,7 +328,7 @@ final class ReaderLoop {
         }
     }
 
-    /** Wake every active type once: the wake listener restarted and may have missed notifications (phase 6 §3.3); any thread */
+    /** Wake every active type once: the wake listener restarted and may have missed notifications; any thread */
     void wakeAll() {
         for (var type : active.values()) {
             wake(type);
@@ -502,7 +501,7 @@ final class ReaderLoop {
     }
 
     /**
-     * Design phase 5 §6.3: the gaps become holes of the reader's initial candidate if it is outstanding; else they are
+     * The gaps become holes of the reader's initial candidate if it is outstanding; else they are
      * final and the subscription's own re-read answers them. Refused if the inbox was detached meanwhile.
      */
     private void handOff(HandOff request) {
@@ -525,9 +524,9 @@ final class ReaderLoop {
     }
 
     /**
-     * Step 2 of the iteration (phase 6 §4): take every wake flag before reading, so a wake during the read causes
-     * another; then read the due types - one alone with the combined probe or the tail (§9 decision 2), two or more in
-     * one flush with at most one running set, read last (§4.2)
+     * Step 2 of the iteration: take every wake flag before reading, so a wake during the read causes
+     * another; then read the due types - one alone with the combined probe or the tail, two or more in
+     * one flush with at most one running set, read last
      */
     private void readDue(long now) throws Exception {
         var clearAfterRead = types.stream().anyMatch(type -> type.seams.has(WAKE_CLEARED_AFTER_READ));
@@ -575,9 +574,10 @@ final class ReaderLoop {
     }
 
     /**
-     * Wake coalescing (phase 6 §10.8): a woken read starts no sooner than {@link EventLogSettings#wokenReadMin()} after the
+     * Wake coalescing: a woken read starts no sooner than {@link EventLogSettings#wokenReadMin()} after the
      * start of the type's last read of any kind - any read that starts after a wake serves it - and never later than the
-     * due time the type already has, so the backstop still bounds it (I7). The wake is only deferred, never dropped: the
+     * due time the type already has, so the backstop still bounds it (I7; see docs/design/event-log.md §11). The wake
+     * is only deferred, never dropped: the
      * due time is lowered to this and {@link ActiveType#wakePending} carries the wake to that read. Per type, because the
      * due time is per type; types read in one flush share their read start, so they stay in step and keep sharing flushes.
      */
@@ -593,10 +593,11 @@ final class ReaderLoop {
     /** More due types than this are read one statement each, not in one flush: a guard against statement-cache churn */
     static final int MAX_FLUSH_TYPES = 16;
 
-    // ---- test knobs (phase 6 §7.3 gate measurement only) ----
-    /** {@code false} reads every due type alone, one statement each: §7.3's "flush off" arm */
+    // ---- test knobs (measurement only) ----
+    /** {@code false} reads every due type alone, one statement each: the "flush off" arm of the measurement */
     volatile boolean flushForTests = true;
-    /** {@code true} reads a single due type through {@link #flush} (tail, then the running set if wanted) instead of the combined probe: §9 decision 2's figure */
+    /** {@code true} reads a single due type through {@link #flush} (tail, then the running set if wanted) instead of
+     * the combined probe, for comparison */
     volatile boolean singleTypeFlushForTests;
 
     private void readAlone(ActiveType type) throws Exception {
@@ -611,7 +612,7 @@ final class ReaderLoop {
     }
 
     /**
-     * One pgjdbc flush (phase 6 §4.2): every due type's tail statement, then one {@code SELECT RUNNING_SET} if any of
+     * One pgjdbc flush: every due type's tail statement, then one {@code SELECT RUNNING_SET} if any of
      * them wants a running set and its probe clock allows. Statements before one Sync share an implicit transaction,
      * where PostgreSQL caches backend status (P0.2): so exactly one running set, read after every type's snapshot (I11)
      */
@@ -712,7 +713,7 @@ final class ReaderLoop {
         return statement;
     }
 
-    /** Distinct flush texts kept prepared; the mixes of types and shapes that occur are few (phase 6 §4.2) */
+    /** Distinct flush texts kept prepared; the mixes of types and shapes that occur are few */
     private static final int MAX_FLUSH_TEXTS = 64;
 
     private static void closeQuietly(Statement statement) {
@@ -724,7 +725,7 @@ final class ReaderLoop {
     }
 
     /**
-     * The probe clock (phase 6 §5): a running set is read only once the last one is a probe wait old - the woken wait
+     * The probe clock: a running set is read only once the last one is a probe wait old - the woken wait
      * if a wake arrived since, else the backstop-floored {@link EventLogSettings#probeWait}
      */
     private boolean probeAllowed(ActiveType type, long now) {
@@ -740,8 +741,8 @@ final class ReaderLoop {
     }
 
     /**
-     * The wait before a type's next running set (the probe clock, phase 6 §5): the woken or the backstop-floored cost rule,
-     * capped at {@link EventLogSettings#holeProbeWaitMax()} while a hole, range or candidate is outstanding (phase 10 gate):
+     * The wait before a type's next running set (the probe clock): the woken or the backstop-floored cost rule,
+     * capped at {@link EventLogSettings#holeProbeWaitMax()} while a hole, range or candidate is outstanding:
      * such a hole retires only on a running-set read, and holds the watermark until it does
      * ({@link WatermarkMutant#HOLE_PROBE_WAIT_UNCAPPED})
      */
@@ -862,7 +863,7 @@ final class ReaderLoop {
     }
 
     /**
-     * §2.4: a reader restart detaches every attached subscription, since the new readers start at the head and have
+     * A reader restart detaches every attached subscription, since the new readers start at the head and have
      * forgotten the old holes
      */
     private void restart(Exception cause) {

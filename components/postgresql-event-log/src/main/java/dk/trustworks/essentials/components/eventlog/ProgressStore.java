@@ -24,10 +24,10 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * The engine's progress rows (design §2.5, §3.4; plan §8.2): create or read at start, periodic save as a
+ * The engine's progress rows: create or read at start, periodic save as a
  * compare-and-set on the reset epoch. Each call is its own autocommit statement on the engine's {@code DataSource}.
  * <p>
- * Phase 7 (design {@code docs/archive/event-store-engine-phase7.md} §2, §3): an exclusive subscription's row carries a
+ * An exclusive subscription's row carries a
  * lease; every write of it binds a {@link Fence} (fence and owner), a non-exclusive one binds {@code null}. The lease
  * columns are written only here and by {@link LeaseKeeper} through the statements of {@link EventLogStorage}.
  */
@@ -36,7 +36,7 @@ final class ProgressStore {
 
     /**
      * A progress row's key. {@code instanceName} is the configured instance for a non-exclusive subscription (one row
-     * per instance; two JVMs with the same instance name overwrite each other's progress, design §3.5), {@code ""} for
+     * per instance, two JVMs with the same instance name overwrite each other's progress), {@code ""} for
      * an exclusive one.
      */
     record Key(String subscriber, String aggregateType, String instanceName) {
@@ -58,7 +58,7 @@ final class ProgressStore {
     }
 
     /**
-     * What a write of an exclusive subscription asserts besides the epoch (§3.1, §3.2): the fence its claim drew and the
+     * What a write of an exclusive subscription asserts besides the epoch: the fence its claim drew and the
      * owner id of its event log. {@code owner} is {@code null} only under the test mutant {@code FENCE_WITHOUT_OWNER}
      */
     record Fence(long fence, String owner) {
@@ -83,16 +83,16 @@ final class ProgressStore {
 
     /**
      * Create the row with {@code initialResumeFrom}, or take the stored one. The mode and progress model are stored;
-     * if a stored row had others, the change is logged and the row updated in the same statement (§19 item 17).
+     * if a stored row had others, the change is logged and the row updated in the same statement.
      */
     Started start(Key key, boolean exclusive, String consistencyMode, String progressModel, long initialResumeFrom) throws SQLException {
         return start(key, exclusive, consistencyMode, progressModel, initialResumeFrom, null, null);
     }
 
     /**
-     * As {@link #start(Key, boolean, String, String, long)}, storing {@code filterDigest} (phase 8 §2.6: a changed digest
-     * is logged at WARN and stored, never refused) and, with {@code headTable}, starting a new row at that event table's
-     * {@code max(global_order) + 1} instead of {@code initialResumeFrom} (phase 8 decision 13)
+     * As {@link #start(Key, boolean, String, String, long)}, storing {@code filterDigest} (a changed digest is logged
+     * at WARN and stored, never refused) and, with {@code headTable}, starting a new row at that event table's
+     * {@code max(global_order) + 1} instead of {@code initialResumeFrom}
      */
     Started start(Key key, boolean exclusive, String consistencyMode, String progressModel, long initialResumeFrom, String headTable, String filterDigest)
             throws SQLException {
@@ -159,7 +159,7 @@ final class ProgressStore {
     }
 
     /**
-     * The in-transaction progress update (phase 4 §3.3) on the page's {@code connection}, which is not committed here.
+     * The in-transaction progress update on the page's {@code connection}, which is not committed here.
      *
      * @param expected the {@code resume_from} this subscription last committed, or {@code null} for no such guard
      * @return {@code true} if one row was updated; {@code false} if the epoch, the fence, the expected value or the row
@@ -203,7 +203,7 @@ final class ProgressStore {
     }
 
     /**
-     * A new owner writes its own mode and model over the ones the claimed row named (§2.2), fenced
+     * A new owner writes its own mode and model over the ones the claimed row named, fenced
      *
      * @return whether the row was updated
      */
@@ -220,7 +220,7 @@ final class ProgressStore {
     }
 
     /**
-     * Release the lease (§2.5); a periodic owner writes its resume point in the same statement, only under the epoch it
+     * Release the lease; a periodic owner writes its resume point in the same statement, only under the epoch it
      * was computed in.
      *
      * @param resumeFrom the resume point to write, or {@code null} to release only (in-transaction)
@@ -294,7 +294,7 @@ final class ProgressStore {
 
     /**
      * Reset {@code key} to {@code resumeFrom}: bump the epoch and delete the subscription's parked rows in one
-     * transaction, since a rebuild re-delivers everything (design phase 4 §4.5). Package-private until phase 8's reset API.
+     * transaction, since a rebuild re-delivers everything.
      *
      * @return whether the row existed
      */
@@ -315,7 +315,7 @@ final class ProgressStore {
     }
 
     /**
-     * The reset's two statements on {@code connection}, which is not committed here (phase 8 §4.2): the caller's
+     * The reset's two statements on {@code connection}, which is not committed here: the caller's
      * transaction, so a rebuild truncates its view and resets in one commit. The progress row first, then the parked
      * rows - the order the serve transaction locks them in. A row that does not exist is not created.
      *

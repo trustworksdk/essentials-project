@@ -29,7 +29,7 @@ import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.RESET
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * {@link EventLogAdmin} on the event log's {@code DataSource} (design {@code docs/archive/event-store-engine-phase8.md} §4)
+ * {@link EventLogAdmin} on the event log's {@code DataSource}
  */
 final class DatabaseEventLogAdmin implements EventLogAdmin {
     private static final Logger log = LoggerFactory.getLogger(DatabaseEventLogAdmin.class);
@@ -37,7 +37,7 @@ final class DatabaseEventLogAdmin implements EventLogAdmin {
     private final DataSource                                   dataSource;
     private final EventLogSettings                             settings;
     private final ProgressStore                                progressStore;
-    /** This event log's running subscriptions, to serve a request locally (§4.3 step 2) */
+    /** This event log's running subscriptions, to serve a request locally */
     private final Supplier<List<Subscription>>                 subscriptions;
     private final Supplier<TestSeams>                          seams;
 

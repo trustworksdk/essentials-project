@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Phase 5 §3.2: the window schedule (doubling, cap, quartering on cancel) and the density switch */
+/** The window schedule (doubling, cap, quartering on cancel) and the density switch */
 class CatchUpWindowTest {
     @Test
     void a_short_page_doubles_the_window_up_to_the_cap() {

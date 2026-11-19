@@ -26,16 +26,16 @@ import java.util.function.BooleanSupplier;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Phase 7 unit A smoke tests (design {@code docs/archive/event-store-engine-phase7.md} §2): an exclusive subscription claims
+ * Smoke tests: an exclusive subscription claims
  * its lease, delivers and releases it on stop; a second event log, standing by, takes over after the first stops. The
- * gate ITs (I5, I6, I16, takeovers under failure) are unit B's.
+ * invariant ITs (I5, I6, I16, takeovers under failure; see docs/design/event-log.md §11) are the other lease ITs.
  */
 class EventLogExclusiveSubscriptionIT extends AbstractEventLogIT {
     static final String   TYPE = "Orders";
     static final String   SUB  = "projection";
     static final Duration WAIT = Duration.ofSeconds(30);
 
-    /** §6's test timings: 2 s lease, 500 ms renewal, 1 s local deadline, 1 s statement timeout */
+    /** The test lease timings: 2 s lease, 500 ms renewal, 1 s local deadline, 1 s statement timeout */
     static final EventLogSettings SETTINGS = EventLogSettings.defaults()
                                                              .withBackstopInterval(Duration.ofMillis(25))
                                                              .withProbeBackoff(Duration.ofMillis(25), Duration.ofMillis(100))

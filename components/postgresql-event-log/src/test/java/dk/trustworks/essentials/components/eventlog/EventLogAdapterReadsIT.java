@@ -24,7 +24,7 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Phase 8 unit 8b-A: the engine reads the {@code EventStore} adapter needs (§5.2) - the last event of a stream, events
+ * The engine reads the {@code EventStore} adapter needs - the last event of a stream, events
  * by ids, by global-order range (streamed, filtered), the highest and lowest global order, and the events caused by an
  * event on its partial index. Their generic plans are checked in {@link EventLogGenericPlanIT}.
  */

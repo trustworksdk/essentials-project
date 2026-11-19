@@ -23,7 +23,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Phase 4 §2.2, §2.3: held-back rows in {@code global_order} order, released at a watermark, dropped at or below a
+ * Held-back rows in {@code global_order} order, released at a watermark, dropped at or below a
  * range read's ceiling, each removal releasing the row in the inbox that counts it.
  */
 class HeldBackTest {

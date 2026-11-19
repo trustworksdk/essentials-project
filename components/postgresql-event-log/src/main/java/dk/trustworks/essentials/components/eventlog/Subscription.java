@@ -26,15 +26,15 @@ import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The engine's subscription behind a {@link SubscriptionHandle} (phase 8 decision 12): package-private, started by
+ * The engine's subscription behind a {@link SubscriptionHandle}: package-private, started by
  * {@link EventLog#subscribe(SubscriptionDefinition, DeliveryHandler)} or, with test seams, the package-private spec path.
  * <p>
- * Two independent strategies (design {@code docs/archive/event-store-engine-phase4.md} §1.1):
+ * Two independent strategies:
  * <ul>
- *     <li>The <b>consistency mode</b> decides which received rows may be handed on. {@link ConsistencyMode#FRESH}
- *     (phase 3 §3.2) hands on every received row once, deduplicated by a {@link HandledSet}; the resume point is
+ *     <li>The <b>consistency mode</b> decides which received rows may be handed on. {@link ConsistencyMode#FRESH} hands
+ *     on every received row once, deduplicated by a {@link HandledSet}; the resume point is
  *     {@code P + 1}, {@code P = min(received watermark, lowest received-but-unhandled - 1)}.
- *     {@link ConsistencyMode#CONTIGUOUS} (phase 4 §2) holds rows above its received watermark back ({@link HeldBack})
+ *     {@link ConsistencyMode#CONTIGUOUS} holds rows above its received watermark back ({@link HeldBack})
  *     and hands on only the received prefix, in strict {@code global_order}; the resume point is the applied prefix
  *     {@code A + 1}.</li>
  *     <li>The <b>progress model</b> decides how rows are applied and where the resume point is written.
@@ -42,25 +42,26 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     {@link EventLogSettings#progressSaveInterval()}; {@link ProgressModel#IN_HANDLER_TRANSACTION} hands pages of at most
  *     {@link EventLogSettings#pageSize()} events to a {@link PageHandler} in a transaction on a connection of the engine's
  *     {@code DataSource}, whose last statement moves the resume point - guarded by the reset epoch and by the value last
- *     committed (§3.3) - so a page and its progress commit together or not at all (I12).</li>
+ *     committed - so a page and its progress commit together or not at all (I12; see docs/design/event-log.md
+ * §11).</li>
  * </ul>
- * The lifecycle is phase 3's (§3.1): the tail reader is the {@link EventLog}'s shared {@link ReaderLoop}; this
+ * The lifecycle: the tail reader is the {@link EventLog}'s shared {@link ReaderLoop}; this
  * subscription holds no connection except an open page's, and runs on its own virtual delivery thread:
  * <ol>
  *     <li><b>Catch-up</b> {@code (P, W]} below the reader's watermark {@code W}, paged, each read on a borrowed
  *     connection returned before any row is applied. While {@code W} is unknown (F4) it <b>waits for the watermark</b>;
  *     {@code FRESH} only one backstop interval, then attaches under the unknown watermark, bridges and hands the gaps it
- *     found to the reader (phase 5 §6.3), unless there are more than {@link EventLogSettings#holeRangeThreshold()}.</li>
+ *     found to the reader, unless there are more than {@link EventLogSettings#holeRangeThreshold()}.</li>
  *     <li><b>Attach</b>: a request to the loop, answered at its quiescent point with the cursor {@code C}, the watermark
  *     and the unresolved holes in {@code (W, C]}.</li>
  *     <li><b>Bridge</b>: {@code FRESH} reads {@code (max(P, highest handled), C]} at once, each page re-reading the attach
- *     holes and the handled set's gaps below its lower bound (phase 4 §5.3). {@code CONTIGUOUS} defers it: each time the
- *     received watermark rises while {@code R < C} it reads {@code (R, min(W_rcv, C)]}, which is final (§2.4).</li>
+ *     holes and the handled set's gaps below its lower bound. {@code CONTIGUOUS} defers it: each time the
+ *     received watermark rises while {@code R < C} it reads {@code (R, min(W_rcv, C)]}, which is final.</li>
  *     <li><b>Attached</b>: batches from the inbox. An overflow or a reader restart closes the inbox; the subscription
- *     <b>detaches</b> between pages, never during one (§7.1), and catches up again. {@code CONTIGUOUS} keeps its pending
- *     rows across a detach (§2.5).</li>
+ *     <b>detaches</b> between pages, never during one, and catches up again. {@code CONTIGUOUS} keeps its pending
+ *     rows across a detach.</li>
  * </ol>
- * Failures (phase 4 §4): an I/O failure of the engine (any failure outside the handler, or the page connection lost)
+ * Failures: an I/O failure of the engine (any failure outside the handler, or the page connection lost)
  * retries the same page indefinitely with a doubling backoff. What the handler throws on a live connection is the
  * handler's failure, I/O-classified or not. A handler failure of a page of several events shrinks the page
  * ({@link StepDown}); an event failing alone is retried {@link EventLogSettings#retryAttempts()} times with a doubling
@@ -73,12 +74,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 final class Subscription {
     private static final Logger log = LoggerFactory.getLogger(Subscription.class);
 
-    /** Where the delivery thread is in the lifecycle (§3.1); for tests and diagnostics */
+    /** Where the delivery thread is in the lifecycle; for tests and diagnostics */
     enum Phase {
         STARTING,
-        /** Exclusive (phase 7 §2): waiting for the lease keeper to claim the lease; not joined to the reader */
+        /** Exclusive: waiting for the lease keeper to claim the lease; not joined to the reader */
         STANDBY,
-        /** Exclusive: past the local deadline without a confirmed renewal; no handler call, no page (§2.4) */
+        /** Exclusive: past the local deadline without a confirmed renewal; no handler call, no page */
         SUSPENDED,
         CATCHING_UP,
         WAITING_FOR_WATERMARK,
@@ -95,16 +96,16 @@ final class Subscription {
     private final PeriodicHandler                handler;
     private final PageHandler                    pageHandler;
     private final TestSeams                      seams;
-    /** Where page transactions come from (phase 8 §2.4); parked retries of a periodic subscription use {@link #engineSource} */
+    /** Where page transactions come from; parked retries of a periodic subscription use {@link #engineSource} */
     private final PageTransactionSource          pageSource;
     private final EnginePageTransactions         engineSource;
-    /** Per-subscription retry, backoff and page size (phase 8 §2.2) */
+    /** Per-subscription retry, backoff and page size */
     private final ErrorSettings                  errors;
-    /** The stored filter digest (phase 8 §2.6), {@code null} without a filter */
+    /** The stored filter digest, {@code null} without a filter */
     private final String                         filterDigest;
-    /** A new row starts at the head (phase 8 decision 13) */
+    /** A new row starts at the head */
     private final boolean                        fromHead;
-    // ---- status (phase 8 §2.7) ----
+    // ---- status ----
     private volatile Throwable                   lastError;
     private volatile int                         heldAggregates;
     private final ReaderLoop                     loop;
@@ -113,13 +114,13 @@ final class Subscription {
     private final ProgressStore                  progress;
     private final EventLogSettings               settings;
     private final EventLogObserver               observer;
-    // ---- phase 5 ----
+    // ---- filters ----
     private final EventTypeFilter                filter;
     /** Whether rows are filtered at all: on event type, on tenant, or both */
     private final boolean                        filtered;
-    /** Whether rows are filtered on event type (phase 5) */
+    /** Whether rows are filtered on event type */
     private final boolean                        typeFiltered;
-    /** The tenant filter (phase 8 §15 question 7), {@code null} for every tenant */
+    /** The tenant filter, {@code null} for every tenant */
     private final String                         tenant;
     /** The filtered statements of this filter's shape, {@code null} unfiltered */
     private final EventLogStorage.FilterStatements filterStatements;
@@ -156,9 +157,9 @@ final class Subscription {
     private long                                 lastSaveNanos;
     private Long                                 repositionTo;
     private boolean                              waitReported;
-    /** {@code FRESH}: when the wait under an unknown watermark began (design phase 5 §6.3), else {@code null} */
+    /** {@code FRESH}: when the wait under an unknown watermark began, else {@code null} */
     private Long                                 unknownSinceNanos;
-    /** {@code FRESH}: a hand-off found too many gaps; wait for the watermark (F4) until it is known (§6.3) */
+    /** {@code FRESH}: a hand-off found too many gaps; wait for the watermark (F4) until it is known */
     private boolean                              handOffFellBack;
     // FRESH
     private HandledSet                           handled;
@@ -173,23 +174,23 @@ final class Subscription {
     private List<HeldBack.Entry>                 lastFailedPage;
     /** {@code A} before the last page; mutant {@link WatermarkMutant#REREAD_WITHOUT_APPLIED_DROP} */
     private Long                                 appliedBeforeLastPage;
-    // Failures (phase 4 §4)
+    // Failures
     private final StepDown                       stepDown;
     private final ParkedEvents                   parked;
-    /** Events decided for parking, by global order: the next page that holds them parks them (§4.4) */
+    /** Events decided for parking, by global order: the next page that holds them parks them */
     private final Map<Long, ParkedEvents.Row>    toPark = new HashMap<>();
     /** One-shot limit of the next page: the events before one a handler asked to park commit in a page of their own */
     private int                                  pageCut;
-    /** The event failing alone, and its attempts so far (§4.3) */
+    /** The event failing alone, and its attempts so far */
     private long                                 failingOrder = -1;
     private int                                  failingAttempts;
     /** Consecutive I/O failures of pages, for the backoff */
     private int                                  ioFailures;
     private final Queue<ParkedRequest>           parkedRequests = new ConcurrentLinkedQueue<>();
-    /** Phase 8 §4.3: when the next parked check is due (0: at once), and how many ran; delivery thread */
+    /** When the next parked check is due (0: at once), and how many ran; delivery thread */
     private long                                 nextParkedCheckNanos;
     private volatile long                        parkedChecks;
-    // ---- phase 7: exclusive subscriptions; both null for a non-exclusive one ----
+    // ---- exclusive subscriptions; both null for a non-exclusive one ----
     private final Lease                          lease;
     private final LeaseKeeper                    keeper;
     /** The fence (and owner) of the claim this incarnation delivers under; {@code null} while standby. Delivery thread */
@@ -203,7 +204,7 @@ final class Subscription {
     }
 
     /**
-     * @param lease  the exclusive subscription's lease (phase 7), {@code null} for a non-exclusive one
+     * @param lease  the exclusive subscription's lease, {@code null} for a non-exclusive one
      * @param keeper the event log's lease keeper, with {@code lease}
      */
     Subscription(SubscriptionSpec spec, ReaderLoop loop, EventLogStorage.TailStatements statements, TailReader.RowMapper mapper, ProgressStore progress,
@@ -244,7 +245,7 @@ final class Subscription {
     }
 
     /**
-     * What a subscription's catch-up reads share with its event log (phase 5 §2.2, §3, §4): the type-id registry, the
+     * What a subscription's catch-up reads share with its event log: the type-id registry, the
      * database's permits (and, for mutant {@link WatermarkMutant#PERMIT_PER_EVENT_LOG}, the event log's own), and whether
      * the aggregate type's {@code (event_type, global_order)} index is valid
      */
@@ -262,7 +263,7 @@ final class Subscription {
     /**
      * What a subscription is: its progress key, where a new one starts, its consistency mode and progress model, the
      * handler that model calls ({@code handler} for {@link ProgressModel#PERIODIC}, {@code pageHandler} for
-     * {@link ProgressModel#IN_HANDLER_TRANSACTION}) and its test seams. Phase 8: the page transaction source
+     * {@link ProgressModel#IN_HANDLER_TRANSACTION}) and its test seams; the page transaction source
      * ({@code null} for the engine's), the error settings ({@code null} for the event log's defaults), the filter digest
      * stored on the row and whether a new row starts at the head ({@code initialResumeFrom} is then ignored)
      */
@@ -286,7 +287,7 @@ final class Subscription {
             if (initialResumeFrom < 1) {
                 throw new IllegalArgumentException("initialResumeFrom must be >= 1");
             }
-            // Phase 7 §4: the two kinds never share a key
+            // The two kinds never share a key
             if (exclusive && !key.instanceName().isEmpty()) {
                 throw new IllegalArgumentException("An exclusive subscription has the instance name '', not '" + key.instanceName() + "'");
             }
@@ -306,18 +307,18 @@ final class Subscription {
             this(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, false);
         }
 
-        /** Phase 2's and 3's subscription: {@code FRESH}, periodic */
+        /** The basic subscription: {@code FRESH}, periodic */
         SubscriptionSpec(ProgressStore.Key key, long initialResumeFrom, PeriodicHandler handler, TestSeams seams) {
             this(key, initialResumeFrom, ConsistencyMode.FRESH, ProgressModel.PERIODIC, handler, null, seams, EventTypeFilter.all());
         }
 
-        /** @return this spec with the event-type filter {@code filter} (phase 5 §1.2) */
+        /** @return this spec with the event-type filter {@code filter} */
         SubscriptionSpec withFilter(EventTypeFilter filter) {
             return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, source, errors,
                                         SubscriptionDefinition.filterDigest(filter, Optional.ofNullable(tenant)), fromHead, tenant);
         }
 
-        /** @return this spec with the tenant filter {@code tenant} (phase 8 §15 question 7); {@code null} for every tenant */
+        /** @return this spec with the tenant filter {@code tenant}; {@code null} for every tenant */
         SubscriptionSpec withTenant(String tenant) {
             return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, source, errors,
                                         SubscriptionDefinition.filterDigest(filter, Optional.ofNullable(tenant)), fromHead, tenant);
@@ -333,7 +334,7 @@ final class Subscription {
             return new SubscriptionSpec(key, initialResumeFrom, mode, model, handler, pageHandler, seams, filter, exclusive, source, errors, filterDigest, fromHead, tenant);
         }
 
-        /** @return this spec as an exclusive subscription (phase 7), keyed by instance name {@code ""} */
+        /** @return this spec as an exclusive subscription, keyed by instance name {@code ""} */
         SubscriptionSpec asExclusive() {
             return new SubscriptionSpec(new ProgressStore.Key(key.subscriber(), key.aggregateType(), ""), initialResumeFrom, mode, model, handler, pageHandler, seams, filter,
                                         true, source, errors, filterDigest, fromHead, tenant);
@@ -483,7 +484,7 @@ final class Subscription {
         observer.onHeldAggregates(key.subscriber(), key.aggregateType(), heldAggregates);
     }
 
-    /** @return the last failure, or {@code null}; for the status (phase 8 §2.7) */
+    /** @return the last failure, or {@code null}; for the status */
     Throwable lastError() {
         return lastError;
     }
@@ -529,7 +530,7 @@ final class Subscription {
                     loadParked();
                     type = loop.join(key.aggregateType(), statements, mapper, seams);
                 } else {
-                    // Phase 7 §4: never flip a stored row's kind; a standby never writes the row
+                    // Never flip a stored row's kind; a standby never writes the row
                     var row = progress.read(key);
                     if (row.isPresent() && !row.get().exclusive()) {
                         throw new IllegalStateException("Subscription " + key.subscriber() + " on " + key.aggregateType() + " (instance '') is stored as non-exclusive and " +
@@ -585,7 +586,7 @@ final class Subscription {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // Phase 7: ownership of an exclusive subscription (design phase 7 §2)
+    // Ownership of an exclusive subscription
     // ---------------------------------------------------------------------------------------------------------------
 
     /** Thrown on the delivery thread when the lease is lost (or, {@code fatal}, the row is gone): unwinds to {@link #ownership()} */
@@ -599,7 +600,7 @@ final class Subscription {
     }
 
     /**
-     * Await ownership, deliver while owner, and on a loss leave the reader and await it again (§2.4)
+     * Await ownership, deliver while owner, and on a loss leave the reader and await it again
      */
     private void ownership() {
         while (running) {
@@ -656,7 +657,7 @@ final class Subscription {
         }
     }
 
-    /** §2.2: after a claim, what {@link #run()} does after a start - position at the row's resume point, load parked, join */
+    /** After a claim, what {@link #run()} does after a start - position at the row's resume point, load parked, join */
     private void adopt(Lease.Claim claim) throws Exception {
         ownedFence = new ProgressStore.Fence(claim.fence(), lease.owner());
         resetEpoch = claim.resetEpoch();
@@ -681,7 +682,7 @@ final class Subscription {
     }
 
     /**
-     * §2.4 {@code LOST}: close the inbox, leave the reader, drop pending, held-back and parked state, and go back to
+     * Lease {@code LOST}: close the inbox, leave the reader, drop pending, held-back and parked state, and go back to
      * standby - no save, no retry of the failed write, no release
      */
     private void leaveAfterLoss() {
@@ -703,7 +704,7 @@ final class Subscription {
         phase = Phase.STANDBY;
     }
 
-    /** The final write on stop (§2.5): a periodic owner saves and releases in one statement, an in-transaction one releases */
+    /** The final write on stop: a periodic owner saves and releases in one statement, an in-transaction one releases */
     private void releaseLease() throws SQLException {
         var fence = ownedFence;
         if (fence == null || lease.state() == Lease.State.LOST) {
@@ -744,7 +745,7 @@ final class Subscription {
         return seams.has(SAVE_WITHOUT_EPOCH) ? null : (Long) resetEpoch;
     }
 
-    /** A lost lease ends the lifecycle wherever the delivery thread is idle (§2.4, plan §9 "lost lease leaves the reader") */
+    /** A lost lease ends the lifecycle wherever the delivery thread is idle, leaving the reader */
     private void checkLost() {
         if (lease != null && (ownedFence == null || lease.state() == Lease.State.LOST)) {
             throw new LeaseLostException(false);
@@ -752,7 +753,7 @@ final class Subscription {
     }
 
     /**
-     * §2.4: before a handler call, a periodic save or park, or a page. Lost: unwind. Past the local deadline: suspend,
+     * Before a handler call, a periodic save or park, or a page. Lost: unwind. Past the local deadline: suspend,
      * and wait until the keeper confirms the lease again or reports it lost
      */
     private void ownerCheck() throws InterruptedException {
@@ -799,7 +800,7 @@ final class Subscription {
     }
 
     /**
-     * Phase 8 §4.3: whether this subscription may serve a parked request now - running and, if exclusive, owning its lease
+     * Whether this subscription may serve a parked request now - running and, if exclusive, owning its lease
      */
     boolean servesParked() {
         return isRunning() && (lease == null || (lease.state() == Lease.State.OWNED && ownedFence != null));
@@ -810,9 +811,9 @@ final class Subscription {
         return lease;
     }
 
-    /** §2.6's decision on a fenced write that updated nothing, in order */
+    /** The decision on a fenced write that updated nothing, in order */
     enum ConflictDecision {
-        /** Non-exclusive, row gone: recreate it (phase 4) */
+        /** Non-exclusive, row gone: recreate it */
         RECREATE,
         /** Exclusive, row gone: stop with an error, never recreate (it would lose the resume point) */
         STOP,
@@ -827,7 +828,7 @@ final class Subscription {
     }
 
     /**
-     * Phase 7 §2.6, as a pure function of the row read after the zero-row write
+     * The {@link ConflictDecision}, as a pure function of the row read after the zero-row write
      *
      * @param fence the fence this incarnation delivers under; {@code null} for a non-exclusive subscription
      */
@@ -873,7 +874,7 @@ final class Subscription {
         window.reset();
     }
 
-    /** The held aggregates from {@code el_parked_events} (§4.5): at start and after a reposition */
+    /** The held aggregates from {@code el_parked_events}: at start and after a reposition */
     private void loadParked() throws SQLException {
         if (seams.has(HELD_SET_NOT_RELOADED)) {
             parked.clear();
@@ -932,11 +933,11 @@ final class Subscription {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // FRESH (phase 3 §3, phase 4 §5.3)
+    // FRESH
     // ---------------------------------------------------------------------------------------------------------------
 
     /**
-     * Catch up {@code (P, W]} and attach (§3.3, §3.4 step 1-2)
+     * Catch up {@code (P, W]} and attach
      *
      * @return the accepted attach, or {@code null} if stopped or a reset is pending
      */
@@ -1015,7 +1016,7 @@ final class Subscription {
     }
 
     /**
-     * Design phase 5 §6.3: a {@code FRESH} subscription that has waited one backstop interval under an unknown watermark
+     * A {@code FRESH} subscription that has waited one backstop interval under an unknown watermark
      * attaches anyway - unless its handled set already has more gaps than {@link EventLogSettings#holeRangeThreshold()},
      * or a hand-off fell back since the watermark was last known
      */
@@ -1026,7 +1027,7 @@ final class Subscription {
     }
 
     /**
-     * {@code attachUnknown} (§6.3 step 1): attach while the watermark is unknown. The reply's watermark is
+     * {@code attachUnknown}: attach while the watermark is unknown. The reply's watermark is
      * {@link Long#MIN_VALUE}, so neither the bridge nor a batch raises {@code W_rcv} until a batch carries the known one.
      *
      * @return the accepted attach, or {@code null} if refused (the reader restarts); a reply with a known watermark is an
@@ -1048,7 +1049,7 @@ final class Subscription {
     }
 
     /**
-     * WaitingForWatermark (§3.1): read nothing until the type's watermark may have changed (F4, decision 2)
+     * WaitingForWatermark: read nothing until the type's watermark may have changed (F4)
      */
     private void waitForWatermark(long version, TailReader.State state) throws Exception {
         checkLost();
@@ -1078,10 +1079,10 @@ final class Subscription {
     }
 
     /**
-     * Bridge (phase 4 §5.3): read {@code (max(P, highest handled), C]}; each page also re-reads the attach holes at or
+     * Bridge: read {@code (max(P, highest handled), C]}; each page also re-reads the attach holes at or
      * below its lower bound that the bridge has not returned yet, and the handled set's gaps - the unhandled orders
      * between {@code P} and the highest handled one - so a late commit into either is handled before its successors in
-     * later pages (I2). Above {@link EventLogSettings#holeRangeThreshold()} gaps the bridge starts at {@code P} (phase 3).
+     * later pages (I2). Above {@link EventLogSettings#holeRangeThreshold()} gaps the bridge starts at {@code P}.
      *
      * @return {@code true} once the bridge reached {@code C}; {@code false} if stopped, reset or detached
      */
@@ -1130,7 +1131,7 @@ final class Subscription {
                     return fallBackToWait();
                 }
                 if (gaps == null) {
-                    // More gaps than the threshold since the bridge started: finish from P, as phase 3 does
+                    // More gaps than the threshold since the bridge started: finish from P, as an ordinary attach does
                     withGaps = false;
                     lower = handled.prefix();
                     continue;
@@ -1167,7 +1168,7 @@ final class Subscription {
                 return false;
             }
             if (filtered && ceiling > lower && (!reply.unknownWatermark() || seams.has(FILTERED_BRIDGE_MARKS_RANGE_UNDER_UNKNOWN_WATERMARK))) {
-                // §2.3 (not under an unknown watermark, phase 5 §6.3: a value held below the head is no attach hole, so
+                // Filtered bridge (not under an unknown watermark: a value held below the head is no attach hole, so
                 // the covered range would mark it handled; there every order not returned stays a gap and is handed off): every order of (lower, ceiling] the page did not return is non-matching or an attach hole still re-read
                 if (seams.has(FILTERED_BRIDGE_MARKS_HOLES)) {
                     handled.addRange(lower, ceiling, Collections.emptySortedSet(), Collections.emptySortedMap());
@@ -1186,7 +1187,7 @@ final class Subscription {
     }
 
     /**
-     * Design phase 5 §6.3 steps 3-4, after a bridge under the unknown watermark reached {@code C}: {@code P} is final
+     * After a bridge under the unknown watermark reached {@code C}: {@code P} is final
      * below, so every order of {@code (P, C]} the bridge did not hand on is a gap - rolled back, non-matching, or held by
      * a writer of the reader's initial candidate (I4). The gaps go to the reader, which re-reads them in every tail
      * statement until that candidate retires; then one re-read here takes what committed into them before the hand-off
@@ -1240,7 +1241,7 @@ final class Subscription {
         return true;
     }
 
-    /** §6.3: too many gaps to hand off - detach and wait for the watermark (F4) until it is known */
+    /** Too many gaps to hand off - detach and wait for the watermark (F4) until it is known */
     private boolean fallBackToWait() throws Exception {
         handOffFellBack = true;
         log.debug("Subscription {} on {}: more than {} gaps under the unknown watermark; waiting for it instead", key.subscriber(), key.aggregateType(),
@@ -1256,7 +1257,7 @@ final class Subscription {
     }
 
     /**
-     * Attached (§3.5): take batches until the inbox closes, the subscription stops or a reset is pending
+     * Attached: take batches until the inbox closes, the subscription stops or a reset is pending
      */
     private void attached() throws Exception {
         phase = Phase.ATTACHED;
@@ -1289,7 +1290,7 @@ final class Subscription {
     }
 
     /**
-     * Work through received rows in order, dropping those already handled (§3.2)
+     * Work through received rows in order, dropping those already handled
      *
      * @return {@code false} if the subscription stopped, a reset is pending or, attached, the inbox closed before all
      * were handled
@@ -1298,7 +1299,7 @@ final class Subscription {
         pending.clear();
         for (var row : rows) {
             if (filtered && !matches(row)) {
-                // §2.1, §2.4: a non-matching row is handled as a no-op
+                // A non-matching row is handled as a no-op
                 handled.add(row.globalOrder());
                 continue;
             }
@@ -1320,11 +1321,11 @@ final class Subscription {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // CONTIGUOUS (phase 4 §2)
+    // CONTIGUOUS
     // ---------------------------------------------------------------------------------------------------------------
 
     /**
-     * Catch up {@code (R, W]} into pending, applying it as it comes, then attach (§2.5). The deferred bridge starts
+     * Catch up {@code (R, W]} into pending, applying it as it comes, then attach. The deferred bridge starts
      * from the attach reply.
      *
      * @return {@code true} once attached; {@code false} if stopped or a reset is pending
@@ -1333,7 +1334,7 @@ final class Subscription {
         while (running && repositionTo == null) {
             phase = Phase.CATCHING_UP;
             if (!pending.isEmpty()) {
-                // Kept from before a detach (§2.5): final, so applied ahead of the catch-up
+                // Kept from before a detach: final, so applied ahead of the catch-up
                 if (!drain()) {
                     return false;
                 }
@@ -1421,7 +1422,7 @@ final class Subscription {
     }
 
     /**
-     * §2.2: a batch's rows go into {@link HeldBack}, except a row at or below {@code R}, which is in pending or applied
+     * A batch's rows go into {@link HeldBack}, except a row at or below {@code R}, which is in pending or applied
      * already and is dropped
      */
     private void receive(Batch batch, Inbox counting) {
@@ -1430,7 +1431,7 @@ final class Subscription {
         }
         for (var row : batch.rows()) {
             if (filtered && !matches(row)) {
-                // §2.4: dropped on receipt; R moves with W_rcv regardless. Counted only under the mutant
+                // Dropped on receipt; R moves with W_rcv regardless. Counted only under the mutant
                 if (seams.has(INBOX_COUNTS_UNMATCHED)) {
                     counting.release(1);
                 }
@@ -1452,7 +1453,7 @@ final class Subscription {
     }
 
     /**
-     * §2.2, §2.4: while {@code R} is below the received watermark, first bridge {@code (R, min(W_rcv, C)]} (final, so a
+     * While {@code R} is below the received watermark, first bridge {@code (R, min(W_rcv, C)]} (final, so a
      * plain range read), dropping the held rows it covers; then move every held row at or below {@code W_rcv} to
      * pending and set {@code R = W_rcv}
      */
@@ -1529,7 +1530,7 @@ final class Subscription {
     // ---------------------------------------------------------------------------------------------------------------
 
     /**
-     * Detach (phase 3 §3.6, phase 4 §2.5), only ever between pages. {@code FRESH}: {@code P} is already
+     * Detach, only ever between pages. {@code FRESH}: {@code P} is already
      * {@code min(W_rcv, lowest unhandled received - 1)} (F5); the unhandled rows and the inbox are discarded, the runs
      * kept. {@code CONTIGUOUS}: pending {@code (A, R]} is kept, held-back rows and the inbox are dropped, and catch-up
      * resumes above {@code R}.
@@ -1567,7 +1568,7 @@ final class Subscription {
     }
 
     /**
-     * A superseding reset, or (in-transaction) another writer of the progress row (§3.6, phase 4 §3.3): detach and
+     * A superseding reset, or (in-transaction) another writer of the progress row: detach and
      * reposition at the row's resume point; what was handled no longer counts
      */
     private void reposition() throws Exception {
@@ -1611,7 +1612,7 @@ final class Subscription {
 
     /**
      * {@link ProgressModel#PERIODIC}: the first pending event - parked in autocommit if it is decided or its aggregate is
-     * held (§4.4, §4.5), else handled with retries - then mark it applied. A park row is inserted before the event counts
+     * held, else handled with retries - then mark it applied. A park row is inserted before the event counts
      * as handled, so a crash in between replays it and finds it parked.
      */
     private boolean applyOne() throws Exception {
@@ -1645,8 +1646,8 @@ final class Subscription {
     }
 
     /**
-     * The periodic park insert (phase 7 §3.3): guarded by the epoch and, exclusive, the lease; a guard that matches
-     * nothing is a zero-row write (§2.6), and the event does not count as handled
+     * The periodic park insert: guarded by the epoch and, exclusive, the lease; a guard that matches
+     * nothing is a zero-row write, and the event does not count as handled
      *
      * @return {@code true} once the row is parked (or found parked); {@code false} if stopped or repositioning
      */
@@ -1678,7 +1679,7 @@ final class Subscription {
     }
 
     /**
-     * Run the handler until it returns normally, the event's retries are used up or it asks to park it (§4.1-§4.4). The
+     * Run the handler until it returns normally, the event's retries are used up or it asks to park it. The
      * handler holds no engine connection, so whatever it throws is its own failure - an I/O-classified one too;
      * only mutant {@link WatermarkMutant#HANDLER_IO_RETRIED_FOREVER} retries that indefinitely without counting an attempt.
      */
@@ -1762,7 +1763,7 @@ final class Subscription {
     }
 
     /**
-     * §4.5: the park row of an event whose aggregate is held - by the held set, or by a head parked earlier in the same
+     * The park row of an event whose aggregate is held - by the held set, or by a head parked earlier in the same
      * page ({@code pageHeads}) - else {@code null}
      */
     private ParkedEvents.Row holdRowFor(StoredEvent event, Map<String, Long> pageHeads) {
@@ -1795,7 +1796,7 @@ final class Subscription {
         return rows;
     }
 
-    /** Park rows committed: heads hold their aggregates (§4.5), the error state forgets them */
+    /** Park rows committed: heads hold their aggregates, the error state forgets them */
     private void afterParked(List<ParkedEvents.Row> rows) {
         var heldBefore = parked.heldCount();
         for (var row : rows) {
@@ -1814,11 +1815,12 @@ final class Subscription {
     }
 
     /**
-     * {@link ProgressModel#IN_HANDLER_TRANSACTION}: one page transaction (phase 4 §3.3) over the first pending events, at
-     * most the step-down size (§4.2). Events decided for parking and events of held aggregates are taken out of the page
-     * and parked in the same transaction (§4.4, §4.5); the handler gets the rest. The handler's writes, the park rows and
+     * {@link ProgressModel#IN_HANDLER_TRANSACTION}: one page transaction over the first pending events, at
+     * most the step-down size. Events decided for parking and events of held aggregates are taken out of the page
+     * and parked in the same transaction; the handler gets the rest. The handler's writes, the park rows and
      * the progress update - the last statement, guarded by the reset epoch and the value last committed - commit together;
-     * the page leaves pending only after the commit. A failure is classified (§4.1): the engine's I/O ({@link #isEngineFailure})
+     * the page leaves pending only after the commit. A failure is classified: the engine's I/O
+     * ({@link #isEngineFailure})
      * retries the same page, a park request parks, anything else shrinks, retries, then parks.
      *
      * @return {@code true} if the page committed or is to be retried; {@code false} if stopped or repositioning
@@ -1859,7 +1861,7 @@ final class Subscription {
             connection = open.connection();
             openPageConnection = connection;
             if (lease != null) {
-                // §7, decision 6: a dead owner's open page cannot hold the progress row past one lease
+                // A dead owner's open page cannot hold the progress row past one lease
                 try (var statement = connection.prepareStatement(EventLogStorage.PAGE_IDLE_TIMEOUT)) {
                     statement.setString(1, settings.leaseDuration().toMillis() + "ms");
                     statement.execute();
@@ -1895,7 +1897,7 @@ final class Subscription {
                 if (saved) {
                     hooks.afterProgressBeforeCommit(subscriber, handlerPage, resumeFrom);
                     if (lease != null && !seams.has(NO_LOCAL_DEADLINE) && lease.pastDeadline()) {
-                        // §2.4: past the deadline before commit - roll back, suspend, then retry the page
+                        // Past the deadline before commit - roll back, suspend, then retry the page
                         var ending = open;
                         open = null;
                         rollback(ending);
@@ -1936,7 +1938,7 @@ final class Subscription {
             }
             throw e;
         } catch (Exception e) {
-            // What the handler threw on a live page connection is the handler's failure, I/O-classified or not (§4.1)
+            // What the handler threw on a live page connection is the handler's failure, I/O-classified or not
             var pageConnection = connection;
             var io             = isEngineFailure(inHandler, e, () -> pageConnection != null && invalid(pageConnection), seams);
             if (open != null) {
@@ -1983,11 +1985,12 @@ final class Subscription {
     }
 
     /**
-     * §4.1-§4.4 after a page rolled back. I/O: the same page again after a doubling backoff, no shrink, no attempt. A
+     * Retry, shrink or park after a page rolled back (see docs/design/event-log.md §5.5). I/O: the same page again
+     * after a doubling backoff, no shrink, no attempt. A
      * {@link ParkEventException} naming an event of the page: that event is parked by the page after the ones before it
-     * (which commit in a page of their own). A handler failure of a page of several events: shrink (§4.2); of an event
+     * (which commit in a page of their own). A handler failure of a page of several events: shrink; of an event
      * alone: retry after a doubling backoff, and once {@link EventLogSettings#retryAttempts()} retries are used up, park
-     * it (§4.3).
+     * it.
      */
     private void onPageFailure(Exception e, boolean io, List<StoredEvent> page, List<StoredEvent> handlerPage) throws InterruptedException {
         var subscriber = key.subscriber();
@@ -2040,7 +2043,7 @@ final class Subscription {
     }
 
     /**
-     * §4.1: whether a failure is the engine's own I/O failure - retried indefinitely with a doubling backoff,
+     * Whether a failure is the engine's own I/O failure - retried indefinitely with a doubling backoff,
      * never shrinking, parking or counting an attempt. It is when it was thrown outside the handler (beginning the page,
      * the engine's statements, the commit), or the handler's page connection is lost. Whatever else the handler threw is
      * the handler's failure, even an I/O-classified one ({@link #isIoFailure}) from a connection of its own: it is retried
@@ -2063,7 +2066,7 @@ final class Subscription {
         return pageConnectionLost.getAsBoolean();
     }
 
-    /** §4.3: the event has failed alone {@code attempts} times, its first try and every retry; parked once this holds */
+    /** The event has failed alone {@code attempts} times, its first try and every retry; parked once this holds */
     static boolean retriesUsedUp(int attempts, ErrorSettings errors) {
         return attempts > errors.retryAttempts();
     }
@@ -2085,7 +2088,7 @@ final class Subscription {
         return false;
     }
 
-    /** §4.1: the page connection is no longer valid */
+    /** The page connection is no longer valid */
     private static boolean invalid(Connection connection) {
         try {
             return connection.isClosed() || !connection.isValid(1);
@@ -2094,7 +2097,7 @@ final class Subscription {
         }
     }
 
-    // ---- retry and discard of a parked aggregate (§4.5) ----
+    // ---- retry and discard of a parked aggregate ----
 
     private record ParkedRequest(long head, boolean discard, CompletableFuture<Boolean> result) {
     }
@@ -2103,7 +2106,7 @@ final class Subscription {
      * Retry the aggregate parked at {@code head}: on the delivery thread, between pages, one transaction locks the head's
      * and its held rows, hands their events to the handler in order, deletes the rows and runs the progress
      * compare-and-set unchanged; after it commits the aggregate is no longer held. If it fails the head's attempts grow
-     * and the aggregate stays held. Package-private until phase 8's admin surface.
+     * and the aggregate stays held.
      *
      * @return {@code true} once applied; {@code false} if it failed, {@code head} is not parked, or a reset intervened
      */
@@ -2136,7 +2139,7 @@ final class Subscription {
     }
 
     /**
-     * Phase 8 §4.3, the parked check: while this subscription holds at least one aggregate, read the requests an operator
+     * The parked check: while this subscription holds at least one aggregate, read the requests an operator
      * stored on its parked heads, at most once per {@link EventLogSettings#effectiveParkedCheckInterval()}, and queue them.
      * With no held aggregate there is no head to request anything on, and nothing is read
      */
@@ -2158,7 +2161,7 @@ final class Subscription {
         }
     }
 
-    /** @return the parked checks that read the table (phase 8 §4.3); for tests */
+    /** @return the parked checks that read the table; for tests */
     long parkedChecks() {
         return parkedChecks;
     }
@@ -2186,7 +2189,7 @@ final class Subscription {
         try {
             open = (model == ProgressModel.PERIODIC ? engineSource : pageSource).begin();
             var connection = open.connection();
-            // Phase 8 §4.3: the progress row first, epoch- and fence-guarded, in the order a reset locks
+            // The progress row first, epoch- and fence-guarded, in the order a reset locks
             if (!seams.has(SERVE_WITHOUT_EPOCH)
                     && !ParkedEvents.lockProgress(connection, key, seams.has(SERVE_WITHOUT_EPOCH) ? null : (Long) resetEpoch,
                                                   seams.has(SERVE_WITHOUT_FENCE) ? null : boundFence())) {
@@ -2274,7 +2277,7 @@ final class Subscription {
     }
 
     /**
-     * The resume point once the page is applied (§3.3): {@code CONTIGUOUS} the new {@code A + 1} - the next pending
+     * The resume point once the page is applied: {@code CONTIGUOUS} the new {@code A + 1} - the next pending
      * order, or {@code R + 1} if the page empties pending; {@code FRESH} the new {@code P + 1}
      *
      * @param next the first pending order after the page, or {@code null}
@@ -2287,7 +2290,7 @@ final class Subscription {
         return Math.max(handled.prefix(), prefix) + 1;
     }
 
-    /** Commit a page through its source (phase 8 §2.4); the connection is released either way */
+    /** Commit a page through its source; the connection is released either way */
     private void commit(PageTransactionSource.OpenPage open) throws SQLException {
         openPageConnection = null;
         open.commit();
@@ -2300,7 +2303,7 @@ final class Subscription {
     }
 
     /**
-     * What the handler sees of a page transaction (phase 8 §2.3): the connection guarded against ending the transaction,
+     * What the handler sees of a page transaction: the connection guarded against ending the transaction,
      * and the source's resources
      */
     private static PageTransaction handlerTransaction(PageTransactionSource.OpenPage open) {
@@ -2319,7 +2322,7 @@ final class Subscription {
     }
 
     /**
-     * The progress update matched no row (phase 4 §3.3, phase 7 §2.6; not a handler failure), decided by
+     * The progress update matched no row (not a handler failure), decided by
      * {@link #decide}: the row is gone - non-exclusive, recreate it and retry the page; exclusive, stop with an error.
      * Exclusive and the fence or owner differs - the lease was lost. Its epoch moved - a reset, reposition at its resume
      * point. Its resume point moved under the same epoch - another writer, reposition at its value
@@ -2386,8 +2389,8 @@ final class Subscription {
     }
 
     /**
-     * As {@link #read(boolean, long, long, SortedSet, SortedMap)}; with {@code typeIds} (a filtered {@code FRESH} bridge,
-     * phase 5 §2.3) both branches carry the type predicate. Under a catch-up permit (§4).
+     * As {@link #read(boolean, long, long, SortedSet, SortedMap)}; with {@code typeIds} (a filtered {@code FRESH}
+     * bridge) both branches carry the type predicate. Under a catch-up permit.
      */
     private List<StoredEvent> read(boolean bridge, long lower, long upper, SortedSet<Long> holes, SortedMap<Long, Long> ranges, Short[] typeIds)
             throws SQLException, InterruptedException {
@@ -2439,7 +2442,7 @@ final class Subscription {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // Phase 5: filtered reads (§2.2, §3) and the catch-up permit (§4)
+    // Filtered reads and the catch-up permit
     // ---------------------------------------------------------------------------------------------------------------
 
     /** One filtered read: the matching rows, and how far the position may advance (a final order) */
@@ -2447,7 +2450,7 @@ final class Subscription {
     }
 
     /**
-     * The filter's type ids (§2.2): names with no id yet are left out; each lookup of an unknown name costs one reload.
+     * The filter's type ids: names with no id yet are left out; each lookup of an unknown name costs one reload.
      * Called after the ceiling is read, so every type that can occur at or below it has its id.
      */
     private Short[] resolveTypeIds() throws SQLException {
@@ -2478,7 +2481,7 @@ final class Subscription {
     }
 
     /**
-     * A filtered read of {@code (lower, min(final, lower + window)]} (§2.2, §3.2): {@code finalOrder} is a watermark (or
+     * A filtered read of {@code (lower, min(final, lower + window)]}: {@code finalOrder} is a watermark (or
      * the deferred bridge's {@code min(W_rcv, C)}), so every order at or below it is final. A short page advances to the
      * ceiling, a full one to its last row; with a valid type index and a sparse type, a short page is followed by the
      * skip-ahead probe. A cancelled statement quarters the window and returns {@code null}: retry from {@code lower}.
@@ -2553,7 +2556,7 @@ final class Subscription {
         return rows;
     }
 
-    /** §3.2: the first matching order in {@code (lower, upper]}, or {@code null} */
+    /** The first matching order in {@code (lower, upper]}, or {@code null} */
     private Long skipAhead(Short[] ids, long lower, long upper) throws SQLException, InterruptedException {
         acquirePermit();
         try (var connection = loop.dataSource().getConnection(); var statement = connection.prepareStatement(filterStatements.skipAheadProbe())) {
@@ -2584,12 +2587,12 @@ final class Subscription {
         return p;
     }
 
-    /** @return whether {@code row} passes the filter in memory: its event type, and its tenant (phase 8 §15 question 7) */
+    /** @return whether {@code row} passes the filter in memory: its event type, and its tenant */
     private boolean matches(StoredEvent row) {
         return filter.matches(row.eventType()) && (tenant == null || tenant.equals(row.tenant()));
     }
 
-    /** §4.2: before a covered statement borrows its connection. Fair, interruptible */
+    /** Before a covered statement borrows its connection. Fair, interruptible */
     private void acquirePermit() throws InterruptedException {
         if (seams.has(NO_CATCH_UP_PERMIT)) {
             return;
@@ -2609,7 +2612,7 @@ final class Subscription {
     }
 
     /**
-     * §4.2: after the result set is closed and the connection returned. {@code applied}: the rows read were applied
+     * After the result set is closed and the connection returned. {@code applied}: the rows read were applied
      * (only mutant {@link WatermarkMutant#PERMIT_HELD_THROUGH_PAGE} waits for that)
      */
     private void releasePermit(boolean applied) {
@@ -2637,7 +2640,7 @@ final class Subscription {
     }
 
     /**
-     * {@code FRESH}: §3.2's {@code P + 1}. {@code CONTIGUOUS}: {@code A + 1}
+     * {@code FRESH}: {@code P + 1}. {@code CONTIGUOUS}: {@code A + 1}
      */
     long resumePoint() {
         if (contiguous()) {

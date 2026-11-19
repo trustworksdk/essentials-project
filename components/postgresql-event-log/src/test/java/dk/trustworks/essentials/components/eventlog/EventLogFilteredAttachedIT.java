@@ -24,9 +24,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Phase 5 §7.1 and §7.3, the attached side of a filtered subscription: the filtered {@code FRESH} bridge keeps the attach
- * holes unhandled (I13), the detach after an overflow resumes below the unhandled matching rows (F5), and a slow
- * rare-type subscription's inbox counts matching rows only (§2.4). The filtered variants of {@code EventLogAttachIT},
+ * The attached side of a filtered subscription: the filtered {@code FRESH} bridge keeps the attach
+ * holes unhandled (I13; see docs/design/event-log.md §11), the detach after an overflow resumes below the unhandled
+ * matching rows (F5), and a slow
+ * rare-type subscription's inbox counts matching rows only. The filtered variants of {@code EventLogAttachIT},
  * {@code EventLogDetachIT} and {@code EventLogSlowSubscriptionIT}, kept here so the phase-3 ITs stay as they were.
  */
 class EventLogFilteredAttachedIT extends AbstractSubscriptionIT {
@@ -152,7 +153,7 @@ class EventLogFilteredAttachedIT extends AbstractSubscriptionIT {
         return new DetachOutcome(missed, duplicates, perAggregateOrderViolations(recorder.delivered));
     }
 
-    // ---- §2.4: a slow rare-type subscription ----
+    // ---- a slow rare-type subscription ----
 
     @Test
     void a_slow_rare_type_subscription_does_not_overflow_while_its_matching_backlog_is_under_the_bound() throws Exception {

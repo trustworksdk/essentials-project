@@ -28,14 +28,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * I1, plan §16: <i>"No loss: every committed event reaches every active subscription at least once, in both modes"</i>
- * - phase 2 has {@code FRESH} only.
+ * I1: <i>"No loss: every committed event reaches every active subscription at least once, in both modes"</i>
  * <p>
  * Concurrent writers with random commit order and rollbacks, a writer held open while others commit (5 s by default,
  * the plan's five minutes with the opt-in {@code -Dbenchmark.run=true}, the repository's switch for long suites), a sequence jump of a million values, and a
  * reader restarted (its backend terminated) while a writer holds a value below the head. Must-fail variants (P0.5 mutants): the empty tail
  * taken to mean nobody runs, a restarted reader that takes the head as final (F4), and a writer that draws its value
- * before its xid - the raw insert of P0.1's control, which the engine's append never is (I4).
+ * before its xid - the raw insert of P0.1's control, which the engine's append never is (I4; see
+ * docs/design/event-log.md §11).
  */
 class EventLogNoLossIT extends AbstractSubscriptionIT {
     private static final int    HOLD_KEY = 731_902;
@@ -136,7 +136,7 @@ class EventLogNoLossIT extends AbstractSubscriptionIT {
     }
 
     /**
-     * Phase 3 §2.4: the reader's backend is terminated while a writer holds a value below the head; the restarted reader
+     * The reader's backend is terminated while a writer holds a value below the head; the restarted reader
      * starts at the head, the attached subscription detaches and the held value reaches it through catch-up once the
      * restart's initial candidate retires.
      *

@@ -24,7 +24,7 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Phase 4 §3.1, §8.2: a page handler cannot end or change the engine's transaction - {@code commit},
+ * A page handler cannot end or change the engine's transaction - {@code commit},
  * {@code rollback()}, {@code setAutoCommit}, {@code close} and {@code abort} throw - while savepoints and everything
  * else reach the real connection.
  */

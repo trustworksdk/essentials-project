@@ -25,7 +25,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * The event log's fixed table names, its schema entry points when no harness owns the schema, and the start-up checks
- * the watermark depends on (design {@code docs/archive/event-store-engine-phase2.md} §1.2, §2; plan §4.3).
+ * the watermark depends on.
  * <p>
  * The DDL text itself lives in {@link EventLogSchemaContributor}: the schema harness rule allows DDL only in schema
  * contributors. This class runs it, under the framework's bootstrap advisory lock, when the component owns its schema.
@@ -37,7 +37,7 @@ public final class EventLogSchema {
     public static final String LEASE_FENCE_SEQUENCE  = "el_lease_fence_seq";
     public static final String PARKED_EVENTS_TABLE   = "el_parked_events";
     /**
-     * One row per aggregate type moved from the old event store (design phase 9 §3.8): written only by the migration
+     * One row per aggregate type moved from the old event store: written only by the migration
      * tool, read by {@link EventLog#registerAggregateType(String)}, which refuses a type whose copy is in progress
      */
     public static final String MIGRATION_TABLE       = "el_migration";
@@ -116,7 +116,7 @@ public final class EventLogSchema {
     }
 
     /**
-     * Refuse to run where the watermark cannot work (plan §4.3 prerequisite 2). The tail reader's probe reads
+     * Refuse to run where the watermark cannot work. The tail reader's probe reads
      * {@code backend_xid} through {@code pg_stat_get_activity(NULL)}; where it is redacted for other roles' backends the
      * probe returns a subset of the running writers, and the watermark would pass a live writer's value. So this
      * constructs the condition: one connection takes a real transaction id, and a second must see it. Verified once per
@@ -166,8 +166,8 @@ public final class EventLogSchema {
     }
 
     /**
-     * Refuse an event table whose {@code global_order} identity hands out values with a cache above 1 (plan §4.3
-     * prerequisite 3): cached values are not handed out in wall-clock order across sessions.
+     * Refuse an event table whose {@code global_order} identity hands out values with a cache above 1: cached values
+     * are not handed out in wall-clock order across sessions.
      *
      * @throws IllegalStateException if the cache is not 1, or the table has no identity on {@code global_order}
      */

@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Design phase 5 §6.3, §7.1 ("Restarted reader"), decision 2: after a reader restart behind a writer that holds a value
+ * After a reader restart behind a writer that holds a value
  * below the head, a {@code FRESH} subscription that has waited one backstop interval attaches under the unknown
  * watermark, bridges, and hands the gaps it found to the reader, which re-reads them until its initial candidate
  * retires. The held value commits only once both subscriptions are attached and have handed off (asserted with the

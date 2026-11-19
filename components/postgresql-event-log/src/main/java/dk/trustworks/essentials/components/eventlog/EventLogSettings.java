@@ -20,10 +20,11 @@ import java.time.Duration;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * Settings of the event log's subscriptions (design {@code docs/archive/event-store-engine-phase2.md} §1.2, §3.3, §3.4).
+ * Settings of the event log's subscriptions.
  *
- * @param backstopInterval     tier-0 wake-up: how long a caught-up tail reader parks before it reads again (plan §11).
- *                             Wake-ups ({@link EventLog#afterCommit}) only shorten it (I7)
+ * @param backstopInterval     tier-0 wake-up: how long a caught-up tail reader parks before it reads again.
+ *                             Wake-ups ({@link EventLog#afterCommit}) only shorten it (I7; see docs/design/event-log.md
+ * §11)
  * @param tailPageSize         most rows one tail read returns above the cursor; late commits re-read from holes do
  *                             not count against it
  * @param probeBackoffMin      least time between two re-probes while a candidate is outstanding and nothing new was
@@ -38,57 +39,57 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                             server-side prepared statements, except those whose generic plan is not index-only
  *                             (P0.16; {@code EventLogGenericPlanIT} checks them). {@code false} plans every read custom
  * @param subscriptionBufferSize most events a subscription's inbox holds before the next batch overflows it and the
- *                             subscription detaches (phase 3 §2.3); at least {@code tailPageSize}. An empty inbox
+ *                             subscription detaches; at least {@code tailPageSize}. An empty inbox
  *                             accepts any batch
- * @param catchUpPageSize      most rows one catch-up or bridge statement returns (phase 3 §3.3, §3.4)
- * @param pageSize             most events one page transaction of an in-transaction subscription applies (phase 4
- *                             §3.2; P0.13: no gain above about 100 row by row)
- * @param retryAttempts        how many times an event that fails alone is retried before it is parked (phase 4 §4.3);
+ * @param catchUpPageSize      most rows one catch-up or bridge statement returns
+ * @param pageSize             most events one page transaction of an in-transaction subscription applies (P0.13: no
+ * gain above about 100 row by row)
+ * @param retryAttempts        how many times an event that fails alone is retried before it is parked;
  *                             zero parks it on its first failure alone
  * @param retryBackoffInitial  the sleep before the first retry of an event that failed alone, doubled before each further
- *                             retry; also the first wait after an I/O failure, which is retried indefinitely (phase 4 §4.1)
+ *                             retry; also the first wait after an I/O failure, which is retried indefinitely
  * @param retryBackoffMax      the most any such sleep or wait lasts
  * @param catchUpPermits       most catch-up and bridge statements in flight at once per database per JVM, shared by every
- *                             {@code EventLog} on that database (phase 5 §4); the first event log on a database sizes it
- * @param catchUpScanWindow    the first order window a filtered catch-up read scans (phase 5 §3.2); doubled after each
+ *                             {@code EventLog} on that database; the first event log on a database sizes it
+ * @param catchUpScanWindow    the first order window a filtered catch-up read scans; doubled after each
  *                             short page, quartered after a cancelled statement
  * @param catchUpScanWindowMax the largest such window
- * @param eventTypeIndexed     aggregate types that get the opt-in {@code (event_type, global_order)} index (phase 5 §5)
- * @param tenantIndexed        aggregate types that get the opt-in {@code (tenant, global_order)} index (phase 8 §15
- *                             question 7): built like the event-type index; it serves the skip-ahead probe of a
+ * @param eventTypeIndexed     aggregate types that get the opt-in {@code (event_type, global_order)} index
+ * @param tenantIndexed        aggregate types that get the opt-in {@code (tenant, global_order)} index: built like the
+ *                             event-type index; it serves the skip-ahead probe of a
  *                             tenant-filtered catch-up
  * @param wokenProbeMin        least time between two running-set reads of an aggregate type that was woken since its last
- *                             one (phase 6 §5): the cost rule of {@link #probeWait(long, int)} without the backstop floor
- * @param crossJvmWakeUp       tier 1 (phase 6 §3): {@link EventLog#afterCommit} also sends a coalesced {@code NOTIFY} on a
+ *                             one: the cost rule of {@link #probeWait(long, int)} without the backstop floor
+ * @param crossJvmWakeUp       tier 1: {@link EventLog#afterCommit} also sends a coalesced {@code NOTIFY} on a
  *                             borrowed connection, and while any subscription exists one listener thread holds one
  *                             {@code LISTEN} connection that wakes this event log's readers on other event logs' commits.
  *                             {@code false}: neither runs, and only the same event log's commits (tier 2) and the
  *                             backstop wake a reader
  * @param wokenReadMin         least time from the start of an aggregate type's last read to the start of a read a wake
- *                             asks for (phase 6 §10.8, wake coalescing): a wake inside it defers the read to its end, and
+ *                             asks for (wake coalescing): a wake inside it defers the read to its end, and
  *                             every wake that arrives meanwhile is served by that one read. Never drops a wake, never
  *                             delays a read the backstop, a full page or a probe makes due, and never defers past the
  *                             backstop. Costs at most this much commit-to-handler latency. Zero reads at once on every wake
- * @param notifySendMin        least time between the starts of two {@code NOTIFY} sends of one event log's notifier (tier 1,
- *                             phase 6 §10.8): the aggregate types committed inside it are unioned into the next send. Nothing
+ * @param notifySendMin        least time between the starts of two {@code NOTIFY} sends of one event log's notifier
+ *                             (tier 1): the aggregate types committed inside it are unioned into the next send. Nothing
  *                             pending is dropped; a stop sends what is pending at once. Costs other event logs at most this
  *                             much latency. Zero sends as soon as the previous send returned
  * @param leaseDuration        how long a claim or renewal of an exclusive subscription's lease lasts, judged by the
- *                             database's clock (phase 7 §2, §6); greater than {@code leaseLocalStop + leaseRenewalInterval}
+ *                             database's clock; greater than {@code leaseLocalStop + leaseRenewalInterval}
  * @param leaseRenewalInterval how often the event log's lease keeper renews every owned lease, and tries to claim every
  *                             standby one, in one statement each
- * @param leaseLocalStop       how long after the start of its last confirmed renewal an owner keeps delivering (the local
- *                             deadline, §2.4); at least {@code leaseRenewalInterval}, less than {@code leaseDuration}
+ * @param leaseLocalStop       how long after the start of its last confirmed renewal an owner keeps delivering (the
+ * local deadline); at least {@code leaseRenewalInterval}, less than {@code leaseDuration}
  * @param leaseStatementTimeout the query timeout of the keeper's statements, whole seconds (pgjdbc's granularity), at least
  *                             one second and at most {@code leaseLocalStop}
- * @param parkedCheckInterval  phase 8 §4.3: how often a subscription that holds at least one aggregate reads the retry and
+ * @param parkedCheckInterval  how often a subscription that holds at least one aggregate reads the retry and
  *                             discard requests stored on its parked heads by an operator on any node; {@link Duration#ZERO}
  *                             (the default) means {@code backstopInterval}. A subscription that holds no aggregate reads
  *                             nothing
- * @param adminListLimit       phase 8 §4.1: the most rows one {@link EventLogAdmin#subscriptions} listing returns
+ * @param adminListLimit       the most rows one {@link EventLogAdmin#subscriptions} listing returns
  * @param nodeName             free text (at most 64 characters) prefixed to the lease owner id ({@code "<nodeName>/<id>"}),
  *                             for operators; empty for none
- * @param holeProbeWaitMax     phase 10 gate: most time between two running-set reads of an aggregate type while a hole,
+ * @param holeProbeWaitMax     most time between two running-set reads of an aggregate type while a hole,
  *                             a range or a candidate of it is outstanding - the cap on {@link #probeWait(long, int)} and
  *                             {@link #wokenProbeWait(long, int)} there ({@link #holeProbeWait(Duration)}). A hole left by a
  *                             rolled-back append retires only on a running-set read, and until it does it holds the
@@ -142,25 +143,26 @@ public record EventLogSettings(Duration backstopInterval,
     static final int BACKENDS_PER_READER = 10;
 
     /**
-     * {@link #wokenReadMin()} of {@link #defaults()}: off. Phase 6 §10.8 measured 2 and 5 ms: at 100 ev/s the commits are
-     * 10 ms apart, so neither interval merges a single read, and neither brings §7.1's statements per delivered event
+     * {@link #wokenReadMin()} of {@link #defaults()}: off. 2 and 5 ms were measured: at 100 ev/s the commits are
+     * 10 ms apart, so neither interval merges a single read, and neither brings the statements per delivered event
      * near the backstop-only figure; nothing is gained for the latency it costs under bursts
      */
     static final Duration DEFAULT_WOKEN_READ_MIN  = Duration.ZERO;
     /**
-     * {@link #notifySendMin()} of {@link #defaults()}: the smallest measured interval (phase 6 §10.8) that cuts the
-     * notifier's sends at 8 and 20 writers from about 10 000 to about 490 a second and keeps §7.2's append cost inside 10 %
+     * {@link #notifySendMin()} of {@link #defaults()}: the smallest measured interval that cuts the
+     * notifier's sends at 8 and 20 writers from about 10 000 to about 490 a second and keeps the append cost inside 10
+     * %
      */
     static final Duration DEFAULT_NOTIFY_SEND_MIN = Duration.ofMillis(2);
     /**
      * {@link #retryBackoffInitial()} of {@link #defaults()}: 10 ms, so a failing event waits 10, 20 and 40 ms before it is
-     * parked. Phase 8 §16 measured one always-failing event in 1 000 at 0.10x the no-failure throughput with 100 ms and
+     * parked. One always-failing event in 1 000 measured 0.10x the no-failure throughput with 100 ms and
      * about 0.45x with 10 ms. Configurable engine-wide with {@link #withRetryBackoff(Duration, Duration)} and per
      * subscription with {@link ErrorSettings}.
      */
     static final Duration DEFAULT_RETRY_BACKOFF_INITIAL = Duration.ofMillis(10);
     /**
-     * {@link #holeProbeWaitMax()} of {@link #defaults()}: 100 ms. The trading demo's load gate (phase 10) measured an
+     * {@link #holeProbeWaitMax()} of {@link #defaults()}: 100 ms. The trading demo's load test measured an
      * honest 3-5 ms probe at a 60-connection pool pushing the next running set 1.8-3 s out under the cost rule, while
      * rolled-back appends left holes that held every {@code CONTIGUOUS} Orders subscriber for 0.5-3.4 s, against a
      * booked p99 budget of 490 ms. An order crosses several such subscriptions, and each one a hole catches waits up to
@@ -211,7 +213,7 @@ public record EventLogSettings(Duration backstopInterval,
     }
 
     /**
-     * The lease timings (phase 7 §6): lease, renewal interval and local deadline, validated together. A statement timeout
+     * The lease timings: lease, renewal interval and local deadline, validated together. A statement timeout
      * above the new local deadline is lowered to the local deadline's whole seconds (at least one)
      */
     public EventLogSettings withLease(Duration leaseDuration, Duration leaseRenewalInterval, Duration leaseLocalStop) {
@@ -226,7 +228,7 @@ public record EventLogSettings(Duration backstopInterval,
         return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit, holeProbeWaitMax);
     }
 
-    /** Phase 8 §4.3; {@link Duration#ZERO} means {@code backstopInterval} */
+    /** The parked check's interval; {@link Duration#ZERO} means {@code backstopInterval} */
     public EventLogSettings withParkedCheckInterval(Duration parkedCheckInterval) {
         return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit, holeProbeWaitMax);
     }
@@ -235,7 +237,7 @@ public record EventLogSettings(Duration backstopInterval,
         return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit, holeProbeWaitMax);
     }
 
-    /** @return the effective parked-check interval (phase 8 §4.3) */
+    /** @return the effective parked-check interval */
     public Duration effectiveParkedCheckInterval() {
         return parkedCheckInterval.isZero() ? backstopInterval : parkedCheckInterval;
     }
@@ -326,7 +328,7 @@ public record EventLogSettings(Duration backstopInterval,
         return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit, holeProbeWaitMax);
     }
 
-    /** Phase 8 §15 question 7: the aggregate types that get the opt-in {@code (tenant, global_order)} index */
+    /** The aggregate types that get the opt-in {@code (tenant, global_order)} index */
     public EventLogSettings withTenantIndexed(java.util.Set<String> tenantIndexed) {
         return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit, holeProbeWaitMax);
     }
@@ -343,7 +345,7 @@ public record EventLogSettings(Duration backstopInterval,
         return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit, holeProbeWaitMax);
     }
 
-    /** Phase 10 gate: see {@link #holeProbeWaitMax()} */
+    /** See {@link #holeProbeWaitMax()} */
     public EventLogSettings withHoleProbeWaitMax(Duration holeProbeWaitMax) {
         return new EventLogSettings(backstopInterval, tailPageSize, probeBackoffMin, probeBackoffMax, progressSaveInterval, holeRangeThreshold, genericPlans, subscriptionBufferSize, catchUpPageSize, pageSize, retryAttempts, retryBackoffInitial, retryBackoffMax, catchUpPermits, catchUpScanWindow, catchUpScanWindowMax, eventTypeIndexed, tenantIndexed, wokenProbeMin, crossJvmWakeUp, wokenReadMin, notifySendMin, leaseDuration, leaseRenewalInterval, leaseLocalStop, leaseStatementTimeout, nodeName, parkedCheckInterval, adminListLimit, holeProbeWaitMax);
     }
@@ -387,7 +389,7 @@ public record EventLogSettings(Duration backstopInterval,
     }
 
     /**
-     * How long to wait between two running-set reads of a type woken since its last one (phase 6 §5, the probe clock):
+     * How long to wait between two running-set reads of a type woken since its last one (the probe clock):
      * {@code cost * 100 * max(1, backends / 10)} as {@link #probeWait(long, int)}, but between {@link #wokenProbeMin()}
      * and {@link #probeBackoffMax()} - no backstop floor, since wakes now arrive at the commit rate. Capped at
      * {@link #holeProbeWaitMax()} while a hole waits, as {@link #probeWait(long, int)}
@@ -403,7 +405,7 @@ public record EventLogSettings(Duration backstopInterval,
     }
 
     /**
-     * The probe wait while a hole, range or candidate of the type is outstanding (phase 10 gate): {@code wait}, at most
+     * The probe wait while a hole, range or candidate of the type is outstanding: {@code wait}, at most
      * {@link #holeProbeWaitMax()}. A hole retires only on a running-set read, and until then it holds the watermark
      */
     Duration holeProbeWait(Duration wait) {

@@ -26,8 +26,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Design phase 6 §6 unit tests of tier 1: payload parsing and own-instance filtering, the notifier's coalescing, and the
- * upgrade guard of {@code PINNED_PEEK}'s reflection (drain options §4.2: a pgjdbc rename fails the build, not latency).
+ * Unit tests of tier 1: payload parsing and own-instance filtering, the notifier's coalescing, and the
+ * upgrade guard of {@code PINNED_PEEK}'s reflection (a pgjdbc rename fails the build, not latency).
  */
 class WakeTierTest {
     @Test

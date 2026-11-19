@@ -24,10 +24,10 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Phase 3 §2.4, F4: a reader restart detaches every attached subscription. Two subscriptions are attached; a writer
+ * F4: a reader restart detaches every attached subscription. Two subscriptions are attached; a writer
  * holds a value below the head; the reader's backend is terminated, so the new reader starts at the head and has
  * forgotten the hole. The held value commits after the restart and must reach both, through their catch-up. Must-fail
- * variants: {@link WatermarkMutant#KEEP_ATTACHED_ON_READER_RESTART} and phase 2's
+ * variants: {@link WatermarkMutant#KEEP_ATTACHED_ON_READER_RESTART} and
  * {@link WatermarkMutant#RESTARTED_READER_AT_HEAD} (both on the type's first subscription, whose seams the shared
  * reader uses).
  */

@@ -56,7 +56,7 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         final AtomicLong detaches  = new AtomicLong();
         final AtomicLong attaches  = new AtomicLong();
         final AtomicLong rowsRead  = new AtomicLong();
-        /** Reads that read a running set: combined probes and flushes with one (phase 6 §5) */
+        /** Reads that read a running set: combined probes and flushes with one */
         final AtomicLong combinedReads = new AtomicLong();
         /** Catch-up, bridge and deferred-bridge statements of every subscription */
         final AtomicLong catchUpReads = new AtomicLong();
@@ -66,9 +66,9 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         final Map<String, AtomicLong> indexedFilteredReads = new java.util.concurrent.ConcurrentHashMap<>();
         final List<String> detachReasons = new CopyOnWriteArrayList<>();
         final List<Long>   saves         = new CopyOnWriteArrayList<>();
-        /** Attaches under an unknown watermark (phase 5 §6.3) */
+        /** Attaches under an unknown watermark */
         final AtomicLong   unknownAttaches = new AtomicLong();
-        /** The subscribers that handed gaps off, once per hand-off (phase 5 §6.3) */
+        /** The subscribers that handed gaps off, once per hand-off */
         final List<String> handedOffBy   = new CopyOnWriteArrayList<>();
         volatile int lastCandidates;
         volatile int lastHoles;
@@ -238,7 +238,7 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
         return subscribe(name, recorder, new TestSeams(Set.of(mutants), TestSeams.Hooks.NONE, null));
     }
 
-    /** Terminates the backend of the shared reader loop's connection, if it has one: the next read fails (§2.4) */
+    /** Terminates the backend of the shared reader loop's connection, if it has one: the next read fails */
     void terminateReaderBackend() throws SQLException {
         var connection = eventLog.readerLoop().connection();
         if (connection != null) {

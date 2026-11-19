@@ -20,7 +20,7 @@ import java.time.Duration;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * How one subscription handles failures (design phase 8 §2.2, §6; phase 4 §4): an event that fails alone is retried
+ * How one subscription handles failures: an event that fails alone is retried
  * {@code retryAttempts} times, waiting {@code backoffStart} doubled per retry and capped at {@code backoffMax}, then
  * parked; an I/O failure waits on the same backoff and retries indefinitely. A page of an in-transaction subscription
  * holds at most {@code pageSize} events and shrinks on a handler failure.
@@ -31,7 +31,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param pageSize      the most events in one page, 1 to 10 000
  */
 public record ErrorSettings(int retryAttempts, Duration backoffStart, Duration backoffMax, int pageSize) {
-    /** The largest page size (design phase 8 §6) */
+    /** The largest page size */
     public static final int MAX_PAGE_SIZE = 10_000;
 
     public ErrorSettings {

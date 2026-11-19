@@ -23,7 +23,7 @@ import static dk.trustworks.essentials.components.eventlog.EventLogStorage.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * Interns event-type names as {@code smallint} ids in {@code el_event_types} (design §2.3, decision 2).
+ * Interns event-type names as {@code smallint} ids in {@code el_event_types}.
  * <p>
  * A name the cache does not know is looked for in the table first (reloading it whole), and only then registered with
  * {@code INSERT ... ON CONFLICT (name) DO NOTHING RETURNING id} followed by a {@code SELECT} when a concurrent
@@ -64,7 +64,7 @@ public final class EventTypeRegistry {
     }
 
     /**
-     * The id of {@code eventType} if it is registered, without registering it (design phase 5 §2.2): a name the cache
+     * The id of {@code eventType} if it is registered, without registering it: a name the cache
      * does not know costs one reload of the committed rows
      *
      * @return the id, or {@code null} if no such event type is registered yet

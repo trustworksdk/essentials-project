@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Gate row I16 (design phase 7 §9.3): an owner that cannot renew stops delivering before its lease expires by server
+ * Gate row I16: an owner that cannot renew stops delivering before its lease expires by server
  * time; a renewal pass never extends a lease whose fence changed; one renewal statement renews every owned lease.
  * <p>
  * The server's expiry is mapped onto the JVM's monotonic clock after every renewal (in

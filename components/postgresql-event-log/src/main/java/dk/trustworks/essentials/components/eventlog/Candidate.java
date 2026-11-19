@@ -20,7 +20,7 @@ import java.util.Set;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * A watermark candidate (plan §4.2): {@code highestRead} is the highest {@code global_order} the reader had read when
+ * A watermark candidate: {@code highestRead} is the highest {@code global_order} the reader had read when
  * it read {@code runningXids}, the {@code backend_xid}s of every writer running after that read's snapshot. Any writer
  * that could still commit a value at or below {@code highestRead} is in that set, so once the set is disjoint from a
  * later running set, every value at or below {@code highestRead} is resolved.

@@ -23,7 +23,7 @@ import java.util.*;
  * source in place of the event table (a view that holds a scan open, for the hold-inside-scan proofs). Package-private;
  * {@link #NONE} in normal use.
  * <p>
- * The tail reader of an aggregate type is shared (phase 3 §2.1): its mutants, reader hooks and read source are those of
+ * The tail reader of an aggregate type is shared: its mutants, reader hooks and read source are those of
  * the subscription that made the type active (the first one to start); the subscription mutants and delivery-thread
  * hooks are each subscription's own.
  *
@@ -45,7 +45,7 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
     /**
      * Thrown by a hook to end the delivery thread as a lost JVM would: no further statement, no rollback, no close, no
      * final save. The IT then terminates the open page connection's backend ({@link Subscription#openPageConnection()}),
-     * so the transaction dies with it (design phase 4 §8).
+     * so the transaction dies with it.
      */
     static final class Crash extends RuntimeException {
         Crash(String where) {
@@ -69,7 +69,7 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         default void beforeHoleRead(Collection<Long> holes) throws Exception {
         }
 
-        /** Reader loop thread: a read finished and its rows are not yet offered to any inbox (phase 3 §2.2) */
+        /** Reader loop thread: a read finished and its rows are not yet offered to any inbox */
         default void afterReadBeforePublish(String aggregateType, List<StoredEvent> rows) throws Exception {
         }
 
@@ -92,7 +92,7 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         default void onDetach(String subscriber, String reason, long resumeFrom) throws Exception {
         }
 
-        // ---- phase 4 (§8): delivery thread ----
+        // ---- catch-up and bridge reads: delivery thread ----
 
         /** Before a catch-up read ({@code deferred = false}) or a {@code CONTIGUOUS} deferred-bridge read ({@code true}) */
         default void beforeDeliveryRead(String subscriber, boolean deferred) throws Exception {
@@ -118,11 +118,11 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         default void onRelease(String subscriber, List<StoredEvent> rows, long receivedWatermark) throws Exception {
         }
 
-        /** An event is parked ({@code blockedBy} null) or held behind a parked head (unit B) */
+        /** An event is parked ({@code blockedBy} null) or held behind a parked head */
         default void onPark(String subscriber, long globalOrder, Long blockedBy) throws Exception {
         }
 
-        // ---- phase 5 (§7): delivery thread ----
+        // ---- filtered reads: delivery thread ----
 
         /** A filtered catch-up read its ceiling {@code ceiling} and is about to resolve its type ids */
         default void afterCeilingBeforeTypeIds(String subscriber, long ceiling) throws Exception {
@@ -136,7 +136,7 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         default void onPermit(String subscriber, boolean acquired) throws Exception {
         }
 
-        // ---- phase 5 unit B (§6.3, §7) ----
+        // ---- attach under an unknown watermark ----
 
         /** Delivery thread: the bridge under an unknown watermark reached {@code C}; {@code gaps} are about to be handed off */
         default void beforeHandOff(String subscriber, List<HandledSet.Gap> gaps) throws Exception {
@@ -149,7 +149,7 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         default void onHandOff(String aggregateType, List<HandledSet.Gap> gaps) throws Exception {
         }
 
-        // ---- phase 6 unit A (§6): reader loop thread ----
+        // ---- reader loop thread ----
 
         /**
          * The due types' statements are about to be sent: one combined or tail statement for a single type, one flush for
@@ -163,7 +163,7 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         default void afterFlushBeforeApply(List<String> aggregateTypes) throws Exception {
         }
 
-        // ---- phase 6 unit B (§6): the event log's wake seams ----
+        // ---- wake-ups: the event log's wake seams ----
 
         /** Notifier thread: {@code payloads} are about to be sent as one {@code NOTIFY} statement */
         default void beforeNotifySend(List<String> payloads) throws Exception {
@@ -177,7 +177,7 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         default void beforeListenerReconnect() throws Exception {
         }
 
-        // ---- phase 7 (§9): the lease keeper's thread, on EventLog.leaseSeams ----
+        // ---- leases: the lease keeper's thread, on EventLog.leaseSeams ----
 
         /** Keeper: the claim statement for {@code keys} (standby subscriptions) is about to be sent */
         default void beforeClaim(List<ProgressStore.Key> keys) throws Exception {
@@ -191,7 +191,7 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         default void afterRenewalBeforeConfirm(List<ProgressStore.Key> keys) throws Exception {
         }
 
-        // ---- phase 7 (§9): delivery thread ----
+        // ---- leases: delivery thread ----
 
         /** A periodic save of {@code resumeFrom} passed its deadline check and is about to be sent */
         default void beforePeriodicSave(String subscriber, long resumeFrom) throws Exception {

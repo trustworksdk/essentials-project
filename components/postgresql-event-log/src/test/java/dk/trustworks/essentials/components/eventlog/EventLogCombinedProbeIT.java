@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * I11, plan §16: <i>"Combined probe: the running-writer set is read after the statement's snapshot"</i>.
+ * I11: <i>"Combined probe: the running-writer set is read after the statement's snapshot"</i>.
  * <p>
  * A writer held between taking its value and committing keeps its candidate; the hold-inside-scan proof (a writer that
  * takes its xid while the probe is blocked inside its scan, after its snapshot, still appears in that probe's running

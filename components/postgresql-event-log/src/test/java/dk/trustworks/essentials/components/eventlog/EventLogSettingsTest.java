@@ -70,7 +70,7 @@ class EventLogSettingsTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> defaults.withNotifySendMin(Duration.ofMillis(-1))).isInstanceOf(IllegalArgumentException.class);
     }
 
-    // ---- phase 7 §6: lease timings ----
+    // ---- lease timings ----
 
     @Test
     void the_lease_defaults_are_15_s_4_s_7_s_and_3_s() {

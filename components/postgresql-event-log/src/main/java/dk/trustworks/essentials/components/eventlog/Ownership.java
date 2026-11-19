@@ -16,8 +16,8 @@
 package dk.trustworks.essentials.components.eventlog;
 
 /**
- * Who delivers a subscription (design phase 8 §2.2). {@link Exclusive}: at most one event log at a time, the one
- * holding the lease on the progress row {@code (subscriber, aggregateType, '')} (phase 7). {@link PerInstance}: every
+ * Who delivers a subscription. {@link Exclusive}: at most one event log at a time, the one
+ * holding the lease on the progress row {@code (subscriber, aggregateType, '')}. {@link PerInstance}: every
  * instance delivers its own copy, keyed by its non-blank instance name; two event logs started with the same name
  * overwrite each other's progress.
  */

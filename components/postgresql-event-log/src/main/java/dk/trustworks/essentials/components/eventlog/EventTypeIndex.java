@@ -27,8 +27,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * The opt-in {@code (event_type, global_order)} index of the aggregate types in
- * {@link EventLogSettings#eventTypeIndexed()} (design phase 5 §5, decision 3), or - {@link Kind#TENANT} - the
- * {@code (tenant, global_order)} index of those in {@link EventLogSettings#tenantIndexed()} (phase 8 §15 question 7).
+ * {@link EventLogSettings#eventTypeIndexed()}, or - {@link Kind#TENANT} - the
+ * {@code (tenant, global_order)} index of those in {@link EventLogSettings#tenantIndexed()}.
  * <ul>
  *     <li>When the engine creates the schema it builds the index {@code CONCURRENTLY} on a virtual thread, on a
  *     connection of its own in autocommit, never on the start-up path: valid - done; invalid (a failed build) - drop it
@@ -37,13 +37,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     <li>Otherwise it builds nothing and logs, once per aggregate type, the statement to run.</li>
  * </ul>
  * Validity is read from {@code pg_index} ({@code indisvalid AND indisready}), never assumed. It only decides whether a
- * filtered catch-up issues the skip-ahead probe (§3.2): the reads are the same with or without the index.
+ * filtered catch-up issues the skip-ahead probe: the reads are the same with or without the index.
  */
 final class EventTypeIndex {
     private static final Logger log = LoggerFactory.getLogger(EventTypeIndex.class);
 
     /**
-     * Which opt-in index: the event-type index (phase 5 §5), or the tenant index (phase 8 §15 question 7), built, logged
+     * Which opt-in index: the event-type index, or the tenant index, built, logged
      * and read the same way
      */
     enum Kind {

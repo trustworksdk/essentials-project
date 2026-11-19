@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Phase 8 §15 question 7: the tenant filter in SQL. Catch-up and bridge reads carry {@code tenant = ?} (with the type
+ * The tenant filter in SQL. Catch-up and bridge reads carry {@code tenant = ?} (with the type
  * predicate when the subscription filters on event types too), live batches are filtered in memory. A rare tenant's
  * catch-up reads none of the other tenants' rows; a held event of the tenant below the reader's cursor is delivered
  * once whether the catch-up passes it or a restarted reader's bridge does (the bridge under an unknown watermark must
@@ -88,7 +88,7 @@ class EventLogTenantFilterIT extends AbstractSubscriptionIT {
     void a_held_event_of_the_tenant_behind_a_restarted_reader_is_delivered_once_by_the_bridge(boolean withType) throws Exception {
         var outcome = heldEvent(ConsistencyMode.FRESH, withType, true, Set.of());
         assertDeliveredOnce(outcome);
-        // §6.3: the tenant-filtered bridge under the unknown watermark left the non-matching runs as gaps and handed them off
+        // The tenant-filtered bridge under the unknown watermark left the non-matching runs as gaps and handed them off
         assertThat(reads.handedOffBy).contains("tested");
     }
 

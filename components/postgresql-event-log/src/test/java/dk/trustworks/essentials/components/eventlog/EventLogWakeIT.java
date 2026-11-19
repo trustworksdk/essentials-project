@@ -27,7 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Wake discipline, design phase 6 §4.1, §5, §6.4: the loop takes a type's wake flag before it reads, so a wake during a
+ * Wake discipline: the loop takes a type's wake flag before it reads, so a wake during a
  * read causes another read; and wakes at the commit rate do not read the running set at the commit rate - the probe
  * clock allows one per woken probe wait. Backstop 30 s, so only a wake can be fast. Must-fail variants:
  * {@link WatermarkMutant#WAKE_CLEARED_AFTER_READ}, {@link WatermarkMutant#PROBE_ON_EVERY_WAKE}.

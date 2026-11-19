@@ -28,7 +28,7 @@ import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The tail reader state machine of one aggregate type (plan §4, §6; design §3.3, phase 3 §1.1). Runs on the
+ * The tail reader state machine of one aggregate type. Runs on the
  * {@link ReaderLoop}'s connection, which it is handed and does not own, and is touched by the loop's thread only:
  * cursor, hole set, candidates and watermark are plain fields (an assertion checks the owner thread under {@code -ea}).
  * A reader restart discards the instance and starts a new one.
@@ -38,16 +38,16 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     <li>While a hole or candidate is outstanding, or the last read revealed a new hole, each read is the
  *     <b>combined probe</b>: tail above the cursor, outstanding holes re-read by {@code = ANY} and, while a range is
  *     outstanding, by a range join ({@code UNION ALL}, never {@code OR}: F1 with P0.11's form), and the running-writer
- *     set, read during execution after the statement's snapshot (§4.10, P0.2, P0.12) - also when no event row comes
- *     back. Otherwise the plain tail read. Since phase 6 the running set waits for the loop's probe clock: a read without
+ *     set, read during execution after the statement's snapshot (P0.2, P0.12) - also when no event row comes
+ *     back. Otherwise the plain tail read. The running set waits for the loop's probe clock: a read without
  *     it re-reads outstanding holes ({@code rereadTail}); several due types are read in one flush of such statements
  *     followed by one running set ({@link #execute(boolean)}, {@link #flushStatement()}, {@link #apply(Read, boolean)}).</li>
  *     <li>A probe creates a {@link Candidate} {@code (cursor, running set)} when a hole lies above every outstanding
  *     candidate, and retires each candidate whose set is disjoint from its running set. A retired candidate resolves
- *     every hole at or below it: those are re-read once ({@code holeRead}, §4.2) and the rows published before the
+ *     every hole at or below it: those are re-read once ({@code holeRead}) and the rows published before the
  *     watermark moves past them (F2).</li>
  *     <li><b>Watermark</b> (F2): {@code min(cursor, lowest unresolved hole - 1)}.</li>
- *     <li><b>Start</b> (F4, phase 3 §2.4): the reader starts at the head, read with the running set in one statement.
+ *     <li><b>Start</b> (F4): the reader starts at the head, read with the running set in one statement.
  *     If any writer is running, an <b>initial candidate</b> {@code (head, running set)} makes the watermark unknown
  *     until it retires, since a writer may still commit below the head. With no writer running the watermark is the
  *     head at once.</li>
@@ -108,7 +108,7 @@ final class TailReader implements AutoCloseable {
     }
 
     /**
-     * Start at the head (F4, phase 3 §2.4): one statement reads {@code max(global_order)} and the running set. Runs once,
+     * Start at the head (F4): one statement reads {@code max(global_order)} and the running set. Runs once,
      * on the loop's thread, which becomes the owner.
      */
     void startAtHead() throws SQLException {
@@ -144,7 +144,7 @@ final class TailReader implements AutoCloseable {
     }
 
     /**
-     * The raw result of one read, not yet applied to the reader (design phase 6 §4.2)
+     * The raw result of one read, not yet applied to the reader
      *
      * @param rows     event rows in the order read, late commits included
      * @param running  the running set read after the read's snapshot, or {@code null} if none was read
@@ -206,8 +206,8 @@ final class TailReader implements AutoCloseable {
     }
 
     /**
-     * One read of this type alone (design phase 6 §9 decision 2): the combined probe if a running set is wanted and
-     * {@code runningSetAllowed} (the probe clock, §5), else the tail - with the hole re-read while holes are outstanding
+     * One read of this type alone: the combined probe if a running set is wanted and
+     * {@code runningSetAllowed} (the probe clock), else the tail - with the hole re-read while holes are outstanding
      * ({@code rereadTail}), so a late commit is read by every read whatever the probe does
      */
     Read execute(boolean runningSetAllowed) throws Exception {
@@ -245,7 +245,7 @@ final class TailReader implements AutoCloseable {
     }
 
     /**
-     * @return this type's statement in a flush of several types (design phase 6 §4.2): the plain tail, or the tail with
+     * @return this type's statement in a flush of several types: the plain tail, or the tail with
      * the hole re-read while holes are outstanding; never a running-set branch
      */
     String flushStatement() {
@@ -443,8 +443,8 @@ final class TailReader implements AutoCloseable {
     }
 
     /**
-     * A {@code FRESH} subscription attached under the unknown watermark hands off the gaps its bridge found (design
-     * phase 5 §6.3): while the restart's initial candidate is outstanding, every gap at or below its head becomes an
+     * A {@code FRESH} subscription attached under the unknown watermark hands off the gaps its bridge found: while the
+     * restart's initial candidate is outstanding, every gap at or below its head becomes an
      * unresolved hole of that candidate - re-read by every tail statement (F1) and resolved only by the hole read after
      * it retires (F2). Gaps above the head are already holes of this reader, or final. Holes and ranges stay disjoint,
      * since several subscriptions may hand off overlapping gaps and a value re-read twice would be published twice.
@@ -608,8 +608,8 @@ final class TailReader implements AutoCloseable {
     }
 
     /**
-     * @return a hole, range or candidate is outstanding: the watermark waits for a running set to retire it (phase 10
-     * gate, {@link EventLogSettings#holeProbeWaitMax()})
+     * @return a hole, range or candidate is outstanding: the watermark waits for a running set to retire it
+     * ({@link EventLogSettings#holeProbeWaitMax()})
      */
     boolean holesWaiting() {
         return !candidates.isEmpty() || !holes.isEmpty() || !ranges.isEmpty();

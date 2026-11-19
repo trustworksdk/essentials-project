@@ -30,7 +30,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * The event log's schema as an {@link EssentialsSchemaHarness} contribution, and the one place its DDL text lives
- * (the schema harness rule: DDL lives in schema contributors). Design: {@code docs/archive/event-store-engine-phase2.md} §2.
+ * (the schema harness rule: DDL lives in schema contributors). Design: {@code docs/design/event-log.md} §2.
  * <p>
  * The fixed schema ({@code el_event_types}, {@code el_aggregate_types}, {@code el_lease_fence_seq},
  * {@code el_progress}, {@code el_parked_events}, {@code el_migration}) is one repeatable change. Each aggregate type's event and head tables
@@ -146,12 +146,12 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
 
     /**
      * The lease columns of {@code el_progress} ({@code lease_owner}, {@code lease_until}, {@code lease_fence}) are written
-     * only through {@code ProgressStore} and the lease keeper (design phase 7 §2, §5). Every fence is drawn from
+     * only through {@code ProgressStore} and the lease keeper. Every fence is drawn from
      * {@code el_lease_fence_seq} inside a claim statement, so a fence never repeats: {@code ALTER SEQUENCE ... RESTART},
      * {@code setval} to a lower value, or dropping and recreating the sequence breaks that guarantee and with it the fencing
      * of exclusive subscriptions.
      *
-     * @return the fixed schema's statements, in order, each safe against existing objects (design §2.3 - §2.6)
+     * @return the fixed schema's statements, in order, each safe against existing objects
      */
     public static List<String> schemaStatements() {
         return List.of(
@@ -183,7 +183,7 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
                         "    updated_at        timestamptz NOT NULL DEFAULT now(),\n" +
                         "    PRIMARY KEY (subscriber, aggregate_type, instance_name)\n" +
                         ") WITH (fillfactor = 70)",
-                // Phase 8 §2.6: the stored filter digest; added to a table created before phase 8
+                // The stored filter digest; added to a table created without it
                 "ALTER TABLE " + PROGRESS_TABLE + " ADD COLUMN IF NOT EXISTS filter_digest text",
                 "CREATE TABLE IF NOT EXISTS " + PARKED_EVENTS_TABLE + " (\n" +
                         "    subscriber      text        NOT NULL,\n" +
@@ -200,14 +200,14 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
                         "    requested_at    timestamptz,\n" +
                         "    PRIMARY KEY (subscriber, aggregate_type, instance_name, global_order)\n" +
                         ")",
-                // Phase 8 §4.3: an operator's retry or discard request on a parked head, served by the node that runs the
-                // subscription; added to a table created before phase 8
+                // An operator's retry or discard request on a parked head, served by the node that runs the
+                // subscription; added to a table created without it
                 "ALTER TABLE " + PARKED_EVENTS_TABLE + " ADD COLUMN IF NOT EXISTS requested text CHECK (requested IN ('RETRY', 'DISCARD'))",
                 "ALTER TABLE " + PARKED_EVENTS_TABLE + " ADD COLUMN IF NOT EXISTS requested_at timestamptz",
                 createIndexUnlessPresent(PARKED_EVENTS_TABLE, PARKED_EVENTS_TABLE + "_aggregate",
                                          "CREATE INDEX IF NOT EXISTS " + PARKED_EVENTS_TABLE + "_aggregate ON " + PARKED_EVENTS_TABLE +
                                                  " (subscriber, aggregate_type, instance_name, aggregate_id, global_order)"),
-                // Phase 9 §3.8: the state of each aggregate type's move from the old event store. The engine owns the DDL
+                // The state of each aggregate type's move from the old event store. The engine owns the DDL
                 // and only reads it (the registerAggregateType guard); the migration tool writes the rows. CUT_OVER rows
                 // stay as the record of the move; the engine never deletes one
                 "CREATE TABLE IF NOT EXISTS " + MIGRATION_TABLE + " (\n" +
@@ -223,9 +223,9 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
     }
 
     /**
-     * The opt-in {@code (event_type, global_order)} index (design phase 5 §5.1). Not a {@link SchemaChange}: the harness
+     * The opt-in {@code (event_type, global_order)} index. Not a {@link SchemaChange}: the harness
      * applies a change set in one transaction, and {@code CONCURRENTLY} cannot run inside one, so {@code EventTypeIndex}
-     * runs these in autocommit when the schema is created, and logs the create statement otherwise (§5.2).
+     * runs these in autocommit when the schema is created, and logs the create statement otherwise.
      *
      * @return {@code [create, drop]}: the concurrent build, and the drop of an invalid index left by a failed build
      */
@@ -237,7 +237,7 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
     }
 
     /**
-     * The opt-in {@code (tenant, global_order)} index (phase 8 §15 question 7), built and logged as
+     * The opt-in {@code (tenant, global_order)} index, built and logged as
      * {@link #eventTypeIndexStatements(AggregateTypeTables)} is
      *
      * @return {@code [create, drop]}: the concurrent build, and the drop of an invalid index left by a failed build
@@ -259,8 +259,9 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
 
     /**
      * @param tables the validated names of one aggregate type
-     * @return its event table (with its event-id and caused-by indexes), head table and registry row, each statement safe against existing objects (design §2.1,
-     * §2.2, §2.4). The registry insert does nothing on any conflict; the engine checks afterwards that the row maps back
+     * @return its event table (with its event-id and caused-by indexes), head table and registry row, each statement
+     * safe against existing objects. The registry insert does nothing on any conflict; the engine checks afterwards
+     * that the row maps back
      * to this aggregate type
      */
     public static List<String> aggregateTypeStatements(AggregateTypeTables tables) {
@@ -284,9 +285,9 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
                         ")",
                 createIndexUnlessPresent(events, tables.eventIdIndex(),
                                          "CREATE INDEX IF NOT EXISTS " + tables.eventIdIndex() + " ON " + events + " (event_id)"),
-                // Phase 8 §14 question 8: the causation lookup ("what did this event cause?"). Partial: events without a cause
-                // stay out of it, so an append without one pays nothing. Created with the table; on a table created before
-                // phase 8b it is built (not concurrently) when the aggregate type next registers
+                // The causation lookup ("what did this event cause?"). Partial: events without a cause
+                // stay out of it, so an append without one pays nothing. Created with the table; on a table created
+                // without it, it is built (not concurrently) when the aggregate type next registers
                 createIndexUnlessPresent(events, tables.causedByIndex(),
                                          "CREATE INDEX IF NOT EXISTS " + tables.causedByIndex() + " ON " + events +
                                                  " (caused_by_event_id) WHERE caused_by_event_id IS NOT NULL"),

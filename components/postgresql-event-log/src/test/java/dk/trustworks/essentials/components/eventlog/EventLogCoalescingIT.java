@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Wake coalescing, design phase 6 §10.8: a wake inside {@link EventLogSettings#wokenReadMin()} of the type's last read
+ * Wake coalescing: a wake inside {@link EventLogSettings#wokenReadMin()} of the type's last read
  * defers the read to the interval's end, and a type committed inside {@link EventLogSettings#notifySendMin()} of the
  * notifier's last send goes out with the next send. Neither is ever dropped, and each costs at most its interval of
  * latency. Backstop 30 s, so only a wake can be fast. The intervals are 300 ms, far above a read or a send, so the

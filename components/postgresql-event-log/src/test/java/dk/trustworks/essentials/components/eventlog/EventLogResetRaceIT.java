@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Gate row I6 (design phase 7 §9.2): a reset wins over every write it races - a periodic save, a page commit, a periodic
+ * Gate row I6: a reset wins over every write it races - a periodic save, a page commit, a periodic
  * park and a release. Every arm runs once with a non-exclusive and once with an exclusive subscription.
  */
 class EventLogResetRaceIT extends AbstractLeaseIT {
@@ -204,7 +204,7 @@ class EventLogResetRaceIT extends AbstractLeaseIT {
         assertThat(queryLong("SELECT count(*) FROM " + VIEW + " WHERE global_order = 11")).isEqualTo(1);
     }
 
-    // ---- a reset racing a periodic park (phase-4 §11.5's gap) ----
+    // ---- a reset racing a periodic park ----
 
     /** @return the park rows left after event 5's held park insert was released behind a reset to 8 */
     private long resetRacingAPeriodicPark(boolean exclusive, WatermarkMutant... mutants) throws Exception {

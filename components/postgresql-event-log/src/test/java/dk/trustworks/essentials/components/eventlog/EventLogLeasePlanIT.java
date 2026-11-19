@@ -26,7 +26,7 @@ import java.util.stream.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Phase 7 §15.5 (unit D): the keeper's batched renewal and claim keep a linear plan on an {@code el_progress} that has
+ * The keeper's batched renewal and claim keep a linear plan on an {@code el_progress} that has
  * never been analysed - the state after the table is created, and (for the owner predicate) after every owner restart.
  * Before unit D both statements filtered {@code el_progress} by predicates the planner, without statistics, guessed
  * leave about one row, and the generic plan pgjdbc switches to after five executions became a nested loop that rescans
@@ -39,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class EventLogLeasePlanIT extends AbstractEventLogIT {
     private static final String OWNER = "node-1/3f1c9a52-6d0e-4a52-9c8e-6b1f0f2d7a10";
 
-    /** The renewal statement before unit D (§2.3's first shape): owner, fence and instance as restrictions of el_progress */
+    /** The renewal statement's earlier shape: owner, fence and instance as restrictions of el_progress */
     private static final String PRE_UNIT_D_RENEW =
             "UPDATE " + EventLogSchema.PROGRESS_TABLE + " p\n" +
                     "   SET lease_until = now() + ?::interval\n" +

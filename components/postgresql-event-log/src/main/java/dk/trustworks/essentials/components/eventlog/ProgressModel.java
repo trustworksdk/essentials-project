@@ -16,13 +16,13 @@
 package dk.trustworks.essentials.components.eventlog;
 
 /**
- * Where a subscription's resume point is written (plan §8); the values {@code el_progress} stores. It follows from the
+ * Where a subscription's resume point is written; the values {@code el_progress} stores. It follows from the
  * handler kind: a {@link PeriodicHandler} is {@link #PERIODIC}, a {@link PageHandler} is {@link #IN_HANDLER_TRANSACTION}.
  * Public for {@link EventLogAdmin#importProgress}, which writes a progress row before any handler exists.
  */
 public enum ProgressModel {
     /** An autocommit save at most every {@link EventLogSettings#progressSaveInterval()} */
     PERIODIC,
-    /** In the page transaction, as its last statement (phase 4 §3.3) */
+    /** In the page transaction, as its last statement */
     IN_HANDLER_TRANSACTION
 }

@@ -28,14 +28,14 @@ import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The lease keeper of one {@link EventLog} (design {@code docs/archive/event-store-engine-phase7.md} §2.2, §2.3, §8;
- * decision 1): one virtual thread, {@code eventlog-lease}, that runs only while the event log has an exclusive
+ * The lease keeper of one {@link EventLog}: one virtual thread, {@code eventlog-lease}, that runs only while the event
+ * log has an exclusive
  * subscription. Every {@link EventLogSettings#leaseRenewalInterval()} it borrows one connection and sends at most two
  * statements: one {@code LEASE_RENEW} for every owned lease and one {@code LEASE_CLAIM} for every standby one (plus a
  * {@code LEASE_CLAIM_NEW} per standby subscription that has never seen its row). Each statement has the query timeout
  * {@link EventLogSettings#leaseStatementTimeout()}. It never touches the reader loop and reads no event table.
  * <p>
- * A renewal is confirmed at the time it was <b>sent</b> (§2.3): the server's {@code now()} is at or after it, so the
+ * A renewal is confirmed at the time it was <b>sent</b>: the server's {@code now()} is at or after it, so the
  * delivery thread's local deadline always falls before the server's expiry. A failed pass confirms nothing; the
  * deadline, checked by the delivery thread, then suspends delivery.
  */
@@ -267,7 +267,8 @@ final class LeaseKeeper {
         }
     }
 
-    /** §2.2: a missing key whose subscription never saw its row - insert it with the lease, or find it created by another node */
+    /** A missing key whose subscription never saw its row - insert it with the lease, or find it created by another
+     * node */
     private void claimNew(Connection connection, Lease lease, long start) throws SQLException {
         var row = lease.newRow();
         try (var statement = connection.prepareStatement(row.headTable() == null ? EventLogStorage.LEASE_CLAIM_NEW : EventLogStorage.leaseClaimNew(row.headTable()))) {

@@ -24,10 +24,10 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * I2, plan §16: <i>"Per-aggregate order: within one subscription incarnation, A#n is first delivered before
+ * I2: <i>"Per-aggregate order: within one subscription incarnation, A#n is first delivered before
  * A#n+1"</i>.
  * <p>
- * §4.5's unit-of-work scenario, and P0.5's F1 shape: A#n commits late into a hole, A#n+1 is appended after it and read
+ * The unit-of-work scenario, and P0.5's F1 shape: A#n commits late into a hole, A#n+1 is appended after it and read
  * above the cursor, while a long writer elsewhere keeps the hole's candidate from retiring - with one and with several
  * events per transaction. Must-fail variant: a reader that delivers late commits only from the hole read at
  * retirement (F1, {@link WatermarkMutant#NO_HOLE_REREAD}).

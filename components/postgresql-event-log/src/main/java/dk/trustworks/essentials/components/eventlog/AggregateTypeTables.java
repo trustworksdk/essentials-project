@@ -73,8 +73,8 @@ public record AggregateTypeTables(String aggregateType, String eventTable, Strin
      *                                  untruncated identifier
      */
     /**
-     * @return {@code el_<type>_events_type_order}, the opt-in {@code (event_type, global_order)} index (design phase 5
-     * §5.1); shorter than {@link #streamOrderConstraint()}, so it fits whenever the other names do
+     * @return {@code el_<type>_events_type_order}, the opt-in {@code (event_type, global_order)} index; shorter than
+     * {@link #streamOrderConstraint()}, so it fits whenever the other names do
      */
     public String eventTypeIndex() {
         var name = eventTable + EVENT_TYPE_INDEX_SUFFIX;
@@ -83,8 +83,8 @@ public record AggregateTypeTables(String aggregateType, String eventTable, Strin
     }
 
     /**
-     * @return {@code el_<type>_events_tenant_order}, the opt-in {@code (tenant, global_order)} index (phase 8 §15
-     * question 7); as long as {@link #streamOrderConstraint()}, so it fits whenever the other names do
+     * @return {@code el_<type>_events_tenant_order}, the opt-in {@code (tenant, global_order)} index; as long as
+     * {@link #streamOrderConstraint()}, so it fits whenever the other names do
      */
     public String tenantIndex() {
         var name = eventTable + TENANT_INDEX_SUFFIX;
@@ -94,7 +94,7 @@ public record AggregateTypeTables(String aggregateType, String eventTable, Strin
 
     /**
      * @return {@code el_<type>_events_caused_by}, the partial {@code caused_by_event_id} index behind the causation
-     * lookup (phase 8 §14 question 8); shorter than {@link #streamOrderConstraint()}, so it fits whenever the other
+     * lookup; shorter than {@link #streamOrderConstraint()}, so it fits whenever the other
      * names do
      */
     public String causedByIndex() {

@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.eventlog;
 import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 
 /**
- * The scan window of one subscription's filtered reads (design phase 5 §3.2), and the density switch that keeps the
+ * The scan window of one subscription's filtered reads, and the density switch that keeps the
  * type index out of a read for a common type. Delivery thread only; no SQL.
  * <ul>
  *     <li>A read scans {@code (lower, min(W, lower + window)]}. A full page keeps the window; a short page doubles it,
@@ -28,7 +28,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireTrue;
  * </ul>
  */
 final class CatchUpWindow {
-    /** Above this share of matching rows, the type index is kept out of the read (§3.2; the gate places it) */
+    /** Above this share of matching rows, the type index is kept out of the read (placed by measurement) */
     static final double DENSE  = 0.25;
     /** Below this share, the plain form is used again */
     static final double SPARSE = 0.05;

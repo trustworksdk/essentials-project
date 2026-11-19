@@ -20,7 +20,7 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * A local snapshot of a subscription (design phase 8 §2.7), read without a statement; the cluster view is the admin
+ * A local snapshot of a subscription, read without a statement; the cluster view is the admin
  * listing.
  *
  * @param definition        what was subscribed

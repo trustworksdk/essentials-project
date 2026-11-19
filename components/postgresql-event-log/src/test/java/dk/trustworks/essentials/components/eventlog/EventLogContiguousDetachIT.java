@@ -25,10 +25,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Design phase 4 §2.3, §2.5, §7.1, §8.2: a {@code CONTIGUOUS} subscription detaches only between pages, so an overflow
+ * A {@code CONTIGUOUS} subscription detaches only between pages, so an overflow
  * while a page is open keeps that page's rows pending if it rolls back and drops them if it commits; held-back rows
  * count against the inbox's bound, so behind a long writer the subscription overflows and re-attaches - with no
- * statement while the writer runs - instead of growing without bound; and the reader loop never waits for it (I9).
+ * statement while the writer runs - instead of growing without bound; and the reader loop never waits for it (I9; see
+ * docs/design/event-log.md §11).
  * Must-fail variants: {@link WatermarkMutant#REREAD_WITHOUT_APPLIED_DROP}, {@link WatermarkMutant#DETACH_POSITION_PAST_OPEN_PAGE},
  * {@link WatermarkMutant#HELD_NOT_COUNTED}, {@link WatermarkMutant#BACK_PRESSURE}.
  */

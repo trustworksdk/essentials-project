@@ -26,12 +26,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * I12, plan §16 (design phase 4 §7, §8.1): a {@code CONTIGUOUS} subscription never hands on a row above its received
+ * I12: a {@code CONTIGUOUS} subscription never hands on a row above its received
  * watermark, and with in-transaction progress a crash at any point leaves the projection equal to applying each event
- * once. Also the in-transaction compare-and-set on the previous resume point, and a reset that rolls back an open page
- * (§8.2).
+ * once. Also the in-transaction compare-and-set on the previous resume point, and a reset that rolls back an open page.
  * <p>
- * The crash loop: per crash point (§8's hooks and both reads), a round of writers with random commit order and a
+ * The crash loop: per crash point (the page hooks and both reads), a round of writers with random commit order and a
  * rollback below and above a writer that holds a value, a subscription that crashes there ({@link TestSeams.Crash}, the
  * page connection's backend then terminated), restarted with the same key in the next round. A keeper subscription
  * holds the type's reader active, so the restarted one catches up below the held value, attaches, and needs the

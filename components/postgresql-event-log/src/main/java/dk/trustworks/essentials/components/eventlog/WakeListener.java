@@ -30,15 +30,15 @@ import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Tier 1's receiving half (design phase 6 §3.3): one per {@link EventLog}, running only while the reader loop has an
+ * Tier 1's receiving half: one per {@link EventLog}, running only while the reader loop has an
  * active type and {@link EventLogSettings#crossJvmWakeUp()} is on. One platform daemon thread {@code eventlog-listener}
  * and one held connection ({@code application_name = eventlog-listener}) with {@code LISTEN el_wake}.
  * <ul>
  *     <li><b>Drain</b> (P0.17 (a)): pgjdbc's {@code getNotifications(timeout)} with its socket peek's cool-down pinned by
  *     reflection ({@code PINNED_PEEK}), so a dense stream does not hold notifications inside the driver; if the
  *     reflection fails, {@code QUERY_POLL}: a trivial statement whose response carries the queued notifications, polled
- *     every millisecond and backing off to 50 ms while nothing arrives (drain options §5).</li>
- *     <li><b>No work</b> (§11): a notification is parsed, dropped if it is this event log's own (tier 2 acted on it), and
+ *     every millisecond and backing off to 50 ms while nothing arrives.</li>
+ *     <li><b>No work</b>: a notification is parsed, dropped if it is this event log's own (tier 2 acted on it), and
  *     sets the wake flag of its aggregate type if that type is active. It never reads events or reader state.</li>
  *     <li><b>Restart</b>: any failure closes the connection, waits {@code min(backstopInterval, 1 s)}, reconnects, re-runs
  *     {@code LISTEN} and then wakes every active type once, since a notification may have been missed meanwhile.</li>

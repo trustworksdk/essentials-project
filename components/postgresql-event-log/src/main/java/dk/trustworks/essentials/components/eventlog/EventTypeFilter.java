@@ -20,10 +20,10 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * The event types a subscription consumes (design {@code docs/archive/event-store-engine-phase5.md} §1.2), by name. An
+ * The event types a subscription consumes, by name. An
  * empty set means every event type ({@link #all()}). A row of another type counts as handled without reaching the
- * handler (§2.1). Not persisted: changing a subscription's filter changes what it receives from its current position
- * on. <b>Temporary</b>: phase 8's subscription definition absorbs it.
+ * handler. Not persisted: changing a subscription's filter changes what it receives from its current position
+ * on.
  *
  * @param eventTypes the event type names; empty for every event type
  */

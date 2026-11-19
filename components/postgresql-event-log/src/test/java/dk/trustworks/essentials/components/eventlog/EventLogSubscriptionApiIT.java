@@ -27,7 +27,7 @@ import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Design phase 8 §9.1: the engine API. Every definition field reaches {@code el_progress}; {@code StartFrom.head()} is
+ * The engine API. Every definition field reaches {@code el_progress}; {@code StartFrom.head()} is
  * resolved when the row is created and ignored for an existing row; a changed filter digest warns and continues; a page
  * source on another database is refused; the tenant filter, per-subscription error settings and the status snapshot
  */

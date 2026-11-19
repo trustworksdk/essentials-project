@@ -22,7 +22,7 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Phase 3 §3.2: the prefix {@code P}, the run-length runs above it, their pruning, and the dedupe rule.
+ * The prefix {@code P}, the run-length runs above it, their pruning, and the dedupe rule.
  */
 class HandledSetTest {
     @Test

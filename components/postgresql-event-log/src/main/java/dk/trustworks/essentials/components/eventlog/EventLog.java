@@ -28,8 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * The new PostgreSQL event store engine's facade: append and stream load (design
- * {@code docs/archive/event-store-engine-phase2.md} §3.1, §3.2). Subscriptions are added by later units of phase 2.
+ * The new PostgreSQL event store engine's facade: append, stream load and subscriptions.
  * <p>
  * Appends run on the caller's {@link Connection}, which the engine never commits: they join the caller's transaction.
  * One statement per aggregate; statements of the same shape go out as one pgjdbc batch. Each statement takes
@@ -55,17 +54,17 @@ public final class EventLog {
     private volatile boolean                                          started;
     private final EventTypeIndex                                      eventTypeIndex;
     private final EventTypeIndex                                      tenantIndex;
-    /** The database's shared catch-up permits (phase 5 §4), and this event log's own for the per-event-log mutant */
+    /** The database's shared catch-up permits, and this event log's own for the per-event-log mutant */
     private volatile CatchUpPermits                                   permits;
     private volatile CatchUpPermits                                   ownPermits;
-    /** This event log's id in wake payloads (phase 6 §3.1): a listener drops its own instance's notifications */
+    /** This event log's id in wake payloads: a listener drops its own instance's notifications */
     private final String                                              instance;
-    /** Tier 1 (phase 6 §3); both {@code null} without {@link EventLogSettings#crossJvmWakeUp()} */
+    /** Tier 1; both {@code null} without {@link EventLogSettings#crossJvmWakeUp()} */
     private final WakeNotifier                                        notifier;
     private final WakeListener                                        listener;
     /** The mutants and hooks of the notifier and listener; for tests */
     private volatile TestSeams                                        wakeSeams      = TestSeams.NONE;
-    /** Phase 7: the lease keeper of this event log's exclusive subscriptions, and its mutants and hooks (tests) */
+    /** The lease keeper of this event log's exclusive subscriptions, and its mutants and hooks (tests) */
     private final LeaseKeeper                                         leaseKeeper;
     private final EventLogCommitCallback                              commitCallback = new EventLogCommitCallback(this);
     private volatile TestSeams                                        leaseSeams     = TestSeams.NONE;
@@ -78,7 +77,7 @@ public final class EventLog {
 
     /**
      * @param createsSchema whether the engine creates the schema (schema mode {@code create}): the opt-in event-type
-     *                      index is built only then (phase 5 §5.2)
+     *                      index is built only then
      */
     EventLog(DataSource dataSource, SchemaOwnership schemaOwnership, EventLogSchema.AggregateTypeDdlExecutor ddl, EventLogSettings settings, EventLogObserver observer,
              java.util.function.BooleanSupplier createsSchema) {
@@ -111,7 +110,7 @@ public final class EventLog {
         }
     }
 
-    /** A random 8-character id (phase 6 §3.1) */
+    /** A random 8-character id */
     private static String newInstanceId() {
         var chars  = "abcdefghijklmnopqrstuvwxyz0123456789";
         var random = java.util.concurrent.ThreadLocalRandom.current();
@@ -142,7 +141,7 @@ public final class EventLog {
         this.wakeSeams = requireNonNull(seams, "No seams provided");
     }
 
-    /** Set the lease keeper's mutants and hooks (phase 7 §9); package-private, for tests */
+    /** Set the lease keeper's mutants and hooks; package-private, for tests */
     void leaseSeams(TestSeams seams) {
         this.leaseSeams = requireNonNull(seams, "No seams provided");
     }
@@ -152,7 +151,7 @@ public final class EventLog {
         return leaseKeeper;
     }
 
-    /** This event log's {@code lease_owner} (phase 7 §2.1): {@code [<nodeName>/]<instance>}, new on every event log */
+    /** This event log's {@code lease_owner}: {@code [<nodeName>/]<instance>}, new on every event log */
     String leaseOwner() {
         return leaseKeeper.owner();
     }
@@ -185,7 +184,7 @@ public final class EventLog {
     }
 
     /**
-     * §4.3: a cap at or above the pool size does nothing; Hikari's maximum pool size is read reflectively, if present
+     * A cap at or above the pool size does nothing; Hikari's maximum pool size is read reflectively, if present
      */
     private void warnIfPermitsReachPool() {
         try {
@@ -232,7 +231,7 @@ public final class EventLog {
     }
 
     /**
-     * Start a subscription (design phase 8 §2.5). A {@link PeriodicHandler} gets one event at a time and the resume point is
+     * Start a subscription. A {@link PeriodicHandler} gets one event at a time and the resume point is
      * saved periodically; a {@link PageHandler} gets pages in transactions from {@link PageTransactionSource#engine()}, each
      * of which moves the resume point as its last statement. An existing progress row resumes from its stored point; a
      * new one starts at {@link SubscriptionDefinition#startFrom()}. An exclusive subscription returns at once, possibly as
@@ -264,7 +263,7 @@ public final class EventLog {
     }
 
     /**
-     * Start an in-transaction subscription whose page transactions come from {@code source} (design phase 8 §2.4): the
+     * Start an in-transaction subscription whose page transactions come from {@code source}: the
      * handler's writes, the parked rows and the progress update commit together through it. The source must give
      * connections to this event log's database.
      *
@@ -283,7 +282,7 @@ public final class EventLog {
 
     /**
      * The package-private spec of a definition: the seams-free path every test seam path shares. The tenant filter goes
-     * into the spec beside the event-type filter (phase 8 §15 question 7): in SQL on catch-up and bridge reads, in memory
+     * into the spec beside the event-type filter: in SQL on catch-up and bridge reads, in memory
      * on live batches; an event of another tenant counts as handled without reaching the handler
      */
     static Subscription.SubscriptionSpec spec(SubscriptionDefinition definition, PeriodicHandler periodic, PageHandler page, PageTransactionSource source) {
@@ -298,7 +297,7 @@ public final class EventLog {
                                                  definition.errors().orElse(null), definition.filterDigest(), fromHead, tenant);
     }
 
-    /** §2.4: a source on another database would make the page's progress non-atomic with its output */
+    /** A source on another database would make the page's progress non-atomic with its output */
     private void requireSameDatabase(PageTransactionSource source) throws SQLException {
         var open = source.begin();
         String theirs;
@@ -327,7 +326,7 @@ public final class EventLog {
     }
 
     /**
-     * Foundation's unit-of-work callback that calls {@link #afterCommit(Collection)} after a commit (design phase 8 §2.8):
+     * Foundation's unit-of-work callback that calls {@link #afterCommit(Collection)} after a commit:
      * register it on a unit of work with the aggregate types it appended to as the associated resources
      *
      * @return this event log's commit callback
@@ -337,7 +336,7 @@ public final class EventLog {
     }
 
     /**
-     * The admin operations (design phase 8 §4): listing, parked rows, reset, retry and discard from any node, retired
+     * The admin operations: listing, parked rows, reset, retry and discard from any node, retired
      * instances
      *
      * @return this event log's admin facade
@@ -347,15 +346,14 @@ public final class EventLog {
         return admin;
     }
 
-    /** The admin facade's mutants (phase 8 §9.3); for tests */
+    /** The admin facade's mutants; for tests */
     void adminSeams(TestSeams seams) {
         this.adminSeams = requireNonNull(seams, "No seams provided");
     }
 
     /**
-     * Reset a subscription to {@code resumeFrom}: bump its reset epoch and delete its parked rows in one transaction
-     * (design phase 4 §4.5). A running subscription notices at its next save or page. Package-private until phase 8's
-     * reset API.
+     * Reset a subscription to {@code resumeFrom}: bump its reset epoch and delete its parked rows in one transaction. A
+     * running subscription notices at its next save or page.
      *
      * @return whether the progress row existed
      */
@@ -410,7 +408,7 @@ public final class EventLog {
         return eventTypeIndex;
     }
 
-    /** The opt-in tenant index (phase 8 §15 question 7), for tests */
+    /** The opt-in tenant index, for tests */
     EventTypeIndex tenantIndex() {
         return tenantIndex;
     }
@@ -437,8 +435,8 @@ public final class EventLog {
      * Idempotent. The table is verified - identity {@code CACHE 1}, the registry row maps back to this aggregate type -
      * now if it exists, otherwise before its first append or load.
      * <p>
-     * A type whose move from the old event store is still being copied ({@code el_migration} state {@code COPYING},
-     * design phase 9 §3.8) is refused: this node's reader would take the copied rows appearing below its watermark as
+     * A type whose move from the old event store is still being copied ({@code el_migration} state {@code COPYING}) is
+     * refused: this node's reader would take the copied rows appearing below its watermark as
      * retired holes, and its appends would draw values a later copy epoch collides with. Register it after the cut-over.
      *
      * @return the aggregate type's validated names
@@ -478,8 +476,8 @@ public final class EventLog {
     }
 
     /**
-     * The registration guard (phase 9 §3.8): one primary-key read of {@code el_migration}. A schema without the table
-     * (one created before phase 9 and not upgraded, under a validating harness) has had no migration written to it
+     * The registration guard: one primary-key read of {@code el_migration}. A schema without the table
+     * (an older schema not yet upgraded, under a validating harness) has had no migration written to it
      */
     private void refuseWhileCopying(String aggregateType) throws SQLException {
         try (var connection = dataSource.getConnection();
@@ -510,7 +508,7 @@ public final class EventLog {
 
     /**
      * Append the events of several streams - of one or several aggregate types - on the caller's connection, in the
-     * caller's transaction (design §3.1, plan §5.2). New event types are registered first, each in its own committed
+     * caller's transaction. New event types are registered first, each in its own committed
      * transaction on the engine's {@code DataSource}.
      *
      * @return one result per request, in request order
@@ -572,7 +570,7 @@ public final class EventLog {
                     var request = append.request;
                     var rows    = counts[i];
                     if (rows == 0) {
-                        // No read of the stream's actual version: it would cost a loser one more round trip (phase 8 §18.5)
+                        // No read of the stream's actual version: it would cost a loser one more round trip
                         conflicts.add(new StreamAppendConflictException(request.aggregateType(), request.aggregateId(), request.expectedEventOrder(), null));
                         continue;
                     }
@@ -669,13 +667,15 @@ public final class EventLog {
     }
 
     /**
-     * Tell the engine that a transaction which appended to {@code aggregateTypes} has committed (design phase 6 §2.2):
+     * Tell the engine that a transaction which appended to {@code aggregateTypes} has committed:
      * each type active in this event log's reader is woken, so its subscriptions see the commit at once instead of
      * within the backstop interval; with {@link EventLogSettings#crossJvmWakeUp()} each registered type is also sent, coalesced,
-     * as one {@code NOTIFY} on a borrowed connection, waking other event logs' readers (tier 1, §3). Call it after {@code commit()} returns; with foundation's {@code UnitOfWork} the
+     * as one {@code NOTIFY} on a borrowed connection, waking other event logs' readers (tier 1). Call it after
+     * {@code commit()} returns; with foundation's {@code UnitOfWork} the
      * engine's commit callback does it. A hint, never a statement of fact: a call before the commit, or for a
      * transaction that rolled back, costs one read; no call costs latency up to the backstop interval, never an event
-     * (I7). Never blocks and never throws for an unknown or inactive type. An application that appends on a connection it commits
+     * (I7; see docs/design/event-log.md §11). Never blocks and never throws for an unknown or inactive type. An
+     * application that appends on a connection it commits
      * itself calls it; with foundation's {@code UnitOfWork}, register {@link #commitCallback()} instead.
      *
      * @param aggregateTypes the aggregate types the committed transaction appended to
@@ -699,7 +699,7 @@ public final class EventLog {
 
     /**
      * Load a stream's events with {@code fromEventOrder <= event_order <= toEventOrder}, in event order, on the caller's
-     * connection (design §3.2).
+     * connection.
      */
     public List<StoredEvent> loadStream(Connection connection, String aggregateType, String aggregateId, long fromEventOrder, long toEventOrder) throws SQLException {
         requireNonNull(connection, "No connection provided");
@@ -745,7 +745,7 @@ public final class EventLog {
         }
     }
 
-    // ---- phase 8 unit 8b-A: the reads the EventStore adapter needs (§5.2) ----
+    // ---- the reads the EventStore adapter needs ----
 
     /**
      * The last event of a stream (the adapter's {@code loadLastPersistedEventRelatedTo}): one row, read backwards on the
@@ -951,7 +951,7 @@ public final class EventLog {
     /**
      * The events caused by an event (the adapter's {@code loadEventsCausedBy}): one statement per aggregate type
      * registered with this event log, each on the partial {@code caused_by_event_id} index the schema creates with
-     * the event table (§14 question 8), on the caller's connection.
+     * the event table, on the caller's connection.
      *
      * @return the events whose {@code caused_by_event_id} is {@code causedByEventId}: aggregate types by event table
      * name, each in global order; empty if none

@@ -22,7 +22,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.*;
 
-/** Design phase 8 §2.2, §6: the definition's validation, defaults and filter digest */
+/** The definition's validation, defaults and filter digest */
 class SubscriptionDefinitionTest {
     @Test
     void defaults() {

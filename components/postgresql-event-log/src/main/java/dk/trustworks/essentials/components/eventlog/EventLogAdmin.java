@@ -19,7 +19,7 @@ import java.sql.*;
 import java.util.*;
 
 /**
- * The engine's admin operations (design {@code docs/archive/event-store-engine-phase8.md} §4), reached through
+ * The engine's admin operations, reached through
  * {@link EventLog#admin()}. Every operation works from the database, so it can be called on any node, whether or not
  * that node runs the subscription. Each call borrows one connection from the event log's {@code DataSource} (except
  * {@link #reset(ProgressKey, long, Connection)} and {@link #importProgress}, which run on the caller's) and runs one to three statements.
@@ -38,7 +38,7 @@ public interface EventLogAdmin {
     ParkedPage parked(ProgressKey key, long afterGlobalOrder, int limit) throws SQLException;
 
     /**
-     * Reset the subscription to {@code resumeFrom} (§4.2): bump its reset epoch and delete its parked rows (requests
+     * Reset the subscription to {@code resumeFrom}: bump its reset epoch and delete its parked rows (requests
      * included) in one transaction. The lease columns are not touched. A subscription running anywhere notices at its next
      * save or page and repositions.
      *
@@ -49,12 +49,12 @@ public interface EventLogAdmin {
     /**
      * {@link #reset(ProgressKey, long)} on the caller's transaction, which is neither committed nor rolled back here: a
      * {@code CONTIGUOUS} rebuild truncates its view and resets in one commit, so the view matches its resume point at
-     * every point (§4.2, §10.3). Must be a connection to this event log's database.
+     * every point. Must be a connection to this event log's database.
      */
     boolean reset(ProgressKey key, long resumeFrom, Connection connection) throws SQLException;
 
     /**
-     * Retry the parked head at {@code head} (§4.3): the request is stored on the head's row; if this node runs the
+     * Retry the parked head at {@code head}: the request is stored on the head's row; if this node runs the
      * subscription and owns it, it serves it at once ({@link ParkedRequestResult#DONE} or {@link ParkedRequestResult#FAILED}
      * if it did so within the parked-check interval), else the node that runs it serves it at its next parked check
      * ({@link ParkedRequestResult#ACCEPTED}). A request waits until some node runs the subscription; a reset deletes it.
@@ -65,7 +65,7 @@ public interface EventLogAdmin {
     ParkedRequestResult discardParked(ProgressKey key, long head) throws SQLException;
 
     /**
-     * Delete the row of a retired instance and its parked rows (plan §19 item 17): only a per-instance (non-exclusive) row,
+     * Delete the row of a retired instance and its parked rows: only a per-instance (non-exclusive) row,
      * never one this event log runs. An instance that runs on another node finds its row gone at its next save.
      *
      * @return whether a row was deleted
@@ -73,7 +73,7 @@ public interface EventLogAdmin {
     boolean deleteRetiredInstance(ProgressKey key) throws SQLException;
 
     /**
-     * Write an imported resume point (design {@code docs/archive/event-store-engine-phase9.md} §4.3), for the migration
+     * Write an imported resume point, for the migration
      * from the old event store: insert the progress row of {@code definition} under {@code instanceName} with the
      * definition's consistency mode, exclusive flag and filter digest, {@code model}, {@code resume_from = resumeFrom},
      * reset epoch 0 and no lease, so the first claim takes it. Runs on the caller's transaction, which is neither committed

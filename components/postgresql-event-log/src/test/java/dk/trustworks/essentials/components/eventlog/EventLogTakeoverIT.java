@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Multi-JVM takeovers with in-JVM event logs (design phase 7 §9.4): each node is an {@link EventLog} on its own
+ * Multi-JVM takeovers with in-JVM event logs: each node is an {@link EventLog} on its own
  * {@code DataSource} running one periodic {@code FRESH} and one in-transaction {@code CONTIGUOUS} exclusive subscription;
  * a writer on a third event log appends throughout. The forked-JVM family is {@code EventLogForkedTakeoverIT}.
  */

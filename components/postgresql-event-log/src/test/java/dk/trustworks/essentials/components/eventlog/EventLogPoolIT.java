@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Phase 3 §2.4, §4.2: the reader loop (and, phase 6 §3.4, the wake listener) holds one connection per {@link EventLog} while any
+ * The reader loop (and, the wake listener) holds one connection per {@link EventLog} while any
  * subscription exists and none otherwise; a subscription holds none. Twenty subscriptions on a pool of three deliver everything; stopping them all
  * leaves no active connection and ends the loop; a new subscription starts the reader again, at the head. Resource
  * assertions, no mutant.
@@ -73,7 +73,7 @@ class EventLogPoolIT extends AbstractSubscriptionIT {
             assertThat(perAggregateOrderViolations(recorder.delivered)).isEmpty();
         }
         awaitTrue(() -> subscriptions.stream().allMatch(Subscription::isIdle));
-        // Phase 6 §3.4: the reader loop and the wake listener each hold one while any subscription exists
+        // The reader loop and the wake listener each hold one while any subscription exists
         await().atMost(WAIT).until(() -> pool.getHikariPoolMXBean().getActiveConnections() == 2);
         assertThat(pool.getHikariPoolMXBean().getActiveConnections()).as("only the reader loop and the wake listener hold a connection while idle").isEqualTo(2);
 

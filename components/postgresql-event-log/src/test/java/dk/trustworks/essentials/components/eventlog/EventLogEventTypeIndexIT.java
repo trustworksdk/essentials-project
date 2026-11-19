@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Phase 5 §5, §7.3: the opt-in {@code (event_type, global_order)} index is built concurrently on an existing table while
+ * The opt-in {@code (event_type, global_order)} index is built concurrently on an existing table while
  * appends run, an invalid one (a cancelled build) is dropped and rebuilt, and where the engine does not create the
  * schema nothing is built and the warning names the statement. Validity is read from {@code pg_index}. Data sizes scale
  * up with {@code -Dbenchmark.run=true}.

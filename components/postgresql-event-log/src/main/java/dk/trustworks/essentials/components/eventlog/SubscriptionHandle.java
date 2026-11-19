@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.eventlog;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * A running subscription (design phase 8 §2.5), returned by {@link EventLog#subscribe}
+ * A running subscription, returned by {@link EventLog#subscribe}
  */
 public interface SubscriptionHandle {
     /** @return what was subscribed */

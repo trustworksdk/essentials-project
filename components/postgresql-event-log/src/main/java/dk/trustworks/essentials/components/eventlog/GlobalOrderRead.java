@@ -20,7 +20,7 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * A read of one aggregate type's events by global order (phase 8 §5.2, the {@code EventStore} adapter's
+ * A read of one aggregate type's events by global order (the {@code EventStore} adapter's
  * {@code loadEventsByGlobalOrder}): the inclusive range {@code [fromInclusive, toInclusive]}, plus any
  * {@code additionalGlobalOrders} outside it, optionally narrowed to some event types and a tenant. Read with
  * {@link EventLog#loadByGlobalOrder(java.sql.Connection, GlobalOrderRead)} or {@link EventLog#loadByGlobalOrder(GlobalOrderRead)}.

@@ -16,7 +16,7 @@
 package dk.trustworks.essentials.components.eventlog;
 
 /**
- * Where a subscription whose progress row does not exist yet starts (design phase 8 §2.2). An existing row always
+ * Where a subscription whose progress row does not exist yet starts. An existing row always
  * resumes from its stored point.
  */
 public sealed interface StartFrom permits StartFrom.Head, StartFrom.GlobalOrder {
@@ -28,7 +28,7 @@ public sealed interface StartFrom permits StartFrom.Head, StartFrom.GlobalOrder 
 
     /**
      * @return the event log's head when the progress row is created: {@code max(global_order) + 1} of the aggregate
-     * type's event table, resolved in the statement that creates the row (decision 13)
+     * type's event table, resolved in the statement that creates the row
      */
     static StartFrom head() {
         return Head.INSTANCE;

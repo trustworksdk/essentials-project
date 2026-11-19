@@ -26,7 +26,7 @@ import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * I3, plan §16: <i>"A resume point never passes an order that could still be delivered"</i>.
+ * I3: <i>"A resume point never passes an order that could still be delivered"</i>.
  * <p>
  * A crash - the reader's backend terminated and the subscription stopped without a final save - between delivery
  * and handling, behind a long writer, between a candidate's retirement and its hole read, and while a restarted
@@ -93,7 +93,7 @@ class EventLogResumePointIT extends AbstractSubscriptionIT {
      * The retiring probe is held inside its scan (after its snapshot) while the hole's writer commits, so the probe
      * cannot see the late row, yet its running set no longer holds the writer: the candidate retires and only the hole
      * read can deliver the row. The loop is held in that window until the subscription has worked through (and saved)
-     * everything it received, then the subscription crashes. Phase 3: the save runs on the subscription's own thread,
+     * everything it received, then the subscription crashes. The save runs on the subscription's own thread,
      * and the mutant offers the moved watermark to the inbox before the hole read; the shared loop is released after
      * the crash so the next incarnation has a reader.
      */
@@ -136,7 +136,7 @@ class EventLogResumePointIT extends AbstractSubscriptionIT {
     }
 
     /**
-     * Phase 3 §3.2: the handler blocks on {@code g1}; the loop reads {@code g2} - the reader's state already has the
+     * The handler blocks on {@code g1}; the loop reads {@code g2} - the reader's state already has the
      * moved watermark - and is held at {@code afterReadBeforePublish}. The handler is released, the subscription saves
      * on its own thread, and crashes before the loop offers {@code g2}.
      */
@@ -187,7 +187,7 @@ class EventLogResumePointIT extends AbstractSubscriptionIT {
         awaitTrue(() -> unchecked(() -> savedResumeFrom("sub")) == held.globalOrder());
         crash(s1);
         // Restarted while the writer still runs: the initial candidate covers the head, the watermark is unknown
-        // Phase 3: the subscription waits for the watermark and reads nothing; the mutant catches up above it
+        // The subscription waits for the watermark and reads nothing; the mutant catches up above it
         var r2 = new Recorder();
         var s2 = subscribe("sub", r2, mutants);
         awaitTrue(s2::isIdle);

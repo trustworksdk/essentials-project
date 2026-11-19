@@ -32,8 +32,8 @@ import java.util.function.BooleanSupplier;
 import java.util.logging.Logger;
 
 /**
- * Phase 3, unit C of {@code docs/archive/event-store-engine-phase3.md}: the measurements behind the phase-3 gate (§5.4,
- * predictions §4.3). The reader is one shared loop per {@link EventLog} (one thread, one held connection); a
+ * The measurements behind the subscription design. The reader is one shared loop per {@link EventLog} (one
+ * thread, one held connection); a
  * subscription holds no connection and borrows one only for catch-up, bridge and progress statements.
  * <ul>
  *     <li>{@link #idle()}: 100 seeded events, no writes; 1, 10 and 50 {@code FRESH} subscriptions on one aggregate
@@ -41,8 +41,8 @@ import java.util.logging.Logger;
  *     <li>{@link #steady()}: P0.0's steady shape ({@code CurrentEngineBaselineSpikeIT} in
  *     {@code postgresql-event-store}): one writer appending one event to a new aggregate per unit of work without an
  *     expected order at 10 and 100 events/s, 10 s warm-up, 60 s window, 10 subscriptions. Gate: reader statements per
- *     delivered event at or below today's engine with 10 subscriptions (phase-2 §6.1: 6.79-6.91 at 10 ev/s, 1.04 at 100
- *     ev/s), plus commit-to-handle latency.</li>
+ *     delivered event at or below today's engine with 10 subscriptions (6.79-6.91 at 10 ev/s, 1.04 at 100 ev/s), plus
+ *     commit-to-handle latency.</li>
  *     <li>Both run at the default backstop (1 s) and P0.0's polling interval (100 ms), and with two reader pools: phase
  *     2's sizing (subscriptions + 10) and 4. Every {@code getConnection()} on the reader pool is timed; the maximum wait
  *     in the window and over the whole run (start-up and catch-up included) is reported. Gate: no wait above 1 s.</li>
@@ -61,7 +61,7 @@ import java.util.logging.Logger;
  * {@code -Dspike.gate.backstops} (ms, "1000,100"), {@code -Dspike.gate.readerPools} ("0,4"; 0 = subscriptions + 10),
  * {@code -Dspike.eventlog.image}; external server as {@link SpikeDb}.
  * <p>
- * Phase 4, unit C of {@code docs/archive/event-store-engine-phase4.md} (§9), suite {@code p4-gate}:
+ * Suite {@code p4-gate}:
  * <ul>
  *     <li>{@link #projectionThroughput()}: P0.13's projection shape on the new engine; baseline {@code FRESH} + periodic
  *     with a per-event autocommit upsert, arms {@code CONTIGUOUS} + in-transaction row by row (page 10, 100), JDBC batch
@@ -76,20 +76,21 @@ import java.util.logging.Logger;
  * {@code -Dspike.gate.projections} ("1,4"), {@code -Dspike.gate.projectionArms} (all), {@code -Dspike.gate.latencyWriters}
  * ("1,4"). Suite {@code p3-gate} runs only {@link #steady()}, {@link #idle()} and {@link #reattachChurn()}.
  * <p>
- * Phase 5, unit C of {@code docs/archive/event-store-engine-phase5.md} (§8), suite {@code p5-gate}: {@link #rareTypeCatchUp()}
- * (§8.1, with the density sweep, index size and append cost), {@link #restartStorm()} (§8.2, catch-up permits from
- * {@code -Dspike.gate.stormPermits}, "4,50,2,8") and {@link #freshAfterRestart()} (§8.3). Results
+ * Suite {@code p5-gate}:
+ * {@link #rareTypeCatchUp()}
+ * (with the density sweep, index size and append cost), {@link #restartStorm()} (catch-up permits from
+ * {@code -Dspike.gate.stormPermits}, "4, 50, 2, 8") and {@link #freshAfterRestart()}. Results
  * {@code target/spike-results/p5-c-*.txt}. Knobs: {@code -Dspike.gate.rareEvents} (1000000), {@code -Dspike.gate.densities}
  * ("1,5,25,50"), {@code -Dspike.gate.stormEvents} (100000).
  * <p>
- * Phase 7, unit C of {@code docs/archive/event-store-engine-phase7.md} (§10), suite {@code p7-gate}: {@link #takeoverTime()}
- * (§10.1, a forked {@code LeaseOwnerProcess} owner and an in-JVM standby), {@link #renewalCost()} (§10.2) and
- * {@link #leaseUnaffected()} (§10.3). Results {@code target/spike-results/p7-c-*.txt}. Knobs:
+ * Suite {@code p7-gate}: {@link #takeoverTime()}
+ * (a forked {@code LeaseOwnerProcess} owner and an in-JVM standby), {@link #renewalCost()} and
+ * {@link #leaseUnaffected()}. Results {@code target/spike-results/p7-c-*.txt}. Knobs:
  * {@code -Dspike.gate.p7Repetitions} (20), {@code -Dspike.gate.p7Shapes} ("CRASH,PAUSE,GRACEFUL"),
  * {@code -Dspike.gate.p7PauseSeconds} (30), {@code -Dspike.gate.p7Leases} ("1,10,100,1000"),
  * {@code -Dspike.gate.p7IdleSeconds} (300).
  * <p>
- * Phase 2's {@code eventIdIndex} and {@code probeBackoff} measurements (suite {@code p2-gate}, results in phase-2 §6)
+ * The {@code eventIdIndex} and {@code probeBackoff} measurements (suite {@code p2-gate})
  * were retired with this change: the probe topology (one reader per subscription) no longer exists. They are at commit
  * {@code 13184d080}.
  * <p>
@@ -296,9 +297,9 @@ class EventLogGateSpikeIT {
         }
     }
 
-    // ================================================================== phase 4, unit C (suite p4-gate)
+    // ================================================================== suite p4-gate
 
-    /** The arms of the projection-throughput row (phase 4 §9) */
+    /** The arms of the projection-throughput row */
     enum ProjectionArm {
         /** Baseline: FRESH + PERIODIC, a per-event handler upserting in its own autocommit transaction, 1 s save */
         PERIODIC(0),
@@ -407,7 +408,7 @@ class EventLogGateSpikeIT {
     }
 
     /**
-     * Row 1 of phase 4 §9, P0.13's shape on the new engine: {@code PROJECTION_EVENTS} seeded events over a tenth as many
+     * Row 1, P0.13's shape on the new engine: {@code PROJECTION_EVENTS} seeded events over a tenth as many
      * interleaved aggregates (payload about 200 B), one pre-populated view table per projection, every write an upsert
      * that updates. Each projection starts from 1 and is timed from {@code subscribe} until its last event is applied.
      * Reader pool projections + 2; the baseline's handler connections are dedicated connections from the writer pool.
@@ -626,7 +627,7 @@ class EventLogGateSpikeIT {
     }
 
     /**
-     * Row 3: phase-3 §7.4's churn shape (one subscription, 50 ms per event, 100 ev/s, reader pool 4, a long writer
+     * Row 3: the churn shape (one subscription, 50 ms per event, 100 ev/s, reader pool 4, a long writer
      * holding a value below the head) for 60 s and 300 s, once CONTIGUOUS (in-transaction, row by row) and once FRESH
      * (periodic). After the window the long writer commits and the next 10 s show the deferred bridge.
      */
@@ -703,8 +704,8 @@ class EventLogGateSpikeIT {
     }
 
     /**
-     * Row 4: phase-3 §7.2's steady shape with 10 subscriptions, half FRESH (periodic, empty handler), half CONTIGUOUS
-     * (in-transaction, empty page handler). Reader statements per delivered event against phase-3 §7.2.
+     * Row 4: the steady shape with 10 subscriptions, half FRESH (periodic, empty handler), half CONTIGUOUS
+     * (in-transaction, empty page handler). Reader statements per delivered event.
      */
     @Test
     void mixedStatements() throws Exception {
@@ -792,7 +793,7 @@ class EventLogGateSpikeIT {
         }
     }
 
-    // ================================================================== phase 5, unit C (suite p5-gate)
+    // ================================================================== suite p5-gate
 
     private static final String        P5_RARE       = "p5-c-rare.txt";
     private static final String        P5_STORM      = "p5-c-storm.txt";
@@ -813,16 +814,16 @@ class EventLogGateSpikeIT {
         return (k + 1) * density / 100 > k * density / 100;
     }
 
-    /** The arms of phase 5 §8.1 (the filtered read without the window needs a main-code switch: not measured) */
+    /** The arms (the filtered read without the window needs a main-code switch: not measured) */
     enum RareArm {
-        /** Reference: phase 4's path, {@code EventTypeFilter.all()}, the handler ignores the other types */
+        /** Reference: the unfiltered path, {@code EventTypeFilter.all()}, the handler ignores the other types */
         UNFILTERED,
         FILTERED,
         FILTERED_INDEX
     }
 
     /**
-     * Phase 5 §8.1: {@code RARE_EVENTS} seeded events on one aggregate type over 100 event types and a tenth as many
+     * {@code RARE_EVENTS} seeded events on one aggregate type over 100 event types and a tenth as many
      * aggregates, payload about 200 B; the subscribed type is {@code density} % of them. One FRESH subscription from 1 with
      * an empty handler, timed until it attaches: with no writes the watermark is the head, so attaching means its catch-up
      * passed the head. Then a density sweep with the index, and the append cost with and without the index.
@@ -953,7 +954,7 @@ class EventLogGateSpikeIT {
     }
 
     /**
-     * Phase 5 §8.2: {@code STORM_EVENTS} seeded events (20 types), 8 writers at 25 events/s each (one event per unit of
+     * {@code STORM_EVENTS} seeded events (20 types), 8 writers at 25 events/s each (one event per unit of
      * work), after 10 s 50 subscriptions start at once from 1: 25 FRESH periodic and 25 CONTIGUOUS in-transaction, half of
      * each filtered to 2 of the 20 types. Engine and writers share ONE pool of 10 (one role). Measured until every
      * subscription has attached, plus 10 s. A probe connection samples {@code pg_stat_activity} every 5 ms.
@@ -1080,7 +1081,7 @@ class EventLogGateSpikeIT {
     }
 
     /**
-     * Phase 5 §8.3 (recorded, not gated): one FRESH subscription at 100 ev/s, live; a writer holds a value for 60 s; 10 s
+     * Recorded, not gated: one FRESH subscription at 100 ev/s, live; a writer holds a value for 60 s; 10 s
      * into it the reader restarts (every backend of the reader role is terminated, the loop's held connection among them).
      * Records the time from the restart to the first delivery, the bridge statements and rows, and the gaps handed off.
      */
@@ -1149,7 +1150,7 @@ class EventLogGateSpikeIT {
     }
 
 
-    // ------------------------------------------------------------------ phase 6, unit C (design phase 6 §7)
+    // ------------------------------------------------------------------ suite p6-gate
 
     private static final String        P6_LATENCY  = "p6-c-latency.txt";
     private static final String        P6_NOTIFY   = "p6-c-notify.txt";
@@ -1206,9 +1207,9 @@ class EventLogGateSpikeIT {
     }
 
     /**
-     * §7.1 latency and §7.4 (arm {@code LOST}): one writer at 1, 10 and 100 ev/s, one event per unit of work to a new
+     * Latency and loss (arm {@code LOST}): one writer at 1, 10 and 100 ev/s, one event per unit of work to a new
      * aggregate; 10 subscriptions (5 FRESH periodic, 5 CONTIGUOUS in-transaction). Arms: {@code BACKSTOP_1000},
-     * {@code BACKSTOP_100} (phase 5: no cross-JVM wake-up, no {@code afterCommit}); {@code TIER2} (same engine,
+     * {@code BACKSTOP_100} (no cross-JVM wake-up, no {@code afterCommit}); {@code TIER2} (same engine,
      * {@code afterCommit}, listener off); {@code TIER1} (writer engine W on the writer role, subscriptions in engine S on
      * the reader role, notifier and listener on); {@code TIER12} (10 subscriptions in each engine); {@code LOST} (as
      * TIER1, W's notifier off and no {@code afterCommit}: every notification lost, backstop 1 s); {@code TIER1_FORKED}
@@ -1332,7 +1333,7 @@ class EventLogGateSpikeIT {
     }
 
     /**
-     * §7.2: 1, 8 and 20 writers, one event per unit of work to a new aggregate, 2 s warm-up and an 8 s window, with
+     * 1, 8 and 20 writers, one event per unit of work to a new aggregate, 2 s warm-up and an 8 s window, with
      * {@code fsync} on and off; arms {@code NONE} (no {@code afterCommit}), {@code NOTIFIER} ({@code afterCommit}, the
      * coalesced notifier on the engine's reader-role pool) and {@code DIRECT} (reference: the writer runs
      * {@code pg_notify} on its own connection after commit). A second engine with one subscription listens throughout.
@@ -1444,7 +1445,7 @@ class EventLogGateSpikeIT {
     }
 
     /**
-     * §7.3 and §9 decision 2: 1, 10, 16 and 50 aggregate types, one FRESH subscription each; one writer per type commits
+     * 1, 10, 16 and 50 aggregate types, one FRESH subscription each; one writer per type commits
      * in lockstep ({@code P6_FLUSH_HZ} times a second), then one {@code afterCommit} names every type, so they are woken
      * together. A long writer per type holds one value below its head throughout, so every type keeps a candidate and
      * wants a running set on every read the probe clock allows. Arms: {@code FLUSH} (the engine as built: one flush for
@@ -1567,7 +1568,7 @@ class EventLogGateSpikeIT {
         }
     }
 
-    // ------------------------------------------------------------------ phase 7, unit C (design phase 7 §10)
+    // ------------------------------------------------------------------ suite p7-gate
 
     private static final String        P7_TAKEOVER   = "p7-c-takeover.txt";
     private static final String        P7_RENEWAL    = "p7-c-renewal.txt";
@@ -1581,12 +1582,12 @@ class EventLogGateSpikeIT {
     private static final String        P7_VIEW       = "el_test_view";
     private static final String        P7_LOG        = "el_test_progress_log";
 
-    /** One §10.1 repetition: ms from the kill or stop to the standby's claim and first handled event per model, replays, landed writes */
+    /** One repetition: ms from the kill or stop to the standby's claim and first handled event per model, replays, landed writes */
     record Takeover(double claimMs, double periodicMs, double pagesMs, long periodicReplayed, long pagesRehandled, long pagesDuplicated, long landed, boolean lossSeen) {
     }
 
     /**
-     * §10.1: a forked owner ({@code LeaseOwnerProcess} on the default lease settings: one FRESH periodic and one CONTIGUOUS
+     * A forked owner ({@code LeaseOwnerProcess} on the default lease settings: one FRESH periodic and one CONTIGUOUS
      * in-transaction exclusive subscription) and an in-JVM standby with the same two; a writer here at 100 ev/s. Shapes:
      * {@code CRASH} (SIGKILL), {@code PAUSE} (SIGSTOP for 30 s, then SIGCONT) and {@code GRACEFUL} (standard input
      * closed: the child stops its subscriptions, which releases). Each repetition uses subscriber names of its own and
@@ -1752,7 +1753,7 @@ class EventLogGateSpikeIT {
     }
 
     /**
-     * §10.2: N exclusive FRESH periodic subscriptions owned by one {@link EventLog}, all idle (no events), for 5 min after
+     * N exclusive FRESH periodic subscriptions owned by one {@link EventLog}, all idle (no events), for 5 min after
      * every lease was claimed and a 10 s settle. Recorded: {@code LEASE_RENEW} calls, rows, server mean and max
      * ({@code pg_stat_statements}), the keeper's renewal statement time and connection-borrow time on the client (the
      * borrows of the {@code eventlog-lease} thread), WAL per pass ({@code pg_stat_wal}, the LSN, and the statement's own
@@ -1858,9 +1859,9 @@ class EventLogGateSpikeIT {
     }
 
     /**
-     * §10.3: phase-6 §7.1's steady shape at 100 ev/s (one engine, {@code afterCommit}, tier 1 off: phase 6's
+     * the steady shape at 100 ev/s (one engine, {@code afterCommit}, tier 1 off: the
      * {@code TIER2} arm; 5 FRESH periodic and 5 CONTIGUOUS in-transaction subscriptions, 10 s warm-up, 60 s window),
-     * arms {@code NONEXCLUSIVE} (phase 6 baseline) and {@code EXCLUSIVE}; and phase-6 §7.2's append shape at 8 writers
+     * arms {@code NONEXCLUSIVE} (the baseline) and {@code EXCLUSIVE}; and the append shape at 8 writers
      * with {@code fsync=on} (2 s warm-up, 8 s window, {@code afterCommit} with the default notifier, a second engine with
      * one listening FRESH subscription, non-exclusive or exclusive). {@code pg_stat_activity} is sampled every 5 ms for
      * backends waiting on a heavyweight lock, and those whose statement touches {@code el_progress} are counted apart.
@@ -2071,10 +2072,10 @@ class EventLogGateSpikeIT {
         return settings;
     }
 
-    // ---- phase 6 unit D (§10.8): the coalescing intervals, in ms; absent = the defaults ----
+    // ---- the coalescing intervals, in ms; absent = the defaults ----
     private static final String  WOKEN_READ_MIN  = System.getProperty("spike.gate.p6WokenReadMin");
     private static final String  NOTIFY_SEND_MIN = System.getProperty("spike.gate.p6NotifySendMin");
-    /** {@code on}, {@code off} or {@code on,off} (the default): the fsync settings §7.2 runs */
+    /** {@code on}, {@code off} or {@code on,off} (the default): the fsync settings the append arm runs */
     private static final String  P6_FSYNC        = System.getProperty("spike.gate.p6Fsync", "on,off");
 
     /** A database-name suffix per coalescing setting, so arms with different intervals never share a permit key */
@@ -2084,7 +2085,7 @@ class EventLogGateSpikeIT {
 
     /**
      * One application instance: a writer pool and an event log on a reader pool, as separate roles; or ({@code shared})
-     * one pool of the writer role for both, as an application with one {@code DataSource} runs (phase 5 §8.2)
+     * one pool of the writer role for both, as an application with one {@code DataSource} runs
      */
     private static final class App implements AutoCloseable {
         final HikariDataSource    writerPool;
@@ -2168,7 +2169,7 @@ class EventLogGateSpikeIT {
             return count.get();
         }
 
-        /** Phase 7 §10.2: the borrows of the lease keeper's thread, ns */
+        /** The borrows of the lease keeper's thread, ns */
         final ConcurrentLinkedQueue<Long> leaseBorrows = new ConcurrentLinkedQueue<>();
 
         private Connection timed(long started, Connection connection) {
@@ -2263,7 +2264,7 @@ class EventLogGateSpikeIT {
         private final AtomicLong        handled  = new AtomicLong();
         private final AtomicLong        duplicates = new AtomicLong();
         private volatile boolean        counting   = true;
-        // phase 7: leases
+        // Leases
         final Map<String, Long>                 claimedAt     = new ConcurrentHashMap<>();
         final ConcurrentLinkedQueue<long[]>     renewals      = new ConcurrentLinkedQueue<>(); // owned, renewed, nanos
         final AtomicLong                        renewalFailed = new AtomicLong();
@@ -2294,7 +2295,7 @@ class EventLogGateSpikeIT {
         private          long   pageHandled;
         private volatile long   catchUpPages, catchUpRows, catchUpDropped, bridgePages, bridgeRows, bridgeDropped, batches, batchRows;
 
-        // phase 4: totals that only resetTotals() clears, and the last resume point per subscriber
+        // Totals that only resetTotals() clears, and the last resume point per subscriber
         final         AtomicLong        pagesCommitted = new AtomicLong();
         final         AtomicLong        pageEvents     = new AtomicLong();
         final         AtomicLong        pagesFailed    = new AtomicLong();
@@ -2309,7 +2310,7 @@ class EventLogGateSpikeIT {
         final         AtomicLong        maxHoles       = new AtomicLong();
         final         AtomicLong        totalAttaches  = new AtomicLong();
         private final Map<String, Long> resumeFrom     = new ConcurrentHashMap<>();
-        // phase 5: every subscription, cleared by resetTotals()
+        // Every subscription, cleared by resetTotals()
         final         AtomicLong        permits          = new AtomicLong();
         final         AtomicLong        maxPermitWait    = new AtomicLong();
         final         AtomicLong        maxInUse         = new AtomicLong();
@@ -2323,7 +2324,7 @@ class EventLogGateSpikeIT {
         final         AtomicLong        watermarkWaits   = new AtomicLong();
         final         Map<String, Long> detachReasons    = new ConcurrentHashMap<>();
         private final Map<String, Long> firstAttach      = new ConcurrentHashMap<>();
-        // phase 6: every flush, cleared by resetTotals()
+        // Every flush, cleared by resetTotals()
         final         AtomicLong        flushes            = new AtomicLong();
         final         AtomicLong        multiFlushes       = new AtomicLong();
         final         AtomicLong        flushStatements    = new AtomicLong();

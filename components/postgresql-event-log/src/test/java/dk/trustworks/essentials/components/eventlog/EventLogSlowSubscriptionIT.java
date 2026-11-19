@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * I9, plan §16: <i>"A slow subscription never delays another"</i> (phase 3 §5.1).
+ * I9: <i>"A slow subscription never delays another"</i>.
  * <p>
  * Three subscriptions on one type, 100 ms backstop, a writer at 50 events/s (3 s by default, the plan's 20 s with the
  * opt-in {@code -Dbenchmark.run=true}); one handler blocks on a latch from its second event on. Asserts (a) the other

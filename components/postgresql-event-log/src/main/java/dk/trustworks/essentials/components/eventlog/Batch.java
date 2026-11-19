@@ -20,7 +20,7 @@ import java.util.List;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * One read of the shared tail reader as offered to every attached subscription (design phase 3 §1.1, §2.3): the rows
+ * One read of the shared tail reader as offered to every attached subscription: the rows
  * the read published, in {@code global_order} order, and the reader's watermark after that read. Immutable; the same
  * instance goes to every attached inbox.
  *

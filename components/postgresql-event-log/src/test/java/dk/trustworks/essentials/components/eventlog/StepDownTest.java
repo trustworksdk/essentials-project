@@ -22,7 +22,7 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The step-down schedule (design phase 4 §4.2): halve on a failed page, keep the size inside the suspect range, double
+ * The step-down schedule: halve on a failed page, keep the size inside the suspect range, double
  * after each committed page above it, up to the page size
  */
 class StepDownTest {

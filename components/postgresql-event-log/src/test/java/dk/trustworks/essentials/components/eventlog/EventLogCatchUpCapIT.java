@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Phase 5 §7.2, gate row I15: catch-up and bridge statements of every subscription on one database, across two
+ * I15: catch-up and bridge statements of every subscription on one database, across two
  * {@link EventLog}s with a {@code DataSource} each, are capped by one set of {@code catchUpPermits}. Deterministic: every
  * tested subscription reads through the scan-hold view, so each statement in flight is a backend blocked on the hold
  * and can be counted exactly. A permit is held for one statement only: subscriptions whose handlers block hold none.

@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.eventlog;
 import java.util.*;
 
 /**
- * What one subscription has handled (design phase 3 §3.2): a prefix {@code P} - every existing order at or below it is
+ * What one subscription has handled: a prefix {@code P} - every existing order at or below it is
  * handled - plus a run-length set of the orders handled above {@code P}. Memory only, delivery thread only.
  * <p>
  * Every source of rows goes through one rule: a row at or below {@code P}, or in a run, is dropped as already handled;
@@ -42,7 +42,7 @@ final class HandledSet {
         return prefix;
     }
 
-    /** @return {@code P + 1}, the resume point (§4.7) */
+    /** @return {@code P + 1}, the resume point */
     long resumeFrom() {
         return prefix + 1;
     }
@@ -80,8 +80,8 @@ final class HandledSet {
 
     /**
      * Mark every order in {@code (lowExclusive, highInclusive]} handled except {@code holes} and the ranges of
-     * {@code ranges} (low to high, inclusive): a filtered {@code FRESH} bridge page's covered range (design phase 5
-     * §2.3), where every order the page did not return is non-matching or an attach hole still re-read
+     * {@code ranges} (low to high, inclusive): a filtered {@code FRESH} bridge page's covered range, where every order
+     * the page did not return is non-matching or an attach hole still re-read
      */
     void addRange(long lowExclusive, long highInclusive, SortedSet<Long> holes, SortedMap<Long, Long> ranges) {
         var excluded = new TreeMap<Long, Long>();
@@ -143,7 +143,7 @@ final class HandledSet {
     }
 
     /**
-     * Reposition at {@code newPrefix} and forget the runs: a superseding reset (§3.6), where what was handled no
+     * Reposition at {@code newPrefix} and forget the runs: a superseding reset, where what was handled no
      * longer counts
      */
     void reset(long newPrefix) {
@@ -171,7 +171,7 @@ final class HandledSet {
     }
 
     /**
-     * The unhandled ranges between {@code P} and {@link #highest()} (design phase 4 §5.3): what a {@code FRESH} bridge
+     * The unhandled ranges between {@code P} and {@link #highest()}: what a {@code FRESH} bridge
      * that starts above the highest handled order must re-read on every page
      *
      * @param limit most gaps to return

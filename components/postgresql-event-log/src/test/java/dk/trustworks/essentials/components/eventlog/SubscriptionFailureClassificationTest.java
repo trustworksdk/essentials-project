@@ -26,7 +26,7 @@ import java.util.function.BooleanSupplier;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Design phase 4 §4.1: what a subscription retries indefinitely as the engine's I/O failure, and what it retries
+ * What a subscription retries indefinitely as the engine's I/O failure, and what it retries
  * {@code retryAttempts} times and then parks. Drives {@link Subscription#isEngineFailure} and
  * {@link Subscription#retriesUsedUp} the way the delivery loop does: an engine failure counts no attempt, a handler
  * failure counts one, and the event is parked once its retries are used up. The end-to-end proofs are

@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Tier 1, design phase 6 §3, §6.3: the coalesced {@code NOTIFY} after commit and the per-event-log listener. "Another
+ * Tier 1: the coalesced {@code NOTIFY} after commit and the per-event-log listener. "Another
  * JVM" is a second {@link EventLog} ({@code other}, the writer) on its own {@code DataSource}; the subscriptions run on
  * {@code eventLog}. Backstop 30 s, so only a wake can be fast. Must-fail variants:
  * {@link WatermarkMutant#RECONNECT_WITHOUT_LISTEN}, {@link WatermarkMutant#NO_WAKE_ON_LISTENER_RESTART},

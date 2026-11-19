@@ -22,7 +22,7 @@ import java.util.Set;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The view of a page transaction's connection that a {@link PageHandler} gets (design phase 4 §3.1): the
+ * The view of a page transaction's connection that a {@link PageHandler} gets: the
  * engine owns the transaction, so {@code commit}, {@code rollback()}, {@code setAutoCommit}, {@code close} and
  * {@code abort} throw {@link IllegalStateException}. A handler that committed would split its output from the resume
  * point, which I12 forbids. Savepoints ({@code rollback(Savepoint)} included) and everything else pass through.

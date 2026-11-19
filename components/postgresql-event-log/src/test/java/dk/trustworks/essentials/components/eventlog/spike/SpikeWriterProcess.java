@@ -27,7 +27,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 /**
- * Phase 6 §7.1's forked-JVM check of the "two engines in one JVM" shortcut: the writer engine runs in a child JVM on the
+ * The forked-JVM check of the "two engines in one JVM" shortcut: the writer engine runs in a child JVM on the
  * same classpath, appends one event per unit of work at the given rate, calls {@code afterCommit} (tier 1 on), and
  * prints {@code B <id> <nanoTime>} before and {@code C <id> <nanoTime>} after each commit. {@code System.nanoTime()} is
  * {@code CLOCK_MONOTONIC} on Linux, shared by every process on the host, so the parent compares it with its own. The

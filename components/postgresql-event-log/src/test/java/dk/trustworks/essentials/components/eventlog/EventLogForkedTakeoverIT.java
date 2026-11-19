@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Multi-JVM takeovers with forked JVMs (design phase 7 §9.4): each owner is a {@link LeaseOwnerProcess} child on the
+ * Multi-JVM takeovers with forked JVMs: each owner is a {@link LeaseOwnerProcess} child on the
  * same classpath; a writer in this JVM appends about 50 events a second throughout. Scenarios: a crash (SIGKILL), a
  * pause (SIGSTOP for twice the lease, then SIGCONT), a graceful stop, and repeated connection loss. Opt-in, like the
  * other forked-JVM checks: {@code -Dspike.run=true} (each scenario starts two JVMs and waits out leases).

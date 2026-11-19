@@ -16,7 +16,7 @@
 package dk.trustworks.essentials.components.eventlog;
 
 /**
- * Handles one event; the subscription saves its resume point periodically (design phase 8 §2.3). Returning normally
+ * Handles one event; the subscription saves its resume point periodically. Returning normally
  * marks the event handled; throwing retries it, then parks it ({@link ParkEventException} parks at once).
  */
 @FunctionalInterface

@@ -19,7 +19,7 @@ import java.time.Duration;
 import java.util.Set;
 
 /**
- * Callbacks for metrics and diagnostics of the tail reader and the subscriptions (design §1.2, phase 3 §1.1). Every
+ * Callbacks for metrics and diagnostics of the tail reader and the subscriptions. Every
  * method has a no-op default; implementations must be fast and must not throw - they run on the reader loop's thread
  * or a subscription's delivery thread. A Micrometer binding is a later step.
  */
@@ -36,7 +36,7 @@ public interface EventLogObserver {
      * @param rows                  event rows returned (late commits included)
      * @param outstandingHoles      values or ranges not yet resolved after the read
      * @param outstandingCandidates candidates not yet retired after the read
-     * @param oldestCandidateAge    age of the oldest outstanding candidate, {@link Duration#ZERO} if none (plan §4.6)
+     * @param oldestCandidateAge    age of the oldest outstanding candidate, {@link Duration#ZERO} if none
      */
     default void onRead(String aggregateType, boolean combined, long nanos, int rows, int outstandingHoles, int outstandingCandidates, Duration oldestCandidateAge) {
     }
@@ -63,17 +63,17 @@ public interface EventLogObserver {
     }
 
     /**
-     * A subscription's inbox was attached to its aggregate type's reader (phase 3 §3.4). Reader loop thread.
+     * A subscription's inbox was attached to its aggregate type's reader. Reader loop thread.
      *
      * @param cursor    the reader's cursor {@code C}: the bridge reads up to it
      * @param watermark the reader's watermark {@code W}; {@link Long#MIN_VALUE} for a {@code FRESH} subscription attached
-     *                  while it is unknown, which hands its gaps off after the bridge (design phase 5 §6.3)
+     *                  while it is unknown, which hands its gaps off after the bridge
      */
     default void onAttach(String subscriber, String aggregateType, long cursor, long watermark) {
     }
 
     /**
-     * A subscription detached (phase 3 §3.6) and catches up from {@code resumeFrom}. Delivery thread.
+     * A subscription detached and catches up from {@code resumeFrom}. Delivery thread.
      *
      * @param reason {@code OVERFLOW}, {@code READER_RESTART}, {@code RESET}, {@code STOPPED}, {@code ERROR} or
      *               {@code TOO_MANY_GAPS}
@@ -82,7 +82,7 @@ public interface EventLogObserver {
     }
 
     /**
-     * One catch-up or bridge statement finished (phase 3 §3.3, §3.4). Delivery thread.
+     * One catch-up or bridge statement finished. Delivery thread.
      *
      * @param bridge {@code true} for a bridge page
      * @param rows   rows returned
@@ -100,8 +100,8 @@ public interface EventLogObserver {
     }
 
     /**
-     * A subscription started or stopped waiting because its aggregate type's watermark is unknown (F4, phase 3
-     * decision 2): after a reader (re)start while a writer holds a value below the head. Delivery thread.
+     * A subscription started or stopped waiting because its aggregate type's watermark is unknown (F4): after a reader
+     * (re)start while a writer holds a value below the head. Delivery thread.
      *
      * @param waiting {@code true} when the wait starts, {@code false} when it ends
      * @param heldBy  the {@code backend_xid}s of the reader's initial candidate - the writers the wait is for; empty
@@ -111,7 +111,7 @@ public interface EventLogObserver {
     }
 
     /**
-     * An in-transaction page committed together with its resume point (phase 4 §3.3). Delivery thread.
+     * An in-transaction page committed together with its resume point. Delivery thread.
      *
      * @param size events in the page
      */
@@ -119,7 +119,7 @@ public interface EventLogObserver {
     }
 
     /**
-     * A page transaction rolled back (phase 4 §4). Delivery thread.
+     * A page transaction rolled back. Delivery thread.
      *
      * @param size  events in the page
      * @param cause what failed
@@ -128,7 +128,7 @@ public interface EventLogObserver {
     }
 
     /**
-     * {@code CONTIGUOUS}: rows moved to pending under a received watermark (phase 4 §2.2). Delivery thread.
+     * {@code CONTIGUOUS}: rows moved to pending under a received watermark. Delivery thread.
      *
      * @param rows              rows released
      * @param receivedWatermark the received watermark that covers them
@@ -138,7 +138,7 @@ public interface EventLogObserver {
     }
 
     /**
-     * An event was parked (phase 4 §4.4), or held behind its aggregate's parked head (§4.5); the row is committed.
+     * An event was parked, or held behind its aggregate's parked head; the row is committed.
      * Delivery thread.
      *
      * @param blockedBy the parked head this event is held behind, or {@code null} if it is a head itself
@@ -148,13 +148,13 @@ public interface EventLogObserver {
     }
 
     /**
-     * The number of aggregates held behind a parked head changed, or was loaded at start (phase 4 §4.5). Delivery thread.
+     * The number of aggregates held behind a parked head changed, or was loaded at start. Delivery thread.
      */
     default void onHeldAggregates(String subscriber, String aggregateType, int count) {
     }
 
     /**
-     * A delivery thread acquired a catch-up permit (phase 5 §4). Delivery thread.
+     * A delivery thread acquired a catch-up permit. Delivery thread.
      *
      * @param waitNanos how long it waited for it
      * @param inUse     permits of the database in use after acquiring
@@ -163,7 +163,7 @@ public interface EventLogObserver {
     }
 
     /**
-     * A filtered catch-up, skip-ahead or deferred-bridge read finished (phase 5 §3). Delivery thread.
+     * A filtered catch-up, skip-ahead or deferred-bridge read finished. Delivery thread.
      *
      * @param scannedOrders the orders its range covered
      * @param rows          matching rows returned
@@ -175,7 +175,7 @@ public interface EventLogObserver {
 
     /**
      * A {@code FRESH} subscription attached under an unknown watermark handed the gaps its bridge found below the reader's
-     * cursor to the reader (design phase 5 §6.3). Reader loop thread, at the quiescent point.
+     * cursor to the reader. Reader loop thread, at the quiescent point.
      *
      * @param gaps     single values and ranges handed off
      * @param toReader {@code true} if the reader holds them as holes of its restart's initial candidate; {@code false} if
@@ -186,7 +186,7 @@ public interface EventLogObserver {
     }
 
     /**
-     * The reader loop read its due types (design phase 6 §4.2): one statement for a single type, one pgjdbc flush for
+     * The reader loop read its due types: one statement for a single type, one pgjdbc flush for
      * several, with at most one running set. Reader loop thread.
      *
      * @param aggregateTypes the types read, in flush order
@@ -196,7 +196,7 @@ public interface EventLogObserver {
     default void onFlush(java.util.List<String> aggregateTypes, int statements, long nanos) {
     }
 
-    // ---- phase 7 (design phase 7 §2): leases of exclusive subscriptions ----
+    // ---- leases of exclusive subscriptions ----
 
     /** An exclusive subscription's lease was claimed with {@code fence}; delivery starts. Lease keeper thread */
     default void onLeaseClaimed(String subscriber, String aggregateType, long fence) {
@@ -209,7 +209,7 @@ public interface EventLogObserver {
     default void onLeaseLost(String subscriber, String aggregateType, String reason) {
     }
 
-    /** An owner passed its local deadline without a confirmed renewal and stopped delivering (§2.4). Delivery thread */
+    /** An owner passed its local deadline without a confirmed renewal and stopped delivering. Delivery thread */
     default void onLeaseSuspended(String subscriber, String aggregateType) {
     }
 
@@ -217,7 +217,7 @@ public interface EventLogObserver {
     default void onLeaseResumed(String subscriber, String aggregateType) {
     }
 
-    /** A handler call that started before the local deadline ended {@code nanos} after it (decision 5). Delivery thread */
+    /** A handler call that started before the local deadline ended {@code nanos} after it. Delivery thread */
     default void onLeaseOverrun(String subscriber, String aggregateType, long nanos) {
     }
 

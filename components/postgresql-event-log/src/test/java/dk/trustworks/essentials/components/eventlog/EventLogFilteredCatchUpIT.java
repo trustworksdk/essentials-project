@@ -27,7 +27,8 @@ import java.util.concurrent.atomic.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Phase 5 §7.1 (I13) and §7.3: filtered catch-up. A long writer holds a matching event below the reader's cursor while a
+ * Phase 5 §7.1 (I13; see docs/design/event-log.md §11) and §7.3: filtered catch-up. A long writer holds a matching
+ * event below the reader's cursor while a
  * filtered subscription catches up past it, with the reader running, starting under the writer (F4's wait) and
  * restarted (F4); a type first appended while the catch-up runs; a short page advances to the ceiling; a cancelled read
  * retries with a quarter of the window. Data sizes scale up with {@code -Dbenchmark.run=true}.
@@ -79,7 +80,7 @@ class EventLogFilteredCatchUpIT extends AbstractSubscriptionIT {
     @CsvSource({"FRESH", "CONTIGUOUS"})
     void a_filtered_subscription_behind_a_restarted_reader_gets_the_held_event_once(ConsistencyMode mode) throws Exception {
         assertDeliveredOnce(heldMatchingEvent(mode, false, Shape.READER_RESTARTED, Set.of(), Set.of()));
-        // §6.3: FRESH attaches under the unknown watermark and hands its gaps off before the held event commits;
+        // FRESH attaches under the unknown watermark and hands its gaps off before the held event commits;
         // CONTIGUOUS keeps F4's wait
         if (mode == ConsistencyMode.FRESH) {
             assertThat(reads.handedOffBy).contains("tested");
@@ -148,7 +149,7 @@ class EventLogFilteredCatchUpIT extends AbstractSubscriptionIT {
                                                                   : Subscription.SubscriptionSpec.inTransaction(key, 1, mode, PageHandler.perEvent((e, tx) -> recorder.handle(e)), seams);
         var tested   = subscribe(spec.withFilter(ONLY_X));
         if (mode == ConsistencyMode.FRESH && shape == Shape.READER_RESTARTED && !readerMutants.contains(WatermarkMutant.RESTARTED_READER_AT_HEAD)) {
-            // §6.3: the held event commits only once the subscription attached under the unknown watermark and handed off
+            // The held event commits only once the subscription attached under the unknown watermark and handed off
             var handing = !mutants.contains(WatermarkMutant.GAPS_NOT_HANDED_OFF);
             awaitTrue(() -> tested.phase() == Subscription.Phase.ATTACHED && (!handing || reads.handedOffBy.contains("tested")));
             assertThat(eventLog.reader(TYPE).state().watermark()).as("the restart's watermark is still unknown").isNull();
@@ -224,7 +225,7 @@ class EventLogFilteredCatchUpIT extends AbstractSubscriptionIT {
         return deliveredWithin(recorder, z.get());
     }
 
-    // ---- §7.3: a short page advances to the ceiling ----
+    // ---- a short page advances to the ceiling ----
 
     @Test
     void a_short_filtered_page_advances_to_the_ceiling() throws Exception {
@@ -269,7 +270,7 @@ class EventLogFilteredCatchUpIT extends AbstractSubscriptionIT {
         return statements.get();
     }
 
-    // ---- §7.3: a cancelled read quarters the window ----
+    // ---- a cancelled read quarters the window ----
 
     @Test
     void a_cancelled_filtered_read_retries_with_a_quarter_of_the_window_and_loses_nothing() throws Exception {

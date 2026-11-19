@@ -22,7 +22,7 @@ import java.util.concurrent.locks.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * A subscription's bounded buffer of {@link Batch}es (design phase 3 §2.3): one producer, the reader loop's thread, and
+ * A subscription's bounded buffer of {@link Batch}es: one producer, the reader loop's thread, and
  * one consumer, the subscription's delivery thread. {@link #offer(Batch)} never blocks.
  * <ul>
  *     <li>The bound counts <b>events</b>, not batches.</li>
@@ -34,19 +34,19 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * </ul>
  * Once closed, an inbox accepts nothing and hands out nothing; what it held is discarded.
  * <p>
- * Phase 4 §2.3: an inbox created <b>counting until released</b> (for a {@code CONTIGUOUS} subscription) keeps counting
+ * An inbox created <b>counting until released</b> (for a {@code CONTIGUOUS} subscription) keeps counting
  * an event after {@link #take(long)} hands its batch out, until the delivery thread calls {@link #release(int)} - when
  * the row is applied, parked or dropped. Held-back rows thereby count against the bound, and a subscription that cannot
  * release (behind a long writer) overflows and detaches instead of growing without bound.
  */
 final class Inbox {
-    /** Why an inbox was closed: the detach causes of §3.6 */
+    /** Why an inbox was closed: the causes of a detach */
     enum CloseReason {
-        /** A batch did not fit (§2.3) */
+        /** A batch did not fit */
         OVERFLOW,
-        /** The reader's connection or a read failed; every attached subscription detaches (§2.4) */
+        /** The reader's connection or a read failed; every attached subscription detaches */
         READER_RESTART,
-        /** A superseding reset repositions the subscription (§3.6) */
+        /** A superseding reset repositions the subscription */
         RESET,
         /** The subscription stopped */
         STOPPED,
@@ -54,7 +54,7 @@ final class Inbox {
         ERROR,
         /**
          * {@code FRESH} attached under an unknown watermark found more gaps than {@link EventLogSettings#holeRangeThreshold()}
-         * to hand off: it waits for the watermark instead (design phase 5 §6.3)
+         * to hand off: it waits for the watermark instead
          */
         TOO_MANY_GAPS
     }
@@ -70,7 +70,7 @@ final class Inbox {
 
     private final int                    capacity;
     private final boolean                countUntilReleased;
-    /** Phase 5 §2.4: only rows that pass count; a batch with none is stored as watermark-only */
+    /** Only rows that pass count; a batch with none is stored as watermark-only */
     private final EventTypeFilter        filter;
     private final String                 tenant;
     /** Mutant {@link WatermarkMutant#INBOX_COUNTS_UNMATCHED}: every row counts, as without a filter */
@@ -91,15 +91,15 @@ final class Inbox {
 
     /**
      * @param capacity           the bound in events ({@link EventLogSettings#subscriptionBufferSize()})
-     * @param countUntilReleased {@code true}: an event counts from {@link #offer(Batch)} until {@link #release(int)}
-     *                           (phase 4 §2.3); {@code false}: until its batch is taken (phase 3)
+     * @param countUntilReleased {@code true}: an event counts from {@link #offer(Batch)} until {@link #release(int)};
+     * {@code false}: until its batch is taken
      */
     Inbox(int capacity, boolean countUntilReleased) {
         this(capacity, countUntilReleased, EventTypeFilter.all(), false);
     }
 
     /**
-     * @param filter         the subscription's filter (phase 5 §2.4): only matching rows count against the bound, and a
+     * @param filter         the subscription's filter: only matching rows count against the bound, and a
      *                       batch without one is stored as watermark-only
      * @param countUnmatched mutant {@link WatermarkMutant#INBOX_COUNTS_UNMATCHED}
      */
@@ -108,7 +108,7 @@ final class Inbox {
     }
 
     /**
-     * @param tenant the subscription's tenant filter (phase 8 §15 question 7), {@code null} for every tenant: a row of
+     * @param tenant the subscription's tenant filter, {@code null} for every tenant: a row of
      *               another tenant does not match
      */
     Inbox(int capacity, boolean countUntilReleased, EventTypeFilter filter, String tenant, boolean countUnmatched) {
@@ -165,7 +165,7 @@ final class Inbox {
         requireNonNull(batch, "No batch provided");
         var counted = counted(batch);
         if (counted == 0 && !batch.watermarkOnly()) {
-            // §2.4: nothing in it matches - a watermark-only batch, always accepted, merged into a trailing one
+            // Nothing in it matches - a watermark-only batch, always accepted, merged into a trailing one
             batch = new Batch(java.util.List.of(), batch.watermark());
         }
         lock.lock();

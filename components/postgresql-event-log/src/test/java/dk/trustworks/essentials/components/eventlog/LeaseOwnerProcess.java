@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * The child JVM of {@code EventLogForkedTakeoverIT} (design phase 7 §9.4), after {@code spike/SpikeWriterProcess}'s
+ * The child JVM of {@code EventLogForkedTakeoverIT}, after {@code spike/SpikeWriterProcess}'s
  * pattern: same classpath, arguments on the command line ({@code jdbcUrl user password nodeName}), a line protocol on
  * standard output, and it ends - stopping its subscriptions, which releases their leases - when its standard input
  * closes. It runs one periodic {@code FRESH} and one in-transaction {@code CONTIGUOUS} exclusive subscription of
@@ -38,7 +38,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * </ul>
  * {@code System.nanoTime()} is {@code CLOCK_MONOTONIC} on Linux, shared by every process on the host.
  * <p>
- * Phase 7 unit C ({@code spike.EventLogGateSpikeIT#takeoverTime}, design §10.1) starts it with four more arguments
+ * The takeover measurement ({@code spike.EventLogGateSpikeIT#takeoverTime}) starts it with four more arguments
  * ({@code default <periodicSubscriber> <pagesSubscriber> <startFrom>}, through {@link GateSpikeAccess#startLeaseOwner}):
  * the default lease settings ({@link EventLogSettings#defaults()}) on a small pool instead of the test timings, the given
  * subscriber names and start point, and one more line, {@code P <global_order> <nanoTime>} per event the in-transaction

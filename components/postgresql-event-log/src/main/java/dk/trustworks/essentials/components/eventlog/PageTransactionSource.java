@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.eventlog;
 import java.sql.SQLException;
 
 /**
- * Where an in-transaction subscription's page transactions come from (design phase 8 §2.4). The engine runs handler,
+ * Where an in-transaction subscription's page transactions come from. The engine runs handler,
  * progress update and {@link OpenPage#commit()} itself, in that order, on the page's connection - the progress update is
  * always the last statement before the commit, whatever the source - and calls exactly one of {@link OpenPage#commit()}
  * and {@link OpenPage#rollback()}. A source only says how to obtain the connection and how to end the transaction; it

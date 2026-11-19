@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Shared harness of the phase-4 page ITs (design phase 4 §8): a view table {@code (aggregate_id, count,
+ * Shared harness of the phase-4 page ITs: a view table {@code (aggregate_id, count,
  * last_global_order, digest)} where each event sets {@code digest = md5(digest || global_order)}, a one-row high-water
  * mark that records a violation (in the page's own transaction) whenever an event is applied at or below the highest
  * order applied anywhere, a reference fold over the event table to compare with, and crash helpers.
@@ -173,7 +173,7 @@ abstract class AbstractPageIT extends AbstractSubscriptionIT {
         }
     }
 
-    /** The crash points of §8.1: every delivery-thread hook of the page transaction, the release, and both reads */
+    /** The crash points: every delivery-thread hook of the page transaction, the release, and both reads */
     enum CrashPoint {
         CATCH_UP_READ,
         DEFERRED_BRIDGE_READ,

@@ -29,7 +29,7 @@ final class EventLogStorage {
 
     /**
      * Taken first in every append, so the transaction has an xid before the identity default draws a
-     * {@code global_order} (plan §4.3 prerequisite 1, decision 4)
+     * {@code global_order}, which the watermark relies on (I4; see docs/design/event-log.md §11)
      */
     static final String XID_CTE = "WITH xid AS MATERIALIZED (SELECT pg_current_xact_id() AS x),\n";
 
@@ -54,25 +54,25 @@ final class EventLogStorage {
     /** Column index of the running set in the combined probe; columns 1-12 are {@link #EVENT_COLUMNS} */
     static final int RUNNING_COLUMN = 13;
 
-    // ---- phase 5 (§4.2, §5.3) ----
+    // ---- catch-up permits and filtered reads ----
     /** The database identity the catch-up permits are keyed by: name, server address (null on a socket), port */
     static final String DATABASE_IDENTITY = "SELECT current_database(), host(inet_server_addr()), inet_server_port()";
     /** Then the index name: one row {@code indisvalid AND indisready} if the index exists, none if absent */
     static final String INDEX_VALIDITY    = "SELECT i.indisvalid AND i.indisready FROM pg_index i WHERE i.indexrelid = to_regclass(?)";
 
-    // ---- migration (phase 9 §3.8) ----
+    // ---- migration ----
     /** The aggregate type; its migration's state, source table and start, if a migration row exists */
     static final String MIGRATION_STATE =
             "SELECT state, source_table, started_at FROM " + MIGRATION_TABLE + " WHERE aggregate_type = ?";
 
-    // ---- progress (design §2.5, §3.4) ----
+    // ---- progress ----
     static final String PROGRESS_START = progressStart(null);
 
     /**
-     * Create a progress row or take the stored one, storing the mode, model and filter digest (phase 8 §2.6). Parameters:
+     * Create a progress row or take the stored one, storing the mode, model and filter digest. Parameters:
      * the key twice, exclusive, mode, model, then the initial resume point unless {@code headTable} is given, then the
      * filter digest. With {@code headTable} (a validated event table name) a new row starts at its
-     * {@code max(global_order) + 1}, resolved in this statement (phase 8 decision 13)
+     * {@code max(global_order) + 1}, resolved in this statement
      */
     static String progressStart(String headTable) {
         var resume = headTable == null ? "?" : "(SELECT coalesce(max(global_order), 0) + 1 FROM " + headTable + ")";
@@ -86,7 +86,7 @@ final class EventLogStorage {
     }
 
     /**
-     * The guard every fenced write of a subscription carries (phase 7 §3.1): the epoch, then fence, fence, owner. A
+     * The guard every fenced write of a subscription carries: the epoch, then fence, fence, owner. A
      * non-exclusive subscription binds a null fence. A null epoch or owner disables that part: only the test mutants
      * {@code SAVE_WITHOUT_EPOCH} and {@code FENCE_WITHOUT_OWNER} bind one
      */
@@ -97,7 +97,7 @@ final class EventLogStorage {
             "UPDATE " + PROGRESS_TABLE + " SET resume_from = ?, updated_at = now()\n" +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD;
     /**
-     * Phase 4 §3.3: the in-transaction progress update, last statement of a page transaction - {@link #PROGRESS_SAVE}
+     * The in-transaction progress update, last statement of a page transaction - {@link #PROGRESS_SAVE}
      * plus a compare-and-set on the value this subscription last committed. Parameters as {@link #PROGRESS_SAVE}, then
      * the expected {@code resume_from}
      */
@@ -106,7 +106,7 @@ final class EventLogStorage {
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD + "\n" +
                     "   AND resume_from = ?";
     /**
-     * Phase 9 §4.3: insert an imported progress row, or leave the existing one: the key, exclusive, mode, model,
+     * Insert an imported progress row, or leave the existing one: the key, exclusive, mode, model,
      * resume_from, filter digest. Reset epoch 0 and no lease, so the first claim takes it. Returns resume_from of the
      * inserted row; no row when one existed
      */
@@ -125,13 +125,13 @@ final class EventLogStorage {
             "SELECT resume_from, reset_epoch, consistency_mode, progress_model, exclusive, lease_owner, lease_fence FROM " + PROGRESS_TABLE +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";
 
-    // ---- leases (phase 7 §2); all lease time is the server's now() ----
+    // ---- leases; all lease time is the server's now() ----
     /**
-     * Claim every standby key whose lease is free or expired, in one statement (§2.2): {@code text[]} subscribers and
+     * Claim every standby key whose lease is free or expired, in one statement: {@code text[]} subscribers and
      * aggregate types, then owner, lease interval. Returns subscriber, aggregate type, fence, resume_from, reset_epoch,
      * consistency_mode, progress_model of each row claimed.
      * <p>
-     * Shape (§15.5, unit D): the key list is a {@code MATERIALIZED} CTE that also carries every value the row is checked
+     * Shape: the key list is a {@code MATERIALIZED} CTE that also carries every value the row is checked
      * against ({@code instance_name}, {@code exclusive}, the claim time), and every condition compares a column of
      * {@code el_progress} with a column of {@code k}. {@code el_progress} therefore has no restriction of its own, so the
      * planner's estimate of its side is the table's size whatever the statistics hold, and it never picks a nested loop
@@ -152,15 +152,15 @@ final class EventLogStorage {
     /** Mutant {@code CLAIM_IGNORES_LIVE_LEASE}: {@link #LEASE_CLAIM} without the lease condition */
     static final String LEASE_CLAIM_IGNORING_LEASE = LEASE_CLAIM.replace("   AND (p.lease_owner IS NULL OR p.lease_until < k.claim_time)\n", "");
     /**
-     * The first claim of an exclusive row that does not exist yet (§2.2): subscriber, aggregate type, consistency_mode,
+     * The first claim of an exclusive row that does not exist yet: subscriber, aggregate type, consistency_mode,
      * progress_model, resume_from, owner, lease interval. No row returned: another node created it
      */
 static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
 
     /**
-     * Insert the row of a never-seen exclusive subscription with its first claim (§2.2): subscriber, aggregate type, mode,
-     * model, the initial resume point unless {@code headTable} is given (phase 8 decision 13: then
-     * {@code max(global_order) + 1} of that validated event table), owner, lease interval, filter digest (phase 8 §2.6)
+     * Insert the row of a never-seen exclusive subscription with its first claim: subscriber, aggregate type, mode,
+     * model, the initial resume point unless {@code headTable} is given (then
+     * {@code max(global_order) + 1} of that validated event table), owner, lease interval, filter digest
      */
     static String leaseClaimNew(String headTable) {
         var resume = headTable == null ? "?" : "(SELECT coalesce(max(global_order), 0) + 1 FROM " + headTable + ")";
@@ -170,11 +170,11 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
                 "RETURNING lease_fence, resume_from, reset_epoch";
     }
     /**
-     * Renew every owned lease in one statement (§2.3): owner, then {@code text[]} subscribers, aggregate types and
+     * Renew every owned lease in one statement: owner, then {@code text[]} subscribers, aggregate types and
      * {@code bigint[]} fences, then the lease interval. Returns subscriber, aggregate type of each lease renewed. Shaped
      * as {@link #LEASE_CLAIM}: the owner and the fence are checked against columns of the key list, never as a
      * restriction of {@code el_progress} alone, so no statistics (or their absence) can make the planner rescan the key
-     * list per row (§15.5)
+     * list per row
      */
     static final String LEASE_RENEW =
             "WITH k AS MATERIALIZED (\n" +
@@ -190,12 +190,12 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
     /** Mutant {@code RENEW_WITHOUT_FENCE}: {@link #LEASE_RENEW} keyed by the subscription only (the owner still binds, unused) */
     static final String LEASE_RENEW_WITHOUT_FENCE = LEASE_RENEW.replace("   AND p.lease_fence = k.fence\n", "   AND k.fence IS NOT NULL\n")
                                                                .replace("   AND p.lease_owner = k.owner\n", "   AND k.owner IS NOT NULL\n");
-    /** Release an in-transaction subscription's lease (§2.5): the key, then fence, owner */
+    /** Release an in-transaction subscription's lease: the key, then fence, owner */
     static final String LEASE_RELEASE =
             "UPDATE " + PROGRESS_TABLE + " SET lease_owner = NULL, lease_until = NULL, updated_at = now()\n" +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND lease_fence = ? AND lease_owner = ?";
     /**
-     * A periodic subscription's final save and release in one statement (§2.5): resume_from, the key, the epoch the
+     * A periodic subscription's final save and release in one statement: resume_from, the key, the epoch the
      * resume point was computed in (null under mutant {@code RELEASE_WRITES_ANY_EPOCH}), fence, owner
      */
     static final String PROGRESS_SAVE_RELEASE =
@@ -204,28 +204,29 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
                     "       updated_at = now(), lease_owner = NULL, lease_until = NULL\n" +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND lease_fence = ? AND lease_owner = ?";
     /**
-     * A new owner whose claimed row names another mode or model writes its own (§2.2): consistency_mode, progress_model,
+     * A new owner whose claimed row names another mode or model writes its own: consistency_mode, progress_model,
      * the key, then {@link #FENCE_GUARD}'s parameters
      */
     static final String PROGRESS_SET_MODE =
             "UPDATE " + PROGRESS_TABLE + " SET consistency_mode = ?, progress_model = ?, filter_digest = ?, updated_at = now()\n" +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD;
     /**
-     * Mutant {@code FENCE_READ_BEFORE_WRITE}: the fence checked by a separate, unlocked read before an unfenced update - the
-     * shape plan §9's revision rejected. The key, then fence, owner
+     * Mutant {@code FENCE_READ_BEFORE_WRITE}: the fence checked by a separate, unlocked read before an unfenced update
+     * -
+     * a shape that lets a stale owner's write land (I5). The key, then fence, owner
      */
     static final String PROGRESS_FENCE_CHECK =
             "SELECT 1 FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND lease_fence = ? AND lease_owner = ?";
-    /** A page transaction of an exclusive subscription ends within one lease if its owner dies (§7, decision 6): milliseconds */
+    /** A page transaction of an exclusive subscription ends within one lease if its owner dies: milliseconds */
     static final String PAGE_IDLE_TIMEOUT = "SELECT set_config('idle_in_transaction_session_timeout', ?, true)";
 
-    // ---- parked events (phase 4 §4.4, §4.5); the subscription key's three parameters first unless said otherwise ----
+    // ---- parked events; the subscription key's three parameters first unless said otherwise ----
     /** Then global_order, aggregate_id, blocked_by, attempts, error_type, error_message */
     static final String PARK_EVENT =
             "INSERT INTO " + PARKED_EVENTS_TABLE + " (subscriber, aggregate_type, instance_name, global_order, aggregate_id, blocked_by, attempts, error_type, error_message)\n" +
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING";
     /**
-     * The periodic park insert, guarded on the progress row (phase 7 §3.3): the key, then {@link #FENCE_GUARD}'s
+     * The periodic park insert, guarded on the progress row: the key, then {@link #FENCE_GUARD}'s
      * parameters, then global_order, aggregate_id, blocked_by, attempts, error_type, error_message. The {@code FOR SHARE}
      * guard waits for a reset or claim that got there first and re-checks against its row version. Returns the guard's
      * and the insert's row counts
@@ -259,21 +260,21 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
             "UPDATE " + PARKED_EVENTS_TABLE + " SET attempts = attempts + 1, error_type = ?, error_message = ?, requested = NULL, requested_at = NULL\n" + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?";
     /** A reset: every parked row of the subscription */
     static final String PARKED_DELETE_ALL = "DELETE FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";
-    // ---- phase 8 §4: parked requests and the admin facade ----
+    // ---- parked requests and the admin facade (see docs/design/event-log.md §8) ----
     /**
-     * The serve transaction's first statement (§4.3, §11.1 I5, I6): lock the progress row under {@link #FENCE_GUARD}, so a
+     * The serve transaction's first statement (I5, I6): lock the progress row under {@link #FENCE_GUARD}, so a
      * reset or a takeover that got there first leaves nothing to serve, and one that comes later waits for the serve to
      * commit. The key, then {@link #FENCE_GUARD}'s parameters. Taken before the parked rows, in the order a reset takes
      * them, so the two never deadlock
      */
     static final String PARKED_SERVE_GUARD =
             "SELECT 1 FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD + " FOR NO KEY UPDATE";
-    /** The parked check (§4.3): the requests stored on the subscription's heads. The key */
+    /** The parked check: the requests stored on the subscription's heads. The key */
     static final String PARKED_REQUESTS =
             "SELECT global_order, requested FROM " + PARKED_EVENTS_TABLE +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND requested IS NOT NULL AND blocked_by IS NULL ORDER BY global_order";
     /**
-     * Store a request on a parked head (§4.3): the key, then the key, requested, the head. Returns whether the progress
+     * Store a request on a parked head: the key, then the key, requested, the head. Returns whether the progress
      * row exists and whether a head row took the request
      */
     static final String PARKED_REQUEST =
@@ -283,7 +284,7 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
                     "       RETURNING 1)\n" +
                     "SELECT (SELECT count(*) FROM p), (SELECT count(*) FROM u)";
     /**
-     * The admin listing (§4.1), one statement: every progress row with its parked head count and total and its lag, the
+     * The admin listing, one statement: every progress row with its parked head count and total and its lag, the
      * head of each listed aggregate type read once from the type's event table through {@code el_aggregate_types} (so a
      * type no node of this JVM registered still shows). Optional aggregate type twice, then the limit. Columns:
      * subscriber, aggregate_type, instance_name, exclusive, consistency_mode, progress_model, resume_from, reset_epoch,
@@ -308,12 +309,12 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
     static final String ADMIN_SUBSCRIPTION =
             ADMIN_SUBSCRIPTIONS.replace("WHERE (?::text IS NULL OR aggregate_type = ?)\n", "WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?\n")
                                .replace(" LIMIT ?),\n", "),\n");
-    /** One subscription's parked rows above a global order (§4.1): the key, the lower bound (exclusive), the limit */
+    /** One subscription's parked rows above a global order: the key, the lower bound (exclusive), the limit */
     static final String ADMIN_PARKED =
             "SELECT global_order, aggregate_id, blocked_by, attempts, error_type, error_message, parked_at, requested, requested_at FROM " + PARKED_EVENTS_TABLE +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order > ? ORDER BY global_order LIMIT ?";
     /**
-     * Delete a retired instance's row and its parked rows (§19 item 17): only a non-exclusive row nobody holds a lease on.
+     * Delete a retired instance's row and its parked rows: only a non-exclusive row nobody holds a lease on.
      * The key, then the key. Returns the progress rows deleted
      */
     static final String ADMIN_DELETE_RETIRED =
@@ -322,7 +323,7 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
                     "e AS (DELETE FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND EXISTS (SELECT 1 FROM d))\n" +
                     "SELECT count(*) FROM d";
 
-    /** A reset (tests until phase 8): resume_from, then the key */
+    /** A reset: resume_from, then the key */
     static final String PROGRESS_RESET =
             "UPDATE " + PROGRESS_TABLE + " SET reset_epoch = reset_epoch + 1, resume_from = ?, updated_at = now()\n" + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";
 
@@ -331,19 +332,19 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
      * Parameters: {@code head} none; {@code plainTail} cursor, limit; {@code probe} cursor, limit, {@code bigint[]} holes;
      * {@code probeWithRanges} as {@code probe} plus {@code bigint[]} range lows and highs; {@code holeRead} holes, lows,
      * highs; {@code runningSet} none. {@code probe*} return {@link #RUNNING_COLUMN} columns, the running set on one row
-     * whose {@code global_order} is null, sorted last - present even when no event row is (§4.10).
+     * whose {@code global_order} is null, sorted last - present even when no event row is.
      * <p>
-     * Phase 3's subscription statements, run on pooled connections: {@code rangeRead} lower (exclusive), upper
+     * The subscription statements, run on pooled connections: {@code rangeRead} lower (exclusive), upper
      * (inclusive), limit - the catch-up page; {@code bridgePage} as {@code rangeRead} plus {@code bigint[]} attach holes
      * at or below the lower bound; {@code bridgePageWithRanges} plus {@code bigint[]} range lows and highs. The bridge
      * re-reads holes by {@code UNION ALL}, never {@code OR} (P0.11), and reads no running set. {@code byOrders}:
-     * {@code bigint[]} global orders - a parked aggregate's events (phase 4 §4.5).
+     * {@code bigint[]} global orders - a parked aggregate's events.
      * <p>
-     * Phase 5's filtered statements (§2.2, §2.3, §3.2) and phase 8's tenant filter (§15, question 7) are the three
+     * The event-type and tenant filters' statements are the three
      * {@link FilterStatements} sets {@code typeFilter}, {@code tenantFilter} and {@code typeAndTenantFilter}; each binds
      * its filter parameters where {@link FilterStatements} says.
      * <p>
-     * Phase 6's tail with re-read (§4.2), the shape a woken read and every statement of a multi-type flush use when holes
+     * The tail with re-read, the shape a woken read and every statement of a multi-type flush use when holes
      * are outstanding: {@code rereadTail} cursor, limit, {@code bigint[]} holes; {@code rereadTailWithRanges} plus range
      * lows and highs. As {@code probe*} without the running-set branch: the flush reads one running set, last.
      */
@@ -411,7 +412,7 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
     }
 
     /**
-     * The filtered catch-up and bridge statements of one filter shape (phase 5 §2.2, §2.3, §3.2; phase 8 §15 question 7).
+     * The filtered catch-up and bridge statements of one filter shape.
      * The filter predicate {@code F} is {@code event_type = ANY(?::smallint[])} (the event type ids), {@code tenant = ?},
      * or both, ids first; every place below that says {@code F} binds those parameters in that order.
      * <ul>
@@ -465,7 +466,7 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
     }
 
     /**
-     * The read statements the {@code EventStore} adapter needs (phase 8 §5.2, unit 8b-A), generated once per aggregate
+     * The read statements the {@code EventStore} adapter needs, generated once per aggregate
      * type. Each reaches the event table through an index condition under a generic plan ({@code EventLogGenericPlanIT}).
      * <p>
      * The global-order range reads bind {@code fromInclusive, toInclusive}, then the filter parameters

@@ -25,7 +25,7 @@ package dk.trustworks.essentials.components.eventlog;
  * <p>
  * The engine does not read the stream's actual event order after a lost check, so {@link #actualEventOrder()} is
  * {@code null} for every exception it throws: the read would cost a losing writer one more round trip on a path that
- * rolls back anyway (design phase 8 §18.5). Reload the stream to learn where it is.
+ * rolls back anyway. Reload the stream to learn where it is.
  */
 public final class StreamAppendConflictException extends RuntimeException {
     private final String aggregateType;

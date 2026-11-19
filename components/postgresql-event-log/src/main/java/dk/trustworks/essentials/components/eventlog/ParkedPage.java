@@ -20,7 +20,7 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * One page of a subscription's parked rows (design {@code docs/archive/event-store-engine-phase8.md} §4.1), in
+ * One page of a subscription's parked rows, in
  * {@code global_order}
  *
  * @param rows      the rows

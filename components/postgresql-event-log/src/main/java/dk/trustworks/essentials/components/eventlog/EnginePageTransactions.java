@@ -21,8 +21,8 @@ import java.sql.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * {@link PageTransactionSource#engine()}: a connection of the event log's {@code DataSource}, autocommit off (phase 4
- * §3.1). {@link #UNBOUND} stands for it until a subscription binds it to its event log's {@code DataSource}
+ * {@link PageTransactionSource#engine()}: a connection of the event log's {@code DataSource}, autocommit off.
+ * {@link #UNBOUND} stands for it until a subscription binds it to its event log's {@code DataSource}
  */
 final class EnginePageTransactions implements PageTransactionSource {
     static final EnginePageTransactions UNBOUND = new EnginePageTransactions(null);

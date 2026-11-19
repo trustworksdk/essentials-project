@@ -24,7 +24,7 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The probe clock's cost input (phase 10 gate fix): a flush of several types must not record its whole wall time as a
+ * The probe clock's cost input: a flush of several types must not record its whole wall time as a
  * type's probe cost, or the cost rule ({@link EventLogSettings#wokenProbeWait}) turns a few milliseconds of tail reads into
  * seconds before the next running set, and the watermark stalls behind a candidate that could have retired.
  * {@link WatermarkMutant#FLUSH_COUNTED_AS_PROBE_COST} restores the old behaviour. And the cap while a hole waits: even an
@@ -71,7 +71,7 @@ class ProbeCostTest {
         assertThat(ReaderLoop.probeCostAfter(PREVIOUS_COST, tail, TestSeams.NONE)).isEqualTo(PREVIOUS_COST);
     }
 
-    // ---- the cap while a hole waits (phase 10 gate) ----
+    // ---- the cap while a hole waits ----
 
     private static final long HONEST_PROBE = Duration.ofMillis(5).toNanos();
     private static final int  POOL_60     = 60;

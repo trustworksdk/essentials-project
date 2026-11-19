@@ -22,8 +22,8 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * One subscription's {@code el_parked_events} rows and its <b>held aggregates</b> (design
- * {@code docs/archive/event-store-engine-phase4.md} §4.4, §4.5): aggregate id → the {@code global_order} of its parked
+ * One subscription's {@code el_parked_events} rows and its <b>held aggregates</b>: aggregate id → the
+ * {@code global_order} of its parked
  * head. Every later event of a held aggregate is parked behind the head ({@code blocked_by}) instead of handed on.
  * Loaded at start; changed only by the delivery thread, and only after the row that justifies the change committed.
  */
@@ -117,7 +117,7 @@ final class ParkedEvents {
         }
     }
 
-    /** {@link #insert} in its own autocommit transaction ({@code PERIODIC}, §4.4) */
+    /** {@link #insert} in its own autocommit transaction ({@code PERIODIC}) */
     void insertNow(List<Row> rows) throws SQLException {
         try (var connection = dataSource.getConnection()) {
             insert(connection, rows);
@@ -125,11 +125,12 @@ final class ParkedEvents {
     }
 
     /**
-     * The periodic park insert guarded on the progress row (phase 7 §3.3): lands only while the row's reset epoch is
+     * The periodic park insert guarded on the progress row: lands only while the row's reset epoch is
      * {@code resetEpoch} and, for an exclusive subscription, its lease is {@code fence}'s. A row already there stays as it
      * is.
      *
-     * @return {@code false} if the guard matched no row (a zero-row write: the caller decides by phase 7 §2.6), else
+     * @return {@code false} if the guard matched no row (a zero-row write: the caller decides by
+     * {@code Subscription.ConflictDecision}), else
      * {@code true}, inserted or found parked
      */
     boolean insertGuarded(Row row, long resetEpoch, ProgressStore.Fence fence) throws SQLException {
@@ -174,11 +175,11 @@ final class ParkedEvents {
         return orders;
     }
 
-    /** A request stored on a parked head (phase 8 §4.3) */
+    /** A request stored on a parked head */
     record Request(long head, boolean discard) {
     }
 
-    /** The parked check (phase 8 §4.3): the requests stored on this subscription's heads, in order */
+    /** The parked check: the requests stored on this subscription's heads, in order */
     List<Request> requests() throws SQLException {
         var requests = new ArrayList<Request>();
         try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement(EventLogStorage.PARKED_REQUESTS)) {
@@ -193,7 +194,7 @@ final class ParkedEvents {
     }
 
     /**
-     * The serve transaction's first statement (phase 8 §4.3): lock {@code key}'s progress row if its epoch is
+     * The serve transaction's first statement: lock {@code key}'s progress row if its epoch is
      * {@code resetEpoch} and, exclusive, its lease is {@code fence}'s
      *
      * @return {@code false} if the guard matched no row: a reset or takeover got there first
@@ -228,7 +229,7 @@ final class ParkedEvents {
     }
 
     /**
-     * {@link #failedAgain(long, Throwable)} guarded as {@link #insertGuarded} (phase 7 §3.1): counts only under the
+     * {@link #failedAgain(long, Throwable)} guarded as {@link #insertGuarded}: counts only under the
      * current epoch and lease
      */
     void failedAgainGuarded(long head, Throwable error, long resetEpoch, ProgressStore.Fence fence) throws SQLException {

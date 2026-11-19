@@ -26,8 +26,9 @@ import java.util.concurrent.atomic.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Phase 3 §3.4: attach first, then bridge {@code (P, C]}, then drain; each bridge page re-reads the attach holes at or
- * below its lower bound (I2); a row that both the bridge and the reader return is handled once; no attach while the
+ * Attach first, then bridge {@code (P, C]}, then drain; each bridge page re-reads the attach holes at or
+ * below its lower bound (I2; see docs/design/event-log.md §11); a row that both the bridge and the reader return is
+ * handled once; no attach while the
  * type's watermark is unknown (F4).
  * <p>
  * The common shape: a keeper subscription makes the type active, a long writer holds a hole so the reader's cursor
@@ -35,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * starts afterwards, catches up to {@code W} and attaches. Hooks on the delivery thread put each race at a fixed
  * point. Must-fail variants: {@link WatermarkMutant#ATTACH_WITHOUT_BRIDGE}, {@link WatermarkMutant#BRIDGE_BEFORE_ATTACH},
  * {@link WatermarkMutant#BRIDGE_WITHOUT_HOLE_REREAD}, {@link WatermarkMutant#DRAIN_BEFORE_BRIDGE},
- * {@link WatermarkMutant#NO_DEDUPE}, {@link WatermarkMutant#ATTACH_WITH_UNKNOWN_WATERMARK} and phase 2's
+ * {@link WatermarkMutant#NO_DEDUPE}, {@link WatermarkMutant#ATTACH_WITH_UNKNOWN_WATERMARK} and
  * {@link WatermarkMutant#CATCH_UP_ABOVE_WATERMARK}.
  */
 class EventLogAttachIT extends AbstractSubscriptionIT {
@@ -237,7 +238,7 @@ class EventLogAttachIT extends AbstractSubscriptionIT {
     @Test
     void no_attach_until_the_initial_candidate_retires_but_by_hand_off_and_the_held_value_is_delivered() throws Exception {
         var result = startWhileAWriterHoldsAValueBelowTheHead();
-        // Phase 5 §6.3: FRESH may attach under the unknown watermark only to hand its gaps off, never as an ordinary attach
+        // FRESH may attach under the unknown watermark only to hand its gaps off, never as an ordinary attach
         assertThat(result.attachesWhileHeld).isEqualTo(result.unknownAttachesWhileHeld);
         assertThat(result.heldDelivered).isTrue();
     }

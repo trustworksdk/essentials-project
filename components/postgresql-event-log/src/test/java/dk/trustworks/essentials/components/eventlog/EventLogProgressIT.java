@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * I7, plan §16, design phase 6 §6.1: <i>with no running writers, a committed event is delivered within the backstop
+ * I7: <i>with no running writers, a committed event is delivered within the backstop
  * interval with every wake-up lost</i>. Three arms, subscriptions in both modes, each event measured from its commit's
  * return to the handler:
  * <ul>

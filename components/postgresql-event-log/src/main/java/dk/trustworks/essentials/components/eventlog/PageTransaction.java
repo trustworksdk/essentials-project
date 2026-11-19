@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.eventlog;
 import java.sql.Connection;
 
 /**
- * The transaction a {@link PageHandler} applies a page in (design phase 8 §2.3)
+ * The transaction a {@link PageHandler} applies a page in
  */
 public interface PageTransaction {
     /**

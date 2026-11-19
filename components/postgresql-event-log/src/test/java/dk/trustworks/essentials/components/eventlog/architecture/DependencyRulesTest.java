@@ -22,7 +22,7 @@ import org.junit.jupiter.api.*;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 /**
- * The engine is raw pgjdbc: no JDBI, no Reactor, no Jackson, and nothing of the current event store (plan §12.2).
+ * The engine is raw pgjdbc: no JDBI, no Reactor, no Jackson, and nothing of the current event store.
  */
 class DependencyRulesTest {
     private static JavaClasses moduleClasses;

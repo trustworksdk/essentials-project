@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Phase 3 §3.6: a subscription detached by an overflow resumes at the F5 position, {@code min(received watermark,
+ * A subscription detached by an overflow resumes at the F5 position, {@code min(received watermark,
  * lowest unhandled received - 1) + 1}, so the unhandled rows of the batch it was working through and of its discarded
  * inbox are read again; and a superseding reset while attached detaches it and restarts delivery at the reset point.
  * Must-fail variant: {@link WatermarkMutant#DETACH_RESUMES_AT_WATERMARK}.
@@ -102,7 +102,7 @@ class EventLogDetachIT extends AbstractSubscriptionIT {
     }
 
     /**
-     * Phase 2's reset test (ProgressStoreIT), ported: the reset lands while the subscription is attached
+     * The reset test of ProgressStoreIT, on an attached subscription: the reset lands while the subscription is attached
      */
     @Test
     void a_reset_while_attached_detaches_and_restarts_delivery_at_the_reset_point() throws Exception {
@@ -125,7 +125,7 @@ class EventLogDetachIT extends AbstractSubscriptionIT {
         await().atMost(WAIT).until(() -> savedResumeFrom("sub") == next + 1);
     }
 
-    // ---- phase 4 §5.3: the FRESH bridge starts above the highest handled order ----
+    // ---- the FRESH bridge starts above the highest handled order ----
 
     @Test
     void after_an_overflow_the_bridge_starts_above_the_highest_handled_order_and_re_reads_the_gaps() throws Exception {

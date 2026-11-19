@@ -26,7 +26,7 @@ import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.*;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Phase 9 unit 9-B (design {@code docs/archive/event-store-engine-phase9.md} §3.8, §4.3, §9): the engine's side of the
+ * The engine's side of the
  * migration from the old event store - the {@code el_migration} table, the {@code registerAggregateType} guard while a
  * type is being copied, and {@link EventLogAdmin#importProgress}. Each must-fail mutant has a {@code must_fail_*} test
  * that runs the arm against it and asserts the defect shows.
@@ -58,7 +58,7 @@ class EventLogMigrationIT extends AbstractLeaseIT {
         assertThat(queryLong("SELECT count(*) FROM " + EventLogSchema.MIGRATION_TABLE)).isEqualTo(1);
     }
 
-    // ---- the registerAggregateType guard (§3.8) ----
+    // ---- the registerAggregateType guard ----
 
     /** @return whether registering {@link #COPIED} while its row is {@code COPYING} was refused, with no table created */
     private boolean guardRefuses(WatermarkMutant... mutants) throws Exception {
@@ -117,7 +117,7 @@ class EventLogMigrationIT extends AbstractLeaseIT {
         assertThat(logA.registerAggregateType(COPIED)).isEqualTo(AggregateTypeTables.of(COPIED));
     }
 
-    // ---- importProgress (§4.3) ----
+    // ---- importProgress ----
 
     private static SubscriptionDefinition exclusiveDefinition(String subscriber) {
         // StartFrom 1: an imported row must win over it

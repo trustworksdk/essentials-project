@@ -23,7 +23,7 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The plan-mode check of P0.16 (design §3.3): the tail reader runs under {@code force_generic_plan}, so every reader
+ * The plan-mode check of P0.16: the tail reader runs under {@code force_generic_plan}, so every reader
  * statement not in {@link TailReader#CUSTOM_PLAN_STATEMENTS} must have a generic plan that reaches the event table only
  * through index conditions - no sequential scan and no walk of the primary key with the predicate as a filter.
  * Must-fail control: P0.11's {@code OR global_order = ANY(:holes)} form, which walks the primary key.
@@ -54,8 +54,8 @@ class EventLogGenericPlanIT extends AbstractEventLogIT {
     }
 
     /**
-     * Phase 7 §5: the keeper's batched claim and renewal reach {@code el_progress} through its primary key under a
-     * generic plan, never by scanning the table (§10.2's guard against a renewal that walks the table)
+     * The keeper's batched claim and renewal reach {@code el_progress} through its primary key under a
+     * generic plan, never by scanning the table, the guard against a renewal that walks the table
      */
     @Test
     void the_lease_claim_and_renewal_reach_the_progress_table_by_its_primary_key() throws SQLException {
@@ -72,10 +72,10 @@ class EventLogGenericPlanIT extends AbstractEventLogIT {
     }
 
     /**
-     * Phase 8 unit 8b-A: every read the {@code EventStore} adapter needs reaches the event table by an index condition
+     * Every read the {@code EventStore} adapter needs reaches the event table by an index condition
      * under a generic plan, and the three that have an index of their own use it: the stream's last event walks the
      * {@code (aggregate_id, event_order)} constraint backwards, the id lookup the event-id index, the causation lookup
-     * the partial caused-by index (§14 question 8)
+     * the partial caused-by index
      */
     @Test
     void every_adapter_read_statement_reads_the_event_table_by_index_only() throws SQLException {

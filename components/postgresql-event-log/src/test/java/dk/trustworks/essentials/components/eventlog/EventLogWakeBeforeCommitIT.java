@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Design phase 6 §4.2, §4.3, §6.2: a wake that reads before the commit loses nothing, and I11 holds inside a flush of
+ * A wake that reads before the commit loses nothing, and I11 holds inside a flush of
  * several types - one running set, read after every type's snapshot.
  * <p>
  * The flush scenario: types {@code WakeA}, {@code WakeH} and {@code WakeB} are activated in that order, so a flush reads

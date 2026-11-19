@@ -21,12 +21,12 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * One {@code el_progress} row as the admin listing reads it (design {@code docs/archive/event-store-engine-phase8.md}
- * §4.1): the cluster's view, from the database, whichever node runs the subscription.
+ * One {@code el_progress} row as the admin listing reads it: the cluster's view, from the database, whichever node runs
+ * the subscription.
  *
  * @param resumePoint  the first {@code global_order} not yet handled
  * @param leaseOwner   an exclusive row's lease owner ({@code [nodeName/]instance}), while one holds or held it
- * @param filterDigest the stored filter digest (phase 8 §2.6); empty without a filter
+ * @param filterDigest the stored filter digest; empty without a filter
  * @param parkedHeads  parked heads (held aggregates)
  * @param parkedTotal  parked rows, heads and the events held behind them
  * @param lag          the aggregate type's highest {@code global_order} minus {@code resumePoint - 1}, at least 0; empty if the

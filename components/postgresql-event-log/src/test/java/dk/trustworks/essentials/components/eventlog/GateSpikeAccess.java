@@ -21,18 +21,18 @@ import java.util.function.*;
 
 /**
  * Test-only bridge from {@code spike.EventLogGateSpikeIT} (another package) to the package-private knobs, counters and
- * hooks the phase-6 gate measurement needs (design phase 6 §7). Not engine code.
+ * hooks the phase-6 gate measurement needs. Not engine code.
  */
 public final class GateSpikeAccess {
     private GateSpikeAccess() {
     }
 
-    /** §7.3: {@code false} reads every due type alone (one statement each) */
+    /** {@code false} reads every due type alone (one statement each) */
     public static void flush(EventLog eventLog, boolean on) {
         eventLog.readerLoop().flushForTests = on;
     }
 
-    /** §9 decision 2: {@code true} reads a single due type through the multi-statement flush instead of the combined probe */
+    /** {@code true} reads a single due type through the multi-statement flush instead of the combined probe */
     public static void singleTypeFlush(EventLog eventLog, boolean on) {
         eventLog.readerLoop().singleTypeFlushForTests = on;
     }
@@ -68,7 +68,7 @@ public final class GateSpikeAccess {
     }
 
     /**
-     * Phase 7 §10.1: starts a {@link LeaseOwnerProcess} child on the default lease settings, owning {@code periodic}
+     * Starts a {@link LeaseOwnerProcess} child on the default lease settings, owning {@code periodic}
      * (FRESH, periodic) and {@code pages} (CONTIGUOUS, in-transaction, writing {@code el_test_view}) from
      * {@code startFrom}; each line it prints goes to {@code lines}, split on spaces, with the parent's receipt time
      * appended as the last field. End it by closing its standard input (graceful) or killing it.

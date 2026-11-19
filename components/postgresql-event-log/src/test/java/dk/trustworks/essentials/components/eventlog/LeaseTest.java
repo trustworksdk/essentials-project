@@ -23,8 +23,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * The lease state machine and its deadline arithmetic with an injected monotonic clock (design phase 7 §2.4, §9), and
- * §2.6's zero-row decision table
+ * The lease state machine and its deadline arithmetic with an injected monotonic clock, and
+ * the zero-row decision table ({@code Subscription.ConflictDecision})
  */
 class LeaseTest {
     static final long             STOP  = 7_000_000_000L;

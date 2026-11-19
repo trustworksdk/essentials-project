@@ -20,7 +20,7 @@ import java.util.List;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Applies a page of events inside a page transaction (design phase 8 §2.3, §2.4). The engine has begun the
+ * Applies a page of events inside a page transaction. The engine has begun the
  * transaction; after this returns it moves the resume point on the same connection, as the last statement, and commits;
  * if this throws it rolls back. The handler never ends the transaction itself.
  */

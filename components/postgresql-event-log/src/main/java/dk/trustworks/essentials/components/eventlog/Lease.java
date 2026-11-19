@@ -20,18 +20,18 @@ import java.util.function.LongSupplier;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * One exclusive subscription's lease (design {@code docs/archive/event-store-engine-phase7.md} §1.2, §2): written by the
+ * One exclusive subscription's lease: written by the
  * {@link LeaseKeeper}, read by the subscription's delivery thread.
  * <ul>
  *     <li>{@link State#STANDBY}: not owned; the keeper tries to claim it every pass.</li>
  *     <li>{@link State#OWNED}: claimed or renewed with {@link #fence()}; {@link #confirmedAtNanos()} is the start of the last
  *     successful claim or renewal on the monotonic clock. The local deadline is {@code confirmedAtNanos + leaseLocalStop}.</li>
  *     <li>{@link State#SUSPENDED}: the delivery thread found the deadline passed and waits; a renewal that returns the lease
- *     makes it {@code OWNED} again, nothing replayed (decision 4).</li>
+ *     makes it {@code OWNED} again, nothing replayed.</li>
  *     <li>{@link State#LOST}: a renewal or a fenced write found another fence or owner; the delivery thread leaves the reader
  *     and calls {@link #standby()}.</li>
  * </ul>
- * The deadline is checked by the delivery thread only, so a stuck keeper can never extend it (§2.4).
+ * The deadline is checked by the delivery thread only, so a stuck keeper can never extend it.
  */
 final class Lease {
     enum State {
@@ -41,14 +41,14 @@ final class Lease {
         LOST
     }
 
-    /** A claimed row (§2.2): the fence the database drew and the row's progress */
+    /** A claimed row: the fence the database drew and the row's progress */
     record Claim(long fence, long resumeFrom, long resetEpoch, String consistencyMode, String progressModel, String filterDigest) {
         Claim(long fence, long resumeFrom, long resetEpoch, String consistencyMode, String progressModel) {
             this(fence, resumeFrom, resetEpoch, consistencyMode, progressModel, null);
         }
     }
 
-    /** What a first claim inserts when the row does not exist yet (§2.2, {@code LEASE_CLAIM_NEW}) */
+    /** What a first claim inserts when the row does not exist yet ({@code LEASE_CLAIM_NEW}) */
     record NewRow(String consistencyMode, String progressModel, long initialResumeFrom, String headTable, String filterDigest) {
         NewRow(String consistencyMode, String progressModel, long initialResumeFrom) {
             this(consistencyMode, progressModel, initialResumeFrom, null, null);
@@ -161,7 +161,7 @@ final class Lease {
     }
 
     /**
-     * A renewal returned this lease's key with its fence: confirmed at {@code confirmedAt} (the renewal's start, §2.3).
+     * A renewal returned this lease's key with its fence: confirmed at {@code confirmedAt} (the renewal's start).
      *
      * @return {@code true} if it was suspended and now resumes
      */
@@ -179,7 +179,7 @@ final class Lease {
     }
 
     /**
-     * Ownership moved (§2.4, §2.6)
+     * Ownership moved
      *
      * @return {@code true} if this call made it lost
      */

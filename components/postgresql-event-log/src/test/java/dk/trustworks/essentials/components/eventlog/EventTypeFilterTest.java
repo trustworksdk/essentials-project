@@ -21,7 +21,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.*;
 
-/** Phase 5 §1.2 */
+/** The event-type filter's matching and validation */
 class EventTypeFilterTest {
     @Test
     void all_matches_every_type() {
