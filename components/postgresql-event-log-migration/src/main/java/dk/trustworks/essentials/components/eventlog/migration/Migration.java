@@ -128,11 +128,11 @@ public final class Migration {
             refusals.add(Refusal.of(RefusalKind.NO_IDENTITY_SEQUENCE, "Column '" + c.globalOrder() + "' of '" + table.tableName() + "' has no identity sequence"));
         } else if (catalog.sequenceCache() != 1) {
             refusals.add(Refusal.of(RefusalKind.SEQUENCE_CACHE_NOT_ONE, "Sequence " + catalog.sequence() + " has cache " + catalog.sequenceCache() +
-                    "; the online copy needs cache 1 (values handed out in order across sessions, §3.3). ALTER SEQUENCE ... CACHE 1 first"));
+                    "; the online copy needs cache 1 (values handed out in order across sessions). ALTER SEQUENCE ... CACHE 1 first"));
         }
         if (catalog.isUuid(c.aggregateId())) {
             warnings.add("aggregate_id is uuid: the event log stores its lower-case text form, so the application's AggregateIdSerializer must produce " +
-                                 "lower-case canonical text, or loading a stream finds nothing (§2.4)");
+                                 "lower-case canonical text, or loading a stream finds nothing");
         }
         var storage = new MigrationStorage(table, catalog, AggregateTypeTables.of("x"));
         long rows, max, nonUuidCauses;
@@ -157,7 +157,7 @@ public final class Migration {
             }
         }
         if (nonUuidCauses > 0) {
-            warnings.add(nonUuidCauses + " caused_by_event_id values are not canonical UUIDs and are copied as null (§2.4, decision 5)");
+            warnings.add(nonUuidCauses + " caused_by_event_id values are not canonical UUIDs and are copied as null");
         }
         if (target != null) {
             targetChecks(connection, table, target, refusals, warnings);
@@ -404,7 +404,7 @@ public final class Migration {
         }
         if (!seams.has(TYPE_JOIN_DROPS_ROW) && inserted != expected) {
             throw new IllegalStateException("Copying global_order (" + lo + ", " + hi + "] of '" + table.tableName() + "' inserted " + inserted + " rows, but the range " +
-                                                    "holds " + expected + ": an event type without an id dropped rows from the join (§3.4). The batch is rolled back");
+                                                    "holds " + expected + ": an event type without an id dropped rows from the join. The batch is rolled back");
         }
         if (!seams.has(HEADS_NOT_WRITTEN) && inserted > 0) {
             try (var statement = connection.prepareStatement(storage.upsertHeads())) {
