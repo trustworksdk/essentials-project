@@ -1,7 +1,16 @@
 # postgresql-event-log
 
 The new PostgreSQL event store engine ("event log"), built beside `components/postgresql-event-store`, which it must
-not change. Nothing depends on this module yet; it is unreleased phase-2 work on a feature branch.
+not change. **Preview in 0.61.0**: published, off by default in the starter, and its API may change in a minor release.
+
+- Reference for the engine as built: `docs/design/event-log.md` (storage, append, tail reader, probe clock, subscriptions,
+  leases, wake-ups, invariants, the phase-10 gate). Consumer doc: `LLM/LLM-postgresql-event-log.md`. The bullets below are
+  per phase unit; the phase docs they cite are archived under `docs/archive/`.
+- `EventLogSchemaContributor.scriptOnly()`: for a harness that only writes a script (schema mode `emit`). An aggregate
+  type's two tables then go to the harness' sink, into the emitted script, instead of being created directly on the
+  database when the harness does not create the schema. Without it, a type registered before or after `attach` is
+  created on the database in every mode but `create`, which in `emit` writes to a database meant to be left alone. Call
+  it before the harness runs; the starter does so in `emit`.
 
 - Plan: `docs/archive/event-store-subscription-redesign.md`. Phase-2 design and decisions: `docs/archive/event-store-engine-phase2.md` (§5 overrides any "Proposed").
 - Package `dk.trustworks.essentials.components.eventlog`; tables prefixed `el_`.

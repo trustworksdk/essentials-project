@@ -31,9 +31,9 @@
     <artifactId>postgresql-event-log</artifactId>
     <name>postgresql-event-log</name>
     <description>
-        The new PostgreSQL event store engine (event log): append, stream load and, in later phases, the
-        watermark-based subscriptions of docs/archive/event-store-subscription-redesign.md. Built beside
-        postgresql-event-store; raw pgjdbc, no JDBI, Reactor or Jackson.
+        The new PostgreSQL event store engine (event log), preview in 0.61.0: append, stream loads and
+        watermark-based subscriptions with leases, parking and cross-JVM wake-ups. Built beside postgresql-event-store;
+        raw pgjdbc, no JDBI, Reactor or Jackson. Design: docs/design/event-log.md.
     </description>
 
     <dependencies>

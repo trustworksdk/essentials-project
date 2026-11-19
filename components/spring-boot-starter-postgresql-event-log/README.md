@@ -3,7 +3,7 @@
 Auto-configuration for the new PostgreSQL event store engine (`postgresql-event-log`) and its `EventStore` adapter
 (`postgresql-event-log-processor`).
 
-> **Preview.** The starter, its properties and the engine's API may change in a minor release. The old event store
+> **Preview in 0.61.0.** The starter, its properties and the engine's API may change in a minor release. The old event store
 > (`spring-boot-starter-postgresql-event-store`) stays the default and fully supported.
 
 ```xml
@@ -36,6 +36,11 @@ who creates the schema, as for every other Essentials component.
 If `spring-boot-starter-postgresql-event-store` is on the class path too, this starter removes that starter's
 `EventStoreConfiguration` while `essentials.event-log.enabled=true`. Snapshots, closing books and the aggregate admin
 operations keep working on the new engine. The old `EventProcessor` and `ViewEventProcessor` do not run on it: port them
-to `ViewProjection` and `EventReactor`.
+by swapping the superclass to `EventLogViewProcessor`, `EventLogReactor` or `EventLogInboxProcessor`.
 
 Requires the same provided dependencies as `spring-boot-starter-postgresql` (PostgreSQL driver, JDBI, Jackson 3, Reactor).
+
+## Documentation
+
+- [LLM-postgresql-event-log.md](../../LLM/LLM-postgresql-event-log.md) - the consumer reference: processors, porting, settings, limits
+- [docs/design/event-log.md](../../docs/design/event-log.md) - how the engine works

@@ -1,8 +1,11 @@
 # postgresql-event-log-processor
 
 The application layer of the new event store engine (`components/postgresql-event-log`): typed events, the two
-processors, application-sourced page transactions, the commit path and the admin SPI. Unreleased phase-8 work on a
-feature branch; it is in no release list, like the engine.
+processors and the annotated base classes, application-sourced page transactions, the commit path, the `EventStore`
+adapter and the admin SPI. **Preview in 0.61.0**: published, but its API may change in a minor release.
+
+- Reference for the engine as built: `docs/design/event-log.md`. Consumer doc: `LLM/LLM-postgresql-event-log.md`. Plan and
+  phase docs (history, decisions, gate results) are archived under `docs/archive/`.
 
 - Design: `docs/archive/event-store-engine-phase8.md` §3, §4.4, §9.2 (unit 8a-C); the `EventStore` adapter §5, §9.4, §9.5 (unit 8b-B). Package `dk.trustworks.essentials.components.eventlog.processor`.
 - Depends on the engine, `foundation` and `postgresql-event-store` (for its value types, `EventMetaData`, `JSONEventSerializer`, `AggregateIdSerializer`, `TenantSerializer` only — never its subscription model). JDBI, Spring TX/JDBC, pgjdbc and SLF4J are `provided`. `architecture/DependencyRulesTest` enforces: no old subscription/processor/gap packages, no fenced lock or durable queues, no Reactor, no Jackson (serialize only through the application's `JSONEventSerializer`, from `EssentialsJSONEventSerializers`), and Spring only in `SpringPageTransactions`, `EventLogCommits` and `UnitOfWorkPageTransactions`.

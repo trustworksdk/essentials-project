@@ -3,7 +3,7 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
-## 0.60.1-10 — targets Essentials 0.60.1
+## 0.60.1-12 — targets Essentials 0.60.1
 
 - **New event store engine, preview** — a new reference, `LLM-postgresql-event-log.md`, covers the event log engine
   shipping as a preview in Essentials 0.61.0: when to choose it over the classic event store, enabling it with
@@ -13,6 +13,9 @@ targets, with a `-N` suffix for plugin-only releases.
   operations, the migration module and the known limits. The spring-boot-starter-modules and admin-api references gain
   the starter and the seven `event-log-subscriptions` operations, and the traps index gains `ESS-138` to `ESS-142`.
   No skill, rule or script changed.
+- **Admin API operation count** — the admin-api, components and spring-boot-starter-modules references said the
+  admin contract has 40 operations; it has 67 (the shard-owned queue and event-log subscription operations were not
+  counted). No skill, rule or script changed.
 
 ## 0.60.1-9 — targets Essentials 0.60.1
 

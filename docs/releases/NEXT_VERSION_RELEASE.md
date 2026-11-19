@@ -33,6 +33,9 @@ and two lock waits removed.
 - Command handlers: an `AnnotatedCommandHandler` failure is logged at DEBUG, not ERROR - the sender reports it (§1.1.5).
 - CDC: the inbox deletes a row once it is dispatched by default, instead of keeping it until the TTL job (§1.1.6).
 - Fenced locks: opt-in spreading of async-acquired locks, and so of exclusive processors, over the instances (§2.9).
+- A new event store engine, as a **preview** and off by default (`essentials.event-log.enabled`): its modules, a
+  Spring Boot starter, admin operations and an admin console view (§2.19-§2.24). Existing event processors must be
+  ported to run on it.
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1). The
 shard-owned adapter writes a new message format, and **0.60.x and this release must not run side by side against the
@@ -680,6 +683,8 @@ while holding the generation lock, as the built-in scan's rollover does) and poi
 
 ### 2.19 Admin API: seven operations for the new event-log engine's subscriptions (`admin-api-spec`, `spring-boot-starter-admin-api`, `admin-api-client-java`)
 
+**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.22): there is deliberately no `EventStoreSubscriptionManager` adapter.
+
 The admin contract (`essentials-admin-api.yaml`) and the generated Java client grow by seven additive paths under the new
 tag `event-log-subscriptions`, for the subscriptions of the new event store engine (`postgresql-event-log`,
 `postgresql-event-log-processor`). They answer from the database on any instance. You can list subscriptions, get one,
@@ -696,8 +701,7 @@ shows them in its event-log subscriptions view (§2.23). (Event store redesign, 
 
 ### 2.20 Spring Boot starter for the new event store engine, preview (`spring-boot-starter-postgresql-event-log`)
 
-**Preview:** the starter, its properties and the engine's API may change in a minor release. The old event store stays
-the default and fully supported.
+**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.22): there is deliberately no `EventStoreSubscriptionManager` adapter.
 
 The new module `spring-boot-starter-postgresql-event-log` auto-configures the new event store engine
 (`postgresql-event-log`) and its `EventStore` adapter (`EventLogEventStore`, `postgresql-event-log-processor`). It is
@@ -734,6 +738,8 @@ In `emit`, an aggregate type's tables go into the emitted script and nothing is 
 
 ### 2.21 The snapshot beans accept any `ConfigurableEventStore` (`spring-boot-starter-postgresql-event-store`)
 
+**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.22): there is deliberately no `EventStoreSubscriptionManager` adapter.
+
 `SnapshotConfiguration`'s snapshot store, snapshot job processor and snapshot repository factory beans, and
 `DefaultAggregateSnapshotRepositoryFactory` (its constructors, builder field and `Builder.setEventStore`), now take
 `ConfigurableEventStore<? extends AggregateEventStreamConfiguration>` instead of
@@ -744,7 +750,9 @@ and works as before.
 
 ### 2.22 Annotated processor base classes for the new event store engine, preview (`postgresql-event-log-processor`)
 
-**Preview**, as §2.20. Two abstract classes port an existing processor to the new engine by swapping its superclass:
+**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.22): there is deliberately no `EventStoreSubscriptionManager` adapter.
+
+Two abstract classes port an existing processor to the new engine by swapping its superclass:
 `EventLogViewProcessor` for a `ViewEventProcessor`, `EventLogReactor` for an `EventProcessor`. Each is a thin shell over
 the engine's processor of the same kind - one `ViewProjection` (`CONTIGUOUS`, exclusive, each page in one transaction
 with the resume point) or one `EventReactor` (`FRESH`, exclusive, at least once) per aggregate type - so retries, page
@@ -806,6 +814,8 @@ the engine's page size by default), `errorSettings()`. The trading demo's six in
 
 ### 2.23 Admin console: a view for the new event-log engine's subscriptions (`spring-boot-starter-admin-ui`)
 
+**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.22): there is deliberately no `EventStoreSubscriptionManager` adapter.
+
 The admin console has a new **Event-log subscriptions** view under *Event store*, for the subscriptions of the new event
 store engine. It uses only the seven `event-log-subscriptions` operations of the admin API (§2.19). It lists every
 instance's subscriptions from the database, and you can filter the list by aggregate type. For each subscription it
@@ -821,6 +831,34 @@ new engine serves no `EventLogSubscriptionsApi`, so the view shows the API's 404
 The status column is the console's own summary of the row (parked, not leased, leased, per instance), not a field of
 the contract. "Reset to the head" means the row's resume point plus its lag, read again when you confirm the reset.
 (Event store redesign, phase 10.)
+
+### 2.24 The new event store engine, preview (`postgresql-event-log`, `postgresql-event-log-processor`, `postgresql-event-log-migration`)
+
+**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.22): there is deliberately no `EventStoreSubscriptionManager` adapter.
+
+Three new modules make up the engine that §2.19-§2.23 build on:
+
+- `postgresql-event-log`: the `EventLog`. Appends and stream loads, and subscriptions that follow the database's own
+  transaction visibility (a watermark from `pg_stat_get_activity`) instead of CDC, a gap handler or a fenced lock. Two
+  consistency modes per subscription: `CONTIGUOUS` (strict global order, never above a hole) and `FRESH` (every committed
+  event as soon as it is seen, in per-aggregate order). Exclusive subscriptions run on engine leases kept in
+  `el_progress`; a failing event is retried alone and then parked while the rest of the stream continues. Its tables are
+  prefixed `el_`. It refuses to start where the role cannot see other backends' `backend_xid` (grant
+  `pg_read_all_stats`).
+- `postgresql-event-log-processor`: `ViewProjection` (each page in one transaction with its resume point) and
+  `EventReactor` (at least once), the annotated base classes (§2.22), the `EventStore` adapter `EventLogEventStore` for
+  aggregate repositories, snapshots and closing books, and the admin SPI (§2.19).
+- `postgresql-event-log-migration`: a one-way, same-database move of aggregate types from the classic engine's tables,
+  with online copy epochs, a short cut-over with every classic node stopped, hash verification and the import of
+  resume points. It only reads the classic tables; there is no way back but a backup.
+
+The payload columns are `json`, not `jsonb`: the stored text is the serializer's compact output, byte for byte the
+classic engine's. Code that hashes or compares payload text sees no difference after a migration.
+
+Measured on the trading demo (one and two instances): equal throughput, booked latency outside the bursts at or near the
+classic engine's (p99 1.14× with one instance, 0.91× with two), about 1.2-1.3× the PostgreSQL CPU and 22 % more
+statements per order, and about 19 % less WAL. How it works: `docs/design/event-log.md`; the consumer reference:
+`LLM/LLM-postgresql-event-log.md`. (Event store redesign, phases 2-10.)
 
 ## 3. Bug fixes
 
@@ -851,6 +889,8 @@ the contract. "Reset to the head" means the row's resume point plus its lag, rea
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md).
 
+- `0.60.1-12` - a new reference, `LLM-postgresql-event-log.md`, for the new event store engine (preview, §2.24), the
+  traps `ESS-138` to `ESS-142`, and the admin API's operation count corrected to 67 (§6).
 - `0.60.1-3` - the LLM docs show `Money`'s `amount` as a JSON number, the form it is written in, and say a quoted
   amount is also read (§3).
 - `0.60.1-2` - the LLM docs describe elastic pump connections, wake-after-commit, `JSONSerializer.readProperties` and
@@ -993,9 +1033,23 @@ Not published; listed because they are the reference for how to use the framewor
   transaction, the page's, which also moves the subscription's progress, so every event is forwarded exactly once and
   the forward costs one commit per page instead of one per event; the page size is `essentials.event-log.page-size`,
   and for the order flow's two reactions `trading-demo.orders.forwarding.batch-size`, as on the classic engine.
+  `trading-demo.views.partitioned-forward-payloads` applies to the classic engine only; on the new engine the
+  partitioned views read their events from the engine. Those views, `AccountOverview` and `AccountActivity`, have no
+  rebuild hook on the new engine yet: a rebuild replays their events but does not clear their tables first, unlike the
+  Users, InstrumentDetails and Positions views (§2.22).
 
 ## 6. Documentation
 
+- A new LLM reference, `LLM/LLM-postgresql-event-log.md`, covers the new event store engine (preview, §2.24): when to
+  choose it over the classic event store, the starter, the processor base classes, consistency and page transactions,
+  porting from the `EventProcessor` family, the settings (including `hole-probe-wait-max`), admin, migration and the
+  known limits. The traps index gains `ESS-138` to `ESS-142`: a classic processor failing start-up once the new engine is
+  on, a hand-written inbox forwarder that forwards twice, an `onRebuild` that clears only one aggregate type's rows, a
+  handler failure wrapped in an I/O-classified exception that never parks, and `EventLogReactor`'s at-least-once
+  delivery. A contributor reference, `docs/design/event-log.md`, describes the engine as built; its plan documents
+  moved to `docs/archive/`. The plugin ships the new reference (§4).
+- The admin API's LLM docs gave the contract as 40 operations; it has 67 (the shard-owned queue and event-log
+  subscription operations were not counted).
 - The LLM docs describe elastic pump connections, and their `InboxConfig.builder()` examples compile: that builder's
   methods take no `set` prefix (`inboxName`, `redeliveryPolicy`, ...), unlike `OutboxConfigBuilder`'s.
 - The LLM docs and the `types-jackson3` README show `Money` as `{"amount":99.99,"currency":"USD"}`, with the amount a

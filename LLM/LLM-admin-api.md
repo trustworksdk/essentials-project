@@ -6,7 +6,7 @@
 - **Base Package**: `dk.trustworks.essentials.components.adminapi.rest`
 - **Purpose**: HTTP admin/monitoring API over the in-process `*Api` SPIs — replaced the removed Vaadin admin UI
 - **Key Deps**: Spring WebMVC (provided), Spring Boot (provided), Jackson 3
-- **Contract**: `components/admin-api-spec/openapi/essentials-admin-api.yaml` — 40 operations, generated code-first from the SPIs
+- **Contract**: `components/admin-api-spec/openapi/essentials-admin-api.yaml` — 67 operations, generated code-first from the SPIs
 - **No Node**: build and validation are JVM-only. The bundled default UI is Thymeleaf + vanilla JavaScript; any other UI consumes the same contract
 
 ```xml
