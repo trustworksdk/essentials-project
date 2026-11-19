@@ -459,3 +459,40 @@ not established.
 
 **Measurement note.** Event type ids are registered at runtime and differ from one database to the next, so a query
 over the event log has to look them up by name, never reuse an id seen in another run.
+
+**Two instances, after the cap.** Measured 2026-11-19 on `16a3cbdb7` (the demo classes and the installed
+`postgresql-event-log` jar built from it), same setup and driver arguments as above, two instances. The classic
+baseline is the three two-instance classic runs above; the classic code path is unchanged since `cae69a1c8`, so they
+were not repeated.
+
+| Run | Arm | Bursts | Booked p50 / p99, all (ms) | Booked p50 / p99 outside bursts (ms) | Completed ops | Statements / order | WAL / order | PG CPU / order | JVM CPU / order | Burst recovery (max s) | Steady state |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 11 | event-log | 10 | 1 143 / 9 096 | 31 / 1 878 | 39 473 | 319 | 50.1 kB | 19.2 ms | 25.8 ms | 9 | pass |
+| 12 | event-log | 10 | 1 390 / 9 742 | 34 / 2 432 | 39 429 | 330 | 50.0 kB | 20.5 ms | 27.1 ms | 2 | pass |
+| 13 | event-log | 10 | 1 238 / 9 051 | 30 / 1 581 | 39 553 | 332 | 50.6 kB | 20.1 ms | 26.1 ms | 4 | pass |
+
+| Median, 10 bursts | classic (n = 3, runs 1, 4, 5 above) | event-log (n = 3, runs 11–13) | event-log / classic |
+|---|---|---|---|
+| Completed ops | 39 185 | 39 473 | 1.01 |
+| Booked p50 / p99, all | 1 537 / 9 673 ms | 1 238 / 9 096 ms | 0.81 / 0.94 |
+| Booked p50 / p99, outside bursts | 232 / 2 060 ms | 31 / 1 878 ms | 0.13 / **0.91** |
+| Statements / order | 271 | 330 | 1.22 |
+| WAL / order | 62.0 kB | 50.1 kB | 0.81 |
+| PostgreSQL CPU / order | 15.4 ms | 20.1 ms | 1.30 |
+| JVM CPU / order | 24.3 ms | 26.1 ms | 1.08 |
+
+Against the pass lines of §8, with two instances:
+
+| Pass line (§8) | Two instances, after the cap |
+|---|---|
+| Completed operations not below classic | **Pass** (1.01×; every event-log run above the classic median) |
+| Booked p99 outside bursts ≤ 1.1× classic | **Pass** (median 1 878 against 2 060 ms, 0.91×; run 12 alone is 1.18×, runs 11 and 13 are below classic) |
+| Zero lost or duplicated view rows | **Pass** (four projections, every run) |
+| Steady-state check passing | **Pass** (every run; burst recovery 2–9 s against classic's 0–9 s) |
+
+Every driver check passed in all three runs (every order, fill and payment reached its outcome, no dead letters, no
+open reconciliation case, no missing statement, the driver never saturated), and no application log has an `ERROR`.
+The cost line is unchanged in kind: about 22 % more statements and 30 % more PostgreSQL CPU per order than classic,
+for 19 % less WAL. Run 12 took 1 429 s of wall clock against ~1 035 s for every other run; the whole difference is
+one business day (the fifth) taking 452 s instead of ~180 s, with no fill left unbooked at its close and its latency
+inside the figures above. Its cause was not investigated.
