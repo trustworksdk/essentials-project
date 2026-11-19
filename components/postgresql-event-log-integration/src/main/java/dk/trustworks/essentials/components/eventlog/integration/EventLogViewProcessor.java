@@ -64,7 +64,8 @@ public abstract class EventLogViewProcessor implements Lifecycle {
     private final EventLogProcessorDependencies dependencies;
     private final MessageHandlerDispatch        dispatch;
     private ProcessorSeams                      seams = ProcessorSeams.NONE;
-    private List<ViewProjection>                projections;
+    private final LifecycleGate                 gate = new LifecycleGate();
+    private volatile List<ViewProjection>       projections;
     private volatile boolean                    started;
 
     /**
@@ -99,12 +100,24 @@ public abstract class EventLogViewProcessor implements Lifecycle {
         return Optional.empty();
     }
 
-    /** Register any unregistered aggregate type, then subscribe once per aggregate type. Idempotent */
+    /**
+     * Register any unregistered aggregate type, then subscribe once per aggregate type. Idempotent. Start, stop and
+     * {@code seams} run one at a time through a {@link LifecycleGate}, with no monitor held while a stop joins the
+     * delivery threads, so a handler that reads this processor ({@link #projections()}, {@link #isStarted()}) never waits behind a stop joining its own thread
+     */
     @Override
-    public synchronized void start() {
-        if (started) {
-            return;
+    public void start() {
+        try (var ignored = gate.enter()) {
+            if (started) {
+                return;
+            }
+            startAll();
+            started = true;
         }
+        log.info("[{}] Started on aggregate types {}", name, aggregateTypes);
+    }
+
+    private void startAll() {
         try {
             if (projections == null) {
                 projections = build();
@@ -119,17 +132,17 @@ public abstract class EventLogViewProcessor implements Lifecycle {
             stopAll();
             throw new IllegalStateException("Failed to start " + this, e);
         }
-        started = true;
-        log.info("[{}] Started on aggregate types {}", name, aggregateTypes);
     }
 
     @Override
-    public synchronized void stop() {
-        if (!started) {
-            return;
+    public void stop() {
+        try (var ignored = gate.enter()) {
+            if (!started) {
+                return;
+            }
+            stopAll();
+            started = false;
         }
-        stopAll();
-        started = false;
         log.info("[{}] Stopped", name);
     }
 
@@ -147,14 +160,16 @@ public abstract class EventLogViewProcessor implements Lifecycle {
     }
 
     /** @return one projection per aggregate type, in {@link #aggregateTypes()} order (for keys, handles, rebuild); empty before the first start */
-    public synchronized List<ViewProjection> projections() {
+    public List<ViewProjection> projections() {
         return projections == null ? List.of() : projections;
     }
 
     /** Test-only: mutants and subscribe path, before the first {@link #start()} */
-    synchronized void seams(ProcessorSeams seams) {
-        requireTrue(projections == null, "Seams must be set before the first start");
-        this.seams = requireNonNull(seams, "No seams provided");
+    void seams(ProcessorSeams seams) {
+        try (var ignored = gate.enter()) {
+            requireTrue(projections == null, "Seams must be set before the first start");
+            this.seams = requireNonNull(seams, "No seams provided");
+        }
     }
 
     private List<ViewProjection> build() {

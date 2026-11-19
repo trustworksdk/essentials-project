@@ -63,7 +63,8 @@ public abstract class EventLogReactor implements Lifecycle {
     private final EventLogProcessorDependencies dependencies;
     private final MessageHandlerDispatch        dispatch;
     private ProcessorSeams                      seams = ProcessorSeams.NONE;
-    private List<EventReactor>                reactors;
+    private final LifecycleGate                 gate = new LifecycleGate();
+    private volatile List<EventReactor>         reactors;
     private volatile boolean                    started;
 
     /**
@@ -98,12 +99,24 @@ public abstract class EventLogReactor implements Lifecycle {
         return Optional.empty();
     }
 
-    /** Register any unregistered aggregate type, then subscribe once per aggregate type. Idempotent */
+    /**
+     * Register any unregistered aggregate type, then subscribe once per aggregate type. Idempotent. Start, stop and
+     * {@code seams} run one at a time through a {@link LifecycleGate}, with no monitor held while a stop joins the
+     * delivery threads, so a handler that reads this processor ({@link #reactors()}, {@link #isStarted()}) never waits behind a stop joining its own thread
+     */
     @Override
-    public synchronized void start() {
-        if (started) {
-            return;
+    public void start() {
+        try (var ignored = gate.enter()) {
+            if (started) {
+                return;
+            }
+            startAll();
+            started = true;
         }
+        log.info("[{}] Started on aggregate types {}", name, aggregateTypes);
+    }
+
+    private void startAll() {
         try {
             if (reactors == null) {
                 reactors = build();
@@ -118,17 +131,17 @@ public abstract class EventLogReactor implements Lifecycle {
             stopAll();
             throw new IllegalStateException("Failed to start " + this, e);
         }
-        started = true;
-        log.info("[{}] Started on aggregate types {}", name, aggregateTypes);
     }
 
     @Override
-    public synchronized void stop() {
-        if (!started) {
-            return;
+    public void stop() {
+        try (var ignored = gate.enter()) {
+            if (!started) {
+                return;
+            }
+            stopAll();
+            started = false;
         }
-        stopAll();
-        started = false;
         log.info("[{}] Stopped", name);
     }
 
@@ -146,14 +159,16 @@ public abstract class EventLogReactor implements Lifecycle {
     }
 
     /** @return one reactor per aggregate type, in {@link #aggregateTypes()} order (for keys, handles, reset); empty before the first start */
-    public synchronized List<EventReactor> reactors() {
+    public List<EventReactor> reactors() {
         return reactors == null ? List.of() : reactors;
     }
 
     /** Test-only: mutants and subscribe path, before the first {@link #start()} */
-    synchronized void seams(ProcessorSeams seams) {
-        requireTrue(reactors == null, "Seams must be set before the first start");
-        this.seams = requireNonNull(seams, "No seams provided");
+    void seams(ProcessorSeams seams) {
+        try (var ignored = gate.enter()) {
+            requireTrue(reactors == null, "Seams must be set before the first start");
+            this.seams = requireNonNull(seams, "No seams provided");
+        }
     }
 
     private List<EventReactor> build() {

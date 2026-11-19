@@ -60,6 +60,7 @@ public abstract class TradingDemoEventLogPartitionedViewProcessor implements Lif
     private       int                                                         consumers = 1;
     private       DurableQueueConsumer                                        queueConsumer;
     private       EventLogForwarder                                           forwarder;
+    private final LifecycleGate                                               gate = new LifecycleGate();
     private volatile boolean                                                  started;
 
     protected TradingDemoEventLogPartitionedViewProcessor(String name,
@@ -101,38 +102,42 @@ public abstract class TradingDemoEventLogPartitionedViewProcessor implements Lif
     }
 
     @Override
-    public synchronized void start() {
-        if (started) {
-            return;
+    public void start() {
+        try (var ignored = gate.enter()) {
+            if (started) {
+                return;
+            }
+            queueConsumer = durableQueues.consumeFromQueue(queueName,
+                                                           queueRedeliveryPolicy(),
+                                                           consumers,
+                                                           queuedMessage -> unitOfWorkFactory.usingUnitOfWork(uow -> handle(queuedMessage.getMessage())));
+            if (forwarder == null) {
+                forwarder = new EventLogForwarder(name, aggregateTypes, dependencies, this::forward);
+            }
+            try {
+                forwarder.start();
+            } catch (RuntimeException e) {
+                queueConsumer.cancel();
+                throw e;
+            }
+            started = true;
         }
-        queueConsumer = durableQueues.consumeFromQueue(queueName,
-                                                       queueRedeliveryPolicy(),
-                                                       consumers,
-                                                       queuedMessage -> unitOfWorkFactory.usingUnitOfWork(uow -> handle(queuedMessage.getMessage())));
-        if (forwarder == null) {
-            forwarder = new EventLogForwarder(name, aggregateTypes, dependencies, this::forward);
-        }
-        try {
-            forwarder.start();
-        } catch (RuntimeException e) {
-            queueConsumer.cancel();
-            throw e;
-        }
-        started = true;
         log.info("[{}] Started: forwarding {} events to '{}', consumed with {} thread(s) on this instance", name, aggregateTypes, queueName, consumers);
     }
 
     @Override
-    public synchronized void stop() {
-        if (!started) {
-            return;
-        }
-        try {
-            forwarder.stop();
-        } finally {
-            queueConsumer.cancel();
-            queueConsumer = null;
-            started = false;
+    public void stop() {
+        try (var ignored = gate.enter()) {
+            if (!started) {
+                return;
+            }
+            try {
+                forwarder.stop();
+            } finally {
+                queueConsumer.cancel();
+                queueConsumer = null;
+                started = false;
+            }
         }
     }
 

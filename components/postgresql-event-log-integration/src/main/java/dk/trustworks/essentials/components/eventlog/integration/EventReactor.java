@@ -45,6 +45,7 @@ public final class EventReactor {
     private final EventDeserializer        deserializer;
     private final Dispatch<Reaction<?>>    dispatch;
     private final ProcessorSeams           seams;
+    private final LifecycleGate            gate = new LifecycleGate();
     private volatile SubscriptionHandle    handle;
 
     private EventReactor(EventLog eventLog, SubscriptionDefinition definition, EventDeserializer deserializer, Dispatch<Reaction<?>> dispatch, ProcessorSeams seams) {
@@ -59,18 +60,34 @@ public final class EventReactor {
         return new Builder(subscriber, aggregateType);
     }
 
-    /** Start delivering (an exclusive reactor may start as a standby). Idempotent while running */
-    public synchronized EventReactor start() throws SQLException {
-        if (handle == null || !handle.isRunning()) {
-            handle = seams.subscriber().subscribe(eventLog, definition, (PeriodicHandler) this::handle, null);
+    /**
+     * Start delivering (an exclusive reactor may start as a standby). Idempotent while running; waits for a stop, reset
+     * or rebuild in progress (see {@link LifecycleGate})
+     */
+    public EventReactor start() throws SQLException {
+        try (var ignored = gate.enter()) {
+            subscribeIfNotRunning();
         }
         return this;
     }
 
-    /** Stop delivering: the resume point is saved once more and an exclusive reactor releases its lease */
-    public synchronized void stop() {
-        if (handle != null) {
-            handle.stop();
+    /** Stop delivering: the resume point is saved once more and an exclusive reactor releases its lease. Idempotent */
+    public void stop() {
+        try (var ignored = gate.enter()) {
+            stopSubscription();
+        }
+    }
+
+    private void subscribeIfNotRunning() throws SQLException {
+        if (!isRunning()) {
+            handle = seams.subscriber().subscribe(eventLog, definition, (PeriodicHandler) this::handle, null);
+        }
+    }
+
+    private void stopSubscription() {
+        var current = handle;
+        if (current != null) {
+            current.stop();
         }
     }
 
@@ -94,13 +111,22 @@ public final class EventReactor {
     /**
      * Move the reactor to {@code from} (§3.3): stop, reset (epoch + 1, parked rows deleted), start again if it ran.
      * {@link StartFrom#head()} is the aggregate type's head at the time of the call.
+     * <p>
+     * Runs as one {@link LifecycleGate} transition, so a concurrent {@link #start()} cannot resume the reactor between the
+     * stop and the reset; no monitor is held while the stop joins the delivery thread.
      *
      * @return {@code false} if the subscription has no progress row yet
      */
-    public synchronized boolean reset(StartFrom from) throws SQLException {
+    public boolean reset(StartFrom from) throws SQLException {
         requireNonNull(from, "No from provided");
+        try (var ignored = gate.enter()) {
+            return resetStopped(from);
+        }
+    }
+
+    private boolean resetStopped(StartFrom from) throws SQLException {
         var wasRunning = isRunning();
-        stop();
+        stopSubscription();
         var admin = eventLog.admin();
         long resumeFrom;
         if (from instanceof StartFrom.GlobalOrder order) {
@@ -114,7 +140,7 @@ public final class EventReactor {
         }
         var reset = admin.reset(key(), resumeFrom);
         if (wasRunning) {
-            start();
+            subscribeIfNotRunning();
         }
         return reset;
     }

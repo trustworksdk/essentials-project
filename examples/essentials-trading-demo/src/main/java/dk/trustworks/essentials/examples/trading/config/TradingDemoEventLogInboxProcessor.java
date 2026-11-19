@@ -60,6 +60,7 @@ public abstract class TradingDemoEventLogInboxProcessor implements Lifecycle {
     private final PatternMatchingMessageHandler                             handler;
     private       Inbox                                                     inbox;
     private       EventLogPageForwarder                                     forwarder;
+    private final LifecycleGate                                             gate = new LifecycleGate();
     private volatile boolean                                                started;
 
     protected TradingDemoEventLogInboxProcessor(String name,
@@ -104,44 +105,48 @@ public abstract class TradingDemoEventLogInboxProcessor implements Lifecycle {
     }
 
     @Override
-    public synchronized void start() {
-        if (started) {
-            return;
+    public void start() {
+        try (var ignored = gate.enter()) {
+            if (started) {
+                return;
+            }
+            inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
+                                                        .inboxName(InboxName.of(name))
+                                                        .messageConsumptionMode(inboxMessageConsumptionMode())
+                                                        .numberOfParallelMessageConsumers(numberOfParallelInboxMessageConsumers())
+                                                        .redeliveryPolicy(inboxRedeliveryPolicy())
+                                                        .build(),
+                                             new InboxConsumer());
+            // The Inbox outlives a stop(): stopConsuming() drops its consumer and getOrCreateInbox returns it as it is
+            if (!inbox.hasAMessageConsumer()) {
+                inbox.consume(new InboxConsumer());
+            }
+            if (forwarder == null) {
+                forwarder = new EventLogPageForwarder(name, aggregateTypes, dependencies, forwardPageSize(), this::forward);
+            }
+            try {
+                forwarder.start();
+            } catch (RuntimeException e) {
+                inbox.stopConsuming();
+                throw e;
+            }
+            started = true;
         }
-        inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
-                                                    .inboxName(InboxName.of(name))
-                                                    .messageConsumptionMode(inboxMessageConsumptionMode())
-                                                    .numberOfParallelMessageConsumers(numberOfParallelInboxMessageConsumers())
-                                                    .redeliveryPolicy(inboxRedeliveryPolicy())
-                                                    .build(),
-                                         new InboxConsumer());
-        // The Inbox outlives a stop(): stopConsuming() drops its consumer and getOrCreateInbox returns it as it is
-        if (!inbox.hasAMessageConsumer()) {
-            inbox.consume(new InboxConsumer());
-        }
-        if (forwarder == null) {
-            forwarder = new EventLogPageForwarder(name, aggregateTypes, dependencies, forwardPageSize(), this::forward);
-        }
-        try {
-            forwarder.start();
-        } catch (RuntimeException e) {
-            inbox.stopConsuming();
-            throw e;
-        }
-        started = true;
         log.info("[{}] Started: forwarding {} events into its inbox", name, aggregateTypes);
     }
 
     @Override
-    public synchronized void stop() {
-        if (!started) {
-            return;
-        }
-        try {
-            forwarder.stop();
-        } finally {
-            inbox.stopConsuming();
-            started = false;
+    public void stop() {
+        try (var ignored = gate.enter()) {
+            if (!started) {
+                return;
+            }
+            try {
+                forwarder.stop();
+            } finally {
+                inbox.stopConsuming();
+                started = false;
+            }
         }
     }
 

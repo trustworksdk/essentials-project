@@ -50,6 +50,7 @@ public final class ViewProjection {
     private final PageApplier                  pageApplier;
     private final Dispatch<EventApplier<?>>    dispatch;
     private final ProcessorSeams               seams;
+    private final LifecycleGate                gate = new LifecycleGate();
     private volatile SubscriptionHandle        handle;
 
     private ViewProjection(EventLog eventLog, SubscriptionDefinition definition, PageTransactionSource source, EventDeserializer deserializer,
@@ -67,18 +68,34 @@ public final class ViewProjection {
         return new Builder(subscriber, aggregateType);
     }
 
-    /** Start delivering (an exclusive projection may start as a standby). Idempotent while running */
-    public synchronized ViewProjection start() throws SQLException {
-        if (handle == null || !handle.isRunning()) {
-            handle = seams.subscriber().subscribe(eventLog, definition, (PageHandler) this::handlePage, source);
+    /**
+     * Start delivering (an exclusive projection may start as a standby). Idempotent while running; waits for a stop or
+     * rebuild in progress (see {@link LifecycleGate})
+     */
+    public ViewProjection start() throws SQLException {
+        try (var ignored = gate.enter()) {
+            subscribeIfNotRunning();
         }
         return this;
     }
 
-    /** Stop delivering; an exclusive projection releases its lease */
-    public synchronized void stop() {
-        if (handle != null) {
-            handle.stop();
+    /** Stop delivering; an exclusive projection releases its lease. Idempotent */
+    public void stop() {
+        try (var ignored = gate.enter()) {
+            stopSubscription();
+        }
+    }
+
+    private void subscribeIfNotRunning() throws SQLException {
+        if (!isRunning()) {
+            handle = seams.subscriber().subscribe(eventLog, definition, (PageHandler) this::handlePage, source);
+        }
+    }
+
+    private void stopSubscription() {
+        var current = handle;
+        if (current != null) {
+            current.stop();
         }
     }
 
@@ -147,10 +164,17 @@ public final class ViewProjection {
         }, truncate);
     }
 
-    private synchronized boolean rebuild(PageTransactionSource in, Truncate truncate) throws SQLException {
+    /** One {@link LifecycleGate} transition: a concurrent {@link #start()} cannot resume the projection mid-rebuild */
+    private boolean rebuild(PageTransactionSource in, Truncate truncate) throws SQLException {
         requireNonNull(truncate, "No truncate provided");
+        try (var ignored = gate.enter()) {
+            return rebuildStopped(in, truncate);
+        }
+    }
+
+    private boolean rebuildStopped(PageTransactionSource in, Truncate truncate) throws SQLException {
         var wasRunning = isRunning();
-        stop();
+        stopSubscription();
         var from = definition.startFrom() instanceof StartFrom.GlobalOrder order ? order.value() : 1L;
         var open = in.begin();
         boolean reset;
@@ -170,7 +194,7 @@ public final class ViewProjection {
             open.rollback();
         }
         if (wasRunning) {
-            start();
+            subscribeIfNotRunning();
         }
         return reset;
     }

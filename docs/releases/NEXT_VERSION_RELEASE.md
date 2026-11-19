@@ -774,7 +774,9 @@ public class OrderSummaryView extends EventLogViewProcessor {
 - A handler's exception reaches the engine unchanged: retried, then parked; a `ParkEventException` parks at once.
 - An aggregate type not yet registered with the `EventLog` is registered (with the engine's default tables) at `start()`.
 - Both are foundation `Lifecycle`s: in Spring the components starter's lifecycle manager starts them, as it starts the
-  old processors (not in schema mode `emit`).
+  old processors (not in schema mode `emit`). `start()` and `stop()` are idempotent and run one at a time, as do
+  `EventReactor.reset` and `ViewProjection.rebuild`, but no lock is held while a stop waits for the delivery thread to
+  finish, so a handler may call `reactors()`, `projections()` or `isStarted()` while its processor is stopping.
 - **Not carried over** from the old processors: `MessageHandlerInterceptor`s, `@MessageHandler(unitOfWork = ...)`, the
   built-in permanent-error list (an `IllegalArgumentException` is retried and then parked like any other failure),
   inbox redelivery and the `RedeliveryPolicy`, Reactor, and the `FencedLock` (exclusivity is the engine's lease).
