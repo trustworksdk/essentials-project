@@ -13,8 +13,8 @@ classic engine (`postgresql-event-store`) stays the default and fully supported,
 This document describes the engine as it is built: its storage, the append path, how a subscription follows the tail,
 and what the processor module, the starter, the admin surface and the migration tool add. It is a reference for the
 system as it stands, not a record of how it came to be. The decisions, the alternatives that were rejected and the
-gate runs are in the plan documents listed below; section references of the form "phase 4 §4.3" in source comments and
-Javadoc point into them.
+gate runs are in the plan documents listed below. Source comments and Javadoc in the three engine modules cite this
+document (for example "see docs/design/event-log.md §5.5"), and the invariant ids I1-I16 refer to §11.
 
 | Document | Contents |
 |---|---|
