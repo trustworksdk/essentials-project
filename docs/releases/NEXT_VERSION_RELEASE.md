@@ -852,6 +852,11 @@ Three new modules make up the engine that §2.19-§2.23 build on:
   with online copy epochs, a short cut-over with every classic node stopped, hash verification and the import of
   resume points. It only reads the classic tables; there is no way back but a backup.
 
+A handler's own connection error (SQLState `08*` or `SQLTransientConnectionException`, also wrapped) is retried and
+then parked like any other handler failure, as the classic Inbox dead-letters it; only a failure of the engine's own
+page connection or statements is retried indefinitely. Earlier builds of the preview retried such a handler error
+forever, so the subscription stalled behind one event.
+
 The payload columns are `json`, not `jsonb`: the stored text is the serializer's compact output, byte for byte the
 classic engine's. Code that hashes or compares payload text sees no difference after a migration.
 

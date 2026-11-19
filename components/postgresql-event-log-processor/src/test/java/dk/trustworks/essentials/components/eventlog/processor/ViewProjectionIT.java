@@ -23,8 +23,10 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.transaction.TransactionStatus;
 
+import java.sql.SQLTransientConnectionException;
 import java.time.Duration;
 import java.util.*;
+import java.util.function.Supplier;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -128,17 +130,26 @@ class ViewProjectionIT extends AbstractProcessorIT {
         armAlways(kind, Set.of(), X);
     }
 
-    @Test
-    void must_fail_c_DESERIALIZE_OUTSIDE_HANDLER_RETRY() {
-        assertThatThrownBy(() -> armAlways(SourceKind.JDBI, Set.of(ProcessorMutant.DESERIALIZE_OUTSIDE_HANDLER_RETRY), X)).isInstanceOf(AssertionError.class);
+    @ParameterizedTest
+    @EnumSource(SourceKind.class)
+    void b_a_connection_error_the_handler_throws_is_retried_then_parked_like_any_failure(SourceKind kind) throws Exception {
+        // the page connection is fine, so the handler's own I/O-classified failure is not the engine's I/O failure
+        armAlways(kind, Set.of(), -1, () -> new IllegalStateException("calling out failed", new SQLTransientConnectionException("the handler's own connection", "08006")));
     }
 
-    /** @param unknownAt {@code X} for arm (c): its payload class does not exist; else the handler always fails on {@code X} */
     private void armAlways(SourceKind kind, Set<ProcessorMutant> mutants, long unknownAt) throws Exception {
+        armAlways(kind, mutants, unknownAt, () -> new IllegalStateException("always fails"));
+    }
+
+    /**
+     * @param unknownAt {@code X} for arm (c): its payload class does not exist; else the handler always fails on {@code X}
+     * @param failure   what the handler throws on {@code X}
+     */
+    private void armAlways(SourceKind kind, Set<ProcessorMutant> mutants, long unknownAt, Supplier<RuntimeException> failure) throws Exception {
         appendEvents(unknownAt);
         var projection = projection(kind, mutants, seams(mutants, Set.of()), Ownership.perInstance("node-1"), applying((event, context) -> {
             if (event.globalOrder().longValue() == X) {
-                throw new IllegalStateException("always fails");
+                throw failure.get();
             }
         }));
         projection.start();

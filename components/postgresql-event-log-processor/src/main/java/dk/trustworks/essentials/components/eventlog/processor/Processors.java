@@ -26,17 +26,10 @@ final class Processors {
     }
 
     /**
-     * Deserialize inside the handler call, so a failure is a handler failure: retried, then parked (§7). The mutant
-     * {@link ProcessorMutant#DESERIALIZE_OUTSIDE_HANDLER_RETRY} reports it as an I/O failure instead
+     * Deserialize inside the handler call, so a failure is a handler failure: retried, then parked (§7). Since 0.61.0
+     * that holds even for a failure wrapped in an I/O-classified exception, so the former mutant that did so is retired
      */
     static DeliveredEvent deserialize(EventDeserializer deserializer, StoredEvent event, ProcessorSeams seams) throws SQLException {
-        try {
-            return deserializer.deserialize(event);
-        } catch (RuntimeException e) {
-            if (seams.has(ProcessorMutant.DESERIALIZE_OUTSIDE_HANDLER_RETRY)) {
-                throw new SQLTransientConnectionException("MUTANT DESERIALIZE_OUTSIDE_HANDLER_RETRY", "08000", e);
-            }
-            throw e;
-        }
+        return deserializer.deserialize(event);
     }
 }

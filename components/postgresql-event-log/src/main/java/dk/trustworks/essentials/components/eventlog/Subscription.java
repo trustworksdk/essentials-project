@@ -60,9 +60,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     <b>detaches</b> between pages, never during one (§7.1), and catches up again. {@code CONTIGUOUS} keeps its pending
  *     rows across a detach (§2.5).</li>
  * </ol>
- * Failures (phase 4 §4): an I/O failure (the page connection invalid, or an {@code SQLException} of class {@code 08} or
- * an {@link SQLTransientConnectionException} in the cause chain, or any failure outside the handler) retries the same
- * page indefinitely with a doubling backoff. A handler failure of a page of several events shrinks the page
+ * Failures (phase 4 §4): an I/O failure of the engine (any failure outside the handler, or the page connection lost)
+ * retries the same page indefinitely with a doubling backoff. What the handler throws on a live connection is the
+ * handler's failure, I/O-classified or not. A handler failure of a page of several events shrinks the page
  * ({@link StepDown}); an event failing alone is retried {@link EventLogSettings#retryAttempts()} times with a doubling
  * backoff, then parked in {@code el_parked_events} - in the page transaction that moves past it (in-transaction), or in
  * autocommit before it counts as handled (periodic). A {@link ParkEventException} parks at once. The later events of a
@@ -1678,8 +1678,9 @@ final class Subscription {
     }
 
     /**
-     * Run the handler until it returns normally, the event's retries are used up or it asks to park it (§4.1-§4.4). An
-     * I/O failure is retried indefinitely with a doubling backoff and counts no attempt.
+     * Run the handler until it returns normally, the event's retries are used up or it asks to park it (§4.1-§4.4). The
+     * handler holds no engine connection, so whatever it throws is its own failure - an I/O-classified one too;
+     * only mutant {@link WatermarkMutant#HANDLER_IO_RETRIED_FOREVER} retries that indefinitely without counting an attempt.
      */
     private Outcome handle(StoredEvent event) throws Exception {
         var ioFailuresHere = 0;
@@ -1711,13 +1712,13 @@ final class Subscription {
                     return new Outcome(false, parkRow(event, attemptsAfterFailure(event), parkNow));
                 }
                 Duration wait;
-                if (isIoFailure(e)) {
+                if (isEngineFailure(true, e, () -> false, seams)) {
                     wait = errors.backoff(ioFailuresHere++);
                     log.warn("Subscription {} on {}: I/O failure handling global_order {}; retrying after {}", key.subscriber(), key.aggregateType(),
                              event.globalOrder(), wait, e);
                 } else {
                     var attempts = attemptsAfterFailure(event);
-                    if (attempts > errors.retryAttempts()) {
+                    if (retriesUsedUp(attempts, errors)) {
                         log.warn("Subscription {} on {}: handler failed {} times on global_order {}; parking it", key.subscriber(), key.aggregateType(), attempts,
                                  event.globalOrder(), e);
                         return new Outcome(false, parkRow(event, attempts, e));
@@ -1817,8 +1818,8 @@ final class Subscription {
      * most the step-down size (§4.2). Events decided for parking and events of held aggregates are taken out of the page
      * and parked in the same transaction (§4.4, §4.5); the handler gets the rest. The handler's writes, the park rows and
      * the progress update - the last statement, guarded by the reset epoch and the value last committed - commit together;
-     * the page leaves pending only after the commit. A failure is classified (§4.1): I/O retries the same page, a park
-     * request parks, anything else shrinks, retries, then parks.
+     * the page leaves pending only after the commit. A failure is classified (§4.1): the engine's I/O ({@link #isEngineFailure})
+     * retries the same page, a park request parks, anything else shrinks, retries, then parks.
      *
      * @return {@code true} if the page committed or is to be retried; {@code false} if stopped or repositioning
      */
@@ -1935,8 +1936,9 @@ final class Subscription {
             }
             throw e;
         } catch (Exception e) {
-            // Only what the handler threw on a healthy connection is the handler's failure; everything else is I/O (§4.1)
-            var io = !inHandler || isIoFailure(e) || open != null && invalid(connection);
+            // What the handler threw on a live page connection is the handler's failure, I/O-classified or not (§4.1)
+            var pageConnection = connection;
+            var io             = isEngineFailure(inHandler, e, () -> pageConnection != null && invalid(pageConnection), seams);
             if (open != null) {
                 try {
                     rollback(open);
@@ -2011,7 +2013,7 @@ final class Subscription {
         if (handlerPage.size() == 1 || seams.has(NO_SHRINK)) {
             var event    = handlerPage.getFirst();
             var attempts = attemptsAfterFailure(event);
-            if (attempts > errors.retryAttempts()) {
+            if (retriesUsedUp(attempts, errors)) {
                 log.warn("Subscription {} on {}: handler failed {} times on global_order {} alone; parking it", subscriber, key.aggregateType(), attempts,
                          event.globalOrder(), e);
                 toPark.put(event.globalOrder(), parkRow(event, attempts, e));
@@ -2038,8 +2040,37 @@ final class Subscription {
     }
 
     /**
-     * §4.1: the cause chain holds an {@code SQLException} of class {@code 08} (connection exception) or a
-     * {@link SQLTransientConnectionException}
+     * §4.1: whether a failure is the engine's own I/O failure - retried indefinitely with a doubling backoff,
+     * never shrinking, parking or counting an attempt. It is when it was thrown outside the handler (beginning the page,
+     * the engine's statements, the commit), or the handler's page connection is lost. Whatever else the handler threw is
+     * the handler's failure, even an I/O-classified one ({@link #isIoFailure}) from a connection of its own: it is retried
+     * {@link ErrorSettings#retryAttempts()} times, then parked, so one event cannot stall the subscription forever.
+     *
+     * @param thrownByHandler    the failure came out of the handler call
+     * @param error              the failure
+     * @param pageConnectionLost whether the page connection is closed or invalid; asked only when {@code thrownByHandler},
+     *                           and only on the failure path
+     * @param seams              mutant {@link WatermarkMutant#HANDLER_IO_RETRIED_FOREVER} restores the classification
+     *                           before 0.61.0
+     */
+    static boolean isEngineFailure(boolean thrownByHandler, Throwable error, java.util.function.BooleanSupplier pageConnectionLost, TestSeams seams) {
+        if (!thrownByHandler) {
+            return true;
+        }
+        if (seams.has(HANDLER_IO_RETRIED_FOREVER) && isIoFailure(error)) {
+            return true;
+        }
+        return pageConnectionLost.getAsBoolean();
+    }
+
+    /** §4.3: the event has failed alone {@code attempts} times, its first try and every retry; parked once this holds */
+    static boolean retriesUsedUp(int attempts, ErrorSettings errors) {
+        return attempts > errors.retryAttempts();
+    }
+
+    /**
+     * The cause chain holds an {@code SQLException} of class {@code 08} (connection exception) or a
+     * {@link SQLTransientConnectionException}; since 0.61.0 used only by mutant {@link WatermarkMutant#HANDLER_IO_RETRIED_FOREVER}
      */
     static boolean isIoFailure(Throwable error) {
         var depth = 0;

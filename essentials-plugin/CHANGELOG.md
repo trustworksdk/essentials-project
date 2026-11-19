@@ -3,6 +3,13 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-13 — targets Essentials 0.60.1
+
+- **Event log: a handler's connection error is parked** — the event-log reference now says that an exception a
+  handler throws from a connection of its own (SQLState `08*`, `SQLTransientConnectionException`) is retried and then
+  parked like any other handler failure; only the engine's own page connection or statements are retried
+  indefinitely. The traps index retires the trap that described the old stall. No skill, rule or script changed.
+
 ## 0.60.1-12 — targets Essentials 0.60.1
 
 - **New event store engine, preview** — a new reference, `LLM-postgresql-event-log.md`, covers the event log engine

@@ -212,11 +212,13 @@ never refused.
 
 ### 5.5 Failures and parking
 
-Failures are classified. An **I/O failure** (SQLState `08*` or `SQLTransientConnectionException` anywhere in the cause
-chain, an invalid page connection, or anything thrown outside the handler) retries the same page indefinitely with a
+Failures are classified. An **I/O failure** of the engine (anything thrown outside the handler, or an invalid page
+connection) retries the same page indefinitely with a
 doubling backoff (`retryBackoffInitial` to `retryBackoffMax`), never shrinking or parking. A **handler failure**
 shrinks the page (`StepDown`: halve, keep the size inside the suspect range), retries the failing event alone
-`retryAttempts` times, then **parks** it in `el_parked_events`; `ParkEventException` parks at once (I14). A parked
+`retryAttempts` times, then **parks** it in `el_parked_events`; `ParkEventException` parks at once (I14). What the handler throws on a live page connection is a handler failure even
+when it is I/O-classified (SQLState `08*` or `SQLTransientConnectionException` in the cause chain): before 0.61.0
+shipped such a failure was retried forever and stalled the subscription (mutant `HANDLER_IO_RETRIED_FOREVER`). A parked
 event holds its aggregate: later events of that aggregate are parked `blocked_by` it (`ParkedEvents`), and the rest of
 the stream continues. Retry and discard requests are served by the subscription's own thread between pages.
 

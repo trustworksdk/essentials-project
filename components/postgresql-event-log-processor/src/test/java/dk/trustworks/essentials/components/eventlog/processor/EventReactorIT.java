@@ -20,8 +20,10 @@ import dk.trustworks.essentials.components.eventlog.*;
 import dk.trustworks.essentials.components.eventlog.processor.test_data.*;
 import org.junit.jupiter.api.Test;
 
+import java.sql.SQLTransientConnectionException;
 import java.time.Duration;
 import java.util.*;
+import java.util.function.Supplier;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.*;
@@ -50,18 +52,23 @@ class EventReactorIT extends AbstractProcessorIT {
     }
 
     @Test
-    void must_fail_c_DESERIALIZE_OUTSIDE_HANDLER_RETRY() {
-        assertThatThrownBy(() -> arm(Set.of(ProcessorMutant.DESERIALIZE_OUTSIDE_HANDLER_RETRY), X)).isInstanceOf(AssertionError.class);
+    void f_a_connection_error_the_reaction_throws_is_retried_then_parked_like_any_failure() throws Exception {
+        // the reaction's own I/O-classified failure, wrapped, is not the engine's I/O failure retried forever
+        arm(Set.of(), -1, () -> new IllegalStateException("calling out failed", new SQLTransientConnectionException("the reaction's own connection", "08006")));
     }
 
     private void arm(Set<ProcessorMutant> mutants, long unknownAt) throws Exception {
+        arm(mutants, unknownAt, () -> new IllegalStateException("always fails"));
+    }
+
+    private void arm(Set<ProcessorMutant> mutants, long unknownAt, Supplier<RuntimeException> failure) throws Exception {
         appendEvents(unknownAt);
         var received = ConcurrentHashMap.<Long>newKeySet();
         var reactor = EventReactor.builder("order-notifier", ORDERS)
                                   // dispatched on the payload's interface
                                   .on(OrderEvent.class, event -> {
                                       if (event.globalOrder().longValue() == X) {
-                                          throw new IllegalStateException("always fails");
+                                          throw failure.get();
                                       }
                                       received.add(event.globalOrder().longValue());
                                   })

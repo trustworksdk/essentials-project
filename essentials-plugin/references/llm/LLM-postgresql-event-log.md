@@ -228,8 +228,10 @@ it.
 
 **Failures.** A handler exception reaches the engine unchanged: the page is shrunk, the event retried alone
 `retry-attempts` times with a doubling backoff, then parked; the stream continues behind it. `ParkEventException`
-(engine package) parks at once. An I/O failure (SQLState `08*` or `SQLTransientConnectionException` anywhere in the
-cause chain) is retried indefinitely without shrinking and without parking. There is **no permanent-error list**: an
+(engine package) parks at once. That includes an exception the handler throws from a connection of its own (SQLState
+`08*`, `SQLTransientConnectionException`, also wrapped): it is retried and parked like any other. Only a failure of the
+engine's own work (the page connection lost, beginning or committing the page, the engine's statements) is retried
+indefinitely without shrinking and without parking, so a database outage never parks events. There is **no permanent-error list**: an
 `IllegalArgumentException` is retried and parked like any other failure.
 
 ## Porting from the EventProcessor family
@@ -331,8 +333,9 @@ cut-over except restoring a backup; rehearse it on a copy first.
   `EventLogInboxProcessor`.
 - ⚠️ **`onRebuild` runs once per rebuild, without an aggregate type.** A ported `onSubscriptionsReset` that cleared only
   the rows of the type it was given must clear everything the view writes.
-- ⚠️ **Never wrap a handler failure in an I/O-classified exception** (SQLState `08*`, `SQLTransientConnectionException`):
-  the engine retries those forever and never parks the event, so the subscription stalls.
+- ⚠️ **A downstream outage the handler calls parks events.** A handler's own connection error is a handler failure:
+  after `retry-attempts` retries the event is parked (as the classic Inbox dead-letters). Raise `retry-attempts` /
+  `retry-backoff-max` for a subscription that must ride out a longer outage, and retry the parked aggregates after it.
 - ⚠️ **`EventLogReactor` is at least once.** Make its handlers idempotent; use `EventLogInboxProcessor` when a reaction
   needs a durable hand-off.
 - ⚠️ **Payload columns are `json`, not `jsonb`**: the stored text is the serializer's compact output, byte-equal to the

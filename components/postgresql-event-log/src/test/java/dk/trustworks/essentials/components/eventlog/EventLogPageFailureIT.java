@@ -48,7 +48,9 @@ class EventLogPageFailureIT extends AbstractPageIT {
         /** Always fails */
         ALWAYS,
         /** Asks to be parked */
-        PARK_EXCEPTION
+        PARK_EXCEPTION,
+        /** Always throws an I/O-classified exception of its own, on a live page connection */
+        CONNECTION_ERROR
     }
 
     /** The view projection, failing on every event of an aggregate whose id starts with {@code poison} */
@@ -75,7 +77,7 @@ class EventLogPageFailureIT extends AbstractPageIT {
             }
         }
 
-        private void fail(StoredEvent event, boolean alone) {
+        private void fail(StoredEvent event, boolean alone) throws SQLTransientConnectionException {
             switch (failure) {
                 case TRANSIENT -> {
                     if (alone && aloneFailures.getAndIncrement() >= 1) {
@@ -85,6 +87,7 @@ class EventLogPageFailureIT extends AbstractPageIT {
                 case PARK_EXCEPTION -> throw new ParkEventException(event, "poison " + event.globalOrder(), new IllegalStateException("bad payload"));
                 case ALWAYS -> {
                 }
+                case CONNECTION_ERROR -> throw new SQLTransientConnectionException("poison " + event.globalOrder(), "08006");
             }
             onFailure.run();
             if (alone && failure == Failure.ALWAYS && aloneFailures.incrementAndGet() == eventLog.settings().retryAttempts() + 1) {
@@ -184,6 +187,16 @@ class EventLogPageFailureIT extends AbstractPageIT {
     void fresh_in_transaction_parks_an_event_that_always_fails_too() throws Exception {
         var poison = alwaysFailing(ConsistencyMode.FRESH);
         assertThat(parkedRows()).containsExactly(Map.entry(poison, "null/4/java.lang.IllegalArgumentException/poison " + poison));
+        assertThat(foldDifferences(Set.of(poison), true)).isEmpty();
+    }
+
+    @Test
+    void a_connection_error_the_handler_throws_is_retried_then_parked_like_any_failure() throws Exception {
+        // the page connection is fine, so the handler's own SQLState 08 failure is not the engine's I/O failure
+        var poison = seed();
+        start(ConsistencyMode.CONTIGUOUS, new PoisonHandler(Failure.CONNECTION_ERROR), TestSeams.Hooks.NONE);
+        awaitCaughtUp(PROJECTION);
+        assertThat(parkedRows()).containsExactly(Map.entry(poison, "null/4/java.sql.SQLTransientConnectionException/poison " + poison));
         assertThat(foldDifferences(Set.of(poison), true)).isEmpty();
     }
 

@@ -97,6 +97,12 @@ enum WatermarkMutant {
 
     /** A failed page is retried whole, never shrunk; when its retries are used up its first event is parked (§4.2) */
     NO_SHRINK,
+    /**
+     * The pre-0.61.0 classification: an I/O-classified exception the handler threw (SQLState {@code 08*},
+     * {@link java.sql.SQLTransientConnectionException}, also wrapped) counts as the engine's I/O failure, retried forever
+     * and never parked, though the page connection is fine (§4.1)
+     */
+    HANDLER_IO_RETRIED_FOREVER,
     /** An in-transaction park row is inserted in its own transaction after the page that moves past it committed (§4.4) */
     PARK_OUTSIDE_PAGE_TRANSACTION,
     /** The page size doubles after every committed page, inside the suspect range too (§4.2) */
