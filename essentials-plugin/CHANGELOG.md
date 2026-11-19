@@ -3,6 +3,13 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-16 — targets Essentials 0.60.1
+
+- **Event log: atomic partitioned-view rebuild** — the event-log reference now states that
+  `EventLogPartitionedViewProcessor.rebuild()` clears the view, purges its queue and resets the reading side in one
+  transaction on the shard-owned queue too, since the shard-owned `purgeQueue` joins the caller's unit of work. No skill,
+  rule or script changed.
+
 ## 0.60.1-15 — targets Essentials 0.60.1
 
 - **Event log: `EventLogPartitionedViewProcessor`** — the event-log reference documents the new base class that ports a
