@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.admin.api;
 
 import dk.trustworks.essentials.components.adminapi.rest.*;
 import dk.trustworks.essentials.components.queue.shardowned.api.ShardOwnedQueuesApi;
-import dk.trustworks.essentials.components.eventlog.integration.api.EventLogSubscriptionsApi;
+import dk.trustworks.essentials.components.eventlog.processor.api.EventLogSubscriptionsApi;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;

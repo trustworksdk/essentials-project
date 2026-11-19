@@ -16,8 +16,8 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.eventlog;
 
 import dk.trustworks.essentials.components.adminapi.rest.*;
-import dk.trustworks.essentials.components.eventlog.integration.ViewProjection;
-import dk.trustworks.essentials.components.eventlog.integration.api.EventLogSubscriptionsApi;
+import dk.trustworks.essentials.components.eventlog.processor.ViewProjection;
+import dk.trustworks.essentials.components.eventlog.processor.api.EventLogSubscriptionsApi;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.shared.security.*;

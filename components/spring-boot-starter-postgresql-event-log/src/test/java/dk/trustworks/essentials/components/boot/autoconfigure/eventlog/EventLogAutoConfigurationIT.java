@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.eventlog;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsConfiguration;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.*;
 import dk.trustworks.essentials.components.eventlog.*;
-import dk.trustworks.essentials.components.eventlog.integration.*;
+import dk.trustworks.essentials.components.eventlog.processor.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;

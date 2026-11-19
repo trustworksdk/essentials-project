@@ -17,7 +17,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.eventlog;
 
 import dk.trustworks.essentials.components.adminapi.rest.AdminApiPrincipalResolver;
 import dk.trustworks.essentials.components.eventlog.EventLog;
-import dk.trustworks.essentials.components.eventlog.integration.api.*;
+import dk.trustworks.essentials.components.eventlog.processor.api.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;

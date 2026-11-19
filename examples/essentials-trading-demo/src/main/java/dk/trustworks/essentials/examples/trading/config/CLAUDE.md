@@ -27,7 +27,7 @@ Porting a processor (pilot: `accounts/views/uncleared_deposits/`):
    bodies plus `PROCESSOR_NAME` / `AGGREGATE_TYPES` constants the wrappers share. `getCommandBus()` becomes an injected
    `CommandBus`; `usingUnitOfWork` / `withUnitOfWork` go through an injected `EventStoreUnitOfWorkFactory`. The wrappers
    `<Name>ClassicReaction` (extends `TradingDemoEventProcessor`) and `<Name>EventLogReaction` (extends
-   the framework's `EventLogInboxProcessor`, in `postgresql-event-log-integration`) carry the `@MessageHandler`s with the
+   the framework's `EventLogInboxProcessor`, in `postgresql-event-log-processor`) carry the `@MessageHandler`s with the
    classic `UnitOfWorkMode`, so the transaction boundary stays on the wrapper. The twin's constructor takes the aggregate
    types as names (`AGGREGATE_TYPES.stream().map(AggregateType::toString).toList()`). A parallel-consumers override is
    `getNumberOfParallelInboxMessageConsumers()` on classic, `numberOfParallelInboxMessageConsumers()` on the twin.

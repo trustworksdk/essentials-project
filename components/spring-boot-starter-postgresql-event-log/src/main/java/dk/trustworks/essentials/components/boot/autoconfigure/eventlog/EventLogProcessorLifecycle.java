@@ -16,7 +16,7 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.eventlog;
 
 import dk.trustworks.essentials.components.eventlog.EventLog;
-import dk.trustworks.essentials.components.eventlog.integration.*;
+import dk.trustworks.essentials.components.eventlog.processor.*;
 import org.slf4j.*;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.SmartLifecycle;

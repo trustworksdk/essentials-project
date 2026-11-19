@@ -16,7 +16,7 @@
 package dk.trustworks.essentials.components.adminapi.rest;
 
 import dk.trustworks.essentials.components.eventlog.*;
-import dk.trustworks.essentials.components.eventlog.integration.api.*;
+import dk.trustworks.essentials.components.eventlog.processor.api.*;
 import dk.trustworks.essentials.shared.security.*;
 import org.junit.jupiter.api.*;
 import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;

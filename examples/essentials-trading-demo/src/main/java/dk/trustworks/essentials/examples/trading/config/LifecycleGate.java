@@ -18,7 +18,7 @@ package dk.trustworks.essentials.examples.trading.config;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * The demo's copy of the integration module's package-private {@code LifecycleGate}: runs a processor's start and stop
+ * The demo's copy of the processor module's package-private {@code LifecycleGate}: runs a processor's start and stop
  * one at a time without holding a monitor while a stop joins the forwarder's delivery thread (for up to 30 seconds).
  * The monitor is held only to claim and release the gate; a second transition waits for the first outside it, so a start
  * never begins forwarding again while the previous stop is still draining. Not reentrant.

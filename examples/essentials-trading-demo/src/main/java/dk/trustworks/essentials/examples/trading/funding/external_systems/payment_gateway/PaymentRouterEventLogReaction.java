@@ -15,7 +15,7 @@
  */
 package dk.trustworks.essentials.examples.trading.funding.external_systems.payment_gateway;
 
-import dk.trustworks.essentials.components.eventlog.integration.*;
+import dk.trustworks.essentials.components.eventlog.processor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;

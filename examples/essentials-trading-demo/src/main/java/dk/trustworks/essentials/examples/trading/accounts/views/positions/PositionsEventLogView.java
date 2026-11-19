@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.accounts.views.positions;
 
-import dk.trustworks.essentials.components.eventlog.integration.*;
+import dk.trustworks.essentials.components.eventlog.processor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.accounts.events.*;

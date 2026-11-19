@@ -17,7 +17,7 @@ package dk.trustworks.essentials.components.adminapi.rest;
 
 import dk.trustworks.essentials.components.adminapi.rest.dto.*;
 import dk.trustworks.essentials.components.eventlog.ProgressKey;
-import dk.trustworks.essentials.components.eventlog.integration.api.*;
+import dk.trustworks.essentials.components.eventlog.processor.api.*;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;

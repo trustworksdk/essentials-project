@@ -44,7 +44,7 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>
-            <artifactId>postgresql-event-log-integration</artifactId>
+            <artifactId>postgresql-event-log-processor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <!-- SpringTransactionAwareEventStoreUnitOfWorkFactory, built as the old event-store starter builds it. Its presence also

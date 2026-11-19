@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.components.adminapi.spec;
 
 import dk.trustworks.essentials.components.adminapi.spec.OpenApiSpecGenerator.SpecBuilder;
-import dk.trustworks.essentials.components.eventlog.integration.api.*;
+import dk.trustworks.essentials.components.eventlog.processor.api.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.queue.shardowned.api.*;

@@ -682,7 +682,7 @@ while holding the generation lock, as the built-in scan's rollover does) and poi
 
 The admin contract (`essentials-admin-api.yaml`) and the generated Java client grow by seven additive paths under the new
 tag `event-log-subscriptions`, for the subscriptions of the new event store engine (`postgresql-event-log`,
-`postgresql-event-log-integration`). They answer from the database on any instance. You can list subscriptions, get one,
+`postgresql-event-log-processor`). They answer from the database on any instance. You can list subscriptions, get one,
 and page its parked events with `SUBSCRIPTION_READER`. You can reset a subscription, retry or discard a parked event, and
 delete a retired per-instance subscription with `SUBSCRIPTION_WRITER`. `ESSENTIALS_ADMIN` can do both. The path is
 `/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/…` with an optional `instanceName` query parameter;
@@ -691,7 +691,7 @@ leave it out to address an exclusive subscription.
 `spring-boot-starter-admin-api` serves these paths only when the application has an `EventLogSubscriptionsApi` bean
 (`DefaultEventLogSubscriptionsApi` over an `EventLog`). The new `spring-boot-starter-postgresql-event-log` declares one
 when it is enabled (§2.20); an existing application serves nothing new and changes nothing; the paths answer 404 as any area without its SPI bean does. The
-starter now depends on `postgresql-event-log-integration`, as it does on the shard-owned queue engine. The admin console
+starter now depends on `postgresql-event-log-processor`, as it does on the shard-owned queue engine. The admin console
 shows them in its event-log subscriptions view (§2.23). (Event store redesign, phase 8b.)
 
 ### 2.20 Spring Boot starter for the new event store engine, preview (`spring-boot-starter-postgresql-event-log`)
@@ -700,7 +700,7 @@ shows them in its event-log subscriptions view (§2.23). (Event store redesign, 
 the default and fully supported.
 
 The new module `spring-boot-starter-postgresql-event-log` auto-configures the new event store engine
-(`postgresql-event-log`) and its `EventStore` adapter (`EventLogEventStore`, `postgresql-event-log-integration`). It is
+(`postgresql-event-log`) and its `EventStore` adapter (`EventLogEventStore`, `postgresql-event-log-processor`). It is
 **off by default**: nothing happens until you set `essentials.event-log.enabled=true`. Enabled, it declares:
 
 - the `EventLog`, started when the context is built and stopped on shutdown. `essentials.schema.mode` decides who creates
@@ -742,7 +742,7 @@ In `emit`, an aggregate type's tables go into the emitted script and nothing is 
 new engine's adapter (§2.20). Source- and behaviour-compatible: code that passes the old `PostgresqlEventStore` compiles
 and works as before.
 
-### 2.22 Annotated processor base classes for the new event store engine, preview (`postgresql-event-log-integration`)
+### 2.22 Annotated processor base classes for the new event store engine, preview (`postgresql-event-log-processor`)
 
 **Preview**, as §2.20. Two abstract classes port an existing processor to the new engine by swapping its superclass:
 `EventLogViewProcessor` for a `ViewEventProcessor`, `EventLogReactor` for an `EventProcessor`. Each is a thin shell over

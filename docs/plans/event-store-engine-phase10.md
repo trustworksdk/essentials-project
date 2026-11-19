@@ -22,7 +22,7 @@ modules are listed in §10, and each one needs confirmation.
 | Piece | State on `a0560df3c` | Phase 10 |
 |---|---|---|
 | Engine `postgresql-event-log` | Built (phases 2-7), plain Java, raw pgjdbc | No change expected |
-| Integration `postgresql-event-log-integration` | `ViewProjection`, `EventReactor`, `EventLogEventStore` adapter, page sources, `EventLogCommits`, admin SPI `EventLogSubscriptionsApi` (phase 8) | Annotated base classes `EventLogViewProcessor` and `EventLogReactor` (§3.5) |
+| Processor `postgresql-event-log-processor` | `ViewProjection`, `EventReactor`, `EventLogEventStore` adapter, page sources, `EventLogCommits`, admin SPI `EventLogSubscriptionsApi` (phase 8) | Annotated base classes `EventLogViewProcessor` and `EventLogReactor` (§3.5) |
 | Migration `postgresql-event-log-migration` | Copy, verify, import, CLI (phase 9) | Documentation only |
 | Admin REST | `EssentialsAdminApiSpec` rows and `EventLogSubscriptionsController`, conditional on an `EventLogSubscriptionsApi` bean (8b-C, release notes §2.19) | The starter declares the bean (§3.4) |
 | Admin UI | No page for the event log | A view beside the shard-owned queue view (§4) |
@@ -35,7 +35,7 @@ modules are listed in §10, and each one needs confirmation.
 ## 2. Release status
 
 The three engine modules are in the root reactor and in no exclusion list, and `admin-api-spec` already depends on the
-integration module, so they publish with the next release as things stand. **Proposed:** they ship in 0.61.0 marked
+processor module, so they publish with the next release as things stand. **Proposed:** they ship in 0.61.0 marked
 **preview**: the API may change in a minor release, every public type says so in its Javadoc, and the release notes and
 the LLM doc lead with it. The old engine stays the default and fully supported. (Open question 4.)
 
@@ -54,7 +54,7 @@ the LLM doc lead with it. The old engine stays the default and fully supported. 
 - `@AutoConfiguration(after = DataSourceAutoConfiguration.class, beforeName = "…postgresql.EssentialsComponentsConfiguration")`,
   ordered by name so there is no compile dependency on the base starter.
 - Depends on `spring-boot-starter-postgresql` (Jdbi, the unit-of-work factory, `EssentialsSecurityProvider`, the
-  `LifecycleManager`) and on the integration module; the admin-api starter is `provided`, as for the queue starter
+  `LifecycleManager`) and on the processor module; the admin-api starter is `provided`, as for the queue starter
   (otherwise it drags in the old event-store starter).
 - Properties `EssentialsEventLogProperties` (`essentials.event-log.*`) mapping 1:1 onto `EventLogSettings` and
   `ErrorSettings`, with Spring's `Duration` binding. `-proc:full` keeps the metadata file (root `CLAUDE.md`).
@@ -68,7 +68,7 @@ the LLM doc lead with it. The old engine stays the default and fully supported. 
 | `EventLogSchemaContributor` | `initialize-schema`, `matchIfMissing = true` | As the queue starter's contributor bean |
 | `EventLogEventStore` as `ConfigurableEventStore` (`@Bean("essentialsEventStore")`) | `@ConditionalOnMissingBean(EventStore.class)` | `EventLog`, the `EventStoreUnitOfWorkFactory` (Spring-transaction-aware, as the old starter builds it), `JSONEventSerializer` (`EssentialsJSONEventSerializers`), `PersistableEventMapper`, optional `TenantSerializer`, enrichers, the shared `EventStoreEventBus` |
 | `EventStoreUnitOfWorkFactory`, `EventStoreEventBus`, `JSONEventSerializer` | `@ConditionalOnMissingBean` | Same construction as the old starter's (so `SnapshotConfiguration` and `ClosingBooksConfiguration` keep working, §3.3) |
-| `UnitOfWorkPageTransactions` / `SpringPageTransactions` as `PageTransactionSource` | `@ConditionalOnMissingBean`; Spring source when a `PlatformTransactionManager` exists | Integration module |
+| `UnitOfWorkPageTransactions` / `SpringPageTransactions` as `PageTransactionSource` | `@ConditionalOnMissingBean`; Spring source when a `PlatformTransactionManager` exists | Processor module |
 | `EventLogSubscriptionsApi` | `@ConditionalOnBean(EssentialsSecurityProvider.class)`, `@ConditionalOnMissingBean`, in a separate admin auto-configuration ordered `beforeName` `EssentialsAdminApiAutoConfiguration` (as `ShardOwnedQueuesAdminApiAutoConfiguration` is) | `DefaultEventLogSubscriptionsApi` |
 | Processor lifecycle | — | `ViewProjection` and `EventReactor` beans built by the application; the starter starts every one in the context after the `EventLog`, stops them before it (a `SmartLifecycle` adapter, **Proposed**), and not in schema mode `EMIT` |
 
@@ -102,11 +102,11 @@ Options (open question 1):
 - (c) The new starter is not meant to share a class path with the old one: an application swaps the dependency and
   declares the snapshot and closing-books beans itself. No coupling, but every adopter rewrites that wiring.
 
-### 3.5 Annotated base classes (integration module)
+### 3.5 Annotated base classes (processor module)
 
 Decided 2026-11-18 (§11, question 2): existing `EventProcessor` and `ViewEventProcessor` code does not run on the new
 engine unchanged (D3 stands: no `EventStoreSubscriptionManager` adapter), but porting one is a superclass swap. Two
-abstract classes in `dk.trustworks.essentials.components.eventlog.integration`, each a thin shell over the phase-8
+abstract classes in `dk.trustworks.essentials.components.eventlog.processor`, each a thin shell over the phase-8
 processor it names, so every engine rule (I14, leases, shrink and park, page transactions) is the processor's:
 
 | Class | Built on | Shape |
@@ -172,7 +172,7 @@ No Node or JavaScript build (root `CLAUDE.md`). Existing-module change E2 (§10)
 | `essentials-plugin/` | Generated from `LLM/` by `scripts/sync-plugin-llm.sh`; a new `plugin.json` version (`scripts/plugin-check.sh changed`, then `quick`) |
 | `docs/` reference | **Proposed:** `docs/design/event-log.md`, the built engine's reference (mechanism, invariants, statements, settings), condensed from the plan and phase docs 2-9; the plan and phase docs then move to `docs/archive/` |
 | Module `README.md`s | One per new module, as the existing modules have |
-| `docs/releases/NEXT_VERSION_RELEASE.md` | §2 entries: the engine, the integration module, the migration tool, the starter, the admin UI page; §5 the demo; the compact-JSON note (phase-9 §2.3) |
+| `docs/releases/NEXT_VERSION_RELEASE.md` | §2 entries: the engine, the processor module, the migration tool, the starter, the admin UI page; §5 the demo; the compact-JSON note (phase-9 §2.3) |
 | Module `CLAUDE.md`s | Drop "unreleased, nothing depends on it" |
 
 ---
@@ -290,6 +290,7 @@ Each unit is one commit with its release-note entry; 10-E's release notes collec
 | 2 | How existing processors reach the new engine (§3.5, §6.2) | **Annotated base classes** `EventLogViewProcessor` / `EventLogReactor` with `@MessageHandler` dispatch; D3 stands (no `EventStoreSubscriptionManager` adapter). The demo ports by superclass swap; reactions and partitioned views keep forwarding to the existing queues. Rejected: a full old-API adapter (reverses D3), hand-porting to lambda builders | Maintainer (`QP-b3c157d767`) |
 | 3 | One demo build with an engine switch, or a permanent move (§6.3) | **Switch**, `trading-demo.engine`, default `classic` | Maintainer (`QP-45f6d26025`) |
 | 4 | Release status (§2) | **Ship in 0.61.0 as preview** | Maintainer (`QP-fe4f361328`) |
+| 5 | Module name | **Module renamed to `postgresql-event-log-processor`**, package `dk.trustworks.essentials.components.eventlog.processor` (was `postgresql-event-log-integration` / `…eventlog.integration`) | Maintainer, 2026-11-19 |
 
 Settled by Claude, unless the maintainer says otherwise: one `EventLog` per `DataSource` (phase-8
 question 10); the gate's run plan and pass lines (§8); the documentation layout (§5); the admin UI view shape (§4); a

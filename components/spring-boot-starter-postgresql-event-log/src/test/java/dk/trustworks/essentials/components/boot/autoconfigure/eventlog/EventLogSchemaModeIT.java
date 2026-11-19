@@ -16,7 +16,7 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.eventlog;
 
 import dk.trustworks.essentials.components.eventlog.*;
-import dk.trustworks.essentials.components.eventlog.integration.ViewProjection;
+import dk.trustworks.essentials.components.eventlog.processor.ViewProjection;
 import dk.trustworks.essentials.components.foundation.schema.SchemaValidationException;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;

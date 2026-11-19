@@ -1,7 +1,7 @@
 # Essentials Components - Spring Boot starter for the PostgreSQL event log (preview)
 
 Auto-configuration for the new PostgreSQL event store engine (`postgresql-event-log`) and its `EventStore` adapter
-(`postgresql-event-log-integration`).
+(`postgresql-event-log-processor`).
 
 > **Preview.** The starter, its properties and the engine's API may change in a minor release. The old event store
 > (`spring-boot-starter-postgresql-event-store`) stays the default and fully supported.

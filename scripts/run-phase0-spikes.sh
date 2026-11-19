@@ -93,10 +93,10 @@
 #                                  p7-gate       EventLogGateSpikeIT (postgresql-event-log)              phase 7 unit C: takeover
 #                                                time of exclusive subscriptions (crash, pause, graceful; a forked owner JVM), lease
 #                                                renewal cost at 1-1000 leases, append and delivery with exclusive subscriptions
-#                                  p8-gate       EventLogIntegrationGateSpikeIT (postgresql-event-log-integration)  phase 8
+#                                  p8-gate       EventLogProcessorGateSpikeIT (postgresql-event-log-processor)  phase 8
 #                                                unit 8a-D: processor overhead (steady, burst), application-sourced pages
 #                                                (JDBI, Spring), admin listing and parked check, retry back-off sweep
-#                                  p8b-gate      EventLogAdapterGateSpikeIT (postgresql-event-log-integration)  phase 8
+#                                  p8b-gate      EventLogAdapterGateSpikeIT (postgresql-event-log-processor)  phase 8
 #                                                unit 8b-D: adapter vs PostgresqlEventStore appends (P0.4 shapes through
 #                                                StatefulAggregateRepository), contended OCC, fetchStream of 1 000 events
 #                                  p2-gate-old   CurrentEngineBaselineSpikeIT#steady+idle with 1 and 10 subscriptions,
@@ -113,7 +113,7 @@
 # 3 prerequisite missing, 4 build failed, 130 interrupted (what ran is still collected).
 #
 # Reads and builds the repository; moves each suite module's target/spike-results (postgresql-event-store,
-# postgresql-event-log, postgresql-event-log-integration)
+# postgresql-event-log, postgresql-event-log-processor)
 # aside and writes only under the results directory.
 
 set -euo pipefail
@@ -207,7 +207,7 @@ suite_classes() {
     p6-gate)      echo "EventLogGateSpikeIT#wakeLatency+notifyAppendCost+flushAcrossTypes" ;;
     p6-gate-old)  echo "CurrentEngineBaselineSpikeIT#p6Latency" ;;
     p7-gate)      echo "EventLogGateSpikeIT#takeoverTime+renewalCost+leaseUnaffected" ;;
-    p8-gate)      echo "EventLogIntegrationGateSpikeIT" ;;
+    p8-gate)      echo "EventLogProcessorGateSpikeIT" ;;
     p8b-gate)     echo "EventLogAdapterGateSpikeIT" ;;
     p2-gate-old)  echo "CurrentEngineBaselineSpikeIT#steady+idle" ;;
     *)            return 1 ;;
@@ -247,7 +247,7 @@ suite_results() {
 suite_module() {
   case "$1" in
     p3-gate|p4-gate|p5-gate|p6-gate|p7-gate) echo "components/postgresql-event-log" ;;
-    p8-gate|p8b-gate) echo "components/postgresql-event-log-integration" ;;
+    p8-gate|p8b-gate) echo "components/postgresql-event-log-processor" ;;
     *)       echo "components/postgresql-event-store" ;;
   esac
 }

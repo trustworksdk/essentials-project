@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.admin.ui;
 
 import dk.trustworks.essentials.components.boot.autoconfigure.admin.api.EssentialsAdminApiAutoConfiguration;
 import dk.trustworks.essentials.components.eventlog.ParkedRequestResult;
-import dk.trustworks.essentials.components.eventlog.integration.api.*;
+import dk.trustworks.essentials.components.eventlog.processor.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;

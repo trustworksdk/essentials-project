@@ -18,7 +18,7 @@ package dk.trustworks.essentials.examples.perflab.scenario;
 
 import com.zaxxer.hikari.HikariDataSource;
 import dk.trustworks.essentials.components.eventlog.*;
-import dk.trustworks.essentials.components.eventlog.integration.*;
+import dk.trustworks.essentials.components.eventlog.processor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;

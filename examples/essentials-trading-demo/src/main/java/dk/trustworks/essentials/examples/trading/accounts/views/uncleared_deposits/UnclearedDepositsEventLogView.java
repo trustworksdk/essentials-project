@@ -15,7 +15,7 @@
  */
 package dk.trustworks.essentials.examples.trading.accounts.views.uncleared_deposits;
 
-import dk.trustworks.essentials.components.eventlog.integration.EventLogProcessorDependencies;
+import dk.trustworks.essentials.components.eventlog.processor.EventLogProcessorDependencies;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.accounts.events.*;
