@@ -1,15 +1,17 @@
 # Event store redesign, phase 3: engine design
 
+> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.61.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
+
 **Status:** decided 2026-11-15 (§6); built on `feature/event-store-engine-phase3`, gate passed 2026-11-16 (§7). When phase 3 is done, this file moves to
 `docs/archive/` or is folded into the redesign's record (`docs/plans/README.md`).
-**Scope:** phase 3 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): one shared tail
+**Scope:** phase 3 of `docs/archive/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): one shared tail
 reader per aggregate type per `EventLog` (§6), attach and detach with the bridge read (F3), overflow and the F5 resume
 position, catch-up reads (§10, unfiltered and uncapped; filtering and the per-database cap are phase 5), the restarted
 reader rule (F4) for attached subscriptions. `FRESH` only; `CONTIGUOUS` is phase 4. Backstop wake-up only. **Gate:** I9
 passes; idle statements flat in the number of subscriptions; statements per delivered event at or below the P0.0
 baseline with 10 subscriptions (decided 2026-11-15). I1-I4, I10 and I11 keep passing.
 
-Section references (§n) are to the plan; "phase-2 §n" is `docs/plans/event-store-engine-phase2.md`. Where this draft
+Section references (§n) are to the plan; "phase-2 §n" is `docs/archive/event-store-engine-phase2.md`. Where this draft
 proposes something the plan does not say, it is marked **Proposed**. The existing `PostgresqlEventStore` and its
 subscriptions are not changed, and nothing below copies their design; the public subscription API stays phase 8's
 (§12.3), so phase 3 keeps the API it touches to what phase 2 already exposes and adds nothing public.

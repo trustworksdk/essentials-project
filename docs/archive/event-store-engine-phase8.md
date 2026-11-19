@@ -1,8 +1,10 @@
 # Event store redesign, phase 8: engine design
 
+> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.61.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
+
 **Status:** decided 2026-11-17 (§15); split into 8a and 8b. 8a built 2026-11-17, gate passed (§16); 8b built 2026-11-17, gate passed (§18). Built on `feature/event-store-engine-phase8` (from
 phase 7, `9d147a6bb`). When phase 8 is done, this file moves to `docs/archive/` or is folded into the redesign's record.
-**Scope:** phase 8 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): the new subscription
+**Scope:** phase 8 of `docs/archive/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): the new subscription
 API, the view-projection and event-processor processors built on it, parked events and the admin API (§12.3), and the
 `EventStore` adapter for appends and stream loads (§19 item 19). Also the items earlier phases handed to phase 8: the
 temporary public surface (`subscribe` and `subscribeExclusive` overloads, `afterCommit`), the page transaction taken
@@ -18,7 +20,7 @@ removed temporary surface.
 subscription API, the processors, parked events and the admin SPI; **8b** is the `EventStore` adapter and the admin
 API's three-place mapping. The gate is divided in §12.
 
-Section references (§n) are to the plan; "phase-4 §n" etc. are `docs/plans/event-store-engine-phase4.md` and its
+Section references (§n) are to the plan; "phase-4 §n" etc. are `docs/archive/event-store-engine-phase4.md` and its
 siblings. Where this draft proposes something the plan does not say, it is marked **Proposed**. The existing
 `PostgresqlEventStore`, `EventStoreSubscriptionManager`, its builders, `EventProcessor`, `ViewEventProcessor`,
 `InTransactionEventProcessor`, `durable_subscriptions`, `SubscriptionErrorPolicy`, `FailFast` redelivery and

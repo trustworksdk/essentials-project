@@ -7,7 +7,7 @@ the event-store redesign builds a new engine and leaves the existing one unchang
 
 ## What was seen
 
-The phase-9 migration gate (`docs/plans/event-store-engine-phase9.md` §17.3-17.4) ran the trading demo on the old
+The phase-9 migration gate (`docs/archive/event-store-engine-phase9.md` §17.3-17.4) ran the trading demo on the old
 engine, with CDC on, and imported its subscriptions' resume points. Some subscribers had rows in
 `transient_subscriber_gaps` for gaps whose events existed in the event table, and had already been handled:
 

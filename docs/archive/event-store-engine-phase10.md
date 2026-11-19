@@ -1,15 +1,17 @@
 # Event store redesign, phase 10: starter, admin UI, documentation and the trading demo
 
+> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.61.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
+
 **Status:** decided 2026-11-18 (§11). Built on `feature/event-store-engine-phase9` (from `a0560df3c`).
 When phase 10 is done, this file and its siblings (phases 2-9) move to `docs/archive/` or are folded into the
 redesign's record.
-**Scope:** phase 10 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): a Spring Boot starter
+**Scope:** phase 10 of `docs/archive/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): a Spring Boot starter
 for the new engine, the admin UI page for its subscriptions, the reference and LLM documentation, the release notes, and
 the trading demo running on the new engine.
 **Gate (plan §18):** the trading demo runs on the new engine at or above its baseline (§8). Every phase-2 to phase-9 IT
 keeps passing.
 
-Section references (§n) are to the plan. "Phase-8 §n" and similar refer to `docs/plans/event-store-engine-phase8.md`
+Section references (§n) are to the plan. "Phase-8 §n" and similar refer to `docs/archive/event-store-engine-phase8.md`
 and its siblings. Where this draft proposes something the plan does not say, it is marked **Proposed**.
 
 The existing engine is not changed (decided 2026-11-15). Phase 10 adds new modules and pages; the touches to existing

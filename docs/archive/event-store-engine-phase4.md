@@ -1,16 +1,18 @@
 # Event store redesign, phase 4: engine design
 
+> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.61.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
+
 **Status:** decided 2026-11-16 (§10); built on `feature/event-store-engine-phase4`, gate passed 2026-11-16 (§11). When phase 4 is done, this file moves to `docs/archive/` or is folded
 into the redesign's record (`docs/plans/README.md`).
-**Scope:** phase 4 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): `CONTIGUOUS` mode
+**Scope:** phase 4 of `docs/archive/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): `CONTIGUOUS` mode
 (§7); progress in the handler's transaction with a page per transaction (§8.1, §8.3); the page error model: a failed
 page shrinks, the failing event is retried and then parked, and later events of its aggregate are held behind it (§8.3,
 §19 items 18 and 21). Also the item phase-3 decision 3 deferred here: where a `FRESH` bridge starts after a detach.
 **Gate:** I12 and I14 pass (§16); projection throughput above the periodic-save baseline; `CONTIGUOUS` latency within
 one probe interval of `FRESH` with no long writer. I1-I4, I9, I10, I11 and every phase-3 rule IT keep passing.
 
-Section references (§n) are to the plan; "phase-2 §n" and "phase-3 §n" are `docs/plans/event-store-engine-phase2.md`
-and `docs/plans/event-store-engine-phase3.md`. Where this draft proposes something the plan does not say, it is marked
+Section references (§n) are to the plan; "phase-2 §n" and "phase-3 §n" are `docs/archive/event-store-engine-phase2.md`
+and `docs/archive/event-store-engine-phase3.md`. Where this draft proposes something the plan does not say, it is marked
 **Proposed**. The existing `PostgresqlEventStore` and its subscriptions are not changed, and nothing below copies their
 design: no `SubscriptionErrorPolicy`, no redelivery policy, no built-in permanent-error list, no `@MessageHandler`. The
 public subscription API stays phase 8's (§12.3); phase 4 adds the smallest handler contract that lets a page and its

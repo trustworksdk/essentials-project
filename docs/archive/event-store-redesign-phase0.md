@@ -1,6 +1,6 @@
 # Event store redesign: phase 0 record
 
-> **ARCHIVED (2026-11-15).** Phase 0 of the event store redesign is finished; the design itself is still a plan in [`../plans/event-store-subscription-redesign.md`](../plans/event-store-subscription-redesign.md), whose "Phase 0 decisions" section lists what was decided.
+> **ARCHIVED (2026-11-15).** Phase 0 of the event store redesign is finished; the design itself is still a plan in [`event-store-subscription-redesign.md`](event-store-subscription-redesign.md), whose "Phase 0 decisions" section lists what was decided.
 
 This is the condensed record of phase 0 (investigation) of the redesign: what each spike P0.0-P0.17 asked, how it was
 run, the numbers it produced and what was decided from them. It replaces seven working documents (a summary, the P0.0

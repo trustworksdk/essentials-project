@@ -32,14 +32,14 @@
     <name>postgresql-event-log</name>
     <description>
         The new PostgreSQL event store engine (event log): append, stream load and, in later phases, the
-        watermark-based subscriptions of docs/plans/event-store-subscription-redesign.md. Built beside
+        watermark-based subscriptions of docs/archive/event-store-subscription-redesign.md. Built beside
         postgresql-event-store; raw pgjdbc, no JDBI, Reactor or Jackson.
     </description>
 
     <dependencies>
         <!--
           The schema harness (EssentialsSchemaContributor, DynamicSchemaContributor, SchemaChange, SchemaOwnership,
-          SchemaOrder) and PostgresqlUtil live in foundation; see docs/plans/event-store-engine-phase2.md §1.1.
+          SchemaOrder) and PostgresqlUtil live in foundation; see docs/archive/event-store-engine-phase2.md §1.1.
         -->
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>

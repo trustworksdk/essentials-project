@@ -63,6 +63,6 @@ and the write commits with the page, together with the subscription's progress. 
 
 The three EF-2 measurement processors in `_demo_harness/` (`NoOpAccountsEventProcessor`, `NoOpAccountsViewProcessor`,
 `BatchedAccountsForwarder`) stay `@ClassicEngine` and are not ported: they measure the classic engine's forwarding
-paths and only exist behind a `trading-demo.ef2.*` flag (`docs/plans/event-store-engine-phase10.md` §6.3). Every other
+paths and only exist behind a `trading-demo.ef2.*` flag (`docs/archive/event-store-engine-phase10.md` §6.3). Every other
 processor has both wrappers; `TradingDemoEventLogIT` starts the whole demo on the `event-log` profile and asserts that
 no classic processor bean and no `EventStoreSubscriptionManager` exist there.

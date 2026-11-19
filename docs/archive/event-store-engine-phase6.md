@@ -1,15 +1,17 @@
 # Event store redesign, phase 6: engine design
 
+> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.61.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
+
 **Status:** built 2026-11-16 on `feature/event-store-engine-phase6`; gate passed, with the §7.1 statements-per-event row accepted by the maintainer (§10.9). When phase 6 is done, this file moves to `docs/archive/` or is folded
 into the redesign's record (`docs/plans/README.md`).
-**Scope:** phase 6 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): wake-up tiers 1
+**Scope:** phase 6 of `docs/archive/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): wake-up tiers 1
 (cross-JVM, `NOTIFY` after commit, coalesced) and 2 (same JVM, commit callback) of §11 with its P0.10 revision, and the
 one-flush read of every woken aggregate type that P0.16 decided and phase-3 §2.1 deferred to here.
 **Gate:** I7 passes (§16: with no running writers, a committed event is delivered within the backstop interval with
 every notification lost — listener killed, `NOTIFY` disabled); commit-to-handler latency compared with S1 and CDC
 (§7 below). Every phase-2 to phase-5 IT keeps passing, with every `must_fail_*` test.
 
-Section references (§n) are to the plan; "phase-3 §n" etc. are `docs/plans/event-store-engine-phase3.md` and its
+Section references (§n) are to the plan; "phase-3 §n" etc. are `docs/archive/event-store-engine-phase3.md` and its
 siblings; P0.n are entries of the phase-0 record (`docs/archive/event-store-redesign-phase0.md`). Where this draft
 proposes something the plan does not say, it is marked **Proposed**. The existing `PostgresqlEventStore`, its
 `EventStorePollingOptimizer` SPI, S1's trigger and listener and the CDC path are not changed, and nothing below copies

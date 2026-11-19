@@ -1,8 +1,10 @@
 # Event store redesign, phase 7: engine design
 
+> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.61.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
+
 **Status:** built 2026-11-17 on `feature/event-store-engine-phase7`; gate passed, with the two §10.3 rows' idle-timeout cost accepted by the maintainer (§15.4). Decided 2026-11-16 (§14), (from phase 6, `ccbbdd15e`).
 When phase 7 is done, this file moves to `docs/archive/` or is folded into the redesign's record (`docs/plans/README.md`).
-**Scope:** phase 7 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): engine leases on the
+**Scope:** phase 7 of `docs/archive/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): engine leases on the
 progress row, batched renewal, exclusive subscriptions fenced (§9), with no `FencedLockManager`; the progress row and
 its fenced update (§8.2, §8.3); §19 items 17 (fences from one sequence) and 22 (lease timings and the clock). Two known
 gaps are folded in: the `PERIODIC` park insert that is not guarded by the reset epoch (phase-4 §4.4, §11.5), and the
@@ -11,7 +13,7 @@ gaps are folded in: the `PERIODIC` park insert that is not guarded by the reset 
 with forked JVMs; the §10 measurements meet the pass lines decided there. Every phase-2 to phase-6 IT keeps passing,
 with every `must_fail_*` test.
 
-Section references (§n) are to the plan; "phase-4 §n" etc. are `docs/plans/event-store-engine-phase4.md` and its
+Section references (§n) are to the plan; "phase-4 §n" etc. are `docs/archive/event-store-engine-phase4.md` and its
 siblings. Where this draft proposes something the plan does not say, it is marked **Proposed**. The existing
 `PostgresqlEventStore`, `FencedLockManager`, `durable_subscriptions` and the old subscription model are not changed and
 nothing below copies them: there is no lock table, no lock callback and no `FencedLock` object. The public API stays

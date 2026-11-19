@@ -1,8 +1,10 @@
 # Event store redesign, phase 2: engine design
 
+> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.61.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
+
 **Status:** reviewed with the project lead on 2026-11-15; the open questions are decided (§5). Nothing here is built yet.
 When phase 2 is done, this file moves to `docs/archive/` or is folded into the redesign's record (`docs/plans/README.md`).
-**Scope:** phase 2 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): the engine's own
+**Scope:** phase 2 of `docs/archive/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): the engine's own
 schema (§12.4), append (§5), stream load, tail reader with watermark and combined probe (§4), progress table (§8.2),
 one `FRESH` subscription, backstop wake-up only. Gate: I1–I4, I10, I11 pass; statements per event at or below the
 P0.0 baseline. Section references (§n) are to the plan unless marked "phase-0 record".

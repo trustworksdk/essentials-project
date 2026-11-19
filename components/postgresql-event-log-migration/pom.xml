@@ -31,7 +31,7 @@
     <artifactId>postgresql-event-log-migration</artifactId>
     <name>postgresql-event-log-migration</name>
     <description>
-        The one-way move from PostgresqlEventStore's tables to the event log's (docs/plans/event-store-engine-phase9.md):
+        The one-way move from PostgresqlEventStore's tables to the event log's (docs/archive/event-store-engine-phase9.md):
         pre-flight, online copy epochs and the cut-over, as same-database SQL. Only reads the old engine's tables (and
         SHARE-locks them during the cut-over); depends on the event log and the JDBC driver, never on JDBI or
         postgresql-event-store. Unreleased.

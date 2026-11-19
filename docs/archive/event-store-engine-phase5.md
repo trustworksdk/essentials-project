@@ -1,8 +1,10 @@
 # Event store redesign, phase 5: engine design
 
+> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.61.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
+
 **Status:** decided 2026-11-16 (§10); built on `feature/event-store-engine-phase5`, gate passed 2026-11-16 (§11, restart-storm row accepted in §11.5). When phase 5 is done, this file moves to `docs/archive/` or is folded
 into the redesign's record (`docs/plans/README.md`).
-**Scope:** phase 5 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): filtered catch-up, the
+**Scope:** phase 5 of `docs/archive/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): filtered catch-up, the
 adaptive fallback, the per-database cap on catch-up reads and the opt-in `(event_type, global_order)` index (§10.1,
 §10.2, §13.3). Also the item phase-3 decision 2 deferred here: whether catch-up may hand gaps below the head to the
 reader ("catch-up with its own candidate"), which decides what F4 costs a `FRESH` subscription after a JVM restart behind
@@ -10,8 +12,8 @@ a long writer (§6).
 **Gate:** I13 and I15 pass (§16); the rare-type catch-up and restart-storm shapes (§17) beat the baseline defined in §8.
 Every phase-2, phase-3 and phase-4 IT keeps passing, with every `must_fail_*` test.
 
-Section references (§n) are to the plan; "phase-3 §n" and "phase-4 §n" are `docs/plans/event-store-engine-phase3.md` and
-`docs/plans/event-store-engine-phase4.md`. Where this draft proposes something the plan does not say, it is marked
+Section references (§n) are to the plan; "phase-3 §n" and "phase-4 §n" are `docs/archive/event-store-engine-phase3.md` and
+`docs/archive/event-store-engine-phase4.md`. Where this draft proposes something the plan does not say, it is marked
 **Proposed**. The existing `PostgresqlEventStore` and its subscriptions are not changed, and nothing below copies their
 design: no gap tables, no per-subscriber gap state, no polling optimizer. The public subscription API stays phase 8's
 (§12.3); phase 5 adds one value type for the event-type filter (§1.2) and says how phase 8 absorbs it.

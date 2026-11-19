@@ -16,7 +16,7 @@ dense.
 The shard-owned queue's `ShardWakeupListener` (`getNotifications(200)`) therefore wakes cross-process owners late. At
 1 000 notifications/s, p50 was 5-13 ms and p99 76-204 ms. At 3 000/s Tier 1 did no better than the 500 ms backstop. See
 [`../design/durable-queue-measurements.md` §3.17](../design/durable-queue-measurements.md). The event-store
-redesign's wake-up tier 1 ([`event-store-subscription-redesign.md`](event-store-subscription-redesign.md) §11, with
+redesign's wake-up tier 1 ([`event-store-subscription-redesign.md`](../archive/event-store-subscription-redesign.md) §11, with
 P0.10's revision) blocks on the same call, so whatever fixes the queue's listener should serve both.
 
 pgjdbc master was checked on 2026-11-12 and has not changed: `processNotifies` still loops on

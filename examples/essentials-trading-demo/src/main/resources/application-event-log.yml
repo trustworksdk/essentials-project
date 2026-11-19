@@ -1,4 +1,4 @@
-# Runs the demo on the new event store engine (preview; docs/plans/event-store-engine-phase10.md §6.3).
+# Runs the demo on the new event store engine (preview; docs/archive/event-store-engine-phase10.md §6.3).
 # Combine with the other profiles: `compose,event-log` or `compose,simulators,event-log`. Use a fresh database
 # (`./reset-stack.sh`): the engine has its own tables (el_*), so events written by the classic engine are not read.
 #

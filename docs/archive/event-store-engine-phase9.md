@@ -1,9 +1,11 @@
 # Event store redesign, phase 9: migration design
 
+> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.61.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
+
 **Status:** decided 2026-11-17 (§15); built 2026-11-17, gate passed (§17, with the decisions of §18). Built on
 `feature/event-store-engine-phase9` (from phase 8b, `223d36278`). When phase 9 is done, this file moves to
 `docs/archive/` or is folded into the redesign's record.
-**Scope:** phase 9 of `docs/plans/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): the one-way move of an
+**Scope:** phase 9 of `docs/archive/event-store-subscription-redesign.md` (§18, "Phases 1 onward"): the one-way move of an
 application from `PostgresqlEventStore` to the event log. That means copying the events per aggregate type, optionally
 importing resume points, cutting over, and verifying all of it (§12.4, D5, risk 9, §19 item 20). The phase starts with a
 spike that measures how fast the copy runs and how long the stop lasts (§19 item 20).
@@ -12,7 +14,7 @@ spike that measures how fast the copy runs and how long the stop lasts (§19 ite
 the new engine without loss (§10.3, read with open question 3); the §10 measurements meet the pass lines decided there.
 Every phase-2 to phase-8 IT keeps passing.
 
-Section references (§n) are to the plan. "Phase-8 §n" and similar refer to `docs/plans/event-store-engine-phase8.md`
+Section references (§n) are to the plan. "Phase-8 §n" and similar refer to `docs/archive/event-store-engine-phase8.md`
 and its siblings. Where this draft proposes something the plan does not say, it is marked **Proposed**.
 
 The existing engine is not changed (decided 2026-11-15). The migration only **reads** the old engine's tables: the event
