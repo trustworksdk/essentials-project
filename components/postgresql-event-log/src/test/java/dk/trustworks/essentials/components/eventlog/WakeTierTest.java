@@ -16,7 +16,6 @@
 package dk.trustworks.essentials.components.eventlog;
 
 import org.junit.jupiter.api.Test;
-import org.postgresql.core.*;
 
 import java.time.Duration;
 import java.util.*;
@@ -26,8 +25,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Unit tests of tier 1: payload parsing and own-instance filtering, the notifier's coalescing, and the
- * upgrade guard of {@code PINNED_PEEK}'s reflection (a pgjdbc rename fails the build, not latency).
+ * Unit tests of tier 1: payload parsing and own-instance filtering, and the notifier's coalescing. The upgrade guard
+ * of {@code PINNED_PEEK}'s reflection lives with the drain, in foundation's {@code PostgresqlNotificationDrainTest}.
  */
 class WakeTierTest {
     @Test
@@ -40,12 +39,6 @@ class WakeTierTest {
         assertThat(WakeListener.typeToWake("Orders", "zzzz9999", true)).isNull();
         assertThat(WakeListener.typeToWake(":Orders", "zzzz9999", true)).isNull();
         assertThat(WakeListener.typeToWake(null, "zzzz9999", true)).isNull();
-    }
-
-    @Test
-    void pgjdbc_still_has_the_fields_the_pinned_peek_writes() throws Exception {
-        assertThat(QueryExecutorBase.class.getDeclaredField("pgStream").getType()).isEqualTo(PGStream.class);
-        assertThat(WakeListener.PinnedPeek.nextCheckField().getType()).isEqualTo(long.class);
     }
 
     @Test

@@ -3,6 +3,13 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-17 — targets Essentials 0.60.1
+
+- **Foundation: `PostgresqlNotificationDrain`** — the foundation reference documents the new helper for a hand-written
+  LISTEN loop on a dedicated connection: `open(Connection)`, `next(timeoutMillis)` and `close()`, which keeps pgjdbc from
+  holding notifications back while they arrive less than a millisecond apart, with a query-poll fallback. No skill, rule
+  or script changed.
+
 ## 0.60.1-16 — targets Essentials 0.60.1
 
 - **Event log: atomic partitioned-view rebuild** — the event-log reference now states that

@@ -907,6 +907,17 @@ classic engine's (p99 1.14× with one instance, 0.91× with two), about 1.2-1.3�
 statements per order, and about 19 % less WAL. How it works: `docs/design/event-log.md`; the consumer reference:
 `LLM/LLM-postgresql-event-log.md`. (Event store redesign, phases 2-10.)
 
+### 2.25 `PostgresqlNotificationDrain`: LISTEN notifications without pgjdbc holding them back (foundation)
+
+New public helper `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlNotificationDrain` for a
+hand-written LISTEN loop on a dedicated connection: `open(Connection)`, `next(timeoutMillis)` and `close()` (call it
+before the connection is released). pgjdbc's `PGConnection.getNotifications(timeout)` returns nothing while
+notifications keep arriving less than about a millisecond apart, so a loop built on it delivers late under dense
+traffic. The drain switches that peek off by reflection and falls back to a short query poll (one WARN per JVM) if
+pgjdbc's internals change; `openQueryPoll` forces the poll. Lifted from the new event store engine's wake listener,
+which now uses it unchanged; the shard-owned queue's listener uses it too (§3). `ListenNotify` and
+`MultiTableChangeListener` are unchanged. Requires `org.postgresql:postgresql` on the classpath, as before.
+
 ## 3. Bug fixes
 
 | Area | Fix | Commit |

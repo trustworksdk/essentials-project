@@ -15,8 +15,8 @@
  */
 package dk.trustworks.essentials.components.eventlog;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlNotificationDrain;
 import org.postgresql.*;
-import org.postgresql.core.*;
 import org.slf4j.*;
 
 import javax.sql.DataSource;
@@ -34,10 +34,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * active type and {@link EventLogSettings#crossJvmWakeUp()} is on. One platform daemon thread {@code eventlog-listener}
  * and one held connection ({@code application_name = eventlog-listener}) with {@code LISTEN el_wake}.
  * <ul>
- *     <li><b>Drain</b> (P0.17 (a)): pgjdbc's {@code getNotifications(timeout)} with its socket peek's cool-down pinned by
- *     reflection ({@code PINNED_PEEK}), so a dense stream does not hold notifications inside the driver; if the
- *     reflection fails, {@code QUERY_POLL}: a trivial statement whose response carries the queued notifications, polled
- *     every millisecond and backing off to 50 ms while nothing arrives.</li>
+ *     <li><b>Drain</b> (P0.17 (a)): foundation's {@link PostgresqlNotificationDrain} - pgjdbc's
+ *     {@code getNotifications(timeout)} with its socket peek's cool-down pinned by reflection ({@code PINNED_PEEK}), so a
+ *     dense stream does not hold notifications inside the driver; if the reflection fails, {@code QUERY_POLL}: a trivial
+ *     statement whose response carries the queued notifications, polled every millisecond and backing off to 50 ms while
+ *     nothing arrives. {@link WatermarkMutant#STOCK_DRAIN} calls pgjdbc's {@code getNotifications(timeout)} unpinned.</li>
  *     <li><b>No work</b>: a notification is parsed, dropped if it is this event log's own (tier 2 acted on it), and
  *     sets the wake flag of its aggregate type if that type is active. It never reads events or reader state.</li>
  *     <li><b>Restart</b>: any failure closes the connection, waits {@code min(backstopInterval, 1 s)}, reconnects, re-runs
@@ -160,9 +161,9 @@ final class WakeListener {
                     return;
                 }
             }
-            Connection connection = null;
-            Drain      drain      = null;
-            String     previousName = null;
+            Connection                  connection   = null;
+            PostgresqlNotificationDrain drain        = null;
+            String                      previousName = null;
             try {
                 if (restarted) {
                     seams.get().hooks().beforeListenerReconnect();
@@ -179,7 +180,9 @@ final class WakeListener {
                         statement.execute("LISTEN " + WakeNotifier.CHANNEL);
                     }
                 }
-                drain = Drain.open(connection, pg, seams.get().has(STOCK_DRAIN), queryPollForTests);
+                if (!seams.get().has(STOCK_DRAIN)) {
+                    drain = queryPollForTests ? PostgresqlNotificationDrain.openQueryPoll(connection) : PostgresqlNotificationDrain.open(connection);
+                }
                 backendPid = pg.getBackendPID();
                 connects.incrementAndGet();
                 if (restarted) {
@@ -191,7 +194,7 @@ final class WakeListener {
                     }
                 }
                 while (wanted) {
-                    var received = drain.next(DRAIN_TIMEOUT_MILLIS);
+                    var received = drain != null ? drain.next(DRAIN_TIMEOUT_MILLIS) : pg.getNotifications(DRAIN_TIMEOUT_MILLIS);
                     if (received == null) {
                         continue;
                     }
@@ -240,7 +243,7 @@ final class WakeListener {
     }
 
     /** Undo everything a pooled session must not carry; a clean stop also runs {@code UNLISTEN *} */
-    private void release(Connection connection, Drain drain, String previousName, boolean clean) {
+    private void release(Connection connection, PostgresqlNotificationDrain drain, String previousName, boolean clean) {
         backendPid = 0;
         if (drain != null) {
             drain.close();
@@ -262,139 +265,6 @@ final class WakeListener {
             connection.close();
         } catch (SQLException e) {
             log.debug("Closing the wake listener's connection failed", e);
-        }
-    }
-
-    /** One way of taking notifications off the listener's connection (P0.17 (a)) */
-    private interface Drain {
-        PGNotification[] next(int timeoutMillis) throws SQLException;
-
-        void close();
-
-        static Drain open(Connection connection, PGConnection pg, boolean stock, boolean queryPoll) throws SQLException {
-            if (stock) {
-                return new Drain() {
-                    public PGNotification[] next(int timeoutMillis) throws SQLException {
-                        return pg.getNotifications(timeoutMillis);
-                    }
-
-                    public void close() {
-                    }
-                };
-            }
-            if (!queryPoll) {
-                var pinned = PinnedPeek.pin(pg);
-                if (pinned != null) {
-                    return pinned;
-                }
-            }
-            return new QueryPoll(connection, pg);
-        }
-    }
-
-    /**
-     * {@code PINNED_PEEK}: {@code PGStream.hasMessagePending()} skips its 1 ms socket peek while
-     * {@code now < nextStreamAvailableCheckTime}; pinned at {@code Long.MAX_VALUE} it answers from {@code available()}
-     * alone, so {@code getNotifications(timeout)} returns what has arrived instead of looping while traffic stays dense.
-     * The first message is still a blocking read with the timeout. Undone (written back to 0) before the connection is
-     * released.
-     */
-    static final class PinnedPeek implements Drain {
-        private static volatile boolean warned;
-        private final PGConnection pg;
-        private final PGStream     stream;
-
-        private PinnedPeek(PGConnection pg, PGStream stream) {
-            this.pg = pg;
-            this.stream = stream;
-        }
-
-        /** @return the pinned drain, or {@code null} (logged once) if pgjdbc's internals do not have the expected shape */
-        static PinnedPeek pin(PGConnection pg) {
-            try {
-                var stream = stream(pg);
-                nextCheckField().setLong(stream, Long.MAX_VALUE);
-                return new PinnedPeek(pg, stream);
-            } catch (ReflectiveOperationException | RuntimeException e) {
-                if (!warned) {
-                    warned = true;
-                    log.warn("Cannot pin pgjdbc's notification peek ({}); the wake listener polls with a query instead", e.toString());
-                }
-                return null;
-            }
-        }
-
-        static PGStream stream(PGConnection pg) throws ReflectiveOperationException {
-            var executor    = ((BaseConnection) pg).getQueryExecutor();
-            var streamField = QueryExecutorBase.class.getDeclaredField("pgStream");
-            streamField.setAccessible(true);
-            return (PGStream) streamField.get(executor);
-        }
-
-        static java.lang.reflect.Field nextCheckField() throws ReflectiveOperationException {
-            var next = PGStream.class.getDeclaredField("nextStreamAvailableCheckTime");
-            next.setAccessible(true);
-            return next;
-        }
-
-        @Override
-        public PGNotification[] next(int timeoutMillis) throws SQLException {
-            return pg.getNotifications(timeoutMillis);
-        }
-
-        @Override
-        public void close() {
-            try {
-                nextCheckField().setLong(stream, 0);
-            } catch (ReflectiveOperationException | RuntimeException e) {
-                log.debug("Unpinning pgjdbc's notification peek failed", e);
-            }
-        }
-    }
-
-    /**
-     * {@code QUERY_POLL}: never enters pgjdbc's {@code processNotifies}. A trivial statement's response is read up to
-     * ReadyForQuery, every notification in front of it lands in the executor's list, and
-     * {@code QueryExecutor.getNotifications()} hands them over without touching the socket. Polled every millisecond,
-     * doubling to at most 50 ms while nothing arrives
-     */
-    static final class QueryPoll implements Drain {
-        private static final long MIN_POLL_NANOS = 1_000_000L;
-        private static final long MAX_POLL_NANOS = 50_000_000L;
-        private final PreparedStatement statement;
-        private final BaseConnection    base;
-        private long                    pollNanos = MIN_POLL_NANOS;
-
-        QueryPoll(Connection connection, PGConnection pg) throws SQLException {
-            this.statement = connection.prepareStatement("SELECT 1");
-            this.base = (BaseConnection) pg;
-        }
-
-        @Override
-        public PGNotification[] next(int timeoutMillis) throws SQLException {
-            var deadline = System.nanoTime() + timeoutMillis * 1_000_000L;
-            while (true) {
-                statement.execute();
-                var notifications = base.getQueryExecutor().getNotifications();
-                if (notifications.length > 0) {
-                    pollNanos = MIN_POLL_NANOS;
-                    return notifications;
-                }
-                if (System.nanoTime() - deadline >= 0) {
-                    return notifications;
-                }
-                LockSupport.parkNanos(this, pollNanos);
-                pollNanos = Math.min(MAX_POLL_NANOS, pollNanos * 2);
-            }
-        }
-
-        @Override
-        public void close() {
-            try {
-                statement.close();
-            } catch (SQLException e) {
-                log.debug("Closing the poll statement failed", e);
-            }
         }
     }
 }

@@ -246,8 +246,8 @@ Three tiers wake a reader; a wake only sets a flag (`ActiveType.wake`) and unpar
 2. **Other JVMs** (`crossJvmWakeUp`, default on): `WakeNotifier` coalesces committed types and sends one
    `SELECT pg_notify('el_wake', p) FROM unnest(?::text[]) p` at most every `notifySendMin` (2 ms) on a borrowed
    connection; a failed send is dropped. `WakeListener` (one platform thread and one `LISTEN` connection per `EventLog`,
-   only while the loop has an active type) drains notifications with pgjdbc's peek cool-down pinned (`PINNED_PEEK`), or a
-   short query poll if the pin fails, ignores its own instance's, and sets flags. After a failure it reconnects and wakes
+   only while the loop has an active type) drains notifications through foundation's `PostgresqlNotificationDrain`:
+   pgjdbc's peek cool-down pinned (`PINNED_PEEK`), or a short query poll if the pin fails. It ignores its own instance's, and sets flags. After a failure it reconnects and wakes
    every type.
 3. **Backstop:** every type is read at least every `backstopInterval` (1 s), so a committed event is delivered within
    that interval with every notification lost (I7).
