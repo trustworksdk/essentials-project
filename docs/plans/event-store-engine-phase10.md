@@ -415,3 +415,47 @@ Connections held, the admin page under load, whole-machine CPU (only the Postgre
 and the projections other than the four listed. Latency percentiles come from three runs per arm at most and, at one
 instance, from a single event-log run at equal burst count; p99 moved by up to 2× between runs of the same arm
 (classic, one instance: 442-1 020 ms outside bursts).
+
+### Gate fixes and 1-instance re-measurement
+
+The failed pass line above led to three fixes, each committed on its own:
+
+- **`0f6506116`: the demo's inbox forwards a page per transaction.** The trading demo, on the new engine, now forwards
+  one page of events into the inbox per transaction instead of one event at a time. This is correct and stays, but it
+  was not the cause of the tail.
+- **`25ec28bce`: a multi-type flush no longer counts as the probe cost.** The hole probe sized its wait from the cost
+  of the last read; a flush that read several event types at once was being counted as that cost, inflating the wait.
+- **`16a3cbdb7`: the probe wait is capped while holes wait.** `holeProbeWaitMax` (property
+  `essentials.event-log.hole-probe-wait-max`, default 100 ms) caps the wait between probes while at least one hole is
+  waiting to be retired. While the cap is in force the ~1 % probe budget is a soft target rather than a hard limit.
+
+**Root cause.** Appends to Orders that roll back leave holes in the global order, 20–35 of them per burst. A hole was
+retired only by a probe, and the probe's wait was the probe cost × 100 × max(1, backends / 10). Under burst load that
+came to seconds, so every `CONTIGUOUS` Orders subscriber stalled for 0.5–6 s behind a hole that was already known to be
+a rollback. The flush-cost fix shortened the wait but left it unbounded; the cap bounds it.
+
+The one-instance gate was re-run after each fix, on the same setup as above, ten bursts each. Booked latency outside
+bursts, in ms:
+
+| Runs | Arm | Code | Booked p99 / p50 outside bursts, per run (ms) |
+|---|---|---|---|
+| 1–3 | classic | `cae69a1c8` | 446 / 171, 1 020 / 172, 442 / 174 |
+| 8–10 | event-log | after the flush-cost fix (`25ec28bce`) | 2 415 / 22, 491 / 20, 4 034 / 22 |
+| 11–13 | event-log | after the cap (`16a3cbdb7`) | 365 / 20, 677 / 22, 507 / 20 |
+
+With the cap the event-log median out-of-burst p99 is 507 ms against classic's 446 ms, 1.14×; the p50 stays at about a
+tenth of classic's. Completed operations are equal between the arms, every run has zero lost or duplicated view rows,
+and the steady-state check passes. PostgreSQL CPU per order is 15.8–16.4 ms on the new engine against 13.0 ms on the
+classic one.
+
+**Where the remaining tail is (run 13).** What is left is the filled → booked leg of orders placed in the first second
+after a burst window closes. In that second the p99 is 703 ms against classic's 568 ms; in the seconds after it the new
+engine is at 71–185 ms against classic's 277–346 ms. Leaving that second out, the new engine's out-of-burst p99 is
+119 ms against classic's 308 ms. The tail is not the probe cadence and not the simulator. The suspected cause is that
+the new engine drains the backlog left at the end of a burst more slowly, but that rests on 3 of the 10 bursts and is
+not established.
+
+**Verdict.** The maintainer accepted the one-instance gate as passed on 2026-11-19.
+
+**Measurement note.** Event type ids are registered at runtime and differ from one database to the next, so a query
+over the event log has to look them up by name, never reuse an id seen in another run.
