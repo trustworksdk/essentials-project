@@ -34,7 +34,7 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 class DependencyRulesTest {
     private static JavaClasses moduleClasses;
 
-    private static final String INBOX_PROCESSOR = "dk\\.trustworks\\.essentials\\.components\\.eventlog\\.processor\\.EventLogInboxProcessor(\\$.*)?";
+    private static final String INBOX_PROCESSOR = "dk\\.trustworks\\.essentials\\.components\\.eventlog\\.processor\\.EventLog(Inbox|PartitionedView)Processor(\\$.*)?";
 
     @BeforeAll
     static void importModuleClasses() {
@@ -54,7 +54,7 @@ class DependencyRulesTest {
     @Test
     void the_old_subscription_model_is_not_used() {
         // foundation messaging is the durable queues' world; only the @MessageHandler annotation is used here,
-        // except by EventLogInboxProcessor, whose job is forwarding into an Inbox - checked by the next rule
+        // except by EventLogInboxProcessor and EventLogPartitionedViewProcessor, whose job is forwarding into a queue - checked by the next rule
         noClasses().that().haveNameNotMatching(INBOX_PROCESSOR).should().dependOnClassesThat(JavaClass.Predicates.resideInAnyPackage("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription..",
                                                                                          "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor..",
                                                                                          "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap..",

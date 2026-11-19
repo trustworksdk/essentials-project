@@ -49,6 +49,12 @@ class UnportedEventProcessorGuardTest {
         }
     }
 
+    abstract static class AccountOverview extends PartitionedViewEventProcessor {
+        AccountOverview(ViewEventProcessorDependencies dependencies) {
+            super(dependencies);
+        }
+    }
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner().withBean(UnportedEventProcessorGuard.class);
 
     @Test
@@ -68,11 +74,14 @@ class UnportedEventProcessorGuardTest {
         runner.withBean("orderProjection", OrderProjection.class, () -> null)
               .withBean("orderNotifier", OrderNotifier.class, () -> null)
               .withBean("inventoryView", InventoryView.class, () -> null)
+              .withBean("accountOverview", AccountOverview.class, () -> null)
               .run(context -> assertThat(context.getStartupFailure().getMessage())
                       .contains("Bean 'orderProjection' (" + OrderProjection.class.getName() + ") is an old-engine ViewEventProcessor", "ported to EventLogViewProcessor")
                       .contains("Bean 'orderNotifier' (" + OrderNotifier.class.getName() + ") is an old-engine EventProcessor",
                                 "ported to EventLogInboxProcessor (with an inbox) or EventLogReactor (side effects only)")
-                      .contains("Bean 'inventoryView' (" + InventoryView.class.getName() + ") is an old-engine InTransactionEventProcessor"));
+                      .contains("Bean 'inventoryView' (" + InventoryView.class.getName() + ") is an old-engine InTransactionEventProcessor")
+                      .contains("Bean 'accountOverview' (" + AccountOverview.class.getName() + ") is an old-engine PartitionedViewEventProcessor",
+                                "ported to EventLogPartitionedViewProcessor"));
     }
 
     @Test

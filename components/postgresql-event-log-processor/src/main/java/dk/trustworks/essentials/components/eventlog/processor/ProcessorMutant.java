@@ -39,5 +39,11 @@ enum ProcessorMutant {
     INBOX_FORWARD_OUTSIDE_PAGE_TRANSACTION,
     /** EventLogViewProcessor's rebuild commits onRebuild's clear before resetting the subscriptions: a rebuild that
      * resets nothing still empties the view */
-    REBUILD_CLEARS_OUTSIDE_RESET_TRANSACTION
+    REBUILD_CLEARS_OUTSIDE_RESET_TRANSACTION,
+    /** EventLogPartitionedViewProcessor enqueues a page's messages in a unit of work of their own, not the page's: a page
+     * that fails after the enqueue queues its events again */
+    PARTITIONED_ENQUEUE_OUTSIDE_PAGE_TRANSACTION,
+    /** EventLogPartitionedViewProcessor's rebuild does not purge its queue: messages queued before the rebuild are
+     * handled after the clear */
+    PARTITIONED_REBUILD_LEAVES_QUEUED_MESSAGES
 }

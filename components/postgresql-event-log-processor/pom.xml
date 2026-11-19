@@ -159,6 +159,13 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- EventLogPartitionedViewProcessorIT: a queue engine that keeps key order across instances -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-queue-shard-owned-adapter</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
 
         <!-- the repository IT copies (design phase 8 §9.5, RepositoryItCopiesTest), as their original modules declare them -->
         <dependency>

@@ -3,6 +3,15 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-15 — targets Essentials 0.60.1
+
+- **Event log: `EventLogPartitionedViewProcessor`** — the event-log reference documents the new base class that ports a
+  classic `PartitionedViewEventProcessor`: each page of events is queued on `<name>:queue` in the page transaction, so
+  every event is queued exactly once, with the classic queue key and metadata keys; every instance consumes the queue;
+  `rebuild()` with `onRebuild(ProjectionContext)` clears the view, purges the queue and resets the reading side. The
+  porting table lists it, and the starter's unported-processor start-up error now names it for a classic partitioned
+  view. No skill, rule or script changed.
+
 ## 0.60.1-14 — targets Essentials 0.60.1
 
 - **Event log: three traps retired** — the traps index retires the event-log traps for a hand-written inbox forwarder,

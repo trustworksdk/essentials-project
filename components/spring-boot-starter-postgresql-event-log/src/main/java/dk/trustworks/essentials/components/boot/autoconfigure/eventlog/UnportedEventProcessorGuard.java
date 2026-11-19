@@ -43,6 +43,7 @@ public final class UnportedEventProcessorGuard implements BeanFactoryPostProcess
     static {
         var portTo  = new LinkedHashMap<String, String>();
         var package_ = "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.";
+        portTo.put(package_ + "PartitionedViewEventProcessor", "EventLogPartitionedViewProcessor");
         portTo.put(package_ + "ViewEventProcessor", "EventLogViewProcessor");
         portTo.put(package_ + "InTransactionEventProcessor", "EventLogViewProcessor");
         portTo.put(package_ + "EventProcessor", "EventLogInboxProcessor (with an inbox) or EventLogReactor (side effects only)");

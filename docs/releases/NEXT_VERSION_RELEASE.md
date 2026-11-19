@@ -731,7 +731,7 @@ top of the adapter, which does not support them. The old starter's snapshot, clo
 configurations stay and run on the adapter (§2.21). The old processors (`EventProcessor`, `ViewEventProcessor`,
 `InTransactionEventProcessor`) do not run under the new engine: start-up fails before any bean is created, with one line
 per such bean naming it, its class and the base class to port it to, instead of a bare missing-bean error (ESS-138).
-Port them to `EventLogReactor`, `EventLogInboxProcessor` and `EventLogViewProcessor` (§2.22), or to `ViewProjection`
+Port them to `EventLogReactor`, `EventLogInboxProcessor`, `EventLogViewProcessor` and `EventLogPartitionedViewProcessor` (§2.22), or to `ViewProjection`
 and `EventReactor`.
 
 **Schema modes.** In `validate`, the engine's own schema is validated when the `EventLog` bean is built, so a missing one
@@ -813,6 +813,27 @@ ordered by event order, with its metadata plus its event id under `EventLogInbox
 named as the old processor's without the `get`: `inboxMessageConsumptionMode()`, `numberOfParallelInboxMessageConsumers()`,
 `inboxRedeliveryPolicy()` (a `FailoverRedeliveryPolicy` by default), `forwardPageSize()` (the old `getForwardBatchSize()`;
 the engine's page size by default), `errorSettings()`. The trading demo's six inbox reactions run on it.
+
+A fourth class, `EventLogPartitionedViewProcessor`, ports a `PartitionedViewEventProcessor`: a view whose `@MessageHandler`
+methods run on every instance, each handling its share of the aggregates. One instance at a time reads the events
+(`CONTIGUOUS`, from the beginning) and queues every event a handler takes on the durable queue `<name>:queue`, with one
+`queueMessages` per page of up to `forwardPageSize()` events inside the page transaction, so the messages commit with the
+resume point and each event is queued exactly once (the classic class forwards per batch in the subscription's unit of
+work). The messages are the classic class's payload messages: key `<aggregateType>|<aggregateId>`
+(`EventLogPartitionedViewProcessor.qualifiedKey`, equal to the classic `qualifiedKey`), order = event order, the event's
+metadata plus `PARTITIONED_VIEW_AGGREGATE_TYPE` and `PARTITIONED_VIEW_EVENT_ID`, the classic metadata keys. A classic
+*reference* message (the classic default without `forwardsEventPayloads()`) is refused, so drain the queue before
+switching. Every instance consumes the queue with `numberOfParallelQueuedMessageConsumers()` threads, each message in one
+unit of work (`messageUnitOfWork()`), with the plain aggregate id as `OrderedMessage#getKey()` and `CausationContext` bound
+to the event; `start()` refuses a queue implementation that does not keep key order across instances and
+`UnitOfWorkMode.NONE` handlers, as the classic class does. Other hooks: `durableQueueRedeliveryPolicy()` (a
+`FailoverRedeliveryPolicy` by default), `forwardPageSize()`, `errorSettings()`. `rebuild()` with the hook
+`onRebuild(ProjectionContext)` stops this instance's consumers, refuses while any other instance consumes the queue (or
+the queue implementation cannot tell), then in one transaction of the page source runs `onRebuild`, purges the queue
+(queued, in-flight and dead-lettered messages) and resets the reading side, and restarts. The purge joins that
+transaction where the queue implementation's `purgeQueue` joins the unit of work in progress (`PostgresqlDurableQueues`);
+the shard-owned engine's purge still commits on its own connection, inside the rebuild but ahead of the clear and the
+reset. The trading demo's two partitioned views run on it.
 
 ### 2.23 Admin console: a view for the new event-log engine's subscriptions (`spring-boot-starter-admin-ui`)
 
@@ -896,6 +917,8 @@ statements per order, and about 19 % less WAL. How it works: `docs/design/event-
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md).
 
+- `0.60.1-15` - the event-log reference documents `EventLogPartitionedViewProcessor`, the port of a classic
+  `PartitionedViewEventProcessor` (§2.22), and lists it in the porting table.
 - `0.60.1-14` - the event-log reference's porting section states plainly that `EventLogInboxProcessor` forwards
   exactly once, `onRebuild` runs once per rebuild and `EventLogReactor` is at least once; the three traps that framed
   these as pitfalls are retired.
@@ -1043,10 +1066,11 @@ Not published; listed because they are the reference for how to use the framewor
   transaction, the page's, which also moves the subscription's progress, so every event is forwarded exactly once and
   the forward costs one commit per page instead of one per event; the page size is `essentials.event-log.page-size`,
   and for the order flow's two reactions `trading-demo.orders.forwarding.batch-size`, as on the classic engine.
-  `trading-demo.views.partitioned-forward-payloads` applies to the classic engine only; on the new engine the
-  partitioned views read their events from the engine. Those views, `AccountOverview` and `AccountActivity`, have no
-  rebuild hook on the new engine yet: a rebuild replays their events but does not clear their tables first, unlike the
-  Users, InstrumentDetails and Positions views (§2.22).
+  `trading-demo.views.partitioned-forward-payloads` stays and applies to the classic engine only; on the new engine the
+  partitioned views always queue the event payload. Those views, `AccountOverview` and `AccountActivity`, extend the
+  framework's `EventLogPartitionedViewProcessor` (§2.22): each page of events is queued in the page's own transaction, so
+  every event is queued exactly once, and a rebuild truncates their tables and purges their queues, as the classic
+  twins' reset does.
 
 ## 6. Documentation
 

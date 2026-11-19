@@ -22,7 +22,6 @@ import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.accounts.views.account_activity.*;
 import dk.trustworks.essentials.examples.trading.accounts.views.account_overview.*;
 import dk.trustworks.essentials.examples.trading.accounts.views.uncleared_deposits.UnclearedDepositsProjection;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoEventLogPartitionedViewProcessor;
 import dk.trustworks.essentials.examples.trading.funding.types.*;
 import dk.trustworks.essentials.examples.trading.funding.use_cases.link_bank_account.LinkBankAccount;
 import dk.trustworks.essentials.examples.trading.funding.use_cases.request_deposit.RequestDeposit;
@@ -122,13 +121,13 @@ class TradingDemoEventLogIT {
     }
 
     @Test
-    void the_whole_demo_runs_on_the_event_log_engine() {
+    void the_whole_demo_runs_on_the_event_log_engine() throws SQLException {
         // Only new-engine processing is wired
         assertThat(context.getBeansOfType(AbstractEventProcessor.class)).as("classic processors").isEmpty();
         assertThat(context.getBeanNamesForType(EventStoreSubscriptionManager.class)).as("EventStoreSubscriptionManager beans").isEmpty();
         assertThat(context.getBeansOfType(EventLogViewProcessor.class)).as("event-log views").isNotEmpty();
-        assertThat(context.getBeansOfType(TradingDemoEventLogPartitionedViewProcessor.class).values())
-                .extracting(TradingDemoEventLogPartitionedViewProcessor::name)
+        assertThat(context.getBeansOfType(EventLogPartitionedViewProcessor.class).values())
+                .extracting(EventLogPartitionedViewProcessor::name)
                 .containsExactlyInAnyOrder("AccountOverviewProjection", "AccountActivityProjection");
         assertThat(context.getBean(AccountOverviewEventLogView.class).isStarted()).isTrue();
         assertThat(context.getBean(AccountActivityEventLogView.class).isStarted()).isTrue();
@@ -177,6 +176,33 @@ class TradingDemoEventLogIT {
             // One row per event, in the account stream's order
             assertThat(activity).extracting(ActivityEntry::eventOrder).doesNotHaveDuplicates();
         });
+
+        // A partitioned view's rebuild truncates its table, purges its queue and replays: the stale row goes, the account's rows return
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            statement.executeUpdate("INSERT INTO projection_account_activity (account_stream_id, event_order, account_id, generation, kind, description)"
+                                    + " VALUES ('ACC-STALE', 0, 'ACC-STALE', 0, 'OPENED', 'stale')");
+        }
+        var activityView = context.getBean(AccountActivityEventLogView.class);
+        assertThat(activityView.rebuild()).isTrue();
+        assertThat(activityView.isStarted()).isTrue();
+        await().atMost(TIMEOUT).untilAsserted(() -> {
+            assertThat(activityAccounts()).doesNotContain("ACC-STALE");
+            var activity = alice().exchange("/api/accounts/" + ACCOUNT + "/activity", HttpMethod.GET, null, new ParameterizedTypeReference<List<ActivityEntry>>() {})
+                                  .getBody();
+            assertThat(activity).extracting(ActivityEntry::kind).contains("OPENED", "DEPOSIT", "HOLD", "TRADE");
+            assertThat(activity).extracting(ActivityEntry::eventOrder).doesNotHaveDuplicates();
+        });
+    }
+
+    private Set<String> activityAccounts() throws SQLException {
+        var accounts = new TreeSet<String>();
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement();
+             var rows = statement.executeQuery("SELECT DISTINCT account_stream_id FROM projection_account_activity")) {
+            while (rows.next()) {
+                accounts.add(rows.getString(1));
+            }
+        }
+        return accounts;
     }
 
     private AccountOverview overview() {

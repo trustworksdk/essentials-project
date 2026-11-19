@@ -202,6 +202,47 @@ id under `EventLogInboxProcessor.EVENT_ID_METADATA_KEY`. Hooks, named as the cla
 `FailoverRedeliveryPolicy` by default), `forwardPageSize()` (the classic `getForwardBatchSize()`; the engine's
 `page-size` by default), `errorSettings()`.
 
+### `EventLogPartitionedViewProcessor` - a view handled on every instance
+
+The counterpart of the classic `PartitionedViewEventProcessor`, for a view keyed by the aggregate whose handlers should run
+on every instance. Needs a `DurableQueues` that keeps key order across instances (the shard-owned engine); `start()`
+refuses any other, and refuses `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)`.
+
+```java
+public class AccountOverviewView extends EventLogPartitionedViewProcessor {
+    public AccountOverviewView(EventLogProcessorDependencies dependencies, DurableQueues durableQueues,
+                               EventStoreUnitOfWorkFactory<?> unitOfWorkFactory) {
+        super("AccountOverviewProjection", List.of("Accounts"), dependencies, durableQueues, unitOfWorkFactory);
+    }
+
+    @MessageHandler
+    void on(AccountOpened e, OrderedMessage message) {   // message.getKey() = plain aggregate id, getOrder() = event order
+        ((EventStoreUnitOfWork) messageUnitOfWork()).handle().execute("INSERT ...");
+    }
+
+    @Override
+    protected void onRebuild(ProjectionContext context) {
+        ((EventStoreUnitOfWork) messageUnitOfWork()).handle().execute("TRUNCATE TABLE account_overview");
+    }
+}
+```
+
+One instance at a time reads the events (`CONTIGUOUS`, from the beginning) and queues each event a handler takes on
+`<name>:queue` with one `queueMessages` per page, inside the page transaction: each event is queued **exactly once**. The
+`unitOfWorkFactory` must be the one the page transactions and the queues share. Messages match the classic class's
+payload messages: key `<aggregateType>|<aggregateId>` (`qualifiedKey`), order = event order, metadata plus
+`AGGREGATE_TYPE_METADATA_KEY` / `EVENT_ID_METADATA_KEY` (the classic key names). A classic *reference* message is refused:
+drain the queue before switching. Every instance consumes the queue; each message is handled in one unit of work
+(`messageUnitOfWork()`) with `CausationContext` bound. Handlers must be idempotent (guard rows with the event order), as on
+classic. Hooks: `numberOfParallelQueuedMessageConsumers()`, `durableQueueRedeliveryPolicy()`, `forwardPageSize()`,
+`errorSettings()`, `onRebuild(ProjectionContext)`.
+
+`rebuild()` stops this instance's consumers, refuses while another instance consumes the queue (stop it everywhere else
+first, as for the classic reset), then in one page-source transaction runs `onRebuild`, purges the queue (dead letters
+included) and resets the reading side, and restarts. The purge shares that transaction only where the queue
+implementation's `purgeQueue` joins the unit of work in progress; the shard-owned engine's purge still commits on its own
+connection, ahead of the clear and the reset.
+
 ### Lambda builders
 
 Without a base class, `ViewProjection.builder(subscriber, aggregateType)` (`.on(Type.class, (event, ctx) -> …)` or
@@ -243,6 +284,7 @@ Port each one by swapping its superclass:
 |---------|------------|-------|
 | `ViewEventProcessor` (or an in-transaction view) | `EventLogViewProcessor` | Write through `getRequiredUnitOfWork().handle()` as before; it is the page's |
 | `EventProcessor` with an inbox | `EventLogInboxProcessor` | Handlers unchanged, including `OrderedMessage` and `unitOfWork = …` |
+| `PartitionedViewEventProcessor` | `EventLogPartitionedViewProcessor` | Handlers unchanged (`OrderedMessage`); same queue name and key; drain classic reference messages first |
 | `EventProcessor` whose handlers only cause side effects | `EventLogReactor` | `FRESH`, at least once; no inbox, no redelivery policy |
 
 Steps that keep a port small:
@@ -257,7 +299,8 @@ Steps that keep a port small:
    per rebuild for all aggregate types together, not once per type.
 6. **`getCommandBus()` and `usingUnitOfWork` from the base class** become an injected `CommandBus` and
    `EventStoreUnitOfWorkFactory`.
-7. **A `getForwardBatchSize()` override** becomes a `forwardPageSize()` override.
+7. **A `getForwardBatchSize()` override** becomes a `forwardPageSize()` override, and `getNumberOfParallelQueuedMessageConsumers()`
+   becomes `numberOfParallelQueuedMessageConsumers()`.
 
 What each port keeps or changes in delivery:
 
@@ -278,7 +321,7 @@ this behind `trading-demo.engine` (`examples/essentials-trading-demo`, `config/C
 
 **Not carried over** from the classic processors: `MessageHandlerInterceptor`s, `@MessageHandler(unitOfWork = …)` on
 view processors and reactors, the permanent-error list, inbox redelivery and the `RedeliveryPolicy` (except on
-`EventLogInboxProcessor`), Reactor, and the `FencedLock` (exclusivity is the engine's lease).
+`EventLogInboxProcessor` and `EventLogPartitionedViewProcessor`), Reactor, and the `FencedLock` (exclusivity is the engine's lease).
 
 ## Settings
 
@@ -338,7 +381,7 @@ cut-over except restoring a backup; rehearse it on a copy first.
 
 ## Gotchas
 
-- ⚠️ **A classic `EventProcessor`, `ViewEventProcessor` or `InTransactionEventProcessor` bean fails start-up** once
+- ⚠️ **A classic `EventProcessor`, `ViewEventProcessor`, `PartitionedViewEventProcessor` or `InTransactionEventProcessor` bean fails start-up** once
   `essentials.event-log.enabled=true`, before any bean is created, with one line per such bean naming it, its class and
   its port target, for example `Bean 'orderProjection' (com.x.OrderProjection) is an old-engine ViewEventProcessor. With essentials.event-log.enabled=true it must be ported to EventLogViewProcessor - see LLM-postgresql-event-log.md § Porting from the EventProcessor family.`
   Port it (above).

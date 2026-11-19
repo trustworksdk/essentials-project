@@ -188,7 +188,7 @@ the number they have where they are defined, never renumbered: `ESS-S<n>` for a 
 - <a id="ess-085"></a>`ESS-085` Lock contention or leaked locks — shared instance IDs, no try-with-resources, confirmation near timeout → [LLM-springdata-mongo-distributed-fenced-lock.md § Gotchas](LLM-springdata-mongo-distributed-fenced-lock.md#gotchas)
 
 ### postgresql-event-log ([LLM-postgresql-event-log.md](LLM-postgresql-event-log.md))
-- <a id="ess-138"></a>`ESS-138` Start-up fails with "Bean '…' (…) is an old-engine EventProcessor/ViewEventProcessor/InTransactionEventProcessor" after `essentials.event-log.enabled=true` — classic processors do not run on the new engine and there is no adapter; the message names every such bean and its port target: port it to `EventLogViewProcessor`/`EventLogReactor`/`EventLogInboxProcessor` → [LLM-postgresql-event-log.md § Porting from the EventProcessor family](LLM-postgresql-event-log.md#porting-from-the-eventprocessor-family)
+- <a id="ess-138"></a>`ESS-138` Start-up fails with "Bean '…' (…) is an old-engine EventProcessor/ViewEventProcessor/PartitionedViewEventProcessor/InTransactionEventProcessor" after `essentials.event-log.enabled=true` — classic processors do not run on the new engine and there is no adapter; the message names every such bean and its port target: port it to `EventLogViewProcessor`/`EventLogReactor`/`EventLogInboxProcessor`/`EventLogPartitionedViewProcessor` → [LLM-postgresql-event-log.md § Porting from the EventProcessor family](LLM-postgresql-event-log.md#porting-from-the-eventprocessor-family)
 
 ---
 

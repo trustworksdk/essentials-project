@@ -2,7 +2,7 @@
 
 The application layer of the new event store engine (`postgresql-event-log`):
 
-- `EventLogViewProcessor`, `EventLogReactor` and `EventLogInboxProcessor`, annotated base classes with `@MessageHandler`
+- `EventLogViewProcessor`, `EventLogReactor`, `EventLogInboxProcessor` and `EventLogPartitionedViewProcessor`, annotated base classes with `@MessageHandler`
   dispatch that port a classic `ViewEventProcessor` or `EventProcessor` by swapping its superclass;
 - `ViewProjection` (`CONTIGUOUS`, each page in one transaction with its resume point) and `EventReactor` (`FRESH`, at
   least once), built with lambdas;

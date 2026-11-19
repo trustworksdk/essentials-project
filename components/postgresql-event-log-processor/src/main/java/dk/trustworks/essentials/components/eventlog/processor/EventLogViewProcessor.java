@@ -288,8 +288,7 @@ public abstract class EventLogViewProcessor implements Lifecycle {
     private List<ViewProjection> build() {
         var built = new ArrayList<ViewProjection>(aggregateTypes.size());
         for (var aggregateType : aggregateTypes) {
-            var builder = ViewProjection.builder(name, aggregateType)
-                                        .on(Object.class, (event, context) -> handle(event))
+            var builder = applier(ViewProjection.builder(name, aggregateType))
                                         .consistency(consistency())
                                         .startFrom(startFrom())
                                         .transactions(dependencies.pageTransactions())
@@ -299,6 +298,15 @@ public abstract class EventLogViewProcessor implements Lifecycle {
             built.add(builder.build(dependencies.eventLog(), dependencies.serializer()));
         }
         return List.copyOf(built);
+    }
+
+    /**
+     * How each projection applies its events: one event at a time through the {@link MessageHandler} methods. Package-private
+     * so a framework subclass that works on whole pages ({@link EventLogPartitionedViewProcessor}'s reading side) can
+     * apply a page at once.
+     */
+    ViewProjection.Builder applier(ViewProjection.Builder builder) {
+        return builder.on(Object.class, (event, context) -> handle(event));
     }
 
     private void handle(DeliveredEvent event) {

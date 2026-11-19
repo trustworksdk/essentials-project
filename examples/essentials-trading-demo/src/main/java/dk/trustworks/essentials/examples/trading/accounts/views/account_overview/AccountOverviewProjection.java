@@ -176,7 +176,12 @@ public class AccountOverviewProjection {
      * Empties the table, for a classic subscription reset.
      */
     void truncate() {
-        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE projection_account_overview"));
+        unitOfWorkFactory.usingUnitOfWork(uow -> truncate(uow.handle()));
+    }
+
+    /** Empties the view on the caller's transaction: the event-log twin's rebuild */
+    void truncate(Handle handle) {
+        handle.execute("TRUNCATE TABLE projection_account_overview");
     }
 
     private static void delta(Handle handle, AccountEvent event, long eventOrder,
