@@ -19,6 +19,7 @@
 **Dependencies from other modules**:
 - `DBFencedLockApi`, `DurableQueuesApi`, `SchedulerApi`, `PostgresqlQueryStatisticsApi`, `PostgresqlTableStatisticsApi` from [foundation](./LLM-foundation.md)
 - `EventStoreApi`, `CdcApi`, `PostgresqlEventStoreStatisticsApi` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `EventLogSubscriptionsApi` from [postgresql-event-log](./LLM-postgresql-event-log.md) (preview; declared by `spring-boot-starter-postgresql-event-log`)
 - SPI beans are wired by [spring-boot-starter-modules](./LLM-spring-boot-starter-modules.md)
 
 ## TOC
@@ -51,6 +52,7 @@ Mounted under `/api/essentials/admin/v1` (configurable). Contract paths are rela
 | `postgresql-table-statistics` | `GET /postgresql/table-statistics` — every Essentials table, grouped by section | `essentials_postgresql_stats_reader` |
 | `durable-queues` | `GET /durable-queues`, message get/delete/resurrect/mark-as-dead-letter, per-queue messages, dead-letters, counts, statistics, purge | `essentials_queue_reader` / `essentials_queue_writer` |
 | `event-store` | `GET /event-store/subscriptions`, `GET /event-store/subscriptions/statistics`, `GET /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/statistics`, `GET /event-store/aggregate-types/{aggregateType}/highest-global-event-order`, `GET /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events?limit=`, `GET /event-store/events/{eventId}`, `GET /event-store/events/{eventId}/causation-chain?maxDepth=`, `GET /event-store/events/{eventId}/caused-events`, `POST /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/resume` | `essentials_subscription_reader` / `essentials_subscription_writer` (resume) |
+| `event-log-subscriptions` | `GET /event-log/subscriptions?aggregateType=`, `GET .../subscriptions/{subscriber}/aggregate-types/{aggregateType}`, `GET .../parked-events`; `POST .../reset?resumeFrom=`, `POST .../parked-events/{globalOrder}/retry`, `POST .../parked-events/{globalOrder}/discard`, `DELETE .../instances/{instanceName}` — the new event store engine's subscriptions (preview); optional `instanceName` query parameter, omitted for an exclusive subscription; 404 unless the application has an `EventLogSubscriptionsApi` bean ([LLM-postgresql-event-log.md](LLM-postgresql-event-log.md#admin)) | `essentials_subscription_reader` / `essentials_subscription_writer` |
 | `cdc` | `GET /event-store/cdc/status` | `essentials_subscription_reader` |
 | `event-store-statistics` | `GET /event-store/statistics/table-sizes`, `table-activity`, `table-cache-hit-ratio` — event-stream tables only; `postgresql-table-statistics` covers them and every other Essentials table | `essentials_postgresql_stats_reader` |
 

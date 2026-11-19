@@ -72,6 +72,7 @@ Consolidated view of all component modules [LLM-components.md](LLM-components.md
 | **eventsourced-aggregates** | `StatefulAggregate`, `Aggregate`, `Decider`, Repository patterns, snapshots, closing the books | [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md) |
 | **spring-postgresql-event-store** | Spring transaction integration for `EventStore` | [LLM-spring-postgresql-event-store.md](LLM-spring-postgresql-event-store.md) |
 | **postgresql-distributed-fenced-lock** | Distributed locking via PostgreSQL | [LLM-postgresql-distributed-fenced-lock.md](LLM-postgresql-distributed-fenced-lock.md) |
+| **postgresql-event-log** / **postgresql-event-log-processor** | New event store engine (preview, 0.61.0): `CONTIGUOUS`/`FRESH` subscriptions, `EventLogViewProcessor`/`EventLogReactor`/`EventLogInboxProcessor`, `EventLogEventStore` adapter, migration tool | [LLM-postgresql-event-log.md](LLM-postgresql-event-log.md) |
 | **postgresql-queue** | Durable queues with PostgreSQL | [LLM-postgresql-queue.md](LLM-postgresql-queue.md) |
 | **postgresql-queue-shard-owned** | Experimental shard-owned queue engine — no claim write, cross-process ordering. Not published | [LLM-postgresql-queue-shard-owned.md](LLM-postgresql-queue-shard-owned.md) |
 | **postgresql-document-db** | Document database using PostgreSQL | [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md) |
@@ -94,6 +95,7 @@ adapter and accepts only its own type): Java `aggregates.decider.Decider<C,E,ERR
 |---------|----------|----------|
 | `spring-boot-starter-postgresql` | Jdbi, FencedLock, Queues, Inbox/Outbox, CommandBus | Microservices + PostgreSQL |
 | `spring-boot-starter-postgresql-event-store` | Above + EventStore, Subscriptions, EventProcessors | Event-sourced apps + PostgreSQL |
+| `spring-boot-starter-postgresql-event-log` | Preview: the new event store engine instead of the classic one (`essentials.event-log.enabled=true`) | Trying the new engine |
 | `spring-boot-starter-mongodb` | MongoTemplate, FencedLock, Queues, Inbox/Outbox | Microservices + MongoDB |
 | `spring-boot-starter-admin-api` | HTTP admin API over locks, queues, scheduler, event store, CDC, statistics | Monitoring/management |
 
@@ -107,6 +109,7 @@ adapter and accepts only its own type): Java `aggregates.decider.Decider<C,E,ERR
 |----------|---------|-------------|
 | **Type-safe domain modeling** | `types` + framework integrations | [LLM-types.md](LLM-types.md) |
 | **Event Sourcing (Spring Boot)** | `spring-boot-starter-postgresql-event-store` | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) |
+| **Event Sourcing on the new engine (preview)** | `spring-boot-starter-postgresql-event-log` | [LLM-postgresql-event-log.md](LLM-postgresql-event-log.md#when-to-use-it) |
 | **Event Sourcing (Plain Java)** | `postgresql-event-store` + `eventsourced-aggregates` | [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md) |
 | **Microservices (PostgreSQL)** | `spring-boot-starter-postgresql` OR `foundation` + PostgreSQL modules | [LLM-foundation.md](LLM-foundation.md) |
 | **Microservices (MongoDB)** | `spring-boot-starter-mongodb` OR `foundation` + MongoDB modules | [LLM-foundation.md](LLM-foundation.md) |

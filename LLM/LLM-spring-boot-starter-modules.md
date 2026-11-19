@@ -32,6 +32,7 @@
 | PostgreSQL | `spring-boot-starter-postgresql` | Microservices + PostgreSQL, not event-sourced |
 | MongoDB | `spring-boot-starter-mongodb` | Microservices + MongoDB, not event-sourced |
 | Event Store | `spring-boot-starter-postgresql-event-store` | Event-sourced apps + PostgreSQL |
+| Event Log (preview) | `spring-boot-starter-postgresql-event-log` | The new event store engine instead of the classic one; off by default |
 | Admin API | `spring-boot-starter-admin-api` | HTTP monitoring/management API (requires Spring WebMVC) |
 
 **Starter Relationships:**
@@ -168,6 +169,22 @@ See [spring-boot-starter-postgresql-event-store README](../components/spring-boo
 **Admin APIs:**
 - `EventStoreApi` - Query events, manage subscriptions
 - `PostgresqlEventStoreStatisticsApi` - Event store statistics
+
+### Event Log Starter (preview)
+
+Package: `dk.trustworks.essentials.components.boot.autoconfigure.eventlog`. Off by default; everything below exists only with `essentials.event-log.enabled=true`. Full reference: [LLM-postgresql-event-log.md](LLM-postgresql-event-log.md#enabling-it-with-the-starter).
+
+- `EventLog` - the engine, started in its bean method; schema ownership follows `essentials.schema.mode` (`EventLogSchemaContributor` unless `essentials.event-log.initialize-schema=false`)
+- `EventLogEventStore` (`essentialsEventStore`) - the `EventStore` aggregates and repositories use; snapshots and closing books run on it
+- Unit-of-work factory, `EventStoreEventBus`, `JSONEventSerializer`, `PersistableEventMapper`, causation beans - built as the Event Store starter builds them
+- `PageTransactionSource` - `SpringPageTransactions` with a `PlatformTransactionManager`, else `UnitOfWorkPageTransactions`
+- `EventLogProcessorDependencies` - for `EventLogViewProcessor` / `EventLogReactor` / `EventLogInboxProcessor` subclasses
+- `EventLogProcessorLifecycle` - starts `ViewProjection` / `EventReactor` beans after refresh, stops them before the engine (not in schema mode `emit`)
+- `EventLogSubscriptionsApi` - with the Admin API starter and an `EssentialsSecurityProvider`
+
+With the Event Store starter also on the class path, an `AutoConfigurationImportFilter` drops its `EventStoreConfiguration` while enabled: no `EventStoreSubscriptionManager`, gap handler, CDC, `EventProcessorDependencies` or `ViewEventProcessorDependencies`. Classic `EventProcessor`/`ViewEventProcessor` beans then fail start-up; port them to the event-log base classes.
+
+**Properties:** every `EventLogSettings` value under `essentials.event-log.*` (for example `page-size`, `backstop-interval`, `lease-duration`, `node-name`, `hole-probe-wait-max`) - see [Settings](LLM-postgresql-event-log.md#settings).
 
 ### Admin API Starter
 
@@ -822,6 +839,15 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 
 Every third-party library above is `provided` upstream, by design - declare each in compile scope. A missing one fails startup; since 0.60.1 the starters' `MissingDependencyFailureAnalyzer` (foundation, registered in their `META-INF/spring.factories`) turns the `NoClassDefFoundError`/`ClassNotFoundException` into a report naming the Maven coordinates to add. Objenesis used to fail only at the first read of a persisted object; since 0.60.1 the persistence mapper refuses to be created without it (`IllegalStateException` naming `org.objenesis:objenesis`). Spring Boot does not manage the objenesis version.
 
+### Event Log Starter (preview)
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>spring-boot-starter-postgresql-event-log</artifactId>
+</dependency>
+<!-- Same provided dependencies as spring-boot-starter-postgresql; brings in postgresql-event-log and postgresql-event-log-processor -->
+```
+
 ### Admin UI Starter
 ```xml
 <dependency>
@@ -855,6 +881,7 @@ Every third-party library above is `provided` upstream, by design - declare each
 - [springdata-mongo-distributed-fenced-lock](./LLM-springdata-mongo-distributed-fenced-lock.md) - Mongo locks
 - [springdata-mongo-queue](./LLM-springdata-mongo-queue.md) - Mongo queues
 - [eventsourced-aggregates](./LLM-eventsourced-aggregates.md) - Event-sourced aggregates
+- [postgresql-event-log](./LLM-postgresql-event-log.md) - The new event store engine (preview)
 - [reactive](./LLM-reactive.md) - LocalEventBus, CommandBus
 
 **README Links:**

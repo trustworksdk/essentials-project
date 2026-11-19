@@ -187,6 +187,13 @@ the number they have where they are defined, never renumbered: `ESS-S<n>` for a 
 - <a id="ess-084"></a>`ESS-084` `MongoTransactionException` on lock acquisition — standalone MongoDB → [LLM-springdata-mongo-distributed-fenced-lock.md § Gotchas](LLM-springdata-mongo-distributed-fenced-lock.md#gotchas)
 - <a id="ess-085"></a>`ESS-085` Lock contention or leaked locks — shared instance IDs, no try-with-resources, confirmation near timeout → [LLM-springdata-mongo-distributed-fenced-lock.md § Gotchas](LLM-springdata-mongo-distributed-fenced-lock.md#gotchas)
 
+### postgresql-event-log ([LLM-postgresql-event-log.md](LLM-postgresql-event-log.md))
+- <a id="ess-138"></a>`ESS-138` Start-up fails with a missing `EventProcessorDependencies`/`ViewEventProcessorDependencies`/`EventStoreSubscriptionManager` bean after `essentials.event-log.enabled=true` — classic processors do not run on the new engine and there is no adapter; port them to `EventLogViewProcessor`/`EventLogReactor`/`EventLogInboxProcessor` → [LLM-postgresql-event-log.md § Porting from the EventProcessor family](LLM-postgresql-event-log.md#porting-from-the-eventprocessor-family)
+- <a id="ess-139"></a>`ESS-139` Events reach an inbox twice — a hand-written forwarder enqueued in a unit of work of its own (or from a `FRESH` reactor), outside the page transaction; use `EventLogInboxProcessor` → [LLM-postgresql-event-log.md § Gotchas](LLM-postgresql-event-log.md#gotchas)
+- <a id="ess-140"></a>`ESS-140` A rebuilt view keeps stale rows — `onRebuild(ProjectionContext)` runs once per rebuild with no aggregate type, unlike `onSubscriptionsReset(AggregateType, …)`; clear everything the view writes → [LLM-postgresql-event-log.md § Gotchas](LLM-postgresql-event-log.md#gotchas)
+- <a id="ess-141"></a>`ESS-141` A subscription stalls on one event and never parks it — the handler threw (or wrapped) an I/O-classified exception (SQLState `08*`, `SQLTransientConnectionException`), which the engine retries forever → [LLM-postgresql-event-log.md § Gotchas](LLM-postgresql-event-log.md#gotchas)
+- <a id="ess-142"></a>`ESS-142` Duplicate side effects after a restart — `EventLogReactor`/`EventReactor` is `FRESH` and at least once; make handlers idempotent → [LLM-postgresql-event-log.md § Gotchas](LLM-postgresql-event-log.md#gotchas)
+
 ---
 
 ## Spring Boot starters
