@@ -17,22 +17,27 @@
 package dk.trustworks.essentials.components.eventlog.processor;
 
 /**
- * <b>Test-only</b> broken variants of the processors and page sources (design phase 8 §9.2), which the ITs must be seen
+ * <b>Test-only</b> broken variants of the processors and page sources, which the ITs must be seen
  * to catch. Settable only through package-private seams ({@link ProcessorSeams}); never in normal use.
  */
 enum ProcessorMutant {
     /** The processor catches a handler's exception and carries on: the event counts as handled (breaks I14) */
     PROCESSOR_SWALLOWS_FAILURE,
-    /** The page source hands out its typed resources unwrapped: a handler's commit lands output without progress (I12) */
+    /** The page source hands out its typed resources unwrapped: a handler's commit lands output without progress (I12;
+     * see docs/design/event-log.md §11) */
     HANDLER_COMMITS_EARLY,
-    /** The adapter lets the engine's StreamAppendConflictException escape instead of OptimisticAppendToStreamException (§9.4) */
+    /** The adapter lets the engine's StreamAppendConflictException escape instead of OptimisticAppendToStreamException
+     * */
     CONFLICT_UNMAPPED,
-    /** The adapter wakes the engine at append, before commit, instead of through the commit callback (§9.4) */
+    /** The adapter wakes the engine at append, before commit, instead of through the commit callback */
     PUBLISH_BEFORE_COMMIT,
-    /** EventLogViewProcessor / EventLogReactor catch a {@code @MessageHandler}'s exception: the event counts as handled (phase 10 §3.5) */
+    /** EventLogViewProcessor / EventLogReactor catch a {@code @MessageHandler}'s exception: the event counts as handled
+     * */
     ANNOTATED_DISPATCH_SWALLOWS_FAILURE,
-    /** EventLogInboxProcessor enqueues in a unit of work of its own, not the page's: a page that fails after the enqueue forwards its events again (phase 10 §3.5) */
+    /** EventLogInboxProcessor enqueues in a unit of work of its own, not the page's: a page that fails after the
+     * enqueue forwards its events again */
     INBOX_FORWARD_OUTSIDE_PAGE_TRANSACTION,
-    /** EventLogViewProcessor's rebuild commits onRebuild's clear before resetting the subscriptions: a rebuild that resets nothing still empties the view (phase 10 §9) */
+    /** EventLogViewProcessor's rebuild commits onRebuild's clear before resetting the subscriptions: a rebuild that
+     * resets nothing still empties the view */
     REBUILD_CLEARS_OUTSIDE_RESET_TRANSACTION
 }

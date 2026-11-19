@@ -49,7 +49,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 import static dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChain.sortInterceptorsByOrder;
 
 /**
- * The {@link EventStore} adapter of the new engine (design phase 8 §5): appends and stream loads of the existing
+ * The {@link EventStore} adapter of the new engine: appends and stream loads of the existing
  * aggregate repositories, deciders and snapshot repositories go to an {@link EventLog}, in the caller's unit of work.
  * <p>
  * <b>Appends</b> run the {@link EventStoreInterceptor} chain, map each event with the {@link PersistableEventMapper} (and
@@ -58,7 +58,8 @@ import static dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChai
  * work's connection, with the stream's expected last event order: the one given, otherwise the stream's last event
  * order as read in the unit of work (as the old engine does). A lost optimistic check
  * ({@link StreamAppendConflictException}) is thrown as {@link OptimisticAppendToStreamException} with the old engine's
- * message, and consumes no {@code global_order} (I10). The persisted events are registered on the unit of work, so its
+ * message, and consumes no {@code global_order} (I10; see docs/design/event-log.md §11). The persisted events are
+ * registered on the unit of work, so its
  * {@link EventStoreEventBus} publishes them at {@code BeforeCommit}/{@code AfterCommit} (and {@code AfterRollback}), and
  * the engine's commit callback is registered so the event log's readers are woken after commit only (tier 2, I7).
  * <p>
@@ -66,7 +67,7 @@ import static dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChai
  * returned by {@link #loadEventsByGlobalOrder(LoadEventsByGlobalOrder)} must be closed before the unit of work ends;
  * it reads committed rows only and is not a subscription.
  * <p>
- * <b>Not supported</b> (design §5.5): polling and subscriptions - every {@code pollEvents}/{@code unboundedPollForEvents}
+ * <b>Not supported</b>: polling and subscriptions - every {@code pollEvents}/{@code unboundedPollForEvents}
  * overload throws {@link UnsupportedOperationException}; use {@link EventLog} subscriptions
  * ({@link SubscriptionDefinition}, or the {@link ViewProjection} and {@link EventReactor} processors).
  * {@link #findEvent(EventId)} throws as {@link EventStore}'s default does. The {@link EventStoreSubscriptionObserver} is
@@ -635,7 +636,7 @@ public final class EventLogEventStore implements ConfigurableEventStore<EventLog
         return inMemoryProjector.projectEvents(aggregateType, aggregateId, projectionType, this);
     }
 
-    // ---- not supported: polling (design §5.5) ----
+    // ---- not supported: polling ----
 
     @Override
     public Flux<PersistedEvent> pollEvents(AggregateType aggregateType, long fromInclusiveGlobalOrder, Optional<Integer> loadEventsByGlobalOrderBatchSize,

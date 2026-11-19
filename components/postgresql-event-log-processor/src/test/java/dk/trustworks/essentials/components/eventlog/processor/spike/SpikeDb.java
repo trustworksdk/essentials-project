@@ -38,7 +38,7 @@ import java.util.regex.Pattern;
  * <p>
  * The application roles ({@code writer}, {@code reader}) are separate from the observing role, so
  * {@code pg_stat_statements} separates the write path from the read path and the measurement itself is excluded.
- * Not engine code; spikes only. A copy of the engine module's {@code spike/SpikeDb} (phase 8 unit 8a-D): the processor module has
+ * Not engine code; spikes only. A copy of the engine module's {@code spike/SpikeDb}: the processor module has
  * no dependency on the engine's test classes.
  */
 final class SpikeDb implements AutoCloseable {

@@ -27,7 +27,7 @@ import org.junit.jupiter.api.*;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 /**
- * The processor module's dependency rules (design phase 8 §3.1, §11.2): it re-uses the old engine's value types and
+ * The processor module's dependency rules: it re-uses the old engine's value types and
  * serializers, never its subscription model; it serializes only through the application's {@code JSONEventSerializer};
  * Spring stays confined to the classes that are about Spring, so the module runs without it.
  */
@@ -45,7 +45,7 @@ class DependencyRulesTest {
 
     @Test
     void reactor_appears_only_in_the_event_store_adapters_poll_signatures() {
-        // EventStore's pollEvents/unboundedPollForEvents return Flux; the adapter's overrides throw (design phase 8 §5.2)
+        // EventStore's pollEvents/unboundedPollForEvents return Flux; the adapter's overrides throw
         noClasses().that().doNotHaveFullyQualifiedName("dk.trustworks.essentials.components.eventlog.processor.EventLogEventStore")
                    .should().dependOnClassesThat().resideInAnyPackage("reactor..")
                    .check(moduleClasses);
@@ -53,7 +53,7 @@ class DependencyRulesTest {
 
     @Test
     void the_old_subscription_model_is_not_used() {
-        // foundation messaging is the durable queues' world; only the @MessageHandler annotation is used here (phase 10 §3.5),
+        // foundation messaging is the durable queues' world; only the @MessageHandler annotation is used here,
         // except by EventLogInboxProcessor, whose job is forwarding into an Inbox - checked by the next rule
         noClasses().that().haveNameNotMatching(INBOX_PROCESSOR).should().dependOnClassesThat(JavaClass.Predicates.resideInAnyPackage("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription..",
                                                                                          "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor..",

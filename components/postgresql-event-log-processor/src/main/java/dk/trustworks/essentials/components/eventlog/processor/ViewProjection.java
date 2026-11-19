@@ -27,9 +27,10 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * A read model kept in the event log's own database (design phase 8 §3.3): a {@code CONTIGUOUS}, exclusive,
+ * A read model kept in the event log's own database: a {@code CONTIGUOUS}, exclusive,
  * in-transaction subscription whose handler writes the view in the page transaction that also moves the resume point,
- * so the view always matches its resume point (I12). Failures, retries, page shrinking and parking are the engine's;
+ * so the view always matches its resume point (I12; see docs/design/event-log.md §11). Failures, retries, page
+ * shrinking and parking are the engine's;
  * the projection catches nothing (I14).
  *
  * <pre>{@code
@@ -118,7 +119,7 @@ public final class ViewProjection {
     }
 
     /**
-     * Rebuild (§3.3, §4.2): stop, then in one transaction of the projection's page source run {@code truncate} and reset
+     * Rebuild: stop, then in one transaction of the projection's page source run {@code truncate} and reset
      * the subscription to its start ({@link StartFrom#globalOrder}, else {@code 1}), commit, and start again if it ran. At
      * every point the view matches its resume point. Needs an application page source; with
      * {@link PageTransactionSource#engine()} use {@link #rebuild(DataSource, Truncate)}.
@@ -307,7 +308,7 @@ public final class ViewProjection {
             return this;
         }
 
-        /** {@code CONTIGUOUS} by default (D1) */
+        /** {@code CONTIGUOUS} by default */
         public Builder consistency(ConsistencyMode consistency) {
             definition.consistency(consistency);
             return this;

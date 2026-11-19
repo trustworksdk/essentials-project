@@ -21,7 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * What an {@link EventLogViewProcessor} or {@link EventLogReactor} is built with (design phase 10 §3.5). The Spring Boot
+ * What an {@link EventLogViewProcessor} or {@link EventLogReactor} is built with. The Spring Boot
  * starter declares one as a bean; without Spring, build it from the started {@link EventLog}.
  *
  * @param eventLog         the started engine the processors subscribe to

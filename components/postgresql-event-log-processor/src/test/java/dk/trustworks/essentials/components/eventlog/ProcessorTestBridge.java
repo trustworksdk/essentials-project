@@ -24,13 +24,13 @@ import java.util.function.BooleanSupplier;
 /**
  * <b>Test-only</b>, in the processor module's test tree but in the engine's package (a split package on the test class
  * path, never in a jar): lets the processor ITs start a processor's subscription with the engine's package-private
- * seams - its mutants and a crash hook - exactly as the engine's own crash ITs do (phase 4 §8).
+ * seams - its mutants and a crash hook - exactly as the engine's own crash ITs do.
  */
 public final class ProcessorTestBridge {
     private ProcessorTestBridge() {
     }
 
-    /** The page-transaction steps of design phase 8 §9.2 (e) */
+    /** The page-transaction steps */
     public enum CrashPoint {
         BEFORE_HANDLER,
         AFTER_HANDLER_BEFORE_PROGRESS,
@@ -105,7 +105,8 @@ public final class ProcessorTestBridge {
         }
     }
 
-    /** @return the parked checks that read the parked table (phase 8 §4.3) of the subscription behind {@code handle}; for the 8a-D gate spike */
+    /** @return the parked checks that read the parked table of the subscription behind {@code handle}; for the 8a-D
+     * gate spike */
     public static long parkedChecks(SubscriptionHandle handle) {
         return ((DefinedSubscription) handle).subscription().parkedChecks();
     }

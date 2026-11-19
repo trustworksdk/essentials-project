@@ -30,11 +30,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Turns the engine's {@link StoredEvent} into a {@link DeliveredEvent} (design phase 8 §3.2) with the application's
+ * Turns the engine's {@link StoredEvent} into a {@link DeliveredEvent} with the application's
  * {@link JSONEventSerializer} - from {@link EssentialsJSONEventSerializers#create()}, never a hand-built mapper - and the
  * aggregate type's {@link AggregateIdSerializer} and {@link TenantSerializer}. A failure (unknown class, bad JSON) is
  * thrown to the caller; the processors call this inside the handler, so the engine retries and then parks the event
- * like any handler failure (§7).
+ * like any handler failure.
  */
 public final class EventDeserializer {
     private final JSONEventSerializer                         serializer;

@@ -26,7 +26,7 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * A read model kept by {@link MessageHandler} methods (design phase 10 §3.5): a thin shell over one {@link ViewProjection}
+ * A read model kept by {@link MessageHandler} methods: a thin shell over one {@link ViewProjection}
  * per aggregate type - {@code CONTIGUOUS}, exclusive, each page in one transaction that also moves the resume point - so
  * every engine rule is the projection's. Porting an old {@code ViewEventProcessor} is a superclass swap.
  * <pre>{@code
@@ -166,7 +166,7 @@ public abstract class EventLogViewProcessor implements Lifecycle {
     }
 
     /**
-     * Rebuild the read model from the start (design phase 10 §9): stop every aggregate type's subscription, then in one
+     * Rebuild the read model from the start: stop every aggregate type's subscription, then in one
      * transaction of {@link EventLogProcessorDependencies#pageTransactions()} call {@link #onRebuild(ProjectionContext)}
      * and reset every subscription to {@link #startFrom()}, commit, and start again if the processor was started. The
      * cleared view and the reset resume points commit together, so at every point the view matches its resume points;

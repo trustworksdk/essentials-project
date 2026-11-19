@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 
 /**
- * {@link EventLogInboxProcessor} (design phase 10 §3.5) on {@link PostgresqlDurableQueues} sharing the page's JDBI unit
+ * {@link EventLogInboxProcessor} on {@link PostgresqlDurableQueues} sharing the page's JDBI unit
  * of work factory: every event forwarded exactly once even when a page fails after an enqueue and is redelivered - with a
  * must-fail arm that enqueues outside the page transaction - and the payload filter, the forwarded metadata and the
  * cause bound in the handler, an unregistered aggregate type registered at start, a stop and restart.

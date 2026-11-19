@@ -24,7 +24,7 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The bridge from the old engine's configuration to the migration's input (design phase 9 §2.1-2.2, unit 9-F): a
+ * The bridge from the old engine's configuration to the migration's input: a
  * {@link SeparateTablePerAggregateEventStreamConfiguration} becomes a {@link SourceTable} with the same aggregate type,
  * table and column names. It lives here because the migration module never depends on {@code postgresql-event-store}.
  * <p>

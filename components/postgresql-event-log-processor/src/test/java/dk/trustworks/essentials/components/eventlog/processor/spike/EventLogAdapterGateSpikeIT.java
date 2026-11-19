@@ -49,7 +49,7 @@ import java.util.concurrent.atomic.*;
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
 
 /**
- * Phase 8, unit 8b-D of {@code docs/archive/event-store-engine-phase8.md} (§10.3), suite {@code p8b-gate}: the
+ * Suite {@code p8b-gate}: the
  * {@link EventLogEventStore} adapter against {@link PostgresqlEventStore}, both wired as the Spring starter wires the
  * old engine ({@code Jdbi.create(new TransactionAwareDataSourceProxy(dataSource))} with the {@link PostgresPlugin} and
  * {@link SqlExecutionTimeLogger}, a {@link SpringTransactionAwareEventStoreUnitOfWorkFactory} on a

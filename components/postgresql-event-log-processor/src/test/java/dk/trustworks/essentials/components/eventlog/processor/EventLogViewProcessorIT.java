@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * {@link EventLogViewProcessor} (design phase 10 §3.5): {@code @MessageHandler} dispatch with the {@link DeliveredEvent}
+ * {@link EventLogViewProcessor}: {@code @MessageHandler} dispatch with the {@link DeliveredEvent}
  * second parameter, the page's unit of work in a handler, several aggregate types, an unregistered type registered at
  * start, a handler failure parked by the engine - with a must-fail arm whose dispatcher swallows the failure - and a
  * rebuild that clears the view in the transaction that resets the subscription, then replays it - with a must-fail arm

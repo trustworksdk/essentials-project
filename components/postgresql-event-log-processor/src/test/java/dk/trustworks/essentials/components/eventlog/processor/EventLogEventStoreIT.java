@@ -43,7 +43,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * The {@link EventLogEventStore} adapter (design phase 8 §9.4): conflict mapping and I10, wire format against
+ * The {@link EventLogEventStore} adapter: conflict mapping and I10, wire format against
  * {@link PostgresqlEventStore}, unit-of-work stages and the tier-2 wake, interceptors, reads, and the poll methods.
  * Every {@code must_fail_*} expects an {@link AssertionError} from the arm it breaks.
  */

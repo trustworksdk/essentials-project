@@ -22,7 +22,7 @@ import java.time.OffsetDateTime;
 import java.util.*;
 
 /**
- * One subscription as the admin API shows it: {@link SubscriptionRow}'s fields (design phase 8 §4.1)
+ * One subscription as the admin API shows it: {@link SubscriptionRow}'s fields
  */
 public record ApiEventLogSubscription(String subscriber, String aggregateType, String instanceName, boolean exclusive, String consistencyMode,
                                       String progressModel, long resumePoint, long resetEpoch, Optional<String> leaseOwner,

@@ -21,7 +21,7 @@ import dk.trustworks.essentials.components.eventlog.*;
 import java.util.*;
 
 /**
- * The admin SPI of the new event store engine's subscriptions (design phase 8 §4.4), one operation per
+ * The admin SPI of the new event store engine's subscriptions, one operation per
  * {@link EventLogAdmin} operation, keyed by {@link ProgressKey}. Works from the database on any node. Reads need
  * {@code SUBSCRIPTION_READER}, every change {@code SUBSCRIPTION_WRITER} ({@code ESSENTIALS_ADMIN} may do both).
  * Database failures surface as {@link EventLogAdminException}.

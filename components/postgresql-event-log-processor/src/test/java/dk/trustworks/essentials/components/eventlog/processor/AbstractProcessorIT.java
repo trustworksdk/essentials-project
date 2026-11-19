@@ -37,7 +37,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Shared setup of the processor ITs (design phase 8 §9.2): one static container, a fresh schema per test, the engine on
+ * Shared setup of the processor ITs: one static container, a fresh schema per test, the engine on
  * its own data source, the application's pool behind a JDBI unit-of-work factory and a Spring transaction manager, and
  * 100 {@link Added} events over 10 orders ({@code o0}..{@code o9}, round robin; global order {@code n} adds {@code n}).
  */

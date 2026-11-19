@@ -27,7 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * {@link EventLogReactor} (design phase 10 §3.5): the most specific {@code @MessageHandler} wins, the
+ * {@link EventLogReactor}: the most specific {@code @MessageHandler} wins, the
  * {@link DeliveredEvent} second parameter, an unregistered aggregate type registered at start, two aggregate types, and a
  * handler failure parked by the engine - with a must-fail arm whose dispatcher swallows the failure.
  */

@@ -29,7 +29,7 @@ import java.util.Set;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Page transactions from Spring's transaction management (design phase 8 §2.4): each page is a programmatic
+ * Page transactions from Spring's transaction management: each page is a programmatic
  * {@code PROPAGATION_REQUIRES_NEW} transaction of {@code transactionManager}, its connection obtained with
  * {@link DataSourceUtils#getConnection(DataSource)}, so Spring-managed data access on the delivery thread (a
  * {@code JdbcTemplate}, a Spring-aware unit of work) joins the page. The engine runs the handler, then the progress

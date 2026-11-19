@@ -27,8 +27,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Wraps a {@link Jdbi}'s {@link TransactionHandler} so that a handle whose page transaction is open refuses
- * {@code commit()} and {@code rollback()} (design phase 8 §2.4): a handler that ended the page transaction itself would
- * land output without the progress update (I12). Every other handle, and the page's handle once the page source ends it,
+ * {@code commit()} and {@code rollback()}: a handler that ended the page transaction itself would
+ * land output without the progress update (I12; see docs/design/event-log.md §11). Every other handle, and the page's
+ * handle once the page source ends it,
  * behaves exactly as before.
  */
 final class PageGuardTransactionHandler implements TransactionHandler {

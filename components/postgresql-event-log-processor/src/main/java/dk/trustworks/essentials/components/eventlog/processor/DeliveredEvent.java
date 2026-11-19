@@ -28,7 +28,7 @@ import java.util.Optional;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * One delivered event with its payload deserialized (design phase 8 §3.2), built from the engine's {@link StoredEvent}
+ * One delivered event with its payload deserialized, built from the engine's {@link StoredEvent}
  * by an {@link EventDeserializer}. The value types are the existing ones, so a handler moved from the old engine keeps
  * its types.
  *

@@ -42,8 +42,8 @@ import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Phase 9 gate, design {@code docs/archive/event-store-engine-phase9.md} §10.3 steps 2-4, at harness level (decision 3: no
- * demo change). The source is a copy ({@code CREATE DATABASE … TEMPLATE …}) of a database the trading demo wrote on the
+ * The migration measurement on trading-demo data, at harness level (no demo
+ * change). The source is a copy ({@code CREATE DATABASE … TEMPLATE …}) of a database the trading demo wrote on the
  * old engine; this test runs the migration CLI against it in-process and then checks, through {@link EventLogEventStore}
  * and new-engine subscriptions, that the result resumes without loss.
  * <ul>

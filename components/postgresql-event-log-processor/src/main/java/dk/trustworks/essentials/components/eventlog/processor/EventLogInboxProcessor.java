@@ -33,7 +33,7 @@ import java.util.function.Consumer;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * The event-log engine's counterpart of the old inbox-based {@code EventProcessor} (design phase 10 §3.5): it reads the
+ * The event-log engine's counterpart of the old inbox-based {@code EventProcessor}: it reads the
  * events of its aggregate types and puts each one whose payload a {@link MessageHandler} method of the subclass handles
  * into the {@link Inbox} named after the processor; the inbox's consumer calls that method through foundation's
  * {@link PatternMatchingMessageHandler}, with {@link CausationContext} bound to the event. Porting an old

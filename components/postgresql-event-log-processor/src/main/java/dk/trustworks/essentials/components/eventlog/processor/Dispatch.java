@@ -24,7 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Lambda dispatch by payload type (design phase 8 §3.3): a {@code Map<Class<?>, handler>} resolved on the payload's
+ * Lambda dispatch by payload type: a {@code Map<Class<?>, handler>} resolved on the payload's
  * class, then its superclasses, then its interfaces, cached per class. No reflection on annotated methods.
  */
 final class Dispatch<H> {

@@ -29,7 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Gate row I14 through {@link EventReactor} (design phase 8 §9.2 arm (f)): an event whose reaction always fails is parked
+ * Gate row I14 through {@link EventReactor}: an event whose reaction always fails is parked
  * with its aggregate's later events behind it; every other event reaches its reaction at least once. Also arm (c) for the
  * periodic path, and dispatch on a payload's supertype.
  */

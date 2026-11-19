@@ -24,8 +24,8 @@ import java.sql.Connection;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * What a {@link ViewProjection} handler writes through (design phase 8 §3.3): the page transaction's resources. Every
- * write commits with the page's progress update, or not at all; none of them can end the transaction (§2.4).
+ * What a {@link ViewProjection} handler writes through: the page transaction's resources. Every
+ * write commits with the page's progress update, or not at all; none of them can end the transaction.
  */
 public final class ProjectionContext {
     private final PageTransaction transaction;

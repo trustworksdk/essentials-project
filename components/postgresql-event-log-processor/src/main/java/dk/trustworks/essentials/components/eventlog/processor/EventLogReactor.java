@@ -26,8 +26,8 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * Side effects (notifications, commands, forwarding to a queue) run by {@link MessageHandler} methods (design phase 10
- * §3.5): a thin shell over one {@link EventReactor} per aggregate type - {@code FRESH}, exclusive, periodic, at least
+ * Side effects (notifications, commands, forwarding to a queue) run by {@link MessageHandler} methods: a thin shell
+ * over one {@link EventReactor} per aggregate type - {@code FRESH}, exclusive, periodic, at least
  * once - so every engine rule is the reactor's. Porting an old {@code EventProcessor} is a superclass swap.
  * <pre>{@code
  * public class OrderNotifier extends EventLogReactor {

@@ -31,7 +31,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Tier 2's commit paths (design phase 8 §3.4): an append on the application's transaction wakes the event log after the
+ * Tier 2's commit paths: an append on the application's transaction wakes the event log after the
  * commit, through foundation's unit of work and through a Spring {@code TransactionSynchronization}; a rollback wakes
  * nothing. The backstop is 60 s, so a delivery within seconds is the wake's.
  */

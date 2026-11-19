@@ -25,7 +25,7 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Tier 2's commit path (design phase 8 §3.4): after an append to {@code aggregateType} on an application transaction,
+ * Tier 2's commit path: after an append to {@code aggregateType} on an application transaction,
  * register here so that {@link EventLog#afterCommit(Collection)} runs once the transaction has committed - never before,
  * and not after a rollback (a rolled-back writer's hole retires on a later probe).
  */

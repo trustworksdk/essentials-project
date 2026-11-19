@@ -26,9 +26,9 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Reacts to events with effects outside the database - commands, queues, HTTP (design phase 8 §3.3): a {@code FRESH},
+ * Reacts to events with effects outside the database - commands, queues, HTTP: a {@code FRESH},
  * exclusive, periodic subscription, delivering each event at least once. Failures, retries and parking are the engine's;
- * the reactor catches nothing (I14).
+ * the reactor catches nothing (I14; see docs/design/event-log.md §11).
  *
  * <pre>{@code
  * var reactor = EventReactor.builder("order-notifier", "Orders")
@@ -109,7 +109,7 @@ public final class EventReactor {
     }
 
     /**
-     * Move the reactor to {@code from} (§3.3): stop, reset (epoch + 1, parked rows deleted), start again if it ran.
+     * Move the reactor to {@code from}: stop, reset (epoch + 1, parked rows deleted), start again if it ran.
      * {@link StartFrom#head()} is the aggregate type's head at the time of the call.
      * <p>
      * Runs as one {@link LifecycleGate} transition, so a concurrent {@link #start()} cannot resume the reactor between the
@@ -194,7 +194,7 @@ public final class EventReactor {
             return this;
         }
 
-        /** {@code FRESH} by default (D1) */
+        /** {@code FRESH} by default */
         public Builder consistency(ConsistencyMode consistency) {
             definition.consistency(consistency);
             return this;

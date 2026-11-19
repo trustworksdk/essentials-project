@@ -29,14 +29,14 @@ import java.util.Set;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Page transactions from the application's JDBI unit-of-work factory (design phase 8 §2.4): each page runs in a unit of
+ * Page transactions from the application's JDBI unit-of-work factory: each page runs in a unit of
  * work of {@code unitOfWorkFactory}, current on the delivery thread, so {@code resource(Handle.class)},
  * {@code resource(UnitOfWork.class)}, {@code resource(HandleAwareUnitOfWork.class)} and the factory's
  * {@code getRequiredUnitOfWork()} all see it. The engine runs the handler, then the progress update on the unit of work's
  * connection, then {@link OpenPage#commit()}, which commits the unit of work - its {@code beforeCommit} callbacks run
  * then, after the progress update.
  * <p>
- * The handler cannot end the page transaction (§2.4): the unit of work handed out refuses {@code commit} and
+ * The handler cannot end the page transaction: the unit of work handed out refuses {@code commit} and
  * {@code rollback}, and the {@link Jdbi}'s transaction handler is wrapped once ({@link PageGuardTransactionHandler}) so
  * that the page's {@link Handle} refuses them too while the page is open.
  */

@@ -46,21 +46,21 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 /**
- * Phase 9, unit 9-A of {@code docs/archive/event-store-engine-phase9.md} (§10.1, §19 item 20's spike): how fast the
+ * How fast the
  * old engine's tables copy into the event log's, how long the stop lasts, and what the copy costs the old engine.
  * <p>
  * Source: 10 aggregate types built by {@link PostgresqlEventStore} ({@code TEXT} ids, {@code JSONB}, as the starter
  * wires it), a few real appends per type, then a bulk SQL generator whose rows have the real appends' shape (same event
  * type names, revision, metadata, payload keys, ~1 KB payload; checked and recorded per arm), with 20 % holes in
- * {@code global_order}. Target: {@link EventLog#registerAggregateType}. The copy SQL is hand-written here (unit 9-C
- * writes the real one).
+ * {@code global_order}. Target: {@link EventLog#registerAggregateType}. The copy SQL is hand-written here (the
+ * migration module has the real one).
  * <p>
  * Arms ({@code -Dspike.p9.arms}, comma separated): {@code IS_1000}, {@code IS_10000}, {@code IS_100000} (same-database
- * {@code INSERT ... SELECT} per {@code global_order} range of that many values, §3.2), {@code COPY_10000} ({@code COPY}
+ * {@code INSERT ... SELECT} per {@code global_order} range of that many values), {@code COPY_10000} ({@code COPY}
  * out through pgjdbc's {@code CopyManager} and back into a temp staging table, then {@code INSERT ... SELECT} with the
- * type join), {@code ONLINE} (epochs, §3.3, at batch 10 000, against an old engine appending 1 000 ev/s, then a 10 000
- * event delta over 10 types copied by the final pass under {@code SHARE} locks, §3.5, with delta verify and an import of
- * 50 subscriptions). Every bulk arm also runs the online verify of §6.1 over every window. Fresh container
+ * type join), {@code ONLINE} (epochs, at batch 10 000, against an old engine appending 1 000 ev/s, then a 10 000 event
+ * delta over 10 types copied by the final pass under {@code SHARE} locks, with delta verify and an import of 50
+ * subscriptions). Every bulk arm also runs the online verify over every window. Fresh container
  * ({@code fsync=on}) per (run, arm). Results {@code target/spike-results/p9-a-*.txt}. Knobs: {@code -Dspike.p9.events}
  * (1 000 000), {@code -Dspike.p9.runs} (2).
  * <p>
@@ -256,7 +256,8 @@ class MigrationCopySpikeIT {
     }
 
     /**
-     * Gate 9-G (§16.7): the append p99 line re-measured with the real {@link Migration} API (not the spike's hand-written copy),
+     * Gate 9-G: the append p99 line re-measured with the real {@link Migration} API (not the spike's hand-written
+     * copy),
      * its online copy throttled by {@link CopySettings#withMaxEventsPerSecond}; arm {@code ONLINE_T<rate>}, {@code 0} unthrottled.
      * Same phases as {@link #online}: warm-up, 30 s baseline, epochs until a delta under 5 000 rows, 30 s baseline.
      */
@@ -540,7 +541,7 @@ class MigrationCopySpikeIT {
             return rows;
         }
 
-        /** Names in the range not interned yet: {@code idOf} in its own transaction (§3.4) */
+        /** Names in the range not interned yet: {@code idOf} in its own transaction */
         void intern(AggregateType type, long lo, long hi) throws SQLException {
             try (var s = copyOut.createStatement(); var rs = s.executeQuery("SELECT DISTINCT event_type FROM " + src.table(type) + " WHERE global_order > " + lo + " AND global_order <= " + hi)) {
                 while (rs.next()) {
@@ -611,7 +612,7 @@ class MigrationCopySpikeIT {
         record Verified(long windows, long rows, long mismatches, double seconds) {
         }
 
-        /** §6.1 over every window of every type */
+        /** The online verify over every window of every type */
         Verified verify(Void unused) throws SQLException {
             long t0 = System.nanoTime(), windows = 0, rows = 0, mismatches = 0;
             for (var type : src.types) {
@@ -668,7 +669,7 @@ class MigrationCopySpikeIT {
             return true;
         }
 
-        /** §4.2's value per subscription: least(R, lowest open gap that has a row now), written as a progress row */
+        /** The imported resume point per subscription: least(R, lowest open gap that has a row now), written as a progress row */
         long importSubscriptions() throws SQLException {
             long n = 0;
             try (var s = copier.createStatement()) {

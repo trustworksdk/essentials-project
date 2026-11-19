@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Gate row I14, and I12 with application-sourced pages, through {@link ViewProjection} (design phase 8 §9.2 arms (a)-(e)),
+ * Gate row I14, and I12 with application-sourced pages, through {@link ViewProjection},
  * each arm with the JDBI unit-of-work source and the Spring source, each must-fail variant seen to fail.
  */
 class ViewProjectionIT extends AbstractProcessorIT {

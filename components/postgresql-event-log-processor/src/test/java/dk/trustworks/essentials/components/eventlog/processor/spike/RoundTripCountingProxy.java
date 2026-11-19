@@ -22,7 +22,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 /**
- * Throwaway TCP proxy for the phase-0 baseline (P0.0; a copy of the old engine module's spike class for phase 8 unit 8b-D): forwards bytes between a JDBC client and PostgreSQL and counts
+ * Throwaway TCP proxy for the round-trip baseline (P0.0; a copy of the old engine module's spike class): forwards bytes between a JDBC client and PostgreSQL and counts
  * <em>client flights</em> - a burst of bytes the client sends after it last received something. Since the client can
  * only send a dependent request once it has read the reply to the previous one, the number of flights is the number of
  * network round trips the client needed. Used for counting, never for latency (it adds a hop).

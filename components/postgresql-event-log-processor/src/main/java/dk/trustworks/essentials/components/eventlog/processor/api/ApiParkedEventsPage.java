@@ -22,7 +22,7 @@ import java.time.OffsetDateTime;
 import java.util.*;
 
 /**
- * One page of a subscription's parked events: {@link ParkedPage} (design phase 8 §4.1)
+ * One page of a subscription's parked events: {@link ParkedPage}
  */
 public record ApiParkedEventsPage(List<ApiParkedEvent> events, OptionalLong nextAfter) {
     public ApiParkedEventsPage {

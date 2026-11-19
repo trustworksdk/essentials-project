@@ -40,21 +40,21 @@ import java.util.function.BooleanSupplier;
 import java.util.logging.Logger;
 
 /**
- * Phase 8, unit 8a-D of {@code docs/archive/event-store-engine-phase8.md} (§10), suite {@code p8-gate}. The processor arms
- * need this module, so the whole suite lives here (the engine-only §10.4 too, through the engine's public API), on a copy
+ * Suite {@code p8-gate}. The processor arms
+ * need this module, so the whole suite lives here (the engine-only admin arm too, through the engine's public API), on a copy
  * of the engine's {@link SpikeDb}: a fresh container and database name per arm, every arm {@code RUNS} times,
  * {@code pg_stat_statements} by role ({@code reader} = the engine's {@code DataSource}, {@code writer} = the
  * application's pool: appends, and the JDBI and Spring page sources).
  * <ul>
- *     <li>{@link #processorSteady()} (§10.1): phase 7 §10.3's exclusive steady shape, 100 ev/s, 10 subscriptions: 5
+ *     <li>{@link #processorSteady()}: the exclusive steady shape, 100 ev/s, 10 subscriptions: 5
  *     {@link ViewProjection} + 5 {@link EventReactor} against 5 raw {@code CONTIGUOUS} page handlers + 5 raw {@code FRESH}
  *     periodic handlers. Commit-to-handler latency, reader statements per delivery, client CPU and allocation.</li>
- *     <li>{@link #burst()} (§10.1, §10.2): {@code BURST_EVENTS} seeded events into one set-based projection: raw
+ *     <li>{@link #burst()}: {@code BURST_EVENTS} seeded events into one set-based projection: raw
  *     {@link PageHandler}, {@link ViewProjection#builder} {@code onPage} on {@code engine()}, on the JDBI unit-of-work
  *     source and on the Spring source. Events/s, statements per page, borrow time, CPU and allocation.</li>
- *     <li>{@link #retryBackoff()} (phase 4 §11.1's open settings question): row by row page 100 with every global order
+ *     <li>{@link #retryBackoff()}: row by row page 100 with every global order
  *     divisible by 997 always failing, at retry backoffs {@code BACKOFFS} ms against no failures.</li>
- *     <li>{@link #adminAndParked()} (§10.4): {@code subscriptions()} over 1 000 progress rows (100 with parked heads); the
+ *     <li>{@link #adminAndParked()}: {@code subscriptions()} over 1 000 progress rows (100 with parked heads); the
  *     parked check of 10 subscriptions holding aggregates and 10 holding none; retry from another node.</li>
  * </ul>
  * Results {@code target/spike-results/p8-c-*.txt}. Knobs: {@code -Dspike.gate.runs} (2), {@code -Dspike.gate.timeScale}
@@ -86,7 +86,7 @@ class EventLogProcessorGateSpikeIT {
     private static final com.sun.management.OperatingSystemMXBean OS      = (com.sun.management.OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
     private static final com.sun.management.ThreadMXBean          THREADS = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
 
-    // ------------------------------------------------------------------ §10.1 steady
+    // ------------------------------------------------------------------ steady
 
     enum SteadyArm {RAW, PROCESSOR}
 
@@ -188,7 +188,7 @@ class EventLogProcessorGateSpikeIT {
         }
     }
 
-    // ------------------------------------------------------------------ §10.1 burst, §10.2 page sources
+    // ------------------------------------------------------------------ burst, page sources
 
     enum BurstArm {RAW, VIEW_ENGINE, VIEW_JDBI, VIEW_SPRING}
 
@@ -292,7 +292,7 @@ class EventLogProcessorGateSpikeIT {
         }
     }
 
-    // ------------------------------------------------------------------ retry backoff (phase 4 §11.1)
+    // ------------------------------------------------------------------ retry backoff
 
     @Test
     void retryBackoff() throws Exception {
@@ -339,7 +339,7 @@ class EventLogProcessorGateSpikeIT {
         }
     }
 
-    // ------------------------------------------------------------------ §10.4 admin and parked check
+    // ------------------------------------------------------------------ admin and parked check
 
     private static final int LIST_TYPES = 10, LIST_SUBSCRIBERS = 100, LIST_CALLS = 200;
 

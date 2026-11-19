@@ -33,7 +33,7 @@ import java.sql.SQLException;
 import java.util.function.Consumer;
 
 /**
- * What the repository IT copies (design phase 8 §9.5) use in their {@code adapter-copy} blocks instead of
+ * What the repository IT copies use in their {@code adapter-copy} blocks instead of
  * {@code PostgresqlEventStore}: the adapter on a started {@link EventLog} over the IT's container database, and an
  * {@link EventLog} subscription in place of the originals' {@code pollEvents} collectors.
  */

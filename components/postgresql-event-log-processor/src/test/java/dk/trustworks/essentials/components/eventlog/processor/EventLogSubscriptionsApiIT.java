@@ -28,7 +28,7 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * The admin SPI (design phase 8 §4.4, §9.3): each operation maps onto {@link EventLogAdmin}, reads need the subscription
+ * The admin SPI: each operation maps onto {@link EventLogAdmin}, reads need the subscription
  * reader role, changes the writer role.
  */
 class EventLogSubscriptionsApiIT extends AbstractProcessorIT {

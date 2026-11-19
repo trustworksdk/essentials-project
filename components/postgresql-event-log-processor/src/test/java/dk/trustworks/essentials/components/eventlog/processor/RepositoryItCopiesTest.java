@@ -28,7 +28,7 @@ import java.util.regex.Pattern;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The repository IT copies (design phase 8 §9.5) and their fixtures may differ from their originals only inside marked
+ * The repository IT copies and their fixtures may differ from their originals only inside marked
  * blocks: {@code // >>> adapter-copy: replaces N original lines: <reason>} ... {@code // <<< adapter-copy}. Fails when
  * an original changes (its SHA-256 no longer matches) and when a copy drifts outside its blocks.
  */

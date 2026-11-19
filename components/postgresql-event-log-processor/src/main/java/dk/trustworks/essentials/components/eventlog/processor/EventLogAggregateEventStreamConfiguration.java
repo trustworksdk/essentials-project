@@ -26,7 +26,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The {@link EventLogEventStore}'s per-aggregate-type configuration (design phase 8 §5.1): the existing
+ * The {@link EventLogEventStore}'s per-aggregate-type configuration: the existing
  * {@link AggregateEventStreamConfiguration} - serializer, aggregate-id and tenant serializers - plus the engine's
  * validated table names for the aggregate type.
  * <p>
