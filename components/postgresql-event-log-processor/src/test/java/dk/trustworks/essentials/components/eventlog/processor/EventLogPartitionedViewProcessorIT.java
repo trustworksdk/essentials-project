@@ -256,6 +256,15 @@ class EventLogPartitionedViewProcessorIT extends AbstractProcessorIT {
     }
 
     @Test
+    void a_rebuild_that_resets_nothing_rolls_the_purge_back() {
+        unitOfWorkFactory.usingUnitOfWork(() -> durableQueues.queueMessage(QueueName.of(NAME + ":queue"), OrderedMessage.of(new Added("o1", 1), "Orders|o1", 0)));
+        var view = new View(durableQueues, Set.of());
+
+        assertThat(view.rebuild()).as("never started: no progress to reset").isFalse();
+        assertThat(view.queued()).as("the purge rolled back with the rebuild transaction").isEqualTo(1);
+    }
+
+    @Test
     void start_refuses_queues_that_keep_key_order_per_instance_only() {
         var perInstance = proxy(DurableQueues.class, (proxy, method, args) -> method.getName().equals("keepsKeyOrderAcrossInstances") ? false : invoke(method, durableQueues, args));
         var view        = new View(perInstance, Set.of());

@@ -850,10 +850,9 @@ to the event; `start()` refuses a queue implementation that does not keep key or
 `FailoverRedeliveryPolicy` by default), `forwardPageSize()`, `errorSettings()`. `rebuild()` with the hook
 `onRebuild(ProjectionContext)` stops this instance's consumers, refuses while any other instance consumes the queue (or
 the queue implementation cannot tell), then in one transaction of the page source runs `onRebuild`, purges the queue
-(queued, in-flight and dead-lettered messages) and resets the reading side, and restarts. The purge joins that
-transaction where the queue implementation's `purgeQueue` joins the unit of work in progress (`PostgresqlDurableQueues`);
-the shard-owned engine's purge still commits on its own connection, inside the rebuild but ahead of the clear and the
-reset. The trading demo's two partitioned views run on it.
+(queued, in-flight and dead-lettered messages) and resets the reading side, and restarts. The cleared view, the empty
+queue and the reset progress commit together or not at all: the purge joins the rebuild's unit of work (§1.1.7). The
+trading demo's two partitioned views run on it.
 
 ### 2.23 Admin console: a view for the new event-log engine's subscriptions (`spring-boot-starter-admin-ui`)
 

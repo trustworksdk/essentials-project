@@ -239,9 +239,8 @@ classic. Hooks: `numberOfParallelQueuedMessageConsumers()`, `durableQueueRedeliv
 
 `rebuild()` stops this instance's consumers, refuses while another instance consumes the queue (stop it everywhere else
 first, as for the classic reset), then in one page-source transaction runs `onRebuild`, purges the queue (dead letters
-included) and resets the reading side, and restarts. The purge shares that transaction only where the queue
-implementation's `purgeQueue` joins the unit of work in progress; the shard-owned engine's purge still commits on its own
-connection, ahead of the clear and the reset.
+included) and resets the reading side, and restarts. The cleared view, the empty queue and the reset progress commit
+together or not at all: the purge joins the transaction's unit of work (the shard-owned `purgeQueue` does since 0.61.0).
 
 ### Lambda builders
 

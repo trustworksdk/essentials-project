@@ -271,8 +271,8 @@ the backstop.
   one `queueMessages` in the page transaction, keyed `<aggregateType>|<aggregateId>` as the classic
   `PartitionedViewEventProcessor`; every instance consumes the queue, one unit of work per message; `rebuild()` refuses
   while another instance consumes, then runs `onRebuild`, the queue purge and the progress reset in one page-source
-  transaction - the purge shares it only where `purgeQueue` joins the unit of work, which the shard-owned engine's does
-  not yet). All four dispatch to
+  transaction; the shard-owned `purgeQueue` joins the unit of work in progress, so clear, purge and reset commit
+  together). All four dispatch to
   foundation `@MessageHandler` methods (`MessageHandlerDispatch`), take `EventLogProcessorDependencies` and are foundation
   `Lifecycle`s. There is deliberately no `EventStoreSubscriptionManager` adapter (decision D3): classic processors must
   be ported.
