@@ -46,7 +46,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 /**
- * Phase 9, unit 9-A of {@code docs/plans/event-store-engine-phase9.md} (§10.1, §19 item 20's spike): how fast the
+ * Phase 9, unit 9-A of {@code docs/archive/event-store-engine-phase9.md} (§10.1, §19 item 20's spike): how fast the
  * old engine's tables copy into the event log's, how long the stop lasts, and what the copy costs the old engine.
  * <p>
  * Source: 10 aggregate types built by {@link PostgresqlEventStore} ({@code TEXT} ids, {@code JSONB}, as the starter

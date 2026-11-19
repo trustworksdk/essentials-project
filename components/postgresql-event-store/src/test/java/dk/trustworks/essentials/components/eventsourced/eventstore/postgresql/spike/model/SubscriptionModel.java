@@ -21,7 +21,7 @@ import java.util.function.Consumer;
 
 /**
  * Phase-0 spike P0.5: an explicit, deterministic state-machine model of the redesigned subscription engine
- * (docs/plans/event-store-subscription-redesign.md, sections 4, 6, 7, 8, 10.1 and 16). No engine code exists;
+ * (docs/archive/event-store-subscription-redesign.md, sections 4, 6, 7, 8, 10.1 and 16). No engine code exists;
  * this model exists to find design flaws before any is written. See docs/archive/event-store-redesign-phase0.md, "P0.5 Model of the subscription state machine".
  * <p>
  * Every step is atomic. A {@link State} is a value: {@link #actions} lists the enabled steps, each applied to a

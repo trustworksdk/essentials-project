@@ -33,7 +33,7 @@ import static dk.trustworks.essentials.components.eventsourced.eventstore.postgr
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Spike P0.1 of {@code docs/plans/event-store-subscription-redesign.md}: does the single-statement append of §5.1
+ * Spike P0.1 of {@code docs/archive/event-store-subscription-redesign.md}: does the single-statement append of §5.1
  * assign the transaction's xid before the identity default calls {@code nextval} for the first row - under every join
  * order and query protocol?
  * <p>

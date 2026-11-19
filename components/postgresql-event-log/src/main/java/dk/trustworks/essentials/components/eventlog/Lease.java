@@ -20,7 +20,7 @@ import java.util.function.LongSupplier;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * One exclusive subscription's lease (design {@code docs/plans/event-store-engine-phase7.md} §1.2, §2): written by the
+ * One exclusive subscription's lease (design {@code docs/archive/event-store-engine-phase7.md} §1.2, §2): written by the
  * {@link LeaseKeeper}, read by the subscription's delivery thread.
  * <ul>
  *     <li>{@link State#STANDBY}: not owned; the keeper tries to claim it every pass.</li>

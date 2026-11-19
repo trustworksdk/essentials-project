@@ -37,7 +37,7 @@ import java.util.concurrent.atomic.*;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * Spike P0.10 of {@code docs/plans/event-store-subscription-redesign.md}: what does the tier-1 wake-up notification
+ * Spike P0.10 of {@code docs/archive/event-store-subscription-redesign.md}: what does the tier-1 wake-up notification
  * (§11) cost the append path?
  * <p>
  * §11 as written issues {@code pg_notify('essentials_eventstore', '<table>')} inside the appending transaction. The

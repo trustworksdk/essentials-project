@@ -30,7 +30,7 @@ import static dk.trustworks.essentials.components.eventsourced.eventstore.postgr
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Spike P0.12 of {@code docs/plans/event-store-subscription-redesign.md} (§4.10, §6, §7.3): what the combined probe's
+ * Spike P0.12 of {@code docs/archive/event-store-subscription-redesign.md} (§4.10, §6, §7.3): what the combined probe's
  * {@code pg_stat_activity} read costs as the number of connections to the cluster grows, and what probing at a high
  * rate does to concurrent appends.
  * <p>

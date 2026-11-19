@@ -28,7 +28,7 @@ import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The lease keeper of one {@link EventLog} (design {@code docs/plans/event-store-engine-phase7.md} §2.2, §2.3, §8;
+ * The lease keeper of one {@link EventLog} (design {@code docs/archive/event-store-engine-phase7.md} §2.2, §2.3, §8;
  * decision 1): one virtual thread, {@code eventlog-lease}, that runs only while the event log has an exclusive
  * subscription. Every {@link EventLogSettings#leaseRenewalInterval()} it borrows one connection and sends at most two
  * statements: one {@code LEASE_RENEW} for every owned lease and one {@code LEASE_CLAIM} for every standby one (plus a

@@ -32,7 +32,7 @@ import java.util.function.BooleanSupplier;
 import java.util.logging.Logger;
 
 /**
- * Phase 3, unit C of {@code docs/plans/event-store-engine-phase3.md}: the measurements behind the phase-3 gate (§5.4,
+ * Phase 3, unit C of {@code docs/archive/event-store-engine-phase3.md}: the measurements behind the phase-3 gate (§5.4,
  * predictions §4.3). The reader is one shared loop per {@link EventLog} (one thread, one held connection); a
  * subscription holds no connection and borrows one only for catch-up, bridge and progress statements.
  * <ul>
@@ -61,7 +61,7 @@ import java.util.logging.Logger;
  * {@code -Dspike.gate.backstops} (ms, "1000,100"), {@code -Dspike.gate.readerPools} ("0,4"; 0 = subscriptions + 10),
  * {@code -Dspike.eventlog.image}; external server as {@link SpikeDb}.
  * <p>
- * Phase 4, unit C of {@code docs/plans/event-store-engine-phase4.md} (§9), suite {@code p4-gate}:
+ * Phase 4, unit C of {@code docs/archive/event-store-engine-phase4.md} (§9), suite {@code p4-gate}:
  * <ul>
  *     <li>{@link #projectionThroughput()}: P0.13's projection shape on the new engine; baseline {@code FRESH} + periodic
  *     with a per-event autocommit upsert, arms {@code CONTIGUOUS} + in-transaction row by row (page 10, 100), JDBC batch
@@ -76,13 +76,13 @@ import java.util.logging.Logger;
  * {@code -Dspike.gate.projections} ("1,4"), {@code -Dspike.gate.projectionArms} (all), {@code -Dspike.gate.latencyWriters}
  * ("1,4"). Suite {@code p3-gate} runs only {@link #steady()}, {@link #idle()} and {@link #reattachChurn()}.
  * <p>
- * Phase 5, unit C of {@code docs/plans/event-store-engine-phase5.md} (§8), suite {@code p5-gate}: {@link #rareTypeCatchUp()}
+ * Phase 5, unit C of {@code docs/archive/event-store-engine-phase5.md} (§8), suite {@code p5-gate}: {@link #rareTypeCatchUp()}
  * (§8.1, with the density sweep, index size and append cost), {@link #restartStorm()} (§8.2, catch-up permits from
  * {@code -Dspike.gate.stormPermits}, "4,50,2,8") and {@link #freshAfterRestart()} (§8.3). Results
  * {@code target/spike-results/p5-c-*.txt}. Knobs: {@code -Dspike.gate.rareEvents} (1000000), {@code -Dspike.gate.densities}
  * ("1,5,25,50"), {@code -Dspike.gate.stormEvents} (100000).
  * <p>
- * Phase 7, unit C of {@code docs/plans/event-store-engine-phase7.md} (§10), suite {@code p7-gate}: {@link #takeoverTime()}
+ * Phase 7, unit C of {@code docs/archive/event-store-engine-phase7.md} (§10), suite {@code p7-gate}: {@link #takeoverTime()}
  * (§10.1, a forked {@code LeaseOwnerProcess} owner and an in-JVM standby), {@link #renewalCost()} (§10.2) and
  * {@link #leaseUnaffected()} (§10.3). Results {@code target/spike-results/p7-c-*.txt}. Knobs:
  * {@code -Dspike.gate.p7Repetitions} (20), {@code -Dspike.gate.p7Shapes} ("CRASH,PAUSE,GRACEFUL"),

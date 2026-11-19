@@ -21,7 +21,7 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * One {@code el_parked_events} row (design {@code docs/plans/event-store-engine-phase8.md} §4.1). The event itself is
+ * One {@code el_parked_events} row (design {@code docs/archive/event-store-engine-phase8.md} §4.1). The event itself is
  * not copied: it is the aggregate type's event at {@code globalOrder}.
  *
  * @param blockedBy   empty for a parked head; else the head this event is held behind

@@ -35,7 +35,7 @@ import static dk.trustworks.essentials.components.eventsourced.eventstore.postgr
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Spike P0.2 of {@code docs/plans/event-store-subscription-redesign.md}: does the combined probe of §4.10 - a tail read
+ * Spike P0.2 of {@code docs/archive/event-store-subscription-redesign.md}: does the combined probe of §4.10 - a tail read
  * with a scalar sub-select over {@code pg_stat_activity} - read the running-writer set {@code X} after the statement's
  * MVCC snapshot, so that a writer holding a {@code global_order <= S} that the snapshot cannot see is always in
  * {@code X}?

@@ -20,7 +20,7 @@ import java.time.Duration;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * Settings of the event log's subscriptions (design {@code docs/plans/event-store-engine-phase2.md} §1.2, §3.3, §3.4).
+ * Settings of the event log's subscriptions (design {@code docs/archive/event-store-engine-phase2.md} §1.2, §3.3, §3.4).
  *
  * @param backstopInterval     tier-0 wake-up: how long a caught-up tail reader parks before it reads again (plan §11).
  *                             Wake-ups ({@link EventLog#afterCommit}) only shorten it (I7)

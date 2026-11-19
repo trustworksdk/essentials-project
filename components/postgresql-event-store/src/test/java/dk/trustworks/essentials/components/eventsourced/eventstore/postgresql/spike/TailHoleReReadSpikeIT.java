@@ -29,7 +29,7 @@ import static dk.trustworks.essentials.components.eventsourced.eventstore.postgr
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Spike P0.11 of {@code docs/plans/event-store-subscription-redesign.md} (§19 risk 13): what it costs the tail statement
+ * Spike P0.11 of {@code docs/archive/event-store-subscription-redesign.md} (§19 risk 13): what it costs the tail statement
  * of §4.10 to also re-read the outstanding holes, as P0.5's finding F1 proposes for §4.2
  * ({@code WHERE global_order > :cursor OR global_order = ANY(:holes)}, with ranges after a sequence jump), and whether
  * the planner keeps both halves as index scans.

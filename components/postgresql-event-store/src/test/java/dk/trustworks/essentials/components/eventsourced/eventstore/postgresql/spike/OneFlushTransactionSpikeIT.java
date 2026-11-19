@@ -32,7 +32,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Spike P0.14 of {@code docs/plans/event-store-subscription-redesign.md} §18 (background:
+ * Spike P0.14 of {@code docs/archive/event-store-subscription-redesign.md} §18 (background:
  * {@code docs/archive/event-store-redesign-phase0.md}, "P0.14 One flush for engine-owned transactions"): when the engine owns
  * the transaction, how many round trips and how much server CPU does it save to send the last statements and the
  * commit in one flush, and can pgjdbc do it?

@@ -40,7 +40,7 @@ import java.util.function.BooleanSupplier;
 import java.util.logging.Logger;
 
 /**
- * Phase 8, unit 8a-D of {@code docs/plans/event-store-engine-phase8.md} (§10), suite {@code p8-gate}. The processor arms
+ * Phase 8, unit 8a-D of {@code docs/archive/event-store-engine-phase8.md} (§10), suite {@code p8-gate}. The processor arms
  * need this module, so the whole suite lives here (the engine-only §10.4 too, through the engine's public API), on a copy
  * of the engine's {@link SpikeDb}: a fresh container and database name per arm, every arm {@code RUNS} times,
  * {@code pg_stat_statements} by role ({@code reader} = the engine's {@code DataSource}, {@code writer} = the

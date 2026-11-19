@@ -27,7 +27,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * The engine's progress rows (design §2.5, §3.4; plan §8.2): create or read at start, periodic save as a
  * compare-and-set on the reset epoch. Each call is its own autocommit statement on the engine's {@code DataSource}.
  * <p>
- * Phase 7 (design {@code docs/plans/event-store-engine-phase7.md} §2, §3): an exclusive subscription's row carries a
+ * Phase 7 (design {@code docs/archive/event-store-engine-phase7.md} §2, §3): an exclusive subscription's row carries a
  * lease; every write of it binds a {@link Fence} (fence and owner), a non-exclusive one binds {@code null}. The lease
  * columns are written only here and by {@link LeaseKeeper} through the statements of {@link EventLogStorage}.
  */

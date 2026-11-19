@@ -31,7 +31,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * The one-way move of aggregate types from {@code PostgresqlEventStore}'s tables to the event log's (design
- * {@code docs/plans/event-store-engine-phase9.md}), as an operator runs it (§5):
+ * {@code docs/archive/event-store-engine-phase9.md}), as an operator runs it (§5):
  * <ol>
  *     <li>{@link #preflight()}: read-only checks and a report (§3.1)</li>
  *     <li>{@link #prepare()}: pre-flight, then register each aggregate type with the event log and mark it

@@ -19,7 +19,7 @@ import java.sql.*;
 import java.util.*;
 
 /**
- * The engine's admin operations (design {@code docs/plans/event-store-engine-phase8.md} §4), reached through
+ * The engine's admin operations (design {@code docs/archive/event-store-engine-phase8.md} §4), reached through
  * {@link EventLog#admin()}. Every operation works from the database, so it can be called on any node, whether or not
  * that node runs the subscription. Each call borrows one connection from the event log's {@code DataSource} (except
  * {@link #reset(ProgressKey, long, Connection)} and {@link #importProgress}, which run on the caller's) and runs one to three statements.
@@ -73,7 +73,7 @@ public interface EventLogAdmin {
     boolean deleteRetiredInstance(ProgressKey key) throws SQLException;
 
     /**
-     * Write an imported resume point (design {@code docs/plans/event-store-engine-phase9.md} §4.3), for the migration
+     * Write an imported resume point (design {@code docs/archive/event-store-engine-phase9.md} §4.3), for the migration
      * from the old event store: insert the progress row of {@code definition} under {@code instanceName} with the
      * definition's consistency mode, exclusive flag and filter digest, {@code model}, {@code resume_from = resumeFrom},
      * reset epoch 0 and no lease, so the first claim takes it. Runs on the caller's transaction, which is neither committed

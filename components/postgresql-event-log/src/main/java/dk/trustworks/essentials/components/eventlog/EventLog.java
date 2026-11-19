@@ -29,7 +29,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
  * The new PostgreSQL event store engine's facade: append and stream load (design
- * {@code docs/plans/event-store-engine-phase2.md} §3.1, §3.2). Subscriptions are added by later units of phase 2.
+ * {@code docs/archive/event-store-engine-phase2.md} §3.1, §3.2). Subscriptions are added by later units of phase 2.
  * <p>
  * Appends run on the caller's {@link Connection}, which the engine never commits: they join the caller's transaction.
  * One statement per aggregate; statements of the same shape go out as one pgjdbc batch. Each statement takes

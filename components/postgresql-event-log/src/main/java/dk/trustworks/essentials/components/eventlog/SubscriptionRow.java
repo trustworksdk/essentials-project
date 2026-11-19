@@ -21,7 +21,7 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * One {@code el_progress} row as the admin listing reads it (design {@code docs/plans/event-store-engine-phase8.md}
+ * One {@code el_progress} row as the admin listing reads it (design {@code docs/archive/event-store-engine-phase8.md}
  * §4.1): the cluster's view, from the database, whichever node runs the subscription.
  *
  * @param resumePoint  the first {@code global_order} not yet handled

@@ -30,7 +30,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * The event log's schema as an {@link EssentialsSchemaHarness} contribution, and the one place its DDL text lives
- * (the schema harness rule: DDL lives in schema contributors). Design: {@code docs/plans/event-store-engine-phase2.md} §2.
+ * (the schema harness rule: DDL lives in schema contributors). Design: {@code docs/archive/event-store-engine-phase2.md} §2.
  * <p>
  * The fixed schema ({@code el_event_types}, {@code el_aggregate_types}, {@code el_lease_fence_seq},
  * {@code el_progress}, {@code el_parked_events}, {@code el_migration}) is one repeatable change. Each aggregate type's event and head tables

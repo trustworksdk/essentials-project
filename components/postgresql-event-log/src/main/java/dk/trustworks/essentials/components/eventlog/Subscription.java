@@ -29,7 +29,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The engine's subscription behind a {@link SubscriptionHandle} (phase 8 decision 12): package-private, started by
  * {@link EventLog#subscribe(SubscriptionDefinition, DeliveryHandler)} or, with test seams, the package-private spec path.
  * <p>
- * Two independent strategies (design {@code docs/plans/event-store-engine-phase4.md} §1.1):
+ * Two independent strategies (design {@code docs/archive/event-store-engine-phase4.md} §1.1):
  * <ul>
  *     <li>The <b>consistency mode</b> decides which received rows may be handed on. {@link ConsistencyMode#FRESH}
  *     (phase 3 §3.2) hands on every received row once, deduplicated by a {@link HandledSet}; the resume point is

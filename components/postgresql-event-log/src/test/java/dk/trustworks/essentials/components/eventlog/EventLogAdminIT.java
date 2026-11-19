@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Phase 8 §9.3 (design {@code docs/plans/event-store-engine-phase8.md} §4): the admin facade and parked requests, with
+ * Phase 8 §9.3 (design {@code docs/archive/event-store-engine-phase8.md} §4): the admin facade and parked requests, with
  * two {@link EventLog}s on their own {@code DataSource}s as two nodes. Every arm with a must-fail mutant has a
  * {@code must_fail_*} test that runs it against the mutant and asserts the arm's defect shows.
  */

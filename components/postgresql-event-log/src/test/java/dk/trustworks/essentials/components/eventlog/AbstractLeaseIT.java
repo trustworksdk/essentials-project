@@ -26,7 +26,7 @@ import java.util.function.BooleanSupplier;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Shared harness of the phase-7 lease ITs (design {@code docs/plans/event-store-engine-phase7.md} §9): "another JVM" is
+ * Shared harness of the phase-7 lease ITs (design {@code docs/archive/event-store-engine-phase7.md} §9): "another JVM" is
  * a second {@link EventLog} on its own {@code DataSource}; the test lease timings of §6 (2 s lease, 500 ms renewal, 1 s
  * local deadline, 1 s statement timeout); {@link Gate}s that hold a keeper or delivery thread in a hook; and the
  * test-only progress log, a trigger on {@code el_progress} that records every row version a transaction writes, so an IT

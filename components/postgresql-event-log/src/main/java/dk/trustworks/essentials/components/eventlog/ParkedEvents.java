@@ -23,7 +23,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * One subscription's {@code el_parked_events} rows and its <b>held aggregates</b> (design
- * {@code docs/plans/event-store-engine-phase4.md} §4.4, §4.5): aggregate id → the {@code global_order} of its parked
+ * {@code docs/archive/event-store-engine-phase4.md} §4.4, §4.5): aggregate id → the {@code global_order} of its parked
  * head. Every later event of a held aggregate is parked behind the head ({@code blocked_by}) instead of handed on.
  * Loaded at start; changed only by the delivery thread, and only after the row that justifies the change committed.
  */

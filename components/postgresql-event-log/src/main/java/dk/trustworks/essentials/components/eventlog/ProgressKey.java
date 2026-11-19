@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.eventlog;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The key of one {@code el_progress} row (design {@code docs/plans/event-store-engine-phase8.md} §4.1): an exclusive
+ * The key of one {@code el_progress} row (design {@code docs/archive/event-store-engine-phase8.md} §4.1): an exclusive
  * subscription's row has the empty instance name, a per-instance one its instance's name
  */
 public record ProgressKey(String subscriber, String aggregateType, String instanceName) {

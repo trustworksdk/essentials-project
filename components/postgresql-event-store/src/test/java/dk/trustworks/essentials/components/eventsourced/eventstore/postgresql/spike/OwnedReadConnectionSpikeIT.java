@@ -37,7 +37,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Spike P0.16 of {@code docs/plans/event-store-subscription-redesign.md} §18 (background:
+ * Spike P0.16 of {@code docs/archive/event-store-subscription-redesign.md} §18 (background:
  * {@code docs/archive/event-store-redesign-phase0.md}, "P0.16 Owned, pre-prepared read connections"): for
  * the engine's own long-lived connections, what does an owned connection with every statement prepared at connect and
  * fixed session settings save per call over pooled pgjdbc defaults; which {@code plan_cache_mode} keeps each statement

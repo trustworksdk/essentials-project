@@ -26,7 +26,7 @@ import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.*;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Phase 9 unit 9-B (design {@code docs/plans/event-store-engine-phase9.md} §3.8, §4.3, §9): the engine's side of the
+ * Phase 9 unit 9-B (design {@code docs/archive/event-store-engine-phase9.md} §3.8, §4.3, §9): the engine's side of the
  * migration from the old event store - the {@code el_migration} table, the {@code registerAggregateType} guard while a
  * type is being copied, and {@link EventLogAdmin#importProgress}. Each must-fail mutant has a {@code must_fail_*} test
  * that runs the arm against it and asserts the defect shows.

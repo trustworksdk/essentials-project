@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Phase 0 of {@code docs/plans/event-store-subscription-redesign.md}, table design options for a new engine
+ * Phase 0 of {@code docs/archive/event-store-subscription-redesign.md}, table design options for a new engine
  * ({@code docs/archive/event-store-redesign-phase0.md}, "P0.7 Table design options"). Every arm is its own event table created by this spike's DDL
  * (not the current strategy's), written through raw pgjdbc, so options the current layout cannot express can be
  * measured: payload type, event id type and uniqueness, a stream head table, a narrower row, and how the global order is

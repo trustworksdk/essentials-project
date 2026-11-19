@@ -37,7 +37,7 @@ import java.util.concurrent.locks.LockSupport;
 import java.util.regex.Pattern;
 
 /**
- * Spike P0.17 part (a) of {@code docs/plans/event-store-subscription-redesign.md} §18: does a client that delivers
+ * Spike P0.17 part (a) of {@code docs/archive/event-store-subscription-redesign.md} §18: does a client that delivers
  * LISTEN notifications as they arrive (the Vert.x PG client) beat pgjdbc's notification drain on wake latency under
  * sustained traffic? Part (b), request-path pipelining, is parked and not built here.
  * <p>

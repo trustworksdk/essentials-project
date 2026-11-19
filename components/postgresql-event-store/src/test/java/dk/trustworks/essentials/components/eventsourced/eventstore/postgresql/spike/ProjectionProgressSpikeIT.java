@@ -29,7 +29,7 @@ import static dk.trustworks.essentials.components.eventsourced.eventstore.postgr
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Spike P0.13 of {@code docs/plans/event-store-subscription-redesign.md} (§8.1-§8.3, §17 "Projection throughput",
+ * Spike P0.13 of {@code docs/archive/event-store-subscription-redesign.md} (§8.1-§8.3, §17 "Projection throughput",
  * §19 risk 6): what saving the resume point in the handler's transaction costs a view projection, one event per
  * transaction against a page per transaction, and what the per-event fallback costs when an event in a page fails.
  * <p>

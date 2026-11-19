@@ -25,7 +25,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * The event log's fixed table names, its schema entry points when no harness owns the schema, and the start-up checks
- * the watermark depends on (design {@code docs/plans/event-store-engine-phase2.md} §1.2, §2; plan §4.3).
+ * the watermark depends on (design {@code docs/archive/event-store-engine-phase2.md} §1.2, §2; plan §4.3).
  * <p>
  * The DDL text itself lives in {@link EventLogSchemaContributor}: the schema harness rule allows DDL only in schema
  * contributors. This class runs it, under the framework's bootstrap advisory lock, when the component owns its schema.

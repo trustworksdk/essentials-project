@@ -54,7 +54,7 @@ import java.util.concurrent.atomic.*;
 import java.util.function.BooleanSupplier;
 
 /**
- * Spike P0.0 of {@code docs/plans/event-store-subscription-redesign.md}: a baseline of what the CURRENT engine costs -
+ * Spike P0.0 of {@code docs/archive/event-store-subscription-redesign.md}: a baseline of what the CURRENT engine costs -
  * {@link PostgresqlEventStore} with {@link SeparateTablePerAggregateTypePersistenceStrategy}, durable subscriptions from
  * the {@link EventStoreSubscriptionManager}, {@link PostgresqlEventStreamGapHandler} and the jittered polling optimizer,
  * wired with the defaults of {@code spring-boot-starter-postgresql-event-store} (batch size 10, poll interval 100 ms,
@@ -66,7 +66,7 @@ import java.util.function.BooleanSupplier;
  * {@code pg_stat_statements} separates the write path from the read path; the observer is the container's own user and
  * is excluded. Results go to {@code target/spike-results/p0-0-baseline.txt}.
  * <p>
- * Phase 5's gate baselines ({@code docs/plans/event-store-engine-phase5.md} §8.1, §8.2, suite {@code p5-gate-old}):
+ * Phase 5's gate baselines ({@code docs/archive/event-store-engine-phase5.md} §8.1, §8.2, suite {@code p5-gate-old}):
  * {@link #rareTypeCatchUp()} and {@link #restartStorm()}, results {@code p5-old-rare.txt} and {@code p5-old-storm.txt}.
  * <p>
  * Throwaway: runs only with {@code -Dspike.run=true}. Shapes can be selected with {@code -Dit.test=CurrentEngineBaselineSpikeIT#idle}.
@@ -428,7 +428,7 @@ class CurrentEngineBaselineSpikeIT {
     private static final String RARE_TYPE    = "type-00";
 
     /**
-     * Phase 5 §8.1's baseline ({@code docs/plans/event-store-engine-phase5.md}): {@code RARE_EVENTS} events over 100
+     * Phase 5 §8.1's baseline ({@code docs/archive/event-store-engine-phase5.md}): {@code RARE_EVENTS} events over 100
      * named event types and a tenth as many aggregates, payload about 200 B, seeded by one {@code INSERT ... SELECT} that
      * copies a row the engine wrote; the subscribed type is 1 % of them, spread uniformly. One non-exclusive subscription
      * from the first order whose handler ignores every other type, timed until it has seen the head.
@@ -600,7 +600,7 @@ class CurrentEngineBaselineSpikeIT {
         return condition.getAsBoolean();
     }
 
-    // ------------------------------------------------------------------ phase 6 gate (docs/plans/event-store-engine-phase6.md §7.1)
+    // ------------------------------------------------------------------ phase 6 gate (docs/archive/event-store-engine-phase6.md §7.1)
 
     private static final String       P6_OLD   = "p6-old-latency.txt";
     private static final List<String> P6_ARMS  = Arrays.stream(System.getProperty("spike.baseline.p6Arms", "S1_1000,S1_200,CDC").split(",")).map(String::trim)

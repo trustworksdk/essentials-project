@@ -25,7 +25,7 @@ import java.sql.*;
 import java.util.*;
 
 /**
- * Throwaway support for the phase-0 spikes of {@code docs/plans/event-store-subscription-redesign.md}: a PostgreSQL
+ * Throwaway support for the phase-0 spikes of {@code docs/archive/event-store-subscription-redesign.md}: a PostgreSQL
  * container per major version under test, connections in each query-protocol mode, the event table and the result
  * log. Not engine code, and not run by the normal build (see the {@code spike.run} gate on the spike ITs).
  */

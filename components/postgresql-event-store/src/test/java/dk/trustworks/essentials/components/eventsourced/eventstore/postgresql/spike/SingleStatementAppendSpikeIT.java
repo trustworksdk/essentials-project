@@ -37,7 +37,7 @@ import java.util.concurrent.atomic.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Spike P0.4 of {@code docs/plans/event-store-subscription-redesign.md}: is the single-statement append of §5.1
+ * Spike P0.4 of {@code docs/archive/event-store-subscription-redesign.md}: is the single-statement append of §5.1
  * better than today's JDBI {@code PreparedBatch} append?
  * <p>
  * Three arms write the same events to tables created by {@link SeparateTablePerAggregateTypePersistenceStrategy}

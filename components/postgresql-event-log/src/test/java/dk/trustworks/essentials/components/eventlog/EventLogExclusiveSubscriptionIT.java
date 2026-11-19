@@ -26,7 +26,7 @@ import java.util.function.BooleanSupplier;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Phase 7 unit A smoke tests (design {@code docs/plans/event-store-engine-phase7.md} §2): an exclusive subscription claims
+ * Phase 7 unit A smoke tests (design {@code docs/archive/event-store-engine-phase7.md} §2): an exclusive subscription claims
  * its lease, delivers and releases it on stop; a second event log, standing by, takes over after the first stops. The
  * gate ITs (I5, I6, I16, takeovers under failure) are unit B's.
  */

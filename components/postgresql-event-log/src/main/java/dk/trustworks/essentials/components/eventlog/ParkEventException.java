@@ -16,7 +16,7 @@
 package dk.trustworks.essentials.components.eventlog;
 
 /**
- * Thrown by a handler to park an event at once, without retries (design {@code docs/plans/event-store-engine-phase4.md}
+ * Thrown by a handler to park an event at once, without retries (design {@code docs/archive/event-store-engine-phase4.md}
  * §4.4; plan §19 item 21). The parked event is recorded in {@code el_parked_events} and the subscription moves past it;
  * the later events of its aggregate are held behind it (parked as blocked by it) until it is retried or discarded (§4.5).
  * Every other aggregate continues.
