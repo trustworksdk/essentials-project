@@ -259,6 +259,19 @@ Steps that keep a port small:
    `EventStoreUnitOfWorkFactory`.
 7. **A `getForwardBatchSize()` override** becomes a `forwardPageSize()` override.
 
+What each port keeps or changes in delivery:
+
+- **Inbox forwarding is exactly once with `EventLogInboxProcessor`**, because the enqueue and the resume point commit in
+  the same page transaction. A forwarder you write yourself gets the same guarantee only if it enqueues inside that page
+  transaction; one that enqueues in a unit of work of its own, or from a `FRESH` reactor, forwards an event again when
+  the page fails after the enqueue.
+- **`onRebuild(ProjectionContext)` runs once per rebuild, with no aggregate type**, where `onSubscriptionsReset` ran
+  once per type. A ported `onSubscriptionsReset` that cleared only the rows of the type it was given should clear
+  everything the view writes.
+- **`EventLogReactor` is at least once**, the same contract as the classic `EventProcessor`: after a restart a handler
+  may see an event again, so its handlers are idempotent, as they were before. Use `EventLogInboxProcessor` when a
+  reaction needs a durable hand-off.
+
 To run both engines from one code base, keep each handler body in an engine-neutral bean with package-private
 `on(Handle, Event)` methods, and add two thin wrappers, one per engine, each gated on a property; the trading demo does
 this behind `trading-demo.engine` (`examples/essentials-trading-demo`, `config/CLAUDE.md`).
@@ -329,16 +342,9 @@ cut-over except restoring a backup; rehearse it on a copy first.
   `essentials.event-log.enabled=true`, before any bean is created, with one line per such bean naming it, its class and
   its port target, for example `Bean 'orderProjection' (com.x.OrderProjection) is an old-engine ViewEventProcessor. With essentials.event-log.enabled=true it must be ported to EventLogViewProcessor - see LLM-postgresql-event-log.md § Porting from the EventProcessor family.`
   Port it (above).
-- ⚠️ **Forward to an inbox only inside the page transaction.** A hand-written forwarder that enqueues in a unit of work of
-  its own (or from a `FRESH` reactor) forwards events again when a page fails after the enqueue. Use
-  `EventLogInboxProcessor`.
-- ⚠️ **`onRebuild` runs once per rebuild, without an aggregate type.** A ported `onSubscriptionsReset` that cleared only
-  the rows of the type it was given must clear everything the view writes.
 - ⚠️ **A downstream outage the handler calls parks events.** A handler's own connection error is a handler failure:
   after `retry-attempts` retries the event is parked (as the classic Inbox dead-letters). Raise `retry-attempts` /
   `retry-backoff-max` for a subscription that must ride out a longer outage, and retry the parked aggregates after it.
-- ⚠️ **`EventLogReactor` is at least once.** Make its handlers idempotent; use `EventLogInboxProcessor` when a reaction
-  needs a durable hand-off.
 - ⚠️ **Payload columns are `json`, not `jsonb`**: the stored text is the serializer's compact output, byte-equal to the
   classic engine's.
 
@@ -348,4 +354,4 @@ cut-over except restoring a backup; rehearse it on a copy first.
 - [spring-boot-starter-modules](LLM-spring-boot-starter-modules.md#event-log-starter-preview) - the starter
 - [admin-api](LLM-admin-api.md) - the event-log subscription endpoints
 - [foundation](LLM-foundation.md) - `Inbox`, `UnitOfWork`, `@MessageHandler`, `Lifecycle`
-- [Traps](LLM-traps.md#ess-138) - ESS-138 to ESS-142
+- [Traps](LLM-traps.md#ess-138) - ESS-138

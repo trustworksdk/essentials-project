@@ -896,8 +896,11 @@ statements per order, and about 19 % less WAL. How it works: `docs/design/event-
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md).
 
+- `0.60.1-14` - the event-log reference's porting section states plainly that `EventLogInboxProcessor` forwards
+  exactly once, `onRebuild` runs once per rebuild and `EventLogReactor` is at least once; the three traps that framed
+  these as pitfalls are retired.
 - `0.60.1-12` - a new reference, `LLM-postgresql-event-log.md`, for the new event store engine (preview, §2.24), the
-  traps `ESS-138` to `ESS-142`, and the admin API's operation count corrected to 67 (§6).
+  trap `ESS-138`, and the admin API's operation count corrected to 67 (§6).
 - `0.60.1-3` - the LLM docs show `Money`'s `amount` as a JSON number, the form it is written in, and say a quoted
   amount is also read (§3).
 - `0.60.1-2` - the LLM docs describe elastic pump connections, wake-after-commit, `JSONSerializer.readProperties` and
@@ -1050,10 +1053,9 @@ Not published; listed because they are the reference for how to use the framewor
 - A new LLM reference, `LLM/LLM-postgresql-event-log.md`, covers the new event store engine (preview, §2.24): when to
   choose it over the classic event store, the starter, the processor base classes, consistency and page transactions,
   porting from the `EventProcessor` family, the settings (including `hole-probe-wait-max`), admin, migration and the
-  known limits. The traps index gains `ESS-138` to `ESS-142`: a classic processor failing start-up once the new engine is
-  on, a hand-written inbox forwarder that forwards twice, an `onRebuild` that clears only one aggregate type's rows, a
-  handler failure wrapped in an I/O-classified exception that never parks, and `EventLogReactor`'s at-least-once
-  delivery. A contributor reference, `docs/design/event-log.md`, describes the engine as built; its plan documents
+  known limits. The traps index gains `ESS-138`: a classic processor failing start-up once the new engine is on. The
+  porting section states plainly what each port keeps: `EventLogInboxProcessor` forwards exactly once, `onRebuild` runs
+  once per rebuild with no aggregate type, and `EventLogReactor` is at least once like the classic `EventProcessor`. A contributor reference, `docs/design/event-log.md`, describes the engine as built; its plan documents
   moved to `docs/archive/`. The plugin ships the new reference (§4).
 - The admin API's LLM docs gave the contract as 40 operations; it has 67 (the shard-owned queue and event-log
   subscription operations were not counted).

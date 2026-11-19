@@ -3,6 +3,14 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-14 — targets Essentials 0.60.1
+
+- **Event log: three traps retired** — the traps index retires the event-log traps for a hand-written inbox forwarder,
+  the `onRebuild` hook and `EventLogReactor`'s at-least-once delivery: each describes behaviour that is the same as, or
+  safer than, the classic engine, so none is a pitfall. The event-log reference's porting section now states the three
+  facts plainly — `EventLogInboxProcessor` forwards exactly once, `onRebuild` runs once per rebuild with no aggregate
+  type, and a reactor is at least once like the classic `EventProcessor`. No skill, rule or script changed.
+
 ## 0.60.1-13 — targets Essentials 0.60.1
 
 - **Event log: a handler's connection error is parked** — the event-log reference now says that an exception a
@@ -22,7 +30,8 @@ targets, with a `-N` suffix for plugin-only releases.
   `onRebuild`), `EventLogReactor` and `EventLogInboxProcessor`, `CONTIGUOUS` and `FRESH` consistency and page
   transactions, porting from the `EventProcessor` family, the settings (including `hole-probe-wait-max`), the admin
   operations, the migration module and the known limits. The spring-boot-starter-modules and admin-api references gain
-  the starter and the seven `event-log-subscriptions` operations, and the traps index gains `ESS-138` to `ESS-142`.
+  the starter and the seven `event-log-subscriptions` operations, and the traps index gains `ESS-138` and four
+  event-log traps since retired.
   No skill, rule or script changed.
 - **Admin API operation count** — the admin-api, components and spring-boot-starter-modules references said the
   admin contract has 40 operations; it has 67 (the shard-owned queue and event-log subscription operations were not
