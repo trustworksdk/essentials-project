@@ -13,7 +13,7 @@ Spring Boot auto-configuration for the new event store engine (`postgresql-event
 | `EventStoreUnitOfWorkFactory`, `EventStoreEventBus`, `JSONEventSerializer`, `PersistableEventMapper`, causation enricher / queue interceptor / command propagator | Built exactly as the old `EventStoreConfiguration` builds them, each `@ConditionalOnMissingBean` |
 | `PageTransactionSource` | `SpringPageTransactions` with a `PlatformTransactionManager`, else `UnitOfWorkPageTransactions` |
 | `EventLogProcessorLifecycle` | `SmartLifecycle` that registers each `ViewProjection` / `EventReactor` bean's aggregate type, starts it, stops them before the `EventLog`; nothing in schema mode `emit` |
-| `EventLogProcessorDependencies` | For `EventLogViewProcessor` / `EventLogReactor` subclass beans. Those are foundation `Lifecycle`s: the base starter's `DefaultLifecycleManager` starts them (off in `emit`), not `EventLogProcessorLifecycle` |
+| `EventLogProcessorDependencies` | For `EventLogViewProcessor` / `EventLogReactor` / `EventLogInboxProcessor` subclass beans (the last also takes the `Inboxes` and the transaction-aware `UnitOfWorkFactory`). Those are foundation `Lifecycle`s: the base starter's `DefaultLifecycleManager` starts them (off in `emit`), not `EventLogProcessorLifecycle` |
 | `EventLogSubscriptionsApi` | `EventLogAdminApiAutoConfiguration`, with the admin API starter and an `EssentialsSecurityProvider` |
 
 ## Gotchas

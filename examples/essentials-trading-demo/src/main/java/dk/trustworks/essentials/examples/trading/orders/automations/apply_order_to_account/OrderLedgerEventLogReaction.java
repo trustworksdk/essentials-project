@@ -15,7 +15,8 @@
  */
 package dk.trustworks.essentials.examples.trading.orders.automations.apply_order_to_account;
 
-import dk.trustworks.essentials.components.eventlog.integration.EventLogProcessorDependencies;
+import dk.trustworks.essentials.components.eventlog.integration.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.Inboxes;
@@ -28,13 +29,13 @@ import org.springframework.stereotype.Service;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Feeds {@link OrderLedgerProcessor} on the event-log engine: a {@link TradingDemoEventLogInboxProcessor} that forwards the events
+ * Feeds {@link OrderLedgerProcessor} on the event-log engine: a {@link EventLogInboxProcessor} that forwards the events
  * from the event log into its inbox and hands each one to {@link OrderLedgerProcessor}, each handler in its own unit of work as
  * declared. Same processor name, inbox and handlers as {@link OrderLedgerClassicReaction}.
  */
 @EventLogEngine
 @Service
-public class OrderLedgerEventLogReaction extends TradingDemoEventLogInboxProcessor {
+public class OrderLedgerEventLogReaction extends EventLogInboxProcessor {
     private final OrderLedgerProcessor      ledger;
     private final OrderProcessingProperties consumers;
     private final OrderForwardingProperties forwarding;
@@ -44,7 +45,7 @@ public class OrderLedgerEventLogReaction extends TradingDemoEventLogInboxProcess
                                        EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                        OrderLedgerProcessor ledger, OrderProcessingProperties consumers,
                                        OrderForwardingProperties forwarding) {
-        super(OrderLedgerProcessor.PROCESSOR_NAME, OrderLedgerProcessor.AGGREGATE_TYPES, dependencies, inboxes, unitOfWorkFactory);
+        super(OrderLedgerProcessor.PROCESSOR_NAME, OrderLedgerProcessor.AGGREGATE_TYPES.stream().map(AggregateType::toString).toList(), dependencies, inboxes, unitOfWorkFactory);
         this.ledger = requireNonNull(ledger, "No ledger provided");
         this.consumers = requireNonNull(consumers, "No consumers provided");
         this.forwarding = requireNonNull(forwarding, "No forwarding provided");

@@ -32,5 +32,7 @@ enum IntegrationMutant {
     /** The adapter wakes the engine at append, before commit, instead of through the commit callback (§9.4) */
     PUBLISH_BEFORE_COMMIT,
     /** EventLogViewProcessor / EventLogReactor catch a {@code @MessageHandler}'s exception: the event counts as handled (phase 10 §3.5) */
-    ANNOTATED_DISPATCH_SWALLOWS_FAILURE
+    ANNOTATED_DISPATCH_SWALLOWS_FAILURE,
+    /** EventLogInboxProcessor enqueues in a unit of work of its own, not the page's: a page that fails after the enqueue forwards its events again (phase 10 §3.5) */
+    INBOX_FORWARD_OUTSIDE_PAGE_TRANSACTION
 }

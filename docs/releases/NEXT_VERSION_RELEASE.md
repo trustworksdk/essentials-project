@@ -781,6 +781,19 @@ public class OrderSummaryView extends EventLogViewProcessor {
   built-in permanent-error list (an `IllegalArgumentException` is retried and then parked like any other failure),
   inbox redelivery and the `RedeliveryPolicy`, Reactor, and the `FencedLock` (exclusivity is the engine's lease).
 
+A third class, `EventLogInboxProcessor`, ports an inbox-based `EventProcessor` that keeps its inbox: it reads the events
+of its aggregate types (`CONTIGUOUS`, from the beginning, one instance at a time) and puts each one whose payload one of
+its `@MessageHandler` methods handles into the `Inbox` named after the processor; the inbox's consumer then calls that
+method as the old processor did - payload, optionally an `OrderedMessage`, `@MessageHandler(unitOfWork = ...)` honoured,
+`CausationContext` bound to the event, failures under the inbox's `RedeliveryPolicy`. A page of up to
+`forwardPageSize()` events is enqueued in one page transaction that also moves the resume point, so each event is
+forwarded exactly once; the enqueue joins that transaction through the `UnitOfWorkFactory` passed in, which must be the
+one the page transactions and the inbox's queues share. The event travels with its payload, keyed by aggregate id and
+ordered by event order, with its metadata plus its event id under `EventLogInboxProcessor.EVENT_ID_METADATA_KEY`. Hooks,
+named as the old processor's without the `get`: `inboxMessageConsumptionMode()`, `numberOfParallelInboxMessageConsumers()`,
+`inboxRedeliveryPolicy()` (a `FailoverRedeliveryPolicy` by default), `forwardPageSize()` (the old `getForwardBatchSize()`;
+the engine's page size by default), `errorSettings()`. The trading demo's six inbox reactions run on it.
+
 ### 2.23 Admin console: a view for the new event-log engine's subscriptions (`spring-boot-starter-admin-ui`)
 
 The admin console has a new **Event-log subscriptions** view under *Event store*, for the subscriptions of the new event

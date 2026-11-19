@@ -6,7 +6,7 @@ gate every bean that exists on only one of them. Each classic processor base cla
 | Classic                                   | New engine (twin)                              | Handler writes through |
 |-------------------------------------------|------------------------------------------------|------------------------|
 | `TradingDemoViewEventProcessor`           | `TradingDemoEventLogViewProcessor`             | `pageHandle()`         |
-| `TradingDemoEventProcessor` (inbox)       | `TradingDemoEventLogInboxProcessor`            | its own unit of work, as on classic |
+| `TradingDemoEventProcessor` (inbox)       | `EventLogInboxProcessor` (framework)           | its own unit of work, as on classic |
 | `TradingDemoPartitionedViewEventProcessor`| `TradingDemoEventLogPartitionedViewProcessor`  | `messageHandle()`      |
 
 ## One handler body, two engine wrappers
@@ -27,14 +27,15 @@ Porting a processor (pilot: `accounts/views/uncleared_deposits/`):
    bodies plus `PROCESSOR_NAME` / `AGGREGATE_TYPES` constants the wrappers share. `getCommandBus()` becomes an injected
    `CommandBus`; `usingUnitOfWork` / `withUnitOfWork` go through an injected `EventStoreUnitOfWorkFactory`. The wrappers
    `<Name>ClassicReaction` (extends `TradingDemoEventProcessor`) and `<Name>EventLogReaction` (extends
-   `TradingDemoEventLogInboxProcessor`) carry the `@MessageHandler`s with the classic `UnitOfWorkMode`, so the
-   transaction boundary stays on the wrapper. A parallel-consumers override is
-   `getNumberOfParallelInboxMessageConsumers()` on classic, `numberOfParallelInboxMessageConsumers()` on the twin;
-   The twin forwards a whole page per transaction: an `EventLogPageForwarder` (an `EventLogViewProcessor`,
-   `CONTIGUOUS`, from the beginning as classic's subscription) enqueues every event of the page inside the page's
-   transaction, so the forward commits atomically with the progress - never open a unit of work per event there.
-   The page size is `forwardPageSize()` (default `essentials.event-log.page-size`); a classic `getForwardBatchSize()`
-   override becomes a `forwardPageSize()` override returning the same property (`OrderLedgerEventLogReaction`).
+   the framework's `EventLogInboxProcessor`, in `postgresql-event-log-integration`) carry the `@MessageHandler`s with the
+   classic `UnitOfWorkMode`, so the transaction boundary stays on the wrapper. The twin's constructor takes the aggregate
+   types as names (`AGGREGATE_TYPES.stream().map(AggregateType::toString).toList()`). A parallel-consumers override is
+   `getNumberOfParallelInboxMessageConsumers()` on classic, `numberOfParallelInboxMessageConsumers()` on the twin.
+   The framework class forwards a whole page per transaction (`CONTIGUOUS`, from the beginning as classic's
+   subscription): it enqueues every event of the page inside the page's transaction, so the forward commits atomically
+   with the progress - never open a unit of work per event there. The page size is `forwardPageSize()` (default
+   `essentials.event-log.page-size`); a classic `getForwardBatchSize()` override becomes a `forwardPageSize()` override
+   returning the same property (`OrderLedgerEventLogReaction`, `ExchangeOrderRouterEventLogReaction`).
 6. **Partitioned views** (pilot: `accounts/views/account_overview/`): same split, wrappers `<Name>ClassicView` (extends
    `TradingDemoPartitionedViewEventProcessor`) and `<Name>EventLogView` (extends the twin, which also takes
    `DurableQueues`). Handlers keep the `(<Event>, OrderedMessage)` shape on both; the projection gets

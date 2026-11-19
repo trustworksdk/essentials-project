@@ -15,7 +15,8 @@
  */
 package dk.trustworks.essentials.examples.trading.funding.external_systems.payment_gateway;
 
-import dk.trustworks.essentials.components.eventlog.integration.EventLogProcessorDependencies;
+import dk.trustworks.essentials.components.eventlog.integration.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.Inboxes;
@@ -26,20 +27,20 @@ import org.springframework.stereotype.Service;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Feeds {@link PaymentRouter} on the event-log engine: a {@link TradingDemoEventLogInboxProcessor} that forwards the events
+ * Feeds {@link PaymentRouter} on the event-log engine: a {@link EventLogInboxProcessor} that forwards the events
  * from the event log into its inbox and hands each one to {@link PaymentRouter}, each handler in its own unit of work as
  * declared. Same processor name, inbox and handlers as {@link PaymentRouterClassicReaction}.
  */
 @EventLogEngine
 @Service
-public class PaymentRouterEventLogReaction extends TradingDemoEventLogInboxProcessor {
+public class PaymentRouterEventLogReaction extends EventLogInboxProcessor {
     private final PaymentRouter router;
 
     public PaymentRouterEventLogReaction(EventLogProcessorDependencies dependencies,
                                          Inboxes inboxes,
                                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                          PaymentRouter router) {
-        super(PaymentRouter.PROCESSOR_NAME, PaymentRouter.AGGREGATE_TYPES, dependencies, inboxes, unitOfWorkFactory);
+        super(PaymentRouter.PROCESSOR_NAME, PaymentRouter.AGGREGATE_TYPES.stream().map(AggregateType::toString).toList(), dependencies, inboxes, unitOfWorkFactory);
         this.router = requireNonNull(router, "No router provided");
     }
 

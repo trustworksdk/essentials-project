@@ -15,7 +15,8 @@
  */
 package dk.trustworks.essentials.examples.trading.market_data.use_cases.risk_approve_instrument;
 
-import dk.trustworks.essentials.components.eventlog.integration.EventLogProcessorDependencies;
+import dk.trustworks.essentials.components.eventlog.integration.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.Inboxes;
@@ -26,20 +27,20 @@ import org.springframework.stereotype.Service;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Feeds {@link InstrumentRiskApprovalProcessor} on the event-log engine: a {@link TradingDemoEventLogInboxProcessor} that forwards the events
+ * Feeds {@link InstrumentRiskApprovalProcessor} on the event-log engine: a {@link EventLogInboxProcessor} that forwards the events
  * from the event log into its inbox and hands each one to {@link InstrumentRiskApprovalProcessor}, each handler in its own unit of work as
  * declared. Same processor name, inbox and handlers as {@link InstrumentRiskApprovalClassicReaction}.
  */
 @EventLogEngine
 @Service
-public class InstrumentRiskApprovalEventLogReaction extends TradingDemoEventLogInboxProcessor {
+public class InstrumentRiskApprovalEventLogReaction extends EventLogInboxProcessor {
     private final InstrumentRiskApprovalProcessor processor;
 
     public InstrumentRiskApprovalEventLogReaction(EventLogProcessorDependencies dependencies,
                                                   Inboxes inboxes,
                                                   EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                   InstrumentRiskApprovalProcessor processor) {
-        super(InstrumentRiskApprovalProcessor.PROCESSOR_NAME, InstrumentRiskApprovalProcessor.AGGREGATE_TYPES, dependencies, inboxes, unitOfWorkFactory);
+        super(InstrumentRiskApprovalProcessor.PROCESSOR_NAME, InstrumentRiskApprovalProcessor.AGGREGATE_TYPES.stream().map(AggregateType::toString).toList(), dependencies, inboxes, unitOfWorkFactory);
         this.processor = requireNonNull(processor, "No processor provided");
     }
 

@@ -152,6 +152,14 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- EventLogInboxProcessorIT: the inbox's durable queues -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-queue</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- the repository IT copies (design phase 8 §9.5, RepositoryItCopiesTest), as their original modules declare them -->
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>

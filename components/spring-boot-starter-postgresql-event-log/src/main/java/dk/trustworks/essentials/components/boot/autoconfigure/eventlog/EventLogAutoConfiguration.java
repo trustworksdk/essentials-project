@@ -242,7 +242,7 @@ public class EventLogAutoConfiguration {
     }
 
     /**
-     * What an {@link EventLogViewProcessor} / {@link EventLogReactor} subclass bean is built with. Those are foundation
+     * What an {@link EventLogViewProcessor} / {@link EventLogReactor} / {@link EventLogInboxProcessor} subclass bean is built with. Those are foundation
      * {@code Lifecycle}s, started by the components starter's lifecycle manager (not in schema mode {@code emit}).
      */
     @Bean

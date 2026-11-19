@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventlog.integration.architecture;
 
 import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClass;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.FailoverRedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.*;
@@ -32,6 +33,8 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
  */
 class DependencyRulesTest {
     private static JavaClasses moduleClasses;
+
+    private static final String INBOX_PROCESSOR = "dk\\.trustworks\\.essentials\\.components\\.eventlog\\.integration\\.EventLogInboxProcessor(\\$.*)?";
 
     @BeforeAll
     static void importModuleClasses() {
@@ -50,13 +53,26 @@ class DependencyRulesTest {
 
     @Test
     void the_old_subscription_model_is_not_used() {
-        // foundation messaging is the durable queues' world; only the @MessageHandler annotation is used here (phase 10 §3.5)
-        noClasses().should().dependOnClassesThat(JavaClass.Predicates.resideInAnyPackage("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription..",
+        // foundation messaging is the durable queues' world; only the @MessageHandler annotation is used here (phase 10 §3.5),
+        // except by EventLogInboxProcessor, whose job is forwarding into an Inbox - checked by the next rule
+        noClasses().that().haveNameNotMatching(INBOX_PROCESSOR).should().dependOnClassesThat(JavaClass.Predicates.resideInAnyPackage("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription..",
                                                                                          "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor..",
                                                                                          "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap..",
                                                                                          "dk.trustworks.essentials.components.foundation.fencedlock..",
                                                                                          "dk.trustworks.essentials.components.foundation.messaging..")
                                                                      .and(DescribedPredicate.not(JavaClass.Predicates.equivalentTo(MessageHandler.class))))
+                   .check(moduleClasses);
+    }
+
+    @Test
+    void the_inbox_processor_uses_inboxes_but_not_the_old_subscription_model() {
+        // FailoverRedeliveryPolicy is the old processor package's only class allowed: a value class, the inbox's default policy
+        noClasses().that().haveNameMatching(INBOX_PROCESSOR)
+                   .should().dependOnClassesThat(JavaClass.Predicates.resideInAnyPackage("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription..",
+                                                                                         "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor..",
+                                                                                         "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap..",
+                                                                                         "dk.trustworks.essentials.components.foundation.fencedlock..")
+                                                                     .and(DescribedPredicate.not(JavaClass.Predicates.equivalentTo(FailoverRedeliveryPolicy.class))))
                    .check(moduleClasses);
     }
 

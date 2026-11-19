@@ -15,7 +15,8 @@
  */
 package dk.trustworks.essentials.examples.trading.orders.external_systems.exchange;
 
-import dk.trustworks.essentials.components.eventlog.integration.EventLogProcessorDependencies;
+import dk.trustworks.essentials.components.eventlog.integration.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.Inboxes;
@@ -28,13 +29,13 @@ import org.springframework.stereotype.Service;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Feeds {@link ExchangeOrderRouter} on the event-log engine: a {@link TradingDemoEventLogInboxProcessor} that forwards the events
+ * Feeds {@link ExchangeOrderRouter} on the event-log engine: a {@link EventLogInboxProcessor} that forwards the events
  * from the event log into its inbox and hands each one to {@link ExchangeOrderRouter}, each handler in its own unit of work as
  * declared. Same processor name, inbox and handlers as {@link ExchangeOrderRouterClassicReaction}.
  */
 @EventLogEngine
 @Service
-public class ExchangeOrderRouterEventLogReaction extends TradingDemoEventLogInboxProcessor {
+public class ExchangeOrderRouterEventLogReaction extends EventLogInboxProcessor {
     private final ExchangeOrderRouter       router;
     private final OrderProcessingProperties consumers;
     private final OrderForwardingProperties forwarding;
@@ -44,7 +45,7 @@ public class ExchangeOrderRouterEventLogReaction extends TradingDemoEventLogInbo
                                                EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                ExchangeOrderRouter router, OrderProcessingProperties consumers,
                                                OrderForwardingProperties forwarding) {
-        super(ExchangeOrderRouter.PROCESSOR_NAME, ExchangeOrderRouter.AGGREGATE_TYPES, dependencies, inboxes, unitOfWorkFactory);
+        super(ExchangeOrderRouter.PROCESSOR_NAME, ExchangeOrderRouter.AGGREGATE_TYPES.stream().map(AggregateType::toString).toList(), dependencies, inboxes, unitOfWorkFactory);
         this.router = requireNonNull(router, "No router provided");
         this.consumers = requireNonNull(consumers, "No consumers provided");
         this.forwarding = requireNonNull(forwarding, "No forwarding provided");

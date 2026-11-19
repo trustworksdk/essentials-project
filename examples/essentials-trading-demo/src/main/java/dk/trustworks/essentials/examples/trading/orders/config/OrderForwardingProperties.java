@@ -26,7 +26,7 @@ public class OrderForwardingProperties {
     /**
      * Events forwarded per unit of work ({@code EventProcessor#getForwardBatchSize()}). {@code 1}, the default, forwards
      * event by event, a commit each, as an {@code EventProcessor} always has.
-     * On the event-log engine it is the forward's page size ({@code TradingDemoEventLogInboxProcessor#forwardPageSize()}).
+     * On the event-log engine it is the forward's page size ({@code EventLogInboxProcessor#forwardPageSize()}).
      */
     private int batchSize = 1;
 

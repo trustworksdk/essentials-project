@@ -27,8 +27,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * The reader half of {@link TradingDemoEventLogPartitionedViewProcessor}: an {@link EventLogReactor} ({@code FRESH},
- * per-aggregate order, one instance at a time) whose single handler takes every event and hands it on (the inbox twin
- * reads through {@link EventLogPageForwarder} instead). It is not a bean: the twin that owns it starts and stops it.
+ * per-aggregate order, one instance at a time) whose single handler takes every event and hands it on (the inbox twins
+ * reads through {@link EventLogInboxProcessor} instead). It is not a bean: the twin that owns it starts and stops it.
  * <p>
  * Kept apart from the twin because {@link EventLogReactor} dispatches to the {@code @MessageHandler} methods of
  * {@code this}: were the twin itself the reactor, the reactor would call the twin's own handlers directly instead of
@@ -36,7 +36,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 final class EventLogForwarder extends EventLogReactor {
     /** {@link MessageMetaData} key of the forwarded event's id: the consumer binds it as the cause */
-    static final String EVENT_ID_METADATA_KEY = "EVENT_LOG_FORWARDED_EVENT_ID";
+    static final String EVENT_ID_METADATA_KEY = EventLogInboxProcessor.EVENT_ID_METADATA_KEY;
 
     private final Consumer<DeliveredEvent> forward;
 
