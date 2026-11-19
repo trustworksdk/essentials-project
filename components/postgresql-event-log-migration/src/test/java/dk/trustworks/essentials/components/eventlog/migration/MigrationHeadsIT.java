@@ -27,7 +27,7 @@ import static dk.trustworks.essentials.components.eventlog.migration.MigrationMu
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Design phase 9 §9.1 {@code MigrationHeadsIT} and §3.6: the copied heads make the first append's optimistic check
+ * The copied heads make the first append's optimistic check
  * right, for streams copied online and by the cut-over alike. (The engine's append is the check; the adapter's
  * {@code OptimisticAppendToStreamException} wraps the engine's {@link StreamAppendConflictException}.)
  */

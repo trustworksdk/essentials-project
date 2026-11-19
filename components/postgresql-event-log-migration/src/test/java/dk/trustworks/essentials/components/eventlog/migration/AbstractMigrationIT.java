@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * One PostgreSQL container per test class, an empty {@code public} schema per test. The old engine's tables are built by
- * {@link PostgresqlEventStore} itself (design phase 9 §9), under its own JDBI unit of work; the test may also write its
+ * {@link PostgresqlEventStore} itself, under its own JDBI unit of work; the test may also write its
  * own old tables directly, to plant rows the old engine would not write.
  */
 @Testcontainers
@@ -222,7 +222,7 @@ abstract class AbstractMigrationIT {
 
     /**
      * @return the rows that differ between the old table (up to {@code throughGlobalOrder}) and the event log's table,
-     * compared over every column, payload and metadata as text (§6.1's columns)
+     * compared over every column, payload and metadata as text
      */
     protected long differingRows(OldEngine engine, String type, long throughGlobalOrder) throws SQLException {
         return differingRows(engine.table(type), type, throughGlobalOrder);

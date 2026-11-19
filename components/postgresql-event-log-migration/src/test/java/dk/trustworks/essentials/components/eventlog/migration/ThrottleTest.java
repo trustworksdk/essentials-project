@@ -23,7 +23,7 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The online copy's throttle (design phase 9 §16.7), on a fake clock
+ * The online copy's throttle, on a fake clock
  */
 class ThrottleTest {
     private long             now;

@@ -27,7 +27,7 @@ import static dk.trustworks.essentials.components.eventlog.migration.MigrationMu
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Design phase 9 §9.1 {@code MigrationSequenceIT} and §3.6: values burned at the old table's end can put an old resume
+ * Values burned at the old table's end can put an old resume
  * point above the highest row; the event log's identity continues above the old sequence, not above the highest row.
  */
 class MigrationSequenceIT extends AbstractMigrationIT {

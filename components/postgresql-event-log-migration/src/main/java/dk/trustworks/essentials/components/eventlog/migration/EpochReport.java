@@ -20,7 +20,7 @@ import java.time.*;
 import java.util.List;
 
 /**
- * The outcome of one online epoch (design phase 9 §3.3).
+ * The outcome of one online epoch.
  *
  * @param types    per aggregate type, the range the epoch copied; empty if the wait timed out
  * @param waited   how long the epoch waited for the transactions older than its start

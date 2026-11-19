@@ -28,7 +28,7 @@ import static dk.trustworks.essentials.components.eventlog.migration.MigrationMu
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Design phase 9 §9.1 {@code MigrationCutoverIT} and §3.5: the cut-over's {@code SHARE} locks wait for every in-flight
+ * The cut-over's {@code SHARE} locks wait for every in-flight
  * old writer and block every new one until the commit.
  */
 class MigrationCutoverIT extends AbstractMigrationIT {

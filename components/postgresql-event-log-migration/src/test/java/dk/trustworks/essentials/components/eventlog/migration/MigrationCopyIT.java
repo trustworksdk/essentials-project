@@ -26,8 +26,8 @@ import static dk.trustworks.essentials.components.eventlog.migration.MigrationMu
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Design phase 9 §9.1 {@code MigrationCopyIT}: {@code jsonb} and {@code json} sources, {@code text} and {@code uuid} ids,
- * tenants, causation and correlation, three types; copied, cut over, and equal over every column (§2.3, §2.4)
+ * {@code jsonb} and {@code json} sources, {@code text} and {@code uuid} ids,
+ * tenants, causation and correlation, three types; copied, cut over, and equal over every column
  */
 class MigrationCopyIT extends AbstractMigrationIT {
     private OldEngine          accounts, orders, users;
@@ -43,7 +43,7 @@ class MigrationCopyIT extends AbstractMigrationIT {
         accounts.streams("Accounts", 3, 4);
         orders.streams("Orders", 6, 9);
         users.streams("Users", 4, 5);
-        // a cause the event log cannot hold: copied as null and counted (§2.4, decision 5)
+        // a cause the event log cannot hold: copied as null and counted
         execute("INSERT INTO " + users.table("Users") + " (aggregate_id, event_order, event_id, caused_by_event_id, correlation_id, event_type, event_revision, timestamp, " +
                         "event_payload, event_metadata, tenant) SELECT aggregate_id || '-x', 0, gen_random_uuid()::text, 'not-a-uuid', correlation_id, event_type, " +
                         "event_revision, timestamp, event_payload, event_metadata, tenant FROM " + users.table("Users") + " LIMIT 1");
@@ -75,13 +75,13 @@ class MigrationCopyIT extends AbstractMigrationIT {
         assertThat(newCount("Accounts")).isEqualTo(47);
         assertThat(newCount("Orders")).isEqualTo(60);
         assertThat(newCount("Users")).isEqualTo(21);
-        // the online verification covered the epoch's ranges, the cut-over's the delta; both equal (§6.2)
+        // the online verification covered the epoch's ranges, the cut-over's the delta; both equal
         assertThat(online.equal()).isTrue();
         assertThat(online.type("Orders").orElseThrow().rows()).isEqualTo(54);
         assertThat(online.type("Accounts").orElseThrow().windows()).isNotEmpty();
         assertThat(queryLong("SELECT count(*) FROM el_users_events WHERE caused_by_event_id IS NULL")).isEqualTo(1);
         assertThat(queryLong("SELECT count(*) FROM el_accounts_events WHERE tenant = 'tenant-1'")).isEqualTo(35);
-        // the json source's text is kept byte for byte, the jsonb source's is its ::text rendering (§2.3)
+        // the json source's text is kept byte for byte, the jsonb source's is its ::text rendering
         assertThat(queryLong("SELECT count(*) FROM el_orders_events e JOIN orders_events o USING (global_order) WHERE e.event_payload::text <> o.event_payload::text")).isZero();
         assertThat(queryLong("SELECT count(*) FROM el_orders_events WHERE event_payload::text LIKE '%\": %'")).as("Jackson's compact json, not jsonb's rendering").isZero();
         for (var type : List.of("Accounts", "Orders", "Users")) {
@@ -135,7 +135,7 @@ class MigrationCopyIT extends AbstractMigrationIT {
         assertThat(differingRows(accounts, "Accounts", status.copiedThrough())).as("rows dropped silently below the checkpoint").isPositive();
     }
 
-    // ------------------------------------------------------------------ verification (§6, §9.1)
+    // ------------------------------------------------------------------ verification
 
     @Test
     void verification_finds_a_payload_re_rendered_through_jsonb_and_the_cut_over_rolls_back() throws Exception {

@@ -20,7 +20,7 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * The outcome of a committed cut-over (design phase 9 §3.5).
+ * The outcome of a committed cut-over.
  *
  * @param types    per aggregate type, what the final pass copied and where its identity sequence now stands
  * @param lockWait how long acquiring the {@code SHARE} locks took
@@ -38,7 +38,7 @@ public record CutoverReport(List<TypeCutover> types, Duration lockWait, Duration
      *                      {@code el_migration.copied_through}, which {@code verify --after-cutover} compares against
      * @param rows          the rows copied by the final pass
      * @param sequenceValue the value the event table's identity sequence was set to ({@code is_called}), or 0 if it was
-     *                      left untouched because nothing was ever drawn or copied (§3.6)
+     *                      left untouched because nothing was ever drawn or copied
      */
     public record TypeCutover(String aggregateType, long from, long to, long rows, long sequenceValue) {
     }

@@ -28,7 +28,7 @@ import static dk.trustworks.essentials.components.eventlog.migration.MigrationMu
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * The import of the old engine's resume points (design phase 9 §4), as a {@link CutoverStep}: it runs in the cut-over
+ * The import of the old engine's resume points, as a {@link CutoverStep}: it runs in the cut-over
  * transaction, under the {@code SHARE} locks, after the final pass is copied and verified. Add it to
  * {@link MigrationPlan#cutoverSteps()}.
  * <p>
@@ -39,21 +39,21 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * </pre>
  * through {@link EventLogAdmin#importProgress}, once per instance name: an open transient gap whose event committed late
  * may never have been delivered, and the new engine keeps no per-subscription pending set, so the subscription replays
- * {@code [I, R)} (at least once, as on the old engine). An open gap that never filled does not force a replay (decision 8).
+ * {@code [I, R)} (at least once, as on the old engine). An open gap that never filled does not force a replay.
  * <p>
- * A mapping with {@link ImportedSubscription#trustOldResumePoint()} imports {@code R} unchanged instead (§18): the
+ * A mapping with {@link ImportedSubscription#trustOldResumePoint()} imports {@code R} unchanged instead: the
  * operator states the old subscriber already handled its gap fills, which trades invariant I8 for no replay. The report
  * records the opt-in and the filled gaps it skips, and the run logs them at WARN.
  * The gaps' rows are looked up in the event log's table, which the cut-over has just verified equal to the old one.
  * <p>
  * It takes {@code SHARE} locks on the old subscription and gap tables too, so an old node still running a subscriber
- * cannot move a resume point under it. Then it checks every progress row it wrote (§6.1): {@code resume_from = I},
+ * cannot move a resume point under it. Then it checks every progress row it wrote: {@code resume_from = I},
  * {@code I <= R}, and {@code I <=} every open transient gap of the subscriber that has a row; for an opted-in mapping,
  * {@code resume_from = R}. A progress row that already
  * exists with another resume point is refused (an equal one is an idempotent rerun). Any refusal rolls the whole
  * cut-over back.
  * <p>
- * Not recovered, reported instead (§4.4, {@link ImportReport}): late fills of permanent gaps below {@code R} (decision 7),
+ * Not recovered, reported instead ({@link ImportReport}): late fills of permanent gaps below {@code R},
  * a source without gap tracking, the old subscribers no mapping names. {@link #report()} holds the last run's report;
  * it describes what was committed only if {@link Migration#cutover()} returned.
  */
@@ -113,7 +113,7 @@ public final class ResumePointImport implements CutoverStep {
     }
 
     /**
-     * The import preview (design phase 9 §4): per mapping, the old resume point {@code R}, the value the cut-over would
+     * The import preview: per mapping, the old resume point {@code R}, the value the cut-over would
      * import {@code I}, the I8-safe value and the rows it replays (flagged when large, {@link ImportReport#LARGE_REPLAY_ROWS}),
      * the opt-in and the filled gaps it skips, and the replay length in values and rows, plus the old subscribers that are not mapped. Computed
      * by the same code as {@link #run}, in a {@code READ ONLY} transaction: it takes no {@code SHARE} lock, writes
@@ -296,7 +296,7 @@ public final class ResumePointImport implements CutoverStep {
     }
 
     /**
-     * The progress-row structural checks (§6.1), read back from {@code el_progress} and against bounds computed apart from
+     * The progress-row structural checks, read back from {@code el_progress} and against bounds computed apart from
      * the imported value: {@code 1 <= resume_from <= R}, and {@code resume_from <=} the lowest open transient gap that
      * has a row, unless the mapping opted in to {@code R} ({@link #checkTrusted})
      */
@@ -318,7 +318,7 @@ public final class ResumePointImport implements CutoverStep {
         }
     }
 
-    /** The opt-in's check (§18): every progress row resumes from the old resume point {@code R} exactly */
+    /** The opt-in's check: every progress row resumes from the old resume point {@code R} exactly */
     private void checkTrusted(Connection connection, ImportedSubscription s, long oldResume) throws SQLException {
         for (var instance : s.instanceNames()) {
             var stored = storedResumeFrom(connection, s, instance);

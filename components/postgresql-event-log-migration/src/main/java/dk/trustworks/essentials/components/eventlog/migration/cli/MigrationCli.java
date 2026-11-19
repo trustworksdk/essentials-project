@@ -27,7 +27,7 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The migration's command line (design phase 9 §5): one subcommand per step of the procedure, each reading the same YAML
+ * The migration's command line: one subcommand per step of the procedure, each reading the same YAML
  * configuration ({@link MigrationConfigYaml}) and printing a plain-text report.
  * <pre>
  * java -cp postgresql-event-log-migration.jar:postgresql-event-log.jar:foundation.jar:shared.jar:...:postgresql.jar:snakeyaml.jar \

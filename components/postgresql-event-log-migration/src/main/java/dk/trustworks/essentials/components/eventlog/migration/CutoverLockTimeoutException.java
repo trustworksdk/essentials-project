@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.components.eventlog.migration;
 
 /**
- * The cut-over could not take the {@code SHARE} locks within {@code lockTimeout} (design phase 9 §3.5): writers are
+ * The cut-over could not take the {@code SHARE} locks within {@code lockTimeout}: writers are
  * still running on the old tables. Nothing was copied and the migration is still {@code COPYING}.
  */
 public final class CutoverLockTimeoutException extends RuntimeException {

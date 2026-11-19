@@ -20,7 +20,7 @@ import java.time.OffsetDateTime;
 import java.util.*;
 
 /**
- * The outcome of {@link Migration#verifyAfterCutover()} (design phase 9 §6.3): per cut-over aggregate type, the old
+ * The outcome of {@link Migration#verifyAfterCutover()}: per cut-over aggregate type, the old
  * table's rows above the copied maximum recorded at the cut-over. Such a row was written by an old-engine node that
  * should have been stopped; it exists only in the old table and is never merged.
  *

@@ -20,10 +20,10 @@ import java.sql.*;
 import java.util.List;
 
 /**
- * A step of the cut-over transaction (design phase 9 §3.5 step 3) that runs under the {@code SHARE} locks, after the
+ * A step of the cut-over transaction that runs under the {@code SHARE} locks, after the
  * delta is copied, the heads are written and the identity sequences are set, and before the migration state becomes
- * {@code CUT_OVER}, and after the built-in delta verification (§6). The extension point for the import of resume points (§4,
- * unit 9-E). A step runs on the cut-over's connection and must neither commit nor roll back; an exception rolls the
+ * {@code CUT_OVER}, and after the built-in delta verification. The extension point for the import of resume points. A
+ * step runs on the cut-over's connection and must neither commit nor roll back; an exception rolls the
  * whole cut-over back to the state after the last epoch.
  */
 @FunctionalInterface

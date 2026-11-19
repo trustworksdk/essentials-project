@@ -29,7 +29,7 @@ import static dk.trustworks.essentials.components.eventlog.migration.AbstractMig
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Unit 9-F: the procedure of design phase 9 §5, run through {@link MigrationCli} with a YAML configuration against the I8
+ * The migration procedure (see docs/design/event-log.md §10), run through {@link MigrationCli} with a YAML configuration against the I8
  * fixture ({@link #i8Source()}), from pre-flight to the check for late rows after the cut-over
  */
 class MigrationCliIT extends AbstractMigrationIT {

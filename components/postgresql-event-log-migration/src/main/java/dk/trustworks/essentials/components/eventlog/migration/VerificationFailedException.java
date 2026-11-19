@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.eventlog.migration;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The cut-over's verification found a difference (design phase 9 §6.1, §7): the cut-over transaction rolled back to the
+ * The cut-over's verification found a difference: the cut-over transaction rolled back to the
  * state after the last epoch. The report names the windows and rows.
  */
 public final class VerificationFailedException extends IllegalStateException {

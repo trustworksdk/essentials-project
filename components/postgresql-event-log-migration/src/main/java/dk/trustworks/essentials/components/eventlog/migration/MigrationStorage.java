@@ -24,9 +24,9 @@ import java.util.*;
 import static dk.trustworks.essentials.components.eventlog.EventLogSchema.MIGRATION_TABLE;
 
 /**
- * The migration's SQL (design phase 9 §3). Every table and column name in it was validated by {@link SourceTable},
+ * The migration's SQL. Every table and column name in it was validated by {@link SourceTable},
  * {@link SourceColumns} or {@link AggregateTypeTables} before it reaches here; every value is a bind parameter. No DDL:
- * the event log's tables are created by the engine's contributor, and {@code setval} is not DDL (§3.6).
+ * the event log's tables are created by the engine's contributor, and {@code setval} is not DDL.
  */
 final class MigrationStorage {
     static final String UUID_RE = "'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'";
@@ -42,7 +42,7 @@ final class MigrationStorage {
             "WHERE aggregate_type = ? AND state = 'COPYING'";
     static final String SET_SEQUENCE = "SELECT setval(pg_get_serial_sequence(?, 'global_order'), ?, true)";
     static final String CLOCK = "SELECT clock_timestamp()";
-    /** §3.3: the transactions of this database, other than this backend's, that started at or before the epoch's start */
+    /** The transactions of this database, other than this backend's, that started at or before the epoch's start */
     static final String OLDER_TRANSACTIONS = "SELECT pid, application_name, xact_start, state FROM pg_stat_activity " +
             "WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid() " +
             "AND xact_start IS NOT NULL AND xact_start <= ? ORDER BY xact_start LIMIT 20";
@@ -65,12 +65,12 @@ final class MigrationStorage {
         return source.columns();
     }
 
-    /** {@code caused_by_event_id} values that are copied as null (§2.4, decision 5) */
+    /** {@code caused_by_event_id} values that are copied as null */
     String nonUuidCause() {
         return catalog.isUuid(c().causedByEventId()) ? "false" : col(c().causedByEventId()) + " IS NOT NULL AND " + col(c().causedByEventId()) + " !~ " + UUID_RE;
     }
 
-    /** §2.4's refusals as predicates over a row {@code o} of the old table */
+    /** The preflight refusals as predicates over a row {@code o} of the old table */
     Map<RefusalKind, String> refusalPredicates() {
         var p = new LinkedHashMap<RefusalKind, String>();
         if (!catalog.isUuid(c().eventId())) {
@@ -117,7 +117,7 @@ final class MigrationStorage {
                 source.tableName() + " o WHERE " + col(c().globalOrder()) + " > ? AND " + col(c().globalOrder()) + " <= ?";
     }
 
-    /** §3.2: one server-side statement per batch; the payload is the old column's text output, never re-serialised (§2.3) */
+    /** One server-side statement per batch; the payload is the old column's text output, never re-serialised */
     String insertRange(boolean payloadViaJsonb) {
         var cause = catalog.isUuid(c().causedByEventId()) ? col(c().causedByEventId())
                                                            : "CASE WHEN " + col(c().causedByEventId()) + " ~ " + UUID_RE + " THEN " + col(c().causedByEventId()) + "::uuid END";
@@ -131,7 +131,7 @@ final class MigrationStorage {
                 " WHERE " + col(c().globalOrder()) + " > ? AND " + col(c().globalOrder()) + " <= ? ORDER BY " + col(c().globalOrder());
     }
 
-    /** §3.6: the heads of the batch's aggregates; a stream spanning batches keeps its highest order */
+    /** The heads of the batch's aggregates; a stream spanning batches keeps its highest order */
     String upsertHeads() {
         return "INSERT INTO " + target.headTable() + " (aggregate_id, version) SELECT aggregate_id, max(event_order) FROM " + target.eventTable() +
                 " WHERE global_order > ? AND global_order <= ? GROUP BY aggregate_id " +
@@ -142,13 +142,13 @@ final class MigrationStorage {
         return source.tableName();
     }
 
-    // ------------------------------------------------------------------ verification (§6)
+    // ------------------------------------------------------------------ verification
 
     private static final String NULL_MARK = "'∅'";
 
     /**
-     * §6.1: an old row rendered as the text its event log copy must render to. Every nullable column is marked, so that
-     * {@code concat_ws} cannot shift a value into a neighbour's place; the cause is what the copy keeps of it (§2.4), the
+     * An old row rendered as the text its event log copy must render to. Every nullable column is marked, so that
+     * {@code concat_ws} cannot shift a value into a neighbour's place; the cause is what the copy keeps of it, the
      * revision what {@code smallint} keeps of it
      */
     private String oldRowText(boolean withPayload) {
@@ -161,7 +161,7 @@ final class MigrationStorage {
                 "coalesce(" + col(c().tenant()) + "::text, " + NULL_MARK + "))";
     }
 
-    /** §6.1: the same rendering of an event log row; the type name comes from {@code el_event_types} */
+    /** The same rendering of an event log row; the type name comes from {@code el_event_types} */
     private static String newRowText(boolean withPayload) {
         return "concat_ws('|', e.global_order, e.aggregate_id, e.event_order, e.event_id::text, coalesce(e.caused_by_event_id::text, " + NULL_MARK + "), " +
                 "coalesce(e.correlation_id::text, " + NULL_MARK + "), coalesce(y.name, " + NULL_MARK + "), e.event_revision::text, " +
@@ -196,7 +196,7 @@ final class MigrationStorage {
     }
 
     /**
-     * §6.1: the streams with an event in {@code (?, ?]} whose head is missing or differs from the stream's
+     * The streams with an event in {@code (?, ?]} whose head is missing or differs from the stream's
      * {@code max(event_order)}: their count and up to 10 of their ids
      */
     String headMismatches() {
@@ -206,7 +206,7 @@ final class MigrationStorage {
         return "SELECT count(*), (array_agg(aggregate_id ORDER BY aggregate_id))[1:10] FROM (" + mismatch + ") m";
     }
 
-    /** §6.1: heads without a stream (there must be as many heads as streams) */
+    /** Heads without a stream (there must be as many heads as streams) */
     String orphanHeads() {
         return "SELECT count(*) FROM " + target.headTable() + " h WHERE NOT EXISTS (SELECT 1 FROM " + target.eventTable() + " e WHERE e.aggregate_id = h.aggregate_id)";
     }
@@ -221,12 +221,12 @@ final class MigrationStorage {
                 "pg_get_serial_sequence('" + target.eventTable() + "', 'global_order')), 0)";
     }
 
-    /** §6.3: the old rows above the copied maximum: count and max */
+    /** The old rows above the copied maximum: count and max */
     String lateRows() {
         return "SELECT count(*), coalesce(max(" + c().globalOrder() + "), 0) FROM " + source.tableName() + " WHERE " + c().globalOrder() + " > ?";
     }
 
-    /** §6.3: the first 10 of them, with their timestamps */
+    /** The first 10 of them, with their timestamps */
     String lateRowSamples() {
         return "SELECT " + c().globalOrder() + ", " + c().timestamp() + " FROM " + source.tableName() + " WHERE " + c().globalOrder() + " > ? ORDER BY " +
                 c().globalOrder() + " LIMIT 10";

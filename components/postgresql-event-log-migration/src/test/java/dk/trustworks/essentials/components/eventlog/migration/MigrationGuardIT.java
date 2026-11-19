@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Design phase 9 §9.1 {@code MigrationGuardIT} and §3.8: once {@code prepare} marks a type {@code COPYING}, no event
+ * Once {@code prepare} marks a type {@code COPYING}, no event
  * log node may register it until the cut-over. (The guard's mutant, {@code GUARD_SKIPPED}, is the engine's and is
  * shown by its {@code EventLogMigrationIT}.)
  */

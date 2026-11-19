@@ -26,7 +26,7 @@ import static dk.trustworks.essentials.components.eventlog.migration.MigrationMu
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Design phase 9 §9.1 {@code MigrationEpochIT} and §3.3: an epoch copies only what can no longer change. A writer that
+ * An epoch copies only what can no longer change. A writer that
  * drew a value below {@code M} and commits after the epoch's start holds the epoch up until it ends.
  */
 class MigrationEpochIT extends AbstractMigrationIT {

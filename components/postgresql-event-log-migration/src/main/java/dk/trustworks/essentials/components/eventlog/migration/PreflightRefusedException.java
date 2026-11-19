@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.components.eventlog.migration;
 
 /**
- * Pre-flight found a refusal (design phase 9 §3.1); nothing was written
+ * Pre-flight found a refusal; nothing was written
  */
 public final class PreflightRefusedException extends RuntimeException {
     private final PreflightReport report;

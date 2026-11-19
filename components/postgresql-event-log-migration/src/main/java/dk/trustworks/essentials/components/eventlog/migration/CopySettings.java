@@ -21,19 +21,19 @@ import java.time.Duration;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * How the copy runs (design phase 9 §2.2, §3.2, §3.3, §3.5, §16.7).
+ * How the copy runs.
  *
- * @param batchSize          the {@code global_order} values per batch transaction (default 10 000, §16.7); a batch over
+ * @param batchSize          the {@code global_order} values per batch transaction (default 10 000); a batch over
  *                           mostly holes copies few rows
- * @param epochWaitTimeout   how long an online epoch waits for transactions older than its start (default 10 min, §3.3);
+ * @param epochWaitTimeout   how long an online epoch waits for transactions older than its start (default 10 min);
  *                           on timeout the epoch copies nothing and reports the blockers
  * @param epochWaitPoll      how often the epoch wait polls {@code pg_stat_activity} (default 20 ms)
  * @param lockTimeout        the cut-over's {@code lock_timeout} for the {@code SHARE} locks on the old tables (default
- *                           10 s, §3.5); on timeout nothing is copied and the cut-over reports writers still running
- * @param maxEventsPerSecond the online copy's throttle, applied between batches (default 25 000, §18: at that rate the
- *                           old engine's append p99 during an epoch was 0.84-0.92x of its p99 without a copy in the gate,
- *                           §17); 0 is unthrottled. The cut-over is never throttled
- * @param verifyWindow       the {@code global_order} values per verification window (default 100 000, §6.1): each window
+ * 10 s); on timeout nothing is copied and the cut-over reports writers still running
+ * @param maxEventsPerSecond the online copy's throttle, applied between batches (default 25 000, at that rate the old
+ * engine's append p99 during an epoch was 0.84-0.92x of its p99 without a copy in the gate); 0 is unthrottled. The
+ * cut-over is never throttled
+ * @param verifyWindow       the {@code global_order} values per verification window (default 100 000): each window
  *                           is hashed on both sides, and a differing one is bisected down to its rows
  */
 public record CopySettings(int batchSize, Duration epochWaitTimeout, Duration epochWaitPoll, Duration lockTimeout, long maxEventsPerSecond, int verifyWindow) {

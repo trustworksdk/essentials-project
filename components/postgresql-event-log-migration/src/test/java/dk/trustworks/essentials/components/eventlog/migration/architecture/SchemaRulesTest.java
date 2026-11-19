@@ -20,7 +20,7 @@ import dk.trustworks.essentials.components.foundation.test.architecture.Abstract
 
 /**
  * The migration holds no DDL: the event log's tables come from the engine's contributor, and {@code setval} and
- * {@code LOCK TABLE} are not DDL (design phase 9 §3.6).
+ * {@code LOCK TABLE} are not DDL.
  */
 class SchemaRulesTest extends AbstractEssentialsSchemaRulesTest {
 }

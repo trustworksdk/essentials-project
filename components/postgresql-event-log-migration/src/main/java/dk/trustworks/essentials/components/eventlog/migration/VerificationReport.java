@@ -20,8 +20,8 @@ import java.time.Duration;
 import java.util.*;
 
 /**
- * The outcome of a verification (design phase 9 §6): per aggregate type, the windows of {@code global_order} hashed on
- * both sides over every column (§6.1), the rows a differing window was bisected down to, and the structural checks.
+ * The outcome of a verification: per aggregate type, the windows of {@code global_order} hashed on
+ * both sides over every column, the rows a differing window was bisected down to, and the structural checks.
  *
  * @param mode  what was verified
  * @param types per aggregate type
@@ -33,9 +33,9 @@ public record VerificationReport(Mode mode, List<TypeVerification> types, Durati
     }
 
     public enum Mode {
-        /** The copied ranges, while the old engine runs (§6.2); ranges copied by an epoch are final */
+        /** The copied ranges, while the old engine runs; ranges copied by an epoch are final */
         ONLINE,
-        /** The range the cut-over's final pass copied, under the {@code SHARE} locks (§6.2, §16.7), and the identity sequences */
+        /** The range the cut-over's final pass copied, under the {@code SHARE} locks, and the identity sequences */
         CUTOVER
     }
 
@@ -76,7 +76,7 @@ public record VerificationReport(Mode mode, List<TypeVerification> types, Durati
      * @param windows            every window of the range, with both sides' row counts and hashes
      * @param differingRows      the rows the differing windows were bisected down to, in {@code global_order} order;
      *                           at most {@value Verifier#MAX_DIFFERING_ROWS}
-     * @param structuralFailures the failed structural checks (§6.1): heads, and under the cut-over the identity sequence
+     * @param structuralFailures the failed structural checks: heads, and under the cut-over the identity sequence
      */
     public record TypeVerification(String aggregateType, long from, long to, long rows, List<Window> windows, List<RowDifference> differingRows,
                                    List<String> structuralFailures) {

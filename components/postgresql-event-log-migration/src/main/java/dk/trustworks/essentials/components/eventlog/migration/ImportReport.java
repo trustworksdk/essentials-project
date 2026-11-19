@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.eventlog.migration;
 import java.util.List;
 
 /**
- * What the import of resume points did, and what it could not recover (design phase 9 §4.2, §4.4, decisions 7 and 8).
+ * What the import of resume points did, and what it could not recover (decisions 7 and 8).
  *
  * @param imported     one entry per imported subscription
  * @param unmapped     the old durable subscriptions of the plan's aggregate types that no {@link ImportedSubscription}
@@ -58,7 +58,7 @@ public record ImportReport(List<SubscriptionImport> imported, List<UnmappedSubsc
      * @param filledOpenTransientGaps        those of them that have a row: committed late, maybe never delivered
      * @param lateFilledPermanentGapsBelowResume the permanent gaps of the type below {@code R} that have a row: late
      *                                       commits the old engine gave up on and never delivered; copied, not delivered
-     *                                       (decision 7, report only)
+     *                                       (report only)
      * @param safeResumeFrom                 the I8-safe {@code I = least(R, lowest open transient gap that has a row)},
      *                                       whether imported or not
      * @param safeReplayRows                 the events in {@code [safeResumeFrom, R)}: the replay the safe value costs

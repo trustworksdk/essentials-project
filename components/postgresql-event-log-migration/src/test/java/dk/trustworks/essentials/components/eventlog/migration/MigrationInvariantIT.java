@@ -32,7 +32,7 @@ import static dk.trustworks.essentials.components.eventlog.migration.MigrationMu
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Invariant I8 (design phase 9 §9.2): after the copy and the import, the event log holds every source event, and every
+ * Invariant I8: after the copy and the import, the event log holds every source event, and every
  * imported subscription delivers each event at or above its old resume point, including the event that filled one of
  * its open transient gaps before the cut-over.
  * <p>
@@ -171,7 +171,7 @@ class MigrationInvariantIT extends AbstractMigrationIT {
         var cutover = migration.cutover();
         assertThat(cutover.types()).extracting(CutoverReport.TypeCutover::aggregateType).containsExactly(ORDERS, PAYMENTS);
 
-        // Equal per aggregate type (§6.1): every source event, same global order, event order, id and payload bytes
+        // Equal per aggregate type: every source event, same global order, event order, id and payload bytes
         for (var type : List.of(ORDERS, PAYMENTS)) {
             assertThat(differingRows(old, type, oldMax(old, type))).as("rows of %s that differ", type).isZero();
             assertThat(newCount(type)).as("rows of %s", type).isEqualTo(queryLong("SELECT count(*) FROM " + old.table(type)));

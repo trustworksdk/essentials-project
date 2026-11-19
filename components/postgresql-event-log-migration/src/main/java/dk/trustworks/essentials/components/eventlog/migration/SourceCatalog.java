@@ -20,7 +20,7 @@ import java.sql.*;
 import java.util.*;
 
 /**
- * What the catalog says about one old table (design phase 9 §3.1): whether it exists, its columns' types, which overrule
+ * What the catalog says about one old table: whether it exists, its columns' types, which overrule
  * the plan, and its {@code global_order} identity sequence.
  *
  * @param exists            whether the table exists

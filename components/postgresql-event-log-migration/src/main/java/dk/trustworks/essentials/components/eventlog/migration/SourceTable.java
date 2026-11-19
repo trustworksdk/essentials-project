@@ -21,10 +21,10 @@ import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * One aggregate type to move (design phase 9 §2.2): the aggregate type as the application names it (which also names
+ * One aggregate type to move: the aggregate type as the application names it (which also names
  * its event log tables, {@code AggregateTypeTables.of(aggregateType)}), the old engine's event table and its column
  * names. The old table and column names are validated with {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)}
- * here; whether the aggregate type fits the event log's derived names is a pre-flight refusal (§3.1), not a constructor
+ * here; whether the aggregate type fits the event log's derived names is a pre-flight refusal, not a constructor
  * failure, so that a plan can be checked whole.
  *
  * @param aggregateType the aggregate type

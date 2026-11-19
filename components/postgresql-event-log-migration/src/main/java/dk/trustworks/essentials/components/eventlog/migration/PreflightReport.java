@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.eventlog.migration;
 import java.util.*;
 
 /**
- * What pre-flight found (design phase 9 §3.1, §2.4). Read-only: nothing is written before a report with no refusal.
+ * What pre-flight found. Read-only: nothing is written before a report with no refusal.
  *
  * @param tables       one report per {@link SourceTable}, in plan order
  * @param planRefusals refusals that concern the plan as a whole (the event-type id space)
@@ -68,8 +68,7 @@ public record PreflightReport(List<TableReport> tables, List<Refusal> planRefusa
      * @param rows              the old table's row count
      * @param maxGlobalOrder    its {@code max(global_order)}, 0 if empty
      * @param sequenceLastValue its identity sequence's {@code last_value}, 0 if nothing was ever drawn
-     * @param nonUuidCauses     {@code caused_by_event_id} values that are not canonical UUIDs: copied as null (§2.4,
-     *                          decision 5)
+     * @param nonUuidCauses     {@code caused_by_event_id} values that are not canonical UUIDs: copied as null
      * @param refusals          what stops the migration
      * @param warnings          what does not stop it but must be read (a {@code uuid} aggregate id, a rerun)
      */
@@ -111,7 +110,7 @@ public record PreflightReport(List<TableReport> tables, List<Refusal> planRefusa
         UNSUPPORTED_COLUMN_TYPE,
         /** {@code global_order} has no identity sequence */
         NO_IDENTITY_SEQUENCE,
-        /** The identity sequence's cache is not 1, which the epoch rule needs (§3.3) */
+        /** The identity sequence's cache is not 1, which the epoch rule needs */
         SEQUENCE_CACHE_NOT_ONE,
         /** An {@code event_id} is not a lower-case canonical UUID */
         EVENT_ID_NOT_CANONICAL_UUID,

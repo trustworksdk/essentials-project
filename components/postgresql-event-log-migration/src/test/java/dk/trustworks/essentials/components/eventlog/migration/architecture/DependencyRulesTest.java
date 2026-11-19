@@ -23,7 +23,7 @@ import org.junit.jupiter.api.*;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 /**
- * The migration is raw pgjdbc over table and column names (design phase 9 §2.1): no JDBI, and nothing of the old
+ * The migration is raw pgjdbc over table and column names: no JDBI, and nothing of the old
  * engine, whose tables it only reads. Not depending on postgresql-event-store keeps that promise visible.
  */
 class DependencyRulesTest {

@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.eventlog.migration;
 import java.time.OffsetDateTime;
 
 /**
- * One aggregate type's {@code el_migration} row (design phase 9 §3.7, §3.8).
+ * One aggregate type's {@code el_migration} row.
  *
  * @param state         {@code COPYING} or {@code CUT_OVER}
  * @param copiedThrough every old row with {@code global_order <= copiedThrough} is copied

@@ -24,8 +24,8 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * What the migration is told (design phase 9 §2.2). The old and the new tables live in one database in phase 9 (open
- * question 2, decided), so one {@link DataSource} serves both.
+ * What the migration is told. The old and the new tables live in one database, so one {@link DataSource} serves
+ * both.
  *
  * @param dataSource   the application's database, holding the old engine's tables and the event log's
  * @param eventLog     a started {@link EventLog} on that database, built with the schema ownership the application
@@ -33,7 +33,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                     types through its registry. It must run no subscriptions
  * @param tables       the aggregate types to move; aggregate types, old tables and derived event log tables distinct
  * @param settings     how the copy runs
- * @param cutoverSteps run in order under the cut-over's locks ({@link CutoverStep}), after its built-in verification (§6.2)
+ * @param cutoverSteps run in order under the cut-over's locks ({@link CutoverStep}), after its built-in verification
  */
 public record MigrationPlan(DataSource dataSource, EventLog eventLog, List<SourceTable> tables, CopySettings settings, List<CutoverStep> cutoverSteps) {
     public MigrationPlan {

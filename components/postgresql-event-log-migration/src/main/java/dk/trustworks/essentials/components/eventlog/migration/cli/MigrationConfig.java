@@ -28,10 +28,10 @@ import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
  * What the CLI ({@link MigrationCli}) is told: the connection, the aggregate types with their old tables, the copy
- * settings and the optional resume-point import (design phase 9 §2.2, §4, §5). Read from YAML by
+ * settings and the optional resume-point import. Read from YAML by
  * {@link MigrationConfigYaml}; this record itself does not depend on a YAML library, so it can be built in code as well.
  *
- * @param connection      the database holding both the old tables and the event log's (the same database in phase 9)
+ * @param connection      the database holding both the old tables and the event log's (the same database)
  * @param schemaOwnership the event log's schema ownership: {@link SchemaOwnership#COMPONENT} lets {@code prepare} create
  *                        the event log's schema; {@link SchemaOwnership#HARNESS} expects it to exist
  * @param tables          per aggregate type, the old table and its column names
@@ -66,7 +66,7 @@ public record MigrationConfig(ConnectionSettings connection, SchemaOwnership sch
     }
 
     /**
-     * The resume-point import (design phase 9 §4); its table names default to the old engine's
+     * The resume-point import; its table names default to the old engine's
      */
     public record Imports(String durableSubscriptionsTable, String transientGapsTable, String permanentGapsTable, List<Subscription> subscriptions) {
         public Imports {
@@ -84,7 +84,7 @@ public record MigrationConfig(ConnectionSettings connection, SchemaOwnership sch
     }
 
     /**
-     * One old subscriber's mapping to an event log subscription (design phase 9 §4.1). The definition must equal the one
+     * One old subscriber's mapping to an event log subscription. The definition must equal the one
      * the application will subscribe with (same subscriber, aggregate type, ownership, consistency, event types and
      * tenant), or the engine will not recognise the imported progress row as its own.
      *

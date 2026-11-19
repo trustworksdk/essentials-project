@@ -21,9 +21,9 @@ import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import java.util.List;
 
 /**
- * The column names of one old-engine event table (design phase 9 §1.1, {@code EventStreamTableColumnNames}). Every name
+ * The column names of one old-engine event table ({@code EventStreamTableColumnNames}). Every name
  * is validated with {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} before it is ever concatenated into SQL.
- * The column <em>types</em> are not part of this: pre-flight reads them from the catalog (§2.2).
+ * The column <em>types</em> are not part of this: pre-flight reads them from the catalog.
  */
 public record SourceColumns(String globalOrder,
                             String aggregateId,

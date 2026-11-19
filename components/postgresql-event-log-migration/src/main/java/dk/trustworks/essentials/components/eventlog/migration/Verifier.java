@@ -27,10 +27,10 @@ import java.util.*;
 import static dk.trustworks.essentials.components.eventlog.migration.MigrationMutant.VERIFY_WITHOUT_PAYLOAD;
 
 /**
- * The migration's verification (design phase 9 §6): per window of {@code global_order}, the row count and the hash of
- * every column on both sides (§6.1); a differing window bisected down to the rows that differ; the structural checks of
- * heads and identity sequences. Online it covers the copied ranges not verified yet (§6.2); under the cut-over exactly
- * the range the final pass copied (§16.7), plus any range below it no online run verified. The verified maximum is kept
+ * The migration's verification: per window of {@code global_order}, the row count and the hash of
+ * every column on both sides; a differing window bisected down to the rows that differ; the structural checks of
+ * heads and identity sequences. Online it covers the copied ranges not verified yet; under the cut-over exactly
+ * the range the final pass copied, plus any range below it no online run verified. The verified maximum is kept
  * in {@code el_migration.report} with the windows' hashes.
  */
 final class Verifier {
@@ -87,7 +87,7 @@ final class Verifier {
     }
 
     /**
-     * The cut-over's step (§3.5 step 3): per type, {@code (min(verified maximum, from), to]} and the identity sequence.
+     * The cut-over's step: per type, {@code (min(verified maximum, from), to]} and the identity sequence.
      * Throws {@link VerificationFailedException} on any difference, which rolls the cut-over back.
      */
     CutoverStep cutoverStep() {
@@ -153,7 +153,7 @@ final class Verifier {
                 failures.add(orphans + " heads without a stream");
             }
         } else {
-            // §3.6: the identity continues above the old sequence, not above the highest copied row
+            // The identity continues above the old sequence, not above the highest copied row
             var catalog   = SourceCatalog.read(connection, table);
             var targetMax = queryLong(connection, storage.targetMaxGlobalOrderUpTo(), to);
             var expected  = Math.max(catalog.sequenceLastValue(), targetMax);
@@ -180,7 +180,7 @@ final class Verifier {
         }
     }
 
-    /** §6.1: halves a differing range until it is narrow enough to compare row by row */
+    /** Halves a differing range until it is narrow enough to compare row by row */
     private void bisect(Connection connection, MigrationStorage storage, boolean withPayload, long lo, long hi, List<RowDifference> differing) throws SQLException {
         if (differing.size() >= MAX_DIFFERING_ROWS) {
             return;

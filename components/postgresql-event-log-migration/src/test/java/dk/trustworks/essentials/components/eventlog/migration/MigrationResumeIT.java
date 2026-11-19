@@ -26,7 +26,7 @@ import static dk.trustworks.essentials.components.eventlog.migration.MigrationMu
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Design phase 9 §9.1 {@code MigrationResumeIT} and §3.7: a crash loses a batch together with its checkpoint, or the
+ * A crash loses a batch together with its checkpoint, or the
  * whole cut-over; the rerun resumes and the copy is equal. A row someone else wrote stops the run.
  */
 class MigrationResumeIT extends AbstractMigrationIT {
@@ -52,7 +52,7 @@ class MigrationResumeIT extends AbstractMigrationIT {
         migration.seams(mutants(mutants));
         migration.copyEpoch();
         assertThat(migration.status(TYPE).orElseThrow().copiedThrough()).isEqualTo(40);
-        // the migration's own verification sees what the test's comparison sees (§6.1)
+        // the migration's own verification sees what the test's comparison sees
         var verification = migration.verify().type(TYPE).orElseThrow();
         var differing    = differingRows(old, TYPE, 40);
         assertThat(verification.differingRows()).hasSize((int) differing)

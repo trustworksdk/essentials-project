@@ -27,7 +27,7 @@ import static dk.trustworks.essentials.components.eventlog.migration.Verificatio
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Design phase 9 §6: window hashes, bisection to the differing rows, the structural checks, online and under the
+ * Window hashes, bisection to the differing rows, the structural checks, online and under the
  * cut-over, the record in {@code el_migration.report}, and {@code verify --after-cutover}
  */
 class MigrationVerifyIT extends AbstractMigrationIT {
@@ -87,7 +87,7 @@ class MigrationVerifyIT extends AbstractMigrationIT {
         assertThat(all.from()).isZero();
         assertThat(queryLong("SELECT jsonb_array_length(report::jsonb -> 'windows') FROM el_migration")).as("replaced").isEqualTo(4);
 
-        // the cut-over verifies exactly what its final pass copies (§16.7), and records it
+        // the cut-over verifies exactly what its final pass copies, and records it
         old.streams(TYPE, 1, 4);
         migration.cutover();
         assertThat(report("{lastVerification,mode}")).isEqualTo("CUTOVER");

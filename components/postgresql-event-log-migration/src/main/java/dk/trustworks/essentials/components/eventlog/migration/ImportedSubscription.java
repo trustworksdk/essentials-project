@@ -23,7 +23,7 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * The operator's mapping of one old durable subscription to a subscription of the event log (design phase 9 §4.1). The
+ * The operator's mapping of one old durable subscription to a subscription of the event log. The
  * old key {@code (oldSubscriberId, definition.aggregateType())} names a row of the old engine's
  * {@code durable_subscriptions}; the definition and the progress model supply what that row does not have: the
  * ownership, the consistency mode, the filter and the handler kind. One old subscriber may be mapped to more than one
@@ -38,7 +38,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                        definition the non-blank name of every instance that will run it (the new engine keeps one row
  *                        per instance), including the definition's own. Every row gets the same imported point
  * @param trustOldResumePoint the operator's statement that the old subscriber has already handled the events that filled
- *                        its open transient gaps (design phase 9 §4.2, §18). When set, the import writes the old resume
+ *                        its open transient gaps. When set, the import writes the old resume
  *                        point {@code R} unchanged instead of the I8-safe {@code least(R, lowest filled open gap)}: the
  *                        subscription does not replay {@code [I, R)}, and an event that filled a gap and was in fact never
  *                        delivered is never delivered. The import report names the filled gaps this skips. Off by default

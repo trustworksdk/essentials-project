@@ -30,17 +30,17 @@ import static dk.trustworks.essentials.components.eventlog.migration.MigrationSt
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The one-way move of aggregate types from {@code PostgresqlEventStore}'s tables to the event log's (design
- * {@code docs/archive/event-store-engine-phase9.md}), as an operator runs it (§5):
+ * The one-way move of aggregate types from {@code PostgresqlEventStore}'s tables to the event log's, as an operator
+ * runs it:
  * <ol>
- *     <li>{@link #preflight()}: read-only checks and a report (§3.1)</li>
+ *     <li>{@link #preflight()}: read-only checks and a report</li>
  *     <li>{@link #prepare()}: pre-flight, then register each aggregate type with the event log and mark it
- *     {@code COPYING} in {@code el_migration}, which keeps every event log node off its tables (§3.8)</li>
- *     <li>{@link #copyEpoch()}, as often as wanted while the old engine runs: copy what can no longer change (§3.3), in
- *     batches whose checkpoint commits with them (§3.7); reruns resume</li>
+ *     {@code COPYING} in {@code el_migration}, which keeps every event log node off its tables</li>
+ *     <li>{@link #copyEpoch()}, as often as wanted while the old engine runs: copy what can no longer change, in
+ *     batches whose checkpoint commits with them; reruns resume</li>
  *     <li>stop every old-engine node, then {@link #cutover()}: one transaction under {@code SHARE} locks on the old
  *     tables, copying the delta, writing heads, setting the identity sequences, running the {@link CutoverStep}s and
- *     marking the types {@code CUT_OVER} (§3.5)</li>
+ *     marking the types {@code CUT_OVER}</li>
  * </ol>
  * The old tables are only read, and {@code SHARE}-locked during the cut-over. Not thread-safe: one migration runs at a
  * time, and the checkpoint's compare-and-set refuses a second concurrent copier.
@@ -64,10 +64,10 @@ public final class Migration {
         this.seams = requireNonNull(seams, "No seams provided");
     }
 
-    // ------------------------------------------------------------------ pre-flight (§3.1)
+    // ------------------------------------------------------------------ pre-flight
 
     /**
-     * Read-only: the column types, identity sequences and §2.4's refusals of every old table (one scan per table), the
+     * Read-only: the column types, identity sequences and preflight refusals of every old table (one scan per table), the
      * event-type id space, and the target's state. Writes nothing.
      */
     public PreflightReport preflight() throws SQLException {
@@ -216,7 +216,7 @@ public final class Migration {
         return queryLong(connection, "SELECT count(*) FROM (" + String.join(" UNION ", parts) + ") x");
     }
 
-    // ------------------------------------------------------------------ prepare (§5 step 2)
+    // ------------------------------------------------------------------ prepare
 
     /**
      * Pre-flight, then per aggregate type: register it with the event log (its tables, through the engine's own
@@ -249,7 +249,7 @@ public final class Migration {
         return report;
     }
 
-    // ------------------------------------------------------------------ online epochs (§3.3)
+    // ------------------------------------------------------------------ online epochs
 
     /**
      * One online epoch over every aggregate type of the plan: read each old table's {@code M = max(global_order)} and the
@@ -317,7 +317,7 @@ public final class Migration {
         }
     }
 
-    /** §3.7: one batch transaction, its checkpoint included */
+    /** One batch transaction, its checkpoint included */
     private long onlineBatch(Connection connection, SourceTable table, MigrationStorage storage, long lo, long hi) throws SQLException {
         intern(connection, table, storage, lo, hi);
         connection.setAutoCommit(false);
@@ -357,7 +357,7 @@ public final class Migration {
         }
     }
 
-    /** §3.4: the range's event types not interned yet, each in its own committed transaction */
+    /** The range's event types not interned yet, each in its own committed transaction */
     private void intern(Connection connection, SourceTable table, MigrationStorage storage, long lo, long hi) throws SQLException {
         try (var statement = connection.prepareStatement(storage.distinctEventTypes())) {
             statement.setLong(1, lo);
@@ -416,14 +416,14 @@ public final class Migration {
         return inserted;
     }
 
-    // ------------------------------------------------------------------ cut-over (§3.5)
+    // ------------------------------------------------------------------ cut-over
 
     /**
      * The final pass, with every old-engine node stopped: in one transaction, {@code SHARE}-lock the old tables (in name
      * order, under {@code lockTimeout}), copy each type's {@code (copied_through, max]}, write their heads, set each
      * event table's identity sequence to {@code greatest(old sequence last_value, max copied global_order)}, run the
      * verify exactly the range the final pass copied, plus any range below it no online {@link #verify()} found equal,
-     * and the heads and identity sequences (§6.2, §16.7), run the plan's {@link CutoverStep}s, and mark every type
+     * and the heads and identity sequences, run the plan's {@link CutoverStep}s, and mark every type
      * {@code CUT_OVER}. Any failure rolls all of it back to the state after the last epoch.
      *
      * @throws CutoverLockTimeoutException if writers still hold the old tables; nothing was copied
@@ -523,16 +523,16 @@ public final class Migration {
 
     /**
      * @return the {@code REVOKE} statements an operator may run after the cut-over to keep a forgotten old node from
-     * appending (§3.5, decision 6). The migration never runs them
+     * appending. The migration never runs them
      */
     public List<String> revokeStatements() {
         return plan.tables().stream().map(t -> "REVOKE INSERT ON " + t.tableName() + " FROM <old application role>").toList();
     }
 
-    // ------------------------------------------------------------------ verification (§6)
+    // ------------------------------------------------------------------ verification
 
     /**
-     * Online verification (§6.2), while the old engine runs or at any time after: per aggregate type, the copied range
+     * Online verification, while the old engine runs or at any time after: per aggregate type, the copied range
      * not verified yet, {@code (verified maximum, copied_through]}, hashed per window over every column on both sides;
      * a differing window is bisected down to its rows. Then the heads of the range's streams. The outcome and the
      * windows' hashes are recorded in {@code el_migration.report}; the cut-over later verifies only what it copies,
@@ -559,7 +559,7 @@ public final class Migration {
     }
 
     /**
-     * {@code verify --after-cutover} (§6.3, decision 6): per cut-over aggregate type, the old table's rows above the
+     * {@code verify --after-cutover}: per cut-over aggregate type, the old table's rows above the
      * copied maximum recorded at the cut-over. Such a row was appended by an old-engine node that should have been
      * stopped; it exists only in the old table and is reported, never merged. Read-only.
      *
@@ -648,7 +648,7 @@ public final class Migration {
         var connection = plan.dataSource().getConnection();
         try {
             connection.setAutoCommit(true);
-            // Each statement must see the event types interned on the registry's own connection (§3.4)
+            // Each statement must see the event types interned on the registry's own connection
             connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
             return connection;
         } catch (SQLException | RuntimeException e) {

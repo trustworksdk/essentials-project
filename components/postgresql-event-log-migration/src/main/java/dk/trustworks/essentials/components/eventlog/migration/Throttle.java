@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.eventlog.migration;
 import java.util.function.LongSupplier;
 
 /**
- * The online copy's optional rate limit (design phase 9 §16.7): after each batch, sleeps until the rows copied since
+ * The online copy's optional rate limit: after each batch, sleeps until the rows copied since
  * {@link #start()} fit {@code maxEventsPerSecond}. 0 never sleeps.
  */
 final class Throttle {

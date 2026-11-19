@@ -27,7 +27,7 @@ import static dk.trustworks.essentials.components.eventlog.migration.PreflightRe
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Design phase 9 §9.1 {@code MigrationPreflightIT}: each refusal of §2.4 and §3.1, and that a refused {@code prepare}
+ * Each preflight refusal, and that a refused {@code prepare}
  * writes nothing
  */
 class MigrationPreflightIT extends AbstractMigrationIT {
