@@ -175,12 +175,11 @@ public final class ViewProjection {
     private boolean rebuildStopped(PageTransactionSource in, Truncate truncate) throws SQLException {
         var wasRunning = isRunning();
         stopSubscription();
-        var from = definition.startFrom() instanceof StartFrom.GlobalOrder order ? order.value() : 1L;
         var open = in.begin();
         boolean reset;
         try {
             truncate.truncate(open.connection());
-            reset = eventLog.admin().reset(key(), from, open.connection());
+            reset = resetProgress(open.connection());
         } catch (Exception e) {
             open.rollback();
             if (e instanceof SQLException sql) {
@@ -197,6 +196,18 @@ public final class ViewProjection {
             subscribeIfNotRunning();
         }
         return reset;
+    }
+
+    /**
+     * Reset the subscription to its start ({@link StartFrom#globalOrder}, else {@code 1}) on the caller's transaction,
+     * which is neither committed nor rolled back here. For a caller that has stopped the projection and clears the view
+     * in the same transaction ({@link EventLogViewProcessor#rebuild()})
+     *
+     * @return {@code false} if the subscription has no progress row yet
+     */
+    boolean resetProgress(Connection connection) throws SQLException {
+        var from = definition.startFrom() instanceof StartFrom.GlobalOrder order ? order.value() : 1L;
+        return eventLog.admin().reset(key(), from, connection);
     }
 
     private void handlePage(List<StoredEvent> page, PageTransaction transaction) throws Exception {

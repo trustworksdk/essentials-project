@@ -53,6 +53,8 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *     <li>Not carried over from the old processors: {@code MessageHandlerInterceptor}s, {@link MessageHandler#unitOfWork()},
  *     the built-in permanent-error list, inbox redelivery, Reactor and the {@code FencedLock}.</li>
  *     <li>An aggregate type not yet registered with the {@link EventLog} is registered (default tables) at {@link #start()}.</li>
+ *     <li>{@link #rebuild()} replays the view from the start; override {@link #onRebuild(ProjectionContext)} to clear it,
+ *     in the transaction that resets the subscriptions.</li>
  * </ul>
  * Started and stopped as a foundation {@link Lifecycle} - by the Spring Boot starter's lifecycle manager, or by hand.
  */
@@ -101,6 +103,23 @@ public abstract class EventLogViewProcessor implements Lifecycle {
     }
 
     /**
+     * Clear the read model at the start of a {@link #rebuild()}: delete or truncate what the handlers write, so the replay
+     * starts from an empty view. Does nothing unless overridden - the new engine's counterpart of the old processors'
+     * {@code onSubscriptionsReset(AggregateType, GlobalEventOrder)}, called once per rebuild rather than once per
+     * aggregate type.
+     * <p>
+     * Runs on the caller's thread inside the rebuild's transaction, opened from the same page source the handlers write
+     * in, so it writes the way a handler does: with {@link UnitOfWorkPageTransactions} the transaction's unit of work is
+     * bound ({@code getRequiredUnitOfWork()}, {@link ProjectionContext#handle()}), with {@link SpringPageTransactions} the
+     * Spring transaction. Its writes commit together with the reset of every aggregate type's subscription, or not at all.
+     * It must not end the transaction; an exception rolls the whole rebuild back.
+     *
+     * @param context the rebuild transaction's resources
+     */
+    protected void onRebuild(ProjectionContext context) throws Exception {
+    }
+
+    /**
      * Register any unregistered aggregate type, then subscribe once per aggregate type. Idempotent. Start, stop and
      * {@code seams} run one at a time through a {@link LifecycleGate}, with no monitor held while a stop joins the
      * delivery threads, so a handler that reads this processor ({@link #projections()}, {@link #isStarted()}) never waits behind a stop joining its own thread
@@ -146,6 +165,97 @@ public abstract class EventLogViewProcessor implements Lifecycle {
         log.info("[{}] Stopped", name);
     }
 
+    /**
+     * Rebuild the read model from the start (design phase 10 §9): stop every aggregate type's subscription, then in one
+     * transaction of {@link EventLogProcessorDependencies#pageTransactions()} call {@link #onRebuild(ProjectionContext)}
+     * and reset every subscription to {@link #startFrom()}, commit, and start again if the processor was started. The
+     * cleared view and the reset resume points commit together, so at every point the view matches its resume points;
+     * the replay then refills it through the handlers. An instance elsewhere that holds a subscription's lease notices
+     * the reset at its next page and repositions (the engine's reset epoch).
+     * <p>
+     * Call it outside a unit of work: {@link UnitOfWorkPageTransactions} refuses to open the rebuild's own when one is
+     * already active on the thread. Runs as one lifecycle transition, so it waits for a start or stop in progress.
+     *
+     * @return {@code false} if no aggregate type's subscription has a progress row yet: nothing to rebuild, and
+     * {@link #onRebuild(ProjectionContext)}'s writes are rolled back
+     * @throws IllegalStateException if the page source is {@link PageTransactionSource#engine()}, which binds nothing a
+     *                               handler or {@link #onRebuild(ProjectionContext)} could write through; or if the rebuild failed (rolled back)
+     */
+    public boolean rebuild() {
+        var source = dependencies.pageTransactions();
+        if (source == PageTransactionSource.engine()) {
+            throw new IllegalStateException("Rebuilding " + this + " needs a UnitOfWorkPageTransactions or SpringPageTransactions page source, not PageTransactionSource.engine()");
+        }
+        boolean reset;
+        try (var ignored = gate.enter()) {
+            reset = rebuildStopped(source);
+        }
+        log.info("[{}] Rebuilt on aggregate types {}: {}", name, aggregateTypes, reset ? "replaying from the start" : "no progress yet, nothing reset");
+        return reset;
+    }
+
+    private boolean rebuildStopped(PageTransactionSource source) {
+        if (projections == null) {
+            projections = build();
+        }
+        var wasStarted = started;
+        stopAll();
+        RuntimeException failure = null;
+        var reset = false;
+        try {
+            for (var projection : projections) {
+                if (projection.isRunning()) {
+                    throw new IllegalStateException(projection + " did not stop");
+                }
+            }
+            reset = clearAndReset(source);
+        } catch (Exception e) {
+            failure = e instanceof RuntimeException runtime ? runtime : new IllegalStateException("Rebuilding " + this + " failed", e);
+        }
+        if (wasStarted) {
+            try {
+                startAll();
+            } catch (RuntimeException e) {
+                started = false;
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+        return reset;
+    }
+
+    /** {@link #onRebuild(ProjectionContext)} and every subscription's reset, in one transaction of {@code source} */
+    private boolean clearAndReset(PageTransactionSource source) throws Exception {
+        var open = source.begin();
+        var reset = false;
+        try {
+            onRebuild(new ProjectionContext(open));
+            if (seams.has(IntegrationMutant.REBUILD_CLEARS_OUTSIDE_RESET_TRANSACTION)) {
+                log.warn("[{}] MUTANT REBUILD_CLEARS_OUTSIDE_RESET_TRANSACTION: the clear commits before the reset", name);
+                open.commit();
+                open = source.begin();
+            }
+            for (var projection : projections) {
+                reset |= projection.resetProgress(open.connection());
+            }
+        } catch (Throwable t) {
+            open.rollback();
+            throw t;
+        }
+        if (reset) {
+            open.commit();
+        } else {
+            open.rollback();
+        }
+        return reset;
+    }
+
     @Override
     public boolean isStarted() {
         return started;
@@ -159,7 +269,10 @@ public abstract class EventLogViewProcessor implements Lifecycle {
         return aggregateTypes;
     }
 
-    /** @return one projection per aggregate type, in {@link #aggregateTypes()} order (for keys, handles, rebuild); empty before the first start */
+    /**
+     * @return one projection per aggregate type, in {@link #aggregateTypes()} order (for keys, handles, status); empty
+     * before the first start or rebuild. Rebuild through {@link #rebuild()}, which clears the view, not a projection's own
+     */
     public List<ViewProjection> projections() {
         return projections == null ? List.of() : projections;
     }

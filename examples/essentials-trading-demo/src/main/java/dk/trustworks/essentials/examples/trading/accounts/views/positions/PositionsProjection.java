@@ -37,7 +37,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * engine's processor - {@link PositionsClassicView} or {@link PositionsEventLogView} - which hands each event here with
  * the handle of the transaction it handles the event in and the event's {@code EventOrder} in its stream, so the rows
  * commit together with that processor's progress. The constructor's DDL and {@link #truncate()}, which the classic
- * processor calls when its subscriptions are reset, open a unit of work of their own.
+ * processor calls when its subscriptions are reset, open a unit of work of their own; the event-log processor's rebuild
+ * calls {@link #truncate(Handle)} in its own transaction.
  */
 @Service
 public class PositionsProjection {
@@ -219,7 +220,15 @@ public class PositionsProjection {
      * Empties the view, for a processor whose subscriptions are reset to replay it from the start.
      */
     void truncate() {
-        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE projection_positions"));
-        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE projection_positions_version"));
+        unitOfWorkFactory.usingUnitOfWork(uow -> truncate(uow.handle()));
+    }
+
+    /**
+     * Empties the view on {@code handle}, for the event-log processor's rebuild, which clears it in the transaction that
+     * resets the subscription.
+     */
+    void truncate(Handle handle) {
+        handle.execute("TRUNCATE TABLE projection_positions");
+        handle.execute("TRUNCATE TABLE projection_positions_version");
     }
 }

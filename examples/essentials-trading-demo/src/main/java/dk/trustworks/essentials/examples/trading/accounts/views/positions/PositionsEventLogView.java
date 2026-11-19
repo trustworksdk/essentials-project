@@ -46,6 +46,12 @@ public class PositionsEventLogView extends TradingDemoEventLogViewProcessor {
         this.projection = requireNonNull(projection, "No projection provided");
     }
 
+    /** Empties the view in the rebuild's transaction, as {@code onSubscriptionsReset} does on the classic engine */
+    @Override
+    protected void onRebuild(ProjectionContext context) {
+        projection.truncate(pageHandle());
+    }
+
     @MessageHandler
     void handle(AccountOpened event, DeliveredEvent delivered) {
         projection.on(pageHandle(), event, delivered.eventOrder().longValue());

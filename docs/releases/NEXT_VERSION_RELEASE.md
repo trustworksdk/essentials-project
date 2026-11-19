@@ -773,9 +773,19 @@ public class OrderSummaryView extends EventLogViewProcessor {
   its `Handle` work as before, and the writes commit with the page.
 - A handler's exception reaches the engine unchanged: retried, then parked; a `ParkEventException` parks at once.
 - An aggregate type not yet registered with the `EventLog` is registered (with the engine's default tables) at `start()`.
+- `EventLogViewProcessor.rebuild()` replays the view from the start, and the protected hook `onRebuild(ProjectionContext)`
+  clears it - the counterpart of the old processors' `onSubscriptionsReset(AggregateType, GlobalEventOrder)`. The
+  rebuild stops every aggregate type's subscription, then, in one transaction of the processor's page source, calls
+  `onRebuild` and resets every subscription to `startFrom()`; that transaction commits the cleared view and the reset
+  resume points together, or neither, and the processor starts again if it was started. Unlike the old hook,
+  `onRebuild` runs once per rebuild, not once per aggregate type, and writes as a handler does: the transaction's unit of
+  work (or Spring transaction) is bound. When no subscription has progress yet, `rebuild()` returns `false` and the
+  clear is rolled back. Call it outside a unit of work; it needs `UnitOfWorkPageTransactions` or
+  `SpringPageTransactions`, not `PageTransactionSource.engine()`. In the trading demo the Users, InstrumentDetails and
+  Positions views on the new engine now clear their tables on a rebuild, as their classic twins do on a reset.
 - Both are foundation `Lifecycle`s: in Spring the components starter's lifecycle manager starts them, as it starts the
   old processors (not in schema mode `emit`). `start()` and `stop()` are idempotent and run one at a time, as do
-  `EventReactor.reset` and `ViewProjection.rebuild`, but no lock is held while a stop waits for the delivery thread to
+  `rebuild()`, `EventReactor.reset` and `ViewProjection.rebuild`, but no lock is held while a stop waits for the delivery thread to
   finish, so a handler may call `reactors()`, `projections()` or `isStarted()` while its processor is stopping.
 - **Not carried over** from the old processors: `MessageHandlerInterceptor`s, `@MessageHandler(unitOfWork = ...)`, the
   built-in permanent-error list (an `IllegalArgumentException` is retried and then parked like any other failure),

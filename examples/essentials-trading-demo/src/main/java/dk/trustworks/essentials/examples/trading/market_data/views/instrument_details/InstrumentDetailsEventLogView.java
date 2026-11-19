@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.market_data.views.instrument_details;
 
-import dk.trustworks.essentials.components.eventlog.integration.EventLogProcessorDependencies;
+import dk.trustworks.essentials.components.eventlog.integration.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.config.*;
@@ -47,6 +47,12 @@ public class InstrumentDetailsEventLogView extends TradingDemoEventLogViewProces
                                          InstrumentDetailsProjection projection) {
         super("InstrumentDetailsProjection", List.of(Instruments.AGGREGATE_TYPE), dependencies, unitOfWorkFactory);
         this.projection = requireNonNull(projection, "No projection provided");
+    }
+
+    /** Empties the view in the rebuild's transaction, as {@code onSubscriptionsReset} does on the classic engine */
+    @Override
+    protected void onRebuild(ProjectionContext context) {
+        projection.truncate(pageHandle());
     }
 
     @MessageHandler

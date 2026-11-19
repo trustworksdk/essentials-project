@@ -30,7 +30,9 @@ import static org.assertj.core.api.Assertions.*;
 /**
  * {@link EventLogViewProcessor} (design phase 10 §3.5): {@code @MessageHandler} dispatch with the {@link DeliveredEvent}
  * second parameter, the page's unit of work in a handler, several aggregate types, an unregistered type registered at
- * start, and a handler failure parked by the engine - with a must-fail arm whose dispatcher swallows the failure.
+ * start, a handler failure parked by the engine - with a must-fail arm whose dispatcher swallows the failure - and a
+ * rebuild that clears the view in the transaction that resets the subscription, then replays it - with a must-fail arm
+ * whose clear commits on its own.
  */
 class EventLogViewProcessorIT extends AbstractProcessorIT {
     private static final long   X        = 37;
@@ -44,6 +46,8 @@ class EventLogViewProcessorIT extends AbstractProcessorIT {
     class TotalsView extends EventLogViewProcessor {
         final Set<String> seen = ConcurrentHashMap.newKeySet();
         long              failAt = -1;
+        int               rebuilds;
+        boolean           failRebuild;
 
         TotalsView(List<String> aggregateTypes, Set<IntegrationMutant> mutants) {
             super("totals-view", aggregateTypes, new EventLogProcessorDependencies(eventLog, serializer, source(SourceKind.JDBI, Set.of())));
@@ -53,6 +57,17 @@ class EventLogViewProcessorIT extends AbstractProcessorIT {
         @Override
         protected Optional<ErrorSettings> errorSettings() {
             return Optional.of(errors());
+        }
+
+        /** Clears through the rebuild transaction's unit of work, as a handler writes */
+        @Override
+        protected void onRebuild(ProjectionContext context) {
+            rebuilds++;
+            assertThat(unitOfWorkFactory.getRequiredUnitOfWork().handle()).isSameAs(context.handle());
+            context.handle().execute("TRUNCATE view_totals, applied");
+            if (failRebuild) {
+                throw new IllegalStateException("rebuild fails after the clear");
+            }
         }
 
         @MessageHandler
@@ -125,5 +140,71 @@ class EventLogViewProcessorIT extends AbstractProcessorIT {
         } finally {
             view.stop();
         }
+    }
+
+    @Test
+    void a_rebuild_clears_the_view_with_the_reset_and_replays_it() throws Exception {
+        appendEvents(-1);
+        var view = new TotalsView(List.of(ORDERS), Set.of());
+        view.start();
+        try {
+            var key = view.projections().getFirst().key();
+            awaitCaughtUp(key);
+            assertThat(view()).isEqualTo(fold(Set.of()));
+
+            assertThat(view.rebuild()).isTrue();
+
+            assertThat(view.rebuilds).isEqualTo(1);
+            assertThat(view.isStarted()).isTrue();
+            awaitCaughtUp(key);
+            awaitTrue("the view replayed", Duration.ofSeconds(20), () -> view().equals(fold(Set.of())));
+            // Every event applied once since the clear: without it each would count twice, without the reset none would
+            assertThat(applied().values()).hasSize(EVENTS).containsOnly(1);
+        } finally {
+            view.stop();
+        }
+    }
+
+    @Test
+    void a_failing_rebuild_rolls_the_clear_back_and_restarts_the_view() throws Exception {
+        appendEvents(-1);
+        var view = new TotalsView(List.of(ORDERS), Set.of());
+        view.failRebuild = true;
+        view.start();
+        try {
+            var key = view.projections().getFirst().key();
+            awaitCaughtUp(key);
+
+            assertThatThrownBy(view::rebuild).hasMessageContaining("rebuild fails after the clear");
+
+            assertThat(view()).isEqualTo(fold(Set.of()));
+            assertThat(resumePoint(key)).isGreaterThan(EVENTS);
+            assertThat(view.isStarted()).isTrue();
+            assertThat(view.projections().getFirst().isRunning()).isTrue();
+        } finally {
+            view.stop();
+        }
+    }
+
+    @Test
+    void a_rebuild_with_nothing_to_reset_leaves_the_view() throws Exception {
+        nothingToResetArm(Set.of());
+    }
+
+    @Test
+    void must_fail_REBUILD_CLEARS_OUTSIDE_RESET_TRANSACTION() {
+        assertThatThrownBy(() -> nothingToResetArm(Set.of(IntegrationMutant.REBUILD_CLEARS_OUTSIDE_RESET_TRANSACTION))).isInstanceOf(AssertionError.class);
+    }
+
+    /** Never started, so no progress row: the reset finds nothing, and the clear must roll back with it */
+    private void nothingToResetArm(Set<IntegrationMutant> mutants) throws Exception {
+        execute("INSERT INTO view_totals VALUES ('kept', 1)");
+        var view = new TotalsView(List.of(ORDERS), mutants);
+
+        assertThat(view.rebuild()).isFalse();
+
+        assertThat(view.rebuilds).isEqualTo(1);
+        assertThat(view.isStarted()).isFalse();
+        assertThat(view()).containsExactly(Map.entry("kept", 1L));
     }
 }

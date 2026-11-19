@@ -34,5 +34,7 @@ enum IntegrationMutant {
     /** EventLogViewProcessor / EventLogReactor catch a {@code @MessageHandler}'s exception: the event counts as handled (phase 10 §3.5) */
     ANNOTATED_DISPATCH_SWALLOWS_FAILURE,
     /** EventLogInboxProcessor enqueues in a unit of work of its own, not the page's: a page that fails after the enqueue forwards its events again (phase 10 §3.5) */
-    INBOX_FORWARD_OUTSIDE_PAGE_TRANSACTION
+    INBOX_FORWARD_OUTSIDE_PAGE_TRANSACTION,
+    /** EventLogViewProcessor's rebuild commits onRebuild's clear before resetting the subscriptions: a rebuild that resets nothing still empties the view (phase 10 §9) */
+    REBUILD_CLEARS_OUTSIDE_RESET_TRANSACTION
 }

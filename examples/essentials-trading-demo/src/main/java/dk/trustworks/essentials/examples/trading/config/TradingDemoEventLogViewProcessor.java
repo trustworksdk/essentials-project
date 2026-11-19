@@ -49,7 +49,8 @@ public abstract class TradingDemoEventLogViewProcessor extends EventLogViewProce
     }
 
     /**
-     * @return the JDBI handle of the page transaction the current handler runs in
+     * @return the JDBI handle of the page transaction the current handler runs in, or, inside
+     * {@link #onRebuild(ProjectionContext)}, of the rebuild's transaction
      */
     protected Handle pageHandle() {
         return unitOfWorkFactory.getRequiredUnitOfWork().handle();

@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.identity.views.users;
 
-import dk.trustworks.essentials.components.eventlog.integration.EventLogProcessorDependencies;
+import dk.trustworks.essentials.components.eventlog.integration.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.config.*;
@@ -43,6 +43,12 @@ public class UsersEventLogView extends TradingDemoEventLogViewProcessor {
                              UsersProjection projection) {
         super("UsersProjection", List.of(IdentityAggregateTypes.USERS), dependencies, unitOfWorkFactory);
         this.projection = requireNonNull(projection, "No projection provided");
+    }
+
+    /** Empties the view in the rebuild's transaction, as {@code onSubscriptionsReset} does on the classic engine */
+    @Override
+    protected void onRebuild(ProjectionContext context) {
+        projection.truncate(pageHandle());
     }
 
     @MessageHandler

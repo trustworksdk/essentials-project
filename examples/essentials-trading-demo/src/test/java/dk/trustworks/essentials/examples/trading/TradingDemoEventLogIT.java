@@ -26,6 +26,7 @@ import dk.trustworks.essentials.examples.trading.config.TradingDemoEventLogParti
 import dk.trustworks.essentials.examples.trading.funding.types.*;
 import dk.trustworks.essentials.examples.trading.funding.use_cases.link_bank_account.LinkBankAccount;
 import dk.trustworks.essentials.examples.trading.funding.use_cases.request_deposit.RequestDeposit;
+import dk.trustworks.essentials.examples.trading.identity.views.users.UsersEventLogView;
 import dk.trustworks.essentials.examples.trading.orders.types.OrderStatus;
 import dk.trustworks.essentials.examples.trading.orders.views.orders.OrderView;
 import dk.trustworks.essentials.reactive.command.CommandBus;
@@ -43,7 +44,9 @@ import org.springframework.test.context.*;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import javax.sql.DataSource;
 import java.math.BigDecimal;
+import java.sql.SQLException;
 import java.time.*;
 import java.util.*;
 
@@ -61,6 +64,7 @@ import static org.awaitility.Awaitility.await;
  *     <li>partitioned view (event log -> forwarder -> keyed durable queue): the account overview and the statement.</li>
  * </ul>
  * And nothing of the classic engine's processing runs: no classic processor bean, no {@link EventStoreSubscriptionManager}.
+ * A view rebuild clears its table through {@code onRebuild} and replays it, as the classic twin's reset does.
  */
 @Testcontainers
 @SpringBootTest(properties = {
@@ -100,6 +104,10 @@ class TradingDemoEventLogIT {
     private UnclearedDepositsProjection unclearedDeposits;
     @Autowired
     private ApplicationContext          context;
+    @Autowired
+    private UsersEventLogView           usersView;
+    @Autowired
+    private DataSource                  dataSource;
 
     private TestRestTemplate alice() {
         return restTemplate.withBasicAuth("alice@demo.local", "alice-demo-password");
@@ -173,5 +181,30 @@ class TradingDemoEventLogIT {
 
     private AccountOverview overview() {
         return alice().getForEntity("/api/accounts/" + ACCOUNT, AccountOverview.class).getBody();
+    }
+
+    @Test
+    void a_view_rebuild_clears_its_table_and_replays_it() throws SQLException {
+        // The seeded users are projected; a row no event wrote stands in for stale state
+        await().atMost(TIMEOUT).until(() -> users().contains("USR-ALICE"));
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            statement.executeUpdate("INSERT INTO projection_users (user_id, email, display_name, roles) VALUES ('USR-STALE', 'stale@demo.local', 'Stale', '')");
+        }
+
+        assertThat(usersView.rebuild()).isTrue();
+
+        assertThat(usersView.isStarted()).isTrue();
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(users()).contains("USR-ALICE", "USR-BOB").doesNotContain("USR-STALE"));
+    }
+
+    private Set<String> users() throws SQLException {
+        var users = new TreeSet<String>();
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement();
+             var rows = statement.executeQuery("SELECT user_id FROM projection_users")) {
+            while (rows.next()) {
+                users.add(rows.getString(1));
+            }
+        }
+        return users;
     }
 }
