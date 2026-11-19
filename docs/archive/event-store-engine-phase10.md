@@ -498,4 +498,10 @@ open reconciliation case, no missing statement, the driver never saturated), and
 The cost line is unchanged in kind: about 22 % more statements and 30 % more PostgreSQL CPU per order than classic,
 for 19 % less WAL. Run 12 took 1 429 s of wall clock against ~1 035 s for every other run; the whole difference is
 one business day (the fifth) taking 452 s instead of ~180 s, with no fill left unbooked at its close and its latency
-inside the figures above. Its cause was not investigated.
+inside the figures above. A read-only look at the run's harness output on 2026-11-19 found the cause outside the
+engine: the whole stack froze for about 394 s between day 4's close and day 5's first order. Both application logs go
+silent together (12:45:33 and 12:45:39 UTC) and resume together at 12:52:13. The exchange simulator's simulated
+clock stopped over the same window, which only a pause of the host or its Docker VM explains. No request was in flight
+across the gap. Afterwards the two instances re-balanced their shard-owned queue units and catch-up locks, settled
+within about 10 s, and day 5 then ran normally. So it was a machine pause, not an engine stall, and the engine
+recovered from it without loss.
