@@ -17,15 +17,14 @@
 package dk.trustworks.essentials.components.queue.shardowned;
 
 import com.zaxxer.hikari.*;
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlNotificationDrain;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.postgresql.PGConnection;
 import org.postgresql.PGNotification;
-import org.postgresql.core.BaseConnection;
-import org.postgresql.core.PGStream;
-import org.postgresql.core.QueryExecutorBase;
+import org.postgresql.core.*;
 import org.slf4j.*;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -34,7 +33,6 @@ import javax.sql.DataSource;
 import java.lang.reflect.*;
 import java.nio.ByteBuffer;
 import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
@@ -50,7 +48,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * blocks for the first message only; after each notification it keeps reading for as long as
  * {@code PGStream.hasMessagePending()} finds another one, which peeks the socket with a 1 ms timeout. Nothing it has
  * read is handed back until a peek comes up empty, so a stream whose notifications arrive less than about a
- * millisecond apart is held inside the driver for as long as the stream stays that dense.
+ * millisecond apart is held inside the driver for as long as the stream stays that dense. The listener therefore
+ * drains with foundation's {@link PostgresqlNotificationDrain}, which pins that peek off; the {@code TIER1_*} arms
+ * measure that production behaviour, {@code STOCK_DRAIN} the unpinned call it replaced.
  * <p>
  * Shape: a producing runtime that serves nothing, so every wake-up leaves through its batched
  * {@link ShardWakeupNotifier}, and a consuming runtime in the same JVM standing in for another process - its owners
@@ -62,7 +62,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Tier 1 at the default settings (500 ms backstop), and a control at the default settings whose listener reads and
  * discards every notification - the backstop-only path.
  * <p>
- * Three more arms try candidate fixes ({@link Arm}); findings in {@code docs/plans/pgjdbc-notification-drain-options.md}.
+ * Two more arms compare drains ({@link Arm}); the original candidate fixes and their findings are in
+ * {@code docs/plans/pgjdbc-notification-drain-options.md}.
  * <p>
  * Benchmark-gated: {@code -Dbenchmark.run=true}.
  */
@@ -100,23 +101,20 @@ class ShardWakeupListenerDrainIT {
     }
 
     /**
-     * The first three arms are the original measurement (§3.17). The rest are candidate fixes, each at the 10 s backstop
-     * so that a late wake-up shows at full size (compare against {@code TIER1_LONG_BACKSTOP}), each a test-only stand-in
-     * plugged in through {@link ListenerTap} or the producer's {@link DataSource} - nothing in the engine changes:
+     * The first three arms are the original measurement (§3.17), now with the production drain
+     * ({@link PostgresqlNotificationDrain}, peek pinned). The other two are at the 10 s backstop so that a late wake-up
+     * shows at full size (compare against {@code TIER1_LONG_BACKSTOP}), each a test-only switch in {@link ListenerTap}:
      * <ul>
-     *     <li>{@code PINNED_PEEK} - reflection: {@code PGStream.nextStreamAvailableCheckTime} is set to
-     *         {@code Long.MAX_VALUE} once, so {@code hasMessagePending()} never peeks the socket again and only reports
-     *         bytes already read or already in the kernel's receive buffer. {@code getNotifications(200)} unchanged.</li>
-     *     <li>{@code QUERY_POLL} - no reflection, no {@code processNotifies}: every millisecond the listener runs a
-     *         trivial statement (whose response carries every notification the backend has queued, ended by
-     *         ReadyForQuery) and takes the notifications from {@code BaseConnection.getQueryExecutor()}.</li>
-     *     <li>{@code PACED_NOTIFIER} - stock listener; the producing runtime's notifier is held to one batch per 2 ms,
-     *         so each process's notifications arrive in bursts with a gap the driver's 1 ms peek sees.</li>
+     *     <li>{@code STOCK_DRAIN} - the drain the listener used before: the tap writes the peek's cool-down back to 0
+     *         before the first call, so {@code getNotifications(200)} behaves as stock pgjdbc. Keeps the original
+     *         problem reproducible.</li>
+     *     <li>{@code QUERY_POLL} - the drain's fallback ({@link PostgresqlNotificationDrain#openQueryPoll}), used when
+     *         the peek cannot be pinned: a trivial statement every millisecond, backing off to 50 ms.</li>
      * </ul>
-     * Select with {@code -Ddrain.arms=PINNED_PEEK,...} (default: all).
+     * Select with {@code -Ddrain.arms=STOCK_DRAIN,...} (default: all).
      */
     enum Arm {
-        TIER1_LONG_BACKSTOP, TIER1_DEFAULTS, BACKSTOP_ONLY, PINNED_PEEK, QUERY_POLL, PACED_NOTIFIER;
+        TIER1_LONG_BACKSTOP, TIER1_DEFAULTS, BACKSTOP_ONLY, STOCK_DRAIN, QUERY_POLL;
 
         boolean longBackstop() {
             return this != TIER1_DEFAULTS && this != BACKSTOP_ONLY;
@@ -126,7 +124,6 @@ class ShardWakeupListenerDrainIT {
     private static final List<Arm> ARMS = Arrays.stream(System.getProperty("drain.arms", Arrays.stream(Arm.values()).map(Enum::name).reduce((a, b) -> a + "," + b).orElseThrow())
                                                         .split(","))
                                                 .map(String::trim).map(Arm::valueOf).toList();
-    private static final long      PACE_NANOS = Duration.ofMillis(2).toNanos();
 
     @Test
     void measure_cross_runtime_wakeup_latency_under_sustained_notification_traffic() throws Exception {
@@ -164,7 +161,7 @@ class ShardWakeupListenerDrainIT {
                        : ShardOwnerSettings.defaults();
 
         var tap            = new ListenerTap(arm == Arm.BACKSTOP_ONLY, arm);
-        var producerSource = arm == Arm.PACED_NOTIFIER ? paced(dataSource) : dataSource;
+        var producerSource = dataSource;
         var consumerSource = tap.wrap(dataSource);
 
         var totalPlanned = (int) (rate * (WARMUP.toMillis() + MEASURE.toMillis()) / 1000);
@@ -264,25 +261,6 @@ class ShardWakeupListenerDrainIT {
         }
     }
 
-    /**
-     * Test-only pacing of {@link ShardWakeupNotifier}: its thread takes one connection per batch, so holding that
-     * {@code getConnection} until 2 ms after the previous one holds the notifier to one batch per 2 ms, and keys queued in
-     * the meantime coalesce into the next batch - what a pacing notifier would do.
-     */
-    private static DataSource paced(DataSource target) {
-        var last = new AtomicLong(System.nanoTime() - PACE_NANOS);
-        return (DataSource) Proxy.newProxyInstance(ShardWakeupListenerDrainIT.class.getClassLoader(), new Class<?>[]{DataSource.class}, (proxy, method, args) -> {
-            if (method.getName().equals("getConnection") && "shard-queue-notifier".equals(Thread.currentThread().getName())) {
-                var wait = last.get() + PACE_NANOS - System.nanoTime();
-                if (wait > 0) {
-                    LockSupport.parkNanos(wait);
-                }
-                last.set(System.nanoTime());
-            }
-            return ListenerTap.invoke(target, method, args);
-        });
-    }
-
     private static double pct(long[] sorted, double p) {
         return sorted.length == 0 ? 0 : sorted[Math.min(sorted.length - 1, (int) (sorted.length * p))] / 1e6;
     }
@@ -340,13 +318,14 @@ class ShardWakeupListenerDrainIT {
         }
 
         private PGConnection wrapPg(Connection connection, PGConnection target) throws Exception {
-            if (arm == Arm.PINNED_PEEK) {
-                pinPeek(target);
-            }
-            var poll = arm == Arm.QUERY_POLL ? new QueryPoll(connection, target) : null;
+            var poll   = arm == Arm.QUERY_POLL ? PostgresqlNotificationDrain.openQueryPoll(connection) : null;
+            var unpin  = new AtomicBoolean(arm == Arm.STOCK_DRAIN);
             return (PGConnection) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{PGConnection.class}, (proxy, method, args) -> {
                 if (!method.getName().equals("getNotifications") || args == null || args.length != 1) {
                     return invoke(target, method, args);
+                }
+                if (unpin.compareAndSet(true, false)) {
+                    unpinPeek(connection);
                 }
                 var began  = System.nanoTime();
                 var result = poll != null ? poll.next((Integer) args[0]) : (PGNotification[]) invoke(target, method, args);
@@ -365,46 +344,17 @@ class ShardWakeupListenerDrainIT {
         }
 
         /**
-         * The one reflective write the PINNED_PEEK candidate needs. {@code PGStream.hasMessagePending()} skips its 1 ms
-         * socket peek while {@code now < nextStreamAvailableCheckTime}; pinned at {@code Long.MAX_VALUE} it never peeks
-         * again and answers from {@code available()} alone (pgjdbc's buffer, then the socket's). The first message of a
-         * {@code getNotifications(timeout)} call is still a blocking read with the timeout, so nothing waits on the peek.
+         * The STOCK_DRAIN arm: undoes the drain's pin on the first call (its unwrap of {@code PGConnection} comes before
+         * the pin, so it cannot be done there), after which pgjdbc manages the peek's cool-down itself, as stock.
          */
-        static void pinPeek(PGConnection pg) throws Exception {
-            var executor = ((BaseConnection) pg).getQueryExecutor();
+        static void unpinPeek(Connection connection) throws Exception {
+            var executor    = connection.unwrap(BaseConnection.class).getQueryExecutor();
             var streamField = QueryExecutorBase.class.getDeclaredField("pgStream");
             streamField.setAccessible(true);
             var stream = (PGStream) streamField.get(executor);
-            var next = PGStream.class.getDeclaredField("nextStreamAvailableCheckTime");
+            var next   = PGStream.class.getDeclaredField("nextStreamAvailableCheckTime");
             next.setAccessible(true);
-            next.setLong(stream, Long.MAX_VALUE);
-        }
-
-        /**
-         * The QUERY_POLL candidate: never enters {@code processNotifies}. A trivial statement's response is read up to
-         * ReadyForQuery, and every NotificationResponse in front of it lands in the executor's list, which
-         * {@code QueryExecutor.getNotifications()} hands over without touching the socket.
-         */
-        static final class QueryPoll {
-            private final PreparedStatement statement;
-            private final BaseConnection    base;
-
-            QueryPoll(Connection connection, PGConnection pg) throws Exception {
-                this.statement = connection.prepareStatement("SELECT 1");
-                this.base = (BaseConnection) pg;
-            }
-
-            PGNotification[] next(int timeoutMillis) throws Exception {
-                var deadline = System.nanoTime() + timeoutMillis * 1_000_000L;
-                while (true) {
-                    statement.execute();
-                    var notifications = base.getQueryExecutor().getNotifications();
-                    if (notifications.length > 0 || System.nanoTime() >= deadline || Thread.currentThread().isInterrupted()) {
-                        return notifications;
-                    }
-                    LockSupport.parkNanos(1_000_000L);
-                }
-            }
+            next.setLong(stream, 0);
         }
 
         static Object invoke(Object target, Method method, Object[] args) throws Throwable {

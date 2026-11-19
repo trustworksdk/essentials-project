@@ -16,8 +16,8 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlNotificationDrain;
 import dk.trustworks.essentials.shared.Lifecycle;
-import org.postgresql.PGConnection;
 import org.slf4j.*;
 
 import javax.sql.DataSource;
@@ -128,15 +128,20 @@ public final class ShardWakeupListener implements Lifecycle, AutoCloseable {
                     statement.execute("LISTEN " + CHANNEL);
                 }
                 reconnects.increment();
-                var pgConnection = connection.unwrap(PGConnection.class);
-                while (running.get()) {
-                    var notifications = pgConnection.getNotifications(200);
-                    if (notifications == null) {
-                        continue;
-                    }
-                    for (var notification : notifications) {
-                        notificationsReceived.increment();
-                        signal(notification.getParameter());
+                // Not pgjdbc's getNotifications(200) directly: under a dense notification stream it holds every
+                // notification inside the driver until a 1 ms gap appears, which at a few thousand notifications/s
+                // made this tier no faster than the backstop. The drain is closed (the peek unpinned) before the
+                // connection goes back to the pool.
+                try (var drain = PostgresqlNotificationDrain.open(connection)) {
+                    while (running.get()) {
+                        var notifications = drain.next(200);
+                        if (notifications == null) {
+                            continue;
+                        }
+                        for (var notification : notifications) {
+                            notificationsReceived.increment();
+                            signal(notification.getParameter());
+                        }
                     }
                 }
             } catch (Exception e) {
