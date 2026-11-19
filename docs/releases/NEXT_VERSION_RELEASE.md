@@ -32,6 +32,7 @@ and two lock waits removed.
   budget outlasts a failover, minutes instead of ~10 s (§1.1.4).
 - Command handlers: an `AnnotatedCommandHandler` failure is logged at DEBUG, not ERROR - the sender reports it (§1.1.5).
 - CDC: the inbox deletes a row once it is dispatched by default, instead of keeping it until the TTL job (§1.1.6).
+- Shard-owned queues: `purgeQueue` inside a unit of work commits or rolls back with it (§1.1.7).
 - Fenced locks: opt-in spreading of async-acquired locks, and so of exclusive processors, over the instances (§2.9).
 - A new event store engine, as a **preview** and off by default (`essentials.event-log.enabled`): its modules, a
   Spring Boot starter, admin operations and an admin console view (§2.19-§2.24). Existing event processors must be
@@ -245,6 +246,25 @@ What you see: after an upgrade, `select count(*) from eventstore_cdc_inbox where
 published. Then set `essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy=MARK_DISPATCHED` (or
 `CdcDispatcherProperties.setDispatchedRowPolicy(DispatchedRowPolicy.MARK_DISPATCHED)`) to keep the old behaviour.
 Note the key is `cdc-dispatcher`: a `dispatcher:` block binds to nothing, silently.
+
+#### 1.1.7 A shard-owned `purgeQueue` inside a unit of work commits or rolls back with it (`postgresql-queue-shard-owned`, `postgresql-queue-shard-owned-adapter`)
+
+`ShardOwnedDurableQueues.purgeQueue` used to delete the queue's messages on a connection of its own, committed at once,
+even when called inside a `UnitOfWork`. Now, inside a unit of work that carries a JDBC connection (a
+`HandleAwareUnitOfWork`, such as the JDBI and Spring-aware factories' units of work), it deletes them on that unit of
+work's connection, so the purge commits with the caller's work, or is undone when that work rolls back - as
+`PostgresqlDurableQueues.purgeQueue` and the shard-owned enqueue already do. Outside a unit of work nothing changes: the
+purge commits on its own connection. The shard-owned admin API (`ShardOwnedQueuesApi.purgeQueue`) is unaffected. The
+engine SPI gains `MessageQueue.purge(Connection)` (`PostgresqlMessageQueue` implements it; the default throws
+`UnsupportedOperationException`).
+
+**What changes for you:** a purge you call inside a unit of work - `Inbox.deleteAllMessages()`,
+`Outbox.deleteAllMessages()`, a classic processor reset that purges its queue, your own code - is no longer kept if
+that unit of work then rolls back, and its rows stay locked until the unit of work ends. This is what made
+`EventLogPartitionedViewProcessor.rebuild()` atomic (§2.22).
+
+**What to do:** nothing, unless you relied on a purge inside a unit of work surviving that unit of work's rollback;
+then call it outside the unit of work.
 
 ---
 

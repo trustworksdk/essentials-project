@@ -3015,13 +3015,20 @@ public final class ShardOwnedStorage {
      * Remove everything for this queue, across both lanes and the dead letter table.
      */
     public long purge() throws SQLException {
-        var removed = 0L;
         try (var connection = open()) {
-            for (var table : List.of(UNORDERED_TABLE, ORDERED_TABLE, DLQ_TABLE)) {
-                try (var statement = connection.prepareStatement("DELETE FROM " + table + " WHERE queue_id = ?")) {
-                    statement.setShort(1, queueId);
-                    removed += statement.executeUpdate();
-                }
+            return purge(connection);
+        }
+    }
+
+    /**
+     * As {@link #purge()}, on the caller's connection and transaction, which is neither committed nor rolled back here.
+     */
+    public long purge(Connection connection) throws SQLException {
+        var removed = 0L;
+        for (var table : List.of(UNORDERED_TABLE, ORDERED_TABLE, DLQ_TABLE)) {
+            try (var statement = connection.prepareStatement("DELETE FROM " + table + " WHERE queue_id = ?")) {
+                statement.setShort(1, queueId);
+                removed += statement.executeUpdate();
             }
         }
         return removed;

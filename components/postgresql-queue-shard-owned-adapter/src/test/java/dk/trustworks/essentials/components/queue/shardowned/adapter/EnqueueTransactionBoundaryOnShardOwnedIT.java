@@ -55,6 +55,8 @@ import static org.assertj.core.api.Assertions.*;
  * {@code getCurrentUnitOfWork()} committed the enqueue on its own connection, and the Outbox kept a message for
  * work that had rolled back (N-15).
  * <p>
+ * A purge joins a unit of work in progress the same way, and commits on its own outside one.
+ * <p>
  * Also the opt-in guard against an enqueue outside any unit of work or transaction (RN-2): by default it commits on
  * its own and WARNs once; with {@code requireActiveUnitOfWorkForEnqueue} it fails.
  */
@@ -168,6 +170,28 @@ class EnqueueTransactionBoundaryOnShardOwnedIT {
         durableQueues.queueMessage(PLAIN_QUEUE, Message.of(new OrderPlaced("standalone", 1)));
 
         assertThat(durableQueues.getTotalMessagesQueuedFor(PLAIN_QUEUE)).isEqualTo(1);
+    }
+
+    @Test
+    void a_purge_inside_a_unit_of_work_rolls_back_with_it_and_commits_with_it() {
+        durableQueues.queueMessages(PLAIN_QUEUE, List.of(Message.of(new OrderPlaced("one", 1)), Message.of(new OrderPlaced("two", 2))));
+
+        assertThatThrownBy(() -> unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+            assertThat(durableQueues.purgeQueue(PLAIN_QUEUE)).isEqualTo(2);
+            throw new IllegalStateException("roll back the purge");
+        })).hasRootCauseMessage("roll back the purge");
+        assertThat(durableQueues.getTotalMessagesQueuedFor(PLAIN_QUEUE)).as("the rolled-back purge left the messages in place").isEqualTo(2);
+
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> assertThat(durableQueues.purgeQueue(PLAIN_QUEUE)).isEqualTo(2));
+        assertThat(durableQueues.getTotalMessagesQueuedFor(PLAIN_QUEUE)).isZero();
+    }
+
+    @Test
+    void a_purge_outside_any_unit_of_work_still_commits_on_its_own() {
+        durableQueues.queueMessage(PLAIN_QUEUE, Message.of(new OrderPlaced("standalone", 1)));
+
+        assertThat(durableQueues.purgeQueue(PLAIN_QUEUE)).isEqualTo(1);
+        assertThat(durableQueues.getTotalMessagesQueuedFor(PLAIN_QUEUE)).isZero();
     }
 
     @Test

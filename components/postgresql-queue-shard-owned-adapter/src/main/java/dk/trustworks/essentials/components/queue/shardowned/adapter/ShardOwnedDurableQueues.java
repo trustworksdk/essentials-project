@@ -1071,6 +1071,12 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                         + "getQueuedMessages, which pages by id and is served.");
     }
 
+    /**
+     * Removes the queue's messages - both lanes and the dead letters. Inside a {@link UnitOfWork} that is a
+     * {@link HandleAwareUnitOfWork} the removal runs on that unit of work's connection, so it commits or rolls back with
+     * the caller's work, as {@code PostgresqlDurableQueues} does; with no unit of work in progress (or one that carries no
+     * JDBC connection) it commits on its own connection, as before.
+     */
     @Override
     public int purgeQueue(PurgeQueue operation) {
         requireNonNull(operation, "No operation provided");
@@ -1078,8 +1084,12 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                () -> {
+                                                   var queue      = resolve(operation.getQueueName());
+                                                   var unitOfWork = unitOfWorkFactory == null ? Optional.<UnitOfWork>empty() : unitOfWorkFactory.getCurrentUnitOfWork().map(UnitOfWork.class::cast);
                                                    var purged = onQueue(operation.getQueueName(), "purge '" + operation.getQueueName() + "'",
-                                                                        () -> resolve(operation.getQueueName()).purge());
+                                                                        () -> unitOfWork.isPresent() && unitOfWork.get() instanceof HandleAwareUnitOfWork handleAware
+                                                                              ? queue.purge(handleAware.handle().getConnection())
+                                                                              : queue.purge());
                                                    return (int) Math.min(Integer.MAX_VALUE, purged);
                                                })
                 .proceed();

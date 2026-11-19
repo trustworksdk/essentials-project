@@ -1802,6 +1802,11 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         return storage.purge();
     }
 
+    @Override
+    public long purge(Connection connection) throws SQLException {
+        return storage.purge(requireNonNull(connection, "No connection provided"));
+    }
+
     /**
      * {@inheritDoc}
      * <p>
