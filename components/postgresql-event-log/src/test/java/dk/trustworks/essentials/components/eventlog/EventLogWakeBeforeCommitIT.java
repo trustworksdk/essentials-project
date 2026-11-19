@@ -34,8 +34,8 @@ import static org.awaitility.Awaitility.await;
  * The flush scenario: types {@code WakeA}, {@code WakeH} and {@code WakeB} are activated in that order, so a flush reads
  * them in that order; {@code WakeH} is read through a view that holds the scan (P0.2's hold-inside-scan). A long writer
  * L holds a value of {@code WakeH}, so {@code WakeH} wants a running set. {@code afterCommit} for all three types is
- * called before any of the writers below commits (repeated until one flush reads all three, as the wakes are set one
- * by one; the hold is armed and {@code WakeH}'s row committed from that flush's hook); the flush blocks inside {@code WakeH}'s scan, and meanwhile a writer
+ * called before any of the writers below commits (from a hook on the loop thread, so one flush reads all three; the
+ * hold is armed and {@code WakeH}'s row committed from that flush's hook); the flush blocks inside {@code WakeH}'s scan, and meanwhile a writer
  * W takes a value of {@code WakeB} and a value above it commits. So W started after every statement before
  * {@code WakeH}'s and before {@code WakeB}'s snapshot. L then rolls back, {@code WakeB} is probed, and only then W
  * commits. Must-fail variants: {@link WatermarkMutant#RUNNING_SET_FIRST_IN_FLUSH} (the set read before W started),
@@ -80,9 +80,14 @@ class EventLogWakeBeforeCommitIT extends AbstractSubscriptionIT {
         var bProbes = new AtomicLong();
         // Run on the loop thread just before the first 3-type flush with a running set sends its statements
         var onFlush = new AtomicReference<Callable<?>>();
+        // Set: the next read wakes all three types from the loop thread, so the loop's next iteration takes all three flags
+        var wakeAllFromLoop = new AtomicBoolean();
         var hooks = new TestSeams.Hooks() {
             @Override
             public void beforeFlush(List<String> aggregateTypes, boolean wantsRunningSet) throws Exception {
+                if (wakeAllFromLoop.getAndSet(false)) {
+                    eventLog.afterCommit(List.of(A, H, B));
+                }
                 if (aggregateTypes.size() == 3) {
                     flushes.add(wantsRunningSet);
                     var action = wantsRunningSet ? onFlush.getAndSet(null) : null;
@@ -117,10 +122,13 @@ class EventLogWakeBeforeCommitIT extends AbstractSubscriptionIT {
         // Past the woken probe wait (at most probeBackoffMax, 20 ms), so the flush may read a running set
         await().pollDelay(Duration.ofMillis(100)).atMost(WAIT).until(() -> true);
 
-        // afterCommit wakes the types one by one, and each wake unparks the loop: the loop may take A's flag before H's
-        // and B's are set and read them in two flushes. So the hold is armed and h2 committed from the hook, on the loop
-        // thread, by the first flush that does read all three types and a running set; until one does, wake them again.
-        // h2 is then the row the flush's H statement scans, and no earlier read of H can have taken it
+        // afterCommit wakes the types one by one, and each wake unparks the loop: woken from this thread, the loop may
+        // take A's flag before H's and B's are set and read them in two flushes. That H read is woken and finds no row,
+        // which WAKE_ADVANCES_WATERMARK takes as final: it drops L's candidate, H never wants a running set again and no
+        // 3-type flush reads one. So the three wakes are set from a hook, on the loop thread, inside a read of A: the
+        // loop's next iteration takes all three flags at once and reads them in one flush, H's woken probe wait long
+        // past. The hold is armed and h2 committed from that flush's hook, so h2 is the row its H statement scans and
+        // no earlier read of H can have taken it
         var holder = connection();
         onFlush.set(() -> {
             try (var statement = holder.createStatement()) {
@@ -128,14 +136,12 @@ class EventLogWakeBeforeCommitIT extends AbstractSubscriptionIT {
             }
             return appendCommitted(eventLog, AppendRequest.withoutExpectedOrder(H, "h2", events("E", 1)));
         });
-        await().atMost(WAIT).pollInterval(Duration.ofMillis(100)).until(() -> {
-            if (onFlush.get() != null) {
-                eventLog.afterCommit(List.of(A, H, B));
-            }
-            return onFlush.get() == null;
-        });
+        var flushesBefore = flushes.size();
+        wakeAllFromLoop.set(true);
+        eventLog.afterCommit(List.of(A));
+        await().atMost(WAIT).until(() -> flushes.size() > flushesBefore);
+        assertThat(flushes.get(flushesBefore)).as("the woken flush reads all three types and a running set").isTrue();
         awaitScanBlocked();
-        assertThat(flushes).as("the blocked flush reads all three types and a running set").last().isEqualTo(true);
         var w      = openAppend(AppendRequest.withoutExpectedOrder(B, "w", events("E", 1)));
         var gW     = w.globalOrder();
         var bAbove = appendCommitted(eventLog, AppendRequest.withoutExpectedOrder(B, "b-above", events("E", 1))).getFirst().events().getFirst().globalOrder();
