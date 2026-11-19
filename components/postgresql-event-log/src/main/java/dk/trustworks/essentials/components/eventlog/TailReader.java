@@ -607,6 +607,14 @@ final class TailReader implements AutoCloseable {
         return !candidates.isEmpty();
     }
 
+    /**
+     * @return a hole, range or candidate is outstanding: the watermark waits for a running set to retire it (phase 10
+     * gate, {@link EventLogSettings#holeProbeWaitMax()})
+     */
+    boolean holesWaiting() {
+        return !candidates.isEmpty() || !holes.isEmpty() || !ranges.isEmpty();
+    }
+
     long lastReadNanos() {
         return lastReadNanos;
     }

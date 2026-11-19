@@ -158,6 +158,10 @@ public class EssentialsEventLogProperties {
      * The most rows one admin subscriptions listing returns.
      */
     private int adminListLimit = 1000;
+    /**
+     * Most time between two running-set reads of an aggregate type while a hole, range or candidate of it is outstanding: caps the probe back-off, so a rolled-back append's hole does not hold the watermark for seconds. The probe cost budget (~1 % of a core) is a soft target while holes wait.
+     */
+    private Duration holeProbeWaitMax = Duration.ofMillis(100);
 
     /**
      * @return the settings these properties describe
@@ -192,7 +196,8 @@ public class EssentialsEventLogProperties {
                                     leaseStatementTimeout,
                                     nodeName,
                                     parkedCheckInterval,
-                                    adminListLimit);
+                                    adminListLimit,
+                                    holeProbeWaitMax);
     }
 
     public boolean isEnabled() {
@@ -441,5 +446,13 @@ public class EssentialsEventLogProperties {
 
     public void setAdminListLimit(int adminListLimit) {
         this.adminListLimit = adminListLimit;
+    }
+
+    public Duration getHoleProbeWaitMax() {
+        return holeProbeWaitMax;
+    }
+
+    public void setHoleProbeWaitMax(Duration holeProbeWaitMax) {
+        this.holeProbeWaitMax = holeProbeWaitMax;
     }
 }

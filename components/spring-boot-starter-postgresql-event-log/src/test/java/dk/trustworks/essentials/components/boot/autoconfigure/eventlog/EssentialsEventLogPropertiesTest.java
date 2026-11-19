@@ -67,6 +67,7 @@ class EssentialsEventLogPropertiesTest {
         values.put("essentials.event-log.node-name", "node-a");
         values.put("essentials.event-log.parked-check-interval", "9s");
         values.put("essentials.event-log.admin-list-limit", "250");
+        values.put("essentials.event-log.hole-probe-wait-max", "40ms");
 
         var properties = new Binder(new MapConfigurationPropertySource(values))
                 .bind("essentials.event-log", EssentialsEventLogProperties.class)
@@ -75,7 +76,8 @@ class EssentialsEventLogPropertiesTest {
         var expected = new EventLogSettings(Duration.ofSeconds(2), 50, Duration.ofSeconds(3), Duration.ofSeconds(20), Duration.ZERO, 77, false, 900, 250, 40, 5,
                                             Duration.ofMillis(20), Duration.ofSeconds(30), 6, 1000, 50000, Set.of("Orders", "Accounts"), Set.of("Orders"),
                                             Duration.ofMillis(15), false, Duration.ofMillis(5), Duration.ofMillis(7), Duration.ofSeconds(30), Duration.ofSeconds(5),
-                                            Duration.ofSeconds(10), Duration.ofSeconds(4), "node-a", Duration.ofSeconds(9), 250);
+                                            Duration.ofSeconds(10), Duration.ofSeconds(4), "node-a", Duration.ofSeconds(9), 250,
+                                            Duration.ofMillis(40));
         assertThat(properties.toSettings()).isEqualTo(expected);
         // Every component differs from its default, so a property that does not reach its component cannot pass unnoticed
         var defaults = EventLogSettings.defaults();

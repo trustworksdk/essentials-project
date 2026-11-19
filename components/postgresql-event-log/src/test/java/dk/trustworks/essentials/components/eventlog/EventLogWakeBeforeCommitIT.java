@@ -50,7 +50,9 @@ class EventLogWakeBeforeCommitIT extends AbstractSubscriptionIT {
 
     static final EventLogSettings SETTINGS = FAST.withBackstopInterval(Duration.ofSeconds(30))
                                                  .withProbeBackoff(Duration.ofMillis(10), Duration.ofMillis(20))
-                                                 .withWokenProbeMin(Duration.ofMillis(10));
+                                                 .withWokenProbeMin(Duration.ofMillis(10))
+                                                 // only wakes may make H probe: uncapped, its backstop-floored wait is the 30 s backstop
+                                                 .withHoleProbeWaitMax(Duration.ofSeconds(30));
 
     @Test
     void a_writer_starting_inside_a_flush_is_delivered_in_both_modes() throws Exception {

@@ -27,7 +27,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The probe clock's cost input (phase 10 gate fix): a flush of several types must not record its whole wall time as a
  * type's probe cost, or the cost rule ({@link EventLogSettings#wokenProbeWait}) turns a few milliseconds of tail reads into
  * seconds before the next running set, and the watermark stalls behind a candidate that could have retired.
- * {@link WatermarkMutant#FLUSH_COUNTED_AS_PROBE_COST} restores the old behaviour.
+ * {@link WatermarkMutant#FLUSH_COUNTED_AS_PROBE_COST} restores the old behaviour. And the cap while a hole waits: even an
+ * honest probe cost, multiplied by the rule, holds a rolled-back append's hole for seconds, so the wait is capped at
+ * {@link EventLogSettings#holeProbeWaitMax()} then ({@link WatermarkMutant#HOLE_PROBE_WAIT_UNCAPPED}).
  */
 class ProbeCostTest {
     private static final long             PREVIOUS_COST = Duration.ofNanos(300_000).toNanos();
@@ -67,5 +69,42 @@ class ProbeCostTest {
     void a_read_without_a_running_set_keeps_the_previous_cost() {
         var tail = new TailReader.Read(List.of(), null, FLUSH_NANOS, false, true);
         assertThat(ReaderLoop.probeCostAfter(PREVIOUS_COST, tail, TestSeams.NONE)).isEqualTo(PREVIOUS_COST);
+    }
+
+    // ---- the cap while a hole waits (phase 10 gate) ----
+
+    private static final long HONEST_PROBE = Duration.ofMillis(5).toNanos();
+    private static final int  POOL_60     = 60;
+
+    @Test
+    void while_a_hole_waits_the_probe_wait_is_capped() {
+        var cap = SETTINGS.holeProbeWaitMax();
+        assertThat(cap).isEqualTo(Duration.ofMillis(100));
+        // 5 ms x 100 x (60 / 10) = 3 s uncapped, woken or not
+        assertThat(ReaderLoop.probeWait(SETTINGS, true, HONEST_PROBE, POOL_60, true, TestSeams.NONE)).isLessThanOrEqualTo(cap);
+        assertThat(ReaderLoop.probeWait(SETTINGS, false, HONEST_PROBE, POOL_60, true, TestSeams.NONE)).isLessThanOrEqualTo(cap);
+        // a woken wait already below the cap is kept
+        assertThat(ReaderLoop.probeWait(SETTINGS, true, 0, 1, true, TestSeams.NONE)).isEqualTo(SETTINGS.wokenProbeMin());
+        var custom = SETTINGS.withHoleProbeWaitMax(Duration.ofMillis(40));
+        assertThat(ReaderLoop.probeWait(custom, false, HONEST_PROBE, POOL_60, true, TestSeams.NONE)).isEqualTo(Duration.ofMillis(40));
+    }
+
+    @Test
+    void without_a_waiting_hole_the_cost_rule_is_unchanged() {
+        assertThat(ReaderLoop.probeWait(SETTINGS, true, HONEST_PROBE, POOL_60, false, TestSeams.NONE)).isEqualTo(SETTINGS.wokenProbeWait(HONEST_PROBE, POOL_60))
+                                                                                                    .isEqualTo(Duration.ofSeconds(3));
+        assertThat(ReaderLoop.probeWait(SETTINGS, false, HONEST_PROBE, POOL_60, false, TestSeams.NONE)).isEqualTo(SETTINGS.probeWait(HONEST_PROBE, POOL_60));
+    }
+
+    @Test
+    void must_fail_HOLE_PROBE_WAIT_UNCAPPED_holds_the_hole_for_seconds() {
+        var seams = new TestSeams(Set.of(WatermarkMutant.HOLE_PROBE_WAIT_UNCAPPED), TestSeams.Hooks.NONE, null);
+        assertThat(ReaderLoop.probeWait(SETTINGS, true, HONEST_PROBE, POOL_60, true, seams)).isGreaterThanOrEqualTo(Duration.ofSeconds(3));
+    }
+
+    @Test
+    void hole_probe_wait_max_must_be_positive() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> SETTINGS.withHoleProbeWaitMax(Duration.ZERO))
+                                       .isInstanceOf(IllegalArgumentException.class);
     }
 }

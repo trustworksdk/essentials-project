@@ -736,9 +736,19 @@ final class ReaderLoop {
 
     private long probeDueNanos(ActiveType type) {
         var reader = type.reader;
-        var wait = type.wokenSinceProbe ? settings.wokenProbeWait(type.lastProbeCostNanos, reader.lastBackends())
-                                        : settings.probeWait(type.lastProbeCostNanos, reader.lastBackends());
-        return type.lastProbeNanos + wait.toNanos();
+        return type.lastProbeNanos + probeWait(settings, type.wokenSinceProbe, type.lastProbeCostNanos, reader.lastBackends(), reader.holesWaiting(), type.seams).toNanos();
+    }
+
+    /**
+     * The wait before a type's next running set (the probe clock, phase 6 §5): the woken or the backstop-floored cost rule,
+     * capped at {@link EventLogSettings#holeProbeWaitMax()} while a hole, range or candidate is outstanding (phase 10 gate):
+     * such a hole retires only on a running-set read, and holds the watermark until it does
+     * ({@link WatermarkMutant#HOLE_PROBE_WAIT_UNCAPPED})
+     */
+    static Duration probeWait(EventLogSettings settings, boolean woken, long lastProbeCostNanos, int backends, boolean holesWaiting, TestSeams seams) {
+        var wait = woken ? settings.wokenProbeWait(lastProbeCostNanos, backends)
+                         : settings.probeWait(lastProbeCostNanos, backends);
+        return holesWaiting && !seams.has(HOLE_PROBE_WAIT_UNCAPPED) ? settings.holeProbeWait(wait) : wait;
     }
 
     /**

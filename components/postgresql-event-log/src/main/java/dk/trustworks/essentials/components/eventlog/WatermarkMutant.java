@@ -175,6 +175,12 @@ enum WatermarkMutant {
      * candidate that could have retired (§5, phase 10 gate)
      */
     FLUSH_COUNTED_AS_PROBE_COST,
+    /**
+     * The probe wait is not capped at {@link EventLogSettings#holeProbeWaitMax()} while a hole waits: under load the cost
+     * rule's back-off holds a rolled-back append's hole, and with it the watermark and every {@code CONTIGUOUS}
+     * subscriber, for seconds (§5, phase 10 gate)
+     */
+    HOLE_PROBE_WAIT_UNCAPPED,
 
     // ---- phase 6 unit B (design phase 6 §6.1, §6.3); on the event log's wake seams ({@code EventLog.wakeSeams}) ----
 
