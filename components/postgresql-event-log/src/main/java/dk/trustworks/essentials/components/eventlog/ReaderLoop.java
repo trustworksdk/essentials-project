@@ -692,7 +692,8 @@ final class ReaderLoop {
         }
         observer.onFlush(names, parts.size(), nanos);
         for (var k = 0; k < due.size(); k++) {
-            finish(due.get(k), new TailReader.Read(rows.get(k), sets[k], nanos, sets[k] != null));
+            // a flush's wall time is every due type's tail read, not one probe's cost: only a flush of one type is costed
+            finish(due.get(k), new TailReader.Read(rows.get(k), sets[k], nanos, sets[k] != null, due.size() == 1));
         }
     }
 
@@ -740,6 +741,19 @@ final class ReaderLoop {
         return type.lastProbeNanos + wait.toNanos();
     }
 
+    /**
+     * The probe cost a read leaves for the probe clock ({@link #probeDueNanos}): the read's own cost if it was a probe
+     * measured on its own, else the previous cost. A flush of several types keeps the previous cost, as its wall time
+     * multiplied by the cost rule's factor would push the next running set - and so every candidate's retirement and the
+     * watermark - out by seconds under load ({@link WatermarkMutant#FLUSH_COUNTED_AS_PROBE_COST})
+     */
+    static long probeCostAfter(long previousCost, TailReader.Read read, TestSeams seams) {
+        if (seams.has(FLUSH_COUNTED_AS_PROBE_COST) && read.combined()) {
+            return read.nanos();
+        }
+        return read.probeCost(previousCost);
+    }
+
     /** Apply one read of {@code type}, publish it, and set its next due time */
     private void finish(ActiveType type, TailReader.Read read) throws Exception {
         var reader = type.reader;
@@ -751,7 +765,7 @@ final class ReaderLoop {
         var now = System.nanoTime();
         if (read.combined()) {
             type.lastProbeNanos = now;
-            type.lastProbeCostNanos = read.nanos();
+            type.lastProbeCostNanos = probeCostAfter(type.lastProbeCostNanos, read, type.seams);
             type.wokenSinceProbe = false;
         }
         if (read.rows().size() >= settings.tailPageSize()) {

@@ -169,6 +169,12 @@ enum WatermarkMutant {
     WAKE_CLEARED_AFTER_READ,
     /** Every woken read that wants a running set reads one: no probe clock after a wake (§5) */
     PROBE_ON_EVERY_WAKE,
+    /**
+     * A flush of several types records its whole wall time as each type's probe cost: under load the cost rule turns a
+     * few milliseconds of tail reads into seconds before the next running set, and the watermark stalls behind a
+     * candidate that could have retired (§5, phase 10 gate)
+     */
+    FLUSH_COUNTED_AS_PROBE_COST,
 
     // ---- phase 6 unit B (design phase 6 §6.1, §6.3); on the event log's wake seams ({@code EventLog.wakeSeams}) ----
 

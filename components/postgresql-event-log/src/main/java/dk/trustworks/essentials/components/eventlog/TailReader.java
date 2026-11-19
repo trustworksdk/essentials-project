@@ -150,8 +150,19 @@ final class TailReader implements AutoCloseable {
      * @param running  the running set read after the read's snapshot, or {@code null} if none was read
      * @param nanos    what the statement (or the whole flush) took
      * @param combined whether a running set was read
+     * @param costed   whether {@code nanos} is what this type's running-set probe cost: {@code true} for the combined
+     *                 probe and a flush of this type alone, {@code false} for a flush of several types, whose wall time
+     *                 covers every type's tail read and says nothing about what the running set cost
      */
-    record Read(List<StoredEvent> rows, RunningSet running, long nanos, boolean combined) {
+    record Read(List<StoredEvent> rows, RunningSet running, long nanos, boolean combined, boolean costed) {
+        /**
+         * @param previousCost the type's probe cost before this read
+         * @return the probe cost the probe clock should use after this read: {@code nanos} if this read was a probe
+         *         measured on its own, else {@code previousCost}
+         */
+        long probeCost(long previousCost) {
+            return combined && costed ? nanos : previousCost;
+        }
     }
 
     /**
@@ -226,7 +237,7 @@ final class TailReader implements AutoCloseable {
                 running = probed;
             }
         }
-        return new Read(rows, running, System.nanoTime() - started, combined);
+        return new Read(rows, running, System.nanoTime() - started, combined, true);
     }
 
     private boolean rereads() {
