@@ -138,7 +138,7 @@ class EventStoreInterceptorReplacementIT {
 
         unitOfWorkFactory.usingUnitOfWork(() -> {
             var fetched = eventStore.fetchStream(ORDERS, orderId).orElseThrow();
-            assertThat(fetched.eventOrderRangeIncluded()).isEqualTo(LongRange.between(0, 1));
+            assertThat(fetched.eventOrderRangeIncluded()).isEqualTo(LongRange.from(0));
             var fetchedEvents = fetched.eventList();
             assertTransformed(fetchedEvents.get(0), appended.get(0));
             assertThat((CharSequence) fetchedEvents.get(1).eventId()).isEqualTo(appended.get(1).eventId());

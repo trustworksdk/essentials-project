@@ -28,6 +28,15 @@ import java.util.Optional;
 /**
  * Add this interceptor to the {@link EventStore} if you want {@link EventStoreSubscriptionManager#subscribeToAggregateEventsInTransaction(SubscriberId, AggregateType, Optional, TransactionalPersistedEventHandler)}
  * to receive {@link PersistedEvent}'s as soon as they are appended to the {@link EventStore} (i.e. {@link EventStore#appendToStream(AppendToStream)} is performed)
+ * <p>
+ * Ordering: this interceptor carries no {@link dk.trustworks.essentials.shared.interceptor.InterceptorOrder}, so it runs at the
+ * default order {@code 10}. Interceptors with a lower order run before it (further out in the chain); interceptors with the
+ * same order keep their registration order.
+ * <p>
+ * It publishes the {@link AggregateEventStream} that {@code proceed()} returned. An interceptor nested inside it (order greater
+ * than {@code 10}) that transforms events on append, e.g. encrypts them, must therefore return the untransformed (plaintext)
+ * events in that stream, or in-transaction subscribers receive the transformed (ciphertext) events. Likewise, a read-side
+ * interceptor that decrypts events belongs at an order below {@code 10}.
  */
 public class FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream implements EventStoreInterceptor {
     @Override
