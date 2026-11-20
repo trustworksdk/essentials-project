@@ -920,6 +920,13 @@ Hardened before release (code review of the preview). Each item changed what an 
 - Stopping a subscription while it retries a parked aggregate rolls that retry back. Before, the interrupted retry left
   its transaction open, holding the subscription's progress row and parked rows locked. A parked retry of an exclusive
   subscription is now bound by the lease like a page: it cannot hold the progress row past one lease duration.
+- An `OutOfMemoryError`, `InternalError` or `LinkageError` (`NoClassDefFoundError`, …) thrown by a handler is retried
+  like the engine's own failures and never parks the event: it says nothing about the event, and a parked event would
+  need releasing by hand after the restart or redeploy that fixes it. Other `Error`s, `StackOverflowError` among them,
+  are retried and then parked.
+- The lease keeper survives a renewal pass that ends in an `Error`; before, its thread ended and every exclusive
+  subscription of the node suspended until another subscription registered. A retry or discard request made while a
+  subscription is stopping now completes (with an exception) instead of never completing.
 - `SubscriptionHandle.isRunning()` stays `true` until the delivery thread has actually ended. `stop()` still returns
   after 30 s if a handler ignores interrupts, but now logs a WARN, and the admin's `deleteRetiredInstance` and a
   re-subscribe of the same exclusive key see the subscription as running. A start that times out (60 s) stops its

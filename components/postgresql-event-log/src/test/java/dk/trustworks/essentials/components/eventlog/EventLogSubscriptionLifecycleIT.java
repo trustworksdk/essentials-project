@@ -58,4 +58,42 @@ class EventLogSubscriptionLifecycleIT extends AbstractSubscriptionIT {
         release.countDown();
         await().atMost(WAIT).until(() -> !subscription.isRunning());
     }
+
+    @Test
+    void a_parked_request_made_while_the_subscription_stops_completes() throws Exception {
+        var drained = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var hooks = new TestSeams.Hooks() {
+            @Override
+            public void beforeFinalSave(String subscriber) {
+                drained.countDown();
+                // stop() interrupts the delivery thread: keep it alive here regardless, as a slow final save would
+                var deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+                while (release.getCount() > 0 && System.nanoTime() < deadline) {
+                    try {
+                        release.await(100, TimeUnit.MILLISECONDS);
+                    } catch (InterruptedException ignored) {
+                        // keep waiting
+                    }
+                }
+            }
+        };
+        PeriodicHandler handler = event -> {
+        };
+        var subscription = subscribe("stopping", handler, new TestSeams(java.util.Set.of(), hooks, null), 1);
+        var stopper = Executors.newSingleThreadExecutor();
+        try {
+            stopper.submit(subscription::stop);
+            assertThat(drained.await(10, TimeUnit.SECONDS)).isTrue();
+
+            // The delivery thread is alive (final save pending) but drains no more: before, this request never completed
+            var request = subscription.retryParked(1);
+
+            await().atMost(Duration.ofSeconds(5)).until(request::isDone);
+            assertThat(request).isCompletedExceptionally();
+        } finally {
+            release.countDown();
+            stopper.shutdown();
+        }
+    }
 }

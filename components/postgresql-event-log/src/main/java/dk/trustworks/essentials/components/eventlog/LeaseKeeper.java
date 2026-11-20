@@ -126,6 +126,10 @@ final class LeaseKeeper {
                     // A pass that fails outside its own statement handling must not end the keeper: every exclusive
                     // subscription of this EventLog would then suspend for good
                     log.warn("A lease pass of owner {} failed unexpectedly; the next pass runs as usual", owner, e);
+                } catch (Error e) {
+                    // Even an Error: a dead keeper loses every lease of the node, a worse outcome than another attempt. One
+                    // pass per renewal interval, so a repeating Error cannot spin
+                    log.error("A lease pass of owner {} failed with an Error; the keeper keeps going, the next pass runs as usual", owner, e);
                 }
                 var left = interval - (System.nanoTime() - started);
                 if (left > 0 && !stopped) {

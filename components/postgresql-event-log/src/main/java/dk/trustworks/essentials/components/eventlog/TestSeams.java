@@ -57,6 +57,10 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         Hooks NONE = new Hooks() {
         };
 
+        /** After the delivery thread failed the parked requests for the last time, before its final save; delivery thread */
+        default void beforeFinalSave(String subscriber) throws Exception {
+        }
+
         /** Before the loop starts the type's reader (at activation and after every reconnect); loop thread */
         default void beforeReaderStart(String aggregateType) throws Exception {
         }

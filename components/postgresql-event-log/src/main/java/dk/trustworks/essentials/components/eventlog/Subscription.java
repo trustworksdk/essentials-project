@@ -195,6 +195,11 @@ final class Subscription {
     /** Consecutive I/O failures of pages, for the backoff */
     private int                                  ioFailures;
     private final Queue<ParkedRequest>           parkedRequests = new ConcurrentLinkedQueue<>();
+    /**
+     * Cleared once, right before the delivery thread fails what is queued for the last time. Not {@link #isRunning()}: the
+     * thread stays alive for the final save and leave after that drain, and a request queued then would never complete
+     */
+    private volatile boolean                     acceptsParkedRequests = true;
     /** When the next parked check is due (0: at once), and how many ran; delivery thread */
     private long                                 nextParkedCheckNanos;
     private volatile long                        parkedChecks;
@@ -578,7 +583,13 @@ final class Subscription {
             if (permitHeld) {
                 releasePermit(true);
             }
+            acceptsParkedRequests = false;
             failParkedRequests();
+            try {
+                seams.hooks().beforeFinalSave(key.subscriber());
+            } catch (Exception e) {
+                log.debug("beforeFinalSave hook of {} failed", key, e);
+            }
             var current = inbox;
             if (current != null) {
                 current.close(Inbox.CloseReason.STOPPED);
@@ -2084,13 +2095,30 @@ final class Subscription {
      *                           before 0.61.0
      */
     static boolean isEngineFailure(boolean thrownByHandler, Throwable error, java.util.function.BooleanSupplier pageConnectionLost, TestSeams seams) {
-        if (!thrownByHandler) {
+        if (!thrownByHandler || isEnvironmentFailure(error)) {
             return true;
         }
         if (seams.has(HANDLER_IO_RETRIED_FOREVER) && isIoFailure(error)) {
             return true;
         }
         return pageConnectionLost.getAsBoolean();
+    }
+
+    /**
+     * An {@link Error} that says nothing about the event: the JVM is in trouble ({@link OutOfMemoryError},
+     * {@link InternalError}, {@link UnknownError}) or the deployment is broken ({@link LinkageError}, e.g.
+     * {@code NoClassDefFoundError}). Retried like the engine's own I/O, never parked - parking would need every such event
+     * released by hand after the restart or redeploy that fixes it. {@link StackOverflowError} stays a handler failure:
+     * an event whose handling recurses forever is parked.
+     */
+    static boolean isEnvironmentFailure(Throwable error) {
+        var depth = 0;
+        for (var t = error; t != null && depth < 32; t = t.getCause(), depth++) {
+            if (t instanceof OutOfMemoryError || t instanceof InternalError || t instanceof UnknownError || t instanceof LinkageError) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** The event has failed alone {@code attempts} times, its first try and every retry; parked once this holds */
@@ -2152,7 +2180,8 @@ final class Subscription {
     private CompletableFuture<Boolean> requestParked(long head, boolean discard) {
         var request = new ParkedRequest(head, discard, new CompletableFuture<>());
         parkedRequests.add(request);
-        if (!isRunning()) {
+        // Read after the add, as the delivery thread clears the flag before its last drain: one of the two sees the request
+        if (!acceptsParkedRequests) {
             failParkedRequests();
         }
         return request.result();

@@ -92,6 +92,19 @@ class SubscriptionFailureClassificationTest {
     }
 
     @Test
+    void an_error_that_says_nothing_about_the_event_is_retried_forever_never_parked() {
+        assertThat(parkedAfter(true, new OutOfMemoryError("Java heap space"), CONNECTION_OK, TestSeams.NONE)).isEqualTo(-1);
+        assertThat(parkedAfter(true, new NoClassDefFoundError("com/acme/Missing"), CONNECTION_OK, TestSeams.NONE)).isEqualTo(-1);
+        assertThat(parkedAfter(true, new IllegalStateException("wrapped", new InternalError("jvm")), CONNECTION_OK, TestSeams.NONE)).isEqualTo(-1);
+    }
+
+    @Test
+    void an_error_the_event_causes_is_parked_after_its_retries() {
+        assertThat(parkedAfter(true, new StackOverflowError(), CONNECTION_OK, TestSeams.NONE)).isEqualTo(ERRORS.retryAttempts() + 1);
+        assertThat(parkedAfter(true, new AssertionError("invariant broken"), CONNECTION_OK, TestSeams.NONE)).isEqualTo(ERRORS.retryAttempts() + 1);
+    }
+
+    @Test
     void no_retries_parks_on_the_first_failure() {
         assertThat(Subscription.retriesUsedUp(1, new ErrorSettings(0, Duration.ofMillis(1), Duration.ofMillis(1), 1))).isTrue();
         assertThat(Subscription.retriesUsedUp(3, ERRORS)).isFalse();
