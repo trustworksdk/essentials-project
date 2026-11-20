@@ -19,9 +19,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
+import java.time.Duration;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * F4: a reader restart detaches every attached subscription. Two subscriptions are attached; a writer
@@ -74,6 +76,35 @@ class EventLogReaderRestartIT extends AbstractSubscriptionIT {
         assertThat(reads.detachReasons).doesNotContain(Inbox.CloseReason.READER_RESTART.name());
         var after = commitAppend("after", 1);
         awaitDelivered(orders, after);
+    }
+
+    @Test
+    void commits_to_a_type_whose_reader_keeps_failing_to_start_do_not_pull_its_retry_forward() throws Exception {
+        // A long backstop: the retry is due once per 3 s; before, every commit's wake retried the start at once
+        restartEventLog(dataSource, FAST.withBackstopInterval(Duration.ofSeconds(3)));
+        var invoicesType = "Invoices";
+        eventLog.registerAggregateType(invoicesType);
+        var starts = new java.util.concurrent.atomic.AtomicInteger();
+        var alwaysFails = new TestSeams.Hooks() {
+            @Override
+            public void beforeReaderStart(String aggregateType) {
+                starts.incrementAndGet();
+                throw new IllegalStateException("this type's reader never starts");
+            }
+        };
+        subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key("invoices", invoicesType, "node-1"), 1, new Recorder(),
+                                                    new TestSeams(Set.of(), alwaysFails, null)));
+        await().atMost(WAIT).until(() -> starts.get() >= 1);
+        var before = starts.get();
+
+        for (var i = 0; i < 20; i++) {
+            appendCommitted(eventLog, AppendRequest.withoutExpectedOrder(invoicesType, "invoice-" + i, events("E", 1)));
+            eventLog.afterCommit(java.util.List.of(invoicesType)); // the wake a unit of work's commit sends
+            Thread.sleep(20);
+        }
+
+        // 20 commits in under a second: at most the one retry the backstop allows, not one per commit
+        assertThat(starts.get() - before).isLessThanOrEqualTo(1);
     }
 
     /**

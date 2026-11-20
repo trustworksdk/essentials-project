@@ -627,6 +627,11 @@ final class ReaderLoop {
                 type.nextDueNanos = now + settings.backstopInterval().toNanos();
             }
             var woken = clearAfterRead ? type.wake.get() : type.wake.getAndSet(false);
+            if (woken && type.startFailed) {
+                // A type whose reader failed to start retries on its own clock, once per backstop interval: a wake (every
+                // commit to it) must not pull the retry forward, or a persistent failure is retried on every commit
+                woken = false;
+            }
             if (woken) {
                 type.wokenSinceProbe = true;
                 var at = wokenReadDueNanos(type, now);

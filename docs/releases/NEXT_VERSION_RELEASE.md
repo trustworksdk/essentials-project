@@ -908,7 +908,7 @@ Hardened before release (code review of the preview). Each item changed what an 
   that were queued.
 - One aggregate type whose reader fails to start (a missing table, for example) no longer restarts the reader of every
   other type. If the shared connection is still valid, only that type's subscriptions are detached, and it alone
-  retries after one backstop interval. Observe it: before, every subscription of every type logged a detach with
+  retries after one backstop interval - commits to it do not pull the retry forward. Observe it: before, every subscription of every type logged a detach with
   reason `READER_RESTART`; now only the failing type's do.
 - A long writing transaction in another database on the same PostgreSQL server no longer holds every type's watermark
   back. The running set now counts only backends connected to the event log's own database. Before, an idle-in-
