@@ -15,6 +15,7 @@
  */
 package dk.trustworks.essentials.components.eventlog.processor;
 
+import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.eventlog.*;
 import dk.trustworks.essentials.components.foundation.Lifecycle;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
@@ -188,7 +189,8 @@ public abstract class EventLogReactor implements Lifecycle {
 
     private void handle(DeliveredEvent event) {
         try {
-            dispatch.dispatch(event);
+            // What a handler appends or sends records this event as its cause, as the inbox and partitioned processors do
+            CausationContext.where(event.eventId()).run(() -> dispatch.dispatch(event));
         } catch (Exception e) {
             // A handler's checked exception arrives here too (thrown sneakily); precise rethrow keeps it unchanged
             if (!seams.has(ProcessorMutant.ANNOTATED_DISPATCH_SWALLOWS_FAILURE)) {

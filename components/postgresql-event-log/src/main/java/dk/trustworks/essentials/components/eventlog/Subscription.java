@@ -74,6 +74,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 final class Subscription {
     private static final Logger log = LoggerFactory.getLogger(Subscription.class);
 
+
+    /** Per-event TRACE lines of this subscriber, on a logger of its own */
+    private final DeliveryTrace                          trace;
+
     /** Where the delivery thread is in the lifecycle; for tests and diagnostics */
     enum Phase {
         STARTING,
@@ -215,6 +219,7 @@ final class Subscription {
         this.lease = lease;
         this.keeper = keeper;
         this.key = spec.key();
+        this.trace = new DeliveryTrace(key.subscriber(), key.aggregateType());
         this.filter = spec.filter();
         this.tenant = spec.tenant();
         this.typeFiltered = !spec.filter().matchesAll();
@@ -1694,6 +1699,7 @@ final class Subscription {
                 return Outcome.STOPPED;
             }
             seams.hooks().beforeHandler(key.subscriber(), event);
+            trace.delivering(event);
             try {
                 handler.handle(event);
                 if (lease != null) {
@@ -1870,6 +1876,7 @@ final class Subscription {
                 }
             }
             hooks.beforePageHandler(subscriber, handlerPage);
+            trace.delivering(handlerPage);
             if (!handlerPage.isEmpty()) {
                 inHandler = true;
                 pageHandler.handle(handlerPage, handlerTransaction(open));
@@ -1982,6 +1989,7 @@ final class Subscription {
         lastSaved = resumeFrom;
         lastSaveNanos = System.nanoTime();
         observer.onPageCommitted(subscriber, key.aggregateType(), page.size(), lastSaveNanos - pageStart);
+        trace.pageCommitted(page, parks.size(), resumeFrom, lastSaveNanos - pageStart);
         observer.onProgressSaved(subscriber, key.aggregateType(), resumeFrom);
         return true;
     }

@@ -311,6 +311,20 @@ aggregate admin configurations run on the adapter. `EssentialsEventLogProperties
 (`EssentialsEventLogPropertiesTest`). In `validate`, the `EventLog` bean validates the engine's schema before it starts,
 so a missing one fails as `SchemaValidationException`.
 
+**Observability.** `EventLogObserver` (every method a no-op default, called on the reader loop, delivery or lease keeper
+thread) is the engine's only metrics seam. `MicrometerEventLogObserver` binds it: a lag gauge (`essentials.eventlog.subscription.lag`
+= the type's reader cursor, reported by `onReaderCursor` once per tail read, minus the saved resume point from
+`onProgressSaved`, plus one), counters `subscription.failed`/`parked`/`lease_lost` and `lease.renewal_failed`, and a
+`subscription.page` timer by outcome, fed by the `nanos` variants of `onPageCommitted`/`onPageFailed` (one `nanoTime` at
+the page's start; the commit side reuses the `lastSaveNanos` read). Meters are cached per subscription, never looked up
+per call. The starter installs it when a `MeterRegistry` exists and no application observer is declared
+(`EventLogMetrics`, resolved when the `EventLog` bean is built, so no ordering against the metrics auto-configuration),
+and declares the classic starter's `RecordExecutionTimeEventStoreInterceptor` and (with `management.tracing.enabled`)
+`MicrometerTracingEventStoreInterceptor`, which the adapter runs as an enricher, so `traceparent` lands in the stored
+metadata. Per-event TRACE goes through `DeliveryTrace`, on the logger `…eventlog.Subscription.<sanitised subscriber>`,
+created once per subscription and guarded by `isTraceEnabled()`. `EventLogViewProcessor` and `EventLogReactor` bind
+`CausationContext` around each handler call, as the inbox and partitioned processors do (`ProcessorCausationIT`).
+
 ## 10. Migration
 
 `postgresql-event-log-migration` moves aggregate types one way from the classic tables to the event log's, in the same

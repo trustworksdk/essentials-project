@@ -44,5 +44,14 @@ duplicate `essentialsEventStore`; removing the filter from `spring.factories` fa
   to the database. `EventLogSchemaModeIT` covers both with a type registered during the build.
 - **Processors register their own aggregate type** before subscribing: `EventLogProcessorLifecycle` for `ViewProjection` /
   `EventReactor` beans, the base classes at `start()`. Registration creates the engine's default tables (in `create`).
-- The tests need `micrometer-core` and `spring-boot-health` (test scope): `EssentialsComponentsConfiguration` cannot be
-  introspected without them.
+- `micrometer-core` and `micrometer-tracing` are `optional` (as in the event-store starter); the tests need
+  `spring-boot-health` (test scope): `EssentialsComponentsConfiguration` cannot be introspected without it.
+- Observability: `MicrometerMetricsConfiguration` declares an `EventLogMetrics` (a starter type, so the `eventLog` bean
+  names no Micrometer class) that builds a `MicrometerEventLogObserver` from the `MeterRegistry` looked up when the
+  `EventLog` is built - no `@ConditionalOnBean(MeterRegistry)`, so no ordering against the metrics auto-configuration.
+  An application `EventLogObserver` bean wins (documented choice: extend `MicrometerEventLogObserver` to have both).
+  `EventStoreInterceptorsConfiguration` / `TracingConfiguration` re-declare the dropped `EventStoreConfiguration`'s
+  `RecordExecutionTimeEventStoreInterceptor` and `MicrometerTracingEventStoreInterceptor` under its conditions and
+  properties (`essentials.eventstore.metrics.*` bound with `Binder`, as `EssentialsEventStoreProperties` may be absent).
+  A test with `management.tracing.enabled=true` needs a `MeterRegistry` bean too: the components starter's
+  `durableQueuesMicrometerInterceptor` calls `meterRegistry.get()` under that property.

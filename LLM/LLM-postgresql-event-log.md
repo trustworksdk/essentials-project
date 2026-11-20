@@ -22,6 +22,7 @@
 - [Consistency and transactions](#consistency-and-transactions)
 - [Porting from the EventProcessor family](#porting-from-the-eventprocessor-family)
 - [Settings](#settings)
+- [Observability](#observability)
 - [Admin](#admin)
 - [Migrating existing data](#migrating-existing-data)
 - [Known limits](#known-limits)
@@ -348,6 +349,41 @@ longer commit. The probe is paced to cost about 1 % of one core across the clust
 probe seconds away. `hole-probe-wait-max` caps the wait while a hole waits, so while holes wait the 1 % probe budget
 is a **soft target**, not a limit (one probe per 100 ms per reader at the default). Outside holes nothing changes.
 Raise it to spend less database CPU on probes; lower it to retire holes sooner.
+
+## Observability
+
+**Meters.** `MicrometerEventLogObserver` (`…eventlog.observability.micrometer`, needs `micrometer-core`, `provided` in
+the engine) implements `EventLogObserver`. The starter installs it when a `MeterRegistry` bean exists and the application
+declares no `EventLogObserver` bean; `essentials.event-log.metrics.enabled=false` switches it off. An application
+observer bean **replaces** it - to keep both, extend `MicrometerEventLogObserver` and call `super`. Tags: `subscriber_id`,
+`aggregate_type`, optional `Module` (`essentials.tracing-properties.module-tag`), as the old engine's subscription meters.
+
+| Meter | Kind | Meaning |
+|---|---|---|
+| `essentials.eventlog.subscription.lag` | gauge | `max(0, readerCursor - resumeFrom + 1)`: events past the *saved* resume point (the old `DurableSubscriptions_EventOrder_Diff`). A `PERIODIC` subscription saves every `progress-save-interval`, so it reads up to that much behind what was handled |
+| `essentials.eventlog.subscription.failed` | counter | every `onError`: handler and engine failures, retried or parked after. Reader failures count under `subscriber_id=eventlog-reader` |
+| `essentials.eventlog.subscription.parked` | counter | parked heads and events held behind them |
+| `essentials.eventlog.subscription.lease_lost` | counter | leases an exclusive subscription lost |
+| `essentials.eventlog.subscription.page` | timer, `outcome=committed\|failed` | in-transaction page time (handler included); periodic subscriptions have no pages |
+| `essentials.eventlog.lease.renewal_failed` | counter, no subscriber tag | lease keeper passes that failed |
+
+Meters are cached per subscription and updated per page, read or failure, never per event.
+
+**Tracing and append timing.** As on the old engine, and under its properties: `RecordExecutionTimeEventStoreInterceptor`
+(`essentials.eventstore.metrics.enabled`, `.thresholds.*`) always, `MicrometerTracingEventStoreInterceptor` with
+`management.tracing.enabled=true` (`essentials.eventstore.verbose-tracing`). The adapter runs the tracing interceptor as
+an enricher, so each appended event's metadata carries the `traceparent` of the appending span.
+
+**Per-event TRACE.** Each subscription logs on `dk.trustworks.essentials.components.eventlog.Subscription.<subscriber>`
+(characters outside `[A-Za-z0-9_-]`, dots included, become `_`): `delivering <eventType> global_order <n> event_order <m>
+to <subscriber>` per event and `page committed: ...` per in-transaction page. Switch it on for one subscriber, e.g.
+`logging.level.dk.trustworks.essentials.components.eventlog.Subscription.orders-view=TRACE`; off, it costs one level check
+per page.
+
+**Causation.** Every processor base class (`EventLogViewProcessor`, `EventLogReactor`, `EventLogInboxProcessor`,
+`EventLogPartitionedViewProcessor`) binds `CausationContext` to the delivered event around each handler call, so an
+event a handler appends records it as `caused_by_event_id` (with `essentials.eventstore.causation.enabled`, default on).
+A bare `ViewProjection`/`EventReactor` handler does not bind it.
 
 ## Admin
 

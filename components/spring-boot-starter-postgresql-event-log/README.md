@@ -41,6 +41,8 @@ do not run on it: start-up fails with a message naming each such bean, its class
 
 Requires the same provided dependencies as `spring-boot-starter-postgresql` (PostgreSQL driver, JDBI, Jackson 3, Reactor).
 
+Observability: with a `MeterRegistry` bean the engine's Micrometer meters are installed (`essentials.event-log.metrics.enabled`); the old starter's append-timing and (with `management.tracing.enabled=true`) tracing interceptors are declared under the old properties, so appended events carry the trace context. See `LLM/LLM-postgresql-event-log.md` § Observability.
+
 ## Documentation
 
 - [LLM-postgresql-event-log.md](../../LLM/LLM-postgresql-event-log.md) - the consumer reference: processors, porting, settings, limits

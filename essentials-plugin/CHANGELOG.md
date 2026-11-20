@@ -3,6 +3,15 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-18 — targets Essentials 0.60.1
+
+- **Event log: observability** — the event-log reference gains an Observability section: the
+  `MicrometerEventLogObserver` meters (`essentials.eventlog.subscription.lag`, `.failed`, `.parked`, `.lease_lost`,
+  `.page`, `essentials.eventlog.lease.renewal_failed`) and when the starter installs them
+  (`essentials.event-log.metrics.enabled`), the tracing and append-timing interceptors the starter now declares under the
+  old starter's properties, the per-subscriber TRACE logger `dk.trustworks.essentials.components.eventlog.Subscription.<subscriber>`,
+  and causation bound by every processor base class. No skill, rule or script changed.
+
 ## 0.60.1-17 — targets Essentials 0.60.1
 
 - **Foundation: `PostgresqlNotificationDrain`** — the foundation reference documents the new helper for a hand-written

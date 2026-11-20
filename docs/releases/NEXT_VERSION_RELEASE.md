@@ -951,6 +951,18 @@ interceptor as a `PersistableEventEnricher`, so an append stores the current tra
 metadata, as the old engine does. Both need Micrometer (and Micrometer Tracing) on the class path; without it nothing is
 declared.
 
+### 2.28 New event store engine: per-subscriber TRACE and causation in every processor (`postgresql-event-log`, `postgresql-event-log-processor`)
+
+**Preview.** Each subscription logs per event at TRACE on a logger of its own,
+`dk.trustworks.essentials.components.eventlog.Subscription.<subscriber>` (characters outside `[A-Za-z0-9_-]` become `_`):
+`delivering <eventType> global_order <n> event_order <m> to <subscriber>`, and `page committed: ...` per in-transaction
+page. Switch it on for one subscriber with `logging.level.<that logger>=TRACE`; off, it costs one level check per page.
+
+`EventLogViewProcessor` and `EventLogReactor` now bind `CausationContext` to the delivered event around each handler
+call, as `EventLogInboxProcessor` and `EventLogPartitionedViewProcessor` already did: an event a handler appends records
+the delivered event as its `caused_by_event_id` (and a command or queued message it sends carries it on). Before, such
+events had no cause.
+
 ## 3. Bug fixes
 
 | Area | Fix | Commit |

@@ -24,6 +24,8 @@ The application layer of the new event store engine (`postgresql-event-log`):
 JDBI, Spring transactions, the PostgreSQL driver and SLF4J are `provided`: declare them yourself, or use
 `spring-boot-starter-postgresql-event-log`.
 
+Every processor base class binds the delivered event as the cause (`CausationContext`) around each handler call, so events a handler appends record it as `caused_by_event_id`.
+
 ## Documentation
 
 - [LLM-postgresql-event-log.md](../../LLM/LLM-postgresql-event-log.md) - processors, consistency, porting, settings, gotchas
