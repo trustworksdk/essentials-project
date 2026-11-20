@@ -156,6 +156,8 @@ final class ReaderLoop {
         // ---- loop thread only ----
         private final List<Inbox>            attached = new ArrayList<>();
         private long                         nextDueNanos;
+        /** Its reader failed to start on a connection that stayed valid: only this type retries, at {@link #nextDueNanos} */
+        private boolean                      startFailed;
         private Long                         lastPublishedWatermark;
         /** The probe clock: when the last running set was read, and what that read cost */
         private long                         lastProbeNanos;
@@ -405,6 +407,65 @@ final class ReaderLoop {
 
     private void run() {
         log.debug("Reader loop starts");
+        try {
+            loop();
+        } catch (Throwable t) {
+            // An Error, or a restart that itself failed: without this the thread would end with `thread` still set, and
+            // submit() would never start another one - every subscription would wait on its attach reply forever
+            log.error("The reader loop ended unexpectedly; detaching every attached subscription, the next request starts a new loop", t);
+            abandon();
+            if (t instanceof Error error) {
+                throw error;
+            }
+        }
+    }
+
+    /**
+     * After an unexpected end of {@link #loop()}: let the next {@link #submit} start a new thread, refuse what is queued
+     * and detach every attached inbox (the new thread's readers start at the head, as after a restart)
+     */
+    private void abandon() {
+        try {
+            closeConnection();
+        } catch (RuntimeException e) {
+            log.debug("Closing the reader connection after an unexpected end failed", e);
+        }
+        for (var type : types) {
+            for (var inbox : type.attached) {
+                try {
+                    inbox.close(Inbox.CloseReason.READER_RESTART);
+                } catch (RuntimeException e) {
+                    log.debug("[{}] Closing an inbox after an unexpected end failed", type.aggregateType, e);
+                }
+            }
+            type.attached.clear();
+            type.lastPublishedWatermark = null;
+            type.reader = null;
+            type.bump();
+        }
+        synchronized (this) {
+            thread = null;
+            Request request;
+            while ((request = requests.poll()) != null) {
+                refuse(request);
+            }
+        }
+    }
+
+    private static void refuse(Request request) {
+        switch (request) {
+            case Attach attach -> attach.reply().complete(AttachReply.REFUSED);
+            case HandOff handOff -> handOff.reply().complete(HandOffReply.REFUSED);
+            case Activate ignored -> {
+            }
+            case Leave ignored -> {
+            }
+            case Detach ignored -> {
+            }
+        }
+    }
+
+    private void loop() {
         while (true) {
             try {
                 drainRequests();
@@ -449,7 +510,7 @@ final class ReaderLoop {
                     type.nextDueNanos = System.nanoTime();
                     if (connection != null) {
                         try {
-                            startReader(type);
+                            startOrIsolate(type);
                         } catch (Exception e) {
                             restart(e);
                         }
@@ -477,6 +538,15 @@ final class ReaderLoop {
     }
 
     private void attach(Attach request) {
+        try {
+            attachOrRefuse(request);
+        } catch (RuntimeException e) {
+            request.reply().completeExceptionally(e);
+            throw e;
+        }
+    }
+
+    private void attachOrRefuse(Attach request) {
         var type   = request.type();
         var reader = type.reader;
         var watermark = reader == null || !types.contains(type) ? null : reader.watermark();
@@ -505,6 +575,15 @@ final class ReaderLoop {
      * final and the subscription's own re-read answers them. Refused if the inbox was detached meanwhile.
      */
     private void handOff(HandOff request) {
+        try {
+            handOffOrRefuse(request);
+        } catch (RuntimeException e) {
+            request.reply().completeExceptionally(e);
+            throw e;
+        }
+    }
+
+    private void handOffOrRefuse(HandOff request) {
         var type   = request.type();
         var reader = type.reader;
         if (reader == null || !types.contains(type) || !type.attached.contains(request.inbox())) {
@@ -547,6 +626,9 @@ final class ReaderLoop {
                     }
                     type.wakePending = true;
                 }
+            }
+            if (type.reader == null && type.startFailed && now - type.nextDueNanos >= 0) {
+                startOrIsolate(type);
             }
             if (type.reader != null && now - type.nextDueNanos >= 0) {
                 type.wokenRead = type.wakePending;
@@ -842,17 +924,60 @@ final class ReaderLoop {
             // The probe must run in autocommit (P0.2); the mutant keeps one transaction across probes
             connection.setAutoCommit(types.stream().noneMatch(type -> type.seams.has(CACHED_STAT_ACTIVITY)));
             for (var type : types) {
-                startReader(type);
+                startOrIsolate(type);
             }
         } catch (Exception e) {
             restart(e);
         }
     }
 
-    private void startReader(ActiveType type) throws SQLException {
+    /**
+     * Start {@code type}'s reader. If that fails while the shared connection is still valid, the failure is the type's
+     * own (a missing table, a mapper, a hook): only its subscriptions are detached and only it retries after one backstop
+     * interval, so one bad type does not restart every other type's reader. A failure that leaves the connection invalid
+     * is rethrown for the whole-loop {@link #restart(Exception)}.
+     */
+    private void startOrIsolate(ActiveType type) throws Exception {
+        try {
+            startReader(type);
+            type.startFailed = false;
+        } catch (Exception e) {
+            if (!connectionValid()) {
+                throw e;
+            }
+            log.warn("[{}] Starting the tail reader failed; detaching this type's subscriptions and retrying it alone after {}", type.aggregateType,
+                     settings.backstopInterval(), e);
+            observer.onError(READER, type.aggregateType, e);
+            for (var inbox : type.attached) {
+                inbox.close(Inbox.CloseReason.READER_RESTART);
+            }
+            type.attached.clear();
+            type.lastPublishedWatermark = null;
+            closeReader(type);
+            type.startFailed = true;
+            type.nextDueNanos = System.nanoTime() + settings.backstopInterval().toNanos();
+            type.bump();
+        }
+    }
+
+    private boolean connectionValid() {
+        try {
+            return connection != null && connection.isValid(1);
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    private void startReader(ActiveType type) throws Exception {
+        type.seams.hooks().beforeReaderStart(type.aggregateType);
         var reader = new TailReader(type.aggregateType, connection, type.statements, settings, type.mapper, observer, type.seams,
                                     watermark -> offer(type, List.of(), watermark));
-        reader.startAtHead();
+        try {
+            reader.startAtHead();
+        } catch (Exception e) {
+            reader.close();
+            throw e;
+        }
         type.reader = reader;
         type.nextDueNanos = System.nanoTime();
         type.lastProbeNanos = type.nextDueNanos;

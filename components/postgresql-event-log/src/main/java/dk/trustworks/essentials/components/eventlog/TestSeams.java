@@ -57,6 +57,10 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         Hooks NONE = new Hooks() {
         };
 
+        /** Before the loop starts the type's reader (at activation and after every reconnect); loop thread */
+        default void beforeReaderStart(String aggregateType) throws Exception {
+        }
+
         /** Before every read, plain or combined */
         default void beforeRead(boolean combined) throws Exception {
         }

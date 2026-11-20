@@ -39,6 +39,38 @@ import static org.awaitility.Awaitility.await;
  */
 class EventLogCombinedProbeIT extends AbstractSubscriptionIT {
     @Test
+    void a_writer_in_another_database_on_the_server_does_not_hold_the_watermark_back() throws Exception {
+        var recorder = new Recorder();
+        subscribe("sub", recorder);
+        awaitDelivered(recorder, commitAppend("pre", 1));
+        var other = "el_other_database";
+        execute("DROP DATABASE IF EXISTS " + other);
+        execute("CREATE DATABASE " + other);
+        var otherUrl = postgres.getJdbcUrl().replace("/" + postgres.getDatabaseName(), "/" + other);
+        try (var connection = DriverManager.getConnection(otherUrl, postgres.getUsername(), postgres.getPassword())) {
+            connection.setAutoCommit(false);
+            String otherXid;
+            try (var statement = connection.createStatement()) {
+                statement.execute("CREATE TABLE elsewhere (x int)");
+                statement.execute("INSERT INTO elsewhere VALUES (1)");
+                try (var resultSet = statement.executeQuery("SELECT pg_current_xact_id()::text")) {
+                    resultSet.next();
+                    otherXid = resultSet.getString(1);
+                }
+            }
+            var above = commitAppend("above", 1);
+            awaitDelivered(recorder, above);
+            awaitReads(10);
+            var state = eventLog.reader(TYPE).state();
+            assertThat(state.candidates()).noneSatisfy(c -> assertThat(c.runningXids()).contains(otherXid));
+            assertThat(state.watermark()).isNotNull().isGreaterThanOrEqualTo(above);
+            connection.rollback();
+        } finally {
+            execute("DROP DATABASE IF EXISTS " + other + " WITH (FORCE)");
+        }
+    }
+
+    @Test
     void a_writer_held_between_value_and_commit_keeps_its_candidate_and_is_delivered() throws Exception {
         var recorder = new Recorder();
         var subscription = subscribe("sub", recorder);

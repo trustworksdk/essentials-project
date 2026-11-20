@@ -53,8 +53,15 @@ final class EventLogStorage {
      * Element 1 of the array is not an xid but the number of backends the same scan saw, which the probe back-off
      * scales with ({@link EventLogSettings#probeWait(long, int)}); the xids follow it. One scan, so the count costs
      * nothing extra.
+     * <p>
+     * Only writers connected to this database count ({@code datid} = this database's oid, an init plan run once per
+     * statement; filtering on {@code datname} instead keeps the view's join to {@code pg_database}): no other database's backend
+     * can insert into this database's tables, and counting one let a long writing transaction anywhere on the server
+     * hold every type's watermark back. The backend count stays server-wide - it measures the scan, not the writers.
+     * Prepared transactions ({@code PREPARE TRANSACTION}) have no backend and never appear here; the engine does not
+     * support appending inside one.
      */
-    static final String RUNNING_SET = "(SELECT ARRAY[count(*)::text] || coalesce(array_agg(backend_xid::text) FILTER (WHERE backend_xid IS NOT NULL), '{}'::text[]) " +
+    static final String RUNNING_SET = "(SELECT ARRAY[count(*)::text] || coalesce(array_agg(backend_xid::text) FILTER (WHERE backend_xid IS NOT NULL AND datid = (SELECT oid FROM pg_database WHERE datname = current_database())), '{}'::text[]) " +
             "FROM pg_stat_activity)";
 
     /** Column index of the running set in the combined probe; columns 1-12 are {@link #EVENT_COLUMNS} */

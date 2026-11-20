@@ -83,9 +83,9 @@ public final class EventLog {
              java.util.function.BooleanSupplier createsSchema) {
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
         this.settings = requireNonNull(settings, "No settings provided");
-        this.observer = requireNonNull(observer, "No observer provided");
+        this.observer = SafeEventLogObserver.wrap(observer);
         this.progressStore = new ProgressStore(dataSource);
-        this.readerLoop = new ReaderLoop(dataSource, settings, observer);
+        this.readerLoop = new ReaderLoop(dataSource, settings, this.observer);
         this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
         this.ddl = requireNonNull(ddl, "No ddl provided");
         this.eventTypes = new EventTypeRegistry(dataSource);
@@ -93,7 +93,7 @@ public final class EventLog {
         this.tenantIndex = new EventTypeIndex(dataSource, createsSchema, EventTypeIndex.Kind.TENANT);
         this.instance = newInstanceId();
         this.admin = new DatabaseEventLogAdmin(dataSource, settings, progressStore, () -> subscriptions, () -> adminSeams);
-        this.leaseKeeper = new LeaseKeeper(dataSource, settings, observer, settings.nodeName().isEmpty() ? instance : settings.nodeName() + "/" + instance, () -> leaseSeams);
+        this.leaseKeeper = new LeaseKeeper(dataSource, settings, this.observer, settings.nodeName().isEmpty() ? instance : settings.nodeName() + "/" + instance, () -> leaseSeams);
         if (settings.crossJvmWakeUp()) {
             this.notifier = new WakeNotifier(instance, WakeNotifier.sendOnBorrowedConnection(dataSource), () -> wakeSeams, settings.notifySendMin());
             this.listener = new WakeListener(dataSource, settings, instance, readerLoop, notifier, () -> wakeSeams);

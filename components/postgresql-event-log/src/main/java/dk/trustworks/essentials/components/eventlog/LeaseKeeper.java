@@ -111,26 +111,36 @@ final class LeaseKeeper {
 
     private void run() {
         var interval = settings.leaseRenewalInterval().toNanos();
-        while (!stopped) {
-            synchronized (this) {
-                if (leases.isEmpty()) {
-                    thread = null;
-                    return;
+        try {
+            while (!stopped) {
+                synchronized (this) {
+                    if (leases.isEmpty()) {
+                        thread = null;
+                        return;
+                    }
+                }
+                var started = System.nanoTime();
+                try {
+                    pass();
+                } catch (RuntimeException e) {
+                    // A pass that fails outside its own statement handling must not end the keeper: every exclusive
+                    // subscription of this EventLog would then suspend for good
+                    log.warn("A lease pass of owner {} failed unexpectedly; the next pass runs as usual", owner, e);
+                }
+                var left = interval - (System.nanoTime() - started);
+                if (left > 0 && !stopped) {
+                    LockSupport.parkNanos(this, left);
+                }
+                if (Thread.interrupted() && stopped) {
+                    break;
                 }
             }
-            var started = System.nanoTime();
-            pass();
-            var left = interval - (System.nanoTime() - started);
-            if (left > 0 && !stopped) {
-                LockSupport.parkNanos(this, left);
-            }
-            if (Thread.interrupted() && stopped) {
-                break;
-            }
-        }
-        synchronized (this) {
-            if (thread == Thread.currentThread()) {
-                thread = null;
+        } finally {
+            // Also on an Error: with `thread` still set, register() would never start another keeper
+            synchronized (this) {
+                if (thread == Thread.currentThread()) {
+                    thread = null;
+                }
             }
         }
     }

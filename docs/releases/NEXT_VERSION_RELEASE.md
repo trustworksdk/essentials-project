@@ -881,7 +881,7 @@ the contract. "Reset to the head" means the row's resume point plus its lag, rea
 Three new modules make up the engine that §2.19-§2.23 build on:
 
 - `postgresql-event-log`: the `EventLog`. Appends and stream loads, and subscriptions that follow the database's own
-  transaction visibility (a watermark from `pg_stat_get_activity`) instead of CDC, a gap handler or a fenced lock. Two
+  transaction visibility (a watermark from the `pg_stat_activity` view) instead of CDC, a gap handler or a fenced lock. Two
   consistency modes per subscription: `CONTIGUOUS` (strict global order, never above a hole) and `FRESH` (every committed
   event as soon as it is seen, in per-aggregate order). Exclusive subscriptions run on engine leases kept in
   `el_progress`; a failing event is retried alone and then parked while the rest of the stream continues. Its tables are
@@ -898,6 +898,21 @@ A handler's own connection error (SQLState `08*` or `SQLTransientConnectionExcep
 then parked like any other handler failure, as the classic Inbox dead-letters it; only a failure of the engine's own
 page connection or statements is retried indefinitely. Earlier builds of the preview retried such a handler error
 forever, so the subscription stalled behind one event.
+
+Hardened before release (code review of the preview). Each item changed what an earlier preview build did:
+
+- An `EventLogObserver` that throws no longer stops delivery. The engine wraps the observer, logs the exception (WARN at
+  most once a minute) and goes on. Before, a throwing `onError` or `onAttach` ended the shared reader thread for good:
+  every subscription of that `EventLog` waited on its attach reply forever, with nothing logged. The same applied to an
+  `Error` on the reader thread; now the next subscription request starts a new reader thread.
+- One aggregate type whose reader fails to start (a missing table, for example) no longer restarts the reader of every
+  other type. If the shared connection is still valid, only that type's subscriptions are detached, and it alone
+  retries after one backstop interval. Observe it: before, every subscription of every type logged a detach with
+  reason `READER_RESTART`; now only the failing type's do.
+- A long writing transaction in another database on the same PostgreSQL server no longer holds every type's watermark
+  back. The running set now counts only backends connected to the event log's own database. Before, an idle-in-
+  transaction session in an unrelated database stalled every `CONTIGUOUS` subscriber until it ended. A long writing
+  transaction in the same database still holds the watermark, as it must.
 
 The payload columns are `json`, not `jsonb`: the stored text is the serializer's compact output, byte for byte the
 classic engine's. Code that hashes or compares payload text sees no difference after a migration.

@@ -44,6 +44,38 @@ class EventLogReaderRestartIT extends AbstractSubscriptionIT {
         assertThat(heldValueDeliveredAfterARestart(mutant)).isFalse();
     }
 
+    @Test
+    void one_types_reader_failing_to_start_on_a_valid_connection_does_not_restart_the_other_types() throws Exception {
+        var orders = new Recorder();
+        subscribe("orders", orders);
+        var pre = commitAppend("pre", 1);
+        awaitDelivered(orders, pre);
+        var ordersReader = eventLog.reader(TYPE);
+
+        var invoicesType = "Invoices";
+        eventLog.registerAggregateType(invoicesType);
+        var failures = new java.util.concurrent.atomic.AtomicInteger();
+        var failOnce = new TestSeams.Hooks() {
+            @Override
+            public void beforeReaderStart(String aggregateType) {
+                if (failures.getAndIncrement() == 0) {
+                    throw new IllegalStateException("this type's reader fails to start once");
+                }
+            }
+        };
+        var invoices = new Recorder();
+        subscribe(new Subscription.SubscriptionSpec(new ProgressStore.Key("invoices", invoicesType, "node-1"), 1, invoices,
+                                                    new TestSeams(Set.of(), failOnce, null)));
+        var invoice = appendCommitted(eventLog, AppendRequest.withoutExpectedOrder(invoicesType, "invoice", events("E", 1))).getFirst().events().getFirst().globalOrder();
+        awaitDelivered(invoices, invoice);
+
+        assertThat(failures.get()).isGreaterThanOrEqualTo(2);
+        assertThat(eventLog.reader(TYPE)).as("the Orders reader was not restarted").isSameAs(ordersReader);
+        assertThat(reads.detachReasons).doesNotContain(Inbox.CloseReason.READER_RESTART.name());
+        var after = commitAppend("after", 1);
+        awaitDelivered(orders, after);
+    }
+
     /**
      * @return whether both subscriptions delivered the held value; decided once both delivered an event appended after
      * it committed, which they receive in order behind it

@@ -120,9 +120,17 @@ kept as a range instead of single values.
 range join while a range is outstanding, always as a `UNION ALL` branch, never an `OR`), and reads the **running set**:
 
 ```sql
-SELECT ARRAY[count(*)::text] || coalesce(array_agg(backend_xid::text) FILTER (WHERE backend_xid IS NOT NULL), '{}')
+SELECT ARRAY[count(*)::text] || coalesce(array_agg(backend_xid::text) FILTER (WHERE backend_xid IS NOT NULL AND datid = (SELECT oid FROM pg_database WHERE datname = current_database())), '{}')
 FROM pg_stat_activity
 ```
+
+Only writers connected to this database count: no backend of another database can insert into this one's tables, and
+counting them let one long writing transaction anywhere on the server hold every type's watermark back. The backend
+count stays server-wide, because it measures the cost of the scan, not the writers. A prepared transaction
+(`PREPARE TRANSACTION`) has no backend and never appears in the running set; appending inside one is not supported.
+The filter is on `datid` against an init plan, not on `datname`, which would keep the view's join to `pg_database`.
+Measured on PostgreSQL 18.4 with 109 backends (10 holding an xid), `pgbench -M prepared`, one client: 0.117 ms per call
+unfiltered, 0.093 ms filtered on `datname`, 0.086 ms on `datid` - no cost, within noise.
 
 The running set's statement reads the `pg_stat_activity` view rather than `pg_stat_get_activity(NULL)` behind it. The
 view has no filter and only left joins on unique keys (`pg_database`, `pg_authid`), which the planner removes, so both
