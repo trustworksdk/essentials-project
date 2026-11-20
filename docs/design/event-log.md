@@ -312,6 +312,15 @@ that runs the subscription serves it at its next parked check (at most every `pa
 runs on the answering node. The serve transaction locks the progress row before the parked rows, in the order a reset
 does, so the two cannot deadlock.
 
+An in-transaction subscription's serve hands every held event of the aggregate to the page handler inside that
+transaction, so it holds the progress row while the handler runs. For an exclusive subscription the keeper's renewal
+waits on that row, so the serve must finish within `leaseLocalStop` or its deadline check rolls it back; a slow
+aggregate needs a larger `leaseLocalStop` / `leaseDuration`. A `PERIODIC` subscription's serve holds no lock while its
+handler runs (`releaseParkedPeriodic`): a short transaction reads the held events, the handler runs with nothing locked
+(the local deadline checked before each call), and a second short transaction - progress row first again - checks
+that nothing moved, deletes the rows and saves. A reset or lease change in between refuses that step and the events
+run again, the periodic handler's at-least-once contract.
+
 The processor module wraps it as the `EventLogSubscriptionsApi` SPI (`DefaultEventLogSubscriptionsApi`, roles
 `SUBSCRIPTION_READER`/`SUBSCRIPTION_WRITER`). It is one admin contract in three places: the SPI, the seven rows of tag
 `event-log-subscriptions` in `EssentialsAdminApiSpec`, and `EventLogSubscriptionsController` in

@@ -449,6 +449,11 @@ cut-over except restoring a backup; rehearse it on a copy first.
 - ⚠️ **`stop()` returns after 30 s even if a handler ignores interrupts**, with a WARN; `isRunning()` stays `true`
   until the delivery thread really ends; until then, in the same `EventLog`, a re-subscribe of the same exclusive key and
   `deleteRetiredInstance` of its row are refused with `IllegalStateException`.
+- ⚠️ **An exclusive in-transaction subscription's parked retry must finish within `lease-local-stop`** (7 s by default):
+  it hands every held event of the aggregate to the handler in one transaction that holds the progress row, which the
+  lease renewal waits on, so a slower retry is rolled back and the aggregate stays parked. Raise `lease-local-stop` /
+  `lease-duration` for such a subscription. A periodic subscription's retry holds no lock while its handler runs; a
+  reset meanwhile makes it deliver the events again (at least once).
 - ⚠️ **Payload columns are `json`, not `jsonb`**: the stored text is the serializer's compact output, byte-equal to the
   classic engine's.
 

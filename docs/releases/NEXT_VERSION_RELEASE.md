@@ -924,6 +924,12 @@ Hardened before release (code review of the preview). Each item changed what an 
   like the engine's own failures and never parks the event: it says nothing about the event, and a parked event would
   need releasing by hand after the restart or redeploy that fixes it. Other `Error`s, `StackOverflowError` among them,
   are retried and then parked.
+- A parked retry of a periodic subscription no longer holds the subscription's progress row while its handler runs:
+  it reads the held events in one short transaction and deletes them and saves progress in another, so a slow handler
+  no longer blocks the lease renewal. Before, an exclusive subscription's retry slower than `lease-local-stop` (7 s)
+  was rolled back every time and the aggregate stayed parked. A reset during the handler now goes ahead and the events
+  are delivered again. An exclusive *in-transaction* subscription's retry must still finish within `lease-local-stop`
+  (the handler runs inside that transaction); raise it for slow aggregates.
 - The lease keeper survives a renewal pass that ends in an `Error`; before, its thread ended and every exclusive
   subscription of the node suspended until another subscription registered. A retry or discard request made while a
   subscription is stopping now completes (with an exception) instead of never completing.
@@ -1086,6 +1092,8 @@ database work per event.
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md).
 
+- `0.60.1-22` - the event-log reference warns that an exclusive in-transaction subscription's parked retry must finish
+  within `lease-local-stop`.
 - `0.60.1-21` - the event-log reference documents the admin reset refusal per processor kind and that a timed-out
   `stop()` makes a re-subscribe of the key refuse rather than wait.
 - `0.60.1-20` - the event-log reference counts four processor base classes everywhere, names the `pg_stat_activity`

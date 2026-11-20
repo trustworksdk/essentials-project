@@ -40,6 +40,8 @@ class EventLogAdminIT extends AbstractLeaseIT {
     private volatile boolean    broken    = true;
     private volatile Gate       headGate;
     private volatile long       gatedHead = -1;
+    /** Each event of {@code order-1} takes this long once {@link #broken} is cleared: a slow retry */
+    private volatile long       slowMillis = 0;
 
     private PeriodicHandler recorder() {
         return event -> {
@@ -48,6 +50,9 @@ class EventLogAdminIT extends AbstractLeaseIT {
             }
             if (event.globalOrder() == gatedHead && headGate != null) {
                 headGate.pass();
+            }
+            if (slowMillis > 0 && event.aggregateId().equals("order-1")) {
+                Thread.sleep(slowMillis);
             }
             delivered.add(event.globalOrder());
         };
@@ -66,7 +71,14 @@ class EventLogAdminIT extends AbstractLeaseIT {
      * behind it), {@code order-2}'s 4 and 5 delivered; then the handler is fixed
      */
     private Subscription parkedOnA(EventLog logA, WatermarkMutant... mutants) throws Exception {
-        var a = periodic(logA, SUB, recorder(), seams(TestSeams.Hooks.NONE, mutants));
+        return parkedOnA(logA, false, mutants);
+    }
+
+    private Subscription parkedOnA(EventLog logA, boolean inTransaction, WatermarkMutant... mutants) throws Exception {
+        var recorder = recorder();
+        var a = inTransaction
+                ? inTransaction(logA, SUB, ConsistencyMode.FRESH, PageHandler.perEvent((event, tx) -> recorder.handle(event)), seams(TestSeams.Hooks.NONE, mutants))
+                : periodic(logA, SUB, recorder, seams(TestSeams.Hooks.NONE, mutants));
         awaitOwned(a);
         append(logA, "order-1", 3);
         append(logA, "order-2", 2);
@@ -231,12 +243,17 @@ class EventLogAdminIT extends AbstractLeaseIT {
      * A serves B's retry and is held in the handler on the head; B resets meanwhile. @return the reset's outcome (or its
      * failure)
      */
-    private Object requestRacingReset(WatermarkMutant... mutants) throws Exception {
+    /**
+     * In-transaction: the serve holds the progress row across the handler, so the reset waits for it and is ordered after
+     * it. Periodic: the handler runs with nothing locked, so the reset goes ahead at once; the serve's second step then
+     * sees the new epoch and refuses, and the events are delivered again (at least once).
+     */
+    private Object requestRacingReset(boolean inTransaction, WatermarkMutant... mutants) throws Exception {
         var logA = eventLog("A");
         var logB = eventLog("B");
         headGate = new Gate(true);
         gatedHead = 1;
-        var a = parkedOnA(logA, mutants);
+        var a = parkedOnA(logA, inTransaction, mutants);
         var epoch = row(SUB).resetEpoch();
         assertThat(logB.admin().retryParked(adminKey(SUB), 1)).isEqualTo(ParkedRequestResult.ACCEPTED);
         headGate.awaitReached();
@@ -247,8 +264,12 @@ class EventLogAdminIT extends AbstractLeaseIT {
                 throw new CompletionException(e);
             }
         });
-        await().atMost(WAIT).until(() -> queryLong("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND " +
-                                                           "(query LIKE '%reset_epoch = reset_epoch + 1%' OR query LIKE 'DELETE FROM " + EventLogSchema.PARKED_EVENTS_TABLE + "%')") == 1);
+        if (inTransaction) {
+            await().atMost(WAIT).until(() -> queryLong("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND " +
+                                                               "(query LIKE '%reset_epoch = reset_epoch + 1%' OR query LIKE 'DELETE FROM " + EventLogSchema.PARKED_EVENTS_TABLE + "%')") == 1);
+        } else {
+            await().atMost(WAIT).until(reset::isDone);
+        }
         headGate.open();
         Object outcome;
         try {
@@ -267,12 +288,31 @@ class EventLogAdminIT extends AbstractLeaseIT {
 
     @Test
     void a_request_racing_a_reset_is_ordered_before_it() throws Exception {
-        assertThat(requestRacingReset()).isEqualTo(true);
+        assertThat(requestRacingReset(true)).isEqualTo(true);
     }
 
     @Test
     void must_fail_reset_race_SERVE_WITHOUT_EPOCH() throws Exception {
-        assertThat(requestRacingReset(SERVE_WITHOUT_EPOCH)).as("the reset deadlocked with the serve").isInstanceOf(SQLException.class);
+        assertThat(requestRacingReset(true, SERVE_WITHOUT_EPOCH)).as("the reset deadlocked with the serve").isInstanceOf(SQLException.class);
+    }
+
+    @Test
+    void a_periodic_request_racing_a_reset_lets_the_reset_go_first_and_is_replayed() throws Exception {
+        assertThat(requestRacingReset(false)).isEqualTo(true);
+    }
+
+    @Test
+    void a_slow_periodic_retry_of_an_exclusive_subscription_commits() throws Exception {
+        // Each held event takes longer than lease-local-stop (1 s here). Holding the progress row across them blocked the
+        // lease renewal, so the deadline check rolled the retry back every time and the aggregate stayed parked
+        var logA = eventLog("A");
+        parkedOnA(logA);
+        slowMillis = 1_200;
+
+        assertThat(logA.admin().retryParked(adminKey(SUB), 1)).isIn(ParkedRequestResult.DONE, ParkedRequestResult.ACCEPTED);
+
+        await().atMost(WAIT).until(() -> parkedRows(SUB) == 0);
+        assertThat(delivered).contains(1L, 2L, 3L);
     }
 
     // ---- a request racing a takeover ----
@@ -317,7 +357,8 @@ class EventLogAdminIT extends AbstractLeaseIT {
         var result = requestRacingTakeover();
         assertThat(result.servedByA()).as("the old owner serves nothing").isEmpty();
         assertThat(result.servedByB()).as("the new owner serves it").isTrue();
-        assertThat(parkedRows(SUB)).isZero();
+        // A periodic retry commits in a short transaction after its handler ran: wait for it rather than race it
+        await().atMost(WAIT).until(() -> parkedRows(SUB) == 0);
     }
 
     @Test

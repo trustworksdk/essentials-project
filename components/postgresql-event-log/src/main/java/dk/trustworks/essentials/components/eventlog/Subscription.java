@@ -2241,11 +2241,16 @@ final class Subscription {
         if (!running) {
             return false;
         }
+        if (model == ProgressModel.PERIODIC) {
+            return releaseParkedPeriodic(head, discard);
+        }
         PageTransactionSource.OpenPage open = null;
         try {
-            open = (model == ProgressModel.PERIODIC ? engineSource : pageSource).begin();
+            open = pageSource.begin();
             var connection = open.connection();
-            // The serve locks the progress row before the handler runs: the same lease bound as a page
+            // The serve locks the progress row before the handler runs (the order a reset locks in, which an in-transaction
+            // handler needs): the same lease bound as a page. An exclusive subscription's renewal waits on that lock, so the
+            // retry must finish within lease-local-stop or the deadline check below rolls it back
             boundByLease(connection);
             // The progress row first, epoch- and fence-guarded, in the order a reset locks
             if (!seams.has(SERVE_WITHOUT_EPOCH)
@@ -2275,11 +2280,7 @@ final class Subscription {
                 }
             }
             var toHandle = discard ? events.stream().filter(event -> event.globalOrder() != head).toList() : events;
-            if (model == ProgressModel.PERIODIC) {
-                for (var event : toHandle) {
-                    handler.handle(event);
-                }
-            } else if (!toHandle.isEmpty()) {
+            if (!toHandle.isEmpty()) {
                 pageHandler.handle(toHandle, handlerTransaction(open));
                 failIfRollbackOnly(open);
             }
@@ -2346,6 +2347,129 @@ final class Subscription {
         }
         releaseHeld(head);
         return true;
+    }
+
+    /**
+     * The parked retry of a {@code PERIODIC} subscription. Its handler is at least once and never runs in a transaction,
+     * so the retry holds no lock while the handler runs: a short transaction reads the held events, the handler runs
+     * with nothing locked (the local lease deadline checked before each call, as on the normal path), and a second short
+     * transaction - progress row first, as a reset locks - checks that nothing moved, deletes the rows and saves. A reset,
+     * a lease change or changed rows in between refuse that second step; the events then run again later, the at-least-
+     * once contract. Holding the progress row across the handler, as the in-transaction retry must, blocked an exclusive
+     * subscription's lease renewal for as long as the handler ran, so a retry slower than lease-local-stop never committed.
+     */
+    private boolean releaseParkedPeriodic(long head, boolean discard) throws Exception {
+        PageTransactionSource.OpenPage open = null;
+        try {
+            open = engineSource.begin();
+            var connection = open.connection();
+            if (!lockProgressGuarded(connection)) {
+                var ending = open;
+                open = null;
+                rollback(ending);
+                onProgressConflict();
+                return false;
+            }
+            var orders = parked.lock(connection, head);
+            var events = orders.isEmpty() ? List.<StoredEvent>of() : readByOrders(connection, orders);
+            var reading = open;
+            open = null;
+            rollback(reading);
+            if (orders.isEmpty()) {
+                releaseHeld(head);
+                return false;
+            }
+
+            for (var event : events) {
+                if (discard && event.globalOrder() == head) {
+                    continue;
+                }
+                ownerCheck();
+                if (!running) {
+                    return false;
+                }
+                handler.handle(event);
+            }
+
+            open = engineSource.begin();
+            connection = open.connection();
+            boundByLease(connection);
+            if (!lockProgressGuarded(connection) || !new HashSet<>(parked.lock(connection, head)).equals(new HashSet<>(orders))) {
+                var ending = open;
+                open = null;
+                rollback(ending);
+                onProgressConflict();
+                return false;
+            }
+            parked.delete(connection, orders);
+            if (!ProgressStore.saveInTransaction(connection, key, lastSaved, seams.has(SERVE_WITHOUT_EPOCH) ? null : boundEpoch(),
+                                                 seams.has(SERVE_WITHOUT_FENCE) ? null : boundFence(), null)) {
+                var ending = open;
+                open = null;
+                rollback(ending);
+                onProgressConflict();
+                return false;
+            }
+            if (pastLeaseDeadline()) {
+                var ending = open;
+                open = null;
+                rollback(ending);
+                ownerCheck();
+                return false;
+            }
+            var ending = open;
+            open = null;
+            commit(ending);
+        } catch (TestSeams.Crash e) {
+            throw e;
+        } catch (InterruptedException | LeaseLostException e) {
+            if (open != null) {
+                try {
+                    rollback(open);
+                } catch (RuntimeException rollbackFailed) {
+                    log.debug("Rolling back a parked retry of {} failed", key, rollbackFailed);
+                }
+            }
+            throw e;
+        } catch (Exception | Error e) {
+            if (open != null) {
+                try {
+                    rollback(open);
+                } catch (RuntimeException rollbackFailed) {
+                    log.debug("Rolling back a parked retry of {} failed", key, rollbackFailed);
+                }
+            }
+            reportError(e);
+            log.warn("Subscription {} on {}: {} of the aggregate parked at global_order {} failed; it stays held", key.subscriber(), key.aggregateType(),
+                     discard ? "discard" : "retry", head, e);
+            try {
+                parked.failedAgainGuarded(head, e, resetEpoch, boundFence());
+            } catch (SQLException again) {
+                log.warn("Subscription {} on {}: counting the failed attempt failed", key.subscriber(), key.aggregateType(), again);
+            }
+            return false;
+        }
+        releaseHeld(head);
+        return true;
+    }
+
+    /** The progress row, epoch- and fence-guarded, locked in the order a reset locks; @return whether it still matches */
+    private boolean lockProgressGuarded(Connection connection) throws SQLException {
+        return seams.has(SERVE_WITHOUT_EPOCH)
+               || ParkedEvents.lockProgress(connection, key, (Long) resetEpoch, seams.has(SERVE_WITHOUT_FENCE) ? null : boundFence());
+    }
+
+    private List<StoredEvent> readByOrders(Connection connection, List<Long> orders) throws SQLException {
+        var events = new ArrayList<StoredEvent>();
+        try (var statement = connection.prepareStatement(statements.byOrders())) {
+            statement.setArray(1, connection.createArrayOf("bigint", orders.toArray(Long[]::new)));
+            try (var resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    events.add(mapper.map(resultSet));
+                }
+            }
+        }
+        return events;
     }
 
     /**
