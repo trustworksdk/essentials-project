@@ -733,7 +733,17 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                                         interceptors,
                                         (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                         () -> {
-                                            messageHandler.handle(message);
+                                            // The handler gets what the interceptors left on the operation - possibly a
+                                            // replacement (e.g. decrypted). The consumer acknowledges or redelivers the
+                                            // message it selected, so a redelivery request made on a replacement that is
+                                            // not a QueuedMessage#withMessage decorator is copied back onto it
+                                            var deliveredMessage = operation.getMessage();
+                                            messageHandler.handle(deliveredMessage);
+                                            if (deliveredMessage != message
+                                                    && deliveredMessage.isManuallyMarkedForRedelivery()
+                                                    && !message.isManuallyMarkedForRedelivery()) {
+                                                message.markForRedeliveryIn(deliveredMessage.getRedeliveryDelay());
+                                            }
                                             return (Void) null;
                                         })
                 .proceed();
