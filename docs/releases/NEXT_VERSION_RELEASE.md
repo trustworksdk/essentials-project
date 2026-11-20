@@ -913,6 +913,17 @@ Hardened before release (code review of the preview). Each item changed what an 
   back. The running set now counts only backends connected to the event log's own database. Before, an idle-in-
   transaction session in an unrelated database stalled every `CONTIGUOUS` subscriber until it ended. A long writing
   transaction in the same database still holds the watermark, as it must.
+- An `Error` thrown by a handler (an `AssertionError`, a `StackOverflowError`) is a handler failure like any other: the
+  page is rolled back, the event retried and then parked. Before, the page transaction was left open, its connection
+  leaked and the delivery thread ended without reporting anything; `isRunning()` just turned false.
+- Stopping a subscription while it retries a parked aggregate rolls that retry back. Before, the interrupted retry left
+  its transaction open, holding the subscription's progress row and parked rows locked. A parked retry of an exclusive
+  subscription is now bound by the lease like a page: it cannot hold the progress row past one lease duration.
+- `SubscriptionHandle.isRunning()` stays `true` until the delivery thread has actually ended. `stop()` still returns
+  after 30 s if a handler ignores interrupts, but now logs a WARN, and the admin's `deleteRetiredInstance` and a
+  re-subscribe of the same exclusive key see the subscription as running. A start that times out (60 s) stops its
+  delivery thread instead of leaving it running unreachable, and two concurrent subscribes of the same exclusive key
+  can no longer both start.
 
 The payload columns are `json`, not `jsonb`: the stored text is the serializer's compact output, byte for byte the
 classic engine's. Code that hashes or compares payload text sees no difference after a migration.

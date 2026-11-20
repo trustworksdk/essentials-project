@@ -73,6 +73,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 final class Subscription {
     private static final Logger log = LoggerFactory.getLogger(Subscription.class);
+    /** How long {@link #start()} waits for the delivery thread to start */
+    private static final Duration START_TIMEOUT = Duration.ofSeconds(60);
+    /** How long {@link #stop()} waits for the delivery thread to end; package-private for tests */
+    volatile Duration stopJoinTimeout = Duration.ofSeconds(30);
 
 
     /** Per-event TRACE lines of this subscriber, on a logger of its own */
@@ -358,11 +362,14 @@ final class Subscription {
         running = true;
         thread = Thread.ofVirtual().name("eventlog-" + key.aggregateType() + "-" + key.subscriber()).start(this::run);
         try {
-            if (!started.await(60, TimeUnit.SECONDS)) {
-                throw new IllegalStateException("Subscription " + key + " did not start within 60 s");
+            if (!started.await(START_TIMEOUT.toSeconds(), TimeUnit.SECONDS)) {
+                // The caller is told the subscribe failed and never gets a handle: the thread must not deliver on its own
+                halt();
+                throw new IllegalStateException("Subscription " + key + " did not start within " + START_TIMEOUT);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            halt();
             throw new IllegalStateException("Interrupted while starting " + key, e);
         }
         if (startFailure != null) {
@@ -389,20 +396,28 @@ final class Subscription {
     private void halt() {
         running = false;
         var t = thread;
-        if (t == null) {
+        if (t == null || t == Thread.currentThread()) {
+            // A handler stopping its own subscription: the thread ends once the handler returns; joining itself would wait out the timeout
             return;
         }
         t.interrupt();
         try {
-            t.join(Duration.ofSeconds(30));
+            if (!t.join(stopJoinTimeout)) {
+                log.warn("Subscription {} on {}: the delivery thread did not end within {} of stop() (a handler that ignores interrupts?); " +
+                                 "isRunning() stays true until it does", key.subscriber(), key.aggregateType(), stopJoinTimeout);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
     }
 
+    /**
+     * @return whether the delivery thread is alive - also after {@link #stop()} returned while a handler that ignores
+     * interrupts still runs, so the admin's {@code deleteRetiredInstance} and a re-subscribe on the same key see it
+     */
     public boolean isRunning() {
         var t = thread;
-        return running && t != null && t.isAlive();
+        return t != null && t.isAlive();
     }
 
     public String subscriber() {
@@ -580,12 +595,15 @@ final class Subscription {
                     log.warn("Final progress save of {} failed", key, e);
                 }
             }
-            if (type != null) {
-                loop.leave(type, current);
-            }
-            if (lease != null) {
-                lease.close();
-                keeper.unregister(lease);
+            try {
+                if (type != null) {
+                    loop.leave(type, current);
+                }
+            } finally {
+                if (lease != null) {
+                    lease.close();
+                    keeper.unregister(lease);
+                }
             }
         }
     }
@@ -624,7 +642,7 @@ final class Subscription {
                 adopt(claim);
             } catch (LeaseLostException e) {
                 leaseLost = true;
-            } catch (Exception e) {
+            } catch (Exception | Error e) {
                 if (!running) {
                     return;
                 }
@@ -916,7 +934,7 @@ final class Subscription {
                 return;
             } catch (InterruptedException e) {
                 return;
-            } catch (Exception e) {
+            } catch (Exception | Error e) {
                 if (!running) {
                     return;
                 }
@@ -1710,7 +1728,9 @@ final class Subscription {
                 }
             } catch (InterruptedException e) {
                 throw e;
-            } catch (Exception e) {
+            } catch (Exception | Error e) {
+                // An Error from the handler (an AssertionError, a StackOverflowError) is a handler failure like any other:
+                // retried, then parked, rather than ending the delivery thread without a word
                 if (!running) {
                     return Outcome.STOPPED;
                 }
@@ -1868,13 +1888,7 @@ final class Subscription {
             open = pageSource.begin();
             connection = open.connection();
             openPageConnection = connection;
-            if (lease != null) {
-                // A dead owner's open page cannot hold the progress row past one lease
-                try (var statement = connection.prepareStatement(EventLogStorage.PAGE_IDLE_TIMEOUT)) {
-                    statement.setString(1, settings.leaseDuration().toMillis() + "ms");
-                    statement.execute();
-                }
-            }
+            boundByLease(connection);
             hooks.beforePageHandler(subscriber, handlerPage);
             trace.delivering(handlerPage);
             if (!handlerPage.isEmpty()) {
@@ -1905,7 +1919,7 @@ final class Subscription {
                 }
                 if (saved) {
                     hooks.afterProgressBeforeCommit(subscriber, handlerPage, resumeFrom);
-                    if (lease != null && !seams.has(NO_LOCAL_DEADLINE) && lease.pastDeadline()) {
+                    if (pastLeaseDeadline()) {
                         // Past the deadline before commit - roll back, suspend, then retry the page
                         var ending = open;
                         open = null;
@@ -1946,8 +1960,9 @@ final class Subscription {
                 }
             }
             throw e;
-        } catch (Exception e) {
-            // What the handler threw on a live page connection is the handler's failure, I/O-classified or not
+        } catch (Exception | Error e) {
+            // What the handler threw on a live page connection is the handler's failure, I/O-classified or not. An Error
+            // too: the page is rolled back and retried or parked like any handler failure, never left open
             var pageConnection = connection;
             var io             = isEngineFailure(inHandler, e, () -> pageConnection != null && invalid(pageConnection), seams);
             if (open != null) {
@@ -2002,7 +2017,7 @@ final class Subscription {
      * alone: retry after a doubling backoff, and once {@link EventLogSettings#retryAttempts()} retries are used up, park
      * it.
      */
-    private void onPageFailure(Exception e, boolean io, List<StoredEvent> page, List<StoredEvent> handlerPage) throws InterruptedException {
+    private void onPageFailure(Throwable e, boolean io, List<StoredEvent> page, List<StoredEvent> handlerPage) throws InterruptedException {
         var subscriber = key.subscriber();
         if (io) {
             var wait = errors.backoff(ioFailures++);
@@ -2199,6 +2214,8 @@ final class Subscription {
         try {
             open = (model == ProgressModel.PERIODIC ? engineSource : pageSource).begin();
             var connection = open.connection();
+            // The serve locks the progress row before the handler runs: the same lease bound as a page
+            boundByLease(connection);
             // The progress row first, epoch- and fence-guarded, in the order a reset locks
             if (!seams.has(SERVE_WITHOUT_EPOCH)
                     && !ParkedEvents.lockProgress(connection, key, seams.has(SERVE_WITHOUT_EPOCH) ? null : (Long) resetEpoch,
@@ -2244,10 +2261,29 @@ final class Subscription {
                 onProgressConflict();
                 return false;
             }
+            if (pastLeaseDeadline()) {
+                // As a page: past the local deadline the commit could land after another owner's claim
+                var ending = open;
+                open = null;
+                rollback(ending);
+                ownerCheck();
+                return false;
+            }
             var ending = open;
             open = null;
             commit(ending);
-        } catch (TestSeams.Crash | InterruptedException e) {
+        } catch (TestSeams.Crash e) {
+            // A lost JVM: no rollback, no close - the IT terminates the backend
+            throw e;
+        } catch (InterruptedException e) {
+            // stop() interrupted the handler: never leave the serve transaction open, it holds the progress row
+            if (open != null) {
+                try {
+                    rollback(open);
+                } catch (RuntimeException rollbackFailed) {
+                    log.debug("Rolling back an interrupted parked retry of {} failed", key, rollbackFailed);
+                }
+            }
             throw e;
         } catch (LeaseLostException e) {
             if (open != null) {
@@ -2258,7 +2294,7 @@ final class Subscription {
                 }
             }
             throw e;
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             if (open != null) {
                 try {
                     rollback(open);
@@ -2278,6 +2314,25 @@ final class Subscription {
         }
         releaseHeld(head);
         return true;
+    }
+
+    /**
+     * Exclusive subscriptions: a dead owner's open transaction - a page or a parked retry, both holding the progress row -
+     * cannot hold that row past one lease ({@code idle_in_transaction_session_timeout}, transaction-local)
+     */
+    private void boundByLease(Connection connection) throws SQLException {
+        if (lease == null) {
+            return;
+        }
+        try (var statement = connection.prepareStatement(EventLogStorage.PAGE_IDLE_TIMEOUT)) {
+            statement.setString(1, settings.leaseDuration().toMillis() + "ms");
+            statement.execute();
+        }
+    }
+
+    /** @return whether the local lease deadline passed, so a transaction holding the progress row must roll back, not commit */
+    private boolean pastLeaseDeadline() {
+        return lease != null && !seams.has(NO_LOCAL_DEADLINE) && lease.pastDeadline();
     }
 
     private void releaseHeld(long head) {

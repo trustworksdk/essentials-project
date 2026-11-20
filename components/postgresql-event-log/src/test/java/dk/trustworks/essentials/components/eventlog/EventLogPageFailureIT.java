@@ -50,7 +50,9 @@ class EventLogPageFailureIT extends AbstractPageIT {
         /** Asks to be parked */
         PARK_EXCEPTION,
         /** Always throws an I/O-classified exception of its own, on a live page connection */
-        CONNECTION_ERROR
+        CONNECTION_ERROR,
+        /** Always throws an {@link AssertionError}: an Error, not an Exception */
+        ASSERTION_ERROR
     }
 
     /** The view projection, failing on every event of an aggregate whose id starts with {@code poison} */
@@ -88,6 +90,7 @@ class EventLogPageFailureIT extends AbstractPageIT {
                 case ALWAYS -> {
                 }
                 case CONNECTION_ERROR -> throw new SQLTransientConnectionException("poison " + event.globalOrder(), "08006");
+                case ASSERTION_ERROR -> throw new AssertionError("poison " + event.globalOrder());
             }
             onFailure.run();
             if (alone && failure == Failure.ALWAYS && aloneFailures.incrementAndGet() == eventLog.settings().retryAttempts() + 1) {
@@ -198,6 +201,17 @@ class EventLogPageFailureIT extends AbstractPageIT {
         awaitCaughtUp(PROJECTION);
         assertThat(parkedRows()).containsExactly(Map.entry(poison, "null/4/java.sql.SQLTransientConnectionException/poison " + poison));
         assertThat(foldDifferences(Set.of(poison), true)).isEmpty();
+    }
+
+    @Test
+    void an_error_the_handler_throws_is_retried_then_parked_and_the_page_rolled_back() throws Exception {
+        // An Error used to skip the rollback and end the delivery thread silently, the page connection left open
+        var poison = seed();
+        var subscription = start(ConsistencyMode.CONTIGUOUS, new PoisonHandler(Failure.ASSERTION_ERROR), TestSeams.Hooks.NONE);
+        awaitCaughtUp(PROJECTION);
+        assertThat(parkedRows()).containsExactly(Map.entry(poison, "null/4/java.lang.AssertionError/poison " + poison));
+        assertThat(foldDifferences(Set.of(poison), true)).isEmpty();
+        assertThat(subscription.isRunning()).isTrue();
     }
 
     @Test

@@ -1,0 +1,61 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package dk.trustworks.essentials.components.eventlog;
+
+import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+import java.util.concurrent.*;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+
+/**
+ * {@link Subscription#stop()} against a handler that ignores interrupts: stop() returns after its join timeout, and
+ * {@link Subscription#isRunning()} keeps saying the delivery thread is alive until it ends - so the admin's
+ * {@code deleteRetiredInstance} and a re-subscribe on the same key do not act on a subscription that still delivers.
+ */
+class EventLogSubscriptionLifecycleIT extends AbstractSubscriptionIT {
+    @Test
+    void is_running_stays_true_while_a_handler_that_ignores_interrupts_outlives_stop() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        PeriodicHandler stubborn = event -> {
+            entered.countDown();
+            while (true) {
+                try {
+                    if (release.await(10, TimeUnit.SECONDS)) {
+                        return;
+                    }
+                } catch (InterruptedException ignored) {
+                    // a handler that swallows the interrupt
+                }
+            }
+        };
+        var subscription = subscribe("stubborn", stubborn, TestSeams.NONE, 1);
+        subscription.stopJoinTimeout = Duration.ofMillis(100);
+        commitAppend("a", 1);
+        assertThat(entered.await(30, TimeUnit.SECONDS)).isTrue();
+
+        var started = System.nanoTime();
+        subscription.stop();
+
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+        assertThat(subscription.isRunning()).as("the handler still runs").isTrue();
+        release.countDown();
+        await().atMost(WAIT).until(() -> !subscription.isRunning());
+    }
+}

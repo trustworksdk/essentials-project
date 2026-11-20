@@ -46,10 +46,22 @@ class EventLogParkedAggregateIT extends AbstractPageIT {
         }
     }
 
+    /** Set: the next handling of A1 signals {@link #blockedInRetry} and sleeps until interrupted */
+    private volatile boolean                         blockA1;
+    private final java.util.concurrent.CountDownLatch blockedInRetry = new java.util.concurrent.CountDownLatch(1);
+
+    private void maybeBlock(StoredEvent event) throws InterruptedException {
+        if (blockA1 && event.aggregateId().equals("A") && event.eventOrder() == 0) {
+            blockedInRetry.countDown();
+            Thread.sleep(Duration.ofMinutes(5));
+        }
+    }
+
     private Subscription start(WatermarkMutant... mutants) throws SQLException {
         PageHandler handler = PageHandler.perEvent((event, tx) -> {
             var connection = tx.connection();
             maybeFail(event);
+            maybeBlock(event);
             apply(event, connection);
         });
         return subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key(PROJECTION, TYPE, "node-1"), 1, ConsistencyMode.CONTIGUOUS,
@@ -148,6 +160,30 @@ class EventLogParkedAggregateIT extends AbstractPageIT {
         if (!Objects.equals(actual, expected)) {
             problems.add(what + ": expected " + expected + ", was " + actual);
         }
+    }
+
+    @Test
+    void stopping_during_a_parked_retry_rolls_its_transaction_back_and_releases_the_progress_row() throws Exception {
+        var subscription = start();
+        var a            = parkA1();
+        broken = false;
+        blockA1 = true;
+        var retry = subscription.retryParked(a[0]);
+        assertThat(blockedInRetry.await(30, TimeUnit.SECONDS)).isTrue();
+
+        subscription.stop();
+
+        assertThat(subscription.isRunning()).isFalse();
+        assertThat(queryLong("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state LIKE 'idle in transaction%'"))
+                .as("no serve transaction left open").isZero();
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            connection.setAutoCommit(false);
+            statement.execute("SET LOCAL lock_timeout = '2s'");
+            statement.execute("SELECT 1 FROM " + EventLogSchema.PROGRESS_TABLE + " WHERE subscriber = '" + PROJECTION + "' FOR UPDATE");
+            connection.rollback();
+        }
+        assertThat(parkedRows()).as("the retry did not happen, A stays parked").hasSize(3);
+        assertThat(retry).isDone();
     }
 
     @Test

@@ -51,6 +51,8 @@ public final class EventLog {
     private final ProgressStore                                       progressStore;
     private final ReaderLoop                                          readerLoop;
     private final List<Subscription>                             subscriptions  = new java.util.concurrent.CopyOnWriteArrayList<>();
+    /** Exclusive keys between their duplicate check and their registration in {@link #subscriptions}; guarded by itself */
+    private final Set<ProgressStore.Key>                         exclusiveStarting = new HashSet<>();
     private volatile boolean                                          started;
     private final EventTypeIndex                                      eventTypeIndex;
     private final EventTypeIndex                                      tenantIndex;
@@ -380,19 +382,35 @@ public final class EventLog {
                                                             () -> tenantIndex.valid(aggregateType));
         Lease lease = null;
         if (spec.exclusive()) {
-            for (var running : subscriptions) {
-                if (running.lease() != null && running.lease().key().equals(spec.key()) && running.isRunning()) {
-                    throw new IllegalStateException("Exclusive subscription " + spec.key().subscriber() + " on " + aggregateType + " is already running in this EventLog");
+            // Check and reserve in one step: two concurrent subscribes of one key would otherwise both pass and share the lease owner
+            synchronized (exclusiveStarting) {
+                for (var running : subscriptions) {
+                    if (running.lease() != null && running.lease().key().equals(spec.key()) && running.isRunning()) {
+                        throw new IllegalStateException("Exclusive subscription " + spec.key().subscriber() + " on " + aggregateType + " is already running in this EventLog");
+                    }
+                }
+                if (!exclusiveStarting.add(spec.key())) {
+                    throw new IllegalStateException("Exclusive subscription " + spec.key().subscriber() + " on " + aggregateType + " is already starting in this EventLog");
                 }
             }
-            lease = new Lease(spec.key(), new Lease.NewRow(spec.mode().name(), spec.model().name(), spec.initialResumeFrom(), spec.fromHead() ? type.tables.eventTable() : null, spec.filterDigest()), leaseKeeper.owner(),
-                              settings.leaseLocalStop().toNanos(), System::nanoTime);
         }
-        var subscription  = new Subscription(spec, readerLoop, EventLogStorage.TailStatements.of(relation), rs -> read(aggregateType, rs), progressStore, settings,
-                                                  observer, catchUp, lease, lease == null ? null : leaseKeeper);
-        subscription.start();
-        subscriptions.add(subscription);
-        return subscription;
+        try {
+            if (spec.exclusive()) {
+                lease = new Lease(spec.key(), new Lease.NewRow(spec.mode().name(), spec.model().name(), spec.initialResumeFrom(), spec.fromHead() ? type.tables.eventTable() : null, spec.filterDigest()),
+                                  leaseKeeper.owner(), settings.leaseLocalStop().toNanos(), System::nanoTime);
+            }
+            var subscription = new Subscription(spec, readerLoop, EventLogStorage.TailStatements.of(relation), rs -> read(aggregateType, rs), progressStore, settings,
+                                                observer, catchUp, lease, lease == null ? null : leaseKeeper);
+            subscription.start();
+            subscriptions.add(subscription);
+            return subscription;
+        } finally {
+            if (spec.exclusive()) {
+                synchronized (exclusiveStarting) {
+                    exclusiveStarting.remove(spec.key());
+                }
+            }
+        }
     }
 
     /**
