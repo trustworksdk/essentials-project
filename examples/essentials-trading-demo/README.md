@@ -60,6 +60,29 @@ From the repo root, PostgreSQL started by Spring Boot's Docker Compose support:
 ./examples/essentials-trading-demo/run-instance.sh 1 observability   # with Grafana, Prometheus, Tempo, Loki
 ```
 
+### On the new event store engine
+
+The demo runs on the classic event store by default. Add the `event-log` profile to the second argument to run it
+on the new event store engine (`postgresql-event-log`, a preview) instead; it combines with the other profiles:
+
+```bash
+./examples/essentials-trading-demo/run-instance.sh 1 event-log                # new engine
+./examples/essentials-trading-demo/run-instance.sh 1 simulators,event-log     # new engine with the simulators
+./examples/essentials-trading-demo/run-instance.sh 2 simulators,event-log     # second instance, same engine
+```
+
+- **Reset the database when you switch engines** (`./examples/essentials-trading-demo/reset-stack.sh`). Each engine
+  has its own tables (the new one's are `el_*`), so events written by one are not read by the other, and the demo
+  looks as if its data were gone.
+- **Run every instance on the same engine.** Mixing an `event-log` instance with a classic one on the same database
+  is not supported.
+- **Install the branch's modules first.** `run-instance.sh` runs Maven offline against your local repository, so the
+  engine modules must be installed there: `./mvnw install -DskipTests -DskipDependencyCheck=true -pl
+  examples/essentials-trading-demo -am` from the repo root.
+
+The profile is [application-event-log.yml](src/main/resources/application-event-log.yml): it sets
+`trading-demo.engine: event-log`, which picks the new engine's wrapper of each processor, and turns CDC off.
+
 or `mvn -q -pl examples/essentials-trading-demo -Dspring-boot.run.profiles=compose spring-boot:run`. Log in as
 `operator@demo.local` / `operator-demo-password` (seeded; `alice@demo.local` / `alice-demo-password` is a customer).
 The Essentials admin console is at [http://localhost:8080/essentials/admin](http://localhost:8080/essentials/admin).
