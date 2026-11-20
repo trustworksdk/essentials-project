@@ -918,6 +918,28 @@ pgjdbc's internals change; `openQueryPoll` forces the poll. Lifted from the new 
 which now uses it unchanged; the shard-owned queue's listener uses it too (§3). `ListenNotify` and
 `MultiTableChangeListener` are unchanged. Requires `org.postgresql:postgresql` on the classpath, as before.
 
+### 2.26 New event store engine: Micrometer meters (`postgresql-event-log`, `spring-boot-starter-postgresql-event-log`)
+
+**Preview.** `MicrometerEventLogObserver` (package `dk.trustworks.essentials.components.eventlog.observability.micrometer`)
+binds the engine's `EventLogObserver` callbacks to Micrometer, with the tags of the old engine's subscription meters
+(`subscriber_id`, `aggregate_type`, optional `Module`):
+
+| Meter | Kind | What |
+|---|---|---|
+| `essentials.eventlog.subscription.lag` | gauge | events between the subscription's saved resume point and the reader's cursor for its aggregate type: the new engine's `DurableSubscriptions_EventOrder_Diff` |
+| `essentials.eventlog.subscription.failed` | counter | handler and engine failures (retried or parked after) |
+| `essentials.eventlog.subscription.parked` | counter | events parked or held behind a parked head |
+| `essentials.eventlog.subscription.lease_lost` | counter | leases an exclusive subscription lost |
+| `essentials.eventlog.subscription.page` | timer, tag `outcome` = `committed`/`failed` | in-transaction page time, from opening the page transaction to its commit or rollback |
+| `essentials.eventlog.lease.renewal_failed` | counter (no subscriber tag) | lease keeper passes that failed |
+
+Meters are updated per page, read or failure, never per event, from meter instances cached per subscription. The
+starter installs the observer when a `MeterRegistry` bean exists and the application declares no `EventLogObserver` of
+its own (`essentials.event-log.metrics.enabled=false` switches it off); an application observer replaces it - extend
+`MicrometerEventLogObserver` and call `super` to have both. `micrometer-core` is `provided` in the engine and optional in
+the starter. `EventLogObserver` gained `onReaderCursor(aggregateType, cursor)` and `nanos` variants of
+`onPageCommitted`/`onPageFailed`, all default methods: an existing observer compiles and is still called.
+
 ## 3. Bug fixes
 
 | Area | Fix | Commit |

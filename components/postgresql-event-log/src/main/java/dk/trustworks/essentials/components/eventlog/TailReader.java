@@ -343,6 +343,7 @@ final class TailReader implements AutoCloseable {
         published.sort(Comparator.comparingLong(StoredEvent::globalOrder));
         publishState();
         observer.onRead(aggregateType, read.combined(), read.nanos(), rows.size(), holes.size() + ranges.size(), candidates.size(), oldestCandidateAge());
+        observer.onReaderCursor(aggregateType, cursor);
         return published;
     }
 

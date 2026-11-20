@@ -98,6 +98,19 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Optional, as in the event-store starter: the engine's meters (MicrometerEventLogObserver) and the event store
+             tracing/timing interceptors are wired only when an application has Micrometer -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- Transient dependencies not included because Essentials uses the provided scope -->
         <dependency>
             <groupId>io.projectreactor</groupId>
@@ -150,13 +163,7 @@
             <artifactId>assertj-core</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- spring-boot-starter-postgresql declares it optional, yet EssentialsComponentsConfiguration cannot be
-             introspected without it, nor without spring-boot-health; applications get both from actuator -->
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-core</artifactId>
-            <scope>test</scope>
-        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-actuator-autoconfigure</artifactId>

@@ -40,7 +40,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
-import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.*;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
@@ -83,6 +83,29 @@ public class EventLogAutoConfiguration {
     }
 
     /**
+     * Micrometer meters of the engine ({@code MicrometerEventLogObserver}: lag, failures, parks, lost leases, page time),
+     * when Micrometer is on the class path and {@code essentials.event-log.metrics.enabled} is not {@code false}. The
+     * registry is looked up when the {@link EventLog} is built, so no ordering against the metrics auto-configuration is
+     * needed; without a registry the engine is left unmetered. An application {@link EventLogObserver} bean replaces it.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "io.micrometer.core.instrument.MeterRegistry")
+    @ConditionalOnProperty(prefix = "essentials.event-log.metrics", name = "enabled", havingValue = "true", matchIfMissing = true)
+    static class MicrometerMetricsConfiguration {
+        @Bean
+        @ConditionalOnMissingBean(name = "eventLogMicrometerMetrics")
+        EventLogMetrics eventLogMicrometerMetrics(ObjectProvider<io.micrometer.core.instrument.MeterRegistry> registries,
+                                                  EssentialsComponentsProperties componentsProperties) {
+            return () -> {
+                var registry = registries.getIfAvailable();
+                return registry == null ? null
+                                        : new dk.trustworks.essentials.components.eventlog.observability.micrometer.MicrometerEventLogObserver(registry,
+                                                                                                                                              componentsProperties.getTracingProperties().getModuleTag());
+            };
+        }
+    }
+
+    /**
      * The engine, started here so that aggregate types can be registered with the adapter while the context is being
      * built. Its schema ownership follows {@code essentials.schema.mode}: {@code create} lets the engine create its own
      * schema at start, every other mode hands it to the schema harness through the {@link EventLogSchemaContributor}.
@@ -94,13 +117,22 @@ public class EventLogAutoConfiguration {
                              EssentialsComponentsProperties componentsProperties,
                              ObjectProvider<EventLogSchemaContributor> schemaContributor,
                              ObjectProvider<SchemaApplier> schemaApplier,
-                             ObjectProvider<EventLogObserver> observer) throws SQLException {
+                             ObjectProvider<EventLogObserver> observer,
+                             ObjectProvider<EventLogMetrics> metrics) throws SQLException {
         var builder = EventLog.builder()
                               .setDataSource(dataSource)
                               .setSettings(properties.toSettings())
                               .setSchemaOwnership(componentsProperties.getSchema().getMode().schemaOwnership());
         schemaContributor.ifAvailable(builder::setSchemaContributor);
-        observer.ifAvailable(builder::setObserver);
+        // An application's own observer wins; else the Micrometer one when a registry exists (extend
+        // MicrometerEventLogObserver to have both)
+        var applicationObserver = observer.getIfAvailable();
+        if (applicationObserver != null) {
+            builder.setObserver(applicationObserver);
+        } else {
+            var metricsObserver = metrics.orderedStream().map(EventLogMetrics::observer).filter(Objects::nonNull).findFirst();
+            metricsObserver.ifPresent(builder::setObserver);
+        }
         var contributor = schemaContributor.getIfAvailable();
         var applier     = schemaApplier.getIfAvailable();
         if (componentsProperties.getSchema().getMode() == SchemaMode.VALIDATE && contributor != null && applier != null) {

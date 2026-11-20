@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.eventlog;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsConfiguration;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.*;
 import dk.trustworks.essentials.components.eventlog.*;
+import dk.trustworks.essentials.components.eventlog.observability.micrometer.MicrometerEventLogObserver;
 import dk.trustworks.essentials.components.eventlog.processor.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
@@ -150,6 +151,42 @@ class EventLogAutoConfigurationIT {
             var loaded = (TestOrder) unitOfWorkFactory.withUnitOfWork(() -> repository.load(orderId));
             assertThat(loaded.total).isEqualTo(7);
         });
+    }
+
+    @Test
+    void with_a_meter_registry_the_engine_reports_its_meters() {
+        enabled().withBean(io.micrometer.core.instrument.simple.SimpleMeterRegistry.class).run(ctx -> {
+            assertThat(ctx).hasNotFailed();
+            var registry = ctx.getBean(io.micrometer.core.instrument.simple.SimpleMeterRegistry.class);
+            appendOneOrder(ctx);
+            await().atMost(Duration.ofSeconds(20))
+                   .untilAsserted(() -> assertThat(registry.find(MicrometerEventLogObserver.PAGE_METRIC)
+                                                           .tag(MicrometerEventLogObserver.SUBSCRIBER_TAG, "orders-view")
+                                                           .timer()).isNotNull());
+            assertThat(registry.find(MicrometerEventLogObserver.LAG_METRIC).tag(MicrometerEventLogObserver.SUBSCRIBER_TAG, "orders-view").gauge()).isNotNull();
+        });
+    }
+
+    @Test
+    void an_application_observer_bean_replaces_the_micrometer_one() {
+        var applicationObserver = new EventLogObserver() {
+        };
+        enabled().withBean(io.micrometer.core.instrument.simple.SimpleMeterRegistry.class)
+                 .withBean(EventLogObserver.class, () -> applicationObserver)
+                 .run(ctx -> {
+                     assertThat(ctx).hasNotFailed();
+                     appendOneOrder(ctx);
+                     await().atMost(Duration.ofSeconds(20)).until(() -> !PROJECTED.isEmpty());
+                     assertThat(ctx.getBean(io.micrometer.core.instrument.simple.SimpleMeterRegistry.class)
+                                   .find(MicrometerEventLogObserver.PAGE_METRIC).timers()).isEmpty();
+                 });
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void appendOneOrder(AssertableApplicationContext ctx) {
+        var unitOfWorkFactory = ctx.getBean(EventStoreUnitOfWorkFactory.class);
+        StatefulAggregateRepository<TestOrder.OrderId, Object, TestOrder> repository = ctx.getBean(StatefulAggregateRepository.class);
+        unitOfWorkFactory.usingUnitOfWork(() -> repository.save(new TestOrder(TestOrder.OrderId.random(), 3)));
     }
 
     @Test

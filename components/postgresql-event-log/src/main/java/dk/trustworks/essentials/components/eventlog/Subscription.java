@@ -1856,6 +1856,8 @@ final class Subscription {
         PageTransactionSource.OpenPage open       = null;
         Connection                     connection = null;
         var                            inHandler  = false;
+        // One nanoTime pair per page for the observer's page timing; the commit side reuses lastSaveNanos
+        var                            pageStart  = System.nanoTime();
         try {
             open = pageSource.begin();
             connection = open.connection();
@@ -1949,7 +1951,7 @@ final class Subscription {
                     log.debug("Rolling back a failed page of {} failed", key, rollbackFailed);
                 }
             }
-            observer.onPageFailed(subscriber, key.aggregateType(), page.size(), e);
+            observer.onPageFailed(subscriber, key.aggregateType(), page.size(), System.nanoTime() - pageStart, e);
             if (e instanceof InterruptedException || !running) {
                 return false;
             }
@@ -1979,7 +1981,7 @@ final class Subscription {
         }
         lastSaved = resumeFrom;
         lastSaveNanos = System.nanoTime();
-        observer.onPageCommitted(subscriber, key.aggregateType(), page.size());
+        observer.onPageCommitted(subscriber, key.aggregateType(), page.size(), lastSaveNanos - pageStart);
         observer.onProgressSaved(subscriber, key.aggregateType(), resumeFrom);
         return true;
     }

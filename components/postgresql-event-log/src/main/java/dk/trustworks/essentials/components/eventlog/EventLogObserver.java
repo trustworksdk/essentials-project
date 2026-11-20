@@ -21,7 +21,9 @@ import java.util.Set;
 /**
  * Callbacks for metrics and diagnostics of the tail reader and the subscriptions. Every
  * method has a no-op default; implementations must be fast and must not throw - they run on the reader loop's thread
- * or a subscription's delivery thread. A Micrometer binding is a later step.
+ * or a subscription's delivery thread. {@code observability.micrometer.MicrometerEventLogObserver} is the Micrometer
+ * binding; the event-log Spring Boot starter wires it when a {@code MeterRegistry} bean exists and no other observer is
+ * declared.
  */
 public interface EventLogObserver {
     EventLogObserver NONE = new EventLogObserver() {
@@ -48,6 +50,14 @@ public interface EventLogObserver {
      * @param lateRows      late commits the hole read returned
      */
     default void onHoleRead(String aggregateType, int resolvedHoles, int lateRows) {
+    }
+
+    /**
+     * The tail reader's cursor after a tail read or combined probe: the highest {@code global_order} of the aggregate type
+     * it has read. Reported once per read, after {@link #onRead}, so an observer can tell how far a subscription's saved
+     * resume point ({@link #onProgressSaved}) is behind the tail without a query. Reader loop thread.
+     */
+    default void onReaderCursor(String aggregateType, long cursor) {
     }
 
     /**
@@ -119,12 +129,35 @@ public interface EventLogObserver {
     }
 
     /**
+     * An in-transaction page committed together with its resume point. Delivery thread. The engine calls this variant; its
+     * default calls {@link #onPageCommitted(String, String, int)}, so an observer written against that one keeps working.
+     *
+     * @param size  events in the page
+     * @param nanos the page's wall-clock time, from opening its transaction to its commit (handler included)
+     */
+    default void onPageCommitted(String subscriber, String aggregateType, int size, long nanos) {
+        onPageCommitted(subscriber, aggregateType, size);
+    }
+
+    /**
      * A page transaction rolled back. Delivery thread.
      *
      * @param size  events in the page
      * @param cause what failed
      */
     default void onPageFailed(String subscriber, String aggregateType, int size, Throwable cause) {
+    }
+
+    /**
+     * A page transaction rolled back. Delivery thread. The engine calls this variant; its default calls
+     * {@link #onPageFailed(String, String, int, Throwable)}, so an observer written against that one keeps working.
+     *
+     * @param size  events in the page
+     * @param nanos the page's wall-clock time, from opening its transaction to the failure's rollback
+     * @param cause what failed
+     */
+    default void onPageFailed(String subscriber, String aggregateType, int size, long nanos, Throwable cause) {
+        onPageFailed(subscriber, aggregateType, size, cause);
     }
 
     /**
