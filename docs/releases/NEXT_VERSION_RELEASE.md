@@ -1075,6 +1075,9 @@ database work per event.
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md).
 
+- `0.60.1-20` - the event-log reference counts four processor base classes everywhere, names the `pg_stat_activity`
+  view as the watermark source, and documents the engine's review fixes (§2.24 "Hardened before release"); the admin
+  API reference's Endpoints table gains the shard-owned queue and aggregate lifecycle and archive tags.
 - `0.60.1-15` - the event-log reference documents `EventLogPartitionedViewProcessor`, the port of a classic
   `PartitionedViewEventProcessor` (§2.22), and lists it in the porting table.
 - `0.60.1-14` - the event-log reference's porting section states plainly that `EventLogInboxProcessor` forwards

@@ -178,11 +178,12 @@ Package: `dk.trustworks.essentials.components.boot.autoconfigure.eventlog`. Off 
 - `EventLogEventStore` (`essentialsEventStore`) - the `EventStore` aggregates and repositories use; snapshots and closing books run on it
 - Unit-of-work factory, `EventStoreEventBus`, `JSONEventSerializer`, `PersistableEventMapper`, causation beans - built as the Event Store starter builds them
 - `PageTransactionSource` - `SpringPageTransactions` with a `PlatformTransactionManager`, else `UnitOfWorkPageTransactions`
-- `EventLogProcessorDependencies` - for `EventLogViewProcessor` / `EventLogReactor` / `EventLogInboxProcessor` subclasses
+- `EventLogProcessorDependencies` - for `EventLogViewProcessor` / `EventLogReactor` / `EventLogInboxProcessor` / `EventLogPartitionedViewProcessor` subclasses; aggregate ids typed per the event store's configuration
+- `AnnotationBasedInMemoryProjector` (with `eventsourced-aggregates`) and the auto-flush interceptor - as the Event Store starter declares them, under its properties
 - `EventLogProcessorLifecycle` - starts `ViewProjection` / `EventReactor` beans after refresh, stops them before the engine (not in schema mode `emit`)
 - `EventLogSubscriptionsApi` - with the Admin API starter and an `EssentialsSecurityProvider`
 
-With the Event Store starter also on the class path, an `AutoConfigurationImportFilter` drops its `EventStoreConfiguration` while enabled: no `EventStoreSubscriptionManager`, gap handler, CDC, `EventProcessorDependencies` or `ViewEventProcessorDependencies`. Classic `EventProcessor`/`ViewEventProcessor`/`InTransactionEventProcessor` beans then fail start-up with a message naming each bean and the event-log base class to port it to.
+With the Event Store starter also on the class path, an `AutoConfigurationImportFilter` drops its `EventStoreConfiguration` while enabled: no `EventStoreSubscriptionManager`, gap handler, CDC, `EventProcessorDependencies` or `ViewEventProcessorDependencies`. Classic `EventProcessor`/`ViewEventProcessor`/`PartitionedViewEventProcessor`/`InTransactionEventProcessor` beans then fail start-up with a message naming each bean and the event-log base class to port it to.
 
 **Properties:** every `EventLogSettings` value under `essentials.event-log.*` (for example `page-size`, `backstop-interval`, `lease-duration`, `node-name`, `hole-probe-wait-max`) - see [Settings](LLM-postgresql-event-log.md#settings).
 

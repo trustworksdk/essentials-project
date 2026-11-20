@@ -35,7 +35,7 @@ Choose the classic event store for production systems today. Consider the event 
 want what it changes:
 
 - **Subscriptions without CDC, gap handler or fenced lock.** A subscription follows the database's own transaction
-  visibility (a watermark from `pg_stat_get_activity`), so it never skips a late commit and needs no gap handling.
+  visibility (a watermark from the `pg_stat_activity` view, counting only this database's writers), so it never skips a late commit and needs no gap handling.
   Exclusive subscriptions run on leases the engine keeps in `el_progress`, not on a `FencedLockManager`.
 - **Two consistency modes**, chosen per subscription: `CONTIGUOUS` (strict global order, never above a hole) for read
   models, `FRESH` (every committed event as soon as it is seen, per-aggregate order only) for reactions.
@@ -78,7 +78,7 @@ Enabled, the starter (`EventLogAutoConfiguration`) declares:
 | `EventLogEventStore` (`essentialsEventStore`) | The `EventStore` for repositories. Backs off from an `EventStore` bean of your own |
 | Unit-of-work factory, `EventStoreEventBus`, `JSONEventSerializer`, `PersistableEventMapper`, causation beans | Built as the classic starter builds them; each backs off from a bean of your own |
 | `PageTransactionSource` | `SpringPageTransactions` with a `PlatformTransactionManager`, else `UnitOfWorkPageTransactions` |
-| `EventLogProcessorDependencies` | Constructor argument of the three base classes below |
+| `EventLogProcessorDependencies` | Constructor argument of the four base classes below; carries each aggregate type's `AggregateIdSerializer`, from the event store's configuration |
 | `EventLogProcessorLifecycle` | Starts every `ViewProjection` and `EventReactor` **bean** after refresh (registering its aggregate type first) and stops them before the `EventLog` |
 | `EventLogSubscriptionsApi` | With `spring-boot-starter-admin-api` and an `EssentialsSecurityProvider` |
 
@@ -96,12 +96,12 @@ when a migration tool owns the schema.
 
 ## Processors
 
-All three base classes are abstract, live in `dk.trustworks.essentials.components.eventlog.processor`, take their
+All four base classes are abstract, live in `dk.trustworks.essentials.components.eventlog.processor`, take their
 aggregate types as **strings**, and implement foundation's `Lifecycle`: in Spring the components starter's lifecycle
 manager starts them after refresh, as it starts the classic processors (not in schema mode `emit`). Handlers use
 foundation's `@MessageHandler` and take the payload, optionally followed by a `DeliveredEvent` (the counterpart of the
 classic `PersistedEvent` parameter: aggregate type and id, `eventOrder()`, `globalOrder()`, `eventId()`, metadata,
-tenant, timestamp). The most specific payload type wins; an event with no handler counts as handled. An aggregate type
+tenant, timestamp; `aggregateId()` is the type's id class, e.g. `OrderId`, as on the classic engine). The most specific payload type wins; an event with no handler counts as handled. An aggregate type
 not yet registered with the `EventLog` is registered (with the engine's default tables) at `start()`.
 
 Overridable hooks on the view processor and the reactor: `consistency()`, `startFrom()` (`StartFrom.beginning()` by
@@ -144,7 +144,10 @@ and the reset resume points commit together or not at all, and starts again if i
 (and rolls the clear back) when no subscription has progress yet. Call it outside a unit of work; it needs
 `UnitOfWorkPageTransactions` or `SpringPageTransactions`, and throws `IllegalStateException` with
 `PageTransactionSource.engine()`. `ProjectionContext` offers `handle()` (JDBI), `connection()`, `resource(Class)` and
-`transaction()`; `onRebuild` must not end the transaction.
+`transaction()`; `onRebuild` must not end the transaction - its `connection()` is the guarded page connection, so `commit`,
+`rollback`, `setAutoCommit` and `close` throw `IllegalStateException` (as in a page handler). The same holds for
+`ViewProjection.rebuild(Truncate)`; code of your own that hands an open page to application code can use
+`PageTransaction.guarded(OpenPage)`.
 
 ### `EventLogReactor` - side effects
 
@@ -210,6 +213,7 @@ on every instance. Needs a `DurableQueues` that keeps key order across instances
 refuses any other, and refuses `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)`.
 
 ```java
+@Service
 public class AccountOverviewView extends EventLogPartitionedViewProcessor {
     public AccountOverviewView(EventLogProcessorDependencies dependencies, DurableQueues durableQueues,
                                EventStoreUnitOfWorkFactory<?> unitOfWorkFactory) {
@@ -223,7 +227,7 @@ public class AccountOverviewView extends EventLogPartitionedViewProcessor {
 
     @Override
     protected void onRebuild(ProjectionContext context) {
-        ((EventStoreUnitOfWork) messageUnitOfWork()).handle().execute("TRUNCATE TABLE account_overview");
+        context.handle().execute("TRUNCATE TABLE account_overview");
     }
 }
 ```
@@ -258,7 +262,7 @@ Spring beans, the starter's `EventLogProcessorLifecycle` starts them. Both build
 |---|---|---|
 | Order | Strict `global_order` of the aggregate type | Per aggregate only |
 | Holes (uncommitted or rolled-back orders) | Waits until the hole commits or is known rolled back | Delivers above holes; picks late commits up afterwards |
-| Default for | `EventLogViewProcessor`, `EventLogInboxProcessor`, `ViewProjection` | `EventLogReactor`, `EventReactor` |
+| Default for | `EventLogViewProcessor`, `EventLogInboxProcessor`, `EventLogPartitionedViewProcessor`, `ViewProjection` | `EventLogReactor`, `EventReactor` |
 | Delivery | Exactly once with page transactions (view writes and resume point commit together) | At least once (resume point saved periodically) |
 
 **Page transactions.** A `ViewProjection` handler runs in a transaction opened by a `PageTransactionSource`:
@@ -367,6 +371,10 @@ observer bean **replaces** it - to keep both, extend `MicrometerEventLogObserver
 | `essentials.eventlog.subscription.page` | timer, `outcome=committed\|failed` | in-transaction page time (handler included); periodic subscriptions have no pages |
 | `essentials.eventlog.lease.renewal_failed` | counter, no subscriber tag | lease keeper passes that failed |
 
+The lag reads 0 on a node that lost or suspended an exclusive subscription's lease (another node delivers) until it
+owns it again and saves; a stopped subscription's meters are removed (`EventLogObserver.onStopped`). An observer that
+throws is logged (WARN at most once a minute) and ignored - it never stops delivery.
+
 Meters are cached per subscription and updated per page, read or failure, never per event.
 
 **Tracing and append timing.** As on the old engine, and under its properties: `RecordExecutionTimeEventStoreInterceptor`
@@ -399,6 +407,11 @@ eventLog)`) answers from the database, so any instance sees every instance's sub
 `spring-boot-starter-admin-api` it is served as seven operations under `/event-log/subscriptions` (tag
 `event-log-subscriptions`): list, get, parked events, reset, retry or discard a parked event, delete a retired
 per-instance subscription. Reads need `SUBSCRIPTION_READER`, changes `SUBSCRIPTION_WRITER`; `ESSENTIALS_ADMIN` does both.
+**Reset refuses a processor-owned subscription** (`IllegalArgumentException` naming the processor) - one of an
+`EventLogViewProcessor`, `EventLogPartitionedViewProcessor` or `EventLogInboxProcessor`: call that processor's
+`rebuild()`, which clears the view (or purges the queue) in the same transaction. Moving the resume point alone would
+replay into an uncleared view. The starter wires the refusal; by hand it is
+`DefaultEventLogSubscriptionsApi(securityProvider, eventLog, key -> Optional<reason>)`.
 The admin console (`spring-boot-starter-admin-ui`) shows them under *Event store → Event-log subscriptions*. Details:
 [LLM-admin-api.md](LLM-admin-api.md).
 
@@ -430,6 +443,8 @@ cut-over except restoring a backup; rehearse it on a copy first.
 - ⚠️ **A downstream outage the handler calls parks events.** A handler's own connection error is a handler failure:
   after `retry-attempts` retries the event is parked (as the classic Inbox dead-letters). Raise `retry-attempts` /
   `retry-backoff-max` for a subscription that must ride out a longer outage, and retry the parked aggregates after it.
+- ⚠️ **`stop()` returns after 30 s even if a handler ignores interrupts**, with a WARN; `isRunning()` stays `true`
+  until the delivery thread really ends, so a re-subscribe of the same key or `deleteRetiredInstance` waits for it.
 - ⚠️ **Payload columns are `json`, not `jsonb`**: the stored text is the serializer's compact output, byte-equal to the
   classic engine's.
 

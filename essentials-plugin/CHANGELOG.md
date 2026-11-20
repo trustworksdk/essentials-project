@@ -3,6 +3,18 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-20 — targets Essentials 0.60.1
+
+- **Event log: review fixes** — the event-log reference counts four processor base classes everywhere (the partitioned
+  view processor was missing from the base-class sentences, the consistency table and the module index), names the
+  `pg_stat_activity` view (this database's writers only) as the watermark source, and its partitioned example clears
+  through `context.handle()` and is a `@Service`. It documents what the engine's review fixes changed for users: typed
+  aggregate ids in processors, the guarded connection in `onRebuild` and `ViewProjection.rebuild(Truncate)` plus
+  `PageTransaction.guarded(OpenPage)`, the admin reset refusing processor-owned subscriptions, the lag gauge on
+  standbys, a throwing observer being ignored, and `isRunning()` after a timed-out `stop()`. The starter page lists the
+  in-memory projector and auto-flush beans and the partitioned processor in the start-up refusal; the admin-api page's
+  Endpoints table gains the shard-owned queue and aggregate lifecycle and archive tags. No skill, rule or script changed.
+
 ## 0.60.1-19 — targets Essentials 0.60.1
 
 - **Event log: processor event type filter** — the event-log reference documents that every processor base class
