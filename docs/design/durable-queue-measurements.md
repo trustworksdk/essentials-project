@@ -788,6 +788,62 @@ keys sent: almost every batch carried a single key.
 Reproduce: `mvn verify -pl components/postgresql-queue-shard-owned -DskipUTs -Dit.test=ShardWakeupListenerDrainIT
 -Dfailsafe.failIfNoSpecifiedTests=false -Dbenchmark.run=true [-Ddrain.rates=200,1000,3000]`.
 
+### 3.18 The horizon probe's statement: the view stays
+
+The trading demo (2 instances, 4 business days, about 18 000 orders) put the ordered lane's horizon probe
+(`runningWriteTransactionIds`) at about 16 calls and 1.9 ms of PostgreSQL execution per order, 111.6 µs per call by
+`pg_stat_statements` - the largest single extra database cost of the shard-owned arm at 2 instances. The new event log
+reads `pg_stat_get_activity(NULL)` directly instead of the `pg_stat_activity` view, so the obvious question was whether
+the queue should too.
+
+It should not. Measured on `postgres:17.5-bookworm` (the module's Testcontainers image) with 106 backends (90 idle
+connections, 10 writers each holding an xid for 20 ms per transaction, the measuring connections), `max_connections`
+300, through pgJDBC 42.7.14 with its defaults, every statement issued 10 000 times on one connection the way the queue
+issues it (`prepareStatement`, execute, close), execution from `pg_stat_statements`, client time per call around it:
+
+| statement (same result) | superuser: exec / client | plain LOGIN role: exec / client | unprepared (`prepareThreshold=0`), superuser: exec + plan / client |
+|---|---|---|---|
+| current: rows from `pg_stat_activity` | **39 / 85 µs** | **24 / 68 µs** | 65 + 17 / 229 µs |
+| rows from `pg_stat_get_activity(NULL)` | 68 / 120 µs | 51 / 101 µs | 67 + 3 / 133 µs |
+| one array from `pg_stat_get_activity(NULL)` | 66 / 120 µs | 49 / 100 µs | 66 + 6 / 136 µs |
+| one array from `pg_stat_activity` | 39 / 85 µs | 24 / 68 µs | 72 + 20 / 252 µs |
+| `pg_locks` transactionid locks (not the same set; reference) | 55 µs (pgbench) | - | 56 + 6 µs |
+
+- **The view's joins cost nothing once prepared.** The planner removes both left joins (`pg_database`, `pg_authid`) as
+  unused, so the plan is the same single function scan. Calling the function directly saves only parsing and
+  planning, about 95 µs of client time per call - which pgJDBC already saves from the fifth execution on a connection
+  by preparing the statement on the server. The pumps' connections are long-lived, so that is the path that runs.
+- **The 25-30 µs between the two prepared forms is the memory allocator, not the SQL.** Each call allocates and frees a
+  copy of every backend's status, sized by `max_connections`. With glibc's dynamic `mmap` threshold, whether that
+  copy is `mmap`ed and page-faulted on every call depends on the connection's allocation history. Starting the server
+  with `MALLOC_MMAP_THRESHOLD_=8388608 MALLOC_TRIM_THRESHOLD_=33554432` made all four forms cost the same 24-25 µs
+  (plain role). Without it, a connection issuing only the view landed in the cheap state in every run, and one
+  issuing only the function in the expensive one - also with an insert and an indexed read between probes, and at
+  `max_connections` 120 and 1 000. A connection issuing both was cheap for both. So switching the queue to the
+  function would, as measured, make every probe dearer, and gains nothing a prepared statement does not already give.
+- **A plain role is cheaper than a superuser** (24 against 39 µs): other roles' query text comes back as
+  `<insufficient privilege>`, so it is not copied and clipped per row. It still sees every `backend_xid`, which is
+  what `verifyWatermarkPrerequisites` asserts.
+- **No other statement returns the same set for less.** No in-core function returns `backend_xid` without building
+  the whole activity row (P0.12 of the event-log redesign, `docs/archive/event-store-redesign-phase0.md`).
+  `pg_locks` is a little cheaper, but takes every lock-manager partition lock on each call, which writers then wait
+  on, and returns a different set (subtransaction xids, prepared transactions).
+- **The count is already at the floor of the current design.** A pass probes only when an owner behind its watermark
+  asks (`horizonProbeWanted`; a caught-up owner returns before probing), one probe serves every owner of a pump pass,
+  and an owner waiting for a candidate's writers re-probes no sooner than `chaseDelay` unless woken. A message still
+  needs about three probing passes before the watermark passes it: one after its read records the candidate, one shows
+  its writers ended, and the next pass's read lets the cursor move. Two ways to issue fewer were looked at and not
+  built: sharing one probe across a runtime's pumps (a pump whose reads have finished waits for the probe in flight
+  to end and then shares the next one - safe by the existing timestamp rule, but it trades pump latency for database
+  CPU and its gain depends on how often pumps overlap, which needs the demo to measure), and pacing a pump's probes
+  (a pass without a probe records no candidate, which is safe, but the watermark then trails further and every
+  cursor read re-reads more rows).
+
+Reproduce: a `postgres:17.5-bookworm` container with `shared_preload_libraries=pg_stat_statements`, 90 connections
+held by `pgbench -c 90 -f idle.sql` (`\sleep 1 s`) and 10 writers by `pgbench -c 10 -f writer.sql`
+(`BEGIN; SELECT pg_current_xact_id(); \sleep 20 ms; COMMIT;`), then a loop of each statement on its own connection,
+`pg_stat_statements_reset()` after 200 warm-up calls.
+
 ## 4. Environment
 
 | | |
