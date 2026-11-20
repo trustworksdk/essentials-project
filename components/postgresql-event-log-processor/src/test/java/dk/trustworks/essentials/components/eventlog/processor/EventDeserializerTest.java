@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.eventlog.processor;
 import dk.trustworks.essentials.components.eventlog.StoredEvent;
 import dk.trustworks.essentials.components.eventlog.processor.test_data.Added;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.EventMetaData;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
 import dk.trustworks.essentials.components.foundation.types.*;
 import org.junit.jupiter.api.Test;
@@ -59,6 +60,21 @@ class EventDeserializerTest {
         assertThat(event.payload()).isEqualTo("{\"a\":1}");
         assertThat(event.eventType().getEventName()).isPresent();
         assertThat(event.tenant()).isEmpty();
+    }
+
+    @Test
+    void the_dependencies_give_each_aggregate_type_its_own_typed_aggregate_id() {
+        // The annotated base classes used to hard-wire String ids: a handler ported from the old engine expecting a typed id got a String
+        var dependencies = new EventLogProcessorDependencies(dk.trustworks.essentials.components.eventlog.EventLog.builder().setDataSource(new org.postgresql.ds.PGSimpleDataSource()).build(),
+                                                             EssentialsJSONEventSerializers.create(),
+                                                             org.mockito.Mockito.mock(dk.trustworks.essentials.components.eventlog.PageTransactionSource.class),
+                                                             aggregateType -> aggregateType.equals("Orders")
+                                                                              ? AggregateIdSerializer.serializerFor(EventId.class)
+                                                                              : new AggregateIdSerializer.StringIdSerializer());
+        var stored = stored("OrderPlaced", "{\"a\":1}", null);
+
+        assertThat(dependencies.deserializerFor("Orders").deserialize(stored).aggregateId()).isEqualTo(EventId.of("o1"));
+        assertThat(dependencies.deserializerFor("Invoices").deserialize(stored).aggregateId()).isEqualTo("o1");
     }
 
     @Test

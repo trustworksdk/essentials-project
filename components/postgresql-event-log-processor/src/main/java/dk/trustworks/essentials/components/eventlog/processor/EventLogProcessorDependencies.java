@@ -16,7 +16,11 @@
 package dk.trustworks.essentials.components.eventlog.processor;
 
 import dk.trustworks.essentials.components.eventlog.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.TenantSerializer;
+
+import java.util.function.Function;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -29,11 +33,33 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param pageTransactions where an {@link EventLogViewProcessor}'s page transactions come from - {@link UnitOfWorkPageTransactions}
  *                         or {@link SpringPageTransactions}, so a handler sees the page's unit of work or Spring transaction.
  *                         Not used by an {@link EventLogReactor}
+ * @param aggregateIdSerializers the {@link AggregateIdSerializer} of each aggregate type, so a handler gets the typed id
+ *                         ({@code OrderId}) the old engine gave it - the event store's per-type configuration
+ *                         ({@code AggregateIdSerializer} of its {@code AggregateEventStreamConfiguration}). The
+ *                         three-argument constructor delivers {@code String} ids
  */
-public record EventLogProcessorDependencies(EventLog eventLog, JSONEventSerializer serializer, PageTransactionSource pageTransactions) {
+public record EventLogProcessorDependencies(EventLog eventLog, JSONEventSerializer serializer, PageTransactionSource pageTransactions,
+                                            Function<String, AggregateIdSerializer> aggregateIdSerializers) {
     public EventLogProcessorDependencies {
         requireNonNull(eventLog, "No eventLog provided");
         requireNonNull(serializer, "No serializer provided");
         requireNonNull(pageTransactions, "No pageTransactions provided");
+        requireNonNull(aggregateIdSerializers, "No aggregateIdSerializers provided");
+    }
+
+    /**
+     * {@code String} aggregate ids for every type
+     */
+    public EventLogProcessorDependencies(EventLog eventLog, JSONEventSerializer serializer, PageTransactionSource pageTransactions) {
+        this(eventLog, serializer, pageTransactions, aggregateType -> new AggregateIdSerializer.StringIdSerializer());
+    }
+
+    /**
+     * @return the deserializer of {@code aggregateType}'s events: its {@link AggregateIdSerializer}, {@code TenantId} tenants.
+     * Resolved once per projection when it is built, never per event
+     */
+    public EventDeserializer deserializerFor(String aggregateType) {
+        var idSerializer = requireNonNull(aggregateIdSerializers.apply(aggregateType), "No AggregateIdSerializer for aggregate type " + aggregateType);
+        return new EventDeserializer(serializer, idSerializer, new TenantSerializer.TenantIdSerializer());
     }
 }

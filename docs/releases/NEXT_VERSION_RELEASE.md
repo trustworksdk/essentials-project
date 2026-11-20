@@ -933,6 +933,23 @@ Hardened before release (code review of the preview). Each item changed what an 
   after 30 s without a notification it checks the connection with one round trip and reconnects if it does not
   answer. Before, wake-ups from other JVMs were lost until TCP keepalive gave up, often hours, and readers fell back
   to the backstop interval without any log line. Under load notifications keep arriving and the check never runs.
+- A page whose unit of work (or Spring transaction) a handler marked rollback-only now fails like any other failing
+  page: it is retried, then the event parked. Before, `commit()` rolled back silently and the engine counted the page
+  and its resume point as committed, so the next save conflicted and the page was delivered again.
+- The annotated processor base classes deliver each aggregate type's typed id (`OrderId`), resolved from the event
+  store's `AggregateEventStreamConfiguration` as on the classic engine. Before, every handler got a `String`, so a
+  handler ported by swapping its superclass failed at runtime. `EventLogProcessorDependencies` has a fourth component,
+  `aggregateIdSerializers`; its three-argument constructor keeps `String` ids, and the starter wires the event store's.
+- `onRebuild` and a `ViewProjection.rebuild(Truncate)` get the guarded connection a page handler gets: `commit`,
+  `rollback`, `setAutoCommit` and `close` throw. Before, a hook that committed made the clear commit before the
+  progress reset, and a crash in between left an empty view resuming at the head. New public
+  `PageTransaction.guarded(OpenPage)` gives other code the same guard. A `ViewProjection` whose rebuild fails is
+  restarted if it was running; before, it stayed stopped.
+- The admin API's subscription reset refuses a subscription owned by an `EventLogViewProcessor`,
+  `EventLogPartitionedViewProcessor` or `EventLogInboxProcessor` (`IllegalArgumentException`, naming the processor);
+  use that processor's `rebuild()`, which clears the view (or purges the queue) in the same transaction. Before, the
+  reset moved the resume point alone: a view that is not idempotent got duplicate rows on the replay.
+  `DefaultEventLogSubscriptionsApi` takes the refusal as an optional third argument.
 
 The payload columns are `json`, not `jsonb`: the stored text is the serializer's compact output, byte for byte the
 classic engine's. Code that hashes or compares payload text sees no difference after a migration.

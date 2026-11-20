@@ -205,7 +205,7 @@ public abstract class EventLogReactor implements Lifecycle {
                                         .seams(seams);
             errorSettings().ifPresent(builder::errors);
             tenant().ifPresent(builder::tenant);
-            built.add(builder.build(dependencies.eventLog(), dependencies.serializer()));
+            built.add(builder.build(dependencies.eventLog(), dependencies.deserializerFor(aggregateType)));
         }
         return List.copyOf(built);
     }

@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.components.eventlog.processor;
 
 import dk.trustworks.essentials.components.eventlog.PageTransactionSource;
-import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.transaction.spring.jdbi.SpringTransactionAwareJdbiUnitOfWorkFactory;
 import org.jdbi.v3.core.*;
@@ -132,6 +132,13 @@ public final class UnitOfWorkPageTransactions implements PageTransactionSource {
         @Override
         public void commit() throws SQLException {
             release();
+            if (unitOfWork.status() == UnitOfWorkStatus.MarkedForRollbackOnly) {
+                // commit() of a rollback-only unit of work rolls back without throwing: the engine would count the page, and
+                // its resume point, as committed. Fail the page instead, so it is retried or parked like any failure
+                var cause = unitOfWork.getCauseOfRollback();
+                unitOfWork.rollback();
+                throw new SQLException("The page's unit of work was marked rollback-only" + (cause == null ? "" : ": " + cause.getMessage()), cause);
+            }
             try {
                 unitOfWork.commit();
             } catch (RuntimeException e) {

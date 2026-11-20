@@ -71,7 +71,10 @@ class EventLogViewProcessorTest {
 
         assertThatThrownBy(view::rebuild).isInstanceOf(IllegalStateException.class).hasRootCauseMessage("clear failed");
 
-        assertThat(view.rebuiltIn).containsExactly(open);
+        // The hook gets the open page's guarded view, as a page handler does, not the open page itself
+        assertThat(view.rebuiltIn).hasSize(1).doesNotContain(open);
+        view.rebuiltIn.getFirst().resource(String.class);
+        verify(open).resource(String.class);
         verify(source).begin();
         verify(open).rollback();
         verify(open, never()).commit();

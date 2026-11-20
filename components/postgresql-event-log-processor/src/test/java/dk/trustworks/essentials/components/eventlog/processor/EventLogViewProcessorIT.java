@@ -48,6 +48,7 @@ class EventLogViewProcessorIT extends AbstractProcessorIT {
         long              failAt = -1;
         int               rebuilds;
         boolean           failRebuild;
+        boolean           commitInRebuild;
 
         TotalsView(List<String> aggregateTypes, Set<ProcessorMutant> mutants) {
             super("totals-view", aggregateTypes, new EventLogProcessorDependencies(eventLog, serializer, source(SourceKind.JDBI, Set.of())));
@@ -65,6 +66,13 @@ class EventLogViewProcessorIT extends AbstractProcessorIT {
             rebuilds++;
             assertThat(unitOfWorkFactory.getRequiredUnitOfWork().handle()).isSameAs(context.handle());
             context.handle().execute("TRUNCATE view_totals, applied");
+            if (commitInRebuild) {
+                try {
+                    context.connection().commit();
+                } catch (SQLException e) {
+                    throw new IllegalStateException("onRebuild may not commit", e);
+                }
+            }
             if (failRebuild) {
                 throw new IllegalStateException("rebuild fails after the clear");
             }
@@ -223,6 +231,25 @@ class EventLogViewProcessorIT extends AbstractProcessorIT {
             assertThat(resumePoint(key)).isGreaterThan(EVENTS);
             assertThat(view.isStarted()).isTrue();
             assertThat(view.projections().getFirst().isRunning()).isTrue();
+        } finally {
+            view.stop();
+        }
+    }
+
+    @Test
+    void on_rebuild_cannot_commit_the_clear_before_the_reset() throws Exception {
+        appendEvents(-1);
+        var view = new TotalsView(List.of(ORDERS), Set.of());
+        view.commitInRebuild = true;
+        view.start();
+        try {
+            var key = view.projections().getFirst().key();
+            awaitCaughtUp(key);
+
+            assertThatThrownBy(view::rebuild).hasMessageContaining("must not call Connection.commit");
+
+            assertThat(view()).as("the clear rolled back with the refused commit").isEqualTo(fold(Set.of()));
+            assertThat(view.isStarted()).isTrue();
         } finally {
             view.stop();
         }

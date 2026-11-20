@@ -176,27 +176,35 @@ public final class ViewProjection {
     private boolean rebuildStopped(PageTransactionSource in, Truncate truncate) throws SQLException {
         var wasRunning = isRunning();
         stopSubscription();
-        var open = in.begin();
-        boolean reset;
         try {
-            truncate.truncate(open.connection());
-            reset = resetProgress(open.connection());
-        } catch (Exception e) {
-            open.rollback();
-            if (e instanceof SQLException sql) {
-                throw sql;
+            var open = in.begin();
+            boolean reset;
+            try {
+                // The guarded connection, as a page gets: a truncate that commits would commit the clear before the reset
+                truncate.truncate(PageTransaction.guarded(open).connection());
+                reset = resetProgress(open.connection());
+            } catch (Exception | Error e) {
+                open.rollback();
+                if (e instanceof SQLException sql) {
+                    throw sql;
+                }
+                if (e instanceof Error error) {
+                    throw error;
+                }
+                throw new IllegalStateException("Rebuilding " + key() + " failed", e);
             }
-            throw new IllegalStateException("Rebuilding " + key() + " failed", e);
+            if (reset) {
+                open.commit();
+            } else {
+                open.rollback();
+            }
+            return reset;
+        } finally {
+            // A failed rebuild must not leave a projection that ran stopped for good (as EventLogViewProcessor does)
+            if (wasRunning) {
+                subscribeIfNotRunning();
+            }
         }
-        if (reset) {
-            open.commit();
-        } else {
-            open.rollback();
-        }
-        if (wasRunning) {
-            subscribeIfNotRunning();
-        }
-        return reset;
     }
 
     /**

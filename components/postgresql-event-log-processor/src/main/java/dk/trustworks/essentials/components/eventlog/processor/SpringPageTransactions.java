@@ -96,6 +96,15 @@ public final class SpringPageTransactions implements PageTransactionSource {
 
         @Override
         public void commit() throws SQLException {
+            if (status.isRollbackOnly()) {
+                // A locally rollback-only status makes commit() roll back silently: fail the page instead (see UnitOfWorkPageTransactions)
+                try {
+                    transactionManager.rollback(status);
+                } finally {
+                    DataSourceUtils.releaseConnection(connection, dataSource);
+                }
+                throw new SQLException("The page's transaction was marked rollback-only");
+            }
             try {
                 transactionManager.commit(status);
             } catch (TransactionException e) {

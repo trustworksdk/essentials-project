@@ -23,7 +23,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.transaction.TransactionStatus;
 
-import java.sql.SQLTransientConnectionException;
+import java.sql.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.function.Supplier;
@@ -104,6 +104,32 @@ class ViewProjectionIT extends AbstractProcessorIT {
             assertThat(view()).isEqualTo(fold(Set.of()));
             assertThat(applied()).hasSize(EVENTS).allSatisfy((order, times) -> assertThat(times).as("applied once: " + order).isEqualTo(1));
             assertThat(parked(projection.key())).isEmpty();
+        } finally {
+            projection.stop();
+        }
+    }
+
+    @Test
+    void a_rebuild_whose_truncate_fails_rolls_back_and_restarts_the_projection() throws Exception {
+        appendEvents(-1);
+        var projection = projection(SourceKind.JDBI, Set.of(), ProcessorSeams.NONE, Ownership.perInstance("node-1"), (events, context) -> {
+            for (var event : events) {
+                applyToView(context.connection(), event);
+            }
+        });
+        projection.start();
+        try {
+            awaitCaughtUp(projection.key());
+
+            assertThatThrownBy(() -> projection.rebuild(connection -> {
+                try (var statement = connection.createStatement()) {
+                    statement.execute("TRUNCATE view_totals, applied");
+                }
+                connection.commit(); // refused: the clear must commit with the reset or not at all
+            })).isInstanceOf(IllegalStateException.class).hasStackTraceContaining("must not call Connection.commit");
+
+            assertThat(view()).as("the clear rolled back").isEqualTo(fold(Set.of()));
+            assertThat(projection.isRunning()).as("a projection that ran is restarted after a failed rebuild").isTrue();
         } finally {
             projection.stop();
         }

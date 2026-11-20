@@ -33,12 +33,26 @@ public final class DefaultEventLogSubscriptionsApi implements EventLogSubscripti
     /** The largest parked page served; a larger ask is clamped */
     public static final int MAX_PAGE_SIZE = 1_000;
 
-    private final EssentialsSecurityProvider securityProvider;
-    private final EventLog                   eventLog;
+    private final EssentialsSecurityProvider                                    securityProvider;
+    private final EventLog                                                      eventLog;
+    private final java.util.function.Function<ProgressKey, Optional<String>> resetRefusal;
 
+    /** Every subscription can be reset */
     public DefaultEventLogSubscriptionsApi(EssentialsSecurityProvider securityProvider, EventLog eventLog) {
+        this(securityProvider, eventLog, key -> Optional.empty());
+    }
+
+    /**
+     * @param resetRefusal why {@link #resetSubscription} must refuse a key, if it must: a subscription owned by a processor
+     *                     with a rebuild contract (a view, partitioned view or inbox processor). Moving such a resume point
+     *                     directly replays into a view nobody cleared, skips the processor's queue purge or re-runs an
+     *                     inbox's side effects; the reason names the processor's {@code rebuild()} instead
+     */
+    public DefaultEventLogSubscriptionsApi(EssentialsSecurityProvider securityProvider, EventLog eventLog,
+                                           java.util.function.Function<ProgressKey, Optional<String>> resetRefusal) {
         this.securityProvider = requireNonNull(securityProvider, "No securityProvider provided");
         this.eventLog = requireNonNull(eventLog, "No eventLog provided");
+        this.resetRefusal = requireNonNull(resetRefusal, "No resetRefusal provided");
     }
 
     @Override
@@ -71,6 +85,10 @@ public final class DefaultEventLogSubscriptionsApi implements EventLogSubscripti
         requireNonNull(key, "No key provided");
         if (resumeFrom < 1) {
             throw new IllegalArgumentException("resumeFrom must be >= 1");
+        }
+        var refused = resetRefusal.apply(key);
+        if (refused.isPresent()) {
+            throw new IllegalArgumentException("Subscription " + key + " cannot be reset directly: " + refused.get());
         }
         return call("reset " + key, () -> eventLog.admin().reset(key, resumeFrom));
     }

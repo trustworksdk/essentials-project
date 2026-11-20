@@ -257,7 +257,8 @@ public abstract class EventLogViewProcessor implements Lifecycle {
         var open = source.begin();
         var reset = false;
         try {
-            onRebuild(new ProjectionContext(open));
+            // The guarded connection, as a page gets: a hook that commits would commit the clear before the reset below
+            onRebuild(new ProjectionContext(PageTransaction.guarded(open)));
             if (seams.has(ProcessorMutant.REBUILD_CLEARS_OUTSIDE_RESET_TRANSACTION)) {
                 log.warn("[{}] MUTANT REBUILD_CLEARS_OUTSIDE_RESET_TRANSACTION: the clear commits before the reset", name);
                 open.commit();
@@ -319,7 +320,7 @@ public abstract class EventLogViewProcessor implements Lifecycle {
                                         .seams(seams);
             errorSettings().ifPresent(builder::errors);
             tenant().ifPresent(builder::tenant);
-            built.add(builder.build(dependencies.eventLog(), dependencies.serializer()));
+            built.add(builder.build(dependencies.eventLog(), dependencies.deserializerFor(aggregateType)));
         }
         return List.copyOf(built);
     }

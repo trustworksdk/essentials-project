@@ -82,6 +82,9 @@ class EventLogSubscriptionsApiIT extends AbstractProcessorIT {
             awaitTrue("the head discarded and the held events released", Duration.ofSeconds(10), () -> api.getParkedEvents(READER, key, 0, 100).events().isEmpty());
 
             assertThat(api.resetSubscription(WRITER, ProgressKey.exclusive("nobody", ORDERS), 1)).isFalse();
+            // A processor-owned subscription is refused and pointed at its processor's rebuild(), the rest are reset
+            var guarded = new DefaultEventLogSubscriptionsApi(ROLES, eventLog, k -> k.equals(key) ? Optional.of("it belongs to a view processor") : Optional.empty());
+            assertThatThrownBy(() -> guarded.resetSubscription(WRITER, key, 1)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("view processor");
             assertThat(api.resetSubscription(WRITER, key, 1)).isTrue();
         } finally {
             reactor.stop();

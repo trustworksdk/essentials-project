@@ -33,4 +33,34 @@ public interface PageTransaction {
      * @throws IllegalArgumentException if the source bound nothing of that type
      */
     <T> T resource(Class<T> type);
+
+    /**
+     * {@code open} as a page handler sees it: the same transaction and resources, with a connection that refuses
+     * {@code commit}, {@code rollback()}, {@code setAutoCommit}, {@code close} and {@code abort}. For code that hands an open
+     * page to application code outside a delivered page - a processor's rebuild hook - so that code cannot end the
+     * transaction its caller still has to finish
+     *
+     * @param open the open page; its owner still commits or rolls it back
+     * @return the guarded view of {@code open}
+     */
+    static PageTransaction guarded(PageTransactionSource.OpenPage open) {
+        java.util.Objects.requireNonNull(open, "No open page provided");
+        return new PageTransaction() {
+            private Connection guarded;
+
+            @Override
+            public Connection connection() {
+                // Wrapped on first use: a hook that only uses a bound resource never pays for it
+                if (guarded == null) {
+                    guarded = GuardedConnection.of(open.connection());
+                }
+                return guarded;
+            }
+
+            @Override
+            public <T> T resource(Class<T> type) {
+                return open.resource(type);
+            }
+        };
+    }
 }

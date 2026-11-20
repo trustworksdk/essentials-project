@@ -2372,18 +2372,7 @@ final class Subscription {
      * and the source's resources
      */
     private static PageTransaction handlerTransaction(PageTransactionSource.OpenPage open) {
-        var guarded = GuardedConnection.of(open.connection());
-        return new PageTransaction() {
-            @Override
-            public Connection connection() {
-                return guarded;
-            }
-
-            @Override
-            public <T> T resource(Class<T> type) {
-                return open.resource(type);
-            }
-        };
+        return PageTransaction.guarded(open);
     }
 
     /**

@@ -24,7 +24,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.in
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.TenantSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.SpringTransactionAwareEventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventTypeOrName;
@@ -344,7 +345,17 @@ public class EventLogAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public EventLogProcessorDependencies eventLogProcessorDependencies(EventLog eventLog, JSONEventSerializer serializer, PageTransactionSource pageTransactionSource) {
-        return new EventLogProcessorDependencies(eventLog, serializer, pageTransactionSource);
+    public EventLogProcessorDependencies eventLogProcessorDependencies(EventLog eventLog, JSONEventSerializer serializer, PageTransactionSource pageTransactionSource,
+                                                                      ObjectProvider<ConfigurableEventStore<?>> eventStores) {
+        // Each aggregate type's id serializer from the event store's configuration, as the old engine's processors resolve it
+        // (String ids when the application declares an EventStore that is not configurable)
+        return new EventLogProcessorDependencies(eventLog, serializer, pageTransactionSource,
+                                                 aggregateType -> {
+                                                     var eventStore = eventStores.getIfAvailable();
+                                                     return eventStore == null ? new AggregateIdSerializer.StringIdSerializer()
+                                                                               : eventStore.findAggregateEventStreamConfiguration(AggregateType.of(aggregateType))
+                                                                                           .<AggregateIdSerializer>map(configuration -> configuration.aggregateIdSerializer)
+                                                                                           .orElseGet(AggregateIdSerializer.StringIdSerializer::new);
+                                                 });
     }
 }
