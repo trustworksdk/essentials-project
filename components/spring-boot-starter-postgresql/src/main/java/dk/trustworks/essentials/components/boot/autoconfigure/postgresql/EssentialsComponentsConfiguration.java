@@ -74,6 +74,7 @@ import org.springframework.boot.health.autoconfigure.contributor.ConditionalOnEn
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.context.event.*;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.env.Environment;
@@ -147,29 +148,6 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 @EnableConfigurationProperties(EssentialsComponentsProperties.class)
 public class EssentialsComponentsConfiguration {
     public static final Logger log = LoggerFactory.getLogger(EssentialsComponentsConfiguration.class);
-
-    /**
-     * Starts an observation per durable queue operation and carries the trace context from the enqueuing thread to the
-     * consumer. Registered when a Micrometer {@link Tracer}, {@link Propagator} and {@link ObservationRegistry} are all
-     * present, unless {@code essentials.durable-queues.tracing-enabled=false}. It does not read
-     * {@code management.tracing.export.enabled}: export is Spring Boot's concern (with OpenTelemetry, Spring Boot
-     * itself swaps in a no-op propagator when export is disabled). Until 0.61.0 it required
-     * {@code management.tracing.enabled=true}, which Spring Boot 4 no longer reads.
-     */
-    @Bean
-    @ConditionalOnBean(type = {"io.micrometer.tracing.Tracer",
-                               "io.micrometer.tracing.propagation.Propagator",
-                               "io.micrometer.observation.ObservationRegistry"})
-    @ConditionalOnProperty(prefix = "essentials.durable-queues", name = "tracing-enabled", havingValue = "true", matchIfMissing = true)
-    public DurableQueuesMicrometerTracingInterceptor durableQueuesMicrometerTracingInterceptor(Tracer tracer,
-                                                                                               Propagator propagator,
-                                                                                               ObservationRegistry observationRegistry,
-                                                                                               EssentialsComponentsProperties properties) {
-        return new DurableQueuesMicrometerTracingInterceptor(tracer,
-                                                             propagator,
-                                                             observationRegistry,
-                                                             properties.getDurableQueues().isVerboseTracing());
-    }
 
     /**
      * Counts processed, handled, retried and dead-lettered messages and gauges the queued and dead-letter messages per
@@ -796,4 +774,40 @@ public class EssentialsComponentsConfiguration {
                                .build();
     }
 
+    /**
+     * Holds the bean that needs Micrometer Tracing, an optional dependency of this starter. Spring reflects on every
+     * method of a configuration class to deduce bean types, and reflecting on a method resolves its parameter types, so
+     * a {@code io.micrometer.tracing.Tracer} or {@code io.micrometer.tracing.propagation.Propagator} parameter on
+     * {@link EssentialsComponentsConfiguration} itself made every application without micrometer-tracing fail to start with
+     * {@code NoClassDefFoundError: io/micrometer/tracing/Tracer}. This class is guarded by class <em>name</em>, so it is
+     * never reflected on unless those classes are present.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = {"io.micrometer.tracing.Tracer",
+                                "io.micrometer.tracing.propagation.Propagator",
+                                "io.micrometer.observation.ObservationRegistry"})
+    static class MicrometerTracingConfiguration {
+        /**
+         * Starts an observation per durable queue operation and carries the trace context from the enqueuing thread to the
+         * consumer. Registered when a Micrometer {@link Tracer}, {@link Propagator} and {@link ObservationRegistry} are all
+         * present, unless {@code essentials.durable-queues.tracing-enabled=false}. It does not read
+         * {@code management.tracing.export.enabled}: export is Spring Boot's concern (with OpenTelemetry, Spring Boot
+         * itself swaps in a no-op propagator when export is disabled). Until 0.61.0 it required
+         * {@code management.tracing.enabled=true}, which Spring Boot 4 no longer reads.
+         */
+        @Bean
+        @ConditionalOnBean(type = {"io.micrometer.tracing.Tracer",
+                                   "io.micrometer.tracing.propagation.Propagator",
+                                   "io.micrometer.observation.ObservationRegistry"})
+        @ConditionalOnProperty(prefix = "essentials.durable-queues", name = "tracing-enabled", havingValue = "true", matchIfMissing = true)
+        public DurableQueuesMicrometerTracingInterceptor durableQueuesMicrometerTracingInterceptor(Tracer tracer,
+                                                                                                   Propagator propagator,
+                                                                                                   ObservationRegistry observationRegistry,
+                                                                                                   EssentialsComponentsProperties properties) {
+            return new DurableQueuesMicrometerTracingInterceptor(tracer,
+                                                                 propagator,
+                                                                 observationRegistry,
+                                                                 properties.getDurableQueues().isVerboseTracing());
+        }
+    }
 }

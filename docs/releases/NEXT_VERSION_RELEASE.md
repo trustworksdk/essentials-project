@@ -230,6 +230,9 @@ Each has its own switch, default `true`: `essentials.durable-queues.tracing-enab
 ordered after Spring Boot's Micrometer auto-configurations, so these checks, and the existing one for
 `MicrometerDurableQueueMessageObserver`, see the beans Spring Boot creates.
 
+An application without `micrometer-tracing` on its classpath starts as before, without the two tracing interceptors (see
+the tracing interceptors row in §3).
+
 `management.tracing.export.enabled` is not read: whether spans are exported is Spring Boot's concern. Note that with the
 OpenTelemetry bridge and export disabled, Spring Boot itself installs a no-op propagator, so the trace context is then not
 carried across a queue, just as for HTTP and Kafka.
@@ -777,6 +780,7 @@ Additive: no interceptor interface changed signature. `HandleQueuedMessage.messa
 | Area | Fix | Commit |
 |---|---|---|
 | Tracing and queue metrics (Spring Boot starters) | `DurableQueuesMicrometerTracingInterceptor`, `DurableQueuesMicrometerInterceptor` and `MicrometerTracingEventStoreInterceptor` were registered only with `management.tracing.enabled=true`, which Spring Boot 4 no longer reads - see §1.1.6. They now follow the Micrometer beans, with an opt-out switch each | - |
+| Tracing interceptors (Spring Boot starters) | Fixes an unreleased regression from the change in the row above (§1.1.6): an application without `micrometer-tracing` on its classpath - an optional dependency of the starters, so one with Spring Boot Actuator but no tracer - could not start. The tracing interceptor bean methods took `Tracer` and `Propagator` parameters directly, and Spring reflects on every method of an auto-configuration class, so the PostgreSQL, MongoDB and event store starters all failed. Before: the context failed with `NoClassDefFoundError: io/micrometer/tracing/Tracer` (`Failed to introspect Class [...EssentialsComponentsConfiguration]` / `[...EventStoreConfiguration]`). After: it starts, without `DurableQueuesMicrometerTracingInterceptor` and `MicrometerTracingEventStoreInterceptor`; with micrometer-tracing present nothing changes. Released versions are not affected | - |
 | Shard-owned queues (`postgresql-queue-shard-owned`, admin API) | Opening a dead letter's details in the admin UI answered 404 (`No message 'o-62-2252' in shard-owned queue …`): looking a message up by id searched queued messages only, though a dead letter keeps its id. It now finds dead letters too, with the error that parked them. The `MessageQueue` SPI gains `getDeadLetter(MessageId)` (a `default` returning empty); `getMessage` stays live-only | - |
 | Shard-owned queues (`postgresql-queue-shard-owned`) | The blocked-key warning named the queue by its internal number (`Queue 30, ordered shard 61: …`), so an operator could not tell which queue's dead letters to open. It now gives the registered name with the id (`Queue 'Inbox:Orders:ExchangeReports' (id 30), …`), read once from the registry when first logged | - |
 | CDC (`postgresql-event-store`) | A CDC subscription that falls more than a page behind the bus under a burst - routine, and healed within milliseconds by catching up from the event store - logged a WARN and an INFO line every time, a screenful per burst. Each occurrence is now DEBUG, and each subscription logs one INFO line a minute counting them; the `live_source.overflow.count` metric is unchanged | - |

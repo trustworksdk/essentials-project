@@ -29,6 +29,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
+import dk.trustworks.essentials.components.foundation.test.classpath.WithoutMicrometerTracingClassLoader;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer.*;
@@ -487,5 +488,27 @@ public class StarterAutoConfigurationIT {
                     assertThat(ctx).doesNotHaveBean(MicrometerTracingEventStoreInterceptor.class);
                     assertThat(ctx).doesNotHaveBean(DurableQueuesMicrometerInterceptor.class);
                 });
+    }
+
+    /**
+     * micrometer-tracing is an optional dependency, so an application without it - here one with Spring Boot's metrics
+     * and observation, as Actuator gives it - must start, just without the tracing interceptors. It did not while their
+     * {@code Tracer} and {@code Propagator} parameters sat on {@link EventStoreConfiguration} and
+     * {@link EssentialsComponentsConfiguration} themselves: introspecting the auto-configurations failed with
+     * {@code NoClassDefFoundError: io/micrometer/tracing/Tracer}. Run through a class loader without Micrometer Tracing,
+     * as the test classpath has it.
+     */
+    @Test
+    void an_application_without_micrometer_tracing_starts_without_the_tracing_interceptors() throws Throwable {
+        try (var withoutTracing = WithoutMicrometerTracingClassLoader.fromTestClasspath()) {
+            assertThat(withoutTracing.hidesMicrometerTracing()).isTrue();
+
+            assertThat(withoutTracing.runStatic(WithoutMicrometerTracingScenario.class.getName(),
+                                                "startTheStarter",
+                                                postgreSQLContainer.getJdbcUrl(),
+                                                postgreSQLContainer.getUsername(),
+                                                postgreSQLContainer.getPassword()))
+                    .isEqualTo("");
+        }
     }
 }

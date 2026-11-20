@@ -29,6 +29,7 @@ import dk.trustworks.essentials.components.foundation.ttl.TTLJob;
 import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
 import dk.trustworks.essentials.shared.network.Network;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
+import dk.trustworks.essentials.components.foundation.test.classpath.WithoutMicrometerTracingClassLoader;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.jdbc.autoconfigure.*;
@@ -231,5 +232,26 @@ public class StarterAutoConfigurationIT {
                     assertThat(ctx.getBean(DurableQueuesHealthIndicator.class).health().getDetails())
                             .containsEntry(DurableQueuesHealthIndicator.DETAIL_DEAD_LETTER_THRESHOLD, 25L);
                 });
+    }
+
+    /**
+     * micrometer-tracing is an optional dependency, so an application without it must start, just without the tracing
+     * interceptor. It did not while the interceptor's {@code Tracer} and {@code Propagator} parameters sat on
+     * {@link EssentialsComponentsConfiguration} itself: introspecting the auto-configuration failed with
+     * {@code NoClassDefFoundError: io/micrometer/tracing/Tracer}. Run through a class loader without Micrometer Tracing,
+     * as the test classpath has it.
+     */
+    @Test
+    void an_application_without_micrometer_tracing_starts_without_the_tracing_interceptor() throws Throwable {
+        try (var withoutTracing = WithoutMicrometerTracingClassLoader.fromTestClasspath()) {
+            assertThat(withoutTracing.hidesMicrometerTracing()).isTrue();
+
+            assertThat(withoutTracing.runStatic(WithoutMicrometerTracingScenario.class.getName(),
+                                                "startTheStarter",
+                                                postgreSQLContainer.getJdbcUrl(),
+                                                postgreSQLContainer.getUsername(),
+                                                postgreSQLContainer.getPassword()))
+                    .isEqualTo("false");
+        }
     }
 }

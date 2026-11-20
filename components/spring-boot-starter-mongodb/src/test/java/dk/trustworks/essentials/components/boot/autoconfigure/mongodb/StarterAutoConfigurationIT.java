@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.mongodb;
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
+import dk.trustworks.essentials.components.foundation.test.classpath.WithoutMicrometerTracingClassLoader;
 import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
 import dk.trustworks.essentials.shared.network.Network;
 import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer.*;
@@ -161,5 +162,24 @@ class StarterAutoConfigurationIT {
                     assertThat(ctx).doesNotHaveBean(DurableQueuesMicrometerTracingInterceptor.class);
                     assertThat(ctx).doesNotHaveBean(DurableQueuesMicrometerInterceptor.class);
                 });
+    }
+
+    /**
+     * micrometer-tracing is an optional dependency, so an application without it - here one with Spring Boot's metrics
+     * and observation, as Actuator gives it - must start, just without the tracing interceptor. It did not while the
+     * interceptor's {@code Tracer} and {@code Propagator} parameters sat on {@link EssentialsComponentsConfiguration}
+     * itself: introspecting the auto-configuration failed with {@code NoClassDefFoundError: io/micrometer/tracing/Tracer}.
+     * Run through a class loader without Micrometer Tracing, as the test classpath has it.
+     */
+    @Test
+    void an_application_without_micrometer_tracing_starts_without_the_tracing_interceptor() throws Throwable {
+        try (var withoutTracing = WithoutMicrometerTracingClassLoader.fromTestClasspath()) {
+            assertThat(withoutTracing.hidesMicrometerTracing()).isTrue();
+
+            assertThat(withoutTracing.runStatic(WithoutMicrometerTracingScenario.class.getName(),
+                                                "startTheStarter",
+                                                mongoDBContainer.getReplicaSetUrl("starter-test-db")))
+                    .isEqualTo("false");
+        }
     }
 }
