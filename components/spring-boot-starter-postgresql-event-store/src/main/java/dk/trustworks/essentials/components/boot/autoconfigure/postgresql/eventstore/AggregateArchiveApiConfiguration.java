@@ -31,6 +31,7 @@ import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.BeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -111,7 +112,7 @@ public class AggregateArchiveApiConfiguration {
                                                                    EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                                    AggregateArchiveExporter aggregateArchiveExporter,
                                                                    AggregateArchiveDestination aggregateArchiveDestination,
-                                                                   Optional<MeterRegistry> meterRegistryOptional) {
+                                                                   BeanFactory beanFactory) {
         return DefaultAggregateGenerationArchiver.builder()
                                                  .setArchiveRegistry(aggregateArchiveRegistry)
                                                  .setGenerationAccessProvider(generationAccessProvider)
@@ -119,7 +120,7 @@ public class AggregateArchiveApiConfiguration {
                                                  .setUnitOfWorkFactory(unitOfWorkFactory)
                                                  .setArchiveExporter(aggregateArchiveExporter)
                                                  .setArchiveDestination(aggregateArchiveDestination)
-                                                 .setMeterRegistry(meterRegistryOptional)
+                                                 .setMeterRegistry(OptionalMeterRegistry.from(beanFactory))
                                                  .build();
     }
 }
