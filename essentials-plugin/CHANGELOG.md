@@ -51,6 +51,10 @@ machines, contradictions in the instructions, and how much text each command and
   their documented exit codes instead of a traceback.
 - macOS: the shell scripts users run were already bash 3.2/BSD-safe; the maintainer scripts that need bash 4.4
   now say so up front, and a static portability test guards them. `doctor.sh` has an `upgrade` profile.
+- `check-citations` has a `repo-path` rule: a `docs/` or `LLM/` path in the plugin's markdown that the Essentials
+  repository no longer has (the file moved, or a release file is gone) is a finding, and a `cite-ok` marker does
+  not silence it. When the repository moved its release notes to `docs/releases/`, one such path was left in
+  `/essentials:upgrade` and nothing failed; it now cites `docs/releases/RELEASE-NOTES-0.60.1.md`.
 
 **Commands and skills**
 - `/essentials:upgrade` runs `doctor --for upgrade` first and falls back to `python3` where `uv` is missing; it

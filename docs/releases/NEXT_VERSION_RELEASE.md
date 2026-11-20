@@ -935,3 +935,6 @@ Not published; listed because they are the reference for how to use the framewor
 - `postgresql-queue-shard-owned`: the stuck-handler and kept-unit bounds (`stuckHandlerTimeout`, and how long a unit
   kept by a stop waits for that stop's flush) are read through a package-private clock that the integration tests
   advance instead of sleeping through them. No behaviour, setting or API changes.
+- Plugin `check-citations` (CI `plugin-docs`, step `citations`): new rule `repo-path` fails a `docs/` or `LLM/` path in
+  the plugin's markdown that the repository no longer has, so the next move of the repository's documents cannot
+  strand a path in the plugin unnoticed. It found one, in `/essentials:upgrade`, now fixed (plugin `0.60.1-12`).

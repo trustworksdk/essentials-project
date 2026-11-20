@@ -386,7 +386,7 @@ below `0.60.1` and its `to` is `0.60.1` or later, compared as versions, never as
 release on, a `ViewEventProcessor` logs a WARN for each event type it receives and has no handler
 for, and at start a WARN for each type that a sealed supertype of a handled type permits and that it
 neither handles nor ignores (logger `…eventstore.postgresql.processor.UnhandledEventTypes`;
-`docs/RELEASE-NOTES-0.60.1.md` §1.1.11, and `@IgnoresEventTypes` in §2). The startup half is <!-- cite-ok: 0.60.1 is the release that added the warning, not the pin -->
+`docs/releases/RELEASE-NOTES-0.60.1.md` §1.1.11, and `@IgnoresEventTypes` in §2). The startup half is <!-- cite-ok: 0.60.1 is the release that added the warning, not the pin -->
 predictable from the source, so predict it while the project is still on the old release:
 
 ```bash

@@ -46,6 +46,20 @@ law-section
     carry are rendered into user projects, where nothing can check them, so a heading name is a
     public name and the template is the last place a dangling one can be caught.
 
+repo-path
+    A path into the Essentials repository's `docs/` or `LLM/` — in backticks, or a markdown link
+    target — that names no file in the repository, where either a file of the same name exists
+    elsewhere under `docs/` or `LLM/` (the file moved; the message names where it is now), or the
+    name is one of the repository's own release or doc files (`RELEASE-NOTES-*`, `MIGRATION-*`,
+    `NEXT_VERSION_RELEASE*`, `LLM-*.md`; the file is gone). When the repository moves its documents,
+    nothing else fails: the prose keeps sending readers to a path that no longer exists. A path the
+    repository never had, such as a user project's `docs/adr/`, is not flagged. Checked in
+    markdown only, and only when the plugin sits in the Essentials repository (`LLM/LLM-traps.md`
+    and `docs/` beside it); an installed copy skips it. A link to a release tag is a URL and is
+    not checked. `cite-ok` does not silence it: a marker meant for another rule on the same line
+    would otherwise hide a dead path, and a dead path has no reason to stay. Point at the file's
+    current path, or link to the tag where the old one is still true.
+
 allow-marker
     A `cite-ok` marker with no reason. An exception nobody can explain is not an exception.
 
@@ -118,7 +132,9 @@ Self-test
 carry literal pins or contract text: `{{pin:<name>}}` is replaced by that row's current value in
 `stack-pins.md`, and `{{quote:S<n>}}` by the first sentence of that requirement, so a pin move or a
 contract edit does not break the self-test. The law-section samples cite the real headings of
-`rules/slice-design.md`, so renaming one of those it cites breaks the self-test on purpose.
+`rules/slice-design.md`, so renaming one of those it cites breaks the self-test on purpose. The
+repo-path samples cite real repository files, one at a path it moved from; outside the repository
+their expectations are skipped and said so.
 
     python3 scripts/check-citations.py --self-test
 """
@@ -158,6 +174,14 @@ NOT_A_PIN = {
 # Not scanned for law-section: a release record cites the law as it stood, the LLM docs never cite it.
 LAW_EXEMPT_FILES = {"CHANGELOG.md"}
 LAW_EXEMPT_DIRS = ("references/llm/", "tests/citations/")
+
+# Not scanned for repo-path: a release record names the paths of its day; references/llm/ is fixed
+# at its source in LLM/; the release-move notes are resolved by migration-plan.py --check; and tests/
+# holds user projects, whose docs/ is their own, plus this script's samples.
+REPO_PATH_EXEMPT_FILES = {"CHANGELOG.md"}
+REPO_PATH_EXEMPT_DIRS = ("references/llm/", "references/stack/migrations/", "tests/")
+REPO_PATH = re.compile(r"(?:(?<=`)|(?<=\]\())((?:docs|LLM)/[\w./%-]+\.(?:md|html|json|ya?ml))(?=[`)#])")
+REPO_OWN_NAME = re.compile(r"^(?:RELEASE-NOTES-|MIGRATION-|NEXT_VERSION_RELEASE|LLM-.*\.md$)")
 
 SCANNED_SUFFIXES = {
     ".md", ".template", ".java", ".kt", ".kts", ".yaml", ".yml", ".json", ".html",
@@ -399,6 +423,48 @@ def law_findings(rel, lines, law):
     return out
 
 
+def read_repo(plugin_root: Path):
+    """(repository root, {path relative to it}, {file name: [paths]}) for the repository's docs/ and
+    LLM/, or None when the plugin does not sit in the Essentials repository (an installed copy)."""
+    repo = plugin_root.parent
+    if not ((repo / "LLM" / "LLM-traps.md").is_file() and (repo / "docs").is_dir()):
+        return None
+    files, by_name = set(), {}
+    for top in ("docs", "LLM"):
+        for dirpath, dirnames, filenames in os.walk(repo / top):
+            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+            for filename in filenames:
+                rel = (Path(dirpath) / filename).relative_to(repo).as_posix()
+                files.add(rel)
+                by_name.setdefault(filename, []).append(rel)
+    return repo, files, by_name
+
+
+def repo_path_findings(lines, repo):
+    """[(line_index, message)] for every docs/ or LLM/ path that the repository no longer has."""
+    _, files, by_name = repo
+    out, in_fence = [], False
+    for i, line in enumerate(lines):
+        if FENCE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        for m in REPO_PATH.finditer(line):
+            path = m.group(1).replace("%20", " ")
+            if path in files:
+                continue
+            name = path.rsplit("/", 1)[-1]
+            now = sorted(by_name.get(name, []))
+            if now:
+                out.append((i, f"{path} is not in the repository — it moved to {', '.join(now)}; "
+                               "cite the current path, or link to the release tag"))
+            elif REPO_OWN_NAME.match(name):
+                out.append((i, f"{path} is not in the repository — cite the file where it is now, "
+                               "or link to the release tag where this path is still true"))
+    return out
+
+
 # ---------------------------------------------------------------------------------------------
 # Scanning
 
@@ -473,9 +539,15 @@ def cited_numbers(sentence):
 
 
 def check_text(rel, text, patterns, contract, prose, restatement_rule=True, law=None,
-               pin_rules=True):
+               pin_rules=True, repo=None):
     findings, lines = [], text.splitlines()
     seen_markers = set()
+
+    # Deliberately not through report(): a cite-ok marker is never an excuse for a dead path, and one
+    # written for another rule on the same line must not hide it.
+    if repo is not None:
+        for i, message in repo_path_findings(lines, repo):
+            findings.append(Finding(rel, i + 1, "repo-path", message))
 
     def report(first, last, rule, message):
         allowed, bare = allow_state(lines, first, last)
@@ -537,7 +609,7 @@ def git_ignored(root: Path):
     return tuple(line for line in r.stdout.splitlines() if line) if r.returncode == 0 else ()
 
 
-def scan(root: Path, patterns, contract, law):
+def scan(root: Path, patterns, contract, law, repo=None):
     findings = []
     ignored = git_ignored(root)
     for dirpath, dirnames, filenames in os.walk(root):
@@ -549,7 +621,9 @@ def scan(root: Path, patterns, contract, law):
                 continue
             pin_rules = not (rel in EXEMPT_FILES or rel.startswith(EXEMPT_DIRS))
             law_rule = not (rel in LAW_EXEMPT_FILES or rel.startswith(LAW_EXEMPT_DIRS))
-            if not (pin_rules or law_rule):
+            repo_rule = (repo is not None and path.suffix == ".md"
+                         and not (rel in REPO_PATH_EXEMPT_FILES or rel.startswith(REPO_PATH_EXEMPT_DIRS)))
+            if not (pin_rules or law_rule or repo_rule):
                 continue
             if path.suffix not in SCANNED_SUFFIXES:
                 continue
@@ -562,7 +636,8 @@ def scan(root: Path, patterns, contract, law):
                            prose=path.suffix in PROSE_SUFFIXES,
                            restatement_rule=rel not in BINDINGS,
                            law=law if law_rule else None,
-                           pin_rules=pin_rules)
+                           pin_rules=pin_rules,
+                           repo=repo if repo_rule else None)
             )
     return findings
 
@@ -571,7 +646,7 @@ def scan(root: Path, patterns, contract, law):
 # Self-test
 
 
-def self_test(root: Path, pins, patterns, contract, law, out):
+def self_test(root: Path, pins, patterns, contract, law, repo, out):
     values = {name: value for name, value in pins}
     samples = root / "tests" / "citations"
 
@@ -596,7 +671,8 @@ def self_test(root: Path, pins, patterns, contract, law, out):
             text = render(path)
         except OSError as exc:
             raise UsageError(f"cannot read {path}: {exc}")
-        found = check_text(f"tests/citations/{name}", text, patterns, contract, prose=True, law=law)
+        found = check_text(f"tests/citations/{name}", text, patterns, contract, prose=True, law=law,
+                           repo=repo)
         got = {(f.line, f.rule) for f in found}
         want = set()
         if not expect_clean:
@@ -604,6 +680,13 @@ def self_test(root: Path, pins, patterns, contract, law, out):
                 want.update((i, rule) for rule in EXPECT.findall(line))
             if not want:
                 raise UsageError(f"{path}: no <!-- expect: rule --> markers")
+            if repo is None:
+                # Outside the repository the rule does not run, so its expectations cannot be met.
+                skipped = {w for w in want if w[1] == "repo-path"}
+                want -= skipped
+                if skipped:
+                    print(f"skip tests/citations/{name}: {len(skipped)} repo-path expectation(s) — "
+                          "not in the Essentials repository", file=out)
         for line, rule in sorted(want - got):
             failures += 1
             print(f"FAIL tests/citations/{name}:{line}: expected {rule}, not reported", file=out)
@@ -623,8 +706,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="check-citations",
         description="Flag version pins and S1-S11 requirement text restated outside "
-        "stack-pins.md / stack-contract.md, and citations of rules/slice-design.md sections that "
-        "do not exist. Deterministic; reports, never writes.",
+        "stack-pins.md / stack-contract.md, citations of rules/slice-design.md sections that "
+        "do not exist, and docs/ or LLM/ paths the repository no longer has. Deterministic; "
+        "reports, never writes.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""\
 rules:
@@ -632,6 +716,8 @@ rules:
   restated-requirement  a MUST/SHOULD sentence citing S<n> that shares {MIN_RUN}+ consecutive
                         words with that requirement's text in stack-contract.md
   law-section           a citation of a rules/slice-design.md section that names no heading in it
+  repo-path             a docs/ or LLM/ path the repository no longer has (moved, or a release
+                        file gone); markdown only, in the repository only, not silenced by cite-ok
   allow-marker          a cite-ok marker with no reason
 
 output:  path:line: rule: message   (path relative to ROOT)
@@ -641,7 +727,8 @@ exempt:  stack-pins.md, stack-contract.md, CHANGELOG.md, references/llm/**,
          tests/migration-plan/**, the seed spec's
          "openapi" line, plugin.json's "version" line, capabilities.json's "since" values; the three binding docs in references/stack/ are exempt
          from restated-requirement only. law-section exempts only CHANGELOG.md,
-         references/llm/** and tests/citations/**
+         references/llm/** and tests/citations/**; repo-path exempts CHANGELOG.md,
+         references/llm/**, references/stack/migrations/** and tests/**
 exit:    0 clean, 1 findings, 2 usage error (bad arguments, unreadable pins/contract)
          with --self-test: 0 every expectation met, 1 one was not""",
     )
@@ -662,13 +749,14 @@ exit:    0 clean, 1 findings, 2 usage error (bad arguments, unreadable pins/cont
         patterns = pin_patterns(pins)
         contract = read_contract(root / CONTRACT)
         law = read_law(root / LAW)
+        repo = read_repo(root)
         if args.self_test:
-            return self_test(root, pins, patterns, contract, law, sys.stdout)
+            return self_test(root, pins, patterns, contract, law, repo, sys.stdout)
     except UsageError as exc:
         print(f"check-citations: {exc}", file=sys.stderr)
         return 2
 
-    findings = scan(root, patterns, contract, law)
+    findings = scan(root, patterns, contract, law, repo)
     findings.sort(key=lambda f: (f.path, f.line, f.rule))
     for f in findings:
         print(f)
