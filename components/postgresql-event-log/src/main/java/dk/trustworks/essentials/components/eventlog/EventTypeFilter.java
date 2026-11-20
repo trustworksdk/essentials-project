@@ -22,8 +22,8 @@ import static dk.trustworks.essentials.shared.FailFast.*;
 /**
  * The event types a subscription consumes, by name. An
  * empty set means every event type ({@link #all()}). A row of another type counts as handled without reaching the
- * handler. Not persisted: changing a subscription's filter changes what it receives from its current position
- * on.
+ * handler. Only a digest of the filter is stored with the subscription's progress: changing the filter keeps the
+ * subscription's position and changes what it receives from that position on.
  *
  * @param eventTypes the event type names; empty for every event type
  */

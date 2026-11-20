@@ -50,7 +50,7 @@ Snapshots and closing books run on it too. What it does not offer: polling (`pol
 multi-aggregate-type subscriptions (a processor with several aggregate types runs one subscription per type).
 
 **Start-up refusal.** The engine refuses to start on a database where one connection cannot see another backend's
-`backend_xid` in `pg_stat_get_activity(NULL)` (`IllegalStateException: The event log cannot start: …`). Grant the
+`backend_xid` in `pg_stat_activity` (`IllegalStateException: The event log cannot start: …`). Grant the
 application's database role `pg_read_all_stats`, or stay on the classic event store. It also refuses an event table
 whose `global_order` identity has a `CACHE` other than 1.
 
