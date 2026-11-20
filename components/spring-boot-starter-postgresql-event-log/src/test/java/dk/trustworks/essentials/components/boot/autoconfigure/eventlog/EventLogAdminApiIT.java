@@ -15,6 +15,7 @@
  */
 package dk.trustworks.essentials.components.boot.autoconfigure.eventlog;
 
+import com.jayway.jsonpath.JsonPath;
 import dk.trustworks.essentials.components.adminapi.rest.*;
 import dk.trustworks.essentials.components.eventlog.processor.ViewProjection;
 import dk.trustworks.essentials.components.eventlog.processor.api.EventLogSubscriptionsApi;
@@ -30,6 +31,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.sql.SQLException;
 import java.time.Duration;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -82,10 +84,11 @@ class EventLogAdminApiIT {
             await().atMost(Duration.ofSeconds(20)).until(() -> EventLogAutoConfigurationIT.PROJECTED.size() == 1);
             var mockMvc = MockMvcBuilders.webAppContextSetup(ctx).build();
 
-            mockMvc.perform(get(SUBSCRIPTIONS))
-                   .andExpect(status().isOk())
-                   .andExpect(jsonPath("$[0].subscriber").value("orders-view"))
-                   .andExpect(jsonPath("$[0].aggregateType").value("Orders"));
+            // OrdersConfiguration has two views on Orders; orders-annotated-view writes its progress row asynchronously,
+            // so whether it is listed yet depends on timing. The list is ordered by aggregate type, subscriber, instance name
+            var body = mockMvc.perform(get(SUBSCRIPTIONS)).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(JsonPath.<List<String>>read(body, "$[?(@.subscriber == 'orders-view')].aggregateType")).as(body).containsExactly("Orders");
+            assertThat(JsonPath.<List<String>>read(body, "$[*].subscriber")).as(body).isSorted();
             mockMvc.perform(get(SUBSCRIPTIONS).param("aggregateType", "Payments"))
                    .andExpect(status().isOk())
                    .andExpect(jsonPath("$").isEmpty());
