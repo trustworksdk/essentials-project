@@ -109,12 +109,13 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  *     <li><b>{@code ReleaseUndeliveredMessage} is not intercepted as such</b>: this class inherits the default of {@link DurableQueues},
  *         which falls back to {@code retryMessage}, so an interceptor sees a {@code RetryMessage} instead.</li>
  *     <li><b>A {@code HandleQueuedMessage} interceptor receives the partial message.</b> On the
- *         delivery path the engine hands over {@code (key, payload, payloadType)} only, so
- *         {@link ShardOwnedQueuedMessage#getId()} and {@code getTotalDeliveryAttempts()} throw rather
- *         than report a made-up value. {@code getQueueName()}, {@code getMessage()} and the payload
- *         are all present — which is what the framework's own
- *         {@code RecordExecutionTimeDurableQueueInterceptor} tags with. An interceptor that reaches
- *         for the id fails the delivery, and the stack trace will look like the framework breaking
+ *         delivery path the engine hands over {@code (messageId, key, payload, payloadType)}, so
+ *         {@link ShardOwnedQueuedMessage#getId()}, {@code getQueueName()}, {@code getMessage()} and the
+ *         payload are all present — which is what the framework's own
+ *         {@code RecordExecutionTimeDurableQueueInterceptor} tags with. The attempt counts
+ *         ({@code getTotalDeliveryAttempts()}, {@code getRedeliveryAttempts()}), the timestamps and
+ *         {@code getLastDeliveryError()} throw rather than report a made-up value: an interceptor that
+ *         reaches for one fails the delivery, and the stack trace will look like the framework breaking
  *         rather than like a partial message.</li>
  * </ul>
  *

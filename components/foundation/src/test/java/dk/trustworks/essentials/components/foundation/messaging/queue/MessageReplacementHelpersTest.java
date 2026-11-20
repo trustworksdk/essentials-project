@@ -144,9 +144,75 @@ class MessageReplacementHelpersTest {
         assertThatThrownBy(() -> operation.setMessage(null)).isInstanceOf(IllegalArgumentException.class);
     }
 
+    // DefaultDurableQueueConsumer.carryRedeliveryRequestToSelectedMessage - used by both consumers after the handler
+    // returns, because they decide between acknowledging and retrying on the message they selected
+
+    @Test
+    void a_redelivery_request_on_a_replacement_that_is_not_a_decorator_is_copied_to_the_selected_message() {
+        var selected    = queuedMessageWith(Message.of("encrypted"));
+        var replacement = queuedMessageWith(selected.getId(), Message.of("decrypted"));
+        replacement.markForRedeliveryIn(Duration.ofSeconds(3));
+
+        DefaultDurableQueueConsumer.carryRedeliveryRequestToSelectedMessage(replacement, selected);
+
+        assertThat(selected.isManuallyMarkedForRedelivery()).isTrue();
+        assertThat(selected.getRedeliveryDelay()).isEqualTo(Duration.ofSeconds(3));
+    }
+
+    @Test
+    void a_redelivery_request_on_a_withMessage_decorator_already_reached_the_selected_message_and_is_left_alone() {
+        var selected    = queuedMessageWith(Message.of("encrypted"));
+        var replacement = selected.withMessage(Message.of("decrypted"));
+        replacement.markForRedeliveryIn(Duration.ofSeconds(3));
+        assertThat(selected.isManuallyMarkedForRedelivery()).as("the decorator forwards the request").isTrue();
+
+        DefaultDurableQueueConsumer.carryRedeliveryRequestToSelectedMessage(replacement, selected);
+
+        assertThat(selected.isManuallyMarkedForRedelivery()).isTrue();
+        assertThat(selected.getRedeliveryDelay()).isEqualTo(Duration.ofSeconds(3));
+    }
+
+    @Test
+    void the_selected_message_keeps_its_own_redelivery_request() {
+        var selected    = queuedMessageWith(Message.of("encrypted"));
+        var replacement = queuedMessageWith(selected.getId(), Message.of("decrypted"));
+        selected.markForRedeliveryIn(Duration.ofSeconds(1));
+        replacement.markForRedeliveryIn(Duration.ofSeconds(3));
+
+        DefaultDurableQueueConsumer.carryRedeliveryRequestToSelectedMessage(replacement, selected);
+
+        assertThat(selected.getRedeliveryDelay()).isEqualTo(Duration.ofSeconds(1));
+    }
+
+    @Test
+    void no_redelivery_request_means_nothing_is_copied() {
+        var selected    = queuedMessageWith(Message.of("encrypted"));
+        var replacement = queuedMessageWith(selected.getId(), Message.of("decrypted"));
+
+        DefaultDurableQueueConsumer.carryRedeliveryRequestToSelectedMessage(replacement, selected);
+        DefaultDurableQueueConsumer.carryRedeliveryRequestToSelectedMessage(selected, selected);
+
+        assertThat(selected.isManuallyMarkedForRedelivery()).isFalse();
+    }
+
+    @Test
+    void the_selected_message_handed_to_the_handler_unreplaced_is_not_touched() {
+        var selected = queuedMessageWith(Message.of("payload"));
+        selected.markForRedeliveryIn(Duration.ofSeconds(2));
+
+        DefaultDurableQueueConsumer.carryRedeliveryRequestToSelectedMessage(selected, selected);
+
+        assertThat(selected.isManuallyMarkedForRedelivery()).isTrue();
+        assertThat(selected.getRedeliveryDelay()).isEqualTo(Duration.ofSeconds(2));
+    }
+
     private static DefaultQueuedMessage queuedMessageWith(Message message) {
+        return queuedMessageWith(QueueEntryId.random(), message);
+    }
+
+    private static DefaultQueuedMessage queuedMessageWith(QueueEntryId id, Message message) {
         return DefaultQueuedMessage.builder()
-                                   .setId(QueueEntryId.random())
+                                   .setId(id)
                                    .setQueueName(QUEUE_NAME)
                                    .setMessage(message)
                                    .setAddedTimestamp(OffsetDateTime.now())

@@ -534,14 +534,6 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
     }
 
     /**
-     * Return a message the poll claimed after this consumer began stopping, so no handler ever ran it. Without this it
-     * stayed marked as being delivered until the stuck-message reset, a whole {@code messageHandlingTimeout} later.
-     * It is released without charging a redelivery attempt - the same rule as {@code CentralizedMessageFetcher}.
-     * The write runs with the interrupt flag cleared, because {@link #stop()} interrupts the polling thread and the
-     * MongoDB driver refuses a connection on an interrupted thread. A failure is only logged: the stuck-message reset
-     * still returns the message.
-     */
-    /**
      * A handler asks for redelivery on the message it was handed. A replacement made with
      * {@link QueuedMessage#withMessage(Message)} forwards that request to the selected message itself, but a replacement
      * built some other way (any {@link QueuedMessage} with the same id) keeps it to itself - so copy it over, because the
@@ -558,6 +550,14 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
         }
     }
 
+    /**
+     * Return a message the poll claimed after this consumer began stopping, so no handler ever ran it. Without this it
+     * stayed marked as being delivered until the stuck-message reset, a whole {@code messageHandlingTimeout} later.
+     * It is released without charging a redelivery attempt - the same rule as {@code CentralizedMessageFetcher}.
+     * The write runs with the interrupt flag cleared, because {@link #stop()} interrupts the polling thread and the
+     * MongoDB driver refuses a connection on an interrupted thread. A failure is only logged: the stuck-message reset
+     * still returns the message.
+     */
     private void releaseUndeliveredMessage(QueuedMessage queuedMessage) {
         try {
             ConsumerQueueWrites.withInterruptFlagCleared(() -> durableQueues.releaseUndeliveredMessage(queuedMessage.getId(), Duration.ZERO));
