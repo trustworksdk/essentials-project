@@ -35,8 +35,7 @@ import java.util.Optional;
  * <p>
  * It publishes the {@link AggregateEventStream} that {@code proceed()} returned. An interceptor nested inside it (order greater
  * than {@code 10}) that transforms events on append, e.g. encrypts them, must therefore return the untransformed (plaintext)
- * events in that stream, or in-transaction subscribers receive the transformed (ciphertext) events. Likewise, a read-side
- * interceptor that decrypts events belongs at an order below {@code 10}.
+ * events in that stream, or in-transaction subscribers receive the transformed (ciphertext) events.
  */
 public class FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream implements EventStoreInterceptor {
     @Override
