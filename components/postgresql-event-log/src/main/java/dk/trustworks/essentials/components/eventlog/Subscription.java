@@ -2420,6 +2420,9 @@ final class Subscription {
                 var created = progress.start(key, false, mode.name(), model.name(), current, null, filterDigest);
                 resetEpoch = created.resetEpoch();
                 lastSaved = created.resumeFrom();
+                // Whoever deleted the row (the admin's deleteRetiredInstance) deleted its parked rows with it: holding
+                // aggregates behind heads that no longer exist would park their later events forever
+                loadParked();
                 if (created.resumeFrom() != current) {
                     repositionTo = created.resumeFrom();
                 }

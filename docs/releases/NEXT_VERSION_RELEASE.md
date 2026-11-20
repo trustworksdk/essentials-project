@@ -924,6 +924,15 @@ Hardened before release (code review of the preview). Each item changed what an 
   re-subscribe of the same exclusive key see the subscription as running. A start that times out (60 s) stops its
   delivery thread instead of leaving it running unreachable, and two concurrent subscribes of the same exclusive key
   can no longer both start.
+- `deleteRetiredInstance` on a per-instance subscription that is in fact still running on another node no longer
+  strands its parked aggregates. Per-instance rows carry no lease, so the admin cannot tell the two apart; the running
+  instance recreates its progress row at its next save and now also reloads its parked set, which the delete emptied.
+  Before, later events of a previously parked aggregate were parked behind a head that no longer existed and were
+  never delivered; a retry of that head answered `NOT_A_HEAD`.
+- The cross-JVM wake listener notices a connection that died silently (a firewall or NAT dropping it without a reset):
+  after 30 s without a notification it checks the connection with one round trip and reconnects if it does not
+  answer. Before, wake-ups from other JVMs were lost until TCP keepalive gave up, often hours, and readers fell back
+  to the backstop interval without any log line. Under load notifications keep arriving and the check never runs.
 
 The payload columns are `json`, not `jsonb`: the stored text is the serializer's compact output, byte for byte the
 classic engine's. Code that hashes or compares payload text sees no difference after a migration.

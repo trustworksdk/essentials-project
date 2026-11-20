@@ -158,6 +158,29 @@ class EventLogAdminIT extends AbstractLeaseIT {
         assertThat(logB.admin().subscriptions(Optional.empty())).extracting(r -> r.key().subscriber()).containsExactly(SUB);
     }
 
+    @Test
+    void deleting_the_row_of_an_instance_still_running_on_another_node_does_not_strand_its_held_aggregate() throws Exception {
+        // Per-instance rows have no lease, so the admin cannot tell a retired instance from one running on another node
+        var logA = eventLog("A");
+        var logB = eventLog("B");
+        var key  = new ProgressKey("instance-sub", TYPE, "a1");
+        logA.subscribe(Definitions.definition("instance-sub", TYPE, "a1", 1, ConsistencyMode.FRESH, EventTypeFilter.all()), recorder());
+        append(logA, "order-1", 2);
+        append(logA, "order-2", 1);
+        awaitTrue(() -> delivered.equals(List.of(3L)));
+        await().atMost(WAIT).until(() -> parkedRows("instance-sub") == 2);
+        broken = false;
+
+        assertThat(logB.admin().deleteRetiredInstance(key)).isTrue();
+        assertThat(parkedRows("instance-sub")).isZero();
+        append(logA, "order-2", 1);
+        await().atMost(WAIT).until(() -> logB.admin().subscription(key).isPresent());
+        var later = append(logA, "order-1", 1).getFirst();
+
+        await().atMost(WAIT).until(() -> delivered.contains(later));
+        assertThat(parkedRows("instance-sub")).isZero();
+    }
+
     // ---- retry and discard from the other node ----
 
     /** Node B (which runs nothing) asks; @return whether node A served the request within {@code within} */

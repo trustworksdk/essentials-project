@@ -75,6 +75,8 @@ final class WakeListener {
     // ---- test knobs ----
     /** The wait before a reconnect instead of {@code min(backstopInterval, 1 s)} */
     volatile Duration                 reconnectDelayForTests;
+    /** How long the listener waits without a notification before checking its connection; package-private for tests */
+    volatile Duration idleCheckForTests = Duration.ofSeconds(30);
     /** {@code true}: every notification is received and dropped (the I7 arm "listener lost") */
     volatile boolean                  deafForTests;
     /** {@code true}: drain with {@code QUERY_POLL} even if the peek can be pinned */
@@ -193,11 +195,21 @@ final class WakeListener {
                         loop.wakeAll();
                     }
                 }
+                var lastHeard = System.nanoTime();
                 while (wanted) {
                     var received = drain != null ? drain.next(DRAIN_TIMEOUT_MILLIS) : pg.getNotifications(DRAIN_TIMEOUT_MILLIS);
-                    if (received == null) {
+                    if (received == null || received.length == 0) {
+                        // The drain only reads: a connection a firewall or NAT dropped without a reset raises nothing. After a
+                        // quiet spell, one round trip proves it alive; under load notifications keep arriving and it never runs
+                        if (System.nanoTime() - lastHeard >= idleCheckForTests.toNanos()) {
+                            if (!connection.isValid(1)) {
+                                throw new SQLException("The wake listener's connection stopped answering", "08006");
+                            }
+                            lastHeard = System.nanoTime();
+                        }
                         continue;
                     }
+                    lastHeard = System.nanoTime();
                     for (var notification : received) {
                         if (WakeNotifier.CHANNEL.equals(notification.getName())) {
                             handle(notification.getParameter());
