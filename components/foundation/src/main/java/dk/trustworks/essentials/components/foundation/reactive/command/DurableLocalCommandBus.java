@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
 import static dk.trustworks.essentials.shared.FailFast.*;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Provides a JVM local and <b>durable</b>,
@@ -229,16 +230,22 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
 
         var handlerFailure = new AtomicReference<Throwable>();
         try {
+            // The chain carries the QueuedMessage, not the command. Interceptors and the handler get the chain's current one, not `queuedMessage`:
+            // an interceptor may have replaced it (CommandBusInterceptorChain#setCommand), e.g. with queuedMessage.withMessage(message.withPayload(...))
             CommandBusInterceptorChain.newInterceptorChain(queuedMessage,
                                                            commandHandler,
                                                            interceptors,
                                                            (interceptor, commandBusInterceptorChain) -> {
-                                                               interceptor.interceptSendAndDontWait(queuedMessage, commandBusInterceptorChain);
+                                                               interceptor.interceptSendAndDontWait(commandBusInterceptorChain.command(), commandBusInterceptorChain);
                                                                return null;
                                                            },
-                                                           msg -> {
+                                                           commandMessage -> {
+                                                               // A replacement that doesn't fit the matched handler is an interceptor failure, not a handler failure:
+                                                               // it fails outside the try below, so the queue's RedeliveryPolicy decides (ClassCastException dead-letters by default)
+                                                               var commandToHandle = commandCarriedBy(commandMessage);
+                                                               requireMatchedCommandHandlerCanHandle(commandHandler, command.getClass(), commandToHandle);
                                                                try {
-                                                                   return commandHandler.handle(command);
+                                                                   return commandHandler.handle(commandToHandle);
                                                                } catch (Throwable e) {
                                                                    rethrowIfCriticalError(e);
                                                                    // Let the failure unwind through the interceptors, so e.g. a UnitOfWork interceptor rolls back
@@ -255,11 +262,34 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
                 throw e;
             }
             // The handler's own exception, not whatever an interceptor wrapped it in on the way out.
-            // If the error handler rethrows, the DurableQueues redelivers the message; if it doesn't, the message counts as handled
+            // If the error handler rethrows, the DurableQueues redelivers the message; if it doesn't, the message counts as handled.
+            // The QueuedMessage as it was delivered, not a replacement an interceptor made: that is what the queue redelivers
             sendAndDontWaitErrorHandler.handleError(failure,
                                                     queuedMessage,
                                                     commandHandler);
         }
+    }
+
+    /**
+     * The command a (possibly replaced) command message at the end of the {@code sendAndDontWait} interceptor chain carries.
+     * The chain starts with the {@link QueuedMessage}; an interceptor replacing it may hand on another {@link QueuedMessage}
+     * or a plain {@link Message}.
+     */
+    private static Object commandCarriedBy(Object commandMessage) {
+        if (commandMessage instanceof QueuedMessage queuedMessage) {
+            return requireNonNull(queuedMessage.getMessage(), "The QueuedMessage carries no Message").getPayload();
+        }
+        if (commandMessage instanceof Message message) {
+            return message.getPayload();
+        }
+        throw new ClassCastException(msg("The {} sendAndDontWait {} chain carries the command message, so a {} that replaces it must hand on a {} (or a {}), " +
+                                                 "not a '{}' - e.g. queuedMessage.withMessage(queuedMessage.getMessage().withPayload(newCommand))",
+                                         DurableLocalCommandBus.class.getSimpleName(),
+                                         CommandBusInterceptorChain.class.getSimpleName(),
+                                         CommandBusInterceptor.class.getSimpleName(),
+                                         QueuedMessage.class.getSimpleName(),
+                                         Message.class.getSimpleName(),
+                                         commandMessage.getClass().getName()));
     }
 
     public int getParallelSendAndDontWaitConsumers() {
