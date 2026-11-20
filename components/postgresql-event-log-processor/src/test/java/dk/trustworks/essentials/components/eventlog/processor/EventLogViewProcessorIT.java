@@ -117,6 +117,48 @@ class EventLogViewProcessorIT extends AbstractProcessorIT {
         }
     }
 
+    /**
+     * A view first run with every event type (as before its filter was derived), then restarted with the filter derived
+     * from its handler: the filter is stored, the position is kept (nothing behind it is delivered again), and an event of
+     * an unhandled type - one whose class does not even exist, so delivering it would park it - is skipped while the
+     * position moves past it.
+     */
+    @Test
+    void a_view_receives_only_its_handled_event_types_and_a_narrower_filter_on_restart_keeps_its_position() throws Exception {
+        appendEvents(-1);
+        var wide = new TotalsView(List.of(ORDERS), Set.of()) {
+            @Override
+            protected EventTypeFilter eventTypeFilter() {
+                return EventTypeFilter.all();
+            }
+        };
+        wide.start();
+        ProgressKey key;
+        try {
+            key = wide.projections().getFirst().key();
+            awaitCaughtUp(key);
+        } finally {
+            wide.stop();
+        }
+        assertThat(eventLog.admin().subscription(key).orElseThrow().filterDigest()).isEmpty();
+
+        var narrow = new TotalsView(List.of(ORDERS), Set.of());
+        narrow.start();
+        try {
+            assertThat(narrow.projections().getFirst().definition().eventTypes()).isEqualTo(EventTypeFilter.of("FQCN:" + Added.class.getName()));
+            appendOneOfType(ORDERS, "o0", "FQCN:dk.trustworks.essentials.components.eventlog.processor.test_data.Gone", new Noted("unhandled"));
+            appendOne(ORDERS, "o0", new Added("o0", 1));
+            awaitTrue("caught up past the unhandled event", Duration.ofSeconds(20), () -> resumePoint(key) > EVENTS + 2);
+            assertThat(parked(key)).isEmpty();
+            assertThat(narrow.seen).containsExactly(ORDERS + ":" + (EVENTS + 2));
+            assertThat(applied()).hasSize(EVENTS + 1).doesNotContainKey(EVENTS + 1L).containsEntry(EVENTS + 2L, 1);
+            assertThat(applied().values()).containsOnly(1);
+            assertThat(eventLog.admin().subscription(key).orElseThrow().filterDigest()).isPresent();
+        } finally {
+            narrow.stop();
+        }
+    }
+
     @Test
     void a_handler_failure_is_parked_by_the_engine() throws Exception {
         failureArm(Set.of());

@@ -45,7 +45,8 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * }</pre>
  * <ul>
  *     <li>A handler takes the payload, optionally a {@link DeliveredEvent} second parameter; the most specific payload type
- *     wins. A payload with no handler counts as handled.</li>
+ *     wins. A payload with no handler counts as handled; when every handled payload type is final, the subscription
+ *     selects only those event types in SQL ({@link #eventTypeFilter()}).</li>
  *     <li>No transaction surrounds a handler, and an event may be delivered more than once (after a retry or a crash):
  *     make the side effect idempotent.</li>
  *     <li>A handler's exception is the engine's: retried, the page shrunk, the event parked ({@link ParkEventException}
@@ -98,6 +99,26 @@ public abstract class EventLogReactor implements Lifecycle {
     /** Empty: every tenant */
     protected Optional<String> tenant() {
         return Optional.empty();
+    }
+
+    /**
+     * The event types this processor subscribes to. The engine selects only events of these types in SQL; an event of any
+     * other type advances the subscription's position without being read, deserialized or delivered.
+     * <p>
+     * By default derived once, when the subscriptions are built, from the payload parameter types of the
+     * {@link MessageHandler} methods: when every one is a final class (a record, an enum, a final class) the filter holds
+     * exactly their event type names ({@code FQCN:} + class name); when any is an interface, an abstract or other
+     * non-final class, {@code Object} or a JDK type such as {@code String}, it is {@link EventTypeFilter#all()}, because a
+     * handler for such a type also receives events of other classes. The choice and its reason are logged at INFO.
+     * <p>
+     * Override it to widen the filter, for example return {@link EventTypeFilter#all()} when the event serializer maps
+     * stored event type names to classes other than the named ones, or to add names. Changing the filter of an existing
+     * subscription keeps its position: events behind it are not delivered again.
+     *
+     * @return the filter; never {@code null}
+     */
+    protected EventTypeFilter eventTypeFilter() {
+        return HandledEventTypes.derive(name, getClass());
     }
 
     /**
@@ -173,10 +194,12 @@ public abstract class EventLogReactor implements Lifecycle {
     }
 
     private List<EventReactor> build() {
-        var built = new ArrayList<EventReactor>(aggregateTypes.size());
+        var built      = new ArrayList<EventReactor>(aggregateTypes.size());
+        var eventTypes = requireNonNull(eventTypeFilter(), "eventTypeFilter() returned null");
         for (var aggregateType : aggregateTypes) {
             var builder = EventReactor.builder(name, aggregateType)
                                         .on(Object.class, this::handle)
+                                        .eventTypes(eventTypes)
                                         .consistency(consistency())
                                         .startFrom(startFrom())
                                         .seams(seams);

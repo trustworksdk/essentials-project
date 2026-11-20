@@ -62,7 +62,8 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *     one. Outside a page the enqueue fails.</li>
  *     <li>An event is forwarded with its payload (the old processor forwards a reference and reads the event back), keyed
  *     by aggregate id and ordered by event order, with the event's metadata and its event id under
- *     {@link #EVENT_ID_METADATA_KEY}. A payload no handler takes is not forwarded.</li>
+ *     {@link #EVENT_ID_METADATA_KEY}. A payload no handler takes is not forwarded; when every handled payload type is
+ *     final it is not even read ({@link #eventTypeFilter()}).</li>
  *     <li>Each handler runs in its own unit of work as its {@link MessageHandler#unitOfWork()} declares; failures follow
  *     {@link #inboxRedeliveryPolicy()}, as in the old processor.</li>
  *     <li>An aggregate type not yet registered with the {@link EventLog} is registered (default tables) at {@link #start()}.</li>
@@ -135,6 +136,26 @@ public abstract class EventLogInboxProcessor implements Lifecycle {
     /** Empty: the engine's retry and backoff defaults ({@link ErrorSettings#defaults(EventLogSettings)}); the page size is always {@link #forwardPageSize()} */
     protected Optional<ErrorSettings> errorSettings() {
         return Optional.empty();
+    }
+
+    /**
+     * The event types this processor subscribes to. The engine selects only events of these types in SQL; an event of any
+     * other type advances the subscription's position without being read, deserialized or delivered.
+     * <p>
+     * By default derived once, when the subscriptions are built, from the payload parameter types of the
+     * {@link MessageHandler} methods: when every one is a final class (a record, an enum, a final class) the filter holds
+     * exactly their event type names ({@code FQCN:} + class name); when any is an interface, an abstract or other
+     * non-final class, {@code Object} or a JDK type such as {@code String}, it is {@link EventTypeFilter#all()}, because a
+     * handler for such a type also receives events of other classes. The choice and its reason are logged at INFO.
+     * <p>
+     * Override it to widen the filter, for example return {@link EventTypeFilter#all()} when the event serializer maps
+     * stored event type names to classes other than the named ones, or to add names. Changing the filter of an existing
+     * subscription keeps its position: events behind it are not delivered again.
+     *
+     * @return the filter; never {@code null}
+     */
+    protected EventTypeFilter eventTypeFilter() {
+        return HandledEventTypes.derive(name, getClass());
     }
 
     public String name() {
@@ -289,6 +310,12 @@ public abstract class EventLogInboxProcessor implements Lifecycle {
         @Override
         protected Optional<ErrorSettings> errorSettings() {
             return Optional.of(errorSettings);
+        }
+
+        /** The owner's filter: the forwarder's own handler takes every payload */
+        @Override
+        protected EventTypeFilter eventTypeFilter() {
+            return owner.eventTypeFilter();
         }
 
         @MessageHandler

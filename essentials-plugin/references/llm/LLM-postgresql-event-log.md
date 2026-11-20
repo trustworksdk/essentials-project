@@ -385,6 +385,13 @@ per page.
 event a handler appends records it as `caused_by_event_id` (with `essentials.eventstore.causation.enabled`, default on).
 A bare `ViewProjection`/`EventReactor` handler does not bind it.
 
+**Event type filter.** Every processor base class subscribes only to the event types its `@MessageHandler` methods
+handle - filtered in SQL, so other events cost no page transaction - when every handled payload type is a final class
+(record, enum, final class) outside the JDK; with any interface, non-final class, `Object` or `String` handler it
+receives every event type, because dispatch also hands subclasses to a supertype handler. Override
+`protected EventTypeFilter eventTypeFilter()` to widen it (`EventTypeFilter.all()` when the serializer maps stored type
+names to other classes) or add names. A changed filter keeps the subscription's position.
+
 ## Admin
 
 `EventLogSubscriptionsApi` (`…eventlog.processor.api`, implementation `DefaultEventLogSubscriptionsApi(securityProvider,

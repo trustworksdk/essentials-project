@@ -3,6 +3,12 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-19 — targets Essentials 0.60.1
+
+- **Event log: processor event type filter** — the event-log reference documents that every processor base class
+  subscribes only to the event types its `@MessageHandler` methods handle when all handled payload types are final, and
+  the `eventTypeFilter()` hook that widens it. No skill, rule or script changed.
+
 ## 0.60.1-18 — targets Essentials 0.60.1
 
 - **Event log: observability** — the event-log reference gains an Observability section: the

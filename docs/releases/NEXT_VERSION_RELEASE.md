@@ -963,6 +963,24 @@ call, as `EventLogInboxProcessor` and `EventLogPartitionedViewProcessor` already
 the delivered event as its `caused_by_event_id` (and a command or queued message it sends carries it on). Before, such
 events had no cause.
 
+### 2.29 New event store engine: processors read only the event types they handle (`postgresql-event-log-processor`)
+
+**Preview.** `EventLogViewProcessor`, `EventLogReactor`, `EventLogInboxProcessor` and `EventLogPartitionedViewProcessor`
+now subscribe with an `EventTypeFilter` built from the payload parameter types of their `@MessageHandler` methods, so
+PostgreSQL skips the other event types of the aggregate type. Before, every event was read, deserialized and given its
+own page transaction, only to be ignored because no handler took it - the main source of the new engine's extra
+database work per event.
+
+- **When it applies:** only when every handled payload type is a final class (a record, an enum, a final class) outside
+  the JDK. A handler on an interface, an abstract or other non-final class, `Object` or `String` also receives other
+  classes, which an exact-name filter cannot express, so such a processor keeps receiving every event type. The choice
+  and its reason are logged at INFO when the processor starts.
+- **Existing subscriptions keep their position:** the new filter is stored on the subscription's progress row at the
+  next start; nothing behind the position is delivered again.
+- **To change it:** override `protected EventTypeFilter eventTypeFilter()` - return `EventTypeFilter.all()` when your
+  `JSONEventSerializer` maps stored event type names to classes other than the named ones, or add names to
+  `super.eventTypeFilter()`.
+
 ## 3. Bug fixes
 
 | Area | Fix | Commit |

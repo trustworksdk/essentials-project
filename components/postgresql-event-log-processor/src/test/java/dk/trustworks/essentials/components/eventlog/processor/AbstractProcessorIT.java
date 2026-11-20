@@ -146,8 +146,13 @@ abstract class AbstractProcessorIT {
 
     /** Append one event of {@code payload}'s class to {@code aggregateType}'s stream {@code aggregateId}, committed at once */
     void appendOne(String aggregateType, String aggregateId, Object payload) throws SQLException {
+        appendOneOfType(aggregateType, aggregateId, "FQCN:" + payload.getClass().getName(), payload);
+    }
+
+    /** As {@link #appendOne(String, String, Object)}, stored under {@code eventType} */
+    void appendOneOfType(String aggregateType, String aggregateId, String eventType, Object payload) throws SQLException {
         try (var connection = engineDataSource.getConnection()) {
-            var event = new EventToAppend(UUID.randomUUID(), null, null, "FQCN:" + payload.getClass().getName(), 1, Instant.now(), serializer.serialize(payload),
+            var event = new EventToAppend(UUID.randomUUID(), null, null, eventType, 1, Instant.now(), serializer.serialize(payload),
                                           serializer.serialize(EventMetaData.empty()));
             eventLog.append(connection, AppendRequest.withoutExpectedOrder(aggregateType, aggregateId, List.of(event)));
         }

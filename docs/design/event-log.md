@@ -275,7 +275,9 @@ the backstop.
   together). All four dispatch to
   foundation `@MessageHandler` methods (`MessageHandlerDispatch`), take `EventLogProcessorDependencies` and are foundation
   `Lifecycle`s. There is deliberately no `EventStoreSubscriptionManager` adapter (decision D3): classic processors must
-  be ported.
+  be ported. Each subscribes with an `EventTypeFilter` of its handlers' payload types (`FQCN:` names) when
+  all are final classes outside the JDK, else `all()` (a supertype handler also takes subclasses); the protected
+  `eventTypeFilter()` hook overrides it.
 - **Page transaction sources.** `UnitOfWorkPageTransactions` binds the page's JDBI unit of work and installs
   `PageGuardTransactionHandler`, so a handle whose page is open refuses commit and rollback. `SpringPageTransactions`
   opens a `REQUIRES_NEW` transaction whose status refuses `setRollbackOnly`.

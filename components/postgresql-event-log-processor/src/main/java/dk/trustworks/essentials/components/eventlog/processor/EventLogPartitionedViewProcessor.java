@@ -54,7 +54,8 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * }</pre>
  * <ul>
  *     <li>One instance at a time reads the events {@code CONTIGUOUS}, from the beginning (an {@link EventLogViewProcessor}
- *     inside), and queues every event a handler takes on the durable queue {@code <name>:queue}: one
+ *     inside), and queues every event a handler takes on the durable queue {@code <name>:queue} (when every handled
+ *     payload type is final, only those event types are read: {@link #eventTypeFilter()}): one
  *     {@link DurableQueues#queueMessages(QueueName, List)} per page of up to {@link #forwardPageSize()} events, in the page
  *     transaction, so the messages commit with the subscription's progress and each event is queued exactly once. The
  *     enqueue joins the page transaction through {@code unitOfWorkFactory}: it must be the factory the queues and
@@ -142,6 +143,26 @@ public abstract class EventLogPartitionedViewProcessor implements Lifecycle {
     /** Empty: the engine's retry and backoff defaults; the page size is always {@link #forwardPageSize()} */
     protected Optional<ErrorSettings> errorSettings() {
         return Optional.empty();
+    }
+
+    /**
+     * The event types this processor subscribes to. The engine selects only events of these types in SQL; an event of any
+     * other type advances the subscription's position without being read, deserialized or delivered.
+     * <p>
+     * By default derived once, when the subscriptions are built, from the payload parameter types of the
+     * {@link MessageHandler} methods: when every one is a final class (a record, an enum, a final class) the filter holds
+     * exactly their event type names ({@code FQCN:} + class name); when any is an interface, an abstract or other
+     * non-final class, {@code Object} or a JDK type such as {@code String}, it is {@link EventTypeFilter#all()}, because a
+     * handler for such a type also receives events of other classes. The choice and its reason are logged at INFO.
+     * <p>
+     * Override it to widen the filter, for example return {@link EventTypeFilter#all()} when the event serializer maps
+     * stored event type names to classes other than the named ones, or to add names. Changing the filter of an existing
+     * subscription keeps its position: events behind it are not delivered again.
+     *
+     * @return the filter; never {@code null}
+     */
+    protected EventTypeFilter eventTypeFilter() {
+        return HandledEventTypes.derive(name, getClass());
     }
 
     /**
@@ -393,6 +414,12 @@ public abstract class EventLogPartitionedViewProcessor implements Lifecycle {
         @Override
         protected Optional<ErrorSettings> errorSettings() {
             return Optional.of(errorSettings);
+        }
+
+        /** The owner's filter: the forwarder's own handler takes every payload */
+        @Override
+        protected EventTypeFilter eventTypeFilter() {
+            return owner.eventTypeFilter();
         }
 
         @Override
