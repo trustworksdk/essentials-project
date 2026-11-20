@@ -22,6 +22,7 @@ import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
 import java.util.function.BooleanSupplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Called by the {@link DurableQueueConsumer} when a {@link QueuedMessage} has been selected
@@ -30,9 +31,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 public final class HandleQueuedMessage {
     /**
-     * The {@link QueuedMessage} ready for being handled by the {@link #messageHandler}
+     * The {@link QueuedMessage} ready for being handled by the {@link #messageHandler}.<br>
+     * Read it through {@link #getMessage()} and replace it through {@link #setMessage(QueuedMessage)}; the field is
+     * public for backwards compatibility only.
      */
-    public final QueuedMessage        message;
+    public QueuedMessage              message;
     /**
      * The {@link QueuedMessageHandler} configured in the {@link DurableQueues#consumeFromQueue(ConsumeFromQueue)} operation
      */
@@ -91,6 +94,26 @@ public final class HandleQueuedMessage {
      */
     public QueuedMessage getMessage() {
         return message;
+    }
+
+    /**
+     * Replace the {@link QueuedMessage} that the rest of the interceptor chain and the {@link #messageHandler} receive,
+     * e.g. with a decrypted or enriched copy made by {@link QueuedMessage#withMessage(Message)}. Call it before
+     * {@code proceed()}: later interceptors and the handler read the replacement, and an interceptor that reads
+     * {@link #getMessage()} after {@code proceed()} returned sees the last replacement made inside it.<br>
+     * A replacement may change what the message carries, never which message it is: acknowledging, retrying and
+     * dead-lettering keep acting on the queue entry that was selected for delivery.
+     *
+     * @param message the replacement; must have the same {@link QueuedMessage#getId() id} as the current message
+     * @throws IllegalArgumentException if {@code message} is {@code null} or has a different id
+     */
+    public void setMessage(QueuedMessage message) {
+        requireNonNull(message, "No message was provided");
+        if (!this.message.getId().equals(message.getId())) {
+            throw new IllegalArgumentException(msg("A replacement message must have the same id as the message being handled: expected '{}' but was '{}'",
+                                                   this.message.getId(), message.getId()));
+        }
+        this.message = message;
     }
 
     /**

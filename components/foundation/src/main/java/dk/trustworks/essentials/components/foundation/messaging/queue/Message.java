@@ -84,6 +84,32 @@ public class Message extends Pair<Object, MessageMetaData> {
         return _2;
     }
 
+    /**
+     * Create a copy of this message that carries a different payload and the same {@link MessageMetaData}.<br>
+     * Use it from an interceptor that changes what a message carries (enrich, decrypt, encrypt) and puts the copy
+     * back on the operation it intercepts - a {@link Message} is never changed in place.<br>
+     * Subclasses that add state override this method to keep it ({@link OrderedMessage} keeps its key and order).
+     * A subclass that does not override it gets a plain {@link Message} back.
+     *
+     * @param payload the new payload
+     * @return a new {@link Message} with {@code payload} and this message's {@link MessageMetaData}
+     */
+    public Message withPayload(Object payload) {
+        return new Message(payload, getMetaData());
+    }
+
+    /**
+     * Create a copy of this message that carries a different {@link MessageMetaData} and the same payload.<br>
+     * Subclasses that add state override this method to keep it ({@link OrderedMessage} keeps its key and order).
+     * A subclass that does not override it gets a plain {@link Message} back.
+     *
+     * @param metaData the new {@link MessageMetaData}
+     * @return a new {@link Message} with this message's payload and {@code metaData}
+     */
+    public Message withMetaData(MessageMetaData metaData) {
+        return new Message(getPayload(), metaData);
+    }
+
     @Override
     public String toString() {
         return "Message{" +
