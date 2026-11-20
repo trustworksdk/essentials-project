@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.eventlog.processor.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.micrometer.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
@@ -50,6 +51,8 @@ import static dk.trustworks.essentials.components.boot.autoconfigure.eventlog.Te
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
 import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
 
 /**
  * The starter in a running Spring context, beside the old event-store starter (on this module's test class path through
@@ -182,11 +185,61 @@ class EventLogAutoConfigurationIT {
                  });
     }
 
+    @Test
+    void the_old_starters_timing_interceptor_is_wired_and_tracing_only_with_management_tracing_enabled() {
+        enabled().run(ctx -> {
+            assertThat(ctx).hasNotFailed();
+            assertThat(ctx).hasSingleBean(RecordExecutionTimeEventStoreInterceptor.class);
+            assertThat(ctx).doesNotHaveBean(MicrometerTracingEventStoreInterceptor.class);
+            assertThat(((EventLogEventStore) ctx.getBean("essentialsEventStore")).getEventStoreInterceptors())
+                    .hasAtLeastOneElementOfType(RecordExecutionTimeEventStoreInterceptor.class);
+        });
+    }
+
+    /**
+     * An append through the adapter with a tracer stores the trace context in the event's metadata: the tracing interceptor
+     * is wired as the old starter wires it, and the adapter runs it as an enricher on every appended event.
+     */
+    @Test
+    void with_tracing_enabled_an_append_stores_the_trace_context_in_the_event_metadata() {
+        var traceContext   = mock(io.micrometer.tracing.TraceContext.class);
+        var currentContext = mock(io.micrometer.tracing.CurrentTraceContext.class);
+        when(currentContext.context()).thenReturn(traceContext);
+        var tracer = mock(io.micrometer.tracing.Tracer.class);
+        when(tracer.currentTraceContext()).thenReturn(currentContext);
+        @SuppressWarnings("unchecked")
+        io.micrometer.tracing.propagation.Propagator propagator = mock(io.micrometer.tracing.propagation.Propagator.class);
+        doAnswer(invocation -> {
+            io.micrometer.tracing.propagation.Propagator.Setter<Object> setter = invocation.getArgument(2);
+            setter.set(invocation.getArgument(1), "traceparent", TRACEPARENT);
+            return null;
+        }).when(propagator).inject(any(), any(), any());
+
+        enabled().withPropertyValues("management.tracing.enabled=true")
+                 .withBean(io.micrometer.tracing.Tracer.class, () -> tracer)
+                 .withBean(io.micrometer.tracing.propagation.Propagator.class, () -> propagator)
+                 .withBean(io.micrometer.observation.ObservationRegistry.class, io.micrometer.observation.ObservationRegistry::create)
+                 // the components starter's queue tracing interceptor needs a registry under management.tracing.enabled
+                 .withBean(io.micrometer.core.instrument.simple.SimpleMeterRegistry.class)
+                 .run(ctx -> {
+                     assertThat(ctx).hasNotFailed();
+                     assertThat(ctx).hasSingleBean(MicrometerTracingEventStoreInterceptor.class);
+                     var orderId = appendOneOrder(ctx);
+                     var stored  = ctx.getBean(EventLog.class).loadStream(ORDERS.toString(), orderId.toString());
+                     assertThat(stored).hasSize(1);
+                     assertThat(stored.getFirst().metadata()).contains("\"traceparent\"").contains(TRACEPARENT);
+                 });
+    }
+
+    private static final String TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
     @SuppressWarnings("unchecked")
-    private static void appendOneOrder(AssertableApplicationContext ctx) {
+    private static TestOrder.OrderId appendOneOrder(AssertableApplicationContext ctx) {
         var unitOfWorkFactory = ctx.getBean(EventStoreUnitOfWorkFactory.class);
         StatefulAggregateRepository<TestOrder.OrderId, Object, TestOrder> repository = ctx.getBean(StatefulAggregateRepository.class);
-        unitOfWorkFactory.usingUnitOfWork(() -> repository.save(new TestOrder(TestOrder.OrderId.random(), 3)));
+        var orderId = TestOrder.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(() -> repository.save(new TestOrder(orderId, 3)));
+        return orderId;
     }
 
     @Test

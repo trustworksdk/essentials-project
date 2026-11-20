@@ -106,6 +106,61 @@ public class EventLogAutoConfiguration {
     }
 
     /**
+     * The event store interceptors the old event-store starter's {@code EventStoreConfiguration} declares for tracing and
+     * timing, under the same conditions and the same properties, since this starter's import filter drops that
+     * configuration. {@link EventLogEventStore} runs them on every append and load; the tracing interceptor is also a
+     * {@link PersistableEventEnricher}, so the {@code essentialsEventStore} bean picks it up and the current trace
+     * context ({@code traceparent}) is stored in every appended event's metadata.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "io.micrometer.core.instrument.MeterRegistry")
+    static class EventStoreInterceptorsConfiguration {
+        /**
+         * As the old starter's: {@code essentials.eventstore.metrics.*} (enabled, thresholds) and the module tag.
+         */
+        @Bean
+        @ConditionalOnMissingBean
+        dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.micrometer.RecordExecutionTimeEventStoreInterceptor measurementEventStoreInterceptor(
+                Optional<io.micrometer.core.instrument.MeterRegistry> meterRegistry,
+                EssentialsComponentsProperties componentsProperties,
+                org.springframework.core.env.Environment environment) {
+            var metrics = org.springframework.boot.context.properties.bind.Binder.get(environment)
+                                                                                 .bind("essentials.eventstore.metrics", EssentialsComponentsProperties.MetricsProperties.class)
+                                                                                 .orElseGet(EssentialsComponentsProperties.MetricsProperties::new);
+            var taker = metrics.isEnabled()
+                        ? dk.trustworks.essentials.shared.measurement.MeasurementTaker.builder()
+                                                                                      .setLoggingRecorder(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.micrometer.RecordExecutionTimeEventStoreInterceptor.class,
+                                                                                                          metrics.toLogThresholds())
+                                                                                      .setMeterRegistry(meterRegistry)
+                                                                                      .build()
+                        : dk.trustworks.essentials.shared.measurement.MeasurementTaker.none();
+            return new dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.micrometer.RecordExecutionTimeEventStoreInterceptor(
+                    taker, componentsProperties.getTracingProperties().getModuleTag());
+        }
+    }
+
+    /**
+     * As the old starter's: with {@code management.tracing.enabled=true}, and {@code essentials.eventstore.verbose-tracing}.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "io.micrometer.tracing.Tracer")
+    @ConditionalOnProperty(prefix = "management.tracing", name = "enabled", havingValue = "true")
+    static class TracingConfiguration {
+        @Bean
+        dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.micrometer.MicrometerTracingEventStoreInterceptor micrometerTracingEventStoreInterceptor(
+                Optional<io.micrometer.tracing.Tracer> tracer,
+                Optional<io.micrometer.tracing.propagation.Propagator> propagator,
+                Optional<io.micrometer.observation.ObservationRegistry> observationRegistry,
+                org.springframework.core.env.Environment environment) {
+            return new dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.micrometer.MicrometerTracingEventStoreInterceptor(
+                    tracer.get(),
+                    propagator.get(),
+                    observationRegistry.get(),
+                    environment.getProperty("essentials.eventstore.verbose-tracing", Boolean.class, false));
+        }
+    }
+
+    /**
      * The engine, started here so that aggregate types can be registered with the adapter while the context is being
      * built. Its schema ownership follows {@code essentials.schema.mode}: {@code create} lets the engine create its own
      * schema at start, every other mode hands it to the schema harness through the {@link EventLogSchemaContributor}.

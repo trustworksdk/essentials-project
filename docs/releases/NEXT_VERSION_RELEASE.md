@@ -940,6 +940,17 @@ its own (`essentials.event-log.metrics.enabled=false` switches it off); an appli
 the starter. `EventLogObserver` gained `onReaderCursor(aggregateType, cursor)` and `nanos` variants of
 `onPageCommitted`/`onPageFailed`, all default methods: an existing observer compiles and is still called.
 
+### 2.27 New event store engine starter: tracing and append timing, as on the old engine (`spring-boot-starter-postgresql-event-log`)
+
+**Preview.** The starter now declares the event store interceptors the old starter's `EventStoreConfiguration` declares
+(which it drops), under the same conditions and properties: `RecordExecutionTimeEventStoreInterceptor`
+(`essentials.eventstore.metrics.enabled` and `.thresholds.*`, module tag from `essentials.tracing-properties.module-tag`)
+and, with `management.tracing.enabled=true`, `MicrometerTracingEventStoreInterceptor`
+(`essentials.eventstore.verbose-tracing`). `EventLogEventStore` runs them on appends and loads, and runs the tracing
+interceptor as a `PersistableEventEnricher`, so an append stores the current trace context (`traceparent`) in each event's
+metadata, as the old engine does. Both need Micrometer (and Micrometer Tracing) on the class path; without it nothing is
+declared.
+
 ## 3. Bug fixes
 
 | Area | Fix | Commit |
