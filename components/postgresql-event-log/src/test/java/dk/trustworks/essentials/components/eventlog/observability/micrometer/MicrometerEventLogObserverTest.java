@@ -39,6 +39,30 @@ class MicrometerEventLogObserverTest {
     }
 
     @Test
+    void a_standby_reports_no_lag_and_a_stopped_subscription_no_meters() {
+        observer.onProgressSaved(VIEW, ORDERS, 5);
+        observer.onReaderCursor(ORDERS, 10);
+        assertThat(lag(VIEW)).isEqualTo(6.0);
+
+        // Lost the lease: another node delivers now, so this one's frozen position must not read as a growing lag
+        observer.onLeaseLost(VIEW, ORDERS, "fence moved");
+        observer.onReaderCursor(ORDERS, 1_000);
+        assertThat(lag(VIEW)).isZero();
+        // Owns it again and saves: the lag is back
+        observer.onProgressSaved(VIEW, ORDERS, 990);
+        assertThat(lag(VIEW)).isEqualTo(11.0);
+        observer.onLeaseSuspended(VIEW, ORDERS);
+        assertThat(lag(VIEW)).isZero();
+
+        observer.onStopped(VIEW, ORDERS);
+        assertThat(registry.find(LAG_METRIC).tag(SUBSCRIBER_TAG, VIEW).gauges()).isEmpty();
+        assertThat(registry.find(FAILED_METRIC).tag(SUBSCRIBER_TAG, VIEW).counters()).isEmpty();
+        // Started again: fresh meters
+        observer.onProgressSaved(VIEW, ORDERS, 1_001);
+        assertThat(lag(VIEW)).isZero();
+    }
+
+    @Test
     void the_lag_is_the_events_between_the_saved_resume_point_and_the_readers_cursor() {
         observer.onProgressSaved(VIEW, ORDERS, 1);
         // No read yet: the tail is unknown, which reads as no lag

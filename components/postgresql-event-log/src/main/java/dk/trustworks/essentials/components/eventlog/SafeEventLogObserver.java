@@ -309,6 +309,15 @@ final class SafeEventLogObserver implements EventLogObserver {
     }
 
     @Override
+    public void onStopped(String subscriber, String aggregateType) {
+        try {
+            delegate.onStopped(subscriber, aggregateType);
+        } catch (RuntimeException e) {
+            failed("onStopped", e);
+        }
+    }
+
+    @Override
     public void onRenewalFailed(Throwable cause) {
         try {
             delegate.onRenewalFailed(cause);

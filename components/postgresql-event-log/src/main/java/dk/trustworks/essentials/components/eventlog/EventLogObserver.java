@@ -261,4 +261,11 @@ public interface EventLogObserver {
     /** A keeper pass failed (no connection, a timeout, a lost connection); no lease was confirmed. Lease keeper thread */
     default void onRenewalFailed(Throwable cause) {
     }
+
+    /**
+     * The subscription ended - {@code stop()}, a failed start or a fatal error - and its delivery thread is done. Delivery
+     * thread, last call for this subscription. For an observer that keeps per-subscription state (meters) to drop it.
+     */
+    default void onStopped(String subscriber, String aggregateType) {
+    }
 }

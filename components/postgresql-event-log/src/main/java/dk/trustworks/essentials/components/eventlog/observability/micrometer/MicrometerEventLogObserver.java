@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventlog.observability.micrometer;
 import dk.trustworks.essentials.components.eventlog.EventLogObserver;
 import io.micrometer.core.instrument.*;
 
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -106,6 +107,7 @@ public class MicrometerEventLogObserver implements EventLogObserver {
         final Counter    leaseLost;
         final Timer      committed;
         final Timer      pageFailed;
+        final Gauge      lag;
 
         SubscriptionMeters(Key key, AtomicLong cursor) {
             this.cursor = cursor;
@@ -113,7 +115,7 @@ public class MicrometerEventLogObserver implements EventLogObserver {
             if (moduleTag != null) {
                 tags = tags.and(MODULE_TAG_NAME, moduleTag);
             }
-            Gauge.builder(LAG_METRIC, this, SubscriptionMeters::lag)
+            lag = Gauge.builder(LAG_METRIC, this, SubscriptionMeters::lag)
                  .description("Events between the subscription's saved resume point and the reader's cursor")
                  .tags(tags)
                  .strongReference(true)
@@ -123,6 +125,12 @@ public class MicrometerEventLogObserver implements EventLogObserver {
             leaseLost = Counter.builder(LEASE_LOST_METRIC).description("Leases the exclusive subscription lost").tags(tags).register(registry);
             committed = Timer.builder(PAGE_METRIC).description("In-transaction page time").tags(tags).tag(OUTCOME_TAG, "committed").register(registry);
             pageFailed = Timer.builder(PAGE_METRIC).description("In-transaction page time").tags(tags).tag(OUTCOME_TAG, "failed").register(registry);
+        }
+
+        void remove() {
+            for (var meter : List.of(lag, failed, parked, leaseLost, committed, pageFailed)) {
+                registry.remove(meter);
+            }
         }
 
         double lag() {
@@ -157,7 +165,24 @@ public class MicrometerEventLogObserver implements EventLogObserver {
 
     @Override
     public void onLeaseLost(String subscriber, String aggregateType, String reason) {
-        meters(subscriber, aggregateType).leaseLost.increment();
+        var meters = meters(subscriber, aggregateType);
+        meters.leaseLost.increment();
+        // A standby delivers nothing: its saved position freezes while the shared cursor moves on, so the lag would grow
+        // without bound on every node but the owner. Unknown (0) until it owns the lease and saves again
+        meters.resumeFrom.set(Long.MIN_VALUE);
+    }
+
+    @Override
+    public void onLeaseSuspended(String subscriber, String aggregateType) {
+        meters(subscriber, aggregateType).resumeFrom.set(Long.MIN_VALUE);
+    }
+
+    @Override
+    public void onStopped(String subscriber, String aggregateType) {
+        var meters = subscriptions.remove(new Key(subscriber, aggregateType));
+        if (meters != null) {
+            meters.remove();
+        }
     }
 
     @Override

@@ -604,6 +604,7 @@ final class Subscription {
                     lease.close();
                     keeper.unregister(lease);
                 }
+                observer.onStopped(key.subscriber(), key.aggregateType());
             }
         }
     }

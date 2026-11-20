@@ -950,6 +950,11 @@ Hardened before release (code review of the preview). Each item changed what an 
   use that processor's `rebuild()`, which clears the view (or purges the queue) in the same transaction. Before, the
   reset moved the resume point alone: a view that is not idempotent got duplicate rows on the replay.
   `DefaultEventLogSubscriptionsApi` takes the refusal as an optional third argument.
+- The Micrometer lag gauge (`essentials.eventlog.subscription.lag`) reads 0 on a node that lost or suspended an
+  exclusive subscription's lease, until it owns it again and saves. Before, every standby reported a lag that grew
+  without bound (its position froze while the shared cursor moved on), which tripped lag alerts on healthy clusters.
+  A stopped subscription's meters are removed from the registry; before, they stayed and its lag kept growing.
+  `EventLogObserver` has a new default method, `onStopped(subscriber, aggregateType)`.
 
 The payload columns are `json`, not `jsonb`: the stored text is the serializer's compact output, byte for byte the
 classic engine's. Code that hashes or compares payload text sees no difference after a migration.
