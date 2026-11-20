@@ -47,6 +47,13 @@
             <artifactId>postgresql-event-log-processor</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- The AnnotationBasedInMemoryProjector bean, as the old event-store starter declares it; optional there too -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>eventsourced-aggregates</artifactId>
+            <version>${project.version}</version>
+            <optional>true</optional>
+        </dependency>
         <!-- SpringTransactionAwareEventStoreUnitOfWorkFactory, built as the old event-store starter builds it. Its presence also
              makes spring-boot-starter-postgresql back off from its own unit-of-work factory, event bus and JSON serializer,
              which this starter therefore declares. -->

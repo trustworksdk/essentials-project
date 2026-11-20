@@ -19,6 +19,7 @@ import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.Essenti
 import dk.trustworks.essentials.components.eventlog.*;
 import dk.trustworks.essentials.components.eventlog.processor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.EventStoreEventBus;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
@@ -294,6 +295,37 @@ public class EventLogAutoConfiguration {
     @ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", havingValue = "true", matchIfMissing = true)
     public CausationPersistableEventEnricher causationPersistableEventEnricher() {
         return new CausationPersistableEventEnricher();
+    }
+
+    /**
+     * As the old event-store starter declares it: flush and publish the persisted events to the {@code EventBus} right
+     * after each {@code appendToStream}, when {@code essentials.eventstore.auto-flush-and-publish-after-append-to-stream}
+     * is {@code true}. Registered with the event store with the other {@code EventStoreInterceptor} beans.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore", name = "auto-flush-and-publish-after-append-to-stream", havingValue = "true")
+    public FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream flushAndPublishPersistedEventsToEventBusRightAfterAppendToStream() {
+        return new FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream();
+    }
+
+    /**
+     * As the old event-store starter declares it, when {@code eventsourced-aggregates} is on the class path: the
+     * {@code AnnotationBasedInMemoryProjector} behind {@code eventStore.inMemoryProjection(type, id, SomeClass.class)},
+     * unless {@code essentials.eventstore.add-annotation-based-in-memory-projector} is {@code false}
+     */
+    @org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "dk.trustworks.essentials.components.eventsourced.aggregates.projection.AnnotationBasedInMemoryProjector")
+    static class InMemoryProjectorConfiguration {
+        @Bean
+        @ConditionalOnMissingBean
+        @ConditionalOnProperty(prefix = "essentials.eventstore", name = "add-annotation-based-in-memory-projector", havingValue = "true", matchIfMissing = true)
+        public dk.trustworks.essentials.components.eventsourced.aggregates.projection.AnnotationBasedInMemoryProjector annotationBasedInMemoryProjector(
+                ConfigurableEventStore<?> eventStore) {
+            var projector = new dk.trustworks.essentials.components.eventsourced.aggregates.projection.AnnotationBasedInMemoryProjector();
+            eventStore.addGenericInMemoryProjector(projector);
+            return projector;
+        }
     }
 
     @Bean

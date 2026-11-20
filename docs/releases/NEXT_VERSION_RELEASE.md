@@ -955,6 +955,13 @@ Hardened before release (code review of the preview). Each item changed what an 
   without bound (its position froze while the shared cursor moved on), which tripped lag alerts on healthy clusters.
   A stopped subscription's meters are removed from the registry; before, they stayed and its lag kept growing.
   `EventLogObserver` has a new default method, `onStopped(subscriber, aggregateType)`.
+- The event-log starter declares the two beans of the old starter it used to drop: the
+  `AnnotationBasedInMemoryProjector` (when `eventsourced-aggregates` is on the class path, unless
+  `essentials.eventstore.add-annotation-based-in-memory-projector=false`) and
+  `FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream` (with
+  `essentials.eventstore.auto-flush-and-publish-after-append-to-stream=true`). Before,
+  `eventStore.inMemoryProjection(type, id, SomeView.class)` threw "Couldn't find an InMemoryProjector" after switching
+  to the new engine, and the auto-flush property silently did nothing.
 
 The payload columns are `json`, not `jsonb`: the stored text is the serializer's compact output, byte for byte the
 classic engine's. Code that hashes or compares payload text sees no difference after a migration.
