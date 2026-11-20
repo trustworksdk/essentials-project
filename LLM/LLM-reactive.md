@@ -466,10 +466,47 @@ public interface CommandBusInterceptor {
 **Package:** `dk.trustworks.essentials.reactive.command.interceptor`
 
 ```java
-public interface CommandBusInterceptorChain<R> {
-    R proceed();
-    Object command();
-    CommandHandler commandHandler();
+public interface CommandBusInterceptorChain {
+    Object proceed();
+    Object command();                        // the current command - possibly replaced by an outer interceptor
+    CommandHandler matchedCommandHandler();  // resolved before the chain ran; never re-resolved
+    default void setCommand(Object command) { throw new UnsupportedOperationException(); }  // overridden by Essentials' chains
+}
+```
+
+### Replacing the command
+
+An interceptor replaces the command with `chain.setCommand(newCommand)` before `chain.proceed()`; later interceptors
+and the handler get the new one. Contract shared by every interceptor family:
+[LLM-shared.md § Changing what an operation carries](./LLM-shared.md#changing-what-an-operation-carries).
+
+- **Every Essentials bus supports it** (`DefaultCommandBusInterceptorChain`). The interface's default throws
+  `UnsupportedOperationException`, so a third-party chain implementation keeps compiling but does not support it.
+- **The handler is fixed before the chain.** Any non-null value is accepted mid-chain, but right before `handle(...)` the
+  bus checks `matchedCommandHandler().canHandle(command.getClass())` and throws `ClassCastException` if the handler cannot
+  take what arrived. A replacement that has to change which handler runs cannot be done here.
+- **That `ClassCastException` is not a handler failure:** on `sendAndDontWait` it never reaches the
+  `SendAndDontWaitErrorHandler`. On `DurableLocalCommandBus` the queue's `RedeliveryPolicy` decides, and its built-in
+  permanent-error list dead-letters it on the first attempt
+  ([LLM-foundation.md § The built-in permanent-error list](./LLM-foundation.md#the-built-in-permanent-error-list)).
+- **The error handler gets the original command**, as sent - that is what a retry sends again.
+- **`DurableLocalCommandBus.sendAndDontWait`**: the chain carries the `QueuedMessage`, so the replacement is the command
+  message (`queued.withMessage(queued.getMessage().withPayload(newCommand))`, or a plain `Message`). Decrypting a queued
+  command whose type decides the handler belongs in a `DurableQueuesInterceptor`
+  ([LLM-foundation.md § Replacing what an interceptor passes on](./LLM-foundation.md#replacing-what-an-interceptor-passes-on)).
+- `RecordExecutionTimeCommandBusInterceptor` tags `command_type` with the command as it reaches it - after the
+  replacements of interceptors ordered before it.
+
+```java
+@InterceptorOrder(2)
+public class NormalizingInterceptor implements CommandBusInterceptor {
+    @Override
+    public Object interceptSend(Object command, CommandBusInterceptorChain chain) {
+        if (command instanceof PlaceOrder placeOrder) {
+            chain.setCommand(placeOrder.withCustomerId(placeOrder.customerId().trim()));  // same type: fits the handler
+        }
+        return chain.proceed();
+    }
 }
 ```
 
@@ -668,6 +705,7 @@ public class OrderCommandHandler extends AnnotatedCommandHandler {
 - ⚠️ Async event handler exceptions go to `OnErrorHandler` - **no automatic retry**.
 - ⚠️ `@AsyncEventHandler` annotation only works with `ReactiveHandlersBeanPostProcessor` in Spring context. Manual registration uses `addAsyncSubscriber()`.
 - ⚠️ Interceptor order: **lower `@InterceptorOrder` = higher priority** (runs first). Default order is 10.
+- ⚠️ `CommandBusInterceptorChain.setCommand` cannot change which handler runs - a command the matched handler cannot take fails with `ClassCastException` before `handle(...)` ([Replacing the command](#replacing-the-command)).
 - ⚠️ `AnnotatedEventHandler`/`AnnotatedCommandHandler` use reflection - consider performance for high-throughput scenarios.
 - ⚠️ Event handlers registered with `ReactiveHandlersBeanPostProcessor` are added to **ALL** `EventBus` beans in the context.
 - ⚠️ `LocalCommandBus` automatically sorts interceptors on add - manual ordering not needed.

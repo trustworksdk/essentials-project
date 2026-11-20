@@ -809,8 +809,8 @@ public interface QueryInterceptor extends Interceptor {
 var result = InterceptorChain.newInterceptorChainForOperation(
     query,
     registeredInterceptors,  // Presorted by @InterceptorOrder
-    (interceptor, chain) -> interceptor.intercept(query, chain),
-    () -> executeQueryDirectly(query)
+    (interceptor, chain) -> interceptor.intercept(chain.operation(), chain),
+    () -> executeQueryDirectly(query)   // reads the operation object, never a value captured before the chain
 ).proceed();
 
 // Ordering example
@@ -830,6 +830,38 @@ public class LoggingInterceptor implements QueryInterceptor {
     }
 }
 ```
+
+#### Changing what an operation carries
+
+One contract across every interceptor family (`DurableQueuesInterceptor`, `MessageHandlerInterceptor`,
+`EventStoreInterceptor`, `CommandBusInterceptor`, `MessageQueueInterceptor`):
+
+1. **Change the input in place, then proceed.** Call the operation's setter before `chain.proceed()`. Payload values
+   are immutable: build a new one (`message.withPayload(...)`), never mutate one.
+2. **Change the output by returning something else** — e.g. decrypt the events `proceed()` returned.
+3. **Downstream reads the operation.** Later interceptors get the same operation object; the default behaviour reads
+   it after the chain ran. A chain you build yourself must do the same, or replacements are silently ignored.
+4. **Only what reaches the target has to fit it.** Where the target was chosen before the chain (message-handler
+   method, command handler), any type is allowed mid-chain; a value the target cannot take fails with
+   `ClassCastException` right before invocation. The target is never re-resolved.
+5. **Order with `@InterceptorOrder`** — decrypt before anything reads the payload, encrypt after anything enriches it.
+
+```java
+@InterceptorOrder(2)   // before interceptors that read the payload
+public class DecryptingInterceptor implements DurableQueuesInterceptor {
+    @Override
+    public Void intercept(HandleQueuedMessage operation, InterceptorChain<HandleQueuedMessage, Void, DurableQueuesInterceptor> chain) {
+        var queued = operation.getMessage();
+        operation.setMessage(queued.withMessage(queued.getMessage().withPayload(decrypt(queued.getPayload()))));
+        return chain.proceed();
+    }
+}
+```
+
+Outer interceptors that read the operation after `proceed()` returned see the last replacement made inside it.
+Per-family setters: see each module's LLM doc. One operation has none yet: `MessageQueueInterceptor`'s
+`HandleMessage` (raw shard-owned engine) is a record until the next major - replace the message in the adapter's
+`HandleQueuedMessage` instead, or transform the bytes in the codec.
 
 ---
 

@@ -1,6 +1,6 @@
 # Interceptors that change what they intercept
 
-Status: being implemented (steps in *Steps*).
+Status: implemented (`HandleMessage` conversion deferred to the next major).
 
 ## Problem
 
@@ -236,6 +236,28 @@ shard-owned adapter) — the default behaviour is written three times.
    in `LLM/LLM-traps.md` (next free `ESS-NNN`), plugin version bump, release-notes entry.
 
 Steps 2–5 touch disjoint modules and can run in parallel once step 1 is in.
+
+## Implementation notes
+
+What the implementation added beyond the design above:
+
+- **`PatternMatchingMessageHandler` now sorts its interceptors by `@InterceptorOrder`**, in the constructors and in
+  `addInterceptor`. It never sorted them before, so rule 5 did not hold for this family; a user-visible change, called
+  out in the release notes.
+- **The fit check covers the second parameter too.** A `@MessageHandler` method taking `(Payload, OrderedMessage)`
+  fails with `ClassCastException` when an interceptor replaced the `OrderedMessage` with a plain `Message`
+  (`Message.of(...)`); `withPayload` keeps it an `OrderedMessage`.
+- **Redelivery copy-back.** A handler that calls `markForRedeliveryIn` on a replacement not built with
+  `QueuedMessage.withMessage` (any `QueuedMessage` with the same id) has its request copied onto the selected message,
+  because the consumer decides between acknowledging and retrying on that one.
+- **A misfit command is not routed to the `SendAndDontWaitErrorHandler`.** The `ClassCastException` is an interceptor
+  failure, not a handler failure: on `LocalCommandBus` it bypasses the error handler, on `DurableLocalCommandBus` the
+  queue's `RedeliveryPolicy` decides (dead-letter on the first attempt by default). The error handler always receives
+  the command as it was sent.
+- **`DurableLocalCommandBus` accepts a `QueuedMessage` or a plain `Message`** as the replacement on its
+  `sendAndDontWait` chain, and hands the handler the payload it carries; anything else fails with
+  `ClassCastException`.
+- **`HandleQueuedMessage.acknowledgedWithHandler` has no effect on the shard-owned adapter**, which does not read it.
 
 ## Decisions
 

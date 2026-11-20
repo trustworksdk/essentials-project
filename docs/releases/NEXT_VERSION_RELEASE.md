@@ -35,6 +35,9 @@ and two lock waits removed.
 - Spring Boot starters: the tracing and queue metrics interceptors are registered when the Micrometer beans are
   present, not only with `management.tracing.enabled=true`, which Spring Boot 4 no longer reads (§1.1.6).
 - Fenced locks: opt-in spreading of async-acquired locks, and so of exclusive processors, over the instances (§2.9).
+- Interceptors: every interceptor family can replace what it passes on - queue, message-handler, command-bus and
+  event-store interceptors share one contract (§2.19); handlers now receive replacements and `PatternMatchingMessageHandler`
+  honours `@InterceptorOrder` (§1.1.7).
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1). The
 shard-owned adapter writes a new message format, and **0.60.x and this release must not run side by side against the
@@ -239,6 +242,26 @@ and the metric is present.
 **What to do:** remove a `management.tracing.enabled: true` kept only for Essentials. An application with tracing or a
 `MeterRegistry` but without that property gets the interceptors now; if you do not want them, set the matching switch
 above to `false`.
+
+#### 1.1.7 Handlers and inner interceptors now receive what an interceptor replaced (foundation, `reactive`)
+
+Follows from §2.19. Check interceptors you already have:
+
+- **Replacements now arrive.** The queue consumers, `PatternMatchingMessageHandler` and the command buses hand the
+  handler what is on the operation (or chain) when the chain ends, not what they captured before it. An interceptor
+  that already set a new message on `HandleQueuedMessage` by reflection, or replaced a command, now changes what the
+  handler receives.
+- **An interceptor that reads the operation after `proceed()`** (for logging or tracing) now sees the last replacement
+  an inner interceptor made, not the original.
+- **`PatternMatchingMessageHandler` now orders its `MessageHandlerInterceptor`s by `@InterceptorOrder`.** It used to run
+  them in registration order whatever their annotation; unannotated ones (order 10) keep their registration order among
+  themselves. Annotated message-handler interceptors on an Inbox, Outbox or event processor may now run in a different
+  order (`8bdec9710`).
+- **`RecordExecutionTimeCommandBusInterceptor`** tags `command_type` with the command as it reaches it, so a command
+  replaced by an interceptor ordered before it is tagged with the replacement's type.
+
+**What to do:** nothing, unless one of your interceptors relied on the old order, or on reading the original after
+`proceed()`; then give it an explicit `@InterceptorOrder`, or keep the original in a local before `proceed()`.
 
 ---
 
@@ -493,8 +516,9 @@ and `exclusiveSubscriptionLockName`.
 ### 2.11 `InvokeMessageHandlerMethod` exposes the message being handled (foundation)
 
 `InvokeMessageHandlerMethod` - the operation a `MessageHandlerInterceptor` sees around every `@MessageHandler` call -
-now has `message` and `messagPayload` as public final fields, like `methodToInvoke` and `invokeMethodOn` already were,
-so an interceptor can read the `Message` and its metadata without reflection. Additive; nothing to change.
+now has `message` and `messagPayload` as public fields, like `methodToInvoke` and `invokeMethodOn` already were,
+so an interceptor can read the `Message` and its metadata without reflection. Additive; nothing to change. Read them
+with `getMessage()` / `getPayload()` and replace them with `setMessage(...)` (§2.19).
 
 ### 2.12 CDC: an out-of-order commit no longer costs each subscriber a commit of its own (`postgresql-event-store`)
 
@@ -713,6 +737,40 @@ message a second time as soon as its claim is that old.
   `DurableQueues`/`Inboxes.maxUnservedAfterInstanceLoss()`, `DurableQueues.messageHandlingTimeout()`,
   `EventStoreSubscriptionManager.getFencedLockManager()`, and
   the shard-owned `MessageQueues.leaseTtl()`.
+
+### 2.19 Interceptors can replace what they pass on, in every interceptor family (foundation, `reactive`, `postgresql-event-store`, `shared`)
+
+An interceptor can now change the input of the operation it intercepts - decrypt a payload on the way in, enrich it,
+rewrite metadata - and the rest of the chain and the handler receive the replacement. Before, only some operations
+allowed it, and the others failed silently: an interceptor that built a new `Message` had nowhere to put it, so the
+handler got the original. One contract now holds for every family, documented on `Interceptor` and in
+`LLM/LLM-shared.md`: call the operation's setter before `proceed()`, change the output by returning something else, and
+the default behaviour reads the operation, never a value captured before the chain ran.
+
+- **Copy helpers** (`031ed10b0`): `Message.withPayload(...)` / `withMetaData(...)`, overridden by `OrderedMessage` to
+  keep its key and order; `QueuedMessage.withMessage(Message)`; `PersistedEvent.withEvent(EventJSON)` /
+  `withMetaData(EventMetaDataJSON)` (`1da420812`).
+- **`DurableQueuesInterceptor`**: `HandleQueuedMessage.setMessage(...)` (`031ed10b0`); the replacement must keep the
+  message's id, and acknowledging, retrying and dead-lettering keep acting on the entry selected for delivery. All three
+  queue consumers - PostgreSQL/MongoDB, the centralized fetcher and the shard-owned adapter - now hand the handler the
+  operation's message.
+- **`MessageHandlerInterceptor`**: `InvokeMessageHandlerMethod.setMessage(...)`, `getMessage()`, `getPayload()`
+  (`8bdec9710`).
+- **`CommandBusInterceptor`**: `CommandBusInterceptorChain.setCommand(...)` (`73f003f32`). It is a default method that
+  throws `UnsupportedOperationException`, so third-party chain implementations keep compiling; every Essentials bus
+  supports it.
+- **`EventStoreInterceptor`**: the existing setters on `AppendToStream`, `FetchStream` and `LoadEventsByGlobalOrder`
+  are now covered by contract tests, and the built-in interceptors document their order (`189856532`).
+
+Where the handler was chosen before the chain ran - a `@MessageHandler` method, a command handler - it is never
+re-resolved. Any type is allowed mid-chain, but what reaches the handler must fit it; otherwise the call fails with a
+`ClassCastException`, which a queue consumer dead-letters on the first attempt (`LLM/LLM-traps.md` `ESS-139`). A
+decryption that decides which handler runs belongs in a `DurableQueuesInterceptor` on `HandleQueuedMessage`.
+`HandleMessage` of the raw shard-owned engine stays a record without a setter until the next major.
+
+Additive: no interceptor interface changed signature. `HandleQueuedMessage.message` and
+`InvokeMessageHandlerMethod.message`/`messagPayload` are no longer `final`; use the setters. Design:
+`docs/design/interceptor-operation-replacement.md`. Behaviour changes: §1.1.7.
 
 ## 3. Bug fixes
 

@@ -3,6 +3,16 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-13 — targets Essentials 0.60.1
+- **Docs: interceptors that replace what they pass on.** The bundled `LLM-shared.md` states one contract for every
+  interceptor family (set the replacement on the operation before `proceed()`, the default behaviour reads the
+  operation); `LLM-foundation.md`, `LLM-reactive.md` and `LLM-postgresql-event-store.md` list each family's setters and
+  copy helpers (`HandleQueuedMessage.setMessage`, `InvokeMessageHandlerMethod.setMessage`,
+  `CommandBusInterceptorChain.setCommand`, `PersistedEvent.withEvent`) and the built-in interceptor ordering. New trap
+  `ESS-139`: a message-handler or command-bus interceptor that changes the payload's type fails with
+  `ClassCastException` - the handler was chosen before the chain ran. `LLM-reactive.md`'s `CommandBusInterceptorChain`
+  sketch now matches the interface (`matchedCommandHandler()`, no type parameter).
+
 ## 0.60.1-12 — targets Essentials 0.60.1
 Fixes from a full review of the plugin: what generated projects do at runtime, script robustness on real
 machines, contradictions in the instructions, and how much text each command and skill loads.

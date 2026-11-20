@@ -1439,6 +1439,43 @@ public class LoggingEventStoreInterceptor implements EventStoreInterceptor {
 | `MicrometerTracingEventStoreInterceptor` | `.micrometer` | Distributed tracing with Micrometer |
 | `RecordExecutionTimeEventStoreInterceptor` | `.micrometer` | Execution time metrics |
 
+None of the three carries `@InterceptorOrder`, so all run at the default order 10; interceptors with equal orders keep
+their registration order (the sort is stable).
+
+### Changing what is appended or loaded
+
+The shared contract ([LLM-shared.md § Changing what an operation carries](./LLM-shared.md#changing-what-an-operation-carries)):
+change the input with the operation's setter before `chain.proceed()`, the output by returning something else.
+
+- **Input setters**: `AppendToStream.setEventsToAppend(...)`, `setAppendEventsAfterEventOrder(...)`;
+  `FetchStream.setEventOrderRange(...)`, `setTenant(...)`; `LoadEventsByGlobalOrder.setGlobalEventOrderRange(...)`,
+  `setIncludeAdditionalGlobalOrders(...)`, `setOnlyIncludeEventIfItBelongsToTenant(...)`. `LoadEvent`, `LoadEvents`,
+  `LoadEventsCausedBy` and `LoadLastPersistedEventRelatedTo` carry query keys only - transform their result.
+- **Output copies**: `PersistedEvent.withEvent(EventJSON)` and `withMetaData(EventMetaDataJSON)` copy every other
+  property. The copy is a `DefaultPersistedEvent` and `equals` the original (same `eventId`); use `valueEquals` to tell
+  them apart.
+- **Rebuilding a `FetchStream` result** needs the aggregate type's stream configuration, which only
+  `ConfigurableEventStore` exposes:
+
+```java
+@Override
+public <ID> Optional<AggregateEventStream<ID>> intercept(FetchStream<ID> operation,
+        EventStoreInterceptorChain<FetchStream<ID>, Optional<AggregateEventStream<ID>>> chain) {
+    var configuration = ((ConfigurableEventStore<?>) chain.eventStore())
+            .getAggregateEventStreamConfiguration(operation.aggregateType);
+    return chain.proceed().map(stream -> AggregateEventStream.of(configuration,
+                                                                 stream.aggregateId(),
+                                                                 stream.eventOrderRangeIncluded(),
+                                                                 stream.events().map(e -> e.withEvent(decrypt(e.event())))));
+}
+```
+
+⚠️ **Encrypting on append, with `FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream`.** It publishes the
+`AggregateEventStream` its `proceed()` returned to in-transaction subscribers. An encrypting interceptor ordered after
+it (order > 10, inside it) must return the plaintext events in its result, or those subscribers receive ciphertext;
+one ordered before it (order < 10) leaves nothing to restore, because publication has already happened when its
+`proceed()` returns.
+
 ### EventStoreEventBus
 
 Optional shared event bus. If not provided, default instance created.
