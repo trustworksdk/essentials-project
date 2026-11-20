@@ -20,7 +20,7 @@ declares the `EventLog`, the `EventStore` adapter and the processors' dependenci
 base classes of `postgresql-event-log-processor`.
 
 The engine refuses to start on a database where the application's role cannot see other backends' `backend_xid` in
-`pg_stat_get_activity` (grant `pg_read_all_stats`).
+`pg_stat_activity` (grant `pg_read_all_stats`).
 
 Metrics: `MicrometerEventLogObserver` (Micrometer, optional) - lag, failure, park and lease-loss meters and a page timer per subscription; per-subscriber TRACE on the logger `dk.trustworks.essentials.components.eventlog.Subscription.<subscriber>`. See `LLM/LLM-postgresql-event-log.md` § Observability.
 

@@ -117,9 +117,10 @@ public final class EventLogSchema {
 
     /**
      * Refuse to run where the watermark cannot work. The tail reader's probe reads
-     * {@code backend_xid} through {@code pg_stat_get_activity(NULL)}; where it is redacted for other roles' backends the
+     * {@code backend_xid} through the {@code pg_stat_activity} view; where it is redacted for other roles' backends the
      * probe returns a subset of the running writers, and the watermark would pass a live writer's value. So this
-     * constructs the condition: one connection takes a real transaction id, and a second must see it. Verified once per
+     * constructs the condition: one connection takes a real transaction id, and a second must see it, through the same
+     * view the probe reads ({@link EventLogStorage#RUNNING_SET}), so what is checked is what runs. Verified once per
      * {@code DataSource}; costs two connections and one rolled-back transaction.
      *
      * @throws IllegalStateException if the transaction id is not visible
@@ -144,12 +145,12 @@ public final class EventLogSchema {
                     writerPid = resultSet.getInt(1);
                 }
                 try (var observer = dataSource.getConnection();
-                     var statement = observer.prepareStatement("SELECT backend_xid IS NOT NULL FROM pg_stat_get_activity(NULL) WHERE pid = ?")) {
+                     var statement = observer.prepareStatement("SELECT backend_xid IS NOT NULL FROM pg_stat_activity WHERE pid = ?")) {
                     statement.setInt(1, writerPid);
                     try (var resultSet = statement.executeQuery()) {
                         if (!(resultSet.next() && resultSet.getBoolean(1))) {
                             throw new IllegalStateException("The event log cannot start: this database does not show one connection the transaction id of another " +
-                                                                    "(pg_stat_get_activity(NULL).backend_xid was not visible for a backend that certainly held one). " +
+                                                                    "(pg_stat_activity.backend_xid was not visible for a backend that certainly held one). " +
                                                                     "The subscription watermark depends on it to know when a global_order can no longer commit; " +
                                                                     "without it events would be skipped. Grant the role pg_read_all_stats, or stay on the current event store.");
                         }

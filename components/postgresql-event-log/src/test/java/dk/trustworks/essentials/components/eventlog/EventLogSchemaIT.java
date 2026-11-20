@@ -116,13 +116,12 @@ class EventLogSchemaIT extends AbstractEventLogIT {
     /**
      * Stock PostgreSQL shows {@code backend_xid} of every backend to every role, so the refusal cannot be provoked with
      * roles. A managed service that redacts it is simulated by an observer whose search path resolves
-     * {@code pg_stat_get_activity} to a function returning the column null.
+     * {@code pg_stat_activity}, the view the running set reads, to a view returning the column null.
      */
     @Test
     void start_refuses_a_database_that_hides_another_backends_xid() throws Exception {
         execute("CREATE SCHEMA el_redacted");
-        execute("CREATE FUNCTION el_redacted.pg_stat_get_activity(integer) RETURNS TABLE(pid integer, backend_xid xid) LANGUAGE sql " +
-                        "AS $$ SELECT a.pid, NULL::xid FROM pg_catalog.pg_stat_get_activity($1) a $$");
+        execute("CREATE VIEW el_redacted.pg_stat_activity AS SELECT a.pid, NULL::xid AS backend_xid FROM pg_catalog.pg_stat_activity a");
         var redacting = dataSource("");
         redacting.setOptions("-c search_path=el_redacted,pg_catalog,public");
         try {

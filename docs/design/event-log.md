@@ -67,7 +67,7 @@ The payload columns are `json`, not `jsonb`: the stored text is the serializer's
 what the classic engine stores and what the migration's hash verification compares.
 
 Start-up refuses a database where one connection cannot see another backend's `backend_xid` in
-`pg_stat_get_activity(NULL)` (the role needs `pg_read_all_stats`), and an event table whose identity has a `CACHE`
+`pg_stat_activity`, the view the running set reads (the role needs `pg_read_all_stats`), and an event table whose identity has a `CACHE`
 other than 1. Either would break the watermark (§4).
 
 **Schema ownership.** With `SchemaOwnership.COMPONENT` (`essentials.schema.mode=create`) `EventLogSchema` runs the
@@ -121,8 +121,17 @@ range join while a range is outstanding, always as a `UNION ALL` branch, never a
 
 ```sql
 SELECT ARRAY[count(*)::text] || coalesce(array_agg(backend_xid::text) FILTER (WHERE backend_xid IS NOT NULL), '{}')
-FROM pg_stat_get_activity(NULL)
+FROM pg_stat_activity
 ```
+
+The running set's statement reads the `pg_stat_activity` view rather than `pg_stat_get_activity(NULL)` behind it. The
+view has no filter and only left joins on unique keys (`pg_database`, `pg_authid`), which the planner removes, so both
+return the same count and xids through the same single function scan. Prepared, the view measured cheaper on
+PostgreSQL 17.5 with 106 backends (10 holding an xid), 5 000 server-prepared calls per form, `pg_stat_statements` mean
+execution: `SELECT RUNNING_SET` 39-40 µs through the view against 64 µs through the function as superuser, 26 against
+51 µs as a plain role; the combined probe with a 100-row tail 55-66 against 85-88 µs (superuser) and 41 against
+68-88 µs (plain role). The gap is the allocator state of the per-call backend-status copy, not the SQL
+(`docs/design/durable-queue-measurements.md` §3.18). The start-up check reads the same view.
 
 The running set is read during execution, after the statement's snapshot was taken (I11), so any writer that could
 still commit into a hole is in it. A probe creates a `Candidate (cursor, running set)` when a hole lies above every
@@ -136,7 +145,7 @@ never going to exist.
 candidate `(head, running set)` makes the watermark unknown until it retires, since that writer may still commit below
 the head.
 
-**The probe clock.** The running set costs a scan of `pg_stat_get_activity`, so it is rationed. Without holes, a type's
+**The probe clock.** The running set costs a scan of every backend's status, so it is rationed. Without holes, a type's
 next running set waits
 
 - `max(max(probeBackoffMin, backstopInterval), min(probeBackoffMax, cost × 100 × max(1, backends / 10)))` after an

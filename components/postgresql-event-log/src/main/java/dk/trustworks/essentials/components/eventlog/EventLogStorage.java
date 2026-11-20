@@ -41,15 +41,21 @@ final class EventLogStorage {
             "NULL::timestamptz, NULL::text, NULL::text, NULL::text, NULL::text";
 
     /**
-     * The running-writer set: every non-null {@code backend_xid}, read from the function behind {@code pg_stat_activity}
-     * (P0.12). In the combined probe it is evaluated during execution, after the statement's snapshot (P0.2, I11).
+     * The running-writer set: every non-null {@code backend_xid}, read from the {@code pg_stat_activity} view. In the
+     * combined probe it is evaluated during execution, after the statement's snapshot (P0.2, I11).
+     * <p>
+     * The view, not {@code pg_stat_get_activity(NULL)} behind it: the view has no filter and only left joins on unique
+     * keys, which the planner removes, so it returns the same rows through the same single function scan. Prepared, it
+     * measured cheaper per call (docs/design/event-log.md §4). The start-up check
+     * ({@link EventLogSchema#verifyWatermarkPrerequisites}) reads the same view, so a deployment that hides
+     * {@code backend_xid} there is refused rather than read as a subset.
      * <p>
      * Element 1 of the array is not an xid but the number of backends the same scan saw, which the probe back-off
      * scales with ({@link EventLogSettings#probeWait(long, int)}); the xids follow it. One scan, so the count costs
      * nothing extra.
      */
     static final String RUNNING_SET = "(SELECT ARRAY[count(*)::text] || coalesce(array_agg(backend_xid::text) FILTER (WHERE backend_xid IS NOT NULL), '{}'::text[]) " +
-            "FROM pg_stat_get_activity(NULL))";
+            "FROM pg_stat_activity)";
 
     /** Column index of the running set in the combined probe; columns 1-12 are {@link #EVENT_COLUMNS} */
     static final int RUNNING_COLUMN = 13;
