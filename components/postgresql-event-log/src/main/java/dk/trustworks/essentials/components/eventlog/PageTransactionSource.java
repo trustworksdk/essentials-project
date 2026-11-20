@@ -48,5 +48,15 @@ public interface PageTransactionSource {
 
         /** Roll back and release; an unchecked exception tells the engine the connection is unusable (an I/O failure) */
         void rollback();
+
+        /**
+         * @return whether the handler marked this transaction rollback-only through a bound resource (a unit of work, a
+         * Spring status). The engine asks right after the handler returns and then fails the page as the handler's
+         * failure - retried, then parked - instead of committing (which would roll back silently) or failing the commit
+         * (which would count as the engine's own I/O and retry forever)
+         */
+        default boolean rollbackOnly() {
+            return false;
+        }
     }
 }

@@ -443,11 +443,20 @@ final class ReaderLoop {
             type.reader = null;
             type.bump();
         }
+        // Waiting subscriptions are answered (they attach again); activations, leaves and detaches stay queued for the next
+        // loop, which reconnects after one backstop interval - so a repeating Error cannot spin, and no type is left behind
+        reconnectAtNanos = System.nanoTime() + settings.backstopInterval().toNanos();
         synchronized (this) {
+            requests.removeIf(request -> {
+                if (request instanceof Attach || request instanceof HandOff) {
+                    refuse(request);
+                    return true;
+                }
+                return false;
+            });
             thread = null;
-            Request request;
-            while ((request = requests.poll()) != null) {
-                refuse(request);
+            if (!types.isEmpty() || !requests.isEmpty()) {
+                thread = Thread.ofPlatform().name("eventlog-reader").daemon().start(this::run);
             }
         }
     }
@@ -457,10 +466,13 @@ final class ReaderLoop {
             case Attach attach -> attach.reply().complete(AttachReply.REFUSED);
             case HandOff handOff -> handOff.reply().complete(HandOffReply.REFUSED);
             case Activate ignored -> {
+                // kept queued, never refused
             }
             case Leave ignored -> {
+                // kept queued, never refused
             }
             case Detach ignored -> {
+                // kept queued, never refused
             }
         }
     }

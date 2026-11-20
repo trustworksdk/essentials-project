@@ -63,6 +63,38 @@ class ReaderLoopFailureTest {
     }
 
     @Test
+    void requests_queued_when_the_loop_ends_unexpectedly_are_served_by_a_new_loop_without_another_request() throws Exception {
+        var inRestart = new CountDownLatch(1);
+        var release   = new CountDownLatch(1);
+        var restarts  = new AtomicInteger();
+        var observer = new EventLogObserver() {
+            @Override
+            public void onError(String subscriber, String aggregateType, Throwable error) {
+                restarts.incrementAndGet();
+                inRestart.countDown();
+                try {
+                    release.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new IllegalStateException("observer bug");
+            }
+        };
+        var loop = new ReaderLoop(NO_DATABASE, EventLogSettings.defaults().withBackstopInterval(Duration.ofMillis(50)), observer);
+        loop.join("orders", EventLogStorage.TailStatements.of("el_orders_events"), resultSet -> null, TestSeams.NONE);
+        assertThat(inRestart.await(10, TimeUnit.SECONDS)).isTrue();
+        // Queued while the loop is inside its failing restart: the old loop never drains it
+        loop.join("invoices", EventLogStorage.TailStatements.of("el_invoices_events"), resultSet -> null, TestSeams.NONE);
+
+        release.countDown();
+
+        // A new loop starts on its own and fails to connect again: a second restart. Before, the queued activation was
+        // dropped and no loop ran until some later request, so there never was one
+        await().atMost(Duration.ofSeconds(10)).until(() -> restarts.get() >= 3);
+        assertThat(loop.isRunning()).isTrue();
+    }
+
+    @Test
     void the_engine_wraps_a_throwing_observer() {
         var calls = new AtomicInteger();
         var throwing = new EventLogObserver() {

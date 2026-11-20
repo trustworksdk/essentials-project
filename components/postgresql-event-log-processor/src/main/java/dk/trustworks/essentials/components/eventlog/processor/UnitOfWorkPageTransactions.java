@@ -130,6 +130,11 @@ public final class UnitOfWorkPageTransactions implements PageTransactionSource {
         }
 
         @Override
+        public boolean rollbackOnly() {
+            return unitOfWork.status() == UnitOfWorkStatus.MarkedForRollbackOnly;
+        }
+
+        @Override
         public void commit() throws SQLException {
             release();
             if (unitOfWork.status() == UnitOfWorkStatus.MarkedForRollbackOnly) {

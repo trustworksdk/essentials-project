@@ -1895,6 +1895,7 @@ final class Subscription {
             if (!handlerPage.isEmpty()) {
                 inHandler = true;
                 pageHandler.handle(handlerPage, handlerTransaction(open));
+                failIfRollbackOnly(open);
                 inHandler = false;
             }
             if (!parks.isEmpty() && !parkOutside) {
@@ -2251,6 +2252,7 @@ final class Subscription {
                 }
             } else if (!toHandle.isEmpty()) {
                 pageHandler.handle(toHandle, handlerTransaction(open));
+                failIfRollbackOnly(open);
             }
             parked.delete(connection, orders);
             var expected = model == ProgressModel.PERIODIC || seams.has(PROGRESS_WITHOUT_EXPECTED_RESUME) ? null : (Long) lastSaved;
@@ -2372,6 +2374,13 @@ final class Subscription {
      * What the handler sees of a page transaction: the connection guarded against ending the transaction,
      * and the source's resources
      */
+    /** Thrown as the handler's own failure, so the page is retried and then parked like any failing page */
+    private static void failIfRollbackOnly(PageTransactionSource.OpenPage open) {
+        if (open.rollbackOnly()) {
+            throw new IllegalStateException("The page handler marked the page's transaction rollback-only");
+        }
+    }
+
     private static PageTransaction handlerTransaction(PageTransactionSource.OpenPage open) {
         return PageTransaction.guarded(open);
     }

@@ -3,6 +3,13 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-21 — targets Essentials 0.60.1
+
+- **Event log: admin reset and stop() corrected** — the admin reset refusal is documented per processor kind (an
+  inbox processor has no `rebuild()`), and only for processors that run in the application serving the admin call;
+  after a `stop()` that timed out, a re-subscribe of the same exclusive key and `deleteRetiredInstance` are refused
+  with `IllegalStateException` (the reference said they wait). No skill, rule or script changed.
+
 ## 0.60.1-20 — targets Essentials 0.60.1
 
 - **Event log: review fixes** — the event-log reference counts four processor base classes everywhere (the partitioned

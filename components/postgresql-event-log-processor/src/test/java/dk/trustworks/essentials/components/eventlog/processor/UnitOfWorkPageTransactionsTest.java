@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 import java.sql.SQLException;
 import java.util.*;
 
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 /**
@@ -43,6 +43,7 @@ class UnitOfWorkPageTransactionsTest {
         var source = new UnitOfWorkPageTransactions(factory, Jdbi.create("jdbc:postgresql://localhost/never-connected"), Set.of(ProcessorMutant.HANDLER_COMMITS_EARLY));
 
         var page = source.begin();
+        assertThat(page.rollbackOnly()).as("the engine asks right after the handler, as the handler's failure").isTrue();
 
         assertThatThrownBy(page::commit).isInstanceOf(SQLException.class).hasMessageContaining("rollback-only");
         verify(unitOfWork).rollback();

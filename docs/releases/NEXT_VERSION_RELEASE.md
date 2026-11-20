@@ -904,7 +904,8 @@ Hardened before release (code review of the preview). Each item changed what an 
 - An `EventLogObserver` that throws no longer stops delivery. The engine wraps the observer, logs the exception (WARN at
   most once a minute) and goes on. Before, a throwing `onError` or `onAttach` ended the shared reader thread for good:
   every subscription of that `EventLog` waited on its attach reply forever, with nothing logged. The same applied to an
-  `Error` on the reader thread; now the next subscription request starts a new reader thread.
+  `Error` on the reader thread; now a new reader thread starts after one backstop interval and serves the requests
+  that were queued.
 - One aggregate type whose reader fails to start (a missing table, for example) no longer restarts the reader of every
   other type. If the shared connection is still valid, only that type's subscriptions are detached, and it alone
   retries after one backstop interval. Observe it: before, every subscription of every type logged a detach with
@@ -934,7 +935,8 @@ Hardened before release (code review of the preview). Each item changed what an 
   answer. Before, wake-ups from other JVMs were lost until TCP keepalive gave up, often hours, and readers fell back
   to the backstop interval without any log line. Under load notifications keep arriving and the check never runs.
 - A page whose unit of work (or Spring transaction) a handler marked rollback-only now fails like any other failing
-  page: it is retried, then the event parked. Before, `commit()` rolled back silently and the engine counted the page
+  page: it is retried, then the event parked. The engine asks the page source right after the handler returns (new
+  `OpenPage.rollbackOnly()`, default `false`), so it counts as the handler's failure, not the engine's. Before, `commit()` rolled back silently and the engine counted the page
   and its resume point as committed, so the next save conflicted and the page was delivered again.
 - The annotated processor base classes deliver each aggregate type's typed id (`OrderId`), resolved from the event
   store's `AggregateEventStreamConfiguration` as on the classic engine. Before, every handler got a `String`, so a
@@ -946,9 +948,11 @@ Hardened before release (code review of the preview). Each item changed what an 
   `PageTransaction.guarded(OpenPage)` gives other code the same guard. A `ViewProjection` whose rebuild fails is
   restarted if it was running; before, it stayed stopped.
 - The admin API's subscription reset refuses a subscription owned by an `EventLogViewProcessor`,
-  `EventLogPartitionedViewProcessor` or `EventLogInboxProcessor` (`IllegalArgumentException`, naming the processor);
-  use that processor's `rebuild()`, which clears the view (or purges the queue) in the same transaction. Before, the
-  reset moved the resume point alone: a view that is not idempotent got duplicate rows on the replay.
+  `EventLogPartitionedViewProcessor` or `EventLogInboxProcessor` running in the application that serves the call
+  (`IllegalArgumentException`, naming the processor). Use the view processors' `rebuild()`, which clears the view (or
+  purges the queue) in the same transaction; an inbox processor has no `rebuild()`, so replay it with
+  `EventLog.admin().reset(key, from)` from the application if that is intended. Before, the reset moved the resume
+  point alone: a view that is not idempotent got duplicate rows on the replay.
   `DefaultEventLogSubscriptionsApi` takes the refusal as an optional third argument.
 - The Micrometer lag gauge (`essentials.eventlog.subscription.lag`) reads 0 on a node that lost or suspended an
   exclusive subscription's lease, until it owns it again and saves. Before, every standby reported a lag that grew
@@ -1075,6 +1079,8 @@ database work per event.
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md).
 
+- `0.60.1-21` - the event-log reference documents the admin reset refusal per processor kind and that a timed-out
+  `stop()` makes a re-subscribe of the key refuse rather than wait.
 - `0.60.1-20` - the event-log reference counts four processor base classes everywhere, names the `pg_stat_activity`
   view as the watermark source, and documents the engine's review fixes (§2.24 "Hardened before release"); the admin
   API reference's Endpoints table gains the shard-owned queue and aggregate lifecycle and archive tags.

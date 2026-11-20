@@ -408,9 +408,12 @@ eventLog)`) answers from the database, so any instance sees every instance's sub
 `event-log-subscriptions`): list, get, parked events, reset, retry or discard a parked event, delete a retired
 per-instance subscription. Reads need `SUBSCRIPTION_READER`, changes `SUBSCRIPTION_WRITER`; `ESSENTIALS_ADMIN` does both.
 **Reset refuses a processor-owned subscription** (`IllegalArgumentException` naming the processor) - one of an
-`EventLogViewProcessor`, `EventLogPartitionedViewProcessor` or `EventLogInboxProcessor`: call that processor's
-`rebuild()`, which clears the view (or purges the queue) in the same transaction. Moving the resume point alone would
-replay into an uncleared view. The starter wires the refusal; by hand it is
+`EventLogViewProcessor` or `EventLogPartitionedViewProcessor` (call its `rebuild()`, which clears the view, or purges the
+queue, in the same transaction; moving the resume point alone would replay into an uncleared view) or an
+`EventLogInboxProcessor` (no `rebuild()`: a reset would hand every event to its handlers again; call
+`EventLog.admin().reset(key, from)` from the application if that is intended). Only the processors running in the
+application that serves the admin call are known: a subscription of a processor that runs only in another application is
+not refused, and a plain `ViewProjection` never is. The starter wires the refusal; by hand it is
 `DefaultEventLogSubscriptionsApi(securityProvider, eventLog, key -> Optional<reason>)`.
 The admin console (`spring-boot-starter-admin-ui`) shows them under *Event store → Event-log subscriptions*. Details:
 [LLM-admin-api.md](LLM-admin-api.md).
@@ -444,7 +447,8 @@ cut-over except restoring a backup; rehearse it on a copy first.
   after `retry-attempts` retries the event is parked (as the classic Inbox dead-letters). Raise `retry-attempts` /
   `retry-backoff-max` for a subscription that must ride out a longer outage, and retry the parked aggregates after it.
 - ⚠️ **`stop()` returns after 30 s even if a handler ignores interrupts**, with a WARN; `isRunning()` stays `true`
-  until the delivery thread really ends, so a re-subscribe of the same key or `deleteRetiredInstance` waits for it.
+  until the delivery thread really ends; until then, in the same `EventLog`, a re-subscribe of the same exclusive key and
+  `deleteRetiredInstance` of its row are refused with `IllegalStateException`.
 - ⚠️ **Payload columns are `json`, not `jsonb`**: the stored text is the serializer's compact output, byte-equal to the
   classic engine's.
 

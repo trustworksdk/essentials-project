@@ -54,15 +54,18 @@ public class EventLogAdminApiAutoConfiguration {
                                                              ObjectProvider<EventLogInboxProcessor> inboxProcessors) {
         // A processor-owned subscription is reset through its processor's rebuild(), which clears the view (or purges the
         // queue) in the same transaction; the processors are looked up per call, since their subscriptions exist only once started
+        // Only the processors running in this JVM are known: a key owned by a processor of another application is not refused
         return new DefaultEventLogSubscriptionsApi(securityProvider, eventLog, key -> {
             var owners = new ArrayList<Map.Entry<String, List<ViewProjection>>>();
-            viewProcessors.orderedStream().forEach(p -> owners.add(Map.entry(p.getClass().getSimpleName(), p.projections())));
-            partitionedViewProcessors.orderedStream().forEach(p -> owners.add(Map.entry(p.getClass().getSimpleName(), p.projections())));
-            inboxProcessors.orderedStream().forEach(p -> owners.add(Map.entry(p.getClass().getSimpleName(), p.projections())));
+            var rebuild = " has a rebuild(): use it, so the view is cleared (and any queue purged) in the same transaction as the reset";
+            viewProcessors.orderedStream().forEach(p -> owners.add(Map.entry("view processor " + p.getClass().getSimpleName() + rebuild, p.projections())));
+            partitionedViewProcessors.orderedStream().forEach(p -> owners.add(Map.entry("partitioned view processor " + p.getClass().getSimpleName() + rebuild, p.projections())));
+            inboxProcessors.orderedStream().forEach(p -> owners.add(Map.entry("inbox processor " + p.getClass().getSimpleName() + " has no rebuild(): a reset would forward every event from the " +
+                                                                                      "resume point to its handlers again; if that is intended, call EventLog.admin().reset(key, from) from the application", p.projections())));
             return owners.stream()
                          .filter(owner -> owner.getValue().stream().anyMatch(projection -> projection.key().equals(key)))
                          .findFirst()
-                         .map(owner -> "it belongs to processor " + owner.getKey() + "; use its rebuild() so the view is cleared in the same transaction");
+                         .map(owner -> "it belongs to the " + owner.getKey());
         });
     }
 }

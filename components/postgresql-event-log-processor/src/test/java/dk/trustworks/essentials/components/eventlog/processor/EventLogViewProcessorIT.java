@@ -46,6 +46,7 @@ class EventLogViewProcessorIT extends AbstractProcessorIT {
     class TotalsView extends EventLogViewProcessor {
         final Set<String> seen = ConcurrentHashMap.newKeySet();
         long              failAt = -1;
+        long              rollbackOnlyAt = -1;
         int               rebuilds;
         boolean           failRebuild;
         boolean           commitInRebuild;
@@ -82,6 +83,11 @@ class EventLogViewProcessorIT extends AbstractProcessorIT {
         private void on(Added added, DeliveredEvent event) throws SQLException {
             if (event.globalOrder().longValue() == failAt) {
                 throw new IllegalStateException("always fails");
+            }
+            if (event.globalOrder().longValue() == rollbackOnlyAt) {
+                // Marks the page's unit of work instead of throwing: the page must fail like a throwing handler
+                unitOfWorkFactory.getRequiredUnitOfWork().markAsRollbackOnly(new IllegalStateException("rolled back by the handler"));
+                return;
             }
             seen.add(event.aggregateType() + ":" + event.globalOrder());
             if (event.aggregateType().toString().equals(ORDERS)) {
@@ -185,6 +191,22 @@ class EventLogViewProcessorIT extends AbstractProcessorIT {
         try {
             var key = view.projections().getFirst().key();
             awaitTrue("the failing event parked", Duration.ofSeconds(20), () -> parked(key).stream().anyMatch(row -> row.globalOrder() == X));
+            awaitTrue("caught up past the parked event", Duration.ofSeconds(20), () -> resumePoint(key) > EVENTS);
+            assertThat(applied()).doesNotContainKey(X);
+        } finally {
+            view.stop();
+        }
+    }
+
+    @Test
+    void an_event_whose_handler_marks_the_unit_of_work_rollback_only_is_parked_not_retried_forever() throws Exception {
+        appendEvents(-1);
+        var view = new TotalsView(List.of(ORDERS), Set.of());
+        view.rollbackOnlyAt = X;
+        view.start();
+        try {
+            var key = view.projections().getFirst().key();
+            awaitTrue("the rolled-back event parked", Duration.ofSeconds(20), () -> parked(key).stream().anyMatch(row -> row.globalOrder() == X));
             awaitTrue("caught up past the parked event", Duration.ofSeconds(20), () -> resumePoint(key) > EVENTS);
             assertThat(applied()).doesNotContainKey(X);
         } finally {
