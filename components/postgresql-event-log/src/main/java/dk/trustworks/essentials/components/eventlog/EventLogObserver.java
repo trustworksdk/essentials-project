@@ -20,8 +20,9 @@ import java.util.Set;
 
 /**
  * Callbacks for metrics and diagnostics of the tail reader and the subscriptions. Every
- * method has a no-op default; implementations must be fast and must not throw - they run on the reader loop's thread
- * or a subscription's delivery thread. {@code observability.micrometer.MicrometerEventLogObserver} is the Micrometer
+ * method has a no-op default; implementations must be fast - they run on the reader loop's thread, a subscription's
+ * delivery thread or the lease keeper's. The engine catches and logs (at most one WARN a minute) whatever a callback
+ * throws, so a faulty observer loses its own data but never stops the engine. {@code observability.micrometer.MicrometerEventLogObserver} is the Micrometer
  * binding; the event-log Spring Boot starter wires it when a {@code MeterRegistry} bean exists and no other observer is
  * declared.
  */

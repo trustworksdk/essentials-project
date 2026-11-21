@@ -340,7 +340,11 @@ aggregate admin configurations run on the adapter. `EssentialsEventLogProperties
 so a missing one fails as `SchemaValidationException`.
 
 **Observability.** `EventLogObserver` (every method a no-op default, called on the reader loop, delivery or lease keeper
-thread) is the engine's only metrics seam. `MicrometerEventLogObserver` binds it: a lag gauge (`essentials.eventlog.subscription.lag`
+thread) is the engine's only metrics seam. The engine wraps the observer it is given (`SafeEventLogObserver`), so a
+callback that throws is caught and logged (a WARN at most once a minute) and never ends the reader loop, a delivery thread
+or the lease keeper. `onStopped` is the last call for a subscription - after `stop()`, a failed start or a fatal error,
+once its delivery thread is done - so an observer that keeps per-subscription state drops it there; the Micrometer
+observer removes that subscription's meters. `MicrometerEventLogObserver` binds it: a lag gauge (`essentials.eventlog.subscription.lag`
 = the type's reader cursor, reported by `onReaderCursor` once per tail read, minus the saved resume point from
 `onProgressSaved`, plus one), counters `subscription.failed`/`parked`/`lease_lost` and `lease.renewal_failed`, and a
 `subscription.page` timer by outcome, fed by the `nanos` variants of `onPageCommitted`/`onPageFailed` (one `nanoTime` at
