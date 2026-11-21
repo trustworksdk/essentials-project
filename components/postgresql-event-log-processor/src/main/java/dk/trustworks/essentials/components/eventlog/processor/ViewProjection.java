@@ -177,6 +177,11 @@ public final class ViewProjection {
         var wasRunning = isRunning();
         stopSubscription();
         try {
+            if (isRunning()) {
+                // stop() is bounded: a handler that ignores interrupts can outlive it and would apply pages to the view
+                // being cleared (as EventLogViewProcessor refuses)
+                throw new IllegalStateException(key() + " did not stop: its handler is still running, so its view cannot be rebuilt now");
+            }
             var open = in.begin();
             boolean reset;
             try {
