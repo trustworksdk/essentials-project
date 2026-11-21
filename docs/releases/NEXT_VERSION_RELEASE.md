@@ -955,6 +955,11 @@ Hardened before release (code review of the preview). Each item changed what an 
   store's `AggregateEventStreamConfiguration` as on the classic engine. Before, every handler got a `String`, so a
   handler ported by swapping its superclass failed at runtime. `EventLogProcessorDependencies` has a fourth component,
   `aggregateIdSerializers`; its three-argument constructor keeps `String` ids, and the starter wires the event store's.
+- The event-log admin reset (`EventLogSubscriptionsApi.resetSubscription`, `POST /event-log/subscriptions/.../reset`)
+  also refuses the subscription of a `ViewProjection` bean, with `IllegalArgumentException` (HTTP 400) pointing to its
+  `rebuild(truncate)`. Before, only processor-owned views were refused; a `ViewProjection` bean's reset moved the resume
+  point and the projection re-applied events on top of the rows its view already held, so a counter or an insert-only
+  view double-counted. A reset that is intended stays available as `EventLog.admin().reset(key, from)`.
 - `EventLog.stop()` interrupts every subscription first and then waits for them together, so a shutdown with several
   handlers that ignore interrupts waits one join timeout (30 s) rather than one per stuck subscription. Before, each
   stuck subscription was interrupted only after the previous one's timeout had run out; each still logs its own

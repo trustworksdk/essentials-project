@@ -35,7 +35,15 @@ public interface EventLogSubscriptionsApi {
     /** Parked rows with {@code global_order > afterGlobalOrder}, at most {@code limit} (capped at {@link DefaultEventLogSubscriptionsApi#MAX_PAGE_SIZE}) */
     ApiParkedEventsPage getParkedEvents(Object principal, ProgressKey key, long afterGlobalOrder, int limit);
 
-    /** @return {@code false} if there is no such subscription (none is created) */
+    /**
+     * Move a subscription's resume point. Nothing its handler already wrote is undone: a view's subscription would
+     * re-apply events on top of the rows it holds, so a view is rebuilt instead ({@code ViewProjection.rebuild},
+     * {@code EventLogViewProcessor.rebuild()}). The starter's implementation refuses the subscriptions of the views and
+     * processors it knows.
+     *
+     * @return {@code false} if there is no such subscription (none is created)
+     * @throws IllegalArgumentException if the subscription must not be reset directly, naming what to use instead
+     */
     boolean resetSubscription(Object principal, ProgressKey key, long resumeFrom);
 
     ParkedRequestResult retryParkedEvent(Object principal, ProgressKey key, long headGlobalOrder);

@@ -5,9 +5,10 @@ targets, with a `-N` suffix for plugin-only releases.
 
 ## 0.60.1-23 — targets Essentials 0.60.1
 
-- **Event log: tenants in processors** — the event-log and starter references say the processor base classes read each
+- **Event log: tenants in processors, reset of a view** — the event-log and starter references say the processor base classes read each
   aggregate type's tenant with its `TenantSerializer` from the event store's configuration (a `TenantId` without a
-  `TenantSerializer` bean). No skill, rule or script changed.
+  `TenantSerializer` bean). The admin reset also refuses a `ViewProjection` bean's subscription (use its
+  `rebuild(truncate)`), and the reference says a reset undoes nothing a handler wrote. No skill, rule or script changed.
 
 ## 0.60.1-22 — targets Essentials 0.60.1
 

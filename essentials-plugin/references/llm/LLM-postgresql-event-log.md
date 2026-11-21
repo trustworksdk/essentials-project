@@ -407,13 +407,15 @@ eventLog)`) answers from the database, so any instance sees every instance's sub
 `spring-boot-starter-admin-api` it is served as seven operations under `/event-log/subscriptions` (tag
 `event-log-subscriptions`): list, get, parked events, reset, retry or discard a parked event, delete a retired
 per-instance subscription. Reads need `SUBSCRIPTION_READER`, changes `SUBSCRIPTION_WRITER`; `ESSENTIALS_ADMIN` does both.
-**Reset refuses a processor-owned subscription** (`IllegalArgumentException` naming the processor) - one of an
+**Reset refuses a view or processor subscription** (`IllegalArgumentException` naming its owner; HTTP 400) - a
+`ViewProjection` bean (call its `rebuild(truncate)`), one of an
 `EventLogViewProcessor` or `EventLogPartitionedViewProcessor` (call its `rebuild()`, which clears the view, or purges the
 queue, in the same transaction; moving the resume point alone would replay into an uncleared view) or an
 `EventLogInboxProcessor` (no `rebuild()`: a reset would hand every event to its handlers again; call
 `EventLog.admin().reset(key, from)` from the application if that is intended). Only the processors running in the
 application that serves the admin call are known: a subscription of a processor that runs only in another application is
-not refused, and a plain `ViewProjection` never is. The starter wires the refusal; by hand it is
+not refused, nor is a `ViewProjection` built outside the context. A reset moves the resume point only: nothing a
+handler wrote is undone, so a refused view would re-apply events on top of its rows. The starter wires the refusal; by hand it is
 `DefaultEventLogSubscriptionsApi(securityProvider, eventLog, key -> Optional<reason>)`.
 The admin console (`spring-boot-starter-admin-ui`) shows them under *Event store → Event-log subscriptions*. Details:
 [LLM-admin-api.md](LLM-admin-api.md).

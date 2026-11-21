@@ -51,7 +51,8 @@ public class EventLogAdminApiAutoConfiguration {
     public EventLogSubscriptionsApi eventLogSubscriptionsApi(EssentialsSecurityProvider securityProvider, EventLog eventLog,
                                                              ObjectProvider<EventLogViewProcessor> viewProcessors,
                                                              ObjectProvider<EventLogPartitionedViewProcessor> partitionedViewProcessors,
-                                                             ObjectProvider<EventLogInboxProcessor> inboxProcessors) {
+                                                             ObjectProvider<EventLogInboxProcessor> inboxProcessors,
+                                                             ObjectProvider<ViewProjection> viewProjections) {
         // A processor-owned subscription is reset through its processor's rebuild(), which clears the view (or purges the
         // queue) in the same transaction; the processors are looked up per call, since their subscriptions exist only once started
         // Only the processors running in this JVM are known: a key owned by a processor of another application is not refused
@@ -62,6 +63,9 @@ public class EventLogAdminApiAutoConfiguration {
             partitionedViewProcessors.orderedStream().forEach(p -> owners.add(Map.entry("partitioned view processor " + p.getClass().getSimpleName() + rebuild, p.projections())));
             inboxProcessors.orderedStream().forEach(p -> owners.add(Map.entry("inbox processor " + p.getClass().getSimpleName() + " has no rebuild(): a reset would forward every event from the " +
                                                                                       "resume point to its handlers again; if that is intended, call EventLog.admin().reset(key, from) from the application", p.projections())));
+            // A ViewProjection bean of its own is a view too: a reset would re-apply events on top of the rows it already holds
+            viewProjections.orderedStream().forEach(p -> owners.add(Map.entry("view projection " + p.key().subscriber() + " (a ViewProjection bean), which has a " +
+                                                                                      "rebuild(truncate): use it, so the view is cleared in the same transaction as the reset", List.of(p))));
             return owners.stream()
                          .filter(owner -> owner.getValue().stream().anyMatch(projection -> projection.key().equals(key)))
                          .findFirst()

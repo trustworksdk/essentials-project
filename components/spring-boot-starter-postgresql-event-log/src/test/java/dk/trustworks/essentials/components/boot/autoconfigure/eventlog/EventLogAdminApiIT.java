@@ -103,13 +103,16 @@ class EventLogAdminApiIT {
                    .andExpect(status().isOk())
                    .andExpect(jsonPath("$.events").isEmpty());
 
+            // A ViewProjection bean is a view: a reset that only moved its resume point would re-apply events on top of
+            // its rows, so the admin refuses it and points to rebuild(truncate)
             ctx.getBean("ordersView", ViewProjection.class).stop();
+            var resumePointBefore = com.jayway.jsonpath.JsonPath.<Number>read(mockMvc.perform(get(ORDERS_VIEW)).andReturn().getResponse().getContentAsString(),
+                                                                              "$.resumePoint").longValue();
             mockMvc.perform(post(ORDERS_VIEW + "/reset").param("resumeFrom", "1"))
-                   .andExpect(status().isOk())
-                   .andExpect(jsonPath("$.reset").value(true));
+                   .andExpect(status().isBadRequest());
             mockMvc.perform(get(ORDERS_VIEW))
                    .andExpect(status().isOk())
-                   .andExpect(jsonPath("$.resumePoint").value(1));
+                   .andExpect(jsonPath("$.resumePoint").value(resumePointBefore));
             mockMvc.perform(post(SUBSCRIPTIONS + "/no-such-view/aggregate-types/Orders/reset").param("resumeFrom", "1"))
                    .andExpect(status().isOk())
                    .andExpect(jsonPath("$.reset").value(false));
