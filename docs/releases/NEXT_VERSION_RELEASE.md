@@ -960,6 +960,15 @@ Hardened before release (code review of the preview). Each item changed what an 
   `rebuild(truncate)`. Before, only processor-owned views were refused; a `ViewProjection` bean's reset moved the resume
   point and the projection re-applied events on top of the rows its view already held, so a counter or an insert-only
   view double-counted. A reset that is intended stays available as `EventLog.admin().reset(key, from)`.
+- The event-log engine works on a connection pool configured to hand out connections with auto-commit off (for
+  example `spring.datasource.hikari.auto-commit=false`, a common Hibernate setting). Its writes outside its own
+  transactions assumed auto-commit: on such a pool a parked event's row and a periodic subscription's resume point were
+  never committed, and the pool rolled them back on return, so a failed event counted as handled with no parked row. Every
+  connection the engine borrows is now switched to auto-commit and handed back with auto-commit off again, as the pool
+  gave it; a connection already in auto-commit is untouched. The engine's wake listener no longer hands its connection
+  back with auto-commit switched on.
+- The shard-owned queue's wake-up listener works on such a pool too. Its `LISTEN` ran in a transaction that never
+  committed, so no notification arrived and every owner fell back to the backstop poll, with nothing logged.
 - Event-log metrics: stopping one instance of a subscriber no longer removes the meters that another running instance
   of it on the same aggregate type shares (same tags); they are removed when the last one stops. Before, the running
   instance's `failed`/`parked` counters and lag gauge disappeared and came back from zero. A lease loss reported after

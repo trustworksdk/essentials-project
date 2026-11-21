@@ -42,6 +42,8 @@ public final class EventLog {
     private static final String UNDEFINED_TABLE = "42P01";
 
     private final DataSource                                          dataSource;
+    /** The application's data source as given: identity and pool-size checks only, never borrowed from */
+    private final DataSource                                     poolDataSource;
     private final SchemaOwnership                                     schemaOwnership;
     private final EventLogSchema.AggregateTypeDdlExecutor             ddl;
     private final EventTypeRegistry                                   eventTypes;
@@ -83,7 +85,10 @@ public final class EventLog {
      */
     EventLog(DataSource dataSource, SchemaOwnership schemaOwnership, EventLogSchema.AggregateTypeDdlExecutor ddl, EventLogSettings settings, EventLogObserver observer,
              java.util.function.BooleanSupplier createsSchema) {
-        this.dataSource = requireNonNull(dataSource, "No dataSource provided");
+        // Every connection the engine borrows starts in auto-commit, whatever the pool hands out (AutoCommitDataSource)
+        this.poolDataSource = requireNonNull(dataSource, "No dataSource provided");
+        dataSource = AutoCommitDataSource.wrap(dataSource);
+        this.dataSource = dataSource;
         this.settings = requireNonNull(settings, "No settings provided");
         this.observer = SafeEventLogObserver.wrap(observer);
         this.progressStore = new ProgressStore(dataSource);
@@ -177,7 +182,7 @@ public final class EventLog {
         if (schemaOwnership == SchemaOwnership.COMPONENT) {
             EventLogSchema.initialize(dataSource);
         }
-        EventLogSchema.verifyWatermarkPrerequisites(dataSource);
+        EventLogSchema.verifyWatermarkPrerequisites(poolDataSource);
         var database = CatchUpPermits.databaseKey(dataSource);
         permits = CatchUpPermits.forDatabase(database, settings.catchUpPermits());
         ownPermits = CatchUpPermits.unshared(database, settings.catchUpPermits());
@@ -190,7 +195,7 @@ public final class EventLog {
      */
     private void warnIfPermitsReachPool() {
         try {
-            var size = (Integer) dataSource.getClass().getMethod("getMaximumPoolSize").invoke(dataSource);
+            var size = (Integer) poolDataSource.getClass().getMethod("getMaximumPoolSize").invoke(poolDataSource);
             if (size != null && settings.catchUpPermits() >= size) {
                 log.info("catchUpPermits ({}) is at or above the pool's maximum size ({}): the cap does not limit catch-up reads, and appenders may wait for " +
                                  "connections during a catch-up storm", settings.catchUpPermits(), size);
