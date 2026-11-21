@@ -1087,7 +1087,9 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
                       .untilAsserted(() -> assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0));
             assertThat(handler.messages).hasSize(1);
             assertThat(inner.acknowledgeResults).containsExactly(true);
-            assertThat(acksInsideHandleChain.get()).isGreaterThanOrEqualTo(1);
+            // Exactly once: an interceptor that acknowledges in the handler's transaction (PostgreSQL's
+            // SingleOperationTransactionDurableQueuesInterceptor) must not acknowledge again on top of the inner one
+            assertThat(acksInsideHandleChain.get()).isEqualTo(1);
             // The consumer saw the flag on the operation and did not acknowledge the message a second time
             Awaitility.await()
                       .during(Duration.ofMillis(500))

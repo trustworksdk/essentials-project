@@ -126,6 +126,10 @@ public class SingleOperationTransactionDurableQueuesInterceptor implements Durab
      * inside the same transaction would be discarded with them, turning a consumed message into one redelivered
      * after every {@code messageHandlingTimeout}.
      * <p>
+     * Not acknowledged a second time when an interceptor further in the chain (a higher {@code InterceptorOrder},
+     * so inside this unit of work) already did and recorded it with
+     * {@link HandleQueuedMessage#acknowledgedWithHandler(boolean)}: its result is kept as the one the consumer reads.
+     * <p>
      * A handler that returned with the thread's interrupt flag set is acknowledged here only while its consumer is
      * known to be started ({@link HandleQueuedMessage#consumerState()} is {@code STARTED}): a consumer's {@code stop()}
      * marks it as stopping before it interrupts its delivery threads, so that handler re-set the flag for a reason of
@@ -159,6 +163,12 @@ public class SingleOperationTransactionDurableQueuesInterceptor implements Durab
     private void acknowledgeWithHandler(HandleQueuedMessage operation, HandleAwareUnitOfWork unitOfWork) {
         var message = operation.getMessage();
         if (durableQueues == null || message.isManuallyMarkedForRedelivery() || unitOfWork.status() == UnitOfWorkStatus.MarkedForRollbackOnly) {
+            return;
+        }
+        if (operation.getAcknowledgedWithHandler() != null) {
+            // An interceptor ordered after this one - running inside this unit of work - acknowledged the message
+            // already. A second acknowledgement would find the row gone, log an ERROR, and overwrite its true with
+            // false, so the consumer would report the message as already handled and not count it as handled
             return;
         }
         if (!Thread.currentThread().isInterrupted()) {
