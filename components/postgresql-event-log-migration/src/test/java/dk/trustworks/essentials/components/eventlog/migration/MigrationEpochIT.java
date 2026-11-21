@@ -96,6 +96,30 @@ class MigrationEpochIT extends AbstractMigrationIT {
     }
 
     @Test
+    void the_epoch_waits_for_a_prepared_two_phase_transaction_holding_a_value_below_M() throws Exception {
+        // The barrier read only pg_stat_activity, which a prepared transaction leaves: the epoch copied through 12, and
+        // the prepared append's 11, committed afterwards below copied_through, was never copied
+        var old = new OldEngine(IdentifierColumnType.TEXT, JSONColumnType.JSONB, TYPE);
+        old.streams(TYPE, 2, 5);                                   // 1-10
+        var migration = migration(CopySettings.defaults().withEpochWaitTimeout(Duration.ofMillis(300)), old);
+        migration.prepare();
+        old.prepared(TYPE, "migration-2pc");                       // 11, prepared, invisible
+        old.stream(TYPE, 1);                                       // 12, committed
+        try {
+            var report = migration.copyEpoch();
+            assertThat(report.timedOut()).as("the prepared transaction holds the epoch").isTrue();
+            assertThat(report.blockers()).anySatisfy(blocker -> assertThat(blocker.applicationName()).contains("migration-2pc"));
+            assertThat(report.rows()).isZero();
+        } finally {
+            try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+                statement.execute("COMMIT PREPARED 'migration-2pc'");
+            }
+        }
+        assertThat(migration.copyEpoch().rows()).isEqualTo(12);
+        assertThat(differingRows(old, TYPE, oldMax(old, TYPE))).isZero();
+    }
+
+    @Test
     void the_throttle_holds_the_copy_rate() throws Exception {
         var old = new OldEngine(IdentifierColumnType.TEXT, JSONColumnType.JSONB, TYPE);
         old.streams(TYPE, 10, 10);

@@ -42,10 +42,21 @@ final class MigrationStorage {
             "WHERE aggregate_type = ? AND state = 'COPYING'";
     static final String SET_SEQUENCE = "SELECT setval(pg_get_serial_sequence(?, 'global_order'), ?, true)";
     static final String CLOCK = "SELECT clock_timestamp()";
-    /** The transactions of this database, other than this backend's, that started at or before the epoch's start */
-    static final String OLDER_TRANSACTIONS = "SELECT pid, application_name, xact_start, state FROM pg_stat_activity " +
-            "WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid() " +
-            "AND xact_start IS NOT NULL AND xact_start <= ? ORDER BY xact_start LIMIT 20";
+    /**
+     * The transactions of this database, other than this backend's, that started at or before the epoch's start - and
+     * every prepared (two-phase) transaction of this database. {@code PREPARE TRANSACTION} ends the backend's
+     * transaction, so it leaves {@code pg_stat_activity} while its rows stay invisible until {@code COMMIT PREPARED}:
+     * an old-engine append in an XA/JTA transaction would otherwise be stepped over and, committed below
+     * {@code copied_through}, never copied. Its start time is unknown, so every one counts (reported with pid 0 and its gid)
+     */
+    static final String OLDER_TRANSACTIONS =
+            "SELECT pid, application_name, xact_start, state FROM (" +
+                    "SELECT pid, application_name, xact_start, state FROM pg_stat_activity " +
+                    "WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid() " +
+                    "AND xact_start IS NOT NULL AND xact_start <= ? " +
+                    "UNION ALL " +
+                    "SELECT 0, 'prepared transaction ' || gid, prepared, 'prepared' FROM pg_prepared_xacts WHERE database = current_database()" +
+                    ") older ORDER BY xact_start LIMIT 20";
 
     private final SourceTable         source;
     private final SourceCatalog       catalog;

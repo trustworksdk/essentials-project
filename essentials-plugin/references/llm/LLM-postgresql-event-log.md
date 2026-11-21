@@ -428,7 +428,9 @@ in the same database: `Migration` (`preflight()`, `prepare()`, repeated online `
 every classic node stopped, and the `verify…()` checks), also as a command line (`MigrationCli`, a YAML config). It
 only reads the classic tables. Subscriptions' resume points are imported per mapping (`ImportedSubscription`;
 `trustOldResumePoint` keeps the classic value instead of the safe, earlier one). There is no way back after the
-cut-over except restoring a backup; rehearse it on a copy first.
+cut-over except restoring a backup; rehearse it on a copy first. Each `copyEpoch()` first waits (up to `epochWaitTimeout`) for
+the database's older transactions and for every prepared two-phase transaction (`pg_prepared_xacts`): an orphaned
+prepared transaction holds the copy until it is committed or rolled back, and is named in the report's blockers.
 
 ## Known limits
 

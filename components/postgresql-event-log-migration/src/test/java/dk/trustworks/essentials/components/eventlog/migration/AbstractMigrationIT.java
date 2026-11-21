@@ -49,14 +49,16 @@ abstract class AbstractMigrationIT {
 
     private static PostgreSQLContainer postgresContainer() {
         var image = System.getProperty(IMAGE_PROPERTY, "");
+        // max_prepared_transactions > 0 (default 0): MigrationEpochIT prepares a two-phase transaction
         if (image.isBlank()) {
-            return EssentialsTestContainers.postgres();
+            return EssentialsTestContainers.postgres().withCommand("postgres", "-c", "fsync=off", "-c", "max_prepared_transactions=10");
         }
         var defaults = EssentialsTestContainers.postgres();
         return new PostgreSQLContainer(org.testcontainers.utility.DockerImageName.parse(image).asCompatibleSubstituteFor("postgres"))
                 .withDatabaseName(defaults.getDatabaseName())
                 .withUsername(defaults.getUsername())
-                .withPassword(defaults.getPassword());
+                .withPassword(defaults.getPassword())
+                .withCommand("postgres", "-c", "fsync=off", "-c", "max_prepared_transactions=10");
     }
 
     protected PGSimpleDataSource dataSource;
@@ -177,6 +179,21 @@ abstract class AbstractMigrationIT {
                 });
             } catch (RuntimeException expected) {
                 // the values are burned
+            }
+        }
+
+        /**
+         * An append in a two-phase transaction, prepared as {@code gid} and left so: its rows stay invisible, and its
+         * backend leaves {@code pg_stat_activity}, until {@code COMMIT PREPARED}
+         */
+        void prepared(String type, String gid) {
+            try {
+                factory.usingUnitOfWork(uow -> {
+                    eventStore.appendToStream(AggregateType.of(type), TestId.random(), Optional.empty(), events(1));
+                    uow.handle().execute("PREPARE TRANSACTION '" + gid + "'");
+                });
+            } catch (RuntimeException ignored) {
+                // the unit of work's own commit finds no transaction: PREPARE TRANSACTION ended it
             }
         }
 

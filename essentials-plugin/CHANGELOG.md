@@ -11,7 +11,7 @@ targets, with a `-N` suffix for plugin-only releases.
   `rebuild(truncate)`), and the reference says a reset undoes nothing a handler wrote. The `stop()` gotcha says a re-subscribe of any key, not
   only an exclusive one, is refused while the old delivery thread runs. Meters are removed when the last instance stops
   (`onStarted`/`onStopped`). The event-store reference says CDC with `wal2json` on PostgreSQL 17.12 / 18
-  needs `wal2json` in `output_plugin_libraries`. No skill, rule or script changed.
+  needs `wal2json` in `output_plugin_libraries`. The migration's epoch waits for prepared two-phase transactions too. No skill, rule or script changed.
 
 ## 0.60.1-22 — targets Essentials 0.60.1
 

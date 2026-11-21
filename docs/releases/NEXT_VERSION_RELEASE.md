@@ -955,6 +955,11 @@ Hardened before release (code review of the preview). Each item changed what an 
   store's `AggregateEventStreamConfiguration` as on the classic engine. Before, every handler got a `String`, so a
   handler ported by swapping its superclass failed at runtime. `EventLogProcessorDependencies` has a fourth component,
   `aggregateIdSerializers`; its three-argument constructor keeps `String` ids, and the starter wires the event store's.
+- The event-log migration's epoch also waits for prepared two-phase transactions (`PREPARE TRANSACTION`, XA/JTA).
+  Before, it waited only for the transactions in `pg_stat_activity`, which a prepared one leaves: an old-engine append
+  prepared there and committed after the epoch had copied past its global order was never copied - silent event loss
+  at the cut-over. An orphaned prepared transaction now holds `copyEpoch()` until it is committed or rolled back; the
+  report's blockers name it (`prepared transaction <gid>`, pid 0).
 - `ViewProjection.rebuild(...)` refuses with `IllegalStateException` ("... did not stop") when its subscription is still
   running after the stop - a handler that ignores interrupts outlives the bounded stop - as `EventLogViewProcessor.rebuild()`
   already did. Before, it cleared the view and reset the progress while that handler could still apply a page to it.
