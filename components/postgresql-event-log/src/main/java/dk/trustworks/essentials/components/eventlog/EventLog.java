@@ -204,8 +204,15 @@ public final class EventLog {
      * Stop every subscription (each saves its resume point once more). Idempotent.
      */
     public void stop() {
-        for (var subscription : subscriptions) {
-            subscription.stop();
+        // Signal every subscription before waiting for any: stuck handlers wait out their join timeouts side by side,
+        // so a shutdown takes one timeout, not one per stuck subscription
+        var stopping  = List.copyOf(subscriptions);
+        var deadlines = new long[stopping.size()];
+        for (int i = 0; i < stopping.size(); i++) {
+            deadlines[i] = stopping.get(i).signalStop();
+        }
+        for (int i = 0; i < stopping.size(); i++) {
+            stopping.get(i).awaitStopped(deadlines[i]);
         }
         subscriptions.clear();
         try {

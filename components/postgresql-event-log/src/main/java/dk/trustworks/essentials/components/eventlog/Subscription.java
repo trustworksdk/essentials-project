@@ -399,15 +399,35 @@ final class Subscription {
     }
 
     private void halt() {
+        awaitStopped(signalStop());
+    }
+
+    /**
+     * The first half of {@link #stop()}: tell the delivery thread to end, without waiting for it. {@link EventLog#stop()}
+     * signals every subscription first and then waits for all of them, so stuck subscriptions wait out their join
+     * timeouts side by side rather than one after another.
+     *
+     * @return when this subscription stops waiting for its thread ({@code System.nanoTime()} plus the join timeout)
+     */
+    long signalStop() {
         running = false;
+        var deadline = System.nanoTime() + stopJoinTimeout.toNanos();
+        var t = thread;
+        if (t != null && t != Thread.currentThread()) {
+            t.interrupt();
+        }
+        return deadline;
+    }
+
+    /** The second half of {@link #stop()}: wait for the delivery thread until {@code deadlineNanos} ({@link #signalStop()}) */
+    void awaitStopped(long deadlineNanos) {
         var t = thread;
         if (t == null || t == Thread.currentThread()) {
             // A handler stopping its own subscription: the thread ends once the handler returns; joining itself would wait out the timeout
             return;
         }
-        t.interrupt();
         try {
-            if (!t.join(stopJoinTimeout)) {
+            if (!t.join(Duration.ofNanos(Math.max(0, deadlineNanos - System.nanoTime())))) {
                 log.warn("Subscription {} on {}: the delivery thread did not end within {} of stop() (a handler that ignores interrupts?); " +
                                  "isRunning() stays true until it does", key.subscriber(), key.aggregateType(), stopJoinTimeout);
             }

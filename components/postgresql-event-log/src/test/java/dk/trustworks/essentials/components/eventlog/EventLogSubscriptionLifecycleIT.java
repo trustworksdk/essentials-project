@@ -60,6 +60,44 @@ class EventLogSubscriptionLifecycleIT extends AbstractSubscriptionIT {
     }
 
     @Test
+    void event_log_stop_signals_every_stuck_subscription_at_once_not_one_join_timeout_after_another() throws Exception {
+        // EventLog.stop() used to stop subscriptions one by one, so each stuck handler added its full join timeout before
+        // the next one was even interrupted
+        var entered     = new CountDownLatch(3);
+        var interrupted = new java.util.concurrent.ConcurrentLinkedQueue<Long>();
+        var release     = new CountDownLatch(1);
+        PeriodicHandler stubborn = event -> {
+            entered.countDown();
+            while (true) {
+                try {
+                    if (release.await(10, TimeUnit.SECONDS)) {
+                        return;
+                    }
+                } catch (InterruptedException ignored) {
+                    // a handler that swallows the interrupt
+                    interrupted.add(System.nanoTime());
+                    if (interrupted.size() == 3) {
+                        release.countDown();
+                    }
+                }
+            }
+        };
+        var stuck = java.util.List.of(subscribe("stubborn-1", stubborn, TestSeams.NONE, 1),
+                                      subscribe("stubborn-2", stubborn, TestSeams.NONE, 1),
+                                      subscribe("stubborn-3", stubborn, TestSeams.NONE, 1));
+        stuck.forEach(subscription -> subscription.stopJoinTimeout = Duration.ofSeconds(1));
+        commitAppend("a", 1);
+        assertThat(entered.await(30, TimeUnit.SECONDS)).isTrue();
+
+        eventLog.stop();
+
+        assertThat(interrupted).hasSize(3);
+        var spread = Duration.ofNanos(java.util.Collections.max(interrupted) - java.util.Collections.min(interrupted));
+        assertThat(spread).as("one after another they were interrupted a join timeout (1 s) apart").isLessThan(Duration.ofMillis(500));
+        await().atMost(WAIT).until(() -> stuck.stream().noneMatch(Subscription::isRunning));
+    }
+
+    @Test
     void a_parked_request_made_while_the_subscription_stops_completes() throws Exception {
         var drained = new CountDownLatch(1);
         var release = new CountDownLatch(1);

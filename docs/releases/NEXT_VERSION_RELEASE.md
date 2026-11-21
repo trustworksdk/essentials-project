@@ -955,6 +955,10 @@ Hardened before release (code review of the preview). Each item changed what an 
   store's `AggregateEventStreamConfiguration` as on the classic engine. Before, every handler got a `String`, so a
   handler ported by swapping its superclass failed at runtime. `EventLogProcessorDependencies` has a fourth component,
   `aggregateIdSerializers`; its three-argument constructor keeps `String` ids, and the starter wires the event store's.
+- `EventLog.stop()` interrupts every subscription first and then waits for them together, so a shutdown with several
+  handlers that ignore interrupts waits one join timeout (30 s) rather than one per stuck subscription. Before, each
+  stuck subscription was interrupted only after the previous one's timeout had run out; each still logs its own
+  warning naming the subscription.
 - The annotated processor base classes deliver the application's own `Tenant` type, read with each aggregate type's
   `TenantSerializer` from the event store's configuration, the one the `EventLogEventStore` adapter writes with. Before,
   every tenant was read as a `TenantId`, so with a `TenantSerializer` bean of your own a handler that cast
