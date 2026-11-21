@@ -72,6 +72,26 @@ class WakeTierTest {
     }
 
     @Test
+    void a_send_interrupted_inside_the_sender_leaves_the_idle_notifier_parked_not_spinning() throws Exception {
+        // send() used to restore the interrupt flag, so every park() in run() returned at once: 100 % CPU while idle
+        var notifierThread = new java.util.concurrent.atomic.AtomicReference<Thread>();
+        var notifier = new WakeNotifier("inst0001", (channel, payloads) -> {
+            notifierThread.set(Thread.currentThread());
+            throw new InterruptedException("driver interrupted");
+        }, () -> TestSeams.NONE);
+        notifier.add("Orders");
+        await().atMost(Duration.ofSeconds(5)).until(() -> notifierThread.get() != null);
+
+        // Idle again: the thread must settle parked (WAITING) and stay there
+        await().atMost(Duration.ofSeconds(5)).until(() -> notifierThread.get().getState() == Thread.State.WAITING);
+        for (int i = 0; i < 50; i++) {
+            Thread.sleep(2);
+            assertThat(notifierThread.get().getState()).as("the idle notifier spins").isIn(Thread.State.WAITING, Thread.State.TERMINATED);
+        }
+        notifier.stop();
+    }
+
+    @Test
     void a_failed_send_is_dropped_not_retried() {
         var attempts = new CopyOnWriteArrayList<List<String>>();
         var notifier = new WakeNotifier("inst0001", (channel, payloads) -> {

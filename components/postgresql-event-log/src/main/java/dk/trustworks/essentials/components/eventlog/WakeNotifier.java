@@ -216,9 +216,9 @@ final class WakeNotifier {
         } catch (Exception e) {
             failures.increment();
             log.debug("Sending {} wake notification(s) failed; dropped (the backstop covers them)", payloads.size(), e);
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
+            // The notifier owns its thread and ends through stop(), never by interrupt: a restored interrupt flag made
+            // every park() in run() return at once, so the idle notifier spun for the rest of the EventLog's life
+            Thread.interrupted();
         }
     }
 

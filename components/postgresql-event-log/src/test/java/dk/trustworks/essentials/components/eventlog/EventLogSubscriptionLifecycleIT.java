@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.concurrent.*;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -57,6 +57,40 @@ class EventLogSubscriptionLifecycleIT extends AbstractSubscriptionIT {
         assertThat(subscription.isRunning()).as("the handler still runs").isTrue();
         release.countDown();
         await().atMost(WAIT).until(() -> !subscription.isRunning());
+    }
+
+    @Test
+    void a_non_exclusive_re_subscribe_is_refused_while_the_old_delivery_thread_outlives_stop() throws Exception {
+        // Only exclusive subscribes used to check isRunning(): a non-exclusive re-subscribe of the same key started a
+        // second delivery thread on the same progress row next to the one still running - duplicate deliveries
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        PeriodicHandler stubborn = event -> {
+            entered.countDown();
+            while (true) {
+                try {
+                    if (release.await(10, TimeUnit.SECONDS)) {
+                        return;
+                    }
+                } catch (InterruptedException ignored) {
+                    // a handler that swallows the interrupt
+                }
+            }
+        };
+        var subscription = subscribe("stubborn", stubborn, TestSeams.NONE, 1);
+        subscription.stopJoinTimeout = Duration.ofMillis(100);
+        commitAppend("a", 1);
+        assertThat(entered.await(30, TimeUnit.SECONDS)).isTrue();
+        subscription.stop();
+        assertThat(subscription.isRunning()).isTrue();
+
+        assertThatThrownBy(() -> subscribe("stubborn", event -> { }, TestSeams.NONE, 1))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already running");
+
+        release.countDown();
+        await().atMost(WAIT).until(() -> !subscription.isRunning());
+        assertThat(subscribe("stubborn", event -> { }, TestSeams.NONE, 1).isRunning()).as("once the old thread has ended").isTrue();
     }
 
     @Test

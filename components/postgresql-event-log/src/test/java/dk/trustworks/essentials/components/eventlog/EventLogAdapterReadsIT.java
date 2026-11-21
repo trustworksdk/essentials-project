@@ -167,6 +167,18 @@ class EventLogAdapterReadsIT extends AbstractEventLogIT {
     }
 
     @Test
+    void a_type_refused_at_registration_does_not_stay_registered_and_break_find_caused_by() throws SQLException {
+        // "orders" maps to the table of "Orders": the registration is refused, and it used to stay in the registered set,
+        // so findCausedBy - which reads every registered type - threw for every caller from then on
+        assertThatThrownBy(() -> eventLog.registerAggregateType("orders")).isInstanceOf(IllegalStateException.class).hasMessageContaining("already belongs");
+        assertThatThrownBy(() -> eventLog.registerAggregateType("orders")).as("refused again, not silently accepted").isInstanceOf(IllegalStateException.class);
+
+        try (var connection = dataSource.getConnection()) {
+            assertThat(eventLog.findCausedBy(connection, UUID.randomUUID())).isEmpty();
+        }
+    }
+
+    @Test
     void the_events_caused_by_an_event_come_from_every_registered_type_on_the_partial_caused_by_index() throws SQLException {
         var cause   = UUID.randomUUID();
         var other   = UUID.randomUUID();

@@ -449,8 +449,9 @@ cut-over except restoring a backup; rehearse it on a copy first.
   after `retry-attempts` retries the event is parked (as the classic Inbox dead-letters). Raise `retry-attempts` /
   `retry-backoff-max` for a subscription that must ride out a longer outage, and retry the parked aggregates after it.
 - ⚠️ **`stop()` returns after 30 s even if a handler ignores interrupts**, with a WARN; `isRunning()` stays `true`
-  until the delivery thread really ends; until then, in the same `EventLog`, a re-subscribe of the same exclusive key and
-  `deleteRetiredInstance` of its row are refused with `IllegalStateException`.
+  until the delivery thread really ends; until then, in the same `EventLog`, a re-subscribe of the same key (exclusive or
+  not) and `deleteRetiredInstance` of its row are refused with `IllegalStateException`. `EventLog.stop()` interrupts
+  every subscription first and waits for them together, so several stuck handlers cost one timeout, not one each.
 - ⚠️ **An exclusive in-transaction subscription's parked retry must finish within `lease-local-stop`** (7 s by default):
   it hands every held event of the aggregate to the handler in one transaction that holds the progress row, which the
   lease renewal waits on, so a slower retry is rolled back and the aggregate stays parked. Raise `lease-local-stop` /

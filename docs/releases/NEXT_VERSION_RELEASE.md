@@ -960,6 +960,15 @@ Hardened before release (code review of the preview). Each item changed what an 
   `rebuild(truncate)`. Before, only processor-owned views were refused; a `ViewProjection` bean's reset moved the resume
   point and the projection re-applied events on top of the rows its view already held, so a counter or an insert-only
   view double-counted. A reset that is intended stays available as `EventLog.admin().reset(key, from)`.
+- A non-exclusive re-subscribe of a key whose old delivery thread is still running (a handler that ignored the
+  interrupt and outlived `stop()`) is refused with `IllegalStateException` ("... is already running in this EventLog"),
+  as an exclusive one already was. Before, it started a second delivery thread on the same progress row, and events
+  were delivered twice.
+- An aggregate type whose registration is refused (for example `orders` after `Orders`, which map to the same table)
+  no longer stays registered. Before, every later `EventLog.findCausedBy` (and so the adapter's `loadEventsCausedBy`)
+  threw `IllegalStateException` for every caller, and a second `registerAggregateType` of it returned without error.
+- The wake-up notifier no longer spins a CPU core when a send is interrupted inside the JDBC driver. Before, it
+  restored the interrupt flag, so the idle notifier never parked again for the life of the `EventLog`.
 - `EventLog.stop()` interrupts every subscription first and then waits for them together, so a shutdown with several
   handlers that ignore interrupts waits one join timeout (30 s) rather than one per stuck subscription. Before, each
   stuck subscription was interrupted only after the previous one's timeout had run out; each still logs its own

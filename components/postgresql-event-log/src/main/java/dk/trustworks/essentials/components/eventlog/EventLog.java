@@ -52,7 +52,7 @@ public final class EventLog {
     private final ReaderLoop                                          readerLoop;
     private final List<Subscription>                             subscriptions  = new java.util.concurrent.CopyOnWriteArrayList<>();
     /** Exclusive keys between their duplicate check and their registration in {@link #subscriptions}; guarded by itself */
-    private final Set<ProgressStore.Key>                         exclusiveStarting = new HashSet<>();
+    private final Set<ProgressStore.Key>                         starting = new HashSet<>();
     private volatile boolean                                          started;
     private final EventTypeIndex                                      eventTypeIndex;
     private final EventTypeIndex                                      tenantIndex;
@@ -388,17 +388,18 @@ public final class EventLog {
         var catchUp       = new Subscription.CatchUpContext(eventTypes, permits, ownPermits, () -> eventTypeIndex.valid(aggregateType),
                                                             () -> tenantIndex.valid(aggregateType));
         Lease lease = null;
-        if (spec.exclusive()) {
-            // Check and reserve in one step: two concurrent subscribes of one key would otherwise both pass and share the lease owner
-            synchronized (exclusiveStarting) {
-                for (var running : subscriptions) {
-                    if (running.lease() != null && running.lease().key().equals(spec.key()) && running.isRunning()) {
-                        throw new IllegalStateException("Exclusive subscription " + spec.key().subscriber() + " on " + aggregateType + " is already running in this EventLog");
-                    }
+        // Check and reserve in one step, for every key: two concurrent subscribes of one exclusive key would otherwise both
+        // pass and share the lease owner, and a re-subscribe of a key whose old delivery thread outlived stop() (a handler
+        // that ignores interrupts) would run a second thread on the same progress row - duplicate deliveries
+        synchronized (starting) {
+            for (var running : subscriptions) {
+                if (running.key().equals(spec.key()) && running.isRunning()) {
+                    throw new IllegalStateException((spec.exclusive() ? "Exclusive subscription " : "Subscription ") + spec.key().subscriber() + " on " + aggregateType +
+                                                            (spec.exclusive() ? "" : " (instance " + spec.key().instanceName() + ")") + " is already running in this EventLog");
                 }
-                if (!exclusiveStarting.add(spec.key())) {
-                    throw new IllegalStateException("Exclusive subscription " + spec.key().subscriber() + " on " + aggregateType + " is already starting in this EventLog");
-                }
+            }
+            if (!starting.add(spec.key())) {
+                throw new IllegalStateException("Subscription " + spec.key().subscriber() + " on " + aggregateType + " is already starting in this EventLog");
             }
         }
         try {
@@ -412,10 +413,8 @@ public final class EventLog {
             subscriptions.add(subscription);
             return subscription;
         } finally {
-            if (spec.exclusive()) {
-                synchronized (exclusiveStarting) {
-                    exclusiveStarting.remove(spec.key());
-                }
+            synchronized (starting) {
+                starting.remove(spec.key());
             }
         }
     }
@@ -479,7 +478,8 @@ public final class EventLog {
         }
         ddl.execute(tables, EventLogSchemaContributor.aggregateTypeStatements(tables));
         var registered = new RegisteredAggregateType(tables);
-        if (aggregateTypes.putIfAbsent(aggregateType, registered) == null) {
+        var added      = aggregateTypes.putIfAbsent(aggregateType, registered) == null;
+        if (added) {
             if (settings.eventTypeIndexed().contains(aggregateType)) {
                 eventTypeIndex.ensure(tables);
             }
@@ -496,6 +496,13 @@ public final class EventLog {
                     aggregateTypes.get(aggregateType).verify(connection);
                 }
             }
+        } catch (SQLException | RuntimeException e) {
+            // A type that fails verification (e.g. "Orders" after "orders": the same table) must not stay registered:
+            // findCausedBy reads every registered type and would throw for every caller from then on
+            if (added) {
+                aggregateTypes.remove(aggregateType, registered);
+            }
+            throw e;
         }
         return tables;
     }
