@@ -372,7 +372,8 @@ observer bean **replaces** it - to keep both, extend `MicrometerEventLogObserver
 | `essentials.eventlog.lease.renewal_failed` | counter, no subscriber tag | lease keeper passes that failed |
 
 The lag reads 0 on a node that lost or suspended an exclusive subscription's lease (another node delivers) until it
-owns it again and saves; a stopped subscription's meters are removed (`EventLogObserver.onStopped`). An observer that
+owns it again and saves; a stopped subscription's meters are removed once the last instance of that subscriber on that type stops
+(`EventLogObserver.onStarted` / `onStopped`, one pair per delivery thread; instances share their meters). An observer that
 throws is logged (WARN at most once a minute) and ignored - it never stops delivery.
 
 Meters are cached per subscription and updated per page, read or failure, never per event.

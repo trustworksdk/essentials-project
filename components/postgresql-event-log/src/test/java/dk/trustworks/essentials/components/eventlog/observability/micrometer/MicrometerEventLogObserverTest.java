@@ -63,6 +63,36 @@ class MicrometerEventLogObserverTest {
     }
 
     @Test
+    void two_instances_of_one_subscriber_keep_their_shared_meters_until_the_last_one_stops() {
+        // Instances of one subscriber on one type share their meters (same tags); the first stop used to remove them
+        // under the instance still running, whose counters then restarted from zero
+        observer.onStarted(VIEW, ORDERS);
+        observer.onStarted(VIEW, ORDERS);
+        observer.onError(VIEW, ORDERS, new IllegalStateException("boom"));
+
+        observer.onStopped(VIEW, ORDERS);
+        assertThat(registry.get(FAILED_METRIC).tag(SUBSCRIBER_TAG, VIEW).counter().count()).as("the other instance still runs").isEqualTo(1);
+
+        observer.onStopped(VIEW, ORDERS);
+        assertThat(registry.find(FAILED_METRIC).tag(SUBSCRIBER_TAG, VIEW).counters()).isEmpty();
+    }
+
+    @Test
+    void a_lease_callback_after_the_stop_registers_no_meters_again() {
+        // A renewal pass in flight when the subscription stops reports the loss after onStopped: it used to register
+        // six meters that nothing removed
+        observer.onStarted(VIEW, ORDERS);
+        observer.onProgressSaved(VIEW, ORDERS, 5);
+        observer.onStopped(VIEW, ORDERS);
+
+        observer.onLeaseLost(VIEW, ORDERS, "fence moved");
+        observer.onLeaseSuspended(VIEW, ORDERS);
+
+        assertThat(registry.find(LAG_METRIC).tag(SUBSCRIBER_TAG, VIEW).gauges()).isEmpty();
+        assertThat(registry.find(LEASE_LOST_METRIC).tag(SUBSCRIBER_TAG, VIEW).counters()).isEmpty();
+    }
+
+    @Test
     void the_lag_is_the_events_between_the_saved_resume_point_and_the_readers_cursor() {
         observer.onProgressSaved(VIEW, ORDERS, 1);
         // No read yet: the tail is unknown, which reads as no lag

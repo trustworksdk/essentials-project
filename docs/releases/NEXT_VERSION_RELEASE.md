@@ -960,6 +960,11 @@ Hardened before release (code review of the preview). Each item changed what an 
   `rebuild(truncate)`. Before, only processor-owned views were refused; a `ViewProjection` bean's reset moved the resume
   point and the projection re-applied events on top of the rows its view already held, so a counter or an insert-only
   view double-counted. A reset that is intended stays available as `EventLog.admin().reset(key, from)`.
+- Event-log metrics: stopping one instance of a subscriber no longer removes the meters that another running instance
+  of it on the same aggregate type shares (same tags); they are removed when the last one stops. Before, the running
+  instance's `failed`/`parked` counters and lag gauge disappeared and came back from zero. A lease loss reported after
+  the stop no longer registers meters that nothing removes. New `EventLogObserver.onStarted` (default no-op) pairs with
+  `onStopped`.
 - A non-exclusive re-subscribe of a key whose old delivery thread is still running (a handler that ignored the
   interrupt and outlived `stop()`) is refused with `IllegalStateException` ("... is already running in this EventLog"),
   as an exclusive one already was. Before, it started a second delivery thread on the same progress row, and events

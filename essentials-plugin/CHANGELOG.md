@@ -9,7 +9,8 @@ targets, with a `-N` suffix for plugin-only releases.
   aggregate type's tenant with its `TenantSerializer` from the event store's configuration (a `TenantId` without a
   `TenantSerializer` bean). The admin reset also refuses a `ViewProjection` bean's subscription (use its
   `rebuild(truncate)`), and the reference says a reset undoes nothing a handler wrote. The `stop()` gotcha says a re-subscribe of any key, not
-  only an exclusive one, is refused while the old delivery thread runs. No skill, rule or script changed.
+  only an exclusive one, is refused while the old delivery thread runs. Meters are removed when the last instance stops
+  (`onStarted`/`onStopped`). No skill, rule or script changed.
 
 ## 0.60.1-22 — targets Essentials 0.60.1
 

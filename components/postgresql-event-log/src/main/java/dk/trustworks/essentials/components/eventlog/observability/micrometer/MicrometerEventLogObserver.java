@@ -64,6 +64,8 @@ public class MicrometerEventLogObserver implements EventLogObserver {
     private final MeterRegistry                                registry;
     private final String                                       moduleTag;
     private final ConcurrentHashMap<Key, SubscriptionMeters>   subscriptions = new ConcurrentHashMap<>();
+    /** How many subscriptions with each key run here, from {@link #onStarted} to {@link #onStopped} */
+    private final ConcurrentHashMap<Key, Integer> running = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AtomicLong>        cursors       = new ConcurrentHashMap<>();
     private final Counter                                      renewalFailed;
 
@@ -90,6 +92,16 @@ public class MicrometerEventLogObserver implements EventLogObserver {
 
     private AtomicLong cursor(String aggregateType) {
         return cursors.computeIfAbsent(aggregateType, type -> new AtomicLong(Long.MIN_VALUE));
+    }
+
+    /**
+     * The meters of a subscription still running here, or {@code null} once the last one with its key stopped: a lease
+     * callback racing the stop must not register meters that nothing removes again
+     */
+    private SubscriptionMeters metersIfRunning(String subscriber, String aggregateType) {
+        var key    = new Key(subscriber, aggregateType);
+        var meters = subscriptions.get(key);
+        return meters != null || !running.containsKey(key) ? meters : meters(subscriber, aggregateType);
     }
 
     private SubscriptionMeters meters(String subscriber, String aggregateType) {
@@ -165,7 +177,10 @@ public class MicrometerEventLogObserver implements EventLogObserver {
 
     @Override
     public void onLeaseLost(String subscriber, String aggregateType, String reason) {
-        var meters = meters(subscriber, aggregateType);
+        var meters = metersIfRunning(subscriber, aggregateType);
+        if (meters == null) {
+            return;
+        }
         meters.leaseLost.increment();
         // A standby delivers nothing: its saved position freezes while the shared cursor moves on, so the lag would grow
         // without bound on every node but the owner. Unknown (0) until it owns the lease and saves again
@@ -174,15 +189,30 @@ public class MicrometerEventLogObserver implements EventLogObserver {
 
     @Override
     public void onLeaseSuspended(String subscriber, String aggregateType) {
-        meters(subscriber, aggregateType).resumeFrom.set(Long.MIN_VALUE);
+        var meters = metersIfRunning(subscriber, aggregateType);
+        if (meters != null) {
+            meters.resumeFrom.set(Long.MIN_VALUE);
+        }
+    }
+
+    @Override
+    public void onStarted(String subscriber, String aggregateType) {
+        running.merge(new Key(subscriber, aggregateType), 1, Integer::sum);
     }
 
     @Override
     public void onStopped(String subscriber, String aggregateType) {
-        var meters = subscriptions.remove(new Key(subscriber, aggregateType));
-        if (meters != null) {
-            meters.remove();
-        }
+        // Instances of one subscriber on one type share their meters (same tags): only the last one to stop removes them
+        running.compute(new Key(subscriber, aggregateType), (key, count) -> {
+            if (count != null && count > 1) {
+                return count - 1;
+            }
+            var meters = subscriptions.remove(key);
+            if (meters != null) {
+                meters.remove();
+            }
+            return null;
+        });
     }
 
     @Override

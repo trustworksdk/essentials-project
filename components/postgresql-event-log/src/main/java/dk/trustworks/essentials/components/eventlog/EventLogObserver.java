@@ -264,6 +264,13 @@ public interface EventLogObserver {
     }
 
     /**
+     * The subscription's delivery thread started - first call for this subscription, always followed by
+     * {@link #onStopped}. Several instances of one subscriber on one type each make their own pair.
+     */
+    default void onStarted(String subscriber, String aggregateType) {
+    }
+
+    /**
      * The subscription ended - {@code stop()}, a failed start or a fatal error - and its delivery thread is done. Delivery
      * thread, last call for this subscription. For an observer that keeps per-subscription state (meters) to drop it.
      */

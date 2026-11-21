@@ -564,6 +564,7 @@ final class Subscription {
     }
 
     private void run() {
+        observer.onStarted(key.subscriber(), key.aggregateType());
         try {
             try {
                 if (lease == null) {

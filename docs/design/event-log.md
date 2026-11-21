@@ -343,8 +343,9 @@ so a missing one fails as `SchemaValidationException`.
 thread) is the engine's only metrics seam. The engine wraps the observer it is given (`SafeEventLogObserver`), so a
 callback that throws is caught and logged (a WARN at most once a minute) and never ends the reader loop, a delivery thread
 or the lease keeper. `onStopped` is the last call for a subscription - after `stop()`, a failed start or a fatal error,
-once its delivery thread is done - so an observer that keeps per-subscription state drops it there; the Micrometer
-observer removes that subscription's meters. `MicrometerEventLogObserver` binds it: a lag gauge (`essentials.eventlog.subscription.lag`
+once its delivery thread is done - so an observer that keeps per-subscription state drops it there. Each delivery thread makes one `onStarted`/`onStopped`
+pair; the Micrometer observer counts them per (subscriber, type), since instances share their meters, and removes the
+meters when the last one stops. A lease callback after that registers nothing again. `MicrometerEventLogObserver` binds it: a lag gauge (`essentials.eventlog.subscription.lag`
 = the type's reader cursor, reported by `onReaderCursor` once per tail read, minus the saved resume point from
 `onProgressSaved`, plus one), counters `subscription.failed`/`parked`/`lease_lost` and `lease.renewal_failed`, and a
 `subscription.page` timer by outcome, fed by the `nanos` variants of `onPageCommitted`/`onPageFailed` (one `nanoTime` at
