@@ -10,7 +10,7 @@ networks:
 services:
   postgresql:
     container_name: essentials-trading-demo-postgresql
-    image: essentials-postgres:17.5
+    image: essentials-postgres:17.5-2
     build:
       context: ../../docker/postgresql
       dockerfile: Dockerfile

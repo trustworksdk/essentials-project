@@ -31,6 +31,7 @@ import org.slf4j.*;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -72,9 +73,28 @@ public final class Wal2JsonLogicalDecodingPlugin implements LogicalDecodingPlugi
 
     @Override
     public Optional<String> unusableReason(Handle handle) {
+        // Read before the probe: a refused slot creation can leave the handle's transaction aborted
+        var allowList = handle.createQuery("SELECT setting FROM pg_settings WHERE name = 'output_plugin_libraries'").mapTo(String.class).findOne();
         return PostgresqlUtil.isOutputPluginUsable(handle, pluginName())
                ? Optional.empty()
-               : Optional.of("wal2json plugin not usable");
+               : Optional.of(unusableReason(allowList));
+    }
+
+    /**
+     * @param outputPluginLibraries the server's {@code output_plugin_libraries}, empty on a server without the setting
+     * @return why wal2json cannot be used - naming the allow-list when it leaves wal2json out
+     */
+    static String unusableReason(Optional<String> outputPluginLibraries) {
+        if (outputPluginLibraries.isPresent() && Arrays.stream(outputPluginLibraries.get().split(",")).map(String::trim).noneMatch(PLUGIN_NAME::equals)) {
+            // PostgreSQL 17.12 and 18 allow only the output plugins listed there (default pgoutput, test_decoding)
+            return "wal2json plugin not usable: the server allows only the output plugins in output_plugin_libraries ('" + outputPluginLibraries.get() +
+                    "'). Add wal2json - in postgresql.conf: output_plugin_libraries = '" + outputPluginLibraries.get() + ", wal2json', or as superuser: " +
+                    "ALTER SYSTEM SET output_plugin_libraries = " + String.join(", ", Arrays.stream((outputPluginLibraries.get() + ",wal2json").split(","))
+                                                                                              .map(String::trim).filter(name -> !name.isEmpty())
+                                                                                              .map(name -> "'" + name + "'").toList()) +
+                    " (each name quoted on its own) - then SELECT pg_reload_conf(). Or use the pgoutput plugin";
+        }
+        return "wal2json plugin not usable";
     }
 
     @Override

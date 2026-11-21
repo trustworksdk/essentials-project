@@ -960,6 +960,17 @@ Hardened before release (code review of the preview). Each item changed what an 
   `rebuild(truncate)`. Before, only processor-owned views were refused; a `ViewProjection` bean's reset moved the resume
   point and the projection re-applied events on top of the rows its view already held, so a counter or an insert-only
   view double-counted. A reset that is intended stays available as `EventLog.admin().reset(key, from)`.
+- CDC with `wal2json` on PostgreSQL 17.12 or 18: such a server refuses an output plugin that is not listed in
+  `output_plugin_libraries` (default `pgoutput, test_decoding`), so slot creation fails with `library "wal2json" may not
+  be used as an output plugin` - under `cdc.mode=require` start-up fails, under `auto` subscribers silently stay on
+  polling. What to do: add `wal2json` to the setting (`postgresql.conf`: `output_plugin_libraries = 'pgoutput,
+  test_decoding, wal2json'`; SQL: `ALTER SYSTEM SET output_plugin_libraries = 'pgoutput', 'test_decoding', 'wal2json'`,
+  each name quoted on its own, then `SELECT pg_reload_conf()`), or use `pgoutput`. The usability check's reason now says
+  this; before, it read only "wal2json plugin not usable". `pgoutput` is unaffected.
+- The repository's PostgreSQL test image (`docker/postgresql`, now `essentials-postgres:17.5-2`) runs the server its tag
+  names: it shipped the builder's whole PostgreSQL tree, so the 17.5 image ran 17.12. Its extensions are now compiled
+  against exactly the base image's server version, pg_cron is 1.6.8 (1.6.4 does not compile on 18), and the CDC tests
+  use this image instead of a second one. Any base works: `-Dessentials.postgres.base-image=postgres:18-bookworm`.
 - The event-log engine works on a connection pool configured to hand out connections with auto-commit off (for
   example `spring.datasource.hikari.auto-commit=false`, a common Hibernate setting). Its writes outside its own
   transactions assumed auto-commit: on such a pool a parked event's row and a periodic subscription's resume point were

@@ -51,7 +51,8 @@
           The wal2json image the CDC integration tests run on, built once below before any failsafe fork starts.
           Bump the tag whenever its Dockerfile changes: an IDE run reuses whatever image carries this name.
         -->
-        <essentials.wal2json.test-image>essentials-test/postgres-wal2json:1</essentials.wal2json.test-image>
+        <!-- The repository's PostgreSQL test image (docker/postgresql: pg_cron and wal2json), the one foundation builds -->
+        <essentials.wal2json.test-image>${essentials.postgres.image}</essentials.wal2json.test-image>
     </properties>
 
 
@@ -284,10 +285,11 @@
                 </configuration>
             </plugin>
             <!--
-              Builds the CDC tests' wal2json image in Maven's own process, before failsafe forks a JVM. Each fork used to
-              build it through ImageFromDockerfile; two forks building the same tag at once left one of them unable to
-              find it, and Testcontainers then tried to pull the local-only name from Docker Hub (404). Same pattern as
-              essentials-postgres in components/foundation.
+              Builds the CDC tests' image (the repository's essentials-postgres, which carries wal2json) in Maven's own
+              process, before failsafe forks a JVM, so a run of this module alone has it too; in a reactor build it is
+              foundation's image again, from the build cache. Each fork used to build it through ImageFromDockerfile; two
+              forks building the same tag at once left one of them unable to find it, and Testcontainers then tried to
+              pull the local-only name from Docker Hub (404).
             -->
             <plugin>
                 <groupId>io.fabric8</groupId>
@@ -298,8 +300,11 @@
                         <image>
                             <name>${essentials.wal2json.test-image}</name>
                             <build>
-                                <dockerFile>${project.basedir}/src/test/resources/docker/postgresql-wal2json/Dockerfile</dockerFile>
-                                <contextDir>${project.basedir}/src/test/resources/docker/postgresql-wal2json</contextDir>
+                                <dockerFile>${project.basedir}/../../docker/postgresql/Dockerfile</dockerFile>
+                                <contextDir>${project.basedir}/../../docker/postgresql</contextDir>
+                                <args>
+                                    <POSTGRES_IMAGE>${essentials.postgres.base-image}</POSTGRES_IMAGE>
+                                </args>
                             </build>
                         </image>
                     </images>

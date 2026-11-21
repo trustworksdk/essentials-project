@@ -606,7 +606,7 @@ class CurrentEngineBaselineSpikeIT {
     private static final List<String> P6_ARMS  = Arrays.stream(System.getProperty("spike.baseline.p6Arms", "S1_1000,S1_200,CDC").split(",")).map(String::trim)
                                                        .filter(v -> !v.isEmpty()).toList();
     private static final List<Integer> P6_RATES = counts(System.getProperty("spike.baseline.p6Rates", "1,10,100"));
-    private static final String       CDC_IMAGE = System.getProperty("essentials.wal2json.test-image", "essentials-test/postgres-wal2json:1");
+    private static final String       CDC_IMAGE = System.getProperty("essentials.wal2json.test-image", "essentials-postgres:17.5-2");
 
     /**
      * Phase 6 §7.1's baselines: today's engine with the starter's wiring, one writer appending one event per unit of

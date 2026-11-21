@@ -64,6 +64,7 @@ assume on an application's behalf. Enabling it should be a conscious act.
 | `max_wal_senders` ≥ slots + headroom | One walsender per active tailer | `SHOW max_wal_senders;` |
 | DB role with `REPLICATION` (or superuser) | The tailer opens a replication connection, separate from the pooled one | `\du` |
 | Decoding plugin available | `pgoutput` is built into PostgreSQL; `wal2json` is an extension that must be installed | `SELECT * FROM pg_get_replication_slots();` / see §2 |
+| `wal2json` only: listed in `output_plugin_libraries` (PostgreSQL 17.12, 18 - servers that have the setting) | Such a server refuses any output plugin not on the list (default `pgoutput, test_decoding`): slot creation fails with `library "wal2json" may not be used as an output plugin`. In `postgresql.conf`: `output_plugin_libraries = 'pgoutput, test_decoding, wal2json'`; in SQL each name is quoted on its own - `ALTER SYSTEM SET output_plugin_libraries = 'pgoutput', 'test_decoding', 'wal2json'` (one quoted `'a, b'` is a single name) - then `SELECT pg_reload_conf()`; no restart | `SHOW output_plugin_libraries;` |
 | A publication covering the event-stream tables (pgoutput only) | pgoutput streams only what the publication includes | `SELECT * FROM pg_publication_tables;` — see §4 |
 
 The publication is the one that catches people out. Either create it yourself, or let
