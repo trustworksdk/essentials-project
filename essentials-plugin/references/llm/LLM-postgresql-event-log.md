@@ -78,7 +78,7 @@ Enabled, the starter (`EventLogAutoConfiguration`) declares:
 | `EventLogEventStore` (`essentialsEventStore`) | The `EventStore` for repositories. Backs off from an `EventStore` bean of your own |
 | Unit-of-work factory, `EventStoreEventBus`, `JSONEventSerializer`, `PersistableEventMapper`, causation beans | Built as the classic starter builds them; each backs off from a bean of your own |
 | `PageTransactionSource` | `SpringPageTransactions` with a `PlatformTransactionManager`, else `UnitOfWorkPageTransactions` |
-| `EventLogProcessorDependencies` | Constructor argument of the four base classes below; carries each aggregate type's `AggregateIdSerializer`, from the event store's configuration |
+| `EventLogProcessorDependencies` | Constructor argument of the four base classes below; carries each aggregate type's `AggregateIdSerializer` and `TenantSerializer`, from the event store's configuration (the single-tenant default reads a tenant as `TenantId`) |
 | `EventLogProcessorLifecycle` | Starts every `ViewProjection` and `EventReactor` **bean** after refresh (registering its aggregate type first) and stops them before the `EventLog` |
 | `EventLogSubscriptionsApi` | With `spring-boot-starter-admin-api` and an `EssentialsSecurityProvider` |
 

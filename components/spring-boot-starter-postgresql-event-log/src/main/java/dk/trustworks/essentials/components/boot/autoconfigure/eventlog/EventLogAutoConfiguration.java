@@ -34,6 +34,7 @@ import dk.trustworks.essentials.components.foundation.causation.CausationCommand
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.messaging.queue.CausationDurableQueuesInterceptor;
 import dk.trustworks.essentials.components.foundation.schema.*;
+import dk.trustworks.essentials.components.foundation.types.Tenant;
 import dk.trustworks.essentials.reactive.*;
 import dk.trustworks.essentials.reactive.command.AbstractCommandBus;
 import org.jdbi.v3.core.Jdbi;
@@ -379,15 +380,29 @@ public class EventLogAutoConfiguration {
     @ConditionalOnMissingBean
     public EventLogProcessorDependencies eventLogProcessorDependencies(EventLog eventLog, JSONEventSerializer serializer, PageTransactionSource pageTransactionSource,
                                                                       ObjectProvider<ConfigurableEventStore<?>> eventStores) {
-        // Each aggregate type's id serializer from the event store's configuration, as the old engine's processors resolve it
-        // (String ids when the application declares an EventStore that is not configurable)
+        // Each aggregate type's id and tenant serializers from the event store's configuration, as the old engine's processors
+        // resolve them (String ids and TenantId tenants when the application declares an EventStore that is not configurable)
         return new EventLogProcessorDependencies(eventLog, serializer, pageTransactionSource,
-                                                 aggregateType -> {
-                                                     var eventStore = eventStores.getIfAvailable();
-                                                     return eventStore == null ? new AggregateIdSerializer.StringIdSerializer()
-                                                                               : eventStore.findAggregateEventStreamConfiguration(AggregateType.of(aggregateType))
-                                                                                           .<AggregateIdSerializer>map(configuration -> configuration.aggregateIdSerializer)
-                                                                                           .orElseGet(AggregateIdSerializer.StringIdSerializer::new);
-                                                 });
+                                                 aggregateType -> configurationOf(eventStores, aggregateType)
+                                                         .<AggregateIdSerializer>map(configuration -> configuration.aggregateIdSerializer)
+                                                         .orElseGet(AggregateIdSerializer.StringIdSerializer::new),
+                                                 aggregateType -> configurationOf(eventStores, aggregateType)
+                                                         .map(EventLogAutoConfiguration::tenantSerializerOf)
+                                                         // The single-tenant default throws on any tenant it reads; an event appended through the
+                                                         // EventLog directly can still carry one, so it is read as a TenantId, as before
+                                                         .filter(tenantSerializer -> !(tenantSerializer instanceof TenantSerializer.NoSupportForMultiTenancySerializer))
+                                                         .orElseGet(TenantSerializer.TenantIdSerializer::new));
+    }
+
+    private static Optional<AggregateEventStreamConfiguration> configurationOf(ObjectProvider<ConfigurableEventStore<?>> eventStores, String aggregateType) {
+        var eventStore = eventStores.getIfAvailable();
+        return eventStore == null ? Optional.empty()
+                                  : eventStore.findAggregateEventStreamConfiguration(AggregateType.of(aggregateType)).map(AggregateEventStreamConfiguration.class::cast);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static TenantSerializer<? extends Tenant> tenantSerializerOf(AggregateEventStreamConfiguration configuration) {
+        // The configuration's field is a raw TenantSerializer
+        return (TenantSerializer<? extends Tenant>) configuration.tenantSerializer;
     }
 }

@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.eventlog.processor;
 import dk.trustworks.essentials.components.eventlog.StoredEvent;
 import dk.trustworks.essentials.components.eventlog.processor.test_data.Added;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.EventMetaData;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
 import dk.trustworks.essentials.components.foundation.types.*;
 import org.junit.jupiter.api.Test;
@@ -75,6 +75,47 @@ class EventDeserializerTest {
 
         assertThat(dependencies.deserializerFor("Orders").deserialize(stored).aggregateId()).isEqualTo(EventId.of("o1"));
         assertThat(dependencies.deserializerFor("Invoices").deserialize(stored).aggregateId()).isEqualTo("o1");
+    }
+
+    /** An application's own tenant type, as an application with a TenantSerializer bean of its own has */
+    record CountryTenant(String country) implements Tenant {
+    }
+
+    static class CountryTenantSerializer implements TenantSerializer<CountryTenant> {
+        @Override
+        public Class<?> tenantType() {
+            return CountryTenant.class;
+        }
+
+        @Override
+        public String serialize(CountryTenant tenant) {
+            return tenant == null ? null : tenant.country();
+        }
+
+        @Override
+        public Optional<CountryTenant> deserialize(String tenant) {
+            return Optional.ofNullable(tenant).map(CountryTenant::new);
+        }
+    }
+
+    @Test
+    void the_dependencies_give_each_aggregate_type_the_tenant_type_its_event_store_configuration_writes() {
+        // The tenant serializer used to be hard-wired to TenantId: a handler casting event.tenant() to the application's
+        // tenant type got a ClassCastException and the event was parked
+        var eventLog = dk.trustworks.essentials.components.eventlog.EventLog.builder().setDataSource(new org.postgresql.ds.PGSimpleDataSource()).build();
+        var pages    = org.mockito.Mockito.mock(dk.trustworks.essentials.components.eventlog.PageTransactionSource.class);
+        var custom = new EventLogProcessorDependencies(eventLog, EssentialsJSONEventSerializers.create(), pages,
+                                                       aggregateType -> new AggregateIdSerializer.StringIdSerializer(),
+                                                       aggregateType -> aggregateType.equals("Orders")
+                                                                        ? new CountryTenantSerializer()
+                                                                        : new TenantSerializer.TenantIdSerializer());
+        var stored = stored("OrderPlaced", "{\"a\":1}", "DK");
+
+        assertThat(custom.deserializerFor("Orders").deserialize(stored).tenant()).hasValue(new CountryTenant("DK"));
+        assertThat(custom.deserializerFor("Invoices").deserialize(stored).tenant()).hasValue(TenantId.of("DK"));
+        // The three- and four-argument constructors keep TenantId tenants
+        assertThat(new EventLogProcessorDependencies(eventLog, EssentialsJSONEventSerializers.create(), pages)
+                           .deserializerFor("Orders").deserialize(stored).tenant()).hasValue(TenantId.of("DK"));
     }
 
     @Test

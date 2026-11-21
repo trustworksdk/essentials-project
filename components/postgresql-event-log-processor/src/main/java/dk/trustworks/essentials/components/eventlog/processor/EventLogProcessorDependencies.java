@@ -19,6 +19,7 @@ import dk.trustworks.essentials.components.eventlog.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.TenantSerializer;
+import dk.trustworks.essentials.components.foundation.types.Tenant;
 
 import java.util.function.Function;
 
@@ -37,29 +38,43 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *                         ({@code OrderId}) the old engine gave it - the event store's per-type configuration
  *                         ({@code AggregateIdSerializer} of its {@code AggregateEventStreamConfiguration}). The
  *                         three-argument constructor delivers {@code String} ids
+ * @param tenantSerializers the {@link TenantSerializer} of each aggregate type, so a handler gets the application's own
+ *                         {@code Tenant} type - the one the event store wrote it with ({@code tenantSerializer} of the same
+ *                         configuration). The three- and four-argument constructors deliver {@code TenantId} tenants
  */
 public record EventLogProcessorDependencies(EventLog eventLog, JSONEventSerializer serializer, PageTransactionSource pageTransactions,
-                                            Function<String, AggregateIdSerializer> aggregateIdSerializers) {
+                                            Function<String, AggregateIdSerializer> aggregateIdSerializers,
+                                            Function<String, TenantSerializer<? extends Tenant>> tenantSerializers) {
     public EventLogProcessorDependencies {
         requireNonNull(eventLog, "No eventLog provided");
         requireNonNull(serializer, "No serializer provided");
         requireNonNull(pageTransactions, "No pageTransactions provided");
         requireNonNull(aggregateIdSerializers, "No aggregateIdSerializers provided");
+        requireNonNull(tenantSerializers, "No tenantSerializers provided");
     }
 
     /**
-     * {@code String} aggregate ids for every type
+     * Typed aggregate ids per {@code aggregateIdSerializers}, {@code TenantId} tenants for every type
+     */
+    public EventLogProcessorDependencies(EventLog eventLog, JSONEventSerializer serializer, PageTransactionSource pageTransactions,
+                                         Function<String, AggregateIdSerializer> aggregateIdSerializers) {
+        this(eventLog, serializer, pageTransactions, aggregateIdSerializers, aggregateType -> new TenantSerializer.TenantIdSerializer());
+    }
+
+    /**
+     * {@code String} aggregate ids and {@code TenantId} tenants for every type
      */
     public EventLogProcessorDependencies(EventLog eventLog, JSONEventSerializer serializer, PageTransactionSource pageTransactions) {
         this(eventLog, serializer, pageTransactions, aggregateType -> new AggregateIdSerializer.StringIdSerializer());
     }
 
     /**
-     * @return the deserializer of {@code aggregateType}'s events: its {@link AggregateIdSerializer}, {@code TenantId} tenants.
+     * @return the deserializer of {@code aggregateType}'s events: its {@link AggregateIdSerializer} and {@link TenantSerializer}.
      * Resolved once per projection when it is built, never per event
      */
     public EventDeserializer deserializerFor(String aggregateType) {
-        var idSerializer = requireNonNull(aggregateIdSerializers.apply(aggregateType), "No AggregateIdSerializer for aggregate type " + aggregateType);
-        return new EventDeserializer(serializer, idSerializer, new TenantSerializer.TenantIdSerializer());
+        var idSerializer     = requireNonNull(aggregateIdSerializers.apply(aggregateType), "No AggregateIdSerializer for aggregate type " + aggregateType);
+        var tenantSerializer = requireNonNull(tenantSerializers.apply(aggregateType), "No TenantSerializer for aggregate type " + aggregateType);
+        return new EventDeserializer(serializer, idSerializer, tenantSerializer);
     }
 }

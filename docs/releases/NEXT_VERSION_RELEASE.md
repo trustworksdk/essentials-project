@@ -955,6 +955,13 @@ Hardened before release (code review of the preview). Each item changed what an 
   store's `AggregateEventStreamConfiguration` as on the classic engine. Before, every handler got a `String`, so a
   handler ported by swapping its superclass failed at runtime. `EventLogProcessorDependencies` has a fourth component,
   `aggregateIdSerializers`; its three-argument constructor keeps `String` ids, and the starter wires the event store's.
+- The annotated processor base classes deliver the application's own `Tenant` type, read with each aggregate type's
+  `TenantSerializer` from the event store's configuration, the one the `EventLogEventStore` adapter writes with. Before,
+  every tenant was read as a `TenantId`, so with a `TenantSerializer` bean of your own a handler that cast
+  `event.tenant()` to your tenant type threw `ClassCastException` and the event was parked. `EventLogProcessorDependencies`
+  has a fifth component, `tenantSerializers`; its three- and four-argument constructors keep `TenantId` tenants. Without
+  a `TenantSerializer` bean the starter keeps reading a tenant as a `TenantId` (the single-tenant default would throw on
+  an event appended through the `EventLog` with a tenant).
 - `onRebuild` and a `ViewProjection.rebuild(Truncate)` get the guarded connection a page handler gets: `commit`,
   `rollback`, `setAutoCommit` and `close` throw. Before, a hook that committed made the clear commit before the
   progress reset, and a crash in between left an empty view resuming at the head. New public

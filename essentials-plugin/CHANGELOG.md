@@ -3,6 +3,12 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-23 — targets Essentials 0.60.1
+
+- **Event log: tenants in processors** — the event-log and starter references say the processor base classes read each
+  aggregate type's tenant with its `TenantSerializer` from the event store's configuration (a `TenantId` without a
+  `TenantSerializer` bean). No skill, rule or script changed.
+
 ## 0.60.1-22 — targets Essentials 0.60.1
 
 - **Event log: parked retries and the lease** — a new gotcha: an exclusive in-transaction subscription's parked retry

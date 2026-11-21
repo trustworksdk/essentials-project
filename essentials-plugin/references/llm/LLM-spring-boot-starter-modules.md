@@ -178,7 +178,7 @@ Package: `dk.trustworks.essentials.components.boot.autoconfigure.eventlog`. Off 
 - `EventLogEventStore` (`essentialsEventStore`) - the `EventStore` aggregates and repositories use; snapshots and closing books run on it
 - Unit-of-work factory, `EventStoreEventBus`, `JSONEventSerializer`, `PersistableEventMapper`, causation beans - built as the Event Store starter builds them
 - `PageTransactionSource` - `SpringPageTransactions` with a `PlatformTransactionManager`, else `UnitOfWorkPageTransactions`
-- `EventLogProcessorDependencies` - for `EventLogViewProcessor` / `EventLogReactor` / `EventLogInboxProcessor` / `EventLogPartitionedViewProcessor` subclasses; aggregate ids typed per the event store's configuration
+- `EventLogProcessorDependencies` - for `EventLogViewProcessor` / `EventLogReactor` / `EventLogInboxProcessor` / `EventLogPartitionedViewProcessor` subclasses; aggregate ids and tenants typed per the event store's configuration
 - `AnnotationBasedInMemoryProjector` (with `eventsourced-aggregates`) and the auto-flush interceptor - as the Event Store starter declares them, under its properties
 - `EventLogProcessorLifecycle` - starts `ViewProjection` / `EventReactor` beans after refresh, stops them before the engine (not in schema mode `emit`)
 - `EventLogSubscriptionsApi` - with the Admin API starter and an `EssentialsSecurityProvider`
