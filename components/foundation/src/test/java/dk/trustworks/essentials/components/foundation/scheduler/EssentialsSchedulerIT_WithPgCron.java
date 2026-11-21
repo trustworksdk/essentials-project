@@ -31,7 +31,7 @@ import static org.awaitility.Awaitility.waitAtMost;
 
 
 /**
- * When running it locally set env variable ESSENTIALS_POSTGRES_IMAGE=essentials-postgres:17.5
+ * When running it locally set env variable ESSENTIALS_POSTGRES_IMAGE=essentials-postgres:17.5-2
  */
 @Testcontainers
 public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedulerTest {

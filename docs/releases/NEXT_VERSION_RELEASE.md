@@ -172,6 +172,7 @@ None so far.
 
 | Area | Fix | Commit |
 |---|---|---|
+| CDC (`postgresql-event-store`) | PostgreSQL 17.12 and 18 refuse an output plugin that is not listed in `output_plugin_libraries` (default `pgoutput, test_decoding`), so creating a `wal2json` slot fails with `library "wal2json" may not be used as an output plugin`: under `cdc.mode=require` start-up fails, under `auto` subscribers silently stay on polling. What to do: add `wal2json` to the setting (`postgresql.conf`: `output_plugin_libraries = 'pgoutput, test_decoding, wal2json'`; SQL: `ALTER SYSTEM SET output_plugin_libraries = 'pgoutput', 'test_decoding', 'wal2json'`, each name quoted on its own, then `SELECT pg_reload_conf()`), or use `pgoutput`. How to observe: `Wal2JsonLogicalDecodingPlugin.unusableReason` read only "wal2json plugin not usable"; it now names `output_plugin_libraries` and both ways to add `wal2json`. `pgoutput` is unaffected. | ported from `bbf1d28f0` |
 
 ---
 
@@ -180,11 +181,17 @@ None so far.
 0.61.0 shipped plugin `0.61.0`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md).
 
+- **0.61.0-1** — the event-store reference says CDC with `wal2json` on PostgreSQL 17.12 / 18 needs `wal2json` in
+  `output_plugin_libraries`, and how to add it.
+
 ---
 
 ## 5. Examples
 
 Not published; listed because they are the reference for how to use the framework.
+
+- `essentials-trading-demo`: its compose files use the repository's PostgreSQL image under its new tag
+  `essentials-postgres:17.5-2` (see §7).
 
 ---
 
@@ -196,4 +203,10 @@ None so far.
 
 ## 7. Build and tooling
 
-None so far.
+- The repository's PostgreSQL test image (`docker/postgresql`, now `essentials-postgres:17.5-2`) runs the server its tag
+  names: it shipped the builder's whole PostgreSQL tree, so the 17.5 image ran 17.12, and all CDC integration tests failed
+  because 17.12 refuses `wal2json` as an output plugin. Its extensions are now compiled against exactly the base image's
+  server version, pg_cron is 1.6.8 (1.6.4 does not compile on 18), its initdb script creates pg_cron only when the server
+  preloads it, and the CDC tests use this image instead of a second one of their own; their setup adds `wal2json` to
+  `output_plugin_libraries` where the server has that setting. Any base works:
+  `-Dessentials.postgres.base-image=postgres:18-bookworm`.
