@@ -412,7 +412,7 @@ public final class EventLog {
                 lease = new Lease(spec.key(), new Lease.NewRow(spec.mode().name(), spec.model().name(), spec.initialResumeFrom(), spec.fromHead() ? type.tables.eventTable() : null, spec.filterDigest()),
                                   leaseKeeper.owner(), settings.leaseLocalStop().toNanos(), System::nanoTime);
             }
-            var subscription = new Subscription(spec, readerLoop, EventLogStorage.TailStatements.of(relation), rs -> read(aggregateType, rs), progressStore, settings,
+            var subscription = new Subscription(spec, readerLoop, EventLogStorage.TailStatements.of(relation, type.tables.eventTable()), rs -> read(aggregateType, rs), progressStore, settings,
                                                 observer, catchUp, lease, lease == null ? null : leaseKeeper);
             subscription.start();
             subscriptions.add(subscription);

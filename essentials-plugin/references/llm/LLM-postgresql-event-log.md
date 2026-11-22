@@ -370,6 +370,7 @@ observer bean **replaces** it - to keep both, extend `MicrometerEventLogObserver
 | `essentials.eventlog.subscription.lease_lost` | counter | leases an exclusive subscription lost |
 | `essentials.eventlog.subscription.page` | timer, `outcome=committed\|failed` | in-transaction page time (handler included); periodic subscriptions have no pages |
 | `essentials.eventlog.lease.renewal_failed` | counter, no subscriber tag | lease keeper passes that failed |
+| `essentials.eventlog.reader.oldest_candidate_age` | time gauge, `aggregate_type` (and `Module`) only | how long the tail reader's oldest unresolved hole candidate has waited; 0 when none. While it grows the type's watermark stands still and every `CONTIGUOUS` subscriber of the type waits: an append that drew a hole has not ended |
 
 The lag reads 0 on a node that lost or suspended an exclusive subscription's lease (another node delivers) until it
 owns it again and saves; a stopped subscription's meters are removed once the last instance of that subscriber on that type stops
@@ -377,6 +378,15 @@ owns it again and saves; a stopped subscription's meters are removed once the la
 throws is logged (WARN at most once a minute) and ignored - it never stops delivery.
 
 Meters are cached per subscription and updated per page, read or failure, never per event.
+
+**A long transaction and the watermark.** A hole in a type's `global_order` is resolved once no transaction that was
+running when it appeared can still commit into it. Any transaction of the database that holds an xid (it has written
+something) counts at first; after a candidate has waited 1 s the reader asks `pg_locks` which of them hold a
+`RowExclusiveLock` on the type's event table, and only those keep holding it. So a long batch job, a migration or a
+session idle in a transaction after a write delays a type's `CONTIGUOUS` subscribers by about a second, but an append
+of that type that stays open holds them for as long as it runs. To find it: `SELECT l.pid, a.application_name,
+a.state, a.xact_start FROM pg_locks l JOIN pg_stat_activity a USING (pid) WHERE l.relation = 'el_<type>_events'::regclass
+AND l.mode = 'RowExclusiveLock'`. Read-only transactions never count.
 
 **Tracing and append timing.** As on the old engine, and under its properties: `RecordExecutionTimeEventStoreInterceptor`
 (`essentials.eventstore.metrics.enabled`, `.thresholds.*`) always, `MicrometerTracingEventStoreInterceptor` with

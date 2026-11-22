@@ -62,6 +62,15 @@ final class TailReader implements AutoCloseable {
      */
     static final Set<String> CUSTOM_PLAN_STATEMENTS = Set.of();
 
+    /**
+     * How long a candidate waits on the running set alone before the reader also asks which of its writers can still
+     * commit into this type's holes ({@link EventLogStorage#lockers(String)}), and the least time between two such
+     * checks. A transaction that holds an xid but never inserted into the event table - a long migration or batch job,
+     * a session idle in a transaction after a write, an append of another type - then holds the watermark for about
+     * this long instead of for its whole life. The check costs a pass over the lock manager, so the probe never runs it.
+     */
+    static final Duration LOCK_CHECK_AFTER = Duration.ofSeconds(1);
+
     @FunctionalInterface
     interface RowMapper {
         StoredEvent map(ResultSet resultSet) throws SQLException;
@@ -89,6 +98,9 @@ final class TailReader implements AutoCloseable {
     private boolean                               lastReadContiguous;
     private long                                  lastReadNanos;
     private int                                   lastBackends = 1;
+    private long                                  lastLockCheckNanos;
+    /** {@link #LOCK_CHECK_AFTER}; tests may shorten it */
+    long                                          lockCheckAfterNanos = LOCK_CHECK_AFTER.toNanos();
 
     /**
      * @param connection              the reader loop's connection; the loop sets its session and closes it
@@ -391,6 +403,16 @@ final class TailReader implements AutoCloseable {
             }
         }
         if (maxRetired == Long.MIN_VALUE) {
+            var lockers = lockersIfStuck();
+            if (lockers != null) {
+                for (var candidate : candidates) {
+                    if (candidate.retiresAgainst(lockers)) {
+                        maxRetired = Math.max(maxRetired, candidate.highestRead());
+                    }
+                }
+            }
+        }
+        if (maxRetired == Long.MIN_VALUE) {
             return;
         }
         // A later candidate's running set was read after an earlier candidate's highest read, so it covers that too
@@ -441,6 +463,41 @@ final class TailReader implements AutoCloseable {
         // Published: from now on the subscription holds them, and they are final
         pending.clear();
         pendingRanges.clear();
+    }
+
+    /**
+     * The lock check of a stuck candidate. An order of this type is drawn only by an {@code INSERT} into its event
+     * table, which holds a {@code RowExclusiveLock} on the table from before the draw until its transaction ends. So a
+     * writer of a candidate that holds no such lock now either has ended or has drawn nothing at or below the
+     * candidate's highest read, and the candidate retires against the lockers as it would against a later running set.
+     * The hole read that follows runs after this statement, so it sees every row a writer committed before it.
+     *
+     * @return the xids holding a lock on the event table, or {@code null} if no candidate has waited
+     * {@link #lockCheckAfterNanos} yet, or the last check was more recent than that
+     */
+    private Set<String> lockersIfStuck() throws SQLException {
+        var now    = System.nanoTime();
+        var oldest = candidates.stream().mapToLong(Candidate::createdNanos).min();
+        if (oldest.isEmpty() || now - oldest.getAsLong() < lockCheckAfterNanos || now - lastLockCheckNanos < lockCheckAfterNanos) {
+            return null;
+        }
+        lastLockCheckNanos = now;
+        if (seams.has(LOCK_CHECK_WITHOUT_LOCKERS)) {
+            return Set.of();
+        }
+        var lockers = new HashSet<String>();
+        try (var resultSet = statement("lockers", statements.lockers()).executeQuery()) {
+            if (resultSet.next()) {
+                var array = resultSet.getArray(1);
+                if (array != null) {
+                    for (var xid : (Object[]) array.getArray()) {
+                        lockers.add((String) xid);
+                    }
+                }
+            }
+        }
+        log.debug("[{}] Lock check of a candidate waiting {} ms: {} writers hold the event table", aggregateType, Duration.ofNanos(now - oldest.getAsLong()).toMillis(), lockers.size());
+        return lockers;
     }
 
     /**

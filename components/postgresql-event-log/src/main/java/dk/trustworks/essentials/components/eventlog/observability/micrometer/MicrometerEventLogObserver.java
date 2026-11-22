@@ -60,6 +60,13 @@ public class MicrometerEventLogObserver implements EventLogObserver {
     public static final String PAGE_METRIC         = "essentials.eventlog.subscription.page";
     /** Counter of lease keeper passes that failed; not per subscription, as one pass renews every lease of the event log */
     public static final String RENEWAL_FAILED_METRIC = "essentials.eventlog.lease.renewal_failed";
+    /**
+     * Time gauge per aggregate type (tag {@value #AGGREGATE_TYPE_TAG} only): how long the tail reader's oldest outstanding
+     * candidate has waited, zero when none waits. While it grows, the type's watermark stands still and every
+     * {@code CONTIGUOUS} subscriber of the type waits with it: a transaction that drew a hole has not ended
+     * (docs/design/event-log.md §4). Updated on every tail read.
+     */
+    public static final String OLDEST_CANDIDATE_AGE_METRIC = "essentials.eventlog.reader.oldest_candidate_age";
 
     private final MeterRegistry                                registry;
     private final String                                       moduleTag;
@@ -67,6 +74,7 @@ public class MicrometerEventLogObserver implements EventLogObserver {
     /** How many subscriptions with each key run here, from {@link #onStarted} to {@link #onStopped} */
     private final ConcurrentHashMap<Key, Integer> running = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AtomicLong>        cursors       = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AtomicLong>        candidateAges = new ConcurrentHashMap<>();
     private final Counter                                      renewalFailed;
 
     public MicrometerEventLogObserver(MeterRegistry registry) {
@@ -153,6 +161,22 @@ public class MicrometerEventLogObserver implements EventLogObserver {
             }
             return Math.max(0, tail - from + 1);
         }
+    }
+
+    @Override
+    public void onRead(String aggregateType, boolean combined, long nanos, int rows, int outstandingHoles, int outstandingCandidates, java.time.Duration oldestCandidateAge) {
+        candidateAges.computeIfAbsent(aggregateType, type -> {
+            var age  = new AtomicLong();
+            var tags = Tags.of(AGGREGATE_TYPE_TAG, type);
+            if (moduleTag != null) {
+                tags = tags.and(MODULE_TAG_NAME, moduleTag);
+            }
+            TimeGauge.builder(OLDEST_CANDIDATE_AGE_METRIC, age, TimeUnit.NANOSECONDS, AtomicLong::doubleValue)
+                     .description("How long the tail reader's oldest outstanding candidate has waited")
+                     .tags(tags)
+                     .register(registry);
+            return age;
+        }).set(oldestCandidateAge.toNanos());
     }
 
     @Override

@@ -93,6 +93,17 @@ class MicrometerEventLogObserverTest {
     }
 
     @Test
+    void the_oldest_candidate_age_is_a_time_gauge_per_aggregate_type_set_on_every_read() {
+        observer.onRead(ORDERS, true, 1_000, 3, 1, 1, java.time.Duration.ofMillis(1500));
+        var gauge = registry.get(OLDEST_CANDIDATE_AGE_METRIC).tag(AGGREGATE_TYPE_TAG, ORDERS).tag(MODULE_TAG_NAME, "orders-module").timeGauge();
+        assertThat(gauge.value(java.util.concurrent.TimeUnit.MILLISECONDS)).isEqualTo(1500);
+
+        observer.onRead(ORDERS, false, 1_000, 0, 0, 0, java.time.Duration.ZERO);
+        assertThat(gauge.value(java.util.concurrent.TimeUnit.MILLISECONDS)).as("no candidate waits").isZero();
+        assertThat(registry.find(OLDEST_CANDIDATE_AGE_METRIC).timeGauges()).as("one gauge per type, registered once").hasSize(1);
+    }
+
+    @Test
     void the_lag_is_the_events_between_the_saved_resume_point_and_the_readers_cursor() {
         observer.onProgressSaved(VIEW, ORDERS, 1);
         // No read yet: the tail is unknown, which reads as no lag

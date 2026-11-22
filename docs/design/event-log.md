@@ -128,6 +128,22 @@ Only writers connected to this database count: no backend of another database ca
 counting them let one long writing transaction anywhere on the server hold every type's watermark back. The backend
 count stays server-wide, because it measures the cost of the scan, not the writers. A prepared transaction
 (`PREPARE TRANSACTION`) has no backend and never appears in the running set; appending inside one is not supported.
+
+**The lock check of a stuck candidate.** The running set still counts every writer of this database, so a transaction
+that holds an xid without ever touching the type's event table (a long migration or batch job, a session idle in a
+transaction after a write, an append of another type) would hold the type's candidates, and every `CONTIGUOUS`
+subscriber of the type, for as long as it runs. An order is drawn only by the identity default of an `INSERT` into the
+event table, which takes a `RowExclusiveLock` on the table when the statement starts and keeps it until the transaction
+ends. So once the oldest candidate has waited `TailReader.LOCK_CHECK_AFTER` (1 s) on the running set alone, the reader
+also runs `EventLogStorage.lockers`: the xids of the transactions of this database that hold a `RowExclusiveLock` on the
+event table, read from `pg_locks` alone (its own transaction-id lock gives each holder's xid; `pg_locks` is not cached
+for the rest of a transaction, as `pg_stat_activity` is). A candidate none of whose writers is among them retires as it
+would against a later running set: each of its writers has ended or drew nothing at or below its highest read, and the
+hole read that follows runs after the check. Writers that never inserted into the table then hold the watermark for
+about a second; an append that drew a hole still holds it until it ends. The check costs a pass over the lock manager,
+so the probe never runs it, and it runs at most once per `LOCK_CHECK_AFTER` while a candidate waits.
+`EventLogLockCheckIT` (with the mutant `LOCK_CHECK_WITHOUT_LOCKERS`); the age of the oldest candidate is the gauge
+`eventlog.reader.oldest_candidate_age`.
 The filter is on `datid` against an init plan, not on `datname`, which would keep the view's join to `pg_database`.
 Measured on PostgreSQL 18.4 with 109 backends (10 holding an xid), `pgbench -M prepared`, one client: 0.117 ms per call
 unfiltered, 0.093 ms filtered on `datname`, 0.086 ms on `datid` - no cost, within noise.

@@ -5,6 +5,9 @@ targets, with a `-N` suffix for plugin-only releases.
 
 ## 0.60.1-23 — targets Essentials 0.60.1
 
+- **Event log: a long transaction and the watermark** — the event-log reference lists the new
+  `essentials.eventlog.reader.oldest_candidate_age` gauge and explains which transactions hold a type's `CONTIGUOUS`
+  subscribers back (only writers holding a lock on its event table, after 1 s) and how to find one in `pg_locks`.
 - **Event log: tenants in processors, reset of a view** — the event-log and starter references say the processor base classes read each
   aggregate type's tenant with its `TenantSerializer` from the event store's configuration (a `TenantId` without a
   `TenantSerializer` bean). The admin reset also refuses a `ViewProjection` bean's subscription (use its

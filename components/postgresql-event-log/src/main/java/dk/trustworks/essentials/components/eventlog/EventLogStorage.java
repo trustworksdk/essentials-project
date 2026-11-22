@@ -64,6 +64,23 @@ final class EventLogStorage {
     static final String RUNNING_SET = "(SELECT ARRAY[count(*)::text] || coalesce(array_agg(backend_xid::text) FILTER (WHERE backend_xid IS NOT NULL AND datid = (SELECT oid FROM pg_database WHERE datname = current_database())), '{}'::text[]) " +
             "FROM pg_stat_activity)";
 
+    /**
+     * The xids of every transaction of this database that holds (or waits for) a lock on {@code eventTable}: the only
+     * transactions that can still commit an order into one of its holes. Only {@code RowExclusiveLock}, the lock an
+     * {@code INSERT} takes: a transaction that merely reads the table cannot draw an order. An append draws {@code global_order} from the
+     * identity default of its {@code INSERT}, which locks the table when the statement starts and keeps the lock until
+     * the transaction ends; the xid comes from the same transaction's lock on its own transaction id. Read from
+     * {@code pg_locks} alone, which, unlike {@code pg_stat_activity}, is not cached for the rest of a transaction. Costs
+     * a pass over the lock manager, so the reader runs it only for a candidate older than
+     * {@link TailReader#LOCK_CHECK_AFTER} (docs/design/event-log.md §4).
+     */
+    static String lockers(String eventTable) {
+        return "SELECT coalesce(array_agg(DISTINCT x.transactionid::text), '{}'::text[]) FROM pg_locks r JOIN pg_locks x " +
+                "ON x.virtualtransaction = r.virtualtransaction AND x.locktype = 'transactionid' AND x.mode = 'ExclusiveLock' AND x.granted " +
+                "WHERE r.locktype = 'relation' AND r.mode = 'RowExclusiveLock' AND r.relation = '" + eventTable + "'::regclass " +
+                "AND r.database = (SELECT oid FROM pg_database WHERE datname = current_database())";
+    }
+
     /** Column index of the running set in the combined probe; columns 1-12 are {@link #EVENT_COLUMNS} */
     static final int RUNNING_COLUMN = 13;
 
@@ -364,8 +381,18 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
     record TailStatements(String head, String plainTail, String probe, String probeWithRanges, String holeRead, String runningSet,
                           String probeWithoutHoleReread, String rangeRead, String bridgePage, String bridgePageWithRanges, String byOrders,
                           FilterStatements typeFilter, FilterStatements tenantFilter, FilterStatements typeAndTenantFilter,
-                          String rereadTail, String rereadTailWithRanges) {
+                          String rereadTail, String rereadTailWithRanges, String lockers) {
+        /** Over the aggregate type's event table itself: the lockers statement locks on the relation read */
         static TailStatements of(String relation) {
+            return of(relation, relation);
+        }
+
+        /**
+         * @param relation   what the reader reads: the aggregate type's event table, or a test's stand-in view over it
+         * @param eventTable the aggregate type's event table, which every append inserts into: {@code lockers} looks for
+         *                   locks on it, never on a stand-in view
+         */
+        static TailStatements of(String relation, String eventTable) {
             var tail   = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] AS running FROM " + relation + " WHERE global_order > ? ORDER BY global_order LIMIT ?)";
             var holes  = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] FROM " + relation + " WHERE global_order = ANY(?::bigint[]))";
             var ranges = "(SELECT " + EVENT_COLUMNS + ", NULL::text[] FROM " + relation + " e JOIN unnest(?::bigint[], ?::bigint[]) AS r(lo, hi) ON e.global_order BETWEEN r.lo AND r.hi)";
@@ -391,7 +418,8 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
                     FilterStatements.of(relation, false, true),
                     FilterStatements.of(relation, true, true),
                     "SELECT * FROM (\n" + rTail + "\nUNION ALL\n" + bridgeHoles + "\n) u ORDER BY u.global_order",
-                    "SELECT * FROM (\n" + rTail + "\nUNION ALL\n" + bridgeHoles + "\nUNION ALL\n" + bridgeRanges + "\n) u ORDER BY u.global_order");
+                    "SELECT * FROM (\n" + rTail + "\nUNION ALL\n" + bridgeHoles + "\nUNION ALL\n" + bridgeRanges + "\n) u ORDER BY u.global_order",
+                    EventLogStorage.lockers(eventTable));
         }
 
         /** Every statement with its name, for the generic-plan check */
@@ -411,6 +439,7 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
             typeAndTenantFilter.putAll("typeAndTenant.", all);
             all.put("rereadTail", rereadTail);
             all.put("rereadTailWithRanges", rereadTailWithRanges);
+            all.put("lockers", lockers);
             return all;
         }
 

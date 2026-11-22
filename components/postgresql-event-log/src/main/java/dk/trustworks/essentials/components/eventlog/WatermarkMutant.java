@@ -280,5 +280,13 @@ enum WatermarkMutant {
      */
     GUARD_SKIPPED,
     /** The progress import replaces an existing row's resume point instead of leaving it and returning it */
-    IMPORT_PROGRESS_OVERWRITES
+    IMPORT_PROGRESS_OVERWRITES,
+
+    // ---- reader; on a type's first subscription ----
+
+    /**
+     * The stuck candidate's lock check reads no locker: a candidate older than {@link TailReader#LOCK_CHECK_AFTER}
+     * retires while the append that drew its hole still runs, and that append's late commit lands below the watermark
+     */
+    LOCK_CHECK_WITHOUT_LOCKERS
 }

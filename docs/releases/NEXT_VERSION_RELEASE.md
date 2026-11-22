@@ -960,6 +960,12 @@ Hardened before release (code review of the preview). Each item changed what an 
   prepared there and committed after the epoch had copied past its global order was never copied - silent event loss
   at the cut-over. An orphaned prepared transaction now holds `copyEpoch()` until it is committed or rolled back; the
   report's blockers name it (`prepared transaction <gid>`, pid 0).
+- The event-log tail reader no longer lets an unrelated long transaction stall a type's `CONTIGUOUS` subscribers. A
+  hole's candidate waited for every transaction of the database that held an xid, so a batch job, a migration or a
+  session idle in a transaction after any write held the watermark of every type for its whole life. After a candidate
+  has waited 1 s the reader now asks `pg_locks` which of those transactions hold a `RowExclusiveLock` on the type's
+  event table (the lock every append takes before it draws a `global_order`) and waits only for them; the normal probe
+  is unchanged. New gauge `essentials.eventlog.reader.oldest_candidate_age` per aggregate type shows a stall.
 - `ViewProjection.rebuild(...)` refuses with `IllegalStateException` ("... did not stop") when its subscription is still
   running after the stop - a handler that ignores interrupts outlives the bounded stop - as `EventLogViewProcessor.rebuild()`
   already did. Before, it cleared the view and reset the progress while that handler could still apply a page to it.
