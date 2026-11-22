@@ -236,16 +236,20 @@ class EventLogContiguousCrashIT extends AbstractPageIT {
     private List<String> commitsJustBeforeTheAttach(WatermarkMutant... mutants) throws Exception {
         subscribe("keeper", new Recorder());
         commitAppend("A", 2);
-        var once = new AtomicBoolean(true);
+        var once      = new AtomicBoolean(true);
+        var committed = new CountDownLatch(1);
         var hooks = new TestSeams.Hooks() {
             @Override
             public void beforeAttachRequest(String subscriber) throws Exception {
                 if (once.getAndSet(false)) {
                     awaitOffered(commitAppend("B", 3) + 2);
+                    committed.countDown();
                 }
             }
         };
         contiguous(PROJECTION, new TestSeams(Set.of(mutants), hooks, null));
+        // Only once B committed: the catch-up of A alone already reaches a target taken before it
+        assertThat(committed.await(30, TimeUnit.SECONDS)).isTrue();
         awaitCaughtUp(PROJECTION);
         return foldDifferences();
     }
