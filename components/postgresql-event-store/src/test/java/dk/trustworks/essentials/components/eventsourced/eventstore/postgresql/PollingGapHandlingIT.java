@@ -20,7 +20,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy;
 import dk.trustworks.essentials.shared.functional.tuple.Pair;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
@@ -54,6 +54,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -117,6 +118,11 @@ class PollingGapHandlingIT {
      * What the gap handler promotes transient gaps with; read on every promotion, so a test can swap it after setup
      */
     private volatile ResolveTransientGapsToPermanentGapsPromotionStrategy           promotionStrategy;
+    /**
+     * Run once, on the polling thread, right after a subscription gap handler returned transient gaps that include the
+     * armed global order - see {@link HookedEventStreamGapHandler}
+     */
+    private final AtomicReference<Pair<Long, Runnable>>                             afterTransientGapsRead = new AtomicReference<>();
 
     @BeforeEach
     void setup() {
@@ -143,7 +149,7 @@ class PollingGapHandlingIT {
                                          .setUnitOfWorkFactory(unitOfWorkFactory)
                                          .setPersistenceStrategy(persistenceStrategy)
                                          // The default configuration - it is the default gap query strategy under test
-                                         .setEventStreamGapHandlerFactory(store -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory,
+                                         .setEventStreamGapHandlerFactory(store -> new HookedEventStreamGapHandler(new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory,
                                                                                                                          Duration.ofSeconds(60),
                                                                                                                          PostgresqlEventStreamGapHandler.ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
                                                                                                                          new ResolveTransientGapsToPermanentGapsPromotionStrategy() {
@@ -156,7 +162,7 @@ class PollingGapHandlingIT {
                                                                                                                              public List<GlobalEventOrder> resolveTransientGapsReadyToBePromotedToPermanentGaps(AggregateType forAggregateType, List<Pair<GlobalEventOrder, OffsetDateTime>> allTransientGaps) {
                                                                                                                                  return promotionStrategy.resolveTransientGapsReadyToBePromotedToPermanentGaps(forAggregateType, allTransientGaps);
                                                                                                                              }
-                                                                                                                         }))
+                                                                                                                         })))
                                          .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver() {
                                              @Override
                                              public void publishEvent(SubscriberId subscriberId, AggregateType aggregateType, PersistedEvent persistedEvent, Duration publishEventDuration) {
@@ -180,6 +186,7 @@ class PollingGapHandlingIT {
         reconciled.clear();
         polls.set(0);
         promotionStrategy = ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120);
+        afterTransientGapsRead.set(null);
         subscriptionManager = null;
     }
 
@@ -672,6 +679,177 @@ class PollingGapHandlingIT {
         var secondMarker = appendCommitted();
         Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(globalOrdersOf(received)).contains(secondMarker));
         assertThat(globalOrdersOf(received)).doesNotHaveDuplicates();
+    }
+
+    /**
+     * A poll that read a fill's gap before the subscriber's acknowledgement committed, and filters its events after the
+     * commit forgot the fill, must not hand the fill on again: the acknowledgement's commit is made to land exactly
+     * between the poll's gap query and its filtering.
+     */
+    @ParameterizedTest
+    @EnumSource(PollingMode.class)
+    void an_acknowledgement_committing_while_a_poll_is_in_flight_does_not_deliver_the_gap_fill_again(PollingMode pollingMode) throws Exception {
+        var subscriberId    = SubscriberId.of("ack-commit-mid-poll-" + pollingMode);
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var received        = new CopyOnWriteArrayList<PersistedEvent>();
+
+        var lateCommit = appendAndHoldOpen();
+        var committed  = appendCommitted();
+        subscription = poll(pollingMode, subscriberId, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(), acknowledgement).subscribe(received::add);
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(globalOrdersOf(received)).containsExactly(committed));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(transientGapsOf(subscriberId)).containsExactly(GlobalEventOrder.of(lateCommit.globalOrder)));
+        lateCommit.commit();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(globalOrdersOf(received)).containsExactly(committed, lateCommit.globalOrder));
+        var gapFill = received.get(1);
+
+        // The acknowledgement deletes the gap row in a unit of work held open on this thread
+        var held = unitOfWorkFactory.getOrCreateNewUnitOfWork();
+        acknowledgement.acknowledge(gapFill);
+
+        // The next poll still sees the gap (the deletion is uncommitted) - stop it right after its gap query
+        var gapRead     = new CountDownLatch(1);
+        var mayContinue = new CountDownLatch(1);
+        afterTransientGapsRead.set(Pair.of(lateCommit.globalOrder, () -> {
+            gapRead.countDown();
+            try {
+                mayContinue.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+        try {
+            assertThat(gapRead.await(10, TimeUnit.SECONDS)).as("a poll read the gap of the fill").isTrue();
+            // Commit and its afterCommit forget the fill while that poll is in flight. They hold no gap handler monitor
+            held.commit();
+        } finally {
+            mayContinue.countDown();
+        }
+
+        assertThat(transientGapsOf(subscriberId)).isEmpty();
+        var marker = executor.submit(() -> appendCommitted()).get(10, TimeUnit.SECONDS);
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(globalOrdersOf(received)).contains(marker));
+        assertThat(globalOrdersOf(received)).containsExactly(committed, lateCommit.globalOrder, marker);
+        assertThat(transientGapsOf(subscriberId)).isEmpty();
+    }
+
+    /**
+     * Delegates to the {@link PostgresqlEventStreamGapHandler}, running {@link #afterTransientGapsRead} once its armed
+     * global order is among the transient gaps a subscription gap handler returns
+     */
+    private final class HookedEventStreamGapHandler implements EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> {
+        private final PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> delegate;
+
+        private HookedEventStreamGapHandler(PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public SubscriptionGapHandler gapHandlerFor(SubscriberId subscriberId) {
+            return new HookedSubscriptionGapHandler(delegate.gapHandlerFor(subscriberId));
+        }
+
+        @Override
+        public List<GlobalEventOrder> resetPermanentGapsFor(AggregateType aggregateType) {
+            return delegate.resetPermanentGapsFor(aggregateType);
+        }
+
+        @Override
+        public List<GlobalEventOrder> resetPermanentGapsFor(AggregateType aggregateType, LongRange resetForThisSpecificGlobalEventOrdersRange) {
+            return delegate.resetPermanentGapsFor(aggregateType, resetForThisSpecificGlobalEventOrdersRange);
+        }
+
+        @Override
+        public List<GlobalEventOrder> resetPermanentGapsFor(AggregateType aggregateType, List<GlobalEventOrder> resetForTheseSpecificGlobalEventOrders) {
+            return delegate.resetPermanentGapsFor(aggregateType, resetForTheseSpecificGlobalEventOrders);
+        }
+
+        @Override
+        public Stream<GlobalEventOrder> getPermanentGapsFor(AggregateType aggregateType) {
+            return delegate.getPermanentGapsFor(aggregateType);
+        }
+
+        @Override
+        public void registerPermanentGaps(AggregateType aggregateType, List<GlobalEventOrder> gaps, String reason) {
+            delegate.registerPermanentGaps(aggregateType, gaps, reason);
+        }
+    }
+
+    private final class HookedSubscriptionGapHandler implements SubscriptionGapHandler {
+        private final SubscriptionGapHandler delegate;
+
+        private HookedSubscriptionGapHandler(SubscriptionGapHandler delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public SubscriberId subscriberId() {
+            return delegate.subscriberId();
+        }
+
+        @Override
+        public List<GlobalEventOrder> findTransientGapsToIncludeInQuery(AggregateType aggregateType, LongRange globalOrderQueryRange) {
+            var transientGaps = delegate.findTransientGapsToIncludeInQuery(aggregateType, globalOrderQueryRange);
+            var armed         = afterTransientGapsRead.get();
+            if (armed != null && transientGaps.contains(GlobalEventOrder.of(armed._1)) && afterTransientGapsRead.compareAndSet(armed, null)) {
+                armed._2.run();
+            }
+            return transientGaps;
+        }
+
+        @Override
+        public void reconcileGaps(AggregateType aggregateType, LongRange globalOrderQueryRange, List<PersistedEvent> persistedEvents, List<GlobalEventOrder> transientGapsIncludedInQuery) {
+            delegate.reconcileGaps(aggregateType, globalOrderQueryRange, persistedEvents, transientGapsIncludedInQuery);
+        }
+
+        @Override
+        public GapReconciliation reconcileGapsAndReport(AggregateType aggregateType, LongRange globalOrderQueryRange, List<PersistedEvent> persistedEvents, List<GlobalEventOrder> transientGapsIncludedInQuery) {
+            return delegate.reconcileGapsAndReport(aggregateType, globalOrderQueryRange, persistedEvents, transientGapsIncludedInQuery);
+        }
+
+        @Override
+        public GapReconciliation reconcileGapsAndReportWithoutRecordingNewGaps(AggregateType aggregateType, LongRange globalOrderQueryRange, List<PersistedEvent> persistedEvents, List<GlobalEventOrder> transientGapsIncludedInQuery) {
+            return delegate.reconcileGapsAndReportWithoutRecordingNewGaps(aggregateType, globalOrderQueryRange, persistedEvents, transientGapsIncludedInQuery);
+        }
+
+        @Override
+        public GapReconciliation resolveFilledGaps(AggregateType aggregateType, List<PersistedEvent> gapFills) {
+            return delegate.resolveFilledGaps(aggregateType, gapFills);
+        }
+
+        @Override
+        public GapReconciliation giveUpTransientGaps(AggregateType aggregateType, List<GlobalEventOrder> transientGaps) {
+            return delegate.giveUpTransientGaps(aggregateType, transientGaps);
+        }
+
+        @Override
+        public GapReconciliation giveUpTransientGapRanges(AggregateType aggregateType, List<LongRange> transientGapRanges) {
+            return delegate.giveUpTransientGapRanges(aggregateType, transientGapRanges);
+        }
+
+        @Override
+        public GapReconciliation addTransientGaps(AggregateType aggregateType, LongRange gaps) {
+            return delegate.addTransientGaps(aggregateType, gaps);
+        }
+
+        @Override
+        public Optional<Duration> transientGapGiveUpThreshold() {
+            return delegate.transientGapGiveUpThreshold();
+        }
+
+        @Override
+        public List<GlobalEventOrder> resetTransientGapsFor(AggregateType aggregateType) {
+            return delegate.resetTransientGapsFor(aggregateType);
+        }
+
+        @Override
+        public List<GlobalEventOrder> getTransientGapsFor(AggregateType aggregateType) {
+            return delegate.getTransientGapsFor(aggregateType);
+        }
+
+        @Override
+        public Stream<GlobalEventOrder> getPermanentGapsFor(AggregateType aggregateType) {
+            return delegate.getPermanentGapsFor(aggregateType);
+        }
     }
 
     /**

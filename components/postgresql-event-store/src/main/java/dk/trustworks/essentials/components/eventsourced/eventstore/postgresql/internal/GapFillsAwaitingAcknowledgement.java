@@ -27,6 +27,7 @@ import org.slf4j.*;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -49,6 +50,14 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * gap is resolved in a unit of work of its own. Either way the outcome is reported through
  * {@link EventStoreSubscriptionObserver#gapReconciliationOutcome} once committed.
  * <p>
+ * A poll brackets its read with {@link #beginRead()}: from the gap query to {@link #awaitAcknowledgement}. A fill
+ * forgotten while a read is in flight stays retained - still counted as awaiting - until every read that started before
+ * it was forgotten has ended. Otherwise a poll that read its gap before the subscriber's unit of work committed, and
+ * filtered its events after, would hand the fill on again. A read that starts after a fill was forgotten started after
+ * the commit that deleted its gap, so its gap query no longer asks for it - once a gap handler that caches the transient
+ * gaps has forgotten it too: a poll may have refreshed that cache from storage while the deletion was uncommitted, so
+ * every poll first resolves the gaps of the fills forgotten since the poll before ({@link #forgetResolvedGaps()}).
+ * <p>
  * Thread-safety: the subscriber acknowledges on its own thread (a batch handler's, an I/O retry's), concurrently with
  * the poll, and both use the subscription's one {@link SubscriptionGapHandler}. Every call to it - the poll's and this
  * one's - holds the gap handler's monitor, never across a commit, so a gap handler need not be thread-safe. A holder of
@@ -67,6 +76,28 @@ public final class GapFillsAwaitingAcknowledgement implements UnitOfWorkLifecycl
      * By global order
      */
     private final ConcurrentMap<Long, PersistedEvent>            awaiting = new ConcurrentHashMap<>();
+    /**
+     * By global order: the fills forgotten while a read was in flight, each with the resolution generation it was
+     * forgotten in - see {@link #beginRead()}
+     */
+    private final ConcurrentMap<Long, Retained>                  retained = new ConcurrentHashMap<>();
+    /**
+     * Counts the resolutions; a read records the count at its start
+     */
+    private final AtomicLong                                     resolutions = new AtomicLong();
+    /**
+     * The reads in flight; guarded by itself, as are the additions to {@link #retained}
+     */
+    private final List<Read>                                     readsInFlight = new ArrayList<>();
+    /**
+     * By global order: the fills forgotten since a poll last called {@link #forgetResolvedGaps()} - kept only once a poll
+     * called {@link #beginRead()}, so a user that never polls (the CDC delivery gate) keeps nothing here
+     */
+    private final ConcurrentMap<Long, PersistedEvent>            resolvedSinceLastRead = new ConcurrentHashMap<>();
+    private volatile boolean                                     polled;
+
+    private record Retained(PersistedEvent gapFill, long generation) {
+    }
 
     /**
      * The gaps an acknowledgement resolved inside a unit of work it did not start, until that unit of work ends
@@ -91,7 +122,9 @@ public final class GapFillsAwaitingAcknowledgement implements UnitOfWorkLifecycl
      * it on again, nor resolve its gap
      */
     public boolean isAwaiting(PersistedEvent event) {
-        return !awaiting.isEmpty() && awaiting.containsKey(event.globalEventOrder().longValue());
+        var globalOrder = event.globalEventOrder().longValue();
+        return (!awaiting.isEmpty() && awaiting.containsKey(globalOrder)) ||
+                (!retained.isEmpty() && retained.containsKey(globalOrder));
     }
 
     /**
@@ -99,7 +132,19 @@ public final class GapFillsAwaitingAcknowledgement implements UnitOfWorkLifecycl
      * poll loaded, so the gap handler never promotes their gaps (it does not promote a gap whose event it is given)
      */
     public Collection<PersistedEvent> awaitingEvents() {
-        return awaiting.isEmpty() ? List.of() : List.copyOf(awaiting.values());
+        if (retained.isEmpty()) {
+            return awaiting.isEmpty() ? List.of() : List.copyOf(awaiting.values());
+        }
+        return List.copyOf(awaitingAndRetained().values());
+    }
+
+    /**
+     * Both maps may briefly hold the same fill (see {@link #resolved})
+     */
+    private Map<Long, PersistedEvent> awaitingAndRetained() {
+        var all = new HashMap<Long, PersistedEvent>(awaiting);
+        retained.forEach((globalOrder, entry) -> all.putIfAbsent(globalOrder, entry.gapFill()));
+        return all;
     }
 
     /**
@@ -109,18 +154,82 @@ public final class GapFillsAwaitingAcknowledgement implements UnitOfWorkLifecycl
      */
     public List<PersistedEvent> withAwaitingEvents(List<PersistedEvent> events) {
         requireNonNull(events, "No events provided");
-        if (awaiting.isEmpty()) {
+        if (awaiting.isEmpty() && retained.isEmpty()) {
             return events;
         }
         var given  = new HashSet<Long>();
         events.forEach(event -> given.add(event.globalEventOrder().longValue()));
         var result = new ArrayList<>(events);
-        awaiting.forEach((globalOrder, gapFill) -> {
+        (retained.isEmpty() ? awaiting : awaitingAndRetained()).forEach((globalOrder, gapFill) -> {
             if (!given.contains(globalOrder)) {
                 result.add(gapFill);
             }
         });
         return result;
+    }
+
+    /**
+     * Called by a poll before it reads the transient gaps; it closes the returned {@link Read} once it is done with what
+     * it read - after {@link #awaitAcknowledgement}. Until then a fill forgotten in the meantime is still counted as
+     * awaiting: the poll may have read its gap before the unit of work that resolved it committed.
+     */
+    public Read beginRead() {
+        polled = true;
+        synchronized (readsInFlight) {
+            var read = new Read(resolutions.get());
+            readsInFlight.add(read);
+            return read;
+        }
+    }
+
+    /**
+     * Called by a poll, inside its unit of work, right before it reads the transient gaps: resolves the gaps of the fills
+     * forgotten since the poll before once more. Their gap rows are gone - the unit of work that deleted them committed -
+     * but a gap handler that caches the transient gaps may have refreshed its cache from storage before that commit, and
+     * would otherwise keep asking for them, and the poll hand them on again. Costs nothing while no fill was forgotten.
+     */
+    public void forgetResolvedGaps() {
+        if (resolvedSinceLastRead.isEmpty()) {
+            return;
+        }
+        var gapFills = List.copyOf(resolvedSinceLastRead.values());
+        resolveFilledGaps(gapFills);
+        gapFills.forEach(gapFill -> resolvedSinceLastRead.remove(gapFill.globalEventOrder().longValue(), gapFill));
+    }
+
+    /**
+     * A poll's read in flight - see {@link #beginRead()}
+     */
+    public final class Read implements AutoCloseable {
+        private final long startGeneration;
+        private       boolean closed;
+
+        private Read(long startGeneration) {
+            this.startGeneration = startGeneration;
+        }
+
+        /**
+         * Forgets the retained fills no read still in flight may have read the gap of
+         */
+        @Override
+        public void close() {
+            synchronized (readsInFlight) {
+                if (closed) {
+                    return;
+                }
+                closed = true;
+                readsInFlight.remove(this);
+                if (retained.isEmpty()) {
+                    return;
+                }
+                if (readsInFlight.isEmpty()) {
+                    retained.clear();
+                    return;
+                }
+                var oldestStart = readsInFlight.stream().mapToLong(read -> read.startGeneration).min().getAsLong();
+                retained.values().removeIf(entry -> entry.generation() <= oldestStart);
+            }
+        }
     }
 
     /**
@@ -140,8 +249,9 @@ public final class GapFillsAwaitingAcknowledgement implements UnitOfWorkLifecycl
         if (awaiting.isEmpty()) {
             return;
         }
+        // Not a retained fill: it is resolved already
         var gapFills = events.stream()
-                             .filter(this::isAwaiting)
+                             .filter(event -> awaiting.containsKey(event.globalEventOrder().longValue()))
                              .toList();
         if (gapFills.isEmpty()) {
             return;
@@ -174,6 +284,16 @@ public final class GapFillsAwaitingAcknowledgement implements UnitOfWorkLifecycl
     }
 
     private void resolved(List<PersistedEvent> gapFills, GapReconciliation outcome) {
+        synchronized (readsInFlight) {
+            var generation = resolutions.incrementAndGet();
+            if (!readsInFlight.isEmpty()) {
+                // Retained before it is removed, so no read in flight ever finds it in neither map
+                gapFills.forEach(gapFill -> retained.put(gapFill.globalEventOrder().longValue(), new Retained(gapFill, generation)));
+            }
+        }
+        if (polled) {
+            gapFills.forEach(gapFill -> resolvedSinceLastRead.put(gapFill.globalEventOrder().longValue(), gapFill));
+        }
         gapFills.forEach(gapFill -> awaiting.remove(gapFill.globalEventOrder().longValue()));
         log.debug("[{}] Resolved the gaps of the acknowledged gap fill(s) {}", eventStreamLogName, globalOrdersOf(gapFills));
         if (!outcome.isEmpty()) {
@@ -217,6 +337,6 @@ public final class GapFillsAwaitingAcknowledgement implements UnitOfWorkLifecycl
 
     @Override
     public String toString() {
-        return "GapFillsAwaitingAcknowledgement{" + eventStreamLogName + ", awaiting=" + awaiting.keySet() + '}';
+        return "GapFillsAwaitingAcknowledgement{" + eventStreamLogName + ", awaiting=" + awaiting.keySet() + ", retained=" + retained.keySet() + '}';
     }
 }
