@@ -155,6 +155,11 @@ class EventLogCatchUpCapIT extends AbstractSubscriptionIT {
         return new Outcome(blocked, maxHeld.get(), all.get());
     }
 
+    private boolean awaitedDelivery(Recorder recorder, long globalOrder) {
+        awaitDelivered(recorder, globalOrder);
+        return true;
+    }
+
     private int blocked() throws SQLException {
         return (int) queryLong("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND objid = " + SCAN_KEY);
     }
@@ -197,7 +202,9 @@ class EventLogCatchUpCapIT extends AbstractSubscriptionIT {
         assertThat(blocked.await(30, TimeUnit.SECONDS)).isTrue();
         var recorder = new Recorder();
         subscribe("last", recorder, seams, 1);
-        var delivered = deliveredWithin(recorder, last);
+        // Only the mutant arm ends after ten reads without delivery; the healthy arm waits on time, since a catch-up under
+        // build load can take longer than ten tail reads
+        var delivered = mutants.length > 0 ? deliveredWithin(recorder, last) : awaitedDelivery(recorder, last);
         release.countDown();
         return delivered;
     }

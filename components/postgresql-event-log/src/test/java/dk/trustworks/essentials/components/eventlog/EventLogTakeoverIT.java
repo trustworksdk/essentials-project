@@ -50,8 +50,12 @@ class EventLogTakeoverIT extends AbstractLeaseIT {
         Subscription           pages;
 
         Node(String name) throws SQLException {
+            this(name, LEASE);
+        }
+
+        Node(String name, EventLogSettings settings) throws SQLException {
             this.name = name;
-            this.log = eventLog(name);
+            this.log = eventLog(name, settings);
         }
 
         Node start() throws SQLException {
@@ -133,11 +137,18 @@ class EventLogTakeoverIT extends AbstractLeaseIT {
         assertFoldEqual(b);
     }
 
+    /**
+     * A lease long enough that an expiry could never pass for a release: with {@link #LEASE}'s 2 s, an expiry hands over
+     * 1.5 s after the stop at the earliest, the same as any bound tight enough to tell the two apart, and a loaded build
+     * missed it (1.73 s)
+     */
+    static final EventLogSettings LONG_LEASE = LEASE.withLease(Duration.ofSeconds(10), LEASE.leaseRenewalInterval(), LEASE.leaseLocalStop());
+
     @Test
     void a_graceful_stop_hands_over_within_a_claim_interval_without_replay() throws Exception {
-        var a = new Node("node-a").start();
+        var a = new Node("node-a", LONG_LEASE).start();
         awaitOwns(a);
-        var b = new Node("node-b").start();
+        var b = new Node("node-b", LONG_LEASE).start();
         awaitTrue(() -> a.handled.size() >= 20);
 
         var stoppedAt = System.nanoTime();
@@ -146,9 +157,11 @@ class EventLogTakeoverIT extends AbstractLeaseIT {
         var lastOfA = a.handled.getLast();
         awaitOwns(b);
         awaitTrue(() -> b.firstHandledNanos.get() != 0);
+        // An expiry would take at least the lease less a renewal interval (9.5 s); a release takes a claim interval plus the start
         assertThat(Duration.ofNanos(b.firstHandledNanos.get() - stoppedAt)).as("stop to the standby's first handled event")
-                                                                         .isLessThanOrEqualTo(LEASE.leaseRenewalInterval().plusSeconds(1));
-        assertThat(b.handled.getFirst()).as("the release saved the resume point: nothing replayed").isGreaterThan(lastOfA);
+                                                                         .isLessThanOrEqualTo(LEASE.leaseRenewalInterval().plusSeconds(3));
+        // A stop that lands while the handler runs leaves that one event unhandled (it may have been cut short), so it comes again
+        assertThat(b.handled.getFirst()).as("the release saved the resume point: nothing but the interrupted event replayed").isGreaterThanOrEqualTo(lastOfA);
         assertFoldEqual(b);
     }
 
