@@ -58,8 +58,13 @@ Usage
 
 Exit codes: 0 no finding at or above --fail-on · 1 findings · 2 could not run (unreadable or
 malformed diff, git failure, --tree PATH not a directory, catalogue missing, a signature id not active in the
-catalogue).
+catalogue, an unexpected internal error — one line on stderr; set REVIEW_SCAN_DEBUG=1 for the traceback).
 --self-test: 0 every fixture expectation met · 1 not.
+
+Text is decoded as UTF-8 with undecodable bytes replaced, whatever the locale, so one Latin-1 byte in a diffed
+file never stops the scan. Lines are split on "\\n" only (a trailing "\\r" dropped), the way git and a diff count
+them: str.splitlines() also breaks on form feeds and Unicode separators, which would shift line numbers and cut
+a hunk short.
 
 Standard library only; Python 3.11+.
 """
@@ -90,6 +95,21 @@ class UsageError(Exception):
     pass
 
 
+def split_lines(text: str) -> list[str]:
+    """Lines as git and a unified diff count them: split on "\\n" only, a trailing "\\r" dropped.
+    str.splitlines() also breaks on \\x0c, \\x1c-\\x1e, \\x85, U+2028 and U+2029, which shifts every line number
+    after one of them and, inside a hunk, strips the `+` tag from the fragment that follows."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return [ln[:-1] if ln.endswith("\r") else ln for ln in lines]
+
+
+def decode(data: bytes) -> str:
+    """UTF-8 whatever the locale, undecodable bytes replaced: one Latin-1 byte never stops a scan."""
+    return data.decode("utf-8", errors="replace")
+
+
 # ---------------------------------------------------------------------------------------------
 # The catalogue (read, never restated)
 
@@ -116,7 +136,7 @@ def load_traps(path: Path) -> dict[str, Trap]:
     except OSError as exc:
         raise UsageError(f"cannot read the traps catalogue {path}: {exc}")
     traps, retired = {}, False
-    for no, line in enumerate(text.splitlines(), 1):
+    for no, line in enumerate(split_lines(text), 1):
         if RETIRED_HEADING.match(line):
             retired = True
         m = TRAP_LINE.match(line)
@@ -395,7 +415,7 @@ def parse_diff(text: str) -> list[FileDiff]:
     that starts with "-- " is never mistaken for a `---` file header."""
     files, cur, hunk = [], None, None
     new_no = old_left = new_left = 0
-    for raw in text.splitlines():
+    for raw in split_lines(text):
         if hunk is not None and (old_left > 0 or new_left > 0):
             tag = raw[:1]
             if tag == "+":
@@ -488,8 +508,8 @@ class Context:
         if root is not None:
             p = root / fd.path
             try:
-                lines = p.read_text(encoding="utf-8").splitlines()
-            except (OSError, UnicodeDecodeError, ValueError):
+                lines = split_lines(decode(p.read_bytes()))
+            except (OSError, ValueError):
                 lines = None
             if lines is not None and all(0 < ln.no <= len(lines) and lines[ln.no - 1] == ln.text
                                          for ln in fd.added()):
@@ -1339,12 +1359,12 @@ class Scan:
 
 def git(root: Path, *args) -> str:
     try:
-        r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=False)
+        r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
     except OSError as exc:
         raise UsageError(f"cannot run git: {exc}")
     if r.returncode != 0:
-        raise UsageError(f"git {' '.join(args)} failed: {r.stderr.strip()}")
-    return r.stdout
+        raise UsageError(f"git {' '.join(args)} failed: {decode(r.stderr).strip()}")
+    return decode(r.stdout)
 
 
 def diff_from_git(root: Path, base: str, head: str | None):
@@ -1353,7 +1373,7 @@ def diff_from_git(root: Path, base: str, head: str | None):
     if head:
         args.append(head)
     text = git(top, *args)
-    untracked = [] if head else [p for p in git(top, "ls-files", "--others", "--exclude-standard").splitlines() if p]
+    untracked = [] if head else [p for p in split_lines(git(top, "ls-files", "--others", "--exclude-standard")) if p]
     return top, text, untracked
 
 
@@ -1365,7 +1385,8 @@ WALK_SKIP = {".git", ".hg", ".svn", "node_modules", "target", "build", "dist", "
 def tree_files(root: Path) -> tuple[list[FileDiff], str]:
     """Every text file under ROOT as a FileDiff whose lines are all added — what `git diff <empty tree>` of that
     tree would say. A git work tree lists its tracked and untracked-but-not-ignored files (`git ls-files`, so
-    .gitignore holds); any other directory is walked, skipping WALK_SKIP. Unreadable and binary files are skipped."""
+    .gitignore holds); any other directory is walked, skipping WALK_SKIP. Unreadable and binary (NUL-carrying)
+    files are skipped; any other file is decoded as git diff output is, undecodable bytes replaced."""
     lister = "walk"
     paths: list[str] = []
     inside = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"], capture_output=True,
@@ -1390,10 +1411,7 @@ def tree_files(root: Path) -> tuple[list[FileDiff], str]:
             continue
         if b"\0" in data:
             continue
-        try:
-            lines = data.decode("utf-8").splitlines()
-        except UnicodeDecodeError:
-            continue
+        lines = split_lines(decode(data))
         fd = FileDiff(rel)
         if lines:
             fd.hunks.append([Line(i, s, True) for i, s in enumerate(lines, 1)])
@@ -1491,7 +1509,7 @@ def self_test(traps, out) -> int:
         rel = fx.relative_to(PLUGIN).as_posix()
         text = fx.read_text(encoding="utf-8")
         want, want_not, want_nr, root = {}, set(), set(), None
-        for line in text.splitlines():
+        for line in split_lines(text):
             if line.startswith("diff ") or line.startswith("--- "):
                 break
             m = EXPECT.match(line)
@@ -1566,6 +1584,22 @@ def self_test(traps, out) -> int:
 
 
 def main(argv=None) -> int:
+    try:
+        return run(argv)
+    except Exception as exc:    # a defect here, not a finding: exit 2 (could not run), never 1
+        if os.environ.get("REVIEW_SCAN_DEBUG"):
+            raise
+        print(f"review-scan: internal error: {type(exc).__name__}: {exc} "
+              "(set REVIEW_SCAN_DEBUG=1 for the traceback)", file=sys.stderr)
+        return 2
+
+
+def read_stdin() -> str:
+    buf = getattr(sys.stdin, "buffer", None)
+    return decode(buf.read()) if buf is not None else sys.stdin.read()
+
+
+def run(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="review-scan",
         description="Trap signatures in the added lines of a diff, with ESS-NNN ids from LLM-traps.md. "
@@ -1610,8 +1644,8 @@ def main(argv=None) -> int:
                       "untracked": untracked}
         elif args.diff:
             try:
-                text = sys.stdin.read() if args.diff == "-" else Path(args.diff).read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError) as exc:
+                text = read_stdin() if args.diff == "-" else decode(Path(args.diff).read_bytes())
+            except OSError as exc:
                 raise UsageError(f"cannot read the diff {args.diff}: {exc}")
             root = Path(args.root) if args.root else Path(".")
             source = {"mode": "diff", "diff": args.diff, "root": str(root.resolve())}

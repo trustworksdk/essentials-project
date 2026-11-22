@@ -12,12 +12,15 @@
   testable without either side running.
 - Inbound commands are dispatched with `sendAndDontWait`, so they are retried; the receiving slice
   must be idempotent.
+- The ingress fails closed: it rejects every request until `webhooks.billing.shared-secret`
+  is configured, then accepts only a matching `X-Webhook-Secret` header. That check is a placeholder —
+  replace it with Billing's own signature scheme, still failing closed (stack contract S9).
 
 ## Boundaries
 **Reacts to / reads:** `InvoiceIssued` from Billing (inbound); `OrderPlaced` from
 `orders/events/` (outbound)
 **Dispatches:** the internal command mapped in `slice.yaml` `maps`
-**External API:** none of its own — `/webhooks/billing` is Billing's ingress
+**External API:** none of its own — `/webhooks/billing/InvoiceIssued` is Billing's ingress
 **Forbidden:**
   - Never import another slice's internals — only `orders/events/` and `orders/types/`.
   - Never let an external wire type cross out of this directory.
@@ -30,8 +33,8 @@
 - `BillingTranslator.java` — the pure mapping (both directions)
 - `BillingClient.java` — typed outbound port
 - `BillingClientAdapter.java` — the transport behind the port; its `send` throws until you implement it; delete if `direction: inbound`
-- `OnInvoiceIssued.java` — inbound ingress → CommandBus (Inbox); delete if `direction: outbound`
-- `BillingPublisher.java` — outbound `EventProcessor` (Outbox); delete if `direction: inbound`
+- `OnInvoiceIssued.java` — inbound ingress → CommandBus `sendAndDontWait` (a durable queue); delete if `direction: outbound`
+- `BillingPublisher.java` — outbound `EventProcessor` (events delivered through its durable Inbox); delete if `direction: inbound`
 - test: `BillingTranslatorTest.java`
 
 ## Direction

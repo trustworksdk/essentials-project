@@ -26,7 +26,7 @@ import java.time.OffsetDateTime;
 import java.util.Optional;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EventJSONTest.createSerializer;
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 class PersistedEventTest {
     public static final  String META_DATA_JSON = "{ \"metaData\": \"someValue\" }";
@@ -277,5 +277,90 @@ class PersistedEventTest {
         assertThat(toStringResult).isNotEmpty();
         assertThat(toStringResult).doesNotContain(EVENT_JSON);
         assertThat(toStringResult).contains(META_DATA_JSON);
+    }
+
+    private PersistedEvent fullyPopulatedEvent() {
+        return PersistedEvent.from(EventId.random(),
+                                   AggregateType.of("TestAggregate"),
+                                   "aggregate-id-123",
+                                   new EventJSON(jsonSerializer, deserializedObject, eventType, EVENT_JSON),
+                                   EventOrder.of(3),
+                                   EventRevision.of(2),
+                                   GlobalEventOrder.of(7),
+                                   new EventMetaDataJSON(jsonSerializer, EventMetaData.class.getName(), META_DATA_JSON),
+                                   OffsetDateTime.now(),
+                                   Optional.of(EventId.random()),
+                                   Optional.of(CorrelationId.random()),
+                                   Optional.of(TenantId.of("tenant-1")));
+    }
+
+    private static void assertAllPropertiesExceptEventAndMetaDataAreCopied(PersistedEvent copy, PersistedEvent original) {
+        assertThat((CharSequence) copy.eventId()).isEqualTo(original.eventId());
+        assertThat((CharSequence) copy.aggregateType()).isEqualTo(original.aggregateType());
+        assertThat(copy.aggregateId()).isEqualTo(original.aggregateId());
+        assertThat(copy.eventOrder()).isEqualTo(original.eventOrder());
+        assertThat(copy.eventRevision()).isEqualTo(original.eventRevision());
+        assertThat(copy.globalEventOrder()).isEqualTo(original.globalEventOrder());
+        assertThat(copy.timestamp()).isEqualTo(original.timestamp());
+        assertThat(copy.causedByEventId()).isEqualTo(original.causedByEventId());
+        assertThat(copy.correlationId()).isEqualTo(original.correlationId());
+        assertThat(copy.tenant()).isEqualTo(original.tenant());
+    }
+
+    @Test
+    void withEvent_replaces_only_the_event_and_keeps_every_other_property() {
+        var original    = fullyPopulatedEvent();
+        var originalJson = original.event();
+        var replacement = new EventJSON(jsonSerializer, new EventJSONTest.TestEvent("decrypted"), eventType, "{\"testField\": \"decrypted\"}");
+
+        var copy = original.withEvent(replacement);
+
+        assertThat(copy).isNotSameAs(original);
+        assertThat(copy.event()).isSameAs(replacement);
+        assertThat(copy.metaData()).isSameAs(original.metaData());
+        assertAllPropertiesExceptEventAndMetaDataAreCopied(copy, original);
+        assertThat(original.event()).isSameAs(originalJson);
+        assertThat(copy).isEqualTo(original);
+        assertThat(copy.valueEquals(original)).isFalse();
+    }
+
+    @Test
+    void withMetaData_replaces_only_the_metadata_and_keeps_every_other_property() {
+        var original         = fullyPopulatedEvent();
+        var originalMetaData = original.metaData();
+        var replacement      = new EventMetaDataJSON(jsonSerializer, EventMetaData.class.getName(), "{ \"metaData\": \"otherValue\" }");
+
+        var copy = original.withMetaData(replacement);
+
+        assertThat(copy).isNotSameAs(original);
+        assertThat(copy.metaData()).isSameAs(replacement);
+        assertThat(copy.event()).isSameAs(original.event());
+        assertAllPropertiesExceptEventAndMetaDataAreCopied(copy, original);
+        assertThat(original.metaData()).isSameAs(originalMetaData);
+        assertThat(copy).isEqualTo(original);
+        assertThat(copy.valueEquals(original)).isFalse();
+    }
+
+    @Test
+    void withEvent_and_withMetaData_keep_empty_optionals_empty() {
+        var original = PersistedEvent.from(EventId.random(), AggregateType.of("TestAggregate"), "aggregate-id-123",
+                                           new EventJSON(jsonSerializer, deserializedObject, eventType, EVENT_JSON), EventOrder.of(0),
+                                           EventRevision.of(1), GlobalEventOrder.of(1),
+                                           new EventMetaDataJSON(jsonSerializer, EventMetaData.class.getName(), META_DATA_JSON), OffsetDateTime.now(),
+                                           Optional.empty(), Optional.empty(), Optional.empty());
+
+        var copy = original.withEvent(original.event()).withMetaData(original.metaData());
+
+        assertThat(copy.valueEquals(original)).isTrue();
+        assertThat(copy.causedByEventId()).isEmpty();
+        assertThat(copy.correlationId()).isEmpty();
+        assertThat(copy.tenant()).isEmpty();
+    }
+
+    @Test
+    void withEvent_and_withMetaData_reject_null() {
+        var original = fullyPopulatedEvent();
+        assertThatThrownBy(() -> original.withEvent(null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> original.withMetaData(null)).isInstanceOf(IllegalArgumentException.class);
     }
 }

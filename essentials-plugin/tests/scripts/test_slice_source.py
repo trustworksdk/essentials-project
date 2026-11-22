@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -150,8 +151,9 @@ class ExitCodes(unittest.TestCase):
         "boundaries": (0, 1),
         "boundaries-kotlin": (0, 1),
         "write-sites": (0, 1),
-        "unhandled-variants": (0, 0),  # facts, not findings
+        "unhandled-variants": (0, 1),  # facts; the one finding is gate 7 (LetterEvent.kt holds two variants)
         "acceptance": (0, 1),  # an expired record and malformed entries leave Should-fix findings
+        "event-variants": (0, 1),  # gate 7: two events files with nested variants, one with top-level ones
     }
 
     def test_case_exit_codes(self):
@@ -324,6 +326,24 @@ class Rules(unittest.TestCase):
         self.assertNotIn("payment_gateway", " ".join(f["file"] for f in self.check["raw-ids"]["findings"]),
                          "a translation webhook carries the external system's ids")
 
+    def test_event_variants_per_file(self):
+        """Gate 7: a file in events/ with two or more concrete event types. A nested variant cannot be split out
+        without renaming the class name the event store recorded, so its finding says `renames`."""
+        found = sorted((f["file"].rsplit("/", 1)[-1], f["split"], tuple(t["name"] for t in f["types"]))
+                       for f in self.check["event-variants"]["findings"])
+        self.assertEqual(found, [
+            ("InvoiceEvent.kt", "renames", ("InvoiceIssued", "InvoiceVoided")),        # companion object not counted
+            ("PaymentEvent.java", "renames", ("PaymentTaken", "PaymentRefunded")),     # sealed sub-parent not counted
+            ("Shipping.kt", "rename-free", ("OrderShipped", "OrderDelivered")),       # helper class not counted
+        ])
+        self.assertEqual({(f["gate"], f["id"], f["severity"]) for f in self.check["event-variants"]["findings"]},
+                         {("7 variants per file", "ESS-G7", "Blocking")})
+        taken = next(t for f in self.check["event-variants"]["findings"] for t in f["types"]
+                     if t["name"] == "PaymentTaken")
+        self.assertEqual((taken["binaryName"], taken["afterSplit"]),
+                         ("com.example.ev.payments.events.PaymentEvent$PaymentTaken",
+                          "com.example.ev.payments.events.PaymentTaken"))
+
     def test_lane_signal_rows(self):
         c = self.check["java-lanes"]
         self.assertEqual(sorted((f["gate"], f["file"].split("/")[-1])
@@ -400,7 +420,7 @@ class Rules(unittest.TestCase):
             for f in c["findings"] + c["unverified"]:
                 with self.subTest(case=case, gate=f["gate"]):
                     self.assertEqual(f["id"], ss.gate_id(f["gate"]))
-                    self.assertRegex(f["id"], r"^ESS-G(0|6|8[abcd]|11[bc]|14)$")
+                    self.assertRegex(f["id"], r"^ESS-G(0|6|7|8[abcd]|11[bc]|14)$")
 
     def test_every_finding_carries_an_impact(self):
         for case, c in self.check.items():
@@ -612,6 +632,49 @@ class Units(unittest.TestCase):
         self.assertEqual(ss.gate_id("11(b) handled events"), "ESS-G11b")
         self.assertEqual(ss.gate_id("6 discriminator"), "ESS-G6")
         self.assertEqual(ss.gate_id("14 stale lane"), "ESS-G14")
+
+
+class WalkedTree(unittest.TestCase):
+    """What the walk skips, and what an unreadable file becomes instead of a traceback."""
+
+    def project(self, tmp):
+        project = Path(tmp) / "project"
+        shutil.copytree(CASES / "java-clean", project)
+        return project
+
+    def test_an_agent_worktree_and_build_output_copy_are_not_counted(self):
+        code, clean = run_json(rel_case("java-clean"))
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self.project(tmp)
+            shutil.copytree(CASES / "java-clean", project / ".claude" / "worktrees" / "agent1")
+            shutil.copytree(CASES / "java-clean", project / "build" / "resources")
+            copied_code, copied = run_json(str(project))
+        self.assertEqual(copied_code, code)
+        self.assertEqual([(s["id"], s["dir"], s["files"]) for s in copied["slices"]],
+                         [(s["id"], s["dir"], s["files"]) for s in clean["slices"]])
+
+    def test_a_manifest_that_is_not_utf8_is_skipped_not_a_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self.project(tmp)
+            manifest = sorted(project.rglob("slice.yaml"))[0]
+            manifest.write_bytes("summary: café\n".encode("latin-1"))
+            code, out, err = run(str(project), "--check", "--json")
+            self.assertNotEqual(code, 2, err)
+            self.assertNotIn("Traceback", err)
+            skipped = json.loads(out)["skippedManifests"]
+            self.assertEqual([s["file"] for s in skipped], [manifest.relative_to(project).as_posix()])
+            self.assertIn("not UTF-8 text: byte 0xE9", skipped[0]["reason"])
+
+    def test_an_acceptance_file_that_is_not_utf8_is_a_finding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self.project(tmp)
+            (project / "slice-check-accepted.yaml").write_bytes("- reason: café\n".encode("latin-1"))
+            code, out, err = run(str(project), "--check", "--json")
+            self.assertEqual(code, 1, err)
+            self.assertNotIn("Traceback", err)
+            [f] = [f for f in json.loads(out)["findings"] if f["gate"] == "0 acceptance record"]
+            self.assertEqual((f["severity"], f["file"]), ("Should-fix", "slice-check-accepted.yaml"))
+            self.assertIn("not UTF-8 text", f["message"])
 
 
 if __name__ == "__main__":

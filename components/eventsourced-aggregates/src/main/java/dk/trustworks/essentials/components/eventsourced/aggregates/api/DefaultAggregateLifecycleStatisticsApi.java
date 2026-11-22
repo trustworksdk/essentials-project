@@ -122,106 +122,34 @@ public class DefaultAggregateLifecycleStatisticsApi implements AggregateLifecycl
                                                              List.of("essentials.aggregate_closing_books.last_rollover_epoch_ms")));
     }
 
+    // The methods that read the meters live in MicrometerMeters, not here: Spring introspects every bean class's declared
+    // methods (getDeclaredMethods resolves parameter types, lambdas included), so a Meter.Id parameter on this class
+    // would stop an application without micrometer-core from starting, even though no registry is present to read.
+
     private Map<String, ApiTimedMetricStatistics> timedMetrics(String aggregateImplementationType,
                                                                AggregateType aggregateType,
                                                                List<String> suffixes,
                                                                String prefix) {
-        var registry = meterRegistry.orElse(null);
-        if (registry == null) {
-            return Map.of();
-        }
-
-        var metrics = new LinkedHashMap<String, ApiTimedMetricStatistics>();
-        for (var suffix : suffixes) {
-            var metricName = prefix + suffix;
-            var timers = registry.find(metricName).timers().stream()
-                                 .filter(timer -> matches(timer.getId(), aggregateImplementationType, aggregateType))
-                                 .toList();
-            if (timers.isEmpty()) {
-                continue;
-            }
-            long count = 0L;
-            double totalTimeMs = 0D;
-            double maxTimeMs = 0D;
-            for (var timer : timers) {
-                count += timer.count();
-                totalTimeMs += timer.totalTime(TimeUnit.MILLISECONDS);
-                maxTimeMs = Math.max(maxTimeMs, timer.max(TimeUnit.MILLISECONDS));
-            }
-            metrics.put(suffix, new ApiTimedMetricStatistics(count, totalTimeMs, maxTimeMs));
-        }
-        return Map.copyOf(metrics);
+        return meterRegistry.isPresent()
+               ? new MicrometerMeters(meterRegistry.get()).timedMetrics(aggregateImplementationType, aggregateType, suffixes, prefix)
+               : Map.of();
     }
 
     private Map<String, Long> counters(String aggregateImplementationType,
                                        AggregateType aggregateType,
                                        List<String> metricNames,
                                        boolean includeMeterNameInKey) {
-        var registry = meterRegistry.orElse(null);
-        if (registry == null) {
-            return Map.of();
-        }
-
-        var values = new LinkedHashMap<String, Long>();
-        for (var metricName : metricNames) {
-            for (var counter : registry.find(metricName).counters()) {
-                if (!matches(counter.getId(), aggregateImplementationType, aggregateType)) {
-                    continue;
-                }
-                var key = includeMeterNameInKey ? metricName + tagsSuffix(counter.getId()) : keyFromTags(counter.getId());
-                values.merge(key, Math.round(counter.count()), Long::sum);
-            }
-        }
-        return Map.copyOf(values);
+        return meterRegistry.isPresent()
+               ? new MicrometerMeters(meterRegistry.get()).counters(aggregateImplementationType, aggregateType, metricNames, includeMeterNameInKey)
+               : Map.of();
     }
 
     private Map<String, Double> gauges(String aggregateImplementationType,
                                        AggregateType aggregateType,
                                        List<String> metricNames) {
-        var registry = meterRegistry.orElse(null);
-        if (registry == null) {
-            return Map.of();
-        }
-
-        var values = new LinkedHashMap<String, Double>();
-        for (var metricName : metricNames) {
-            for (var gauge : registry.find(metricName).gauges()) {
-                if (!matches(gauge.getId(), aggregateImplementationType, aggregateType)) {
-                    continue;
-                }
-                values.put(metricName + tagsSuffix(gauge.getId()), gauge.value());
-            }
-        }
-        return Map.copyOf(values);
-    }
-
-    private boolean matches(Meter.Id id, String aggregateImplementationType, AggregateType aggregateType) {
-        var idAggregateImplType = id.getTag("aggregate_impl_type");
-        var idAggregateType = id.getTag("aggregate_type");
-        if (aggregateImplementationType != null && !aggregateImplementationType.equals(idAggregateImplType)) {
-            return false;
-        }
-        return aggregateType == null || aggregateType.toString().equals(idAggregateType);
-    }
-
-    private String keyFromTags(Meter.Id id) {
-        var tags = id.getTags().stream()
-                     .filter(tag -> !tag.getKey().equals("aggregate_type"))
-                     .filter(tag -> !tag.getKey().equals("aggregate_impl_type"))
-                     .toList();
-        if (tags.isEmpty()) {
-            return "count";
-        }
-        return tags.stream()
-                   .map(tag -> tag.getKey() + "=" + tag.getValue())
-                   .sorted()
-                   .reduce((left, right) -> left + "," + right)
-                   .orElse("count");
-    }
-
-    private String tagsSuffix(Meter.Id id) {
-        var key = keyFromTags(id);
-        return key.equals("count") ? "" : "[" + key + "]";
+        return meterRegistry.isPresent()
+               ? new MicrometerMeters(meterRegistry.get()).gauges(aggregateImplementationType, aggregateType, metricNames)
+               : Map.of();
     }
 
     private void validateReadAccess(Object principal) {
@@ -308,4 +236,102 @@ public class DefaultAggregateLifecycleStatisticsApi implements AggregateLifecycl
         }
     }
 
+    /**
+     * Reads the lifecycle meters from a {@link MeterRegistry}. Only loaded when a registry is present, so the
+     * Micrometer types in its signatures never need to resolve in an application without micrometer-core.
+     */
+    private static final class MicrometerMeters {
+        private final MeterRegistry registry;
+
+        private MicrometerMeters(MeterRegistry registry) {
+            this.registry = registry;
+        }
+
+        Map<String, ApiTimedMetricStatistics> timedMetrics(String aggregateImplementationType,
+                                                           AggregateType aggregateType,
+                                                           List<String> suffixes,
+                                                           String prefix) {
+            var metrics = new LinkedHashMap<String, ApiTimedMetricStatistics>();
+            for (var suffix : suffixes) {
+                var metricName = prefix + suffix;
+                var timers = registry.find(metricName).timers().stream()
+                                     .filter(timer -> matches(timer.getId(), aggregateImplementationType, aggregateType))
+                                     .toList();
+                if (timers.isEmpty()) {
+                    continue;
+                }
+                long count = 0L;
+                double totalTimeMs = 0D;
+                double maxTimeMs = 0D;
+                for (var timer : timers) {
+                    count += timer.count();
+                    totalTimeMs += timer.totalTime(TimeUnit.MILLISECONDS);
+                    maxTimeMs = Math.max(maxTimeMs, timer.max(TimeUnit.MILLISECONDS));
+                }
+                metrics.put(suffix, new ApiTimedMetricStatistics(count, totalTimeMs, maxTimeMs));
+            }
+            return Map.copyOf(metrics);
+        }
+
+        Map<String, Long> counters(String aggregateImplementationType,
+                                   AggregateType aggregateType,
+                                   List<String> metricNames,
+                                   boolean includeMeterNameInKey) {
+            var values = new LinkedHashMap<String, Long>();
+            for (var metricName : metricNames) {
+                for (var counter : registry.find(metricName).counters()) {
+                    if (!matches(counter.getId(), aggregateImplementationType, aggregateType)) {
+                        continue;
+                    }
+                    var key = includeMeterNameInKey ? metricName + tagsSuffix(counter.getId()) : keyFromTags(counter.getId());
+                    values.merge(key, Math.round(counter.count()), Long::sum);
+                }
+            }
+            return Map.copyOf(values);
+        }
+
+        Map<String, Double> gauges(String aggregateImplementationType,
+                                   AggregateType aggregateType,
+                                   List<String> metricNames) {
+            var values = new LinkedHashMap<String, Double>();
+            for (var metricName : metricNames) {
+                for (var gauge : registry.find(metricName).gauges()) {
+                    if (!matches(gauge.getId(), aggregateImplementationType, aggregateType)) {
+                        continue;
+                    }
+                    values.put(metricName + tagsSuffix(gauge.getId()), gauge.value());
+                }
+            }
+            return Map.copyOf(values);
+        }
+
+        private boolean matches(Meter.Id id, String aggregateImplementationType, AggregateType aggregateType) {
+            var idAggregateImplType = id.getTag("aggregate_impl_type");
+            var idAggregateType = id.getTag("aggregate_type");
+            if (aggregateImplementationType != null && !aggregateImplementationType.equals(idAggregateImplType)) {
+                return false;
+            }
+            return aggregateType == null || aggregateType.toString().equals(idAggregateType);
+        }
+
+        private String keyFromTags(Meter.Id id) {
+            var tags = id.getTags().stream()
+                         .filter(tag -> !tag.getKey().equals("aggregate_type"))
+                         .filter(tag -> !tag.getKey().equals("aggregate_impl_type"))
+                         .toList();
+            if (tags.isEmpty()) {
+                return "count";
+            }
+            return tags.stream()
+                       .map(tag -> tag.getKey() + "=" + tag.getValue())
+                       .sorted()
+                       .reduce((left, right) -> left + "," + right)
+                       .orElse("count");
+        }
+
+        private String tagsSuffix(Meter.Id id) {
+            var key = keyFromTags(id);
+            return key.equals("count") ? "" : "[" + key + "]";
+        }
+    }
 }

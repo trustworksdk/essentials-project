@@ -458,6 +458,32 @@ class Apply(Base):
         self.assertEqual(run(SCRIPT, "apply", root, bad).returncode, 2)
         self.assertEqual(run(SCRIPT, "apply", root, root / "missing.json").returncode, 2)
 
+    def test_a_malformed_slices_list_is_a_usage_error(self):
+        # `slices` is a list of {path, accept} objects; any other shape is the caller's mistake, reported
+        # in one line (exit 2), not a traceback and not a silent partial write.
+        root = self.copy()
+        before = tree_digest(root)
+        rel = "src/main/java/com/example/library/lending/use_cases/renew_loan/slice.yaml"
+        for slices in ({rel: {"flow": "x"}}, [rel], "x", [{"path": rel, "accept": {"flow": "x"}}, 3]):
+            with self.subTest(slices=slices):
+                r = run(SCRIPT, "apply", root, self.accepted(lambda data: data.update(slices=slices)))
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("slices", r.stderr)
+                self.assertNotIn("Traceback", r.stderr)
+        self.assertEqual(tree_digest(root), before)
+
+    def test_a_manifest_that_is_not_utf8_is_refused(self):
+        root = self.copy()
+        rel = "src/main/java/com/example/library/lending/use_cases/renew_loan/slice.yaml"
+        target = root / rel
+        target.write_bytes(target.read_bytes() + b"# caf\xe9\n")
+        before = tree_digest(root)
+        r = run(SCRIPT, "apply", root, self.accepted(
+            lambda data: data.update(slices=[{"path": rel, "accept": {"flow": "x"}}])))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn(f"refused  {rel}: not UTF-8", r.stdout)
+        self.assertEqual(tree_digest(root), before)
+
 
 def load_module():
     spec = importlib.util.spec_from_file_location("slice_enrich", SCRIPT)
@@ -475,6 +501,12 @@ class Yaml(unittest.TestCase):
                       'say "hi"', "trailing ", "", "Class#method", "Klass#`a backtick name`", "ünïcode"]:
             text = f"k: {self.m.scalar(value)}"
             self.assertEqual(yaml.safe_load(text), {"k": value}, text)
+
+    def test_evidence_lines_count_newlines_only(self):
+        # A form feed (or \x1c, \u2028) is a line break to str.splitlines() but not to an editor or to
+        # text.count("\n"); the cited line must be the editor's.
+        self.assertEqual(self.m.first_paragraph("# Title\f\n\nThe paragraph.\n"), ("The paragraph.", 3))
+        self.assertEqual(self.m.first_paragraph("# T\n\nOne \u2028two.\n"), ("One \u2028two.", 3))
 
     def test_path_is_always_quoted(self):
         self.assertEqual(self.m.scalar("/api/loans", "path"), '"/api/loans"')

@@ -164,7 +164,8 @@ Ask via `AskUserQuestion`:
   1. **"In the current directory"** — "Scaffold into `$(pwd)`. Use only if the current directory is empty (or contains only .git/README/CLAUDE.md/LICENSE/.gitignore)."
   2. **"In a new subdirectory"** — "Create `./<artifactId>/` and scaffold there. The artifactId is captured later. Recommended if the current directory is non-empty."
 
-Remember the choice as `TARGET_MODE`. A preset `targetMode` is this choice (`current`, `subdirectory`);
+Remember the choice as `TARGET_MODE`, in the preset's tokens: `current` for "In the current directory",
+`subdirectory` for "In a new subdirectory". A preset `targetMode` is this choice, already in those tokens;
 a preset `targetDir` replaces the question, and Step 8 resolves it.
 
 ## Step 2 — Frontend
@@ -208,7 +209,10 @@ Ask via `AskUserQuestion`:
 
 Remember as `WEB` (`webflux` or `webmvc`). The answer picks the Spring web starter, the springdoc
 starter, the one `Essentials*WebConfigurer` the project imports (S4), the SPA filter's form (S8) and
-`reactor-core` on WebMvc (S2.1). Both are built in CI.
+`reactor-core` on WebMvc (S2.1). Both are built in CI. Both stacks render
+`spring.threads.virtual.enabled: true` (S5): on WebFlux it moves handlers that return a plain value off the
+event loop. An `Executor` bean the team adds later undoes that unless `spring.task.execution.mode: force`
+is set with it.
 
 ## Step 5 — DB profile
 
@@ -265,8 +269,8 @@ anything else (exit 2), so ask again rather than letting it fail.
 
 `WORKSPACE_DIR = $(pwd)`, the directory the user invoked `/essentials:init` from.
 
-- `TARGET_MODE == "current directory"` ⇒ `TARGET_DIR = WORKSPACE_DIR`.
-- `TARGET_MODE == "new subdirectory"` ⇒ `TARGET_DIR = WORKSPACE_DIR/<artifactId>`. If it exists and
+- `TARGET_MODE == current` ⇒ `TARGET_DIR = WORKSPACE_DIR`.
+- `TARGET_MODE == subdirectory` ⇒ `TARGET_DIR = WORKSPACE_DIR/<artifactId>`. If it exists and
   is non-empty, abort: "directory `<X>` already exists and is non-empty; remove it or pick a
   different artifactId". Do **not** overwrite.
 - A preset `targetDir` ⇒ `TARGET_DIR` = the absolute path `init-report.py preset` printed;
@@ -446,41 +450,21 @@ in order, and record each outcome for Step 14:
 
 - `maven-wrapper` needs `mvn` on the PATH. Without it, skip the hook and say so: the project builds
   with `mvn` once Maven is installed, `./dev.sh` falls back to it, and running the same command
-  later creates the wrapper.
+  later creates the wrapper. Record `WRAPPER_RESULT`: `created`, or `skipped (no mvn)`.
 - `frontend-lockfile` needs `npm` and the registry. Without them, skip it and say plainly what that
   costs: the embedded build's `npm ci` fails until a `package-lock.json` exists, so until then the
   backend builds with `-Pskip-frontend`.
 
-If `lintGate == "hook"`, activate the hook. A relative `core.hooksPath` resolves against the
-repository's **top level**, not against `${TARGET_DIR}`, so in subdirectory mode — and in "current
-directory" mode inside a larger repository — a bare `.githooks` names a directory that does not exist
-and the hook never runs. Use the project's path from the top level:
+If `lintGate == "hook"`, activate the hook by `${CLAUDE_PLUGIN_ROOT}/references/init-assets/lint-gate.md`
+§ Activating the hook, with `DIR` set to `${TARGET_DIR}`. It is shared with `/essentials:upgrade` Group A2:
+a relative `core.hooksPath` resolves against the repository's top level, so the section's four cases
+decide between setting `core.hooksPath` to the project's path from the top level and a forwarder line in
+a hook git already runs. Print only that section:
 
 ```bash
-git -C "${TARGET_DIR}" rev-parse --is-inside-work-tree     # not a repository ⇒ case 4
-PREFIX="$(git -C "${TARGET_DIR}" rev-parse --show-prefix)"  # "" at the top level, "orders-service/" below it
-git -C "${TARGET_DIR}" config --get core.hooksPath          # set ⇒ case 2
-ls "$(git -C "${TARGET_DIR}" rev-parse --git-common-dir)/hooks" | grep -v '\.sample$'   # any ⇒ case 3
+awk -v s='## Activating the hook' '$0 == s { on = 1; print; next } /^## / { on = 0 } on' \
+  "${CLAUDE_PLUGIN_ROOT}/references/init-assets/lint-gate.md"
 ```
-
-1. **`core.hooksPath` unset and no hook in `.git/hooks`** (git's own `*.sample` files do not count): set it,
-   `git -C "${TARGET_DIR}" config core.hooksPath "${PREFIX}.githooks"`, and say it is local to this
-   clone — every other clone runs the README's command once.
-2. **`core.hooksPath` already set** — to `${PREFIX}.githooks`, nothing to do; to anything else (a
-   hook manager such as husky): leave it. Changing it would
-   silence every hook the manager runs, and leaving the gate unwired installs it dead. Offer
-   (`AskUserQuestion`) to add one forwarder line to the pre-commit hook that setting points at —
-   for husky, `.husky/pre-commit` — before any `exit` in it:
-   `"$(git rev-parse --show-toplevel)/${PREFIX}.githooks/pre-commit" || exit 1`.
-   On no, print the line for the user to add.
-3. **`core.hooksPath` unset, but `.git/hooks` holds a hook** — a `pre-commit`, or another tool's
-   `post-commit` or `post-checkout`: setting `core.hooksPath` would disable every one of them, so name
-   them. Offer the same forwarder line in `.git/hooks/pre-commit` instead, creating that file with a
-   `#!/usr/bin/env bash` line and the execute bit when only other hooks exist, and state the
-   trade-off: the forwarder keeps the existing hooks running but, being in `.git/`, is local to this
-   clone exactly like `core.hooksPath`. On no, print the line.
-4. **Not a git repository yet**: tell the user to run the README's command from the project
-   directory after `git init` — `git config core.hooksPath "$(git rev-parse --show-prefix).githooks"`.
 
 Record which case applied for Step 14.
 
@@ -536,7 +520,7 @@ Step 14 rather than assuming.
 
 ## Step 13.5 — Check the workspace pointer (subdirectory mode only)
 
-Skip this step when `TARGET_MODE == "current directory"` — there is no separate workspace root, and
+Skip this step when `TARGET_MODE == current` — there is no separate workspace root, and
 the project `CLAUDE.md` serves that role.
 
 In subdirectory mode the pointer came from
@@ -562,6 +546,9 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/stack-lint.py" "${TARGET_DIR}" \
 Exit 0 is the expected result. **Exit 1 on a fresh render is a defect in the templates or the
 contract**, not in the project: report every finding verbatim (id, file:line, message) and treat it
 as a plugin bug to file. Do not patch the project. Exit 2: report the stderr line.
+
+Record `LINT_RESULT` for Step 14 and `--report`: `passed` (exit 0), `failed` (exit 1), or `not-run`
+(exit 2, or the lint never started).
 
 **2. Build.** From `${TARGET_DIR}` (the reactor root), with the wrapper when Step 12 created one:
 
@@ -592,7 +579,7 @@ which is the correct one).
 **3. The frontend** (`FRONTEND != none`), when `npm` is on the PATH and Step 12 created the lockfile:
 
 ```bash
-cd "${TARGET_DIR}/frontend" && npm ci && npx orval && npx tsc --noEmit && npx vitest run && npm run build
+cd "${TARGET_DIR}/frontend" && npm ci && npx orval && npx tsc --noEmit && npx vitest run && npx eslint . && npm run build
 ```
 
 `custom-fetch.test.ts` is the check that matters here: it proves the base URL is read (standalone)
@@ -663,9 +650,15 @@ the essentials-docs skill. Just ask Essentials questions normally and Claude wil
 Slice rules are active: .claude/rules/essentials-slices.md loads every session (directory
 vocabulary, the four slice kinds, the boundary rule). The full law lives in the plugin.
 
-Add your first slice:
-  /essentials:add-slice              # elicits kind, bounded context, and names
+Add your first feature — the easiest way is to describe it in plain words:
+  "Let a customer place an order with lines and a total"
+                                     # essentials-change classifies it and scaffolds the slice
+  /essentials:add-slice              # or choose kind, bounded context, and names yourself
   /essentials:slice-check            # audit slices against the law
+
+A good first sequence: a command slice (place an order), a view slice that lists
+what it recorded, ./dev.sh backend, then call the command's endpoint and the view's.
+New to the words? https://github.com/trustworksdk/essentials-project/blob/main/docs/concepts.md
 ```
 
 With `--report`, write the report now (§ Preset and report), `--status rendered`.
@@ -697,7 +690,7 @@ If `CLAUDE_MD_MODE == "skip"`, quote the `## Trustworks Essentials framework kno
 `CLAUDE.md.essentials-init`, tell the user to paste it into their `CLAUDE.md` so the `essentials-docs`
 skill can auto-load, then delete the side file.
 
-If `TARGET_MODE == "new subdirectory"`, add a line about the workspace pointer:
+If `TARGET_MODE == subdirectory`, add a line about the workspace pointer:
 
 - `WORKSPACE_CLAUDE_MD_MODE == "none"` or `"overwrite"`: "Wrote the workspace pointer at `${WORKSPACE_DIR}/CLAUDE.md`, so planner and implementer sessions launched from the workspace root know the project lives at `${artifactId}/` and that the stack pins are authoritative in `${artifactId}/pom.xml`."
 - `WORKSPACE_CLAUDE_MD_MODE == "merge"`: "Merged the Essentials workspace pointer into `${WORKSPACE_DIR}/CLAUDE.md` — review the new `## Trustworks Essentials project pointer` section."

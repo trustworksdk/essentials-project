@@ -35,6 +35,9 @@ and two lock waits removed.
 - Spring Boot starters: the tracing and queue metrics interceptors are registered when the Micrometer beans are
   present, not only with `management.tracing.enabled=true`, which Spring Boot 4 no longer reads (§1.1.6).
 - Fenced locks: opt-in spreading of async-acquired locks, and so of exclusive processors, over the instances (§2.9).
+- Interceptors: every interceptor family can replace what it passes on - queue, message-handler, command-bus and
+  event-store interceptors share one contract (§2.19); handlers now receive replacements and `PatternMatchingMessageHandler`
+  honours `@InterceptorOrder` (§1.1.7).
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1). The
 shard-owned adapter writes a new message format, and **0.60.x and this release must not run side by side against the
@@ -227,6 +230,9 @@ Each has its own switch, default `true`: `essentials.durable-queues.tracing-enab
 ordered after Spring Boot's Micrometer auto-configurations, so these checks, and the existing one for
 `MicrometerDurableQueueMessageObserver`, see the beans Spring Boot creates.
 
+An application without `micrometer-tracing` on its classpath starts as before, without the two tracing interceptors (see
+the tracing interceptors row in §3).
+
 `management.tracing.export.enabled` is not read: whether spans are exported is Spring Boot's concern. Note that with the
 OpenTelemetry bridge and export disabled, Spring Boot itself installs a no-op propagator, so the trace context is then not
 carried across a queue, just as for HTTP and Kafka.
@@ -239,6 +245,27 @@ and the metric is present.
 **What to do:** remove a `management.tracing.enabled: true` kept only for Essentials. An application with tracing or a
 `MeterRegistry` but without that property gets the interceptors now; if you do not want them, set the matching switch
 above to `false`.
+
+#### 1.1.7 Handlers and inner interceptors now receive what an interceptor replaced (foundation, `reactive`)
+
+Follows from §2.19. Check interceptors you already have:
+
+- **Replacements now arrive.** The queue consumers, `PatternMatchingMessageHandler` and the command buses hand the
+  handler what is on the operation (or chain) when the chain ends, not what they captured before it. An interceptor
+  that already replaced a command now changes what the handler receives. Writing the `final` field
+  `HandleQueuedMessage.message` by reflection still has no effect on the handler; use `setMessage(...)`.
+- **An interceptor that reads the operation through `getMessage()` after `proceed()`** (for logging or tracing) now
+  sees the last replacement an inner interceptor made, not the original. The public `HandleQueuedMessage.message`
+  field keeps answering the original.
+- **`PatternMatchingMessageHandler` now orders its `MessageHandlerInterceptor`s by `@InterceptorOrder`.** It used to run
+  them in registration order whatever their annotation; unannotated ones (order 10) keep their registration order among
+  themselves. Annotated message-handler interceptors on an Inbox, Outbox or event processor may now run in a different
+  order (`8bdec9710`).
+- **`RecordExecutionTimeCommandBusInterceptor`** tags `command_type` with the command as it reaches it, so a command
+  replaced by an interceptor ordered before it is tagged with the replacement's type.
+
+**What to do:** nothing, unless one of your interceptors relied on the old order, or on reading the original after
+`proceed()`; then give it an explicit `@InterceptorOrder`, or keep the original in a local before `proceed()`.
 
 ---
 
@@ -493,8 +520,9 @@ and `exclusiveSubscriptionLockName`.
 ### 2.11 `InvokeMessageHandlerMethod` exposes the message being handled (foundation)
 
 `InvokeMessageHandlerMethod` - the operation a `MessageHandlerInterceptor` sees around every `@MessageHandler` call -
-now has `message` and `messagPayload` as public final fields, like `methodToInvoke` and `invokeMethodOn` already were,
-so an interceptor can read the `Message` and its metadata without reflection. Additive; nothing to change.
+now has `getMessage()` and `getPayload()`, so an interceptor can read the `Message` and its metadata without
+reflection; the `message` and `messagPayload` fields stay private. Additive; nothing to change. Replace the message
+with `setMessage(...)` (§2.19).
 
 ### 2.12 CDC: an out-of-order commit no longer costs each subscriber a commit of its own (`postgresql-event-store`)
 
@@ -714,11 +742,50 @@ message a second time as soon as its claim is that old.
   `EventStoreSubscriptionManager.getFencedLockManager()`, and
   the shard-owned `MessageQueues.leaseTtl()`.
 
+### 2.19 Interceptors can replace what they pass on, in every interceptor family (foundation, `reactive`, `postgresql-event-store`, `shared`)
+
+An interceptor can now change the input of the operation it intercepts - decrypt a payload on the way in, enrich it,
+rewrite metadata - and the rest of the chain and the handler receive the replacement. Before, only some operations
+allowed it, and the others failed silently: an interceptor that built a new `Message` had nowhere to put it, so the
+handler got the original. One contract now holds for every family, documented on `Interceptor` and in
+`LLM/LLM-shared.md`: call the operation's setter before `proceed()`, change the output by returning something else, and
+the default behaviour reads the operation, never a value captured before the chain ran.
+
+- **Copy helpers** (`031ed10b0`): `Message.withPayload(...)` / `withMetaData(...)`, overridden by `OrderedMessage` to
+  keep its key and order; `QueuedMessage.withMessage(Message)`; `PersistedEvent.withEvent(EventJSON)` /
+  `withMetaData(EventMetaDataJSON)` (`1da420812`).
+- **`DurableQueuesInterceptor`**: `HandleQueuedMessage.setMessage(...)` (`031ed10b0`); the replacement must keep the
+  message's id, and acknowledging, retrying and dead-lettering keep acting on the entry selected for delivery. All three
+  queue consumers - PostgreSQL/MongoDB, the centralized fetcher and the shard-owned adapter - now hand the handler the
+  operation's message.
+- **`MessageHandlerInterceptor`**: `InvokeMessageHandlerMethod.setMessage(...)`, `getMessage()`, `getPayload()`
+  (`8bdec9710`).
+- **`CommandBusInterceptor`**: `CommandBusInterceptorChain.setCommand(...)` (`73f003f32`). It is a default method that
+  throws `UnsupportedOperationException`, so third-party chain implementations keep compiling; every Essentials bus
+  supports it.
+- **`EventStoreInterceptor`**: the existing setters on `AppendToStream`, `FetchStream` and `LoadEventsByGlobalOrder`
+  are now covered by contract tests, and the built-in interceptors document their order (`189856532`).
+
+Where the handler was chosen before the chain ran - a `@MessageHandler` method, a command handler - it is never
+re-resolved. Any type is allowed mid-chain, but what reaches the handler must fit it; otherwise the call fails with a
+`ClassCastException`, which a queue consumer dead-letters on the first attempt (`LLM/LLM-traps.md` `ESS-139`). A
+decryption that decides which handler runs belongs in a `DurableQueuesInterceptor` on `HandleQueuedMessage`.
+`HandleMessage` of the raw shard-owned engine stays a record without a setter until the next major.
+
+Additive: no interceptor interface changed signature. Read the current message with `getMessage()` and replace it
+with the setters. The public `HandleQueuedMessage.message` field stays `final` and keeps holding the message selected
+for delivery, so an interceptor that reads it never sees a replacement - switch it to `getMessage()` if it should.
+Design:
+`docs/design/interceptor-operation-replacement.md`. Behaviour changes: §1.1.7.
+
 ## 3. Bug fixes
 
 | Area | Fix | Commit |
 |---|---|---|
+| Durable queues (`postgresql-queue`) | A message a `HandleQueuedMessage` interceptor of your own acknowledged inside the handler's chain (recording it with `HandleQueuedMessage.acknowledgedWithHandler(...)`) was acknowledged a second time by the built-in `SingleOperationTransactionDurableQueuesInterceptor`, whenever your interceptor ran after it (an `@InterceptorOrder` above 10). Before: the second acknowledgement found the row gone, logged `Couldn't Acknowledge with id '…' - it may already have been deleted` at ERROR, and overwrote your interceptor's `true` with `false`, so the centralized fetcher (the default) reported the message as already handled and never called `DurableQueueMessageObserver.messageHandled` for it. The message itself was handled and deleted once. After: the built-in interceptor leaves a message already recorded as acknowledged alone; one acknowledgement, no ERROR, and the message counts as handled | - |
 | Tracing and queue metrics (Spring Boot starters) | `DurableQueuesMicrometerTracingInterceptor`, `DurableQueuesMicrometerInterceptor` and `MicrometerTracingEventStoreInterceptor` were registered only with `management.tracing.enabled=true`, which Spring Boot 4 no longer reads - see §1.1.6. They now follow the Micrometer beans, with an opt-out switch each | - |
+| Tracing interceptors (Spring Boot starters) | Fixes an unreleased regression from the change in the row above (§1.1.6): an application without `micrometer-tracing` on its classpath - an optional dependency of the starters, so one with Spring Boot Actuator but no tracer - could not start. The tracing interceptor bean methods took `Tracer` and `Propagator` parameters directly, and Spring reflects on every method of an auto-configuration class, so the PostgreSQL, MongoDB and event store starters all failed. Before: the context failed with `NoClassDefFoundError: io/micrometer/tracing/Tracer` (`Failed to introspect Class [...EssentialsComponentsConfiguration]` / `[...EventStoreConfiguration]`). After: it starts, without `DurableQueuesMicrometerTracingInterceptor` and `MicrometerTracingEventStoreInterceptor`; with micrometer-tracing present nothing changes. Released versions are not affected | - |
+| Metrics and health beans (Spring Boot starters) | An application without `micrometer-core`, or without `spring-boot-health` - both optional for the starters, so any application without Spring Boot Actuator - could not start. Spring reflects on every method of an auto-configuration class and of every bean class, so Micrometer or `HealthIndicator` types in a `@Bean` method's signature (`MeterRegistry` and `Optional<MeterRegistry>` parameters, the `DurableQueuesHealthIndicator` and CDC health indicator return types) or in a bean class's private methods (`DefaultAggregateLifecycleStatisticsApi`) failed the context for the PostgreSQL, MongoDB and event store starters. Before: `NoClassDefFoundError: io/micrometer/core/instrument/MeterRegistry` or `.../boot/health/contributor/HealthIndicator` (`Failed to parse configuration class [...EssentialsComponentsConfiguration]`, `Failed to introspect Class [...EventStoreConfiguration]`, or `Post-processing of merged bean definition failed` for `aggregateLifecycleStatisticsApi`). After: it starts; without micrometer-core there are no queue metrics, Micrometer monitors or meter-based statistics, and without spring-boot-health no health indicators. With both present nothing changes. 0.60.0 is affected | - |
 | Shard-owned queues (`postgresql-queue-shard-owned`, admin API) | Opening a dead letter's details in the admin UI answered 404 (`No message 'o-62-2252' in shard-owned queue …`): looking a message up by id searched queued messages only, though a dead letter keeps its id. It now finds dead letters too, with the error that parked them. The `MessageQueue` SPI gains `getDeadLetter(MessageId)` (a `default` returning empty); `getMessage` stays live-only | - |
 | Shard-owned queues (`postgresql-queue-shard-owned`) | The blocked-key warning named the queue by its internal number (`Queue 30, ordered shard 61: …`), so an operator could not tell which queue's dead letters to open. It now gives the registered name with the id (`Queue 'Inbox:Orders:ExchangeReports' (id 30), …`), read once from the registry when first logged | - |
 | CDC (`postgresql-event-store`) | A CDC subscription that falls more than a page behind the bus under a burst - routine, and healed within milliseconds by catching up from the event store - logged a WARN and an INFO line every time, a screenful per burst. Each occurrence is now DEBUG, and each subscription logs one INFO line a minute counting them; the `live_source.overflow.count` metric is unchanged | - |
@@ -743,6 +810,13 @@ message a second time as soon as its claim is that old.
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md).
 
+- `0.60.1-12` - generated WebFlux projects run blocking Essentials work off the event loop (virtual threads, new
+  S5 clause and `stack-lint` rule). Service-entity handlers signal a missing entity with a retryable
+  `IllegalStateException`, so a durable-queue command that arrives early is no longer dead-lettered. The
+  translation webhook fails closed and gets a per-event path. The Maven wrapper verifies its checksum, Spring
+  Modulith is gone and the dev password is dev-profile only. The slice scripts no longer double every slice in
+  a Claude Code worktree or crash on non-UTF-8 input. Commands and skills lose contradictions and load much
+  less text. To check an existing project: run `/essentials:upgrade --check`. `/essentials:upgrade` now shows how many fixes it will offer before the first one. It can commit each fix on its own branch, and it writes the findings you skip to a backlog file you choose. `/essentials:slice-check` ends by naming the command that owns each open finding, and prints a ready-to-paste `slice-check-accepted.yaml` entry for a finding you decide to keep. Gate 7 (one event variant per file) is now a script check, and `--fix-source` no longer offers to move a nested event variant, which would rename its stored class name and leave existing events unreadable. `/essentials:intro` points newcomers to the new glossary, [`docs/concepts.md`](../concepts.md) (§6).
 - `0.60.1-11` - the LLM docs describe when the starters register the tracing and queue metrics interceptors, and
   their opt-out switches (§1.1.6).
 - `0.60.1-3` - the LLM docs show `Money`'s `amount` as a JSON number, the form it is written in, and say a quoted
@@ -880,6 +954,31 @@ Not published; listed because they are the reference for how to use the framewor
 
 ## 6. Documentation
 
+- **New: [`docs/concepts.md`](../concepts.md), a concepts page and glossary for newcomers** to Essentials, CQRS and
+  event sourcing. It explains event, handler and outbox, eventual consistency, event store (aggregate, stream,
+  `AggregateType`, `EventOrder` vs `GlobalEventOrder`), the three event processor kinds, command, decider,
+  projection, aggregate and slice. It also covers CQRS, the building blocks underneath (UnitOfWork,
+  DurableQueues, Inbox/Outbox, FencedLock, semantic types, optimistic concurrency), bounded contexts, and the
+  plugin's terms (slice law, write styles, `slice.yaml`, S1-S11, ESS ids). Each term links to the doc that owns
+  its API. It follows the same order as the animated
+  [`docs/event-sourcing-vs-crud/`](../event-sourcing-vs-crud/) walkthrough, which is now linked too. The README,
+  `LLM/LLM.md` and `/essentials:intro` point to it.
+- **[`docs/README.md`](../README.md), the index of `docs/`, gains a Start here section** (the concepts page and
+  the walkthrough) and points to the README, the LLM docs, the traps index (troubleshooting), the components
+  README and `examples/`.
+- **README:** Quick Start Path 2 no longer stops at injecting `EventStore`. A new step 4 links a complete service
+  in each write style: aggregate (Java), decider (Java), decider (Kotlin), and the plugin. It says where
+  `${essentials.version}` comes from and that `Amount`, `CurrencyCode` and `Percentage` ship with `types`.
+  Resources now link the docs index, the traps index (troubleshooting) and `examples/`. The duplicate
+  `kotlin-eventsourcing` in the use-case table is gone.
+- **`LLM/LLM.md`** explains what the event store's guarantees mean for a handler, and names a starting write style
+  (a decider) ahead of the full Pattern Selection table.
+- **Renaming or moving an event class leaves stored events unreadable** (new trap `ESS-138`, new section
+  `LLM-postgresql-event-store.md` § Renaming or moving an event class). A typed event is stored under its binary
+  class name (`FQCN:com.acme.orders.events.OrderEvent$OrderPlaced` in `event_type`, and the same name in a queued
+  message's `message_payload_type`), and nothing maps an old name to a new one. A rename, a package move, or moving
+  a nested event type to its own file makes every stored event of that type fail with `LoadingClassFailedException`.
+  Keep the name, or rewrite the stored values in the same release.
 - The LLM docs describe elastic pump connections, and their `InboxConfig.builder()` examples compile: that builder's
   methods take no `set` prefix (`inboxName`, `redeliveryPolicy`, ...), unlike `OutboxConfigBuilder`'s.
 - The LLM docs and the `types-jackson3` README show `Money` as `{"amount":99.99,"currency":"USD"}`, with the amount a
@@ -903,3 +1002,6 @@ Not published; listed because they are the reference for how to use the framewor
 - `postgresql-queue-shard-owned`: the stuck-handler and kept-unit bounds (`stuckHandlerTimeout`, and how long a unit
   kept by a stop waits for that stop's flush) are read through a package-private clock that the integration tests
   advance instead of sleeping through them. No behaviour, setting or API changes.
+- Plugin `check-citations` (CI `plugin-docs`, step `citations`): new rule `repo-path` fails a `docs/` or `LLM/` path in
+  the plugin's markdown that the repository no longer has, so the next move of the repository's documents cannot
+  strand a path in the plugin unnoticed. It found one, in `/essentials:upgrade`, now fixed (plugin `0.60.1-12`).

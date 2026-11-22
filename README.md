@@ -58,6 +58,11 @@ Essentials is a set of Java 25+ building blocks designed to help you write **str
 - Add **integration modules** for framework-specific serialization and persistence of **semantic types**
 - Use **components** for distributed systems requiring event sourcing, queues, and coordination
 
+**New to event sourcing or CQRS?** [docs/concepts.md](docs/concepts.md) explains the vocabulary — event,
+command, decider, projection, aggregate, slice, and the components underneath — and links each word to the
+doc that owns its API. [docs/event-sourcing-vs-crud/](docs/event-sourcing-vs-crud/) shows the same ideas as
+an animated, side-by-side walkthrough.
+
 ---
 ## License
 
@@ -210,7 +215,7 @@ All using your existing database—no Redis, Kafka, Axon-Server, or EventStoreDB
 | **Strongly-typed domain models** | `types` + framework integrations (including Kotlin support)                                                                   |
 | **Immutable value objects** | `immutable`, `immutable-jackson3`                                                                                             |
 | **Event-driven architecture** | `reactive` (`EventBus`, `CommandBus`)                                                                                         |
-| **Event sourcing & CQRS** | Components: `postgresql-event-store`, `eventsourced-aggregates` and for Kotlin `kotlin-eventsourcing`, `kotlin-eventsourcing` |
+| **Event sourcing & CQRS** | Components: `postgresql-event-store`, `eventsourced-aggregates` and for Kotlin `kotlin-eventsourcing` |
 | **Distributed coordination** | Components: `postgresql-distributed-fenced-lock`, `postgresql-queue`, `springdata-mongo-queue`, `springdata-mongo-distributed-fenced-lock` |
 | **Reliable messaging** | Components: `foundation` (`Inbox`/`Outbox`)                                                                                       |
 
@@ -223,6 +228,10 @@ All using your existing database—no Redis, Kafka, Axon-Server, or EventStoreDB
 ---
 
 ## Quick Start
+
+`${essentials.version}` below is the Essentials release you build against: the newest one on Maven Central under
+`dk.trustworks.essentials`. See [Version Compatibility](#version-compatibility) for the Java, Spring Boot and Kotlin
+it needs. New to the vocabulary? Read [docs/concepts.md](docs/concepts.md) first.
 
 ### Path 1: Strongly-Typed Domain Models
 
@@ -258,7 +267,7 @@ public class Quantity extends IntegerType<Quantity> {
 }
 ```
 
-**3. Use in your domain:**
+**3. Use in your domain** (`Amount`, `CurrencyCode` and `Percentage` ship with the `types` module):
 ```java
 public class CreateOrder {
     public final OrderId                  id;
@@ -310,7 +319,22 @@ public class OrderService {
 }
 ```
 
-See [Essentials Components](components/README.md) for complete documentation.
+**4. Record and react to events.** The starter gives you the event store; how you make decisions with it is
+your choice of style. Each of these walks through a complete service:
+
+- **Aggregate style (Java):** [components/README.md — Example 2: Event Sourced Order Service](components/README.md#example-2-full-event-driven---event-sourced-order-service):
+  events, an `AggregateRoot`, a command handler, a view, and an integration.
+- **Decider style (Java):** one small function per command, `EventStreamDecider` + `EventStreamEvolver`
+  ([LLM-eventsourced-aggregates.md](LLM/LLM-eventsourced-aggregates.md#eventstreamdecider-functional); its
+  [Pattern Selection](LLM/LLM-eventsourced-aggregates.md#pattern-selection) helps you choose).
+- **Decider style (Kotlin):** `Decider` + `Evolver` and given/when/then tests
+  ([LLM-kotlin-eventsourcing.md](LLM/LLM-kotlin-eventsourcing.md)).
+- **Let Claude Code scaffold it:** the [Claude Code plugin](#claude-code-plugin)'s `/essentials:init` creates a
+  verified project, and `/essentials:add-slice` adds one feature at a time, in the decider style.
+
+Projections, event processors and the reliability components are in
+[Essentials Components](components/README.md). Before production, scan [LLM/LLM-traps.md](LLM/LLM-traps.md): the
+things that compile and then fail at runtime. Runnable demo projects are in [examples/](examples/).
 
 ---
 
@@ -977,6 +1001,10 @@ that changes `essentials-plugin/` without it.
 ## Resources
 
 - **GitHub:** [https://github.com/trustworksdk/essentials-project](https://github.com/trustworksdk/essentials-project)
+- **Concepts and glossary:** [docs/concepts.md](docs/concepts.md)
+- **All documentation in `docs/`:** [docs/README.md](docs/README.md)
+- **Troubleshooting (compiles, then fails at runtime):** [LLM/LLM-traps.md](LLM/LLM-traps.md)
+- **Examples:** [examples/](examples/)
 - **Components Documentation:** [components/README.md](components/README.md)
 - **LLM Reference:** [LLM/LLM.md](LLM/LLM.md)
 - **Each module contains detailed README.md** with usage examples

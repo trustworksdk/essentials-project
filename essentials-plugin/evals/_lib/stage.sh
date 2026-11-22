@@ -32,8 +32,10 @@ done
 for kv in "${sets[@]+"${sets[@]}"}"; do
   name="${kv%%=*}"
   value="${kv#*=}"
+  # Not `sed -i`: BSD sed (macOS) takes the next argument as the backup suffix, GNU sed takes none. Writing back
+  # through `cat >` keeps the file's mode, which a `mv` of the temporary file would not.
   grep -rlF "{{$name}}" . | while IFS= read -r f; do
-    sed -i "s|{{$name}}|$value|g" "$f"
+    sed "s|{{$name}}|$value|g" "$f" >"$f.stage-tmp" && cat "$f.stage-tmp" >"$f" && rm -f "$f.stage-tmp"
   done || true
 done
 

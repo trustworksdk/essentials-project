@@ -120,8 +120,21 @@ EOF
   appears in them. Handler registration is **not** written by those templates: it is done by
   `ReactiveHandlersBeanPostProcessor` (`LLM-reactive.md`), governed by the
   `reactive-bean-post-processor-enabled` property (`LLM-spring-boot-starter-modules.md`, default
-  `true`). Note that `EssentialsComponentsConfiguration` and `EssentialsComponentsProperties` appear
-  in **no** bundled doc — do not name either in a template, a skill, or a command.
+  `true`). Note that `EssentialsComponentsConfiguration` appears in **no** bundled doc, and
+  `EssentialsComponentsProperties` only as a parameter type in one override sample
+  (`LLM-spring-boot-starter-modules.md`, the `EventStreamGapHandler` bean), which states nothing about
+  its properties — do not name either in a template, a skill, or a command.
+- **Which exception a command handler throws is part of its behaviour, not its style.** A command
+  sent with `sendAndDontWait` is delivered through `DurableLocalCommandBus`'s durable queue
+  (`LLM-foundation.md` § DurableLocalCommandBus), and that queue's consumer dead-letters an
+  `IllegalArgumentException` — which `FailFast.requireNonNull`/`requireTrue` and Kotlin's `require(...)`
+  throw — on its first delivery, whatever the `RedeliveryPolicy` says (`LLM-foundation.md` § The built-in
+  permanent-error list). So the service-entity handlers throw `IllegalStateException` for a missing
+  entity, a condition that may become true once the creating transaction commits (§ Validating inside a
+  message handler), and keep `IllegalArgumentException` only for a payload no retry can fix, such as
+  the aggregate lane's null-command guard. The aggregate lane's `get<Aggregate>` throws
+  `AggregateNotFoundException`, a `RuntimeException` (`EventStoreException extends RuntimeException`,
+  `components/postgresql-event-store/.../EventStoreException.java:22`), so it is retried as well.
 - The service-entity **view** API takes the BC's `<Aggregate>Id` as its `@PathVariable` and imports no
   Essentials symbol for it. Java binds it through `SingleValueTypeConverter`, which the host registers
   by `@Import`ing `EssentialsWebMvcConfigurer` / `EssentialsWebFluxConfigurer` (`LLM-types-spring-web.md`

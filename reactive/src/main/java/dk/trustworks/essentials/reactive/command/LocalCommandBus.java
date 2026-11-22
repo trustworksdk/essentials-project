@@ -82,14 +82,18 @@ public final class LocalCommandBus extends AbstractCommandBus {
         Mono.fromCallable(propagateContext(() -> {
                 var handlerFailure = new AtomicReference<Exception>();
                 try {
+                    // Interceptors and the handler get the chain's command, not `command`: an interceptor may have replaced it (CommandBusInterceptorChain#setCommand)
                     CommandBusInterceptorChain.newInterceptorChain(command,
                                                                    commandHandler,
                                                                    interceptors,
                                                                    (interceptor, commandBusInterceptorChain) -> {
-                                                                       interceptor.interceptSendAndDontWait(command, commandBusInterceptorChain);
+                                                                       interceptor.interceptSendAndDontWait(commandBusInterceptorChain.command(), commandBusInterceptorChain);
                                                                        return null;
                                                                    },
                                                                    _cmd -> {
+                                                                       // A replaced command that doesn't fit the matched handler is an interceptor failure, not a handler failure:
+                                                                       // it fails outside the try below, so it never reaches the error handler
+                                                                       requireMatchedCommandHandlerCanHandle(commandHandler, command.getClass(), _cmd);
                                                                        try {
                                                                            return commandHandler.handle(_cmd);
                                                                        } catch (Exception e) {
@@ -106,7 +110,8 @@ public final class LocalCommandBus extends AbstractCommandBus {
                         // Not a command handler failure (e.g. an interceptor failed) - not the error handler's to handle
                         throw e;
                     }
-                    // The handler's own exception, not whatever an interceptor wrapped it in on the way out
+                    // The handler's own exception, not whatever an interceptor wrapped it in on the way out.
+                    // The command as it was sent, not a replacement an interceptor made: that is what a retry would send again
                     sendAndDontWaitErrorHandler.handleError(failure,
                                                             command,
                                                             commandHandler);

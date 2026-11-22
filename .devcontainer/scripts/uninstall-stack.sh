@@ -76,6 +76,23 @@ if command -v graphify &> /dev/null; then
     uv tool uninstall graphifyy 2>&1 || echo "    NOTE: could not uv-tool-uninstall graphifyy."
 fi
 
+# --- graphify: strip the end-of-rebase refresh block post-create.sh appended ---
+# `graphify uninstall` removes only its own blocks. A hook left holding nothing but
+# the shebang post-create.sh wrote is ours alone and goes too. post-create.sh
+# appends only to post-checkout today; all four are checked so a block from a
+# wider version of it goes as well.
+_hooks_dir="$(git -C "$WORKSPACE" rev-parse --git-path hooks 2>/dev/null)" || _hooks_dir=""
+if [ -n "$_hooks_dir" ]; then
+    case "$_hooks_dir" in /*) ;; *) _hooks_dir="$WORKSPACE/$_hooks_dir" ;; esac
+    for _hook in post-commit post-checkout post-merge post-rewrite; do
+        _path="$_hooks_dir/$_hook"
+        grep -q '^# devcontainer-graphify-sequence-start$' "$_path" 2>/dev/null || continue
+        echo "  Removing the graphify end-of-rebase refresh from ${_hook}..."
+        sed -i '/^# devcontainer-graphify-sequence-start$/,/^# devcontainer-graphify-sequence-end$/d' "$_path"
+        [ -z "$(grep -v '^#!' "$_path" | tr -d '[:space:]')" ] && rm -f "$_path"
+    done
+fi
+
 # Remove the managed block from .gitignore (idempotent; leaves everything else).
 if [ -f "$WORKSPACE/.gitignore" ] && grep -q '>>> devcontainer-stack (managed) >>>' "$WORKSPACE/.gitignore" 2>/dev/null; then
     echo "  Removing graphify managed block from .gitignore..."

@@ -6,6 +6,12 @@ target/
 *.iml
 .vscode/
 .DS_Store
+*.log
+
+# Local environment files carry credentials; only the committed example is shared
+.env
+.env.*
+!.env.example
 === FILE CLAUDE.md (644) ===
 # Golden
 
@@ -269,6 +275,13 @@ services:
 
     <artifactId>golden</artifactId>
     <name>Golden backend</name>
+
+    <properties>
+        <!-- spring-boot:run starts the application with the `dev` Spring profile, the only one with development
+             fallbacks such as the local database password (application.yml). The packaged application has none,
+             so it never runs on a development credential. -Dspring-boot.run.profiles=... replaces it. -->
+        <spring-boot.run.profiles>dev</spring-boot.run.profiles>
+    </properties>
 
     <dependencies>
         <!-- ===== Web, security, operations ===== -->
@@ -548,11 +561,22 @@ public class SecurityConfig {
 spring:
   application:
     name: golden
+  # Load-bearing on WebFlux (S5): the Essentials components block (JDBC, a thread-bound UnitOfWork). With this,
+  # Spring Boot runs every controller method that returns a plain value on a virtual thread (its
+  # applicationTaskExecutor) instead of a Netty event-loop thread. Methods returning Mono/Flux and Kotlin suspend
+  # functions still run on the event loop and must move blocking work off it themselves. An Executor bean of the
+  # application's own stops Boot creating applicationTaskExecutor, and the offloading stops with it, silently;
+  # add spring.task.execution.mode: force when you define one (not before: it also makes applicationTaskExecutor
+  # the @Async executor unless you declare an AsyncConfigurer).
+  threads:
+    virtual:
+      enabled: true
   # Used when no Docker Compose service or test container provides the database; both override it.
+  # The password has no fallback here: the development one is in the `dev` profile at the end of this file.
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/golden}
     username: ${DATABASE_USERNAME:golden}
-    password: ${DATABASE_PASSWORD:golden}
+    password: ${DATABASE_PASSWORD}
 
 server:
   port: 8080
@@ -567,6 +591,16 @@ springdoc:
 logging:
   level:
     com.example.golden: INFO
+
+---
+# Development only. spring-boot:run activates the `dev` profile (backend/pom.xml), so the packaged application
+# never falls back to the development password: without DATABASE_PASSWORD it fails to authenticate instead.
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    password: ${DATABASE_PASSWORD:golden}
 === FILE backend/src/test/java/com/example/golden/ApplicationContextIT.java (644) ===
 package com.example.golden;
 
@@ -599,6 +633,7 @@ class ApplicationContextIT extends IntegrationTestBase {
 === FILE backend/src/test/java/com/example/golden/IntegrationTestBase.java (644) ===
 package com.example.golden;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -652,6 +687,8 @@ public abstract class IntegrationTestBase {
     @BeforeEach
     void truncateReadModels() {
         var tables = readModelTablesToTruncate();
+        // The names are concatenated into SQL, so each one is checked first (S9: names are an injection surface).
+        tables.forEach(PostgresqlUtil::checkIsValidTableOrColumnName);
         if (!tables.isEmpty()) {
             jdbi.useHandle(handle -> handle.execute("TRUNCATE TABLE " + String.join(", ", tables)));
         }
@@ -789,7 +826,6 @@ esac
         <awaitility.version>4.3.0</awaitility.version>
         <!-- Not managed by Spring Boot: imported as BOMs below. -->
         <jdbi3-bom.version>3.55.0</jdbi3-bom.version>
-        <spring-modulith.version>2.0.7</spring-modulith.version>
         <jqwik.version>1.9.3</jqwik.version>
         <!-- Not managed by Spring Boot either: a plain dependency of the backend (S2.1). -->
         <objenesis.version>3.6</objenesis.version>
@@ -801,13 +837,6 @@ esac
                 <groupId>org.jdbi</groupId>
                 <artifactId>jdbi3-bom</artifactId>
                 <version>${jdbi3-bom.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework.modulith</groupId>
-                <artifactId>spring-modulith-bom</artifactId>
-                <version>${spring-modulith.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -838,4 +867,4 @@ When using any planner/implementer tooling at this workspace level: either `cd g
 
 For full project context, framework-knowledge auto-loading (the `essentials-docs` skill), conventions, and commands, see **`golden/CLAUDE.md`** — that file is the project-level source of truth.
 === HOOK maven-wrapper (cwd .) ===
-mvn -N -B -q org.apache.maven.plugins:maven-wrapper-plugin:3.3.4:wrapper -Dmaven=3.10.0 -Dtype=only-script
+mvn -N -B -q org.apache.maven.plugins:maven-wrapper-plugin:3.3.4:wrapper -Dmaven=3.10.0 -DdistributionSha256Sum=1f6d9909266510f039f59aa0e13dcd2c66da85f043e56276e41f2918f8bddaff -Dtype=only-script

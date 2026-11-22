@@ -82,6 +82,13 @@ request parameter. Strictly, Spring's own conversion does bind an id that has a 
 or a static `valueOf`/`of`/`from(String)`, and the converter is required only for one without. S4 makes the
 import the rule for both.
 
+On WebFlux, a handler returning `Mono`/`Flux` is **never offloaded** from the event loop:
+`spring.threads.virtual.enabled` moves only handlers that return a plain value (S5). Essentials
+work is blocking, so such a handler runs it as one `Mono.fromCallable(…)` with
+`.subscribeOn(Schedulers.boundedElastic())`; otherwise return the plain value, which is offloaded.
+Defining an `Executor` bean of your own silently stops that offloading, until
+`spring.task.execution.mode: force` is set beside it (S5).
+
 Where a Kotlin project can defer this dependency, a Java project cannot. A missing converter is
 HTTP **500** with `ConversionNotSupportedException`, not 400 (S4).
 

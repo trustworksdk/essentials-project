@@ -1,14 +1,10 @@
 ---
 name: essentials-change
 description: >
-  Handle a spoken change request in a Trustworks Essentials slice-architecture project — add, extend,
-  amend, fix, or retire a feature, endpoint, command, query, event, read model, projection,
-  automation, or external integration — when the user describes the change in prose rather than
-  running a command, including a bug report against existing behaviour ("Bug: …", "X should be Y")
-  and a changed rule, limit or field. Use it before editing code. Applies only where the slice law is in force: `.claude/rules/essentials-slices.md`
-  exists, a `slice.yaml` is present, or the build declares `dk.trustworks.essentials`. Classifies the
-  request, finds the owning slice from its manifest, applies rules/slice-design.md, and enters the
-  matching scaffolding skill when the change turns out to need a new slice.
+  A change request or bug report described in prose ("Bug: …", "X should be Y", add/extend/amend/fix/
+  retire an endpoint, command, query, event, read model, projection, automation or integration, a
+  changed rule, limit or field) in a Trustworks Essentials slice-architecture project, before editing
+  code. Finds the owning slice from its manifest and enters the scaffolding skill when a new slice is needed.
 user-invocable: false
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 ---
@@ -25,9 +21,17 @@ them.
 
 Run the detection ladder in `${CLAUDE_PLUGIN_ROOT}/references/slice/change-procedure.md` §1.
 
-If the project is **not** on the law and not an Essentials project, **stop silently**: add nothing to
-the conversation and handle the request as ordinary work. A change-request trigger that fires in
-unrelated repositories gets muted, and muting costs the projects that need it.
+Act on the first row that answers:
+
+- **On the law** — `.claude/rules/essentials-slices.md`, a `slice.yaml`, or `<bc>/use_cases/` /
+  `<bc>/views/` directories → continue to Step 1.
+- **An Essentials project, not on the law** — only the build file declares `dk.trustworks.essentials`
+  → say so once, offer `/essentials:slice-discover`, and make the change the way the surrounding code
+  is written. Do **not** impose slice structure on one file of a layered codebase, and skip the rest
+  of this skill.
+- **Neither** → **stop silently**: add nothing to the conversation and handle the request as ordinary
+  work. A change-request trigger that fires in unrelated repositories gets muted, and muting costs the
+  projects that need it.
 
 Detection is Glob and Grep only. Do not run a build, and do not walk the whole source tree.
 

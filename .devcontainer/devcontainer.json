@@ -57,13 +57,18 @@
             "JAVA_VERSION": "25",
             // Exact Temurin apt package version for JAVA_VERSION, so a rebuild installs
             // the JDK you chose instead of whatever patch the Adoptium repo has that
-            // day. 25.0.5+8 is the October 2026 CPU. List what exists with
-            // `apt-cache madison temurin-25-jdk`; "" installs the newest.
-            "JAVA_PACKAGE_VERSION": "25.0.5.0.0+8-0",
+            // day; "" installs the newest. Deliberately "" for now: the Java4Shell fix
+            // (CVE-2026-114938, Temurin 25.0.5.1+2, 2026-11-18) is published for x64
+            // only, so an exact pin would fail the build on arm64, while the old pin
+            // 25.0.5.0.0+8-0 holds x64 on the vulnerable build. Newest gives x64 the
+            // fix and arm64 25.0.5+8, which is unaffected (ARM never uses the
+            // intrinsic; see JAVA_TOOL_OPTIONS below). Pin again once arm64 has the
+            // fixed build — list what exists with `apt-cache madison temurin-25-jdk`.
+            "JAVA_PACKAGE_VERSION": "",
             // Kept installed alongside the default for the Java 17 branches. Build those
             // with JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-$(dpkg --print-architecture).
             "ADDITIONAL_JAVA_VERSIONS": "17",
-            "MAVEN_VERSION": "3.10.0",
+            "MAVEN_VERSION": "3.10.1",
 
             // JetBrains IDE backend — for reference/scripts only.
             // To change the actual IDE, edit customizations.jetbrains.backend below.
@@ -88,8 +93,9 @@
         },
         // Node.js via DevContainer feature.
         "ghcr.io/devcontainers/features/node:1": {
-            // Exact release, not the bare major: 26.12.1 is the 2026-10-21 security release.
-            "version": "26.12.1",
+            // Exact release, not the bare major: 26.13.1 is a Node.js security release
+            // (16 CVEs, 7 High).
+            "version": "26.13.1",
             "nodeGypDependencies": true
         },
         // Python via DevContainer feature
@@ -122,43 +128,37 @@
         // Timezone (override to match your deployment region)
         "TZ": "UTC",
         // Java runtime options for containers (overridable here without rebuild)
-        "JAVA_TOOL_OPTIONS": "-XX:+UseContainerSupport -XX:InitialRAMPercentage=10 -XX:MaxRAMPercentage=40 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp",
+        // -XX:-UseBASE64Intrinsics: TEMPORARY mitigation for Java4Shell
+        // (CVE-2026-114938), a heap overflow in HotSpot's AVX-512 Base64 decode
+        // intrinsic (x86-64 with AVX-512 VBMI; Java 17.0.6+, 21, 25, 27). The JVM
+        // falls back to the plain Java decoder. Temurin is fixed from 25.0.5.1+2,
+        // 21.0.13.1+2 and 17.0.21.1+2 (2026-11-18, x64) — JAVA_PACKAGE_VERSION in
+        // build.args pins the fixed 25. The flag stays because it also reaches
+        // every other JVM that reads JAVA_TOOL_OPTIONS: the kotlin-lsp's bundled
+        // JetBrains Runtime (25.0.4.1) is still affected, and so is the Java 17
+        // in ADDITIONAL_JAVA_VERSIONS until a rebuild picks up 17.0.21.1+2. Drop
+        // it once kotlin-lsp ships a fixed runtime. Harmless on ARM, where the
+        // intrinsic is unused.
+        "JAVA_TOOL_OPTIONS": "-XX:+UseContainerSupport -XX:InitialRAMPercentage=10 -XX:MaxRAMPercentage=40 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp -XX:-UseBASE64Intrinsics",
         // Pinned here as well as in /etc/profile.d/java.sh, which only runs for login
         // shells. Non-login shells (anything an IDE or agent spawns) would otherwise
         // inherit whatever JAVA_HOME the launching process happened to export — the
         // JetBrains terminal supplies a stale /usr/lib/jvm/msopenjdk-current, which does
         // not exist in this image and makes mvn refuse to start.
         "JAVA_HOME": "/usr/lib/jvm/temurin-jdk",
-        // Telemetry opt-out. CodeGraph is telemetry default-on and posts events to
-        // telemetry.getcodegraph.com (→ PostHog, US). Per its docs it shares only
-        // anonymous aggregates — random local machine_id, version, OS/arch, Node
-        // major, CI flag, plus install/index/daily-usage/uninstall events (language
-        // names, coarse file-count & duration buckets, per-tool call counts) — and
-        // explicitly NOT source code, file/dir/repo names or paths, symbol names,
-        // search queries, IPs, hostnames, usernames, emails, or env vars. Restrained,
-        // but default-on to a managed backend, so we disable it in the
-        // container. NOTE: this container has no INSTALL_CODEGRAPH toggle and does
-        // not install CodeGraph — these are pinned pre-emptively so the opt-out is
-        // already in force the day it is added (and if anyone installs it by hand),
-        // and they cost nothing while it is absent. They apply to every process in
-        // the container, including a `codegraph serve --mcp` server Claude Code
-        // might spawn. CODEGRAPH_TELEMETRY=0 is CodeGraph-specific; DO_NOT_TRACK=1
-        // is the cross-tool opt-out standard (https://consoledonottrack.com).
-        // If CodeGraph is ever added to post-create.sh, also run
-        // `codegraph telemetry off` there as a third, persisted opt-out
-        // ("off means off" — no events recorded, no connection opened, no opt-out ping).
-        "CODEGRAPH_TELEMETRY": "0",
+        // Telemetry opt-out. DO_NOT_TRACK=1 is the cross-tool opt-out standard
+        // (https://consoledonottrack.com), honoured by many CLIs a project pulls in
+        // through its own dependencies. It disables their telemetry for every
+        // process in the container; the tool-specific switches below pin the ones
+        // that do not read it, or read it fail-open. Claude Code reads it as well:
+        // it (like DISABLE_TELEMETRY) also turns off Claude Code's feature-flag
+        // fetch, which Code Mode, artifact comments, /skill-doctor, synced plugins
+        // and skills, the advisor tool and MCP tasks need, and on an older Claude
+        // Code Remote Control too (https://code.claude.com/docs/en/env-vars
+        // § "Features that need feature-flag fetching"). Keep it here: claude-cm
+        // and claude-rc (scripts/) clear it for one claude process when they must,
+        // and hand it back to the Bash commands it runs.
         "DO_NOT_TRACK": "1",
-        // CodeGraph also background-checks GitHub for a newer release from the
-        // long-lived `codegraph serve --mcp` process (>= 1.5.0). DO_NOT_TRACK=1
-        // already suppresses it; this is the dedicated switch, pinned explicitly so
-        // the opt-out does not rest on one incidental var.
-        // NOTE (not an env var): `codegraph install` / `codegraph upgrade` offer a
-        // one-time Pro beta-waitlist prompt that POSTs an email to
-        // getcodegraph.com/api/waitlist. Strictly opt-in and TTY-gated, so a
-        // non-interactive install can never trigger it — but do not answer it if
-        // you run those commands by hand.
-        "CODEGRAPH_NO_UPDATE_CHECK": "1",
 
         // Local-first stack: keep everything offline. graphify ships no telemetry
         // (we also disable its local query log — opt-in upstream since #1797, but
@@ -214,6 +214,18 @@
         // no proxy and no ML extras needed (compression + retrieval are local —
         // mcp_server.py:365). Upstream still flags it, so treat as experimental.
         "HEADROOM_MCP_READ": "on",
+        // headroom_read only reads files under these roots (os.pathsep-separated;
+        // headroom 0.43.0, GHSA-8g49-pg6g-xgrf). Unset, the root is the directory
+        // Claude Code was started in, and NOTHING when that is / or the home
+        // directory. Pinned to the workspace so it reads the same wherever claude
+        // is launched; append ":/other/dir" for another tree the agent may read.
+        "HEADROOM_MCP_READ_ROOTS": "/workspace",
+        // rtk: `rtk gain` and other meta commands warn "No hook installed — run
+        // `rtk init -g`" when ~/.claude/settings.json has no rtk hook. That is by
+        // design here: the project's .claude/hooks/rtk-bash-rewrite.sh is the hook,
+        // and post-create.sh strips rtk's global one. Running `rtk init -g` would
+        // bring back the global hook, which rewrites git inside worktrees.
+        "RTK_SUPPRESS_HOOK_WARNING": "1",
         "RTK_TELEMETRY_DISABLED": "1",
         // rtk >= 1.0: `rtk init` offers a proxy on-ramp prompt in interactive mode.
         // post-create.sh runs it non-interactively; this keeps a hand-run quiet too.
@@ -279,14 +291,18 @@
         // EXPERIMENTAL: These flags enable preview features in Claude Code.
         // They may change semantics or be removed without notice across CLI versions.
         // If Claude Code behaves unexpectedly, try removing these first.
+        // Agent teams and Code Mode can't run together: claude-cm (scripts/claude-cm.sh)
+        // clears CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS for its one session only.
         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
         "CLAUDE_CODE_ENABLE_TASKS": "true",
         "CLAUDE_CODE_FORK_SUBAGENT": "1",
         // Claude Code telemetry beyond DO_NOT_TRACK. DO_NOT_TRACK=1 (above) already
         // turns off usage metrics, error reports and session surveys; these say so
         // explicitly, so the opt-out survives a session launched without
-        // DO_NOT_TRACK. Neither affects feature flags, so Remote Control keeps
-        // working. DISABLE_ERROR_REPORTING reads only "set or not".
+        // DO_NOT_TRACK (claude-cm, and claude-rc on Claude Code < 2.1.283 — see
+        // scripts/claude-cm.sh and scripts/claude-rc.sh). Neither affects feature
+        // flags, so Code Mode and Remote Control keep working.
+        // DISABLE_ERROR_REPORTING reads only "set or not".
         "DISABLE_ERROR_REPORTING": "1",
         "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
         // No background self-update inside the container: the version changes only
@@ -445,10 +461,39 @@
                 },
                 // Terminal
                 "terminal.integrated.defaultProfile.linux": "bash",
+                // Claude Code agent worktrees: `isolation: "worktree"` subagents check out
+                // full copies of the repo under .claude/worktrees/<agent>/. Keep the IDE's
+                // file watcher and search out of them — otherwise every parallel agent's
+                // half-written files surface as diagnostics and duplicate search hits.
+                // (Claude Code's own Code-Intelligence plugins have no equivalent knob.)
+                // NOTE: these are object-valued settings — VS Code REPLACES the shipped
+                // default rather than merging into it, so the defaults are restated here.
+                // Anything dropped from these lists stops being excluded.
+                "files.watcherExclude": {
+                    "**/.git/objects/**": true,
+                    "**/.git/subtree-cache/**": true,
+                    "**/.hg/store/**": true,
+                    "**/node_modules/*/**": true,
+                    "**/.claude/worktrees/**": true
+                },
+                "search.exclude": {
+                    "**/node_modules": true,
+                    "**/bower_components": true,
+                    "**/*.code-search": true,
+                    "**/.claude/worktrees": true
+                },
                 // Java settings
                 "java.configuration.updateBuildConfiguration": "automatic",
                 "java.saveActions.organizeImports": true,
                 "maven.executable.preferMavenWrapper": false,
+                // Keep the Java importer out of agent worktrees too (jdtls default list + ours).
+                "java.import.exclusions": [
+                    "**/node_modules/**",
+                    "**/.metadata/**",
+                    "**/archetype-resources/**",
+                    "**/META-INF/maven/**",
+                    "**/.claude/worktrees/**"
+                ],
                 // Python settings
                 "python.defaultInterpreterPath": "/usr/local/python/current/bin/python",
                 "[python]": {
@@ -490,7 +535,12 @@
     "initializeCommand": "mkdir -p .devcontainer/.plugin-marketplace; if [ -f .devcontainer/scripts/local-init.sh ]; then bash .devcontainer/scripts/local-init.sh; else echo 'ℹ️  .devcontainer/scripts/local-init.sh not present — skipping plugin marketplace seed (container still starts).'; fi",
     "onCreateCommand": "echo '✅ DevContainer created successfully!'",
     "postCreateCommand": "if [ -f /workspace/.devcontainer/scripts/post-create.sh ]; then bash /workspace/.devcontainer/scripts/post-create.sh; else echo '⚠️ post-create.sh not found, skipping...'; fi",
-    "postStartCommand": "git config --global --add safe.directory /workspace 2>/dev/null || true",
+    // safe.directory is an exact path: trust /workspace and the isolation
+    // worktrees Claude Code creates under /workspace/.claude/worktrees/ (the bind
+    // mount intermittently reports another owner, and git then refuses a fresh
+    // worktree as "dubious ownership"). --replace-all --fixed-value keeps one
+    // entry each instead of appending a duplicate on every start.
+    "postStartCommand": "git config --global --replace-all --fixed-value safe.directory /workspace /workspace 2>/dev/null; git config --global --replace-all --fixed-value safe.directory '/workspace/.claude/worktrees/*' '/workspace/.claude/worktrees/*' 2>/dev/null; true",
     "waitFor": "postStartCommand",
     "shutdownAction": "stopContainer"
 }

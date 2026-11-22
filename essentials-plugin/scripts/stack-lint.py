@@ -310,105 +310,110 @@ RULES_LIST = [
          "an aggregate policy annotation on a class no EssentialsAggregateDeclarations bean declares",
          "AggregateSnapshotPolicy.java:38-40, AggregateClosingBooksPolicy.java:38 (@Target TYPE); "
          "EssentialsAggregateDeclarations.java:49; LLM/LLM-eventsourced-aggregates.md:671-674"),
+    Rule("s5-webflux-virtual-threads", "S5", "Should-fix",
+         [("C", 313, "On WebFlux, a handler doing Essentials work runs off the event loop")],
+         "WebFlux application whose base configuration does not set spring.threads.virtual.enabled: true",
+         "spring-boot-autoconfigure WebFluxAutoConfiguration: configureBlockingExecution uses applicationTaskExecutor "
+         "when virtual threads are enabled; spring-webflux 7.0.10 BlockingExecutionConfigurer"),
     # S7 ---------------------------------------------------------------------------------------
-    Rule("s7-spec-generation", "S7", "Advisory", [("C", 335, "generated from the code, never hand-written")],
+    Rule("s7-spec-generation", "S7", "Advisory", [("C", 363, "generated from the code, never hand-written")],
          "nothing generates contracts/openapi.json: no test writing it from /v3/api-docs, no springdoc maven plugin"),
-    Rule("s7-contract-file", "S7", "Advisory", [("C", 337, "checked-in `contracts/openapi.json`")],
+    Rule("s7-contract-file", "S7", "Advisory", [("C", 365, "checked-in `contracts/openapi.json`")],
          "no committed spec: the frontend generator's input, or contracts/openapi.json, does not exist"),
     Rule("s7-frontend-input", "S7", "Advisory",
-         [("C", 337, "checked-in `contracts/openapi.json`"),
+         [("C", 365, "checked-in `contracts/openapi.json`"),
           ("F", 71, "target: '../contracts/openapi.json'")],
          "the frontend generator reads a live /v3/api-docs URL instead of the committed spec"),
     Rule("s7-forked-pipeline", "S7", "Advisory",
-         [("C", 347, "The forked-app shape fails"), ("C", 346, "a DB-less spec-export profile")],
+         [("C", 375, "The forked-app shape fails"), ("C", 374, "a DB-less spec-export profile")],
          "left over from the forked-app spec pipeline: springdoc-openapi-maven-plugin, a spring-boot-maven-plugin "
          "start/stop execution, or an application-openapi config"),
     Rule("s7-key-order", "S7", "Advisory",
-         [("C", 338, "keys sorted (`springdoc.writer-with-order-by-keys:")],
+         [("C", 366, "keys sorted (`springdoc.writer-with-order-by-keys:")],
          "springdoc runs without springdoc.writer-with-order-by-keys: true, so the committed spec's key order "
          "follows the code"),
     # 0.50.0: types-spring-web has no SingleValueTypeModelConverter (jar listing; the tag's source tree).
-    Rule("s7-model-converter", "S7", "Advisory", [("C", 355, "`SingleValueTypeModelConverter` as a bean")],
+    Rule("s7-model-converter", "S7", "Advisory", [("C", 383, "`SingleValueTypeModelConverter` as a bean")],
          "springdoc runs but SingleValueTypeModelConverter is not registered: the spec types semantic ids as objects",
          "types-spring-web/src/main/java/dk/trustworks/essentials/types/spring/web/SingleValueTypeModelConverter.java "
          "(a swagger-core ModelConverter; no auto-configuration in types-spring-web)", target_only=True),
     # S8 ---------------------------------------------------------------------------------------
     Rule("s8-embedded-cors", "S8", "Should-fix",
-         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 401, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 197, "Do not configure CORS")],
          "embedded frontend with a CORS configuration"),
     Rule("s8-embedded-base-url", "S8", "Should-fix",
-         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 401, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 200, "Do not set an API base URL")],
          "embedded frontend with an API base URL set"),
     Rule("s8-embedded-spa-filter", "S8", "Should-fix",
-         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 401, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 151, "A SPA fallback filter")],
          "embedded frontend without a SPA fallback to index.html"),
     Rule("s8-embedded-static-copy", "S8", "Should-fix",
-         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 401, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 141, "`maven-resources-plugin` copies `frontend/dist`")],
          "embedded frontend whose build output is not copied into static resources"),
     Rule("s8-standalone-base-url", "S8", "Blocking",
-         [("C", 379, "fetch mutator Orval's config names reads and prefixes"),
+         [("C", 407, "fetch mutator Orval's config names reads and prefixes"),
           ("F", 264, "configured *and consumed*")],
          "standalone frontend whose fetch mutator does not prefix a build-time base-URL variable onto the request"),
     Rule("s8-standalone-cors-source", "S8", "Blocking",
-         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 401, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 214, "expressed as a `CorsConfigurationSource` bean")],
          "standalone frontend and no CorsConfigurationSource bean"),
     Rule("s8-standalone-cors-webfilter", "S8", "Should-fix",
-         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 401, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 218, "Expose the source, not a standalone `CorsWebFilter`")],
          "CORS applied by a standalone CorsWebFilter/CorsFilter bean"),
     Rule("s8-standalone-cors-value", "S8", "Blocking",
-         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 401, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 246, "Bind the origin list with `@ConfigurationProperties`, never `@Value`")],
          "CORS origins bound with @Value to a key configured as a list"),
     Rule("s8-standalone-cors-value-scalar", "S8", "Should-fix",
-         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 401, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 246, "Bind the origin list with `@ConfigurationProperties`, never `@Value`"),
           ("F", 251, "breaks the day someone")],
          "CORS origins bound with @Value to a scalar, or to a key no application* file sets"),
     Rule("s8-standalone-cors-wildcard", "S8", "Blocking",
-         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 401, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 215, "`allowCredentials = true` **cannot**")],
          "wildcard origin combined with allowCredentials"),
     Rule("s8-standalone-dead-spa", "S8", "Advisory",
-         [("C", 373, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 401, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 295, "SPA filter is dead code in this mode")],
          "standalone frontend with a backend SPA fallback"),
     Rule("s8-generated-gitignore", "S8", "Should-fix",
-         [("C", 369, "contract-first pipeline of S7"),
+         [("C", 397, "contract-first pipeline of S7"),
           ("F", 82, "`generated/` and `model/` must not be committed")],
          "the generated API client is not git-ignored"),
     # S9 ---------------------------------------------------------------------------------------
     Rule("s9-admin-spi", "S9", "Should-fix",
-         [("C", 401, "`EssentialsAuthenticatedUser` and `EssentialsSecurityProvider`")],
+         [("C", 429, "`EssentialsAuthenticatedUser` and `EssentialsSecurityProvider`")],
          "an admin starter without the two security SPIs",
          "shared/src/main/java/dk/trustworks/essentials/shared/security/"
          "{EssentialsSecurityProvider,EssentialsAuthenticatedUser}.java"),
     # S10 --------------------------------------------------------------------------------------
-    Rule("s10-tc1-coordinates", "S10", "Advisory", [("C", 416, "The 1.x coordinates no longer resolve")],
+    Rule("s10-tc1-coordinates", "S10", "Advisory", [("C", 449, "The 1.x coordinates no longer resolve")],
          "a Testcontainers 1.x artifact coordinate",
          "~/.m2 org/testcontainers/testcontainers-{postgresql,mongodb} at the testcontainers-bom pin"),
-    Rule("s10-tc-package", "S10", "Advisory", [("C", 441, "`org.testcontainers.postgresql.PostgreSQLContainer`")],
+    Rule("s10-tc-package", "S10", "Advisory", [("C", 474, "`org.testcontainers.postgresql.PostgreSQLContainer`")],
          "a container class imported from the deprecated org.testcontainers.containers package",
          "testcontainers-postgresql jar at the pin: org.testcontainers.containers.PostgreSQLContainer is "
          "@Deprecated, org.testcontainers.postgresql.PostgreSQLContainer is not generic (javap); "
          "likewise testcontainers-mongodb MongoDBContainer"),
     Rule("s10-webtestclient-package", "S10", "Advisory",
-         [("C", 433, "`@AutoConfigureWebTestClient` is no longer in")],
+         [("C", 466, "`@AutoConfigureWebTestClient` is no longer in")],
          "@AutoConfigureWebTestClient imported from its Boot 3 package"),
-    Rule("s10-failsafe", "S10", "Advisory", [("C", 414, "Failsafe runs those during `verify`")],
+    Rule("s10-failsafe", "S10", "Advisory", [("C", 447, "Failsafe runs those during `verify`")],
          "integration tests present but maven-failsafe-plugin is not bound",
          "spring-boot-starter-parent pom: failsafe is in pluginManagement only"),
     # S11 --------------------------------------------------------------------------------------
-    Rule("s11-skip-frontend", "S11", "Should-fix", [("C", 465, "**`skip-frontend` profile** must exist")],
+    Rule("s11-skip-frontend", "S11", "Should-fix", [("C", 498, "**`skip-frontend` profile** must exist")],
          "frontend-maven-plugin without a skip-frontend profile"),
-    Rule("s11-boot-parent", "S11", "Advisory", [("C", 458, "`spring-boot-starter-parent` is the parent POM")],
+    Rule("s11-boot-parent", "S11", "Advisory", [("C", 491, "`spring-boot-starter-parent` is the parent POM")],
          "the reactor does not inherit spring-boot-starter-parent"),
-    Rule("s11-maven-wrapper", "S11", "Advisory", [("C", 469, "**Maven wrapper**, where the project has one")],
+    Rule("s11-maven-wrapper", "S11", "Advisory", [("C", 502, "**Maven wrapper**, where the project has one")],
          "the Maven wrapper downloads a Maven below the stack-pins.md pin",
          "root .mvn/wrapper/maven-wrapper.properties distributionUrl"),
 ]
@@ -463,6 +468,23 @@ class UsageError(Exception):
     pass
 
 
+def split_lines(text: str) -> list[str]:
+    """Lines as an editor, git and `Source.line_of` count them: split on "\\n" only, a trailing "\\r" dropped.
+    str.splitlines() also breaks on \\x0c, \\x1c-\\x1e, \\x85, U+2028 and U+2029, which would shift every line
+    number after one of them."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return [ln[:-1] if ln.endswith("\r") else ln for ln in lines]
+
+
+def read_project_text(path: Path) -> str:
+    """A project file as UTF-8, undecodable bytes replaced: a Latin-1 byte (a `.properties` file written in
+    ISO-8859-1, a stray character in a comment) must never make a file read as empty and pass unchecked.
+    OSError propagates."""
+    return path.read_bytes().decode("utf-8", errors="replace")
+
+
 # ---------------------------------------------------------------------------------------------
 # Plugin sources: pins and contract headings
 
@@ -473,7 +495,7 @@ def read_pins(path: Path):
     except OSError as exc:
         raise UsageError(f"cannot read {path}: {exc}")
     pins = {}
-    for line in text.splitlines():
+    for line in split_lines(text):
         if not line.lstrip().startswith("|"):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
@@ -518,7 +540,7 @@ def read_contract_anchors(path: Path):
     except OSError as exc:
         raise UsageError(f"cannot read {path}: {exc}")
     anchors, current = {}, None
-    for line in text.splitlines():
+    for line in split_lines(text):
         m = re.match(r"^#{2,3}\s+(S\d+(?:\.\d+)?)\s+—", line)
         if m:
             anchors[m.group(1)] = gh_anchor(line.lstrip("#").strip())
@@ -529,7 +551,7 @@ def read_contract_anchors(path: Path):
             anchors.setdefault(b.group(1), anchors[current])
     if not anchors:
         raise UsageError(f"{path}: no `## S<n> —` headings")
-    return anchors, text.splitlines()
+    return anchors, split_lines(text)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -935,16 +957,16 @@ def gitignore_covers(rel: str, patterns):
 
 
 class Source:
-    __slots__ = ("path", "rel", "text", "lines")
+    __slots__ = ("path", "rel", "text", "lines", "error")
 
     def __init__(self, path, rel):
-        self.path, self.rel = path, rel
+        self.path, self.rel, self.error = path, rel, None
         try:
-            raw = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            raw = ""
+            raw = read_project_text(path)
+        except OSError as exc:
+            raw, self.error = "", str(exc)     # reported in notRun by Lint._sources, never a silent pass
         self.text = strip_comments(raw)
-        self.lines = self.text.splitlines()
+        self.lines = split_lines(self.text)
 
     def line_of(self, offset):
         return self.text.count("\n", 0, offset) + 1
@@ -974,7 +996,7 @@ def yaml_keys(text):
     A minimal block-mapping walker, enough for application*.yml: indentation, `---`, list items
     holding mappings, and one-level flow mappings (`{ enabled: false }`)."""
     out, stack = [], []
-    for no, raw in enumerate(text.splitlines(), 1):
+    for no, raw in enumerate(split_lines(text), 1):
         line = re.sub(r"(^|\s)#.*$", "", raw).rstrip()
         if not line.strip():
             continue
@@ -1010,7 +1032,7 @@ def yaml_keys(text):
 
 def properties_keys(text):
     out = []
-    for no, raw in enumerate(text.splitlines(), 1):
+    for no, raw in enumerate(split_lines(text), 1):
         m = re.match(r"^\s*([^#!=:\s][^=:\s]*)\s*[=:]\s*(.*)$", raw)
         if m:
             out.append((m.group(1), m.group(2).strip(), no, m.group(1)))
@@ -1019,8 +1041,8 @@ def properties_keys(text):
 
 def config_keys(path: Path):
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+        text = read_project_text(path)
+    except OSError:
         return []
     return properties_keys(text) if path.suffix == ".properties" else yaml_keys(text)
 
@@ -1033,11 +1055,11 @@ def config_shapes(path: Path):
     (`key[0]`, as `.properties` spells a list). Spring binds a sequence as indexed keys only, so `@Value` on the
     bare key does not see it."""
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+        text = read_project_text(path)
+    except OSError:
         return {}
     yaml = path.suffix != ".properties"
-    lines = text.splitlines()
+    lines = split_lines(text)
     out = {}
     for key, value, no, own in (yaml_keys(text) if yaml else properties_keys(text)):
         indexed = re.match(r"^(.*?)\[\d+\]", key)
@@ -1278,7 +1300,10 @@ class Lint:
                 continue
             parts = f.relative_to(self.root).parts
             if "src" in parts and kind in parts[parts.index("src") + 1:parts.index("src") + 2]:
-                out.append(Source(f, self.p.rel(f)))
+                s = Source(f, self.p.rel(f))
+                if s.error is not None:
+                    self.skip(["*"], f"{s.rel}: cannot read ({s.error}) — no check saw this file")
+                out.append(s)
         return out
 
     def src_main_dir(self):
@@ -2016,6 +2041,7 @@ class Lint:
                              "in its own transaction",
                              "delete the key",
                              [{"op": "delete-config-key", "file": frel, "line": line, "key": key}])
+        self.s5_virtual_threads()
         declared = " ".join(s.text for s in self.main if "EssentialsAggregateDeclarations" in s.text)
         for s in self.main:
             for line, m in s.find(r"@(AggregateSnapshotPolicy|AggregateClosingBooksPolicy)\b"):
@@ -2028,6 +2054,47 @@ class Lint:
                          "EssentialsAggregateDeclarations bean declares it, and nothing reports that",
                          f"declare {name or 'the aggregate'} in an EssentialsAggregateDeclarations bean",
                          mechanical=False)
+
+    def s5_virtual_threads(self):
+        """WebFlux offloads blocking handlers only when the base configuration enables virtual threads.
+
+        Only the profile-less files count (`application.yml`, `application.yaml`, `application.properties`
+        under src/main/resources), and in a multi-document YAML file only the documents without
+        `spring.config.activate.on-profile` (or the legacy `spring.profiles`): a value set for one profile
+        leaves every other run on the event loop."""
+        if self.facts["web"] != "webflux":
+            return
+        for f in self.config_files(include_test=False):
+            if not re.fullmatch(r"application\.(ya?ml|properties)", f.name):
+                continue
+            try:
+                text = read_project_text(f)
+            except OSError:
+                continue
+            if f.suffix == ".properties":
+                docs = [properties_keys(text)]
+            else:
+                docs, chunk = [], []
+                for raw in split_lines(text) + ["---"]:
+                    if raw.strip() == "---":
+                        docs.append(yaml_keys("\n".join(chunk)))
+                        chunk = []
+                    else:
+                        chunk.append(raw)
+            for keys in docs:
+                names = {norm_key(k): (v or "") for k, v, _, _ in keys}
+                if "spring.config.activate.onprofile" in names or "spring.profiles" in names:
+                    continue
+                if names.get("spring.threads.virtual.enabled", "").strip("\"'").lower() == "true":
+                    return
+        flux = self.dep(BOOT, "spring-boot-starter-webflux")
+        self.add("s5-webflux-virtual-threads", self.app.rel, flux.line if flux else None,
+                 "WebFlux application without spring.threads.virtual.enabled: true in its base configuration — "
+                 "a handler returning a plain value runs its blocking unit of work on an event-loop thread, so "
+                 "requests stall under load",
+                 "set spring.threads.virtual.enabled: true in src/main/resources/application.yml (outside any "
+                 "profile document)",
+                 mechanical=False)
 
     # -- S7 --------------------------------------------------------------------------------------
 
@@ -2172,7 +2239,7 @@ class Lint:
                              "fires and reads as intent", "remove the CORS configuration", mechanical=False)
             for d in fe_dirs:
                 for env in sorted(d.glob(".env*")):
-                    for no, raw in enumerate(env.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                    for no, raw in enumerate(split_lines(env.read_text(encoding="utf-8", errors="replace")), 1):
                         m = re.match(r"^\s*(?:export\s+)?((?:VITE|NEXT_PUBLIC|REACT_APP)_\w*API_(?:BASE_)?URL)"
                                      r"\s*=\s*(.*)$", raw)
                         if m and m.group(2).strip().strip("'\""):
@@ -2314,7 +2381,7 @@ class Lint:
             for g in [d] + [p for p in d.parents if self.root in p.parents or p == self.root]:
                 gi = g / ".gitignore"
                 if gi.is_file():
-                    ignores.append((g, gi.read_text(encoding="utf-8", errors="replace").splitlines()))
+                    ignores.append((g, split_lines(gi.read_text(encoding="utf-8", errors="replace"))))
             for out in outputs:
                 if any(gitignore_covers(out.relative_to(g).as_posix(), pats) for g, pats in ignores if g in out.parents):
                     continue
@@ -2393,7 +2460,7 @@ class Lint:
             self.skip(["s11-maven-wrapper"], "no .mvn/wrapper/maven-wrapper.properties: the project has no Maven wrapper")
             return
         rel = self.p.rel(props)
-        for n, raw in enumerate(props.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        for n, raw in enumerate(split_lines(props.read_text(encoding="utf-8", errors="replace")), 1):
             if not re.match(r"\s*distributionUrl\s*[=:]", raw):
                 continue
             m = re.search(r"apache-maven/([^/\s]+)/apache-maven-\1-bin\.zip", raw)
@@ -2520,7 +2587,7 @@ def self_test(pins_path, contract_path):
         for d, n, token in r.cites:
             if d not in docs:
                 try:
-                    docs[d] = (PLUGIN / DOCS[d]).read_text(encoding="utf-8").splitlines()
+                    docs[d] = split_lines((PLUGIN / DOCS[d]).read_text(encoding="utf-8"))
                 except OSError as exc:
                     problems.append(f"cannot read {DOCS[d]}: {exc}")
                     docs[d] = []

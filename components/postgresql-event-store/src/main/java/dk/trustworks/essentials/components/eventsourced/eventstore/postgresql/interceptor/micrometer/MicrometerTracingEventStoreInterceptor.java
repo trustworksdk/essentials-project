@@ -31,6 +31,14 @@ import java.util.stream.Stream;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * An {@link EventStoreInterceptor} that wraps event store operations in Micrometer observations and, as a
+ * {@link PersistableEventEnricher}, stores the current trace context in the metadata of the events being persisted.
+ * <p>
+ * Ordering: this interceptor carries no {@link dk.trustworks.essentials.shared.interceptor.InterceptorOrder}, so it runs at the
+ * default order {@code 10}. Interceptors with a lower order run before it (further out in the chain); interceptors with the
+ * same order keep their registration order.
+ */
 public final class MicrometerTracingEventStoreInterceptor implements EventStoreInterceptor, PersistableEventEnricher {
     public static final String                         AGGREGATE_TYPE         = "AggregateType";
     public static final String                         AGGREGATE_ID           = "AggregateId";

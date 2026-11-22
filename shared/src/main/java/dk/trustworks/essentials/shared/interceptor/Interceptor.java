@@ -35,11 +35,35 @@ package dk.trustworks.essentials.shared.interceptor;
  * <pre>{@code
  * var result = InterceptorChain.newInterceptorChainForOperation(operation,
  *                                                               allInterceptorsConfigured,
- *                                                               (interceptor, interceptorChain) -> interceptorChain.intercept(operation, interceptorChain),
+ *                                                               (interceptor, interceptorChain) -> interceptor.intercept(interceptorChain.operation(), interceptorChain),
  *                                                               () -> performDefaultBehaviorForOperation(operation))
  *                              .proceed();
  * }</pre>
-
+ * <p>
+ * <b>Changing what an operation carries</b><br>
+ * An interceptor may change the input of the operation it intercepts - enrich a payload, decrypt it on the way in,
+ * encrypt it on the way out, rewrite metadata - and every interceptor family in Essentials follows the same contract:
+ * <ol>
+ *     <li><b>Change the input in place, then proceed.</b> Call the operation's setter (e.g. {@code setMessage(...)})
+ *     before {@code proceed()}. The values an operation carries are immutable: build a new one
+ *     (e.g. {@code message.withPayload(...)}), never mutate one.</li>
+ *     <li><b>Change the output by returning something else.</b> Read-side transformation (decrypting what was
+ *     loaded) is done on the value {@code proceed()} returned.</li>
+ *     <li><b>Everything downstream reads the operation.</b> Later interceptors receive the same operation object,
+ *     and the default behaviour reads it after the chain reached it. A chain built in Essentials never hands the
+ *     default behaviour a value captured before the chain ran. Code that builds its own chain must do the same -
+ *     read the operation in the default behaviour, as {@code performDefaultBehaviorForOperation(operation)} does
+ *     above - for replacement to work.</li>
+ *     <li><b>Only what reaches the target has to fit it.</b> Where the target was chosen before the chain ran (a
+ *     message-handler method, a command handler), interceptors may replace the payload with a value of any type, as
+ *     long as the value that reaches the target is accepted by it; otherwise the invocation fails with a
+ *     {@link ClassCastException}. The target is never re-resolved.</li>
+ *     <li><b>Order is expressed with {@link InterceptorOrder}.</b> A decrypting interceptor must run before any
+ *     interceptor that reads the payload; an encrypting one after any that enriches it.</li>
+ * </ol>
+ * Outer interceptors that read the operation after {@code proceed()} returned see the last replacement an inner
+ * interceptor made.
+ *
  * @see InterceptorChain
  */
 public interface Interceptor {

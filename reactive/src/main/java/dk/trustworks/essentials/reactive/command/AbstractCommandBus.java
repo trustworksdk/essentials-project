@@ -222,12 +222,63 @@ public abstract class AbstractCommandBus implements CommandBus {
     public <R, C> R send(C command) {
         var commandHandler = findCommandHandlerCapableOfHandling(command);
         log.debug("Synchronously sending command of type '{}' to {} '{}'", command.getClass().getName(), CommandHandler.class.getSimpleName(), commandHandler.toString());
+        // Interceptors and the handler get the chain's command, not `command`: an interceptor may have replaced it (CommandBusInterceptorChain#setCommand)
         return (R) CommandBusInterceptorChain.newInterceptorChain(command,
                                                                   commandHandler,
                                                                   interceptors,
-                                                                  (interceptor, commandBusInterceptorChain) -> interceptor.interceptSend(command, commandBusInterceptorChain),
-                                                                  commandHandler::handle)
+                                                                  (interceptor, commandBusInterceptorChain) -> interceptor.interceptSend(commandBusInterceptorChain.command(), commandBusInterceptorChain),
+                                                                  _cmd -> handleWithMatchedCommandHandler(commandHandler, command.getClass(), _cmd))
                                              .proceed();
+    }
+
+    /**
+     * The default {@link CommandBus} behaviour at the end of a {@link CommandBusInterceptorChain}: hand the chain's
+     * current command to the {@link CommandHandler} that was matched for the command <i>before</i> the chain ran.<br>
+     * Same as {@link #requireMatchedCommandHandlerCanHandle(CommandHandler, Class, Object)} followed by
+     * {@link CommandHandler#handle(Object)}.
+     *
+     * @param matchedCommandHandler the {@link CommandHandler} resolved for the command as it was sent ({@link CommandBusInterceptorChain#matchedCommandHandler()})
+     * @param matchedCommandType    the type of the command as it was sent, which {@code matchedCommandHandler} was resolved for
+     * @param command               the command that reached the end of the chain ({@link CommandBusInterceptorChain#command()}), possibly replaced by an interceptor
+     * @return the result of {@link CommandHandler#handle(Object)}
+     * @throws ClassCastException if {@code matchedCommandHandler} cannot handle the type of {@code command}
+     */
+    protected static Object handleWithMatchedCommandHandler(CommandHandler matchedCommandHandler, Class<?> matchedCommandType, Object command) {
+        requireMatchedCommandHandlerCanHandle(matchedCommandHandler, matchedCommandType, command);
+        return matchedCommandHandler.handle(command);
+    }
+
+    /**
+     * Check, immediately before the default {@link CommandBus} behaviour invokes the {@link CommandHandler}, that the
+     * command which reached the end of the {@link CommandBusInterceptorChain} fits the handler that was matched before
+     * the chain ran. A {@link CommandBusInterceptor} may replace the command with a value of any type
+     * ({@link CommandBusInterceptorChain#setCommand(Object)}); only what reaches the handler has to fit it. The handler is
+     * deliberately not re-resolved, so {@link CommandBusInterceptorChain#matchedCommandHandler()} means the same thing
+     * throughout the chain.<br>
+     * A command of the type the handler was matched for is not checked again.
+     *
+     * @param matchedCommandHandler the {@link CommandHandler} resolved for the command as it was sent
+     * @param matchedCommandType    the type of the command as it was sent, which {@code matchedCommandHandler} was resolved for
+     * @param command               the command that reached the end of the chain
+     * @throws ClassCastException if {@code matchedCommandHandler} cannot handle the type of {@code command}
+     */
+    protected static void requireMatchedCommandHandlerCanHandle(CommandHandler matchedCommandHandler, Class<?> matchedCommandType, Object command) {
+        requireNonNull(matchedCommandHandler, "No matchedCommandHandler provided");
+        requireNonNull(matchedCommandType, "No matchedCommandType provided");
+        requireNonNull(command, "No command provided");
+        var commandType = command.getClass();
+        if (commandType != matchedCommandType && !matchedCommandHandler.canHandle(commandType)) {
+            throw new ClassCastException(msg("Command of type '{}' cannot be handled by {} '{}', which was matched for command type '{}' before the {}s ran. " +
+                                                     "A {} that replaces the command must hand on a command the matched {} can handle - the {} is not re-resolved",
+                                             commandType.getName(),
+                                             CommandHandler.class.getSimpleName(),
+                                             matchedCommandHandler,
+                                             matchedCommandType.getName(),
+                                             CommandBusInterceptor.class.getSimpleName(),
+                                             CommandBusInterceptor.class.getSimpleName(),
+                                             CommandHandler.class.getSimpleName(),
+                                             CommandHandler.class.getSimpleName()));
+        }
     }
 
     @Override
@@ -239,8 +290,8 @@ public abstract class AbstractCommandBus implements CommandBus {
         return Mono.fromCallable(propagateContext(() -> (R) CommandBusInterceptorChain.newInterceptorChain(command,
                                                                                                            commandHandler,
                                                                                                            interceptors,
-                                                                                                           (interceptor, commandBusInterceptorChain) -> interceptor.interceptSendAsync(command, commandBusInterceptorChain),
-                                                                                                           commandHandler::handle)
+                                                                                                           (interceptor, commandBusInterceptorChain) -> interceptor.interceptSendAsync(commandBusInterceptorChain.command(), commandBusInterceptorChain),
+                                                                                                           _cmd -> handleWithMatchedCommandHandler(commandHandler, command.getClass(), _cmd))
                                                                                       .proceed())).publishOn(Schedulers.boundedElastic());
     }
 

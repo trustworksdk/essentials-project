@@ -771,6 +771,8 @@
       "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslator.kt:20: TODO(\"map InvoiceIssuedPayload -> internal command\")",
       "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslator.kt:25: // TODO: map the internal event onto the external contract.",
       "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslator.kt:26: TODO(\"map internal event -> BillingRequest\")",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/OnInvoiceIssued.kt:29: * Billing's scheme — see the TODO on `authenticate` (stack contract S9).",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/OnInvoiceIssued.kt:54: // TODO: replace this shared-secret comparison with Billing's own scheme — usually an",
       "src/main/kotlin/com/example/shop/orders/external_systems/billing/slice.yaml:29: - { from: InvoiceIssued, to: TODOInternalCommand }",
       "src/test/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.kt:21: // TODO: assert every field, including the type conversions at the boundary.",
       "src/test/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.kt:23: //   assertThat(command).isEqualTo(TODOInternalCommand(...))",
@@ -804,8 +806,14 @@
       {
         "id": "translation.webhook-endpoint",
         "status": "placeholder",
-        "summary": "The webhook POST hands the payload to the translator and sends the result on the CommandBus without waiting, but fails until the inbound mapping is written.",
+        "summary": "The webhook POST on the external event's own path hands the payload to the translator and sends the result on the CommandBus without waiting, but fails until the inbound mapping is written.",
         "where": "src/main/kotlin/com/example/shop/orders/external_systems/billing/OnInvoiceIssued.kt"
+      },
+      {
+        "id": "translation.webhook-authentication",
+        "status": "placeholder",
+        "summary": "The webhook rejects every request with 401 until a shared secret is configured, then accepts only a request presenting the same value in a header; that check is a placeholder, and the external system's own signature scheme is left to the developer.",
+        "where": "src/main/kotlin/com/example/shop/orders/external_systems/billing/OnInvoiceIssued.kt#authenticate"
       },
       {
         "id": "translation.publishes-outbound",

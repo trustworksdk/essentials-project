@@ -168,7 +168,7 @@ def doc_body(raw: str) -> str:
 def first_paragraph(text: str):
     """(paragraph, first line number) of the first prose paragraph of a Markdown file, or None."""
     para, at, in_comment = [], None, False
-    for n, line in enumerate(text.splitlines(), 1):
+    for n, line in enumerate(text.split("\n"), 1):  # not splitlines(): a form feed is no line break
         s = line.strip()
         if in_comment:
             in_comment = "-->" not in s
@@ -328,7 +328,7 @@ def declaration_lines(f, td):
 def javadoc(f, text, td):
     """(first sentence, line) of the doc comment directly above a type declaration, or None."""
     start, prev = declaration_lines(f, td)
-    lines = text.splitlines()
+    lines = text.split("\n")  # the numbering text.count("\n") gives; splitlines() also breaks on \f, \x1c, \u2028
     best = None
     for m in re.finditer(r"/\*\*(?!/)(.*?)\*/", text, re.S):
         a = text.count("\n", 0, m.start()) + 1
@@ -1211,7 +1211,12 @@ def apply(root: Path, accepted: dict, dry_run: bool, emit: bool = False):
             refused += 1
             report.append(f"refused  {rel}: not a slice.yaml under ROOT")
             continue
-        text = target.read_bytes().decode("utf-8")
+        try:
+            text = target.read_bytes().decode("utf-8")
+        except UnicodeDecodeError as exc:
+            refused += 1
+            report.append(f"refused  {rel}: not UTF-8 ({exc.reason} at byte {exc.start})")
+            continue
         try:
             doc = yaml.safe_load(text)
         except yaml.YAMLError:
@@ -1391,6 +1396,13 @@ def main(argv=None):
             raise UsageError(f"cannot read {args.accepted}: {exc}") from None
         if not isinstance(accepted, dict) or accepted.get("schema") != "slice-enrich/1":
             raise UsageError(f"{args.accepted} is not a slice-enrich/1 document")
+        slices = accepted.get("slices")
+        if slices is not None and not isinstance(slices, list):
+            raise UsageError(f"{args.accepted}: `slices` must be a list of objects, not {type(slices).__name__}")
+        for i, s in enumerate(slices or []):
+            if not isinstance(s, dict):
+                raise UsageError(f"{args.accepted}: slices[{i}] must be an object with `path` and `accept`, "
+                                 f"not {type(s).__name__}")
         return apply(root, accepted, args.dry_run, args.emit)
     except UsageError as exc:
         print(f"slice-enrich: {exc}", file=sys.stderr)

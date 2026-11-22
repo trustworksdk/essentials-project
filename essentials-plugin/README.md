@@ -55,7 +55,7 @@ Prints what the plugin offers and what `/essentials:init` sets up. Read-only.
 
 ```
 /essentials:doctor            # every requirement below, and what each missing one costs
-/essentials:doctor slice      # only what add-slice, slice-check, slice-map, slice-map-html and slice-enrich run (also: init, review, docs)
+/essentials:doctor slice      # only what add-slice, slice-check, slice-map, slice-map-html and slice-enrich run (also: init, review, docs, upgrade)
 ```
 
 Checks the tools the commands run (§ Requirements). Read-only; it suggests installs and never runs one.
@@ -233,6 +233,10 @@ essentials-plugin/
 │   │                             migrations/ — release-move notes: order, pin names, ids, citations)
 │   ├── slice/                   (slice-model.md, slice-authoring.md, change-procedure.md,
 │   │                             manifest-guide.md, manifest-reconciliation.md, api-provenance.md,
+│   │                             slice-check-gates.md (the gate table), slice-map-contract.md (the
+│   │                             map JSON, Atlas keys and html page), view-event-sourced.md and
+│   │                             command-lane-{decider,service-entity,aggregate}.md (per-lane
+│   │                             emission, read by the view and command skills),
 │   │                             discovery-heuristics.md, slice-yaml.schema.json,
 │   │                             slice-map-template.html, atlas/ — the Slice Atlas page (atlas.html
 │   │                             and one lens-<n>-<id>.js per lens, inlined by slice-index.py atlas),
@@ -241,8 +245,10 @@ essentials-plugin/
 │   │                             templates/behaviours.json, what each family's code already does)
 │   ├── sdd-contract.md          (the entry points another plugin's agent drives: render-slice.py
 │   │                             render interface 1, init --preset/--report, the project marks)
-│   └── init-assets/project/     (the /essentials:init template tree + manifest.json, rendered by
-│                                 scripts/init-render.py; versions come only from stack-pins.md)
+│   └── init-assets/             (project/: the /essentials:init template tree + manifest.json,
+│                                 rendered by scripts/init-render.py; versions come only from
+│                                 stack-pins.md. lint-gate.md: activating, self-testing and
+│                                 refreshing the lint gate, shared by init and upgrade)
 ├── tests/                       (the maintainers' expected results; nothing here reaches a project)
 │   ├── fixtures/                (synthetic inputs, each with a TEST-GUIDE.md and a machine-readable
 │   │                             expectation file — expected.yaml, or cases.yaml for change-router and
@@ -276,7 +282,8 @@ essentials-plugin/
 │   ├── citations/               (check-citations --self-test input)
 │   └── scripts/                 (the unittest suites: slice-lint, the init pre-commit hook,
 │                                 render-slice, slice-source, slice-index, slice-atlas,
-│                                 slice-atlas-layout, slice-enrich, slice-law, review-scan, search.sh, doctor.sh)
+│                                 slice-atlas-layout, slice-enrich, slice-law, review-scan, search.sh, doctor.sh,
+│                                 and shell-portability: the bash 3.2 / BSD rules for the scripts run on macOS)
 └── evals/                       (claude plugin eval suite for the model-judgement steps —
                                   maintainer, before release; see evals/README.md)
 ```

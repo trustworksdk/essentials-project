@@ -419,7 +419,12 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                                             interceptors,
                                             (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                             () -> {
-                                                consumeFromQueue.queueMessageHandler.handle(queuedMessage);
+                                                // The handler gets what the interceptors left on the operation - possibly a
+                                                // replacement (e.g. decrypted) - while every queue write below keeps using
+                                                // queuedMessage, the entry selected for delivery (setMessage keeps the id)
+                                                var deliveredMessage = operation.getMessage();
+                                                consumeFromQueue.queueMessageHandler.handle(deliveredMessage);
+                                                carryRedeliveryRequestToSelectedMessage(deliveredMessage, queuedMessage);
                                                 return (Void) null;
                                             })
                     .proceed();
@@ -525,6 +530,23 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
             }
         } finally {
             handlerTimeoutOverrun.check(queueName, handlerStartedAtNanos, durableQueues.messageHandlingTimeout());
+        }
+    }
+
+    /**
+     * A handler asks for redelivery on the message it was handed. A replacement made with
+     * {@link QueuedMessage#withMessage(Message)} forwards that request to the selected message itself, but a replacement
+     * built some other way (any {@link QueuedMessage} with the same id) keeps it to itself - so copy it over, because the
+     * consumer decides between acknowledging and retrying on the selected message.
+     *
+     * @param deliveredMessage the message the handler was given
+     * @param selectedMessage  the message the consumer selected for delivery
+     */
+    static void carryRedeliveryRequestToSelectedMessage(QueuedMessage deliveredMessage, QueuedMessage selectedMessage) {
+        if (deliveredMessage != selectedMessage
+                && deliveredMessage.isManuallyMarkedForRedelivery()
+                && !selectedMessage.isManuallyMarkedForRedelivery()) {
+            selectedMessage.markForRedeliveryIn(deliveredMessage.getRedeliveryDelay());
         }
     }
 

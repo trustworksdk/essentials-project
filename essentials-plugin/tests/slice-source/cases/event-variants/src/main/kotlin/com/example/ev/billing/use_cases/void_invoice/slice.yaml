@@ -1,0 +1,13 @@
+schemaVersion: "1.3"
+slice: billing.void_invoice
+kind: command
+bc: billing
+owner: billing-team
+status: live
+summary: Fixture slice for gate 7.
+generator: essentials
+language: kotlin
+handles: [VoidInvoice]
+writes: []
+tests:
+  unit: { present: false }

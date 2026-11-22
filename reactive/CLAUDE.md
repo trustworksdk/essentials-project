@@ -22,7 +22,7 @@ In-process event bus + command bus for JVM-local messaging. Maven: `essentials-r
 | `AnnotatedCommandHandler` | Reflects `@Handler`/`@CmdHandler` methods at construction; caches command-type→`Method`; `canHandle` uses `isAssignableFrom`; invokes via `Method.invoke`, sneaky-throws target exception |
 | `ReactiveHandlersBeanPostProcessor` | `DestructionAwareBeanPostProcessor`; auto-registers all `EventHandler`/`CommandHandler` beans post-init; uses `@AsyncEventHandler` annotation to choose sync vs async registration; skips `ROLE_INFRASTRUCTURE` beans |
 | `CommandContextPropagator` | SPI: called on the **sending** thread for `sendAsync`/`sendAndDontWait`, returns the invocation that restores captured context around the handler on the Reactor worker. `AbstractCommandBus.addContextPropagator`; first added = outermost. `foundation` supplies `CausationCommandContextPropagator` |
-| `CommandBusInterceptorChain` | Chain-of-responsibility; interceptors sorted by `@Order`; separate intercept methods for `send`/`sendAsync`/`sendAndDontWait` |
+| `CommandBusInterceptorChain` | Chain-of-responsibility; interceptors sorted by `@InterceptorOrder`; separate intercept methods for `send`/`sendAsync`/`sendAndDontWait` |
 
 ## Test Structure
 
@@ -37,7 +37,7 @@ In-process event bus + command bus for JVM-local messaging. Maven: `essentials-r
 
 - `EventHandler` — single-method interface; implement directly or extend `AnnotatedEventHandler`
 - `CommandHandler` — implement `canHandle(Class<?>)` + `handle(Object)` directly, or extend `AnnotatedCommandHandler`
-- `CommandBusInterceptor` — all three default methods (`interceptSend`, `interceptSendAsync`, `interceptSendAndDontWait`); implement any subset; ordering via `@Order`
+- `CommandBusInterceptor` — all three default methods (`interceptSend`, `interceptSendAsync`, `interceptSendAndDontWait`); implement any subset; ordering via `@InterceptorOrder`
 - `OnErrorHandler` — async subscriber error callback; receives subscriber, event, exception
 - `SendAndDontWaitErrorHandler` — fire-and-forget error callback on `LocalCommandBus`
 - `AnnotatedCommandHandler.getExceptionLogLevel(Exception)` — override to suppress or change log level per exception type. Default DEBUG since 0.61 (was ERROR + stack, then rethrow → every failure logged twice, per retry on a durable bus; ~6 000 stack traces/2 min in the trading demo). The sender reports it: `send` throws, `SendAndDontWaitErrorHandler` logs ERROR, durable queue keeps `last_delivery_error` + ERROR on dead letter
@@ -52,6 +52,7 @@ In-process event bus + command bus for JVM-local messaging. Maven: `essentials-r
 - **Duplicate-handler WARN only sees declared types** — `CommandHandler.handledCommandTypes()` (default empty) supplies the candidate types, `canHandle` decides; an overlap on a type no handler declares is not found. Runs outside the lock after the add; its own failure logs ERROR and never fails the registration. Pinned by `LocalCommandBusDuplicateCommandHandlerTest`
 - **`sendAndDontWait`/`sendAsync` run the handler on `boundedElastic`, not the caller** — `publishOn` fuses with `Mono.fromCallable` and pulls the callable onto the worker (only `send` runs on the caller). ThreadLocal/ScopedValue context is lost unless carried by a `CommandContextPropagator`; propagation must be captured at send (`propagateContext(...)` on the sending thread), never inside the callable
 - **`sendAndDontWait`'s `SendAndDontWaitErrorHandler` runs after the interceptor chain unwinds (since 0.60.1)** — the innermost step records the handler's exception and rethrows it, so a `UnitOfWork` interceptor rolls back; the bus then calls the error handler once with that recorded original (not an interceptor's wrapper). Calling it inside the chain committed partial writes whenever it didn't rethrow. A failure with nothing recorded (interceptor's own) bypasses it. `DurableLocalCommandBus` (foundation) mirrors this; pinned by `LocalCommandBusSendAndDontWaitErrorTest` + foundation's `SendAndDontWaitHandlerFailureRollbackIT`
+- **`setCommand` never re-resolves the handler** — invokers pass `chain.command()`, and the default behaviour checks `canHandle` right before `handle` and throws `ClassCastException` (not routed to `SendAndDontWaitErrorHandler`). Contract: `docs/design/interceptor-operation-replacement.md`
 - **`LocalCommandBus.sendAndDontWait` is non-durable** — fire-and-forget on `boundedElastic`; no persistence, no retry on JVM crash
 - **`ReactiveHandlersBeanPostProcessor` resolves `EventBus`/`CommandBus` lazily** — first handler bean post-processed triggers `getBeansOfType`/`getBean`; ensure buses are defined as beans before handlers to avoid circular issues
 - **`AnnotatedCommandHandler` uses `isAssignableFrom`** — handles command subclasses; multiple matching methods → `MultipleCommandHandlersFoundException` at resolution time, not registration time

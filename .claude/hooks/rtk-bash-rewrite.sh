@@ -4,18 +4,29 @@
 #
 # rtk's own hook (`rtk hook claude`) rewrites a Bash command to its rtk form — `git status` becomes
 # `rtk git status` — so the output is compressed before it reaches the model. This wrapper runs that
-# hook and passes its answer on unchanged, with one exception:
+# hook and passes its answer on unchanged, with two exceptions:
 #
-#   Inside a worktree under .claude/worktrees/, a rewrite that would put git behind rtk is dropped
-#   and the command runs as typed.
+#   In auto mode (the payload's "permission_mode" is "auto") nothing is rewritten: the command runs
+#   as typed.
+#
+# Why: auto mode's classifier reviews the command Claude wrote before this hook runs. A rewrite
+# returned in updatedInput is then denied with no verdict ("a hook changed this call's input after
+# auto mode reviewed it") and Claude must send the rewritten command again — one refused round trip
+# per rewritten call, more than rtk saves. See https://code.claude.com/docs/en/hooks
+# § "PreToolUse updatedInput in auto mode"; the mode is the common input field permission_mode
+# (same page, § "Common input fields"). Claude can still type `rtk …` itself in auto mode.
+#
+#   Inside a worktree under .claude/worktrees/, a rewrite whose command names git anywhere is
+#   dropped and the command runs as typed.
 #
 # Why: Claude Code refuses any git command from an agent started with isolation "worktree" unless it
-# can see that the command targets the agent's own worktree. `rtk git status` hides git behind a
-# launcher, so it is refused ("this command runs rtk with a git command among its operands … cannot
-# be shown not to be git. Refusing to run it"). Before this wrapper, worktree agents could not
-# `git add` or `git commit` at all; they called /usr/bin/git to get past rtk, or stopped with their
-# work staged. Every other rewrite (ls, grep, …) is still applied in a worktree: the guard only
-# reads git.
+# can see that the command targets the agent's own worktree. rtk is a launcher the guard cannot read,
+# so any rtk command that names git is refused: `rtk git status` ("this command runs rtk with a git
+# command among its operands … cannot be shown not to be git"), and just as much `rtk grep -n '"git"'
+# src` ("this command feeds rtk text naming git … cannot be shown to stay inside the worktree").
+# Before this wrapper, worktree agents could not `git add` or `git commit` at all; they called
+# /usr/bin/git to get past rtk, or stopped with their work staged. A rewrite that does not name git
+# (ls, grep foo, …) is still applied in a worktree: the guard only refuses what names git.
 #
 # .devcontainer/scripts/post-create.sh writes this file and wires it in the committed
 # .claude/settings.json, so every clone gets the same behaviour. It also strips rtk's own hook from
@@ -29,6 +40,9 @@
 # writer with SIGPIPE.
 input="$(cat)"
 [ "${RTK_HOOK_DISABLED:-}" = "1" ] && exit 0
+# Auto mode: leave the command as written (see the header). Matched on the raw JSON, so it needs no
+# jq; inside a JSON string the quotes are escaped (\"), so a command quoting this text cannot match.
+[[ "$input" =~ \"permission_mode\"[[:space:]]*:[[:space:]]*\"auto\" ]] && exit 0
 command -v rtk >/dev/null 2>&1 || exit 0
 
 out="$(printf '%s' "$input" | rtk hook claude)"
@@ -39,10 +53,10 @@ if [ "$rc" -eq 0 ] && [ -n "$out" ] && command -v jq >/dev/null 2>&1; then
   case "$cwd" in
     */.claude/worktrees/*)
       rewritten="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.updatedInput.command // empty' 2>/dev/null)"
-      # `rtk git …` anywhere in the command: at the start, after `&&`/`;`/`|`/`(`, or behind
-      # `rtk bypass` (1.0's name) or `rtk proxy` (its alias). Dropping the whole rewrite keeps
-      # the command exactly as the model wrote it.
-      if [[ "$rewritten" =~ (^|[^[:alnum:]_./-])rtk([[:space:]]+(bypass|proxy))?[[:space:]]+git([[:space:]]|$) ]]; then
+      # `git` as a word anywhere: `rtk git …` in any segment or behind `rtk proxy`, and git as text
+      # rtk is handed (`rtk grep '"git"'`, `.git/`). Over-matching only costs the compression;
+      # dropping the whole rewrite keeps the command exactly as the model wrote it.
+      if [[ "$rewritten" =~ (^|[^[:alnum:]_])git([^[:alnum:]_]|$) ]]; then
         exit 0
       fi
       ;;

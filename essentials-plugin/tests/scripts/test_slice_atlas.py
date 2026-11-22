@@ -31,15 +31,18 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 SCRIPTS = PLUGIN / "scripts"
@@ -495,6 +498,31 @@ class Page(unittest.TestCase):
         self.assertEqual(r.returncode, 3)
         self.assertFalse(out.exists())
 
+    def test_data_carrying_the_lens_placeholder_stays_data(self):
+        # The data goes in after the lenses, so a project's own text that happens to hold the lens
+        # placeholder is not expanded into lens code inside the JSON.
+        root = self.tmp / "p"
+        (root / "a" / "views" / "v").mkdir(parents=True)
+        (root / "a" / "views" / "v" / "slice.yaml").write_text(
+            'slice: a.v\nkind: view\nbc: a\nsummary: "see /* __ATLAS_LENSES__ */ here"\n', encoding="utf-8")
+        (self.tpl.parent / "lens-1-atlas.js").write_text("one();\n", encoding="utf-8")
+        r, out = self.atlas(root)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        page = out.read_text(encoding="utf-8")
+        self.assertEqual(page_data(page)["slices"][0]["summary"], "see /* __ATLAS_LENSES__ */ here")
+        self.assertEqual(page.count("/* ---- lens-1-atlas.js ---- */"), 1)
+
+    def test_a_lens_carrying_the_data_placeholder_is_refused(self):
+        root = self.tmp / "p"
+        (root / "a" / "views" / "v").mkdir(parents=True)
+        (root / "a" / "views" / "v" / "slice.yaml").write_text("slice: a.v\nkind: view\nbc: a\n", encoding="utf-8")
+        (self.tpl.parent / "lens-1-atlas.js").write_text(
+            "// const ATLAS = /* __ATLAS_DATA__ */ null;\n", encoding="utf-8")
+        r, out = self.atlas(root)
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("data placeholder", r.stderr)
+        self.assertFalse(out.exists())
+
 
 class Diff(unittest.TestCase):
     """--before-ref against a throwaway repository holding the fixture, then a scripted change."""
@@ -933,6 +961,83 @@ class Applications(unittest.TestCase):
         self.assertEqual(ci["beta"]["before"]["sha"], "base")
         self.assertIsNone(ci["gamma"])  # no baseline file for it
         self.assertIn("diff vs before-map (base)", r.stdout)
+
+
+def tar_of(*members):
+    """An in-memory tar holding (name, kind, linkname) members; kind is file, dir, sym, link or fifo."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for name, kind, link in members:
+            info = tarfile.TarInfo(name)
+            body = b""
+            if kind == "file":
+                body = b"x"
+                info.size = 1
+                info.mode = 0o4777
+            else:
+                info.type = {"dir": tarfile.DIRTYPE, "sym": tarfile.SYMTYPE, "link": tarfile.LNKTYPE,
+                             "fifo": tarfile.FIFOTYPE}[kind]
+                info.linkname = link or ""
+            tar.addfile(info, io.BytesIO(body) if body else None)
+    buf.seek(0)
+    return tarfile.open(fileobj=buf)
+
+
+class Extract(unittest.TestCase):
+    """extract_ref's unpacking on an interpreter without the PEP 706 filters (Python < 3.11.4), and its
+    git timeouts."""
+
+    SAFE = (("app", "dir", None), ("app/a.txt", "file", None), ("app/b", "sym", "a.txt"))
+    UNSAFE = ((("../evil", "file", None),), (("app/x", "sym", "/etc/passwd"),),
+              (("app/x", "sym", "../../outside"),), (("app/f", "fifo", None),))
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def extract(self, members, has_filter):
+        dest = self.tmp / f"d{len(list(self.tmp.iterdir()))}"
+        with mock.patch.object(slice_atlas, "HAS_DATA_FILTER", has_filter), tar_of(*members) as tar:
+            slice_atlas.safe_extract(tar, dest)
+        return dest
+
+    def test_fallback_extracts_files_dirs_and_inner_symlinks(self):
+        dest = self.extract(self.SAFE, False)
+        self.assertEqual((dest / "app" / "a.txt").read_bytes(), b"x")
+        self.assertEqual(os.readlink(dest / "app" / "b"), "a.txt")
+        self.assertFalse((dest / "app" / "a.txt").stat().st_mode & 0o7022)  # setuid and o+w dropped
+
+    def test_fallback_refuses_what_the_data_filter_refuses(self):
+        for members in self.UNSAFE:
+            with self.subTest(members=members):
+                with self.assertRaises(tarfile.TarError):
+                    self.extract(members, False)
+        self.assertFalse((self.tmp / "evil").exists())
+        # Stricter than the filter, which strips a leading slash and allows an inner hard link: git
+        # archive writes neither, so either one means the archive did not come from git.
+        for members in ((("/abs", "file", None),), (("app/a", "file", None), ("app/h", "link", "app/a"))):
+            with self.subTest(members=members):
+                with self.assertRaises(tarfile.TarError):
+                    self.extract(members, False)
+
+    @unittest.skipUnless(hasattr(tarfile, "data_filter"), "interpreter has no tarfile data filter")
+    def test_data_filter_refuses_the_same(self):
+        for members in self.UNSAFE:
+            with self.subTest(members=members):
+                with self.assertRaises(tarfile.TarError):
+                    self.extract(members, True)
+
+    def test_a_git_timeout_is_a_value_error(self):
+        def stuck(argv, **kwargs):
+            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout", 0))
+        with mock.patch.object(slice_atlas.subprocess, "run", side_effect=stuck):
+            with self.assertRaises(ValueError) as cm:
+                slice_atlas.extract_ref(self.tmp, "HEAD", self.tmp / "tree")
+        self.assertIn("no answer after 300 s", str(cm.exception))
+        self.assertIn("--before-map", str(cm.exception))
 
 
 def slice_index():

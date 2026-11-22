@@ -221,6 +221,30 @@ public class OrderedMessage extends Message {
         return order;
     }
 
+    /**
+     * Create a copy of this message that carries a different payload and keeps this message's
+     * {@link #getKey() key}, {@link #getOrder() order} and {@link MessageMetaData}.
+     *
+     * @param payload the new payload
+     * @return a new {@link OrderedMessage}
+     */
+    @Override
+    public OrderedMessage withPayload(Object payload) {
+        return new OrderedMessage(payload, key, order, getMetaData());
+    }
+
+    /**
+     * Create a copy of this message that carries a different {@link MessageMetaData} and keeps this message's
+     * payload, {@link #getKey() key} and {@link #getOrder() order}.
+     *
+     * @param metaData the new {@link MessageMetaData}
+     * @return a new {@link OrderedMessage}
+     */
+    @Override
+    public OrderedMessage withMetaData(MessageMetaData metaData) {
+        return new OrderedMessage(getPayload(), key, order, metaData);
+    }
+
     @Override
     public String toString() {
         return "OrderedMessage{" +

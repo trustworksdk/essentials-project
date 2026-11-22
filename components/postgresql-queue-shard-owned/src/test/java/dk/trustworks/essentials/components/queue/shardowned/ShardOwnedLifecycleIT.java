@@ -70,6 +70,14 @@ class ShardOwnedLifecycleIT {
      */
     private static final Duration HUNG_FLUSH_BOUND = Duration.ofSeconds(30);
 
+    /**
+     * How long a test's {@code finally} waits for the hand-backs of its queue's stops to finish before it leaves
+     * ({@link #stopAndLetItsHandBacksFinish}). Each is bounded by {@link ShardOwnedQueue#SHUTDOWN_BUDGET} plus the network
+     * bound on its waits for the database (2 s at these tests' 1 s {@code leaseTtl}) once its hold is let go; 10 s leaves
+     * margin on a loaded build.
+     */
+    private static final Duration HAND_BACK_SETTLE = Duration.ofSeconds(10);
+
     @Container
     static PostgreSQLContainer postgres = LabPostgres.create();
 
@@ -613,7 +621,7 @@ class ShardOwnedLifecycleIT {
                 release.countDown();
                 holding.letConnect();
                 holding.letAcknowledge();
-                queue.stop();
+                stopAndLetItsHandBacksFinish(queue);
             }
         }
     }
@@ -696,7 +704,7 @@ class ShardOwnedLifecycleIT {
                 release.countDown();
                 holding.letConnect();
                 holding.letAcknowledge();
-                queue.stop();
+                stopAndLetItsHandBacksFinish(queue);
             }
         }
     }
@@ -789,7 +797,7 @@ class ShardOwnedLifecycleIT {
                 holding.letAcknowledge();
                 Awaitility.await().atMost(Duration.ofSeconds(10))
                           .untilAsserted(() -> assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread has finished").isFalse());
-                assertTheLateStopFlushReportsTheUnitGivenUpAndNoLostLease(queue, logged, ownerLogged, kept.shard());
+                assertTheLateStopFlushReportsTheUnitGivenUpAndNoLostLease(queue, instanceId, logged, ownerLogged, kept.shard());
                 assertThat(ownerOf("ordered", kept.shard())).as("the late flush leaves the released row released").isNull();
                 assertThat(fenceOf("ordered", kept.shard())).as("under the fence it was kept under").isEqualTo(kept.fence());
                 assertThat(instanceRegistered(instanceId)).as("and does not deregister the instance its stop kept a unit for").isTrue();
@@ -797,7 +805,7 @@ class ShardOwnedLifecycleIT {
                 release.countDown();
                 holding.letConnect();
                 holding.letAcknowledge();
-                queue.stop();
+                stopAndLetItsHandBacksFinish(queue);
             }
         } finally {
             queueLogger.detachAppender(logged);
@@ -811,20 +819,52 @@ class ShardOwnedLifecycleIT {
      * the unit on request no longer applies - but one INFO that it finished only after this queue had stopped waiting for
      * the unit, and no refused acknowledgement of the unit counted or logged as a lost lease.
      */
-    private static void assertTheLateStopFlushReportsTheUnitGivenUpAndNoLostLease(ShardOwnedQueue queue, ListAppender<ILoggingEvent> queueLogged,
+    private static void assertTheLateStopFlushReportsTheUnitGivenUpAndNoLostLease(ShardOwnedQueue queue, String instanceId,
+                                                                               ListAppender<ILoggingEvent> queueLogged,
                                                                                ListAppender<ILoggingEvent> ownerLogged, int unit) {
-        assertThat(queueLogged.list).extracting(ILoggingEvent::getFormattedMessage)
-                                    .as("the late flush does not say it is keeping the unit given up meanwhile")
-                                    .noneMatch(message -> message.contains("is keeping"));
-        assertThat(queueLogged.list).filteredOn(event -> event.getLevel() == ch.qos.logback.classic.Level.INFO)
-                                    .extracting(ILoggingEvent::getFormattedMessage)
-                                    .filteredOn(message -> message.contains("only after this queue had stopped waiting for them")
-                                            && message.contains("[" + unit + "]"))
-                                    .as("it says, at INFO, that it finished only after the unit was given up").hasSize(1);
+        // Only this test's instance: the appender sits on the class logger, so it also hears any other queue in this JVM.
+        var ownMessages = queueLogged.list.stream().filter(event -> isAbout(event, instanceId)).toList();
+        assertThat(ownMessages).extracting(ILoggingEvent::getFormattedMessage)
+                               .as("the late flush does not say it is keeping the unit given up meanwhile")
+                               .noneMatch(message -> message.contains("is keeping"));
+        assertThat(ownMessages).filteredOn(event -> event.getLevel() == ch.qos.logback.classic.Level.INFO)
+                               .extracting(ILoggingEvent::getFormattedMessage)
+                               .filteredOn(message -> message.contains("only after this queue had stopped waiting for them")
+                                       && message.contains("[" + unit + "]"))
+                               .as("it says, at INFO, that it finished only after the unit was given up").hasSize(1);
         assertThat(queue.metrics().fencedOutAcks.sum()).as("no acknowledgement counted as fenced out").isZero();
         assertThat(ownerLogged.list).extracting(ILoggingEvent::getFormattedMessage)
                                     .as("nor logged as a lost lease")
                                     .noneMatch(message -> message.contains("lease lost"));
+    }
+
+    /**
+     * Whether {@code event} is about the queue of {@code instanceId}: {@link ShardOwnedQueue} starts each message about one
+     * of its instances with {@code "Instance <id> "}. The trailing space matters, since some of this class's ids are
+     * prefixes of others ({@code kept-behind-a-hung-stop-flush} and {@code kept-behind-a-hung-stop-flush-restarted}).
+     */
+    private static boolean isAbout(ILoggingEvent event, String instanceId) {
+        return event.getFormattedMessage().startsWith("Instance " + instanceId + " ");
+    }
+
+    /**
+     * Stops {@code queue} and then waits, for at most {@link #HAND_BACK_SETTLE}, until no hand-back of its stops is still
+     * running ({@link ShardOwnedQueue#handBackStillRunning()}) - a budget thread an earlier stop gave up waiting for among
+     * them. Used where a test leaves, in its {@code finally}: a {@code stop()} returns after {@link ShardOwnedQueue#SHUTDOWN_BUDGET}
+     * whether or not those threads have finished, and one still running when {@link #tearDown()} closes the pool fails for
+     * want of a connection and logs about it - "is keeping", "could not hand back" - into the log capture of whichever test
+     * runs next, since every capture here sits on the shared class logger. That made
+     * {@code a_unit_a_stop_kept_whose_flush_never_returns_is_released_on_request_past_the_stuck_handler_timeout} fail on
+     * a WARN of {@code held-up-for-a-stop-flush-handler-returned}. Never throws, so a test's own failure is not masked; a
+     * thread still running past the wait is left to log, and {@link #isAbout} keeps the assertions that read the capture
+     * to their own instance.
+     */
+    private static void stopAndLetItsHandBacksFinish(ShardOwnedQueue queue) throws InterruptedException {
+        queue.stop();
+        var deadline = System.nanoTime() + HAND_BACK_SETTLE.toNanos();
+        while (queue.handBackStillRunning() && System.nanoTime() - deadline < 0) {
+            Thread.sleep(50);
+        }
     }
 
     /**
@@ -896,7 +936,7 @@ class ShardOwnedLifecycleIT {
                 holding.letAcknowledge();
                 Awaitility.await().atMost(Duration.ofSeconds(10))
                           .untilAsserted(() -> assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread has finished").isFalse());
-                assertTheLateStopFlushReportsTheUnitGivenUpAndNoLostLease(queue, logged, ownerLogged, kept.shard());
+                assertTheLateStopFlushReportsTheUnitGivenUpAndNoLostLease(queue, instanceId, logged, ownerLogged, kept.shard());
                 assertThat(ownerOf("ordered", kept.shard())).as("the late thread leaves the unit taken over to the restarted queue").isEqualTo(instanceId);
                 assertThat(fenceOf("ordered", kept.shard())).as("under the fence it took the unit over under").isEqualTo(takenOver);
                 assertThat(unitsOwnedBy("ordered", instanceId)).as("nor releases a row the restarted queue holds").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
@@ -908,7 +948,7 @@ class ShardOwnedLifecycleIT {
                 release.countDown();
                 holding.letConnect();
                 holding.letAcknowledge();
-                queue.stop();
+                stopAndLetItsHandBacksFinish(queue);
             }
         } finally {
             queueLogger.detachAppender(logged);
@@ -1022,7 +1062,7 @@ class ShardOwnedLifecycleIT {
                 holding.letAcknowledge();
                 Awaitility.await().atMost(Duration.ofSeconds(10))
                           .untilAsserted(() -> assertThat(queue.handBackStillRunning()).as("premise: the stop's budget thread has finished").isFalse());
-                assertTheLateStopFlushReportsTheUnitGivenUpAndNoLostLease(queue, logged, ownerLogged, kept.shard());
+                assertTheLateStopFlushReportsTheUnitGivenUpAndNoLostLease(queue, instanceId, logged, ownerLogged, kept.shard());
                 assertThat(ownerOf("ordered", kept.shard())).as("the late thread leaves the unit handed back to the restarted queue").isEqualTo(instanceId);
                 assertThat(fenceOf("ordered", kept.shard())).as("under the fence it took the unit under").isEqualTo(takenAgain);
                 assertThat(unitsOwnedBy("ordered", instanceId)).as("nor releases a row the restarted queue holds").isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
@@ -1034,7 +1074,7 @@ class ShardOwnedLifecycleIT {
                 release.countDown();
                 holding.letConnect();
                 holding.letAcknowledge();
-                queue.stop();
+                stopAndLetItsHandBacksFinish(queue);
             }
         } finally {
             queueLogger.detachAppender(logged);
@@ -1124,7 +1164,7 @@ class ShardOwnedLifecycleIT {
                 release.countDown();
                 holding.letConnect();
                 holding.letAcknowledge();
-                queue.stop();
+                stopAndLetItsHandBacksFinish(queue);
             }
         } finally {
             queueLogger.detachAppender(logged);
@@ -1224,7 +1264,7 @@ class ShardOwnedLifecycleIT {
                 release.countDown();
                 holding.letConnect();
                 holding.letAcknowledge();
-                queue.stop();
+                stopAndLetItsHandBacksFinish(queue);
             }
         } finally {
             queueLogger.detachAppender(logged);
@@ -1303,7 +1343,7 @@ class ShardOwnedLifecycleIT {
                 release.countDown();
                 holding.letConnect();
                 holding.letAcknowledge();
-                queue.stop();
+                stopAndLetItsHandBacksFinish(queue);
             }
         }
     }
@@ -1391,7 +1431,7 @@ class ShardOwnedLifecycleIT {
                 release.countDown();
                 holding.letConnect();
                 holding.letAcknowledge();
-                queue.stop();
+                stopAndLetItsHandBacksFinish(queue);
             }
         }
     }
@@ -1504,7 +1544,7 @@ class ShardOwnedLifecycleIT {
                 stopHolding.letAcknowledge();
                 request.letConnect();
                 request.letAcknowledge();
-                queue.stop();
+                stopAndLetItsHandBacksFinish(queue);
             }
         }
     }
@@ -1636,8 +1676,8 @@ class ShardOwnedLifecycleIT {
                 stopHolding.letAcknowledge();
                 request.letConnect();
                 request.letAcknowledge();
-                unordered.stop();
-                ordered.stop();
+                stopAndLetItsHandBacksFinish(unordered);
+                stopAndLetItsHandBacksFinish(ordered);
             }
         }
     }

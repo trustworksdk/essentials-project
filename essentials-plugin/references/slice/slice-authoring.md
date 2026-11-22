@@ -55,8 +55,9 @@ supported shape.
 
 ## 2. Project resolution
 
-1. **Project root** — the directory holding `pom.xml` (or `backend/pom.xml` in the two-module
-   layout `/essentials:init` produces).
+1. **Project root and build file** — the directory holding `pom.xml` (or `backend/pom.xml` in the
+   two-module layout `/essentials:init` produces). That file, or a `build.gradle.kts`, is the build file
+   `render-slice.py requires --build` reads.
 2. **Confirm it is an Essentials project** — `dk.trustworks.essentials` appears in the build file.
    If not, stop and point the user at `/essentials:init`.
 3. **Source root** — `<module>/src/main/kotlin` or `<module>/src/main/java`; test root is the
@@ -251,6 +252,17 @@ ask which. Exit 2 means stack-lint could not run (no `pom.xml`, no Essentials de
 report that the registration was **not checked**, never that it is fine. A Kotlin `@JvmInline value
 class` id needs neither the module nor the import, so a Kotlin slice whose edge takes only value classes
 skips this step.
+
+## 4d. A Kotlin value class in a handler signature needs an explicit operationId
+
+Trap ESS-113. Kotlin mangles the JVM name of a handler that takes a value class as a parameter (nullable
+or `suspend` included) or returns one (`placeOrder-40lU5Lw`); springdoc uses that name as the
+`operationId`, and the generated frontend client inherits it. A value class only inside a generic
+(`List<OrderId>`) or a DTO does not mangle. Give exactly the mangling handlers
+`@Operation(operationId = "…")` (`io.swagger.v3.oas.annotations.Operation`), named after the slice so it
+stays stable and unique — each kind skill names the value to use; `@JvmName` is not an option on
+Spring's open methods. See `references/llm/LLM-types-spring-web.md` § Kotlin handler methods: set the
+operationId. The kind skill also says which of its templates already ships one.
 
 ## 5. How slice templates differ from the project template
 

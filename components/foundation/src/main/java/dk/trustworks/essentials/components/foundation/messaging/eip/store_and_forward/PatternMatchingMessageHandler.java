@@ -31,6 +31,7 @@ import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
+import static dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChain.sortInterceptorsByOrder;
 import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newInterceptorChainForOperation;
 
 /**
@@ -92,7 +93,7 @@ public class PatternMatchingMessageHandler implements Consumer<Message> {
      */
     public PatternMatchingMessageHandler(Object invokeMessageHandlerMethodsOn, List<MessageHandlerInterceptor> interceptors) {
         this.invokeMessageHandlerMethodsOn = requireNonNull(invokeMessageHandlerMethodsOn, "No invokeMessageHandlerMethodsOn provided");
-        this.interceptors = new CopyOnWriteArrayList<>(requireNonNull(interceptors, "No interceptors provided"));
+        this.interceptors = sortInterceptorsByOrder(new CopyOnWriteArrayList<>(requireNonNull(interceptors, "No interceptors provided")));
         invoker = createMethodInvoker();
     }
 
@@ -110,7 +111,7 @@ public class PatternMatchingMessageHandler implements Consumer<Message> {
      */
     public PatternMatchingMessageHandler(List<MessageHandlerInterceptor> interceptors) {
         this.invokeMessageHandlerMethodsOn = this;
-        this.interceptors = new CopyOnWriteArrayList<>(requireNonNull(interceptors, "No interceptors provided"));
+        this.interceptors = sortInterceptorsByOrder(new CopyOnWriteArrayList<>(requireNonNull(interceptors, "No interceptors provided")));
         invoker = createMethodInvoker();
     }
 
@@ -154,9 +155,17 @@ public class PatternMatchingMessageHandler implements Consumer<Message> {
         return MessageHandlerMethods.declaresNonTransactionalMessageHandlers(invokeMessageHandlerMethodsOn);
     }
 
+    /**
+     * Add a {@link MessageHandlerInterceptor}. Interceptors run in {@link dk.trustworks.essentials.shared.interceptor.InterceptorOrder}
+     * order (lowest first, 10 when not annotated); interceptors with the same order run in the order they were added.
+     *
+     * @param interceptor the interceptor to add
+     * @return this instance
+     */
     public PatternMatchingMessageHandler addInterceptor(MessageHandlerInterceptor interceptor) {
         requireNonNull(interceptor, "No interceptor provided");
         interceptors.add(interceptor);
+        sortInterceptorsByOrder(interceptors);
         return this;
     }
 
@@ -238,6 +247,35 @@ public class PatternMatchingMessageHandler implements Consumer<Message> {
         return invoker.hasMatchingMethod(payloadType);
     }
 
+    /**
+     * The handler method was resolved from the payload type before the {@link MessageHandlerInterceptor} chain ran,
+     * and is never re-resolved. An interceptor may have replaced the message with
+     * {@link InvokeMessageHandlerMethod#setMessage(Message)}, with a payload of any type, so check that what arrived
+     * still fits the method before invoking it.<br>
+     * A mismatch is deterministic (the same interceptors produce the same type on every redelivery), hence the
+     * {@link ClassCastException}: a durable queue consumer dead-letters it on the first attempt, unless
+     * {@code alwaysRetryOn(ClassCastException.class)} is configured.
+     */
+    private static void requireArgumentsFitTheMethod(Method methodToInvoke, Object payload, Message message) {
+        var parameterTypes = methodToInvoke.getParameterTypes();
+        if (!parameterTypes[0].isInstance(payload)) {
+            throw new ClassCastException(msg("A MessageHandlerInterceptor replaced the message payload with type '{}', but @MessageHandler method '{}' " +
+                                                     "was resolved for, and accepts, payload type '{}'. The handler method is not re-resolved after the interceptors ran: " +
+                                                     "the payload that reaches it must be an instance of '{}'",
+                                             payload == null ? "null" : payload.getClass().getName(),
+                                             methodToInvoke.toGenericString(),
+                                             parameterTypes[0].getName(),
+                                             parameterTypes[0].getName()));
+        }
+        if (parameterTypes.length == 2 && !parameterTypes[1].isInstance(message)) {
+            throw new ClassCastException(msg("A MessageHandlerInterceptor replaced the message with type '{}', but @MessageHandler method '{}' " +
+                                                     "accepts a message of type '{}' as its 2nd argument (use OrderedMessage.withPayload to keep an OrderedMessage ordered)",
+                                             message.getClass().getName(),
+                                             methodToInvoke.toGenericString(),
+                                             parameterTypes[1].getName()));
+        }
+    }
+
     private class MessageHandlerMethodPatternMatcher implements MethodPatternMatcher<Object> {
 
         @Override
@@ -287,19 +325,24 @@ public class PatternMatchingMessageHandler implements Consumer<Message> {
                                                            invokeMethodOn,
                                                            resolvedInvokeMethodWithArgumentOfType);
 
+            // The default behaviour reads the payload and message from the operation, never from the locals above:
+            // an interceptor may have replaced them through InvokeMessageHandlerMethod.setMessage
             InterceptorChain<InvokeMessageHandlerMethod, Void, MessageHandlerInterceptor> operationresultinterceptorTypeInterceptorChain
                     = newInterceptorChainForOperation(operation,
                                                       interceptors,
                                                       (interceptor, interceptorChain) -> {
-                                                          interceptor.intercept(operation, interceptorChain);
+                                                          interceptor.intercept(interceptorChain.operation(), interceptorChain);
                                                           return null;
                                                       },
                                                       () -> {
+                                                          var payloadToHandle = operation.getPayload();
+                                                          var messageToHandle = operation.getMessage();
+                                                          requireArgumentsFitTheMethod(methodToInvoke, payloadToHandle, messageToHandle);
                                                           try {
                                                               if (methodToInvoke.getParameterCount() == 1) {
-                                                                  methodToInvoke.invoke(invokeMethodOn, payload);
+                                                                  methodToInvoke.invoke(invokeMethodOn, payloadToHandle);
                                                               } else {
-                                                                  methodToInvoke.invoke(invokeMethodOn, payload, message);
+                                                                  methodToInvoke.invoke(invokeMethodOn, payloadToHandle, messageToHandle);
                                                               }
                                                               return null;
                                                           } catch (Exception e) {

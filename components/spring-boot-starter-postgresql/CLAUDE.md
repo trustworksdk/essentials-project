@@ -63,6 +63,7 @@ Single package: `dk.trustworks.essentials.components.boot.autoconfigure.postgres
 
 ## Gotchas
 
+- **No optional type in a bean signature.** micrometer-core, micrometer-tracing and spring-boot-health are optional, and Spring reflects on every method of each auto-configuration and bean class: a `MeterRegistry`/`Tracer`/`HealthIndicator` parameter or return type, or an `Optional<MeterRegistry>` parameter, stops an application without that jar from starting. Put such beans in a nested `@ConditionalOnClass(name = …)` configuration; take `BeanFactory` + `OptionalMeterRegistry.from(beanFactory)` where the meter registry is optional. Guarded by `StarterAutoConfigurationIT` (`OptionalLibrariesScenario`, foundation-test `WithoutJarsClassLoader`)
 - **EventStore classpath detection**: `unitOfWorkFactory` and `eventBus` skip themselves if EventStore variants detected via `@ConditionalOnMissingClass`. Mixing starters without the event-store starter → different UoW factory in play.
 - **Security defaults are deny-all**: `NoAccessSecurityProvider` blocks all API calls out of the box. App must supply its own bean.
 - **Table names are SQL-injected via string concat**: `fencedLocksTableName` and `sharedQueueTableName` go directly into SQL. `PostgresqlUtil.checkIsValidTableOrColumnName()` is first-line defense only — caller must sanitize.

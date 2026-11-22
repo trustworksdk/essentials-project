@@ -31,3 +31,7 @@ Another document's sections are not the law's: `slice-model.md` §4.1, change-pr
 the findings in §4 of this guide.
 A wrapped citation of another file stays that file's: see `references/design/essentials-design.md`
 § State-stored entities.
+
+Repository files at their current paths: `docs/releases/RELEASE-NOTES-0.60.0.md`, [the traps](LLM/LLM-traps.md#ess-001),
+and `LLM/LLM.md`. A path in a user's project is theirs: `docs/adr/0001-upgrade.md`, `docs/essentials-backlog.md`.
+A link to a release tag is a URL: https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/RELEASE-NOTES-0.60.0.md.

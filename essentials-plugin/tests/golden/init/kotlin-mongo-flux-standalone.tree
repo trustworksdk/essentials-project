@@ -6,6 +6,12 @@ target/
 *.iml
 .vscode/
 .DS_Store
+*.log
+
+# Local environment files carry credentials; only the committed example is shared
+.env
+.env.*
+!.env.example
 
 # Frontend: dependencies, the Node the build installs, build output, and the generated API client (never committed)
 frontend/node_modules/
@@ -336,6 +342,13 @@ If the plugin isn't installed yet:
     <artifactId>golden</artifactId>
     <name>Golden backend</name>
 
+    <properties>
+        <!-- spring-boot:run starts the application with the `dev` Spring profile, the only one with development
+             fallbacks such as the local database password (application.yml). The packaged application has none,
+             so it never runs on a development credential. -Dspring-boot.run.profiles=... replaces it. -->
+        <spring-boot.run.profiles>dev</spring-boot.run.profiles>
+    </properties>
+
     <dependencies>
         <!-- ===== Web, security, operations ===== -->
         <dependency>
@@ -400,6 +413,10 @@ If the plugin isn't installed yet:
             <artifactId>kotlin-stdlib</artifactId>
         </dependency>
         <dependency>
+            <!-- Not an S2.1 row: no Essentials Mongo module needs it, and the Postgres profiles already
+                 declare it in the S2.1 block above. Spring's own Kotlin support needs it: BeanUtils
+                 resolves a Kotlin class's primary constructor only when KotlinDetector.isKotlinReflectPresent().
+                 jackson-module-kotlin brings it at compile scope today; declared so it does not hang on that. -->
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-reflect</artifactId>
         </dependency>
@@ -660,6 +677,16 @@ class SecurityConfig {
 spring:
   application:
     name: golden
+  # Load-bearing on WebFlux (S5): the Essentials components block (JDBC, a thread-bound UnitOfWork). With this,
+  # Spring Boot runs every controller method that returns a plain value on a virtual thread (its
+  # applicationTaskExecutor) instead of a Netty event-loop thread. Methods returning Mono/Flux and Kotlin suspend
+  # functions still run on the event loop and must move blocking work off it themselves. An Executor bean of the
+  # application's own stops Boot creating applicationTaskExecutor, and the offloading stops with it, silently;
+  # add spring.task.execution.mode: force when you define one (not before: it also makes applicationTaskExecutor
+  # the @Async executor unless you declare an AsyncConfigurer).
+  threads:
+    virtual:
+      enabled: true
   # spring.mongodb.*, never spring.data.mongodb.*: the old keys are unbound in Spring Boot 4 and fall back
   # to mongodb://localhost/test without a warning (S2). Essentials' Mongo transactions need a replica set.
   # Used when no Docker Compose service or test container provides the database; both override it.
@@ -1219,7 +1246,6 @@ export default defineConfig({
         <mongodb.version>5.13.0</mongodb.version>
         <!-- Not managed by Spring Boot: imported as BOMs below. -->
         <jdbi3-bom.version>3.55.0</jdbi3-bom.version>
-        <spring-modulith.version>2.0.7</spring-modulith.version>
         <jqwik.version>1.9.3</jqwik.version>
         <!-- Not managed by Spring Boot either: a plain dependency of the backend (S2.1). -->
         <objenesis.version>3.6</objenesis.version>
@@ -1231,13 +1257,6 @@ export default defineConfig({
                 <groupId>org.jdbi</groupId>
                 <artifactId>jdbi3-bom</artifactId>
                 <version>${jdbi3-bom.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework.modulith</groupId>
-                <artifactId>spring-modulith-bom</artifactId>
-                <version>${spring-modulith.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -1271,6 +1290,6 @@ When using any planner/implementer tooling at this workspace level: either `cd g
 
 For full project context, framework-knowledge auto-loading (the `essentials-docs` skill), conventions, and commands, see **`golden/CLAUDE.md`** — that file is the project-level source of truth.
 === HOOK maven-wrapper (cwd .) ===
-mvn -N -B -q org.apache.maven.plugins:maven-wrapper-plugin:3.3.4:wrapper -Dmaven=3.10.0 -Dtype=only-script
+mvn -N -B -q org.apache.maven.plugins:maven-wrapper-plugin:3.3.4:wrapper -Dmaven=3.10.0 -DdistributionSha256Sum=1f6d9909266510f039f59aa0e13dcd2c66da85f043e56276e41f2918f8bddaff -Dtype=only-script
 === HOOK frontend-lockfile (cwd frontend) ===
 npm install --package-lock-only --no-audit --no-fund

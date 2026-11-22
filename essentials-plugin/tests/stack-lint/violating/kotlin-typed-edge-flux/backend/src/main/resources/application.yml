@@ -8,3 +8,12 @@ springdoc:
   api-docs:
     path: /v3/api-docs
   writer-with-order-by-keys: false
+---
+# Trap: virtual threads enabled for one profile only does not count for the base configuration.
+spring:
+  config:
+    activate:
+      on-profile: loadtest
+  threads:
+    virtual:
+      enabled: true

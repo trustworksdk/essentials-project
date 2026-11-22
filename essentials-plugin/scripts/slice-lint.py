@@ -46,8 +46,9 @@ Exit codes
     1   findings (Blocking or Should-fix — the script never emits Advisory). With
         --baseline, only findings absent from the baseline count
     2   could not run at all — bad arguments, unreadable schema or baseline, no YAML
-        parser — or ran without schema validation (`jsonschema` missing) and found
-        nothing; --allow-skip-schema turns that last case into 0
+        parser — or ran without schema validation (`jsonschema` missing, or older than
+        4.0, which cannot read the schema's JSON Schema 2020-12) and found nothing;
+        --allow-skip-schema turns that last case into 0
 
 Findings win over a skipped validation: a run that found something exits 1 even when the
 schema did not run, so read `schemaValidated` in the JSON rather than inferring it from the
@@ -70,8 +71,10 @@ Dependencies
 `pyyaml` is required for parsing; `jsonschema` is required for schema validation. Both are
 pinned in the inline script metadata above, so `uv run --script slice-lint.py` brings them
 (this works from a project's installed copy too). When
-`jsonschema` is absent the parse gate still runs, the script says loudly that
-validation was skipped, and it exits 2 — silence is never allowed to read as a pass. When `pyyaml` is
+`jsonschema` is absent, or older than 4.0 (Ubuntu 22.04's python3-jsonschema is 3.2, which
+does not know JSON Schema 2020-12 and would quietly validate as Draft 7), the parse gate still
+runs, the script says loudly that validation was skipped and why, and it exits 2 — silence is
+never allowed to read as a pass. A manifest that is not UTF-8 is a gate 1(a) parse finding. When `pyyaml` is
 absent nothing can be parsed, so the script falls back to scanning for the known-lethal
 authoring mistakes it can find with a regex and exits 2.
 
@@ -144,12 +147,40 @@ class Finding:
         return (SEVERITY_ORDER.get(self.severity, 9), str(self.path), self.line or 0)
 
 
+# The one prune rule of every manifest walker. slice-lint.py, slice-index.py, slice-source.py and
+# slice-law.py each carry an identical copy of these constants and pruned_dir() — slice-lint.py is copied
+# into projects on its own, so it cannot import a shared one — and tests/scripts/test_slice_lint.py
+# fails when the four differ. A dot-directory is VCS or IDE state, or a full copy of the project: a
+# Claude Code agent worktree under .claude/worktrees/ holds every slice.yaml a second time, and a walker
+# that descended into it would report each slice as its own duplicate; it is pruned at any depth.
+# BUILD_OUTPUT_DIRS are build and package output, which can hold copied manifests too (IntelliJ's out/
+# copies resources from source roots). No build tool writes into a Java or Kotlin source root, though, and
+# there build, out and dist are ordinary package names (a hexagonal adapters/out, com.example.build):
+# inside src/<set>/java or src/<set>/kotlin those three are walked like any other package. target and
+# node_modules stay pruned there too (tests/slice-source/cases/tests holds a src/test/java/target that
+# the test-source walk must skip, as every other walk does).
+BUILD_OUTPUT_DIRS = frozenset({"target", "build", "out", "dist", "node_modules"})
+PACKAGE_NAMED_LIKE_OUTPUT = frozenset({"build", "out", "dist"})
+SOURCE_LANG_DIRS = frozenset({"java", "kotlin"})
+
+
+def pruned_dir(name: str, parent: tuple[str, ...]) -> bool:
+    """True for a directory no manifest walker descends into: any dot-directory, or build output outside
+    a source root. `parent` is the directory holding `name`, as path parts relative to the walked root."""
+    if name.startswith("."):
+        return True
+    if name not in BUILD_OUTPUT_DIRS:
+        return False
+    in_source_root = any(parent[i] == "src" and parent[i + 2] in SOURCE_LANG_DIRS for i in range(len(parent) - 2))
+    return not (in_source_root and name in PACKAGE_NAMED_LIKE_OUTPUT)
+
+
 def find_manifests(root: Path):
-    """Every slice.yaml under root, skipping the usual build and VCS noise."""
-    skip = {".git", "target", "build", "out", "node_modules", ".idea", ".gradle", "dist"}
+    """Every slice.yaml under root, skipping VCS, IDE and agent-worktree state and build output."""
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in skip]
+        parent = Path(dirpath).relative_to(root).parts
+        dirnames[:] = [d for d in dirnames if not pruned_dir(d, parent)]
         if "slice.yaml" in filenames:
             found.append(Path(dirpath) / "slice.yaml")
     return sorted(found)
@@ -158,6 +189,11 @@ def find_manifests(root: Path):
 def scan_unquoted_paths(text: str):
     """Line numbers carrying an unquoted path with a brace. Works without a YAML parser."""
     return [i for i, line in enumerate(text.splitlines(), 1) if UNQUOTED_BRACED_PATH.match(line)]
+
+
+def not_utf8(exc: UnicodeDecodeError) -> str:
+    """Where a file stops being UTF-8, in terms a reader can find: `byte 0xE6 at offset 41`."""
+    return f"byte 0x{exc.object[exc.start]:02X} at offset {exc.start}"
 
 
 def parse_manifests(manifests, findings):
@@ -170,6 +206,17 @@ def parse_manifests(manifests, findings):
             text = path.read_text(encoding="utf-8")
         except OSError as exc:
             findings.append(Finding("Blocking", "1(a) parse", path, f"unreadable: {exc}"))
+            continue
+        except UnicodeDecodeError as exc:
+            findings.append(
+                Finding(
+                    "Blocking",
+                    "1(a) parse",
+                    path,
+                    f"not UTF-8 text ({not_utf8(exc)}) — this slice is invisible to every manifest reader",
+                    hint="re-save the file as UTF-8",
+                )
+            )
             continue
 
         try:
@@ -253,8 +300,42 @@ def unknown_keys(error, schema):
     return [(location, None)]
 
 
+# JSON Schema 2020-12, which the schema is written in, arrived in jsonschema 4.0. An older copy (3.2 is
+# what Ubuntu 22.04's python3-jsonschema installs, and the pre-commit hook falls back to plain python3)
+# does not know the draft and silently validates with Draft 7 instead, which changes the findings.
+JSONSCHEMA_FLOOR = "4.0"
+
+
+def schema_validator(schema):
+    """(validator class, None) when the installed jsonschema can validate `schema` in its own draft,
+    else (None, why it cannot) — never a validator for some other draft."""
+    try:
+        from jsonschema import validators
+    except ImportError:
+        return None, "`jsonschema` is not installed"
+    try:
+        from importlib.metadata import version
+
+        installed = version("jsonschema")
+    except Exception:  # metadata absent or unreadable: the version only words the message
+        installed = "unknown version"
+    too_old = (f"the installed `jsonschema` ({installed}) is too old — the schema is JSON Schema 2020-12, "
+               f"which needs jsonschema {JSONSCHEMA_FLOOR} or newer")
+    if not hasattr(validators, "Draft202012Validator"):
+        return None, too_old
+    try:
+        # default=None is accepted at runtime (it is returned for an unknown $schema); the stubs type it narrower
+        validator_cls = validators.validator_for(schema, default=None)  # pyright: ignore[reportArgumentType]
+    except TypeError:  # a validator_for without `default`
+        return None, too_old
+    if validator_cls is None:
+        return None, f"the installed `jsonschema` ({installed}) does not know the schema's $schema " \
+                     f"{schema.get('$schema')!r}"
+    return validator_cls, None
+
+
 def validate_schema(parsed, schema, findings, notes):
-    """Gate 1(b). Returns True if validation actually ran.
+    """Gate 1(b). Returns None if validation actually ran, else why it could not.
 
     A key the schema does not define is rejected on a manifest stamped at or below the copy's
     `x-manifestVersion`, and only noted on one stamped with a newer 1.x — that manifest was written
@@ -262,12 +343,10 @@ def validate_schema(parsed, schema, findings, notes):
     stamp too (the projection near-synonyms); a copy whose gate has no `then` tolerates them as well.
     `x-` keys are extension keys and pass everywhere. The gate lives in the schema, so any validator
     agrees; this function only words it."""
-    try:
-        from jsonschema import validators
-    except ImportError:
-        return False
+    validator_cls, skipped = schema_validator(schema)
+    if validator_cls is None:
+        return skipped
 
-    validator_cls = validators.validator_for(schema)
     validator_cls.check_schema(schema)
     validator = validator_cls(schema)
     gate = version_gate(schema)
@@ -316,7 +395,7 @@ def validate_schema(parsed, schema, findings, notes):
                     )
                 else:
                     findings.append(unknown_key_finding(path, location, key, error))
-    return True
+    return None
 
 
 def unknown_key_finding(path, location, key, error):
@@ -553,7 +632,7 @@ def tier_checks(parsed, findings):
                 if re.match(r"^tier:\s*[\"']?" + re.escape(tier) + r"\b", text):
                     line = i
                     break
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             pass
         findings.append(
             Finding(
@@ -803,7 +882,7 @@ def scenario_checks(parsed, findings):
             continue
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             lines = []
         counts = {}
         for scenario in scenarios:
@@ -851,14 +930,17 @@ def load_baseline(path: Path):
     return {baseline_key(f, root) for f in doc["findings"] if isinstance(f, dict)}
 
 
-SKIPPED_BANNER = (
-    "SCHEMA VALIDATION SKIPPED — `jsonschema` is not installed, so only the parse "
-    "gate ran. This is NOT a clean bill of health, and exits 2 unless --allow-skip-schema.\n"
-    "  uv run --script slice-lint.py …   (or: pip install jsonschema)"
-)
+def skipped_banner(why):
+    """The loud line a run without schema validation prints; `why` is schema_validator()'s reason."""
+    return (
+        f"SCHEMA VALIDATION SKIPPED — {why}, so only the parse "
+        "gate ran. This is NOT a clean bill of health, and exits 2 unless --allow-skip-schema.\n"
+        f"  uv run --script slice-lint.py …   (or: pip install 'jsonschema>={JSONSCHEMA_FLOOR}')"
+    )
 
 
-def report(findings, manifests, parsed, schema_ran, quiet, suppressed=None, notes=()):
+def report(findings, manifests, parsed, skipped, quiet, suppressed=None, notes=()):
+    schema_ran = skipped is None
     out = sys.stdout
     findings.sort(key=Finding.sort_key)
 
@@ -895,7 +977,7 @@ def report(findings, manifests, parsed, schema_ran, quiet, suppressed=None, note
         if not findings and schema_ran and suppressed is None:
             print("Every manifest parses and validates.", file=out)
     if not schema_ran:
-        print(SKIPPED_BANNER, file=sys.stderr if quiet else out)
+        print(skipped_banner(skipped), file=sys.stderr if quiet else out)
 
 
 def main(argv=None):
@@ -974,7 +1056,7 @@ def main(argv=None):
         for path in manifests:
             try:
                 text = path.read_text(encoding="utf-8")
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
             for line in scan_unquoted_paths(text):
                 hits += 1
@@ -986,7 +1068,8 @@ def main(argv=None):
     findings = []
     parsed = parse_manifests(manifests, findings)
     notes = []
-    schema_ran = validate_schema(parsed, schema, findings, notes)
+    skipped = validate_schema(parsed, schema, findings, notes)
+    schema_ran = skipped is None
     stream_vs_event_checks(parsed, findings)
     scenario_checks(parsed, findings)
     cross_manifest_checks(parsed, findings)
@@ -1012,9 +1095,9 @@ def main(argv=None):
         json.dump(doc, sys.stdout, indent=2)
         sys.stdout.write("\n")
         if not schema_ran:
-            print(SKIPPED_BANNER, file=sys.stderr)
+            print(skipped_banner(skipped), file=sys.stderr)
     else:
-        report(findings, manifests, parsed, schema_ran, args.quiet, suppressed, notes)
+        report(findings, manifests, parsed, skipped, args.quiet, suppressed, notes)
 
     # Findings first: a skipped validation never hides one. Otherwise a run that could not validate
     # is not a pass, and says so with 2 — the code a hook or CI already treats as "did not run".

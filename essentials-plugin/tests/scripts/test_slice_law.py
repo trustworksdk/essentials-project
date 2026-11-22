@@ -111,6 +111,27 @@ class SliceLaw(unittest.TestCase):
             code, out, _ = run("--project", tmp)
             self.assertIn("lane=decider,aggregate,service-entity ", out.split("\n", 1)[0])
 
+    def test_lanes_ignore_an_agent_worktree_and_build_output(self):
+        # A copy of the project on another lane, under .claude/worktrees/ or target/, is not this project's
+        # lane; a bounded context under a package named out (hexagonal adapters/out) is.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for rel in ("src/main/kotlin/com/example/orders/use_cases",
+                        ".claude/worktrees/x/src/main/kotlin/com/example/orders/use_cases",
+                        ".claude/worktrees/x/src/main/kotlin/com/example/orders/aggregates",
+                        "target/classes/com/example/orders/use_cases",
+                        "target/classes/com/example/orders/entities"):
+                (root / rel).mkdir(parents=True)
+            code, out, err = run("--project", tmp)
+            self.assertEqual(code, 0, err)
+            self.assertIn("lane=decider ", out.split("\n", 1)[0])
+            for rel in ("src/main/kotlin/com/example/adapters/out/billing/views",
+                        "src/main/kotlin/com/example/adapters/out/billing/aggregates"):
+                (root / rel).mkdir(parents=True)
+            code, out, err = run("--project", tmp)
+            self.assertEqual(code, 0, err)
+            self.assertIn("lane=decider,aggregate ", out.split("\n", 1)[0])
+
     def test_section_by_short_name_brings_its_subsections(self):
         code, out, _ = run("--section", "Spring Data repository surface")
         self.assertEqual(code, 0)
