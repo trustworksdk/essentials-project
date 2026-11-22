@@ -235,7 +235,11 @@ doubling backoff (`retryBackoffInitial` to `retryBackoffMax`), never shrinking o
 shrinks the page (`StepDown`: halve, keep the size inside the suspect range), retries the failing event alone
 `retryAttempts` times, then **parks** it in `el_parked_events`; `ParkEventException` parks at once (I14). What the handler throws on a live page connection is a handler failure even
 when it is I/O-classified (SQLState `08*` or `SQLTransientConnectionException` in the cause chain): before 0.61.0
-shipped such a failure was retried forever and stalled the subscription (mutant `HANDLER_IO_RETRIED_FOREVER`). A parked
+shipped such a failure was retried forever and stalled the subscription (mutant `HANDLER_IO_RETRIED_FOREVER`). An
+`Error` from the handler is a handler failure too (`AssertionError`, `StackOverflowError`), except the ones that say
+nothing about the event: `OutOfMemoryError`, `InternalError`, `UnknownError` and `LinkageError` (a broken deployment),
+also anywhere in the cause chain, are engine failures, retried with the backoff and never parked, so a sick JVM does not
+park healthy events (`Subscription.isEngineFailure`, `SubscriptionFailureClassificationTest`). A parked
 event holds its aggregate: later events of that aggregate are parked `blocked_by` it (`ParkedEvents`), and the rest of
 the stream continues. Retry and discard requests are served by the subscription's own thread between pages.
 
