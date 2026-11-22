@@ -217,6 +217,36 @@ final class ParkedEvents {
         }
     }
 
+    /**
+     * In the serve transaction: the rows of {@code handled} are gone, and {@code newHead}, a row held behind
+     * {@code oldHead}, heads the aggregate from now on, with every row still held behind {@code oldHead} held behind it.
+     * The in-memory hold follows ({@link #release}, {@link #hold}) only once the caller commits.
+     *
+     * @param failure      the error {@code newHead} failed with (one attempt counted), or {@code null} if it has not run
+     * @param requestRetry {@code true} to leave a retry request on the new head, so the next parked check serves it
+     */
+    void rehead(Connection connection, long oldHead, List<Long> handled, long newHead, Throwable failure, boolean requestRetry) throws SQLException {
+        if (!handled.isEmpty()) {
+            delete(connection, handled);
+        }
+        try (var statement = connection.prepareStatement(EventLogStorage.PARKED_NEW_HEAD)) {
+            statement.setInt(1, failure == null ? 0 : 1);
+            statement.setString(2, failure == null ? null : failure.getClass().getName());
+            statement.setString(3, failure == null ? null : failure.getMessage());
+            statement.setString(4, requestRetry ? "RETRY" : null);
+            statement.setString(5, requestRetry ? "RETRY" : null);
+            var p = bindKey(statement, 6);
+            statement.setLong(p, newHead);
+            statement.executeUpdate();
+        }
+        try (var statement = connection.prepareStatement(EventLogStorage.PARKED_REPOINT)) {
+            statement.setLong(1, newHead);
+            var p = bindKey(statement, 2);
+            statement.setLong(p, oldHead);
+            statement.executeUpdate();
+        }
+    }
+
     /** A retry of {@code head}'s aggregate failed: one more attempt on the head's row, autocommit */
     void failedAgain(long head, Throwable error) throws SQLException {
         try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement(EventLogStorage.PARKED_FAILED_AGAIN)) {

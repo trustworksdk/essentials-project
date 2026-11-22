@@ -257,7 +257,14 @@ nothing about the event: `OutOfMemoryError`, `InternalError`, `UnknownError` and
 also anywhere in the cause chain, are engine failures, retried with the backoff and never parked, so a sick JVM does not
 park healthy events (`Subscription.isEngineFailure`, `SubscriptionFailureClassificationTest`). A parked
 event holds its aggregate: later events of that aggregate are parked `blocked_by` it (`ParkedEvents`), and the rest of
-the stream continues. Retry and discard requests are served by the subscription's own thread between pages.
+the stream continues. Retry and discard requests are served by the subscription's own thread between pages. A serve
+hands the head (on a retry) and the held events to the handler one by one, at most `ErrorSettings.pageSize` per
+transaction; the next unhandled event then becomes the head with a `RETRY` request of its own, so a long-held backlog
+never runs in one transaction and a crash between serves loses nothing (`ParkedEvents.rehead`). A held event that fails
+(or throws `ParkEventException`) becomes the head with one attempt counted, after the events before it are applied
+(in-transaction: in a second transaction, the first having rolled back), and the events after it wait behind it. Before
+0.61.0 shipped, one failing held event failed every retry and every discard of its head, and the aggregate could never
+be released.
 
 ### 5.6 Leases and ownership
 

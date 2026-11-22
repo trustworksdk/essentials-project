@@ -2266,6 +2266,7 @@ final class Subscription {
             return releaseParkedPeriodic(head, discard);
         }
         PageTransactionSource.OpenPage open = null;
+        Long newHead = null;
         try {
             open = pageSource.begin();
             var connection = open.connection();
@@ -2301,11 +2302,56 @@ final class Subscription {
                 }
             }
             var toHandle = discard ? events.stream().filter(event -> event.globalOrder() != head).toList() : events;
-            if (!toHandle.isEmpty()) {
-                pageHandler.handle(toHandle, handlerTransaction(open));
-                failIfRollbackOnly(open);
+            // At most one page per serve: the rest waits behind the next unhandled event, made the head with a retry request
+            var page = toHandle.size() > errors.pageSize() ? toHandle.subList(0, errors.pageSize()) : toHandle;
+            var failedAt = -1;
+            Exception failure = null;
+            for (var i = 0; i < page.size(); i++) {
+                try {
+                    pageHandler.handle(List.of(page.get(i)), handlerTransaction(open));
+                    failIfRollbackOnly(open);
+                } catch (Exception e) {
+                    var heldConnection = connection;
+                    if (page.get(i).globalOrder() == head || e instanceof InterruptedException || e instanceof LeaseLostException || isEngineFailure(true, e, () -> invalid(heldConnection), seams)) {
+                        throw e;
+                    }
+                    failedAt = i;
+                    failure = e;
+                    break;
+                }
             }
-            parked.delete(connection, orders);
+            if (failedAt >= 0) {
+                // A held event failed: the events before it are applied in a new transaction, and it becomes the head
+                var failed = open;
+                open = null;
+                rollback(failed);
+                reportError(failure);
+                var promoted = page.get(failedAt).globalOrder();
+                log.warn("Subscription {} on {}: the event at global_order {} held behind the parked head {} failed on its {}; it is parked as the aggregate's head",
+                         key.subscriber(), key.aggregateType(), promoted, head, discard ? "discard" : "retry", failure);
+                open = pageSource.begin();
+                connection = open.connection();
+                boundByLease(connection);
+                if (!lockProgressGuarded(connection) || !new HashSet<>(parked.lock(connection, head)).equals(new HashSet<>(orders))) {
+                    var ending = open;
+                    open = null;
+                    rollback(ending);
+                    onProgressConflict();
+                    return false;
+                }
+                var prefix = page.subList(0, failedAt);
+                if (!prefix.isEmpty()) {
+                    pageHandler.handle(prefix, handlerTransaction(open));
+                    failIfRollbackOnly(open);
+                }
+                parked.rehead(connection, head, handledOrders(head, prefix), promoted, failure, false);
+                newHead = promoted;
+            } else if (page.size() < toHandle.size()) {
+                newHead = toHandle.get(page.size()).globalOrder();
+                parked.rehead(connection, head, handledOrders(head, page), newHead, null, true);
+            } else {
+                parked.delete(connection, orders);
+            }
             var expected = model == ProgressModel.PERIODIC || seams.has(PROGRESS_WITHOUT_EXPECTED_RESUME) ? null : (Long) lastSaved;
             if (!ProgressStore.saveInTransaction(connection, key, lastSaved, seams.has(SERVE_WITHOUT_EPOCH) ? null : boundEpoch(),
                                                  seams.has(SERVE_WITHOUT_FENCE) ? null : boundFence(), expected)) {
@@ -2366,7 +2412,7 @@ final class Subscription {
             }
             return false;
         }
-        releaseHeld(head);
+        rehold(head, newHead);
         return true;
     }
 
@@ -2381,6 +2427,7 @@ final class Subscription {
      */
     private boolean releaseParkedPeriodic(long head, boolean discard) throws Exception {
         PageTransactionSource.OpenPage open = null;
+        Long newHead = null;
         try {
             open = engineSource.begin();
             var connection = open.connection();
@@ -2401,15 +2448,34 @@ final class Subscription {
                 return false;
             }
 
-            for (var event : events) {
-                if (discard && event.globalOrder() == head) {
-                    continue;
-                }
+            var toHandle = discard ? events.stream().filter(event -> event.globalOrder() != head).toList() : events;
+            // At most one page per serve: the rest waits behind the next unhandled event, made the head with a retry request
+            var page    = toHandle.size() > errors.pageSize() ? toHandle.subList(0, errors.pageSize()) : toHandle;
+            var applied = new ArrayList<StoredEvent>(page.size());
+            Exception failure = null;
+            for (var event : page) {
                 ownerCheck();
                 if (!running) {
                     return false;
                 }
-                handler.handle(event);
+                try {
+                    handler.handle(event);
+                } catch (Exception e) {
+                    if (event.globalOrder() == head || e instanceof InterruptedException || e instanceof LeaseLostException || isEngineFailure(true, e, () -> false, seams)) {
+                        throw e;
+                    }
+                    // A held event failed: the events before it count as handled, and it becomes the head
+                    failure = e;
+                    newHead = event.globalOrder();
+                    reportError(e);
+                    log.warn("Subscription {} on {}: the event at global_order {} held behind the parked head {} failed on its {}; it is parked as the aggregate's head",
+                             key.subscriber(), key.aggregateType(), newHead, head, discard ? "discard" : "retry", e);
+                    break;
+                }
+                applied.add(event);
+            }
+            if (failure == null && page.size() < toHandle.size()) {
+                newHead = toHandle.get(page.size()).globalOrder();
             }
 
             open = engineSource.begin();
@@ -2422,7 +2488,11 @@ final class Subscription {
                 onProgressConflict();
                 return false;
             }
-            parked.delete(connection, orders);
+            if (newHead != null) {
+                parked.rehead(connection, head, handledOrders(head, applied), newHead, failure, failure == null);
+            } else {
+                parked.delete(connection, orders);
+            }
             if (!ProgressStore.saveInTransaction(connection, key, lastSaved, seams.has(SERVE_WITHOUT_EPOCH) ? null : boundEpoch(),
                                                  seams.has(SERVE_WITHOUT_FENCE) ? null : boundFence(), null)) {
                 var ending = open;
@@ -2470,7 +2540,7 @@ final class Subscription {
             }
             return false;
         }
-        releaseHeld(head);
+        rehold(head, newHead);
         return true;
     }
 
@@ -2510,6 +2580,31 @@ final class Subscription {
     /** @return whether the local lease deadline passed, so a transaction holding the progress row must roll back, not commit */
     private boolean pastLeaseDeadline() {
         return lease != null && !seams.has(NO_LOCAL_DEADLINE) && lease.pastDeadline();
+    }
+
+    /** After a committed serve: the aggregate of {@code head} is released, or, with a {@code newHead}, held behind that */
+    private void rehold(long head, Long newHead) {
+        if (newHead == null) {
+            releaseHeld(head);
+            return;
+        }
+        var aggregateId = parked.release(head);
+        if (aggregateId != null) {
+            parked.hold(aggregateId, newHead);
+            heldChanged();
+        }
+    }
+
+    /** The parked rows a serve consumed: the head (retried or discarded) and the held events it applied */
+    private static List<Long> handledOrders(long head, List<StoredEvent> applied) {
+        var orders = new ArrayList<Long>(applied.size() + 1);
+        orders.add(head);
+        for (var event : applied) {
+            if (event.globalOrder() != head) {
+                orders.add(event.globalOrder());
+            }
+        }
+        return orders;
     }
 
     private void releaseHeld(long head) {

@@ -39,7 +39,11 @@ public interface SubscriptionHandle {
     /**
      * Retry the aggregate parked at {@code headGlobalOrder} on the delivery thread, between pages: the head and the events
      * held behind it are handed to the handler in order and their parked rows deleted, in one fenced, epoch-guarded
-     * transaction.
+     * transaction per serve. One serve hands over at most {@link ErrorSettings#pageSize()} events; the next unhandled
+     * one then heads the aggregate with a retry request of its own, served at the next parked check. If an event held
+     * behind the head fails (a {@code ParkEventException} included), the events before it are applied, it becomes the
+     * aggregate's head with one attempt counted, and the events after it wait behind it: retry or discard that one next.
+     * Only a failure of the head itself leaves everything as it was.
      *
      * @return {@code true} once applied; {@code false} if it failed, the head is not parked, or a reset intervened;
      * completed exceptionally if the subscription is not running
@@ -48,6 +52,7 @@ public interface SubscriptionHandle {
 
     /**
      * As {@link #retryParked(long)}, but the head is deleted without being handed to the handler; the events held behind it are applied
+     * (a held event that fails becomes the new head, as on a retry)
      */
     CompletableFuture<Boolean> discardParked(long headGlobalOrder);
 }

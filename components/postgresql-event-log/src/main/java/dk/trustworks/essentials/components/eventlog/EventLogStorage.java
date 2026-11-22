@@ -288,6 +288,17 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
     /** error_type, error_message, then the key, then the head */
     static final String PARKED_FAILED_AGAIN =
             "UPDATE " + PARKED_EVENTS_TABLE + " SET attempts = attempts + 1, error_type = ?, error_message = ?, requested = NULL, requested_at = NULL\n" + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?";
+    /**
+     * A held row becomes its aggregate's head ({@code blocked_by = NULL}): attempts + ?, error_type and error_message
+     * (kept when null), requested (null clears it; {@code requested_at} follows), then the key, then the new head
+     */
+    static final String PARKED_NEW_HEAD =
+            "UPDATE " + PARKED_EVENTS_TABLE + " SET blocked_by = NULL, attempts = attempts + ?, error_type = coalesce(?, error_type), error_message = coalesce(?, error_message),\n" +
+                    " requested = ?, requested_at = CASE WHEN ? IS NULL THEN NULL ELSE now() END\n" +
+                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?";
+    /** The rows held behind the old head now wait on the new one: the new head, then the key, then the old head */
+    static final String PARKED_REPOINT =
+            "UPDATE " + PARKED_EVENTS_TABLE + " SET blocked_by = ? WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND blocked_by = ?";
     /** A reset: every parked row of the subscription */
     static final String PARKED_DELETE_ALL = "DELETE FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?";
     // ---- parked requests and the admin facade (see docs/design/event-log.md §8) ----

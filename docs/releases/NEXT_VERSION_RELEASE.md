@@ -966,6 +966,11 @@ Hardened before release (code review of the preview). Each item changed what an 
   has waited 1 s the reader now asks `pg_locks` which of those transactions hold a `RowExclusiveLock` on the type's
   event table (the lock every append takes before it draws a `global_order`) and waits only for them; the normal probe
   is unchanged. New gauge `essentials.eventlog.reader.oldest_candidate_age` per aggregate type shows a stall.
+- An event-log aggregate parked behind a failing head can always be released now. A retry or discard handed the head
+  and every event held behind it to the handler in one transaction, so a second poisoned event in the backlog failed
+  every retry and every discard: the aggregate stayed held for good. A held event that fails now becomes the parked head
+  (one attempt counted) after the events before it are applied; retry or discard it next. A retry also hands over at
+  most `pageSize` events per transaction, continuing on its own at the next parked check, instead of the whole backlog.
 - `ViewProjection.rebuild(...)` refuses with `IllegalStateException` ("... did not stop") when its subscription is still
   running after the stop - a handler that ignores interrupts outlives the bounded stop - as `EventLogViewProcessor.rebuild()`
   already did. Before, it cleared the view and reset the progress while that handler could still apply a page to it.

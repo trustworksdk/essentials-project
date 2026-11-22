@@ -40,9 +40,15 @@ class EventLogParkedAggregateIT extends AbstractPageIT {
         restartEventLog(dataSource, FAST.withRetryBackoff(Duration.ofMillis(1), Duration.ofMillis(10)));
     }
 
+    /** Set: A3 (the third event of aggregate A) fails too, as an event poisoned by the same cause would */
+    private volatile boolean poisonA3;
+
     private void maybeFail(StoredEvent event) {
         if (broken && event.aggregateId().equals("A") && event.eventOrder() == 0) {
             throw new IllegalStateException("A1 fails");
+        }
+        if (poisonA3 && event.aggregateId().equals("A") && event.eventOrder() == 2) {
+            throw new IllegalStateException("A3 fails");
         }
     }
 
@@ -58,14 +64,19 @@ class EventLogParkedAggregateIT extends AbstractPageIT {
     }
 
     private Subscription start(WatermarkMutant... mutants) throws SQLException {
+        return start(null, mutants);
+    }
+
+    private Subscription start(ErrorSettings errors, WatermarkMutant... mutants) throws SQLException {
         PageHandler handler = PageHandler.perEvent((event, tx) -> {
             var connection = tx.connection();
             maybeFail(event);
             maybeBlock(event);
             apply(event, connection);
         });
-        return subscribe(Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key(PROJECTION, TYPE, "node-1"), 1, ConsistencyMode.CONTIGUOUS,
-                                                                     handler, new TestSeams(Set.of(mutants), TestSeams.Hooks.NONE, null)));
+        var spec = Subscription.SubscriptionSpec.inTransaction(new ProgressStore.Key(PROJECTION, TYPE, "node-1"), 1, ConsistencyMode.CONTIGUOUS,
+                                                               handler, new TestSeams(Set.of(mutants), TestSeams.Hooks.NONE, null));
+        return subscribe(errors == null ? spec : spec.withErrors(errors));
     }
 
     /** @return global order -> blocked_by (or {@code head/attempts} for a head) of every parked row */
@@ -198,6 +209,69 @@ class EventLogParkedAggregateIT extends AbstractPageIT {
         awaitCaughtUp(PROJECTION);
         assertThat(viewRow("A")).isEqualTo(chain(a[1], a[2], a4));
         assertThat(foldDifferences(Set.of(a[0]), false)).isEmpty();
+    }
+
+    @Test
+    void a_held_event_that_fails_on_a_discard_becomes_the_head_and_the_events_before_it_are_applied() throws Exception {
+        var subscription = start();
+        var a            = parkA1();
+        poisonA3 = true;
+        assertThat(subscription.discardParked(a[0]).get(30, TimeUnit.SECONDS)).as("the discard commits what it applied").isTrue();
+        assertThat(viewRow("A")).as("A2 applied once, A3 not").isEqualTo(chain(a[1]));
+        assertThat(parkedRows()).as("A3 heads the aggregate, one attempt counted").isEqualTo(Map.of(a[2], "head/1"));
+
+        var a4 = commitAppend("A", 1);
+        awaitCaughtUp(PROJECTION);
+        assertThat(parkedRows()).as("a later event of A waits behind the new head").isEqualTo(Map.of(a[2], "head/1", a4, "behind " + a[2]));
+
+        poisonA3 = false;
+        assertThat(subscription.retryParked(a[2]).get(30, TimeUnit.SECONDS)).isTrue();
+        assertThat(viewRow("A")).isEqualTo(chain(a[1], a[2], a4));
+        assertThat(parkedRows()).isEmpty();
+    }
+
+    @Test
+    void a_periodic_retry_parks_a_failing_held_event_as_the_new_head() throws Exception {
+        var handled = new CopyOnWriteArrayList<StoredEvent>();
+        PeriodicHandler handler = event -> {
+            maybeFail(event);
+            handled.add(event);
+        };
+        var subscription = subscribe(Subscription.SubscriptionSpec.periodic(new ProgressStore.Key(PROJECTION, TYPE, "node-1"), 1, ConsistencyMode.FRESH, handler,
+                                                                            TestSeams.NONE));
+        var a = parkA1();
+        broken = false;
+        poisonA3 = true;
+        assertThat(subscription.retryParked(a[0]).get(30, TimeUnit.SECONDS)).isTrue();
+        assertThat(handled).extracting(StoredEvent::globalOrder).as("A1 and A2 handled, A3 not").endsWith(a[0], a[1]).doesNotContain(a[2]);
+        assertThat(parkedRows()).isEqualTo(Map.of(a[2], "head/1"));
+
+        poisonA3 = false;
+        assertThat(subscription.retryParked(a[2]).get(30, TimeUnit.SECONDS)).isTrue();
+        assertThat(handled).extracting(StoredEvent::globalOrder).endsWith(a[0], a[1], a[2]);
+        assertThat(parkedRows()).isEmpty();
+    }
+
+    @Test
+    void a_retry_applies_a_long_held_backlog_one_page_per_transaction_in_order() throws Exception {
+        var subscription = start(new ErrorSettings(3, Duration.ofMillis(1), Duration.ofMillis(10), 2));
+        var a  = parkA1();
+        var a4 = commitAppend("A", 1);
+        var a5 = commitAppend("A", 1);
+        awaitCaughtUp(PROJECTION);
+        assertThat(parkedRows()).hasSize(5);
+
+        broken = false;
+        assertThat(subscription.retryParked(a[0]).get(30, TimeUnit.SECONDS)).isTrue();
+        assertThat(viewRow("A")).as("the first page: A1 and A2").isEqualTo(chain(a[0], a[1]));
+        awaitTrue(() -> {
+            try {
+                return parkedRows().isEmpty();
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        assertThat(viewRow("A")).isEqualTo(chain(a[0], a[1], a[2], a4, a5));
     }
 
     @Test

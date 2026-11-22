@@ -5,6 +5,8 @@ targets, with a `-N` suffix for plugin-only releases.
 
 ## 0.60.1-23 — targets Essentials 0.60.1
 
+- **Event log: releasing a parked aggregate** — the event-log reference says a held event that fails on a retry or
+  discard becomes the new parked head, and that a retry hands over at most `pageSize` events per transaction.
 - **Event log: a long transaction and the watermark** — the event-log reference lists the new
   `essentials.eventlog.reader.oldest_candidate_age` gauge and explains which transactions hold a type's `CONTIGUOUS`
   subscribers back (only writers holding a lock on its event table, after 1 s) and how to find one in `pg_locks`.

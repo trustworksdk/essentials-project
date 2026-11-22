@@ -41,7 +41,10 @@ want what it changes:
   models, `FRESH` (every committed event as soon as it is seen, per-aggregate order only) for reactions.
 - **Views committed with their resume point.** A view's writes and its progress commit in one page transaction.
 - **Retry, page shrinking and parking are the engine's**: a failing event is retried alone, then parked; the rest of the
-  stream continues. Parked events are retried or discarded from the admin API.
+  stream continues. Parked events are retried or discarded from the admin API. A parked event holds its aggregate:
+  a retry or discard hands the head (on a retry) and the events held behind it to the handler, at most `pageSize` per
+  transaction (the next one then heads the aggregate with a retry request). A held event that fails becomes the new
+  head, after the events before it are applied - retry or discard it next; nothing gets stuck behind a second poison event.
 
 Aggregates and repositories do not change: the starter provides `EventLogEventStore`, an `EventStore`
 (`ConfigurableEventStore<EventLogAggregateEventStreamConfiguration>`) that appends to and loads from the event log.
