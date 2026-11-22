@@ -131,7 +131,7 @@ class MessageReplacementHelpersTest {
         operation.setMessage(replaced);
 
         assertThat(operation.getMessage()).isSameAs(replaced);
-        assertThat(operation.message).isSameAs(replaced);
+        assertThat(operation.message).describedAs("the public field keeps the message selected for delivery").isSameAs(original);
     }
 
     @Test

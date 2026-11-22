@@ -193,7 +193,7 @@ class InterceptorsOnShardOwnedIT {
 
             @Override
             public Void intercept(HandleQueuedMessage operation, InterceptorChain<HandleQueuedMessage, Void, DurableQueuesInterceptor> interceptorChain) {
-                seen.add(operation.message);
+                seen.add(operation.getMessage());
                 return interceptorChain.proceed();
             }
         });

@@ -47,17 +47,15 @@ public final class InvokeMessageHandlerMethod {
      */
     public final Method   methodToInvoke;
     /**
-     * The {@link Message} the handler method will receive.<br>
-     * Public for backwards compatibility - use {@link #getMessage()} and {@link #setMessage(Message)}. Never assign
-     * this field directly: {@link #messagPayload} has to change together with it.
+     * The {@link Message} the handler method will receive - read it with {@link #getMessage()}, replace it with
+     * {@link #setMessage(Message)}, which keeps {@link #messagPayload} in step
      */
-    public       Message  message;
+    private      Message  message;
     /**
-     * The payload the handler method will receive as its first argument (the payload of {@link #message}).<br>
-     * Public for backwards compatibility - use {@link #getPayload()} and {@link #setMessage(Message)}. Never assign
-     * this field directly.
+     * The payload the handler method will receive as its first argument (the payload of {@link #message}) -
+     * read it with {@link #getPayload()}
      */
-    public       Object   messagPayload;
+    private      Object   messagPayload;
     /**
      * The object the handler method is invoked on.<br>
      * Public for backwards compatibility - use {@link #getInvokeMethodOn()}

@@ -236,8 +236,6 @@ class MessageHandlerInterceptorReplacementTest {
         // Then
         assertThat(operation.getMessage()).isSameAs(replaced);
         assertThat(operation.getPayload()).isEqualTo(42);
-        assertThat(operation.message).isSameAs(replaced);
-        assertThat(operation.messagPayload).isEqualTo(42);
         assertThatThrownBy(() -> operation.setMessage(null)).isInstanceOf(IllegalArgumentException.class);
         assertThat(operation.getMessage()).isSameAs(replaced);
     }

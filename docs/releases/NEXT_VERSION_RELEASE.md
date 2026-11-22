@@ -252,10 +252,11 @@ Follows from §2.19. Check interceptors you already have:
 
 - **Replacements now arrive.** The queue consumers, `PatternMatchingMessageHandler` and the command buses hand the
   handler what is on the operation (or chain) when the chain ends, not what they captured before it. An interceptor
-  that already set a new message on `HandleQueuedMessage` by reflection, or replaced a command, now changes what the
-  handler receives.
-- **An interceptor that reads the operation after `proceed()`** (for logging or tracing) now sees the last replacement
-  an inner interceptor made, not the original.
+  that already replaced a command now changes what the handler receives. Writing the `final` field
+  `HandleQueuedMessage.message` by reflection still has no effect on the handler; use `setMessage(...)`.
+- **An interceptor that reads the operation through `getMessage()` after `proceed()`** (for logging or tracing) now
+  sees the last replacement an inner interceptor made, not the original. The public `HandleQueuedMessage.message`
+  field keeps answering the original.
 - **`PatternMatchingMessageHandler` now orders its `MessageHandlerInterceptor`s by `@InterceptorOrder`.** It used to run
   them in registration order whatever their annotation; unannotated ones (order 10) keep their registration order among
   themselves. Annotated message-handler interceptors on an Inbox, Outbox or event processor may now run in a different
@@ -519,9 +520,9 @@ and `exclusiveSubscriptionLockName`.
 ### 2.11 `InvokeMessageHandlerMethod` exposes the message being handled (foundation)
 
 `InvokeMessageHandlerMethod` - the operation a `MessageHandlerInterceptor` sees around every `@MessageHandler` call -
-now has `message` and `messagPayload` as public fields, like `methodToInvoke` and `invokeMethodOn` already were,
-so an interceptor can read the `Message` and its metadata without reflection. Additive; nothing to change. Read them
-with `getMessage()` / `getPayload()` and replace them with `setMessage(...)` (§2.19).
+now has `getMessage()` and `getPayload()`, so an interceptor can read the `Message` and its metadata without
+reflection; the `message` and `messagPayload` fields stay private. Additive; nothing to change. Replace the message
+with `setMessage(...)` (§2.19).
 
 ### 2.12 CDC: an out-of-order commit no longer costs each subscriber a commit of its own (`postgresql-event-store`)
 
@@ -771,8 +772,10 @@ re-resolved. Any type is allowed mid-chain, but what reaches the handler must fi
 decryption that decides which handler runs belongs in a `DurableQueuesInterceptor` on `HandleQueuedMessage`.
 `HandleMessage` of the raw shard-owned engine stays a record without a setter until the next major.
 
-Additive: no interceptor interface changed signature. `HandleQueuedMessage.message` and
-`InvokeMessageHandlerMethod.message`/`messagPayload` are no longer `final`; use the setters. Design:
+Additive: no interceptor interface changed signature. Read the current message with `getMessage()` and replace it
+with the setters. The public `HandleQueuedMessage.message` field stays `final` and keeps holding the message selected
+for delivery, so an interceptor that reads it never sees a replacement - switch it to `getMessage()` if it should.
+Design:
 `docs/design/interceptor-operation-replacement.md`. Behaviour changes: §1.1.7.
 
 ## 3. Bug fixes

@@ -124,10 +124,12 @@ To be written into `Interceptor`'s Javadoc, `LLM/LLM-shared.md` (`InterceptorCha
 
 ### foundation — `DurableQueuesInterceptor` / `HandleQueuedMessage`
 
-- `HandleQueuedMessage`: drop `final` from `public QueuedMessage message`, add `setMessage(QueuedMessage)` (non-null,
-  same `getId()` as the original — a replacement may change content, never identity). Removing `final` from an
-  instance field is binary compatible (JLS 13.4.9), and existing interceptors that read `operation.message` keep
-  reading the current value.
+- `HandleQueuedMessage`: add a private field holding the current message, `setMessage(QueuedMessage)` (non-null,
+  same `getId()` as the current message — a replacement may change content, never identity) and `getMessage()`
+  reading it. The released `public final QueuedMessage message` stays as it was and keeps holding the message
+  selected for delivery: making it non-final would let a direct write bypass the id check, and making it private
+  would break every interceptor that reads it. An interceptor that reads `operation.message` therefore sees the
+  original, not a replacement.
 - `DefaultDurableQueueConsumer`, `CentralizedMessageFetcher`, `ShardOwnedDurableQueues`: the default behaviour calls
   the handler with `operation.getMessage()`. Acknowledge, retry and dead-letter paths keep using the original
   queued message's id, which is unchanged by construction.
@@ -136,8 +138,8 @@ To be written into `Interceptor`'s Javadoc, `LLM/LLM-shared.md` (`InterceptorCha
 
 ### foundation — `MessageHandlerInterceptor` / `InvokeMessageHandlerMethod`
 
-- Drop `final` from `message` and `messagPayload`, add `getMessage()`, `getPayload()` and
-  `setMessage(Message)`, which sets both fields together so they cannot drift. The setter checks only for null; it
+- Keep `message` and `messagPayload` private (they were in every release) and drop their `final`; add
+  `getMessage()`, `getPayload()` and `setMessage(Message)`, which sets both fields together so they cannot drift. The setter checks only for null; it
   accepts a payload of any type (contract rule 4).
 - `PatternMatchingMessageHandler.invokeMethod`: the default behaviour checks that `operation.getPayload()` is an
   instance of `methodToInvoke`'s first parameter type, throws `ClassCastException` if not, and otherwise invokes
@@ -192,12 +194,13 @@ goes there.
 - No interceptor interface changes signature; no existing method is removed.
 - New members are additive: setters on operations, a default method on `CommandBusInterceptorChain`, helpers on
   `Message`, `OrderedMessage`, `QueuedMessage`, `PersistedEvent`.
-- Dropping `final` from public instance fields is binary compatible and source compatible for readers. It allows
-  direct assignment, which is why the setters are the documented way and the fields get deprecated later.
+- No public field changes. `HandleQueuedMessage.message` stays `public final` and holds the message selected for
+  delivery; `InvokeMessageHandlerMethod.message`/`messagPayload` stay private. The replacement lives in private
+  state, so nothing can assign it past the setter's checks.
 - Behaviour change, deliberate: an existing interceptor that *already* tried to replace something — for example by
-  reflection, or by mutating a mutable payload in place — keeps working; one that read `operation.message` *after*
-  `proceed()` now sees the replacement an inner interceptor made, instead of the original. Called out in the release
-  notes.
+  reflection, or by mutating a mutable payload in place — keeps working; one that reads `getMessage()` *after*
+  `proceed()` sees the replacement an inner interceptor made, instead of the original, while `operation.message`
+  keeps answering the original. Called out in the release notes.
 - Chains that third parties build themselves with `newInterceptorChainForOperation` are unaffected: the contract's
   rule 3 is theirs to follow if they want replacement.
 

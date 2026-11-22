@@ -31,11 +31,16 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  */
 public final class HandleQueuedMessage {
     /**
-     * The {@link QueuedMessage} ready for being handled by the {@link #messageHandler}.<br>
-     * Read it through {@link #getMessage()} and replace it through {@link #setMessage(QueuedMessage)}; the field is
-     * public for backwards compatibility only.
+     * The {@link QueuedMessage} that was selected for delivery to the {@link #messageHandler}. This field never
+     * changes: use {@link #getMessage()} for the message the rest of the interceptor chain and the
+     * {@link #messageHandler} receive, which is this one unless an interceptor replaced it through
+     * {@link #setMessage(QueuedMessage)}
      */
-    public QueuedMessage              message;
+    public final QueuedMessage        message;
+    /**
+     * The current message - {@link #message} unless an interceptor replaced it through {@link #setMessage(QueuedMessage)}
+     */
+    private QueuedMessage             currentMessage;
     /**
      * The {@link QueuedMessageHandler} configured in the {@link DurableQueues#consumeFromQueue(ConsumeFromQueue)} operation
      */
@@ -83,6 +88,7 @@ public final class HandleQueuedMessage {
      */
     HandleQueuedMessage(QueuedMessage message, QueuedMessageHandler messageHandler, BooleanSupplier consumerStarted) {
         this.message = requireNonNull(message, "No message was provided");
+        this.currentMessage = message;
         this.messageHandler = requireNonNull(messageHandler, "No message handler was provided");
         this.consumerStarted = consumerStarted;
     }
@@ -93,7 +99,7 @@ public final class HandleQueuedMessage {
      * @return The {@link QueuedMessage} ready for being handled by the {@link #messageHandler}
      */
     public QueuedMessage getMessage() {
-        return message;
+        return currentMessage;
     }
 
     /**
@@ -109,11 +115,11 @@ public final class HandleQueuedMessage {
      */
     public void setMessage(QueuedMessage message) {
         requireNonNull(message, "No message was provided");
-        if (!this.message.getId().equals(message.getId())) {
+        if (!this.currentMessage.getId().equals(message.getId())) {
             throw new IllegalArgumentException(msg("A replacement message must have the same id as the message being handled: expected '{}' but was '{}'",
-                                                   this.message.getId(), message.getId()));
+                                                   this.currentMessage.getId(), message.getId()));
         }
-        this.message = message;
+        this.currentMessage = message;
     }
 
     /**
@@ -166,7 +172,7 @@ public final class HandleQueuedMessage {
     @Override
     public String toString() {
         return "HandleQueuedMessage{" +
-                "message=" + message +
+                "message=" + currentMessage +
                 ", messageHandler=" + messageHandler +
                 '}';
     }
