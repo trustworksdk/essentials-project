@@ -173,8 +173,13 @@ Idioms that are not obvious and bite silently:
 ## Reactive and coroutines (WebFlux)
 
 `reactor-kotlin-extensions` and `kotlinx-coroutines-reactor` bridge coroutines and Reactor. A
-`suspend` handler is fine — note only that it puts value-class validation failures in the 500 row
-of the table above.
+`suspend` handler puts value-class validation failures in the 500 row of the table above, and it is
+**never offloaded** from the event loop: `spring.threads.virtual.enabled` moves only handlers that
+return a plain value (S5). Essentials work is blocking, so a `suspend` handler that calls the
+`CommandBus`, a repository or a unit of work must wrap that call in `withContext(Dispatchers.IO)`;
+otherwise make the handler a plain `fun`, which is offloaded. The generated API templates are plain
+`fun`s for that reason. Defining an `Executor` bean of your own silently stops the offloading of
+plain handlers too, until `spring.task.execution.mode: force` is set beside it (S5).
 
 On WebMvc, none of this applies and `EssentialsWebMvcConfigurer` replaces the WebFlux one (S4).
 

@@ -73,6 +73,7 @@ import org.jdbi.v3.core.Jdbi;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
@@ -82,6 +83,7 @@ import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -112,7 +114,17 @@ import java.util.function.Function;
  * @see dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockStorage
  * @see dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener
  */
-@AutoConfiguration
+// Ordered after Spring Boot's Micrometer auto-configurations, so the @ConditionalOnBean checks for Tracer, Propagator,
+// ObservationRegistry and MeterRegistry see the beans those create. Named, not referenced: they are optional (provided).
+@AutoConfiguration(afterName = {
+        "org.springframework.boot.micrometer.observation.autoconfigure.ObservationAutoConfiguration",
+        "org.springframework.boot.micrometer.tracing.autoconfigure.MicrometerTracingAutoConfiguration",
+        "org.springframework.boot.micrometer.tracing.autoconfigure.NoopTracerAutoConfiguration",
+        "org.springframework.boot.micrometer.tracing.brave.autoconfigure.BraveAutoConfiguration",
+        "org.springframework.boot.micrometer.tracing.opentelemetry.autoconfigure.OpenTelemetryTracingAutoConfiguration",
+        "org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration",
+        "org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterRegistryAutoConfiguration"
+})
 @ConditionalOnClass(name = "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore")
 @EnableConfigurationProperties(EssentialsEventStoreProperties.class)
 public class EventStoreConfiguration {
@@ -152,7 +164,8 @@ public class EventStoreConfiguration {
      *     <li>{@link CausationPersistableEventEnricher} sets {@link PersistableEvent#causedByEventId()} to the event that
      *     caused the current work (see {@link #causationPersistableEventEnricher()})</li>
      *     <li>{@link MicrometerTracingEventStoreInterceptor} adds the trace context to the event meta-data, when
-     *     {@code management.tracing.enabled=true}</li>
+     *     a Micrometer {@code Tracer}, {@code Propagator} and {@code ObservationRegistry} are present (see
+     *     {@link #micrometerTracingEventStoreInterceptor})</li>
      * </ul>
      *
      * @return the {@link PersistableEventMapper} to use for all Events
@@ -525,18 +538,6 @@ public class EventStoreConfiguration {
         return propagator;
     }
 
-    @Bean
-    @ConditionalOnProperty(prefix = "management.tracing", name = "enabled", havingValue = "true")
-    public MicrometerTracingEventStoreInterceptor micrometerTracingEventStoreInterceptor(Optional<Tracer> tracer,
-                                                                                         Optional<Propagator> propagator,
-                                                                                         Optional<ObservationRegistry> observationRegistry,
-                                                                                         EssentialsEventStoreProperties essentialsComponentsProperties) {
-        return new MicrometerTracingEventStoreInterceptor(tracer.get(),
-                                                          propagator.get(),
-                                                          observationRegistry.get(),
-                                                          essentialsComponentsProperties.isVerboseTracing());
-    }
-
     /**
      * The {@link FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream} interceptor that publishes
      * {@link PersistedEvents} to the {@link EventStoreEventBus} immediately after {@code appendToStream()} completes,
@@ -667,50 +668,6 @@ public class EventStoreConfiguration {
     }
 
     /**
-     * The {@value SubscriberGlobalOrderMicrometerMonitor#SUBSCRIPTION_EVENT_ORDER_DIFF_METRIC} gauge - how many events each
-     * subscriber has yet to read. Recorded whenever a {@link MeterRegistry} is present (until 0.60.1 only with
-     * {@code management.tracing.enabled=true}); without one the monitor does nothing. Run by the
-     * {@link EventStoreSubscriptionMonitorManager}, like {@link SubscriptionStoppedMicrometerMonitor}.
-     */
-    @Bean
-    @ConditionalOnMissingBean
-    public SubscriberGlobalOrderMicrometerMonitor subscriberGlobalOrderMicrometerMonitor(EventStoreSubscriptionManager eventStoreSubscriptionManager,
-                                                                                         Optional<MeterRegistry> meterRegistry,
-                                                                                         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
-                                                                                         EssentialsComponentsProperties properties) {
-        // Optional is idiomatic at the @Bean injection point and is unwrapped on the spot
-        return new SubscriberGlobalOrderMicrometerMonitor(eventStoreSubscriptionManager,
-                                                          meterRegistry.orElse(null),
-                                                          eventStoreUnitOfWorkFactory,
-                                                          properties.getTracingProperties().getModuleTag());
-    }
-
-    /**
-     * The {@value SubscriptionStoppedMicrometerMonitor#SUBSCRIPTION_STOPPED_METRIC} gauge - {@code 1} while a subscription
-     * is stopped by its {@link SubscriptionErrorPolicy}, the signal to alert on for a halted projection.
-     * <p>
-     * Deliberately not gated by {@code management.tracing.enabled}: it is an incident signal, recorded whenever a {@link MeterRegistry} is present - the same rule as the
-     * {@value MeasurementEventStoreSubscriptionObserver#SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC} counter it complements.
-     * It is run by the {@link EventStoreSubscriptionMonitorManager}, so {@code essentials.eventstore.subscription-monitor.enabled=false}
-     * switches it off together with every other monitor.
-     *
-     * @param eventStoreSubscriptionManager the {@link EventStoreSubscriptionManager} the subscriptions' state is read from
-     * @param meterRegistry                 the {@link MeterRegistry} to register the gauge in, if any
-     * @param properties                    {@link EssentialsComponentsProperties} configuration properties
-     * @return the {@link SubscriptionStoppedMicrometerMonitor}
-     */
-    @Bean
-    @ConditionalOnMissingBean
-    public SubscriptionStoppedMicrometerMonitor subscriptionStoppedMicrometerMonitor(EventStoreSubscriptionManager eventStoreSubscriptionManager,
-                                                                                     Optional<MeterRegistry> meterRegistry,
-                                                                                     EssentialsComponentsProperties properties) {
-        // Optional is idiomatic at the @Bean injection point and is unwrapped on the spot
-        return new SubscriptionStoppedMicrometerMonitor(eventStoreSubscriptionManager,
-                                                        meterRegistry.orElse(null),
-                                                        properties.getTracingProperties().getModuleTag());
-    }
-
-    /**
      * The registry holding the in-memory per-subscription runtime statistics that
      * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.EventStoreApi#findAllSubscriptionStatistics(Object)}
      * reports. Only registered when {@code essentials.eventstore.subscription-manager.statistics.enabled} is
@@ -743,7 +700,7 @@ public class EventStoreConfiguration {
      * which only controls execution-time measurements.
      *
      * @param properties                     {@link EssentialsEventStoreProperties} configuration properties
-     * @param meterRegistry                  the {@link MeterRegistry} to record metrics into, if any
+     * @param beanFactory                    the bean factory the optional {@link MeterRegistry} is looked up in
      * @param essentialsProperties           {@link EssentialsComponentsProperties} configuration properties
      * @param subscriptionStatisticsRegistry the registry to record subscription statistics into, if statistics are enabled
      * @return the {@link EventStoreSubscriptionObserver} to use for collecting statistics
@@ -751,17 +708,17 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public EventStoreSubscriptionObserver eventStoreSubscriptionObserver(EssentialsEventStoreProperties properties,
-                                                                        Optional<MeterRegistry> meterRegistry,
+                                                                        BeanFactory beanFactory,
                                                                         EssentialsComponentsProperties essentialsProperties,
                                                                         Optional<SubscriptionStatisticsRegistry> subscriptionStatisticsRegistry) {
         EventStoreSubscriptionObserver observer =
-                new MeasurementEventStoreSubscriptionObserver(measurementTakerFor(meterRegistry,
+                new MeasurementEventStoreSubscriptionObserver(measurementTakerFor(beanFactory,
                                                                                   properties.getSubscriptionManager().getMetrics().isEnabled(),
                                                                                   properties.getSubscriptionManager().getMetrics().toLogThresholds(),
                                                                                   MeasurementEventStoreSubscriptionObserver.class),
                                                              essentialsProperties.getTracingProperties().getModuleTag(),
                                                              // The failure counters are an incident signal, so they are not gated by the execution-time metrics toggle
-                                                             meterRegistry.orElse(null));
+                                                             OptionalMeterRegistry.from(beanFactory).orElse(null));
         return subscriptionStatisticsRegistry.<EventStoreSubscriptionObserver>map(registry -> new StatisticsCollectingEventStoreSubscriptionObserver(observer, registry))
                                              .orElse(observer);
     }
@@ -769,9 +726,9 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public RecordExecutionTimeEventStoreInterceptor measurementEventStoreInterceptor(EssentialsEventStoreProperties properties,
-                                                                                     Optional<MeterRegistry> meterRegistry,
+                                                                                     BeanFactory beanFactory,
                                                                                      EssentialsComponentsProperties essentialsProperties) {
-        return new RecordExecutionTimeEventStoreInterceptor(measurementTakerFor(meterRegistry,
+        return new RecordExecutionTimeEventStoreInterceptor(measurementTakerFor(beanFactory,
                                                                                properties.getMetrics().isEnabled(),
                                                                                properties.getMetrics().toLogThresholds(),
                                                                                RecordExecutionTimeEventStoreInterceptor.class),
@@ -779,22 +736,6 @@ public class EventStoreConfiguration {
     }
 
     // CDC ############################################################################################
-
-    @Bean
-    @ConditionalOnClass(HealthIndicator.class)
-    @ConditionalOnEnabledHealthIndicator("cdc")
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
-    public HealthIndicator cdcHealthIndicator(CdcAvailability availability,
-                                              Optional<WalReplicationTailer> tailer,
-                                              Optional<CdcDispatcher> dispatcher,
-                                              EssentialsEventStoreProperties properties) {
-        return CdcHealthIndicator.builder()
-                                 .setAvailability(availability)
-                                 .setTailer(tailer)
-                                 .setDispatcher(dispatcher)
-                                 .setProperties(properties)
-                                 .build();
-    }
 
     /**
      * The declared return type is {@link ConfigurableEventStore}, not just {@link EventStore}, so that when CDC is
@@ -833,7 +774,7 @@ public class EventStoreConfiguration {
                                                                                                    CdcEventBus cdcEventBus,
                                                                                                    EssentialsEventStoreProperties essentialsProperties,
                                                                                                    CdcAvailability availability,
-                                                                                                   Optional<MeterRegistry> meterRegistry) {
+                                                                                                   BeanFactory beanFactory) {
         return CdcEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
                             .setDelegate(eventStore)
                             .setUnitOfWorkFactory(eventStoreUnitOfWorkFactory)
@@ -841,16 +782,16 @@ public class EventStoreConfiguration {
                             .setCdcBus(cdcEventBus)
                             .setCdcProperties(essentialsProperties.getCdc())
                             .setAvailability(availability)
-                            .setMeterRegistry(meterRegistry)
+                            .setMeterRegistry(OptionalMeterRegistry.from(beanFactory))
                             .build();
     }
 
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
-    public CdcAvailability cdcAvailability(Optional<MeterRegistry> meterRegistry) {
+    public CdcAvailability cdcAvailability(BeanFactory beanFactory) {
         // Optional is idiomatic at the @Bean injection point and is unwrapped on the spot
-        return new CdcAvailability(meterRegistry.orElse(null));
+        return new CdcAvailability(OptionalMeterRegistry.from(beanFactory).orElse(null));
     }
 
     @Bean
@@ -866,7 +807,7 @@ public class EventStoreConfiguration {
                                        CdcSlotNameProvider slotNameProvider,
                                        CdcAvailability availability,
                                        @Qualifier("configuredLogicalDecodingPlugin") LogicalDecodingPlugin logicalDecodingPlugin,
-                                       Optional<MeterRegistry> meterRegistry) {
+                                       BeanFactory beanFactory) {
 
         String slotName = getCdcSlotName(essentialsProperties, group, slotNameProvider);
 
@@ -878,7 +819,7 @@ public class EventStoreConfiguration {
                                                           .setCdcPoisonNotifier(subscriptionResetOnPoisonNotifier)
                                                           .setOnEvents(cdcEventBus::publish)
                                                           .setAvailability(availability)
-                                                          .setMeterRegistry(meterRegistry)
+                                                          .setMeterRegistry(OptionalMeterRegistry.from(beanFactory))
                                                           .build(),
                                  new CdcDispatcherSettings(slotName,
                                                            essentialsProperties.getCdc().getCdcDispatcher(),
@@ -1054,7 +995,7 @@ public class EventStoreConfiguration {
                                                      WalMessageFilter walMessageFilter,
                                                      CdcEventBus cdcEventBus,
                                                      @Qualifier("configuredLogicalDecodingPlugin") LogicalDecodingPlugin logicalDecodingPlugin,
-                                                     Optional<MeterRegistry> meterRegistry,
+                                                     BeanFactory beanFactory,
                                                      Optional<WalReplicationTailerErrorHandler> errorHandler) throws SQLException {
 
         String     slotName              = getCdcSlotName(properties, group, slotNameProvider);
@@ -1074,7 +1015,7 @@ public class EventStoreConfiguration {
                                                              .setUnitOfWorkFactory(eventStoreUnitOfWorkFactory)
                                                              .setLogicalDecodingPlugin(logicalDecodingPlugin)
                                                              .setAvailability(availability)
-                                                             .setMeterRegistry(meterRegistry)
+                                                             .setMeterRegistry(OptionalMeterRegistry.from(beanFactory))
                                                              .setErrorHandler(errorHandler)
                                                              .setWalMessageFilter(walMessageFilter)
                                                              .setEventStreamTableNamesSupplier(eventStreamTableNamesSupplier)
@@ -1093,7 +1034,7 @@ public class EventStoreConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public CdcInboxRepository cdcInboxRepository(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
-                                                 Optional<MeterRegistry> meterRegistry,
+                                                 BeanFactory beanFactory,
                                                  EssentialsEventStoreProperties essentialsProperties,
                                                  CdcConsumerGroup group,
                                                  CdcSlotNameProvider slotNameProvider,
@@ -1104,7 +1045,7 @@ public class EventStoreConfiguration {
         // let a custom-named TTL job clean a table the repository never touches, leaking rows.
         var repo = CdcInboxRepository.builder()
                                      .setUnitOfWorkFactory(eventStoreUnitOfWorkFactory)
-                                     .setMeterRegistry(meterRegistry)
+                                     .setMeterRegistry(OptionalMeterRegistry.from(beanFactory))
                                      .setCdcInboxTableName(cdc.getInboxTableName())
                                      .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
                                      .build();
@@ -1158,13 +1099,13 @@ public class EventStoreConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public CdcSlotMetrics cdcSlotMetrics(WalReplicationTailer walReplicationTailer,
-                                         Optional<MeterRegistry> meterRegistry,
+                                         BeanFactory beanFactory,
                                          EssentialsEventStoreProperties essentialsProperties,
                                          CdcConsumerGroup group,
                                          CdcSlotNameProvider slotNameProvider) {
         String slotName = getCdcSlotName(essentialsProperties, group, slotNameProvider);
         return new CdcSlotMetrics(walReplicationTailer,
-                                  meterRegistry.orElse(null),
+                                  OptionalMeterRegistry.from(beanFactory).orElse(null),
                                   slotName,
                                   essentialsProperties.getCdc().getSlot());
     }
@@ -1298,20 +1239,20 @@ public class EventStoreConfiguration {
     /**
      * Assembles the {@link MeasurementTaker} for one metrics subsystem.
      * <p>
-     * This is where {@code Optional<MeterRegistry>} is allowed to live and is unwrapped on the spot: an
-     * {@code Optional} injection point is idiomatic in a {@code @Bean} method, and nothing downstream sees it. The
-     * per-subsystem {@link LogThresholds} are why there is one taker per subsystem rather than a single global one.
-     * A disabled subsystem gets {@link MeasurementTaker#none()}, which the interceptors detect via
-     * {@link MeasurementTaker#isRecording()} and skip all context assembly.
+     * The Micrometer registry is looked up here, through {@link OptionalMeterRegistry}, rather than injected as an
+     * {@code Optional<MeterRegistry>} parameter, because that parameter type keeps an application without
+     * micrometer-core from starting - see {@link OptionalMeterRegistry}. The per-subsystem {@link LogThresholds} are
+     * why there is one taker per subsystem rather than a single global one. A disabled subsystem gets
+     * {@link MeasurementTaker#none()}, which the interceptors detect via {@link MeasurementTaker#isRecording()} and skip
+     * all context assembly.
      *
-     * @param meterRegistry the optionally-present Micrometer registry
-     * @param enabled       whether this subsystem records at all
-     * @param thresholds    the log-level thresholds for this subsystem
-     * @param loggerOwner   the class the logging recorder logs under
+     * @param beanFactory the bean factory the optionally-present Micrometer registry is looked up in
+     * @param enabled     whether this subsystem records at all
+     * @param thresholds  the log-level thresholds for this subsystem
+     * @param loggerOwner the class the logging recorder logs under
      * @return the taker, or {@link MeasurementTaker#none()} when disabled
      */
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    private static MeasurementTaker measurementTakerFor(Optional<MeterRegistry> meterRegistry,
+    private static MeasurementTaker measurementTakerFor(BeanFactory beanFactory,
                                                         boolean enabled,
                                                         LogThresholds thresholds,
                                                         Class<?> loggerOwner) {
@@ -1320,8 +1261,122 @@ public class EventStoreConfiguration {
         }
         return MeasurementTaker.builder()
                                .setLoggingRecorder(loggerOwner, thresholds)
-                               .setMeterRegistry(meterRegistry)
+                               .setMeterRegistry(OptionalMeterRegistry.from(beanFactory))
                                .build();
     }
 
+    /**
+     * Holds the beans that need micrometer-core, an optional dependency of this starter. Spring reflects on every method
+     * of a configuration class to deduce bean types, and reflecting on a method resolves its parameter and return types,
+     * so a bean method on the outer configuration class returning a monitor whose class carries Micrometer types made
+     * every application without micrometer-core fail to start with {@code NoClassDefFoundError: io/micrometer/core/instrument/MeterRegistry}. This
+     * class is guarded by class <em>name</em>, so it is never reflected on unless micrometer-core is present.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "io.micrometer.core.instrument.MeterRegistry")
+    static class MicrometerMetricsConfiguration {
+        /**
+         * The {@value SubscriberGlobalOrderMicrometerMonitor#SUBSCRIPTION_EVENT_ORDER_DIFF_METRIC} gauge - how many events each
+         * subscriber has yet to read. Recorded whenever a {@link MeterRegistry} is present (until 0.60.1 only with
+         * {@code management.tracing.enabled=true}); without one the monitor does nothing. Run by the
+         * {@link EventStoreSubscriptionMonitorManager}, like {@link SubscriptionStoppedMicrometerMonitor}.
+         */
+        @Bean
+        @ConditionalOnMissingBean
+        public SubscriberGlobalOrderMicrometerMonitor subscriberGlobalOrderMicrometerMonitor(EventStoreSubscriptionManager eventStoreSubscriptionManager,
+                                                                                             Optional<MeterRegistry> meterRegistry,
+                                                                                             EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                                                                                             EssentialsComponentsProperties properties) {
+            // Optional is idiomatic at the @Bean injection point and is unwrapped on the spot
+            return new SubscriberGlobalOrderMicrometerMonitor(eventStoreSubscriptionManager,
+                                                              meterRegistry.orElse(null),
+                                                              eventStoreUnitOfWorkFactory,
+                                                              properties.getTracingProperties().getModuleTag());
+        }
+
+        /**
+         * The {@value SubscriptionStoppedMicrometerMonitor#SUBSCRIPTION_STOPPED_METRIC} gauge - {@code 1} while a subscription
+         * is stopped by its {@link SubscriptionErrorPolicy}, the signal to alert on for a halted projection.
+         * <p>
+         * Deliberately not gated by {@code management.tracing.enabled}: it is an incident signal, recorded whenever a {@link MeterRegistry} is present - the same rule as the
+         * {@value MeasurementEventStoreSubscriptionObserver#SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC} counter it complements.
+         * It is run by the {@link EventStoreSubscriptionMonitorManager}, so {@code essentials.eventstore.subscription-monitor.enabled=false}
+         * switches it off together with every other monitor.
+         *
+         * @param eventStoreSubscriptionManager the {@link EventStoreSubscriptionManager} the subscriptions' state is read from
+         * @param meterRegistry                 the {@link MeterRegistry} to register the gauge in, if any
+         * @param properties                    {@link EssentialsComponentsProperties} configuration properties
+         * @return the {@link SubscriptionStoppedMicrometerMonitor}
+         */
+        @Bean
+        @ConditionalOnMissingBean
+        public SubscriptionStoppedMicrometerMonitor subscriptionStoppedMicrometerMonitor(EventStoreSubscriptionManager eventStoreSubscriptionManager,
+                                                                                         Optional<MeterRegistry> meterRegistry,
+                                                                                         EssentialsComponentsProperties properties) {
+            // Optional is idiomatic at the @Bean injection point and is unwrapped on the spot
+            return new SubscriptionStoppedMicrometerMonitor(eventStoreSubscriptionManager,
+                                                            meterRegistry.orElse(null),
+                                                            properties.getTracingProperties().getModuleTag());
+        }
+    }
+
+    /**
+     * Holds the health indicator beans, which need spring-boot-health, an optional dependency of this starter. Guarded by
+     * class <em>name</em> for the same reason as {@link MicrometerMetricsConfiguration}: a bean method on the outer
+     * configuration class whose return type implements {@code HealthIndicator} made every application without
+     * spring-boot-health fail to start with {@code NoClassDefFoundError: org/springframework/boot/health/contributor/HealthIndicator}.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "org.springframework.boot.health.contributor.HealthIndicator")
+    static class HealthIndicatorConfiguration {
+        @Bean
+        @ConditionalOnEnabledHealthIndicator("cdc")
+        @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
+        public HealthIndicator cdcHealthIndicator(CdcAvailability availability,
+                                                  Optional<WalReplicationTailer> tailer,
+                                                  Optional<CdcDispatcher> dispatcher,
+                                                  EssentialsEventStoreProperties properties) {
+            return CdcHealthIndicator.builder()
+                                     .setAvailability(availability)
+                                     .setTailer(tailer)
+                                     .setDispatcher(dispatcher)
+                                     .setProperties(properties)
+                                     .build();
+        }
+    }
+
+    /**
+     * Holds the bean that needs Micrometer Tracing, an optional dependency of this starter. Spring reflects on every
+     * method of a configuration class to deduce bean types, and reflecting on a method resolves its parameter types, so
+     * a {@code io.micrometer.tracing.Tracer} or {@code io.micrometer.tracing.propagation.Propagator} parameter on
+     * {@link EventStoreConfiguration} itself made every application without micrometer-tracing fail to start with
+     * {@code NoClassDefFoundError: io/micrometer/tracing/Tracer}. This class is guarded by class <em>name</em>, so it is
+     * never reflected on unless those classes are present.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = {"io.micrometer.tracing.Tracer",
+                                "io.micrometer.tracing.propagation.Propagator",
+                                "io.micrometer.observation.ObservationRegistry"})
+    static class MicrometerTracingConfiguration {
+        /**
+         * Adds the trace context to the meta-data of every appended event. Registered when a Micrometer {@link Tracer},
+         * {@link Propagator} and {@link ObservationRegistry} are all present, unless
+         * {@code essentials.eventstore.tracing-enabled=false}. Until 0.61.0 it required
+         * {@code management.tracing.enabled=true}, which Spring Boot 4 no longer reads.
+         */
+        @Bean
+        @ConditionalOnBean(type = {"io.micrometer.tracing.Tracer",
+                                   "io.micrometer.tracing.propagation.Propagator",
+                                   "io.micrometer.observation.ObservationRegistry"})
+        @ConditionalOnProperty(prefix = "essentials.eventstore", name = "tracing-enabled", havingValue = "true", matchIfMissing = true)
+        public MicrometerTracingEventStoreInterceptor micrometerTracingEventStoreInterceptor(Tracer tracer,
+                                                                                             Propagator propagator,
+                                                                                             ObservationRegistry observationRegistry,
+                                                                                             EssentialsEventStoreProperties essentialsComponentsProperties) {
+            return new MicrometerTracingEventStoreInterceptor(tracer,
+                                                              propagator,
+                                                              observationRegistry,
+                                                              essentialsComponentsProperties.isVerboseTracing());
+        }
+    }
 }

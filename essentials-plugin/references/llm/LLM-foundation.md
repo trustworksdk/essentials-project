@@ -487,6 +487,58 @@ var durableQueues = PostgresqlDurableQueues.builder()
 | `DurableQueuesMicrometerTracingInterceptor` | `.messaging.queue.micrometer` | Distributed tracing |
 | `RecordExecutionTimeDurableQueueInterceptor` | `.interceptor.micrometer` | Execution time |
 
+#### Replacing what an interceptor passes on
+
+The shared contract ([LLM-shared.md § Changing what an operation carries](./LLM-shared.md#changing-what-an-operation-carries)):
+set the replacement on the operation before `proceed()`, build it with a copy helper, never mutate a payload.
+
+**`DurableQueuesInterceptor`**
+
+- Enqueue: `QueueMessage.setMessage`, `QueueMessages.setMessages`, `QueueMessageAsDeadLetterMessage.setMessage`,
+  `ConsumeFromQueue.setRedeliveryPolicy`.
+- Delivery: `HandleQueuedMessage.setMessage(queued.withMessage(...))`. `QueuedMessage.withMessage(Message)` returns a
+  decorator that carries the new `Message` and delegates everything else, `markForRedeliveryIn` included, to the
+  original; it is not an instance of the implementation class, and it is equal to any `QueuedMessage` with the same id.
+- `setMessage` refuses a message with another id (`IllegalArgumentException`): a replacement changes content, never
+  identity. Acknowledge, retry and dead-letter act on the entry that was selected for delivery. A redelivery a handler
+  requests on a replacement built some other way is copied back to that entry.
+- All three consumers (PostgreSQL/MongoDB `DefaultDurableQueueConsumer`, `CentralizedMessageFetcher`, the shard-owned
+  adapter) hand the handler `operation.getMessage()`. `HandleQueuedMessage.acknowledgedWithHandler(...)` has no effect
+  on the shard-owned adapter, which does not read it.
+
+**`MessageHandlerInterceptor`** (Inbox, Outbox, event processors - `PatternMatchingMessageHandler`)
+
+- `InvokeMessageHandlerMethod.setMessage(Message)` replaces message and payload together; read them with
+  `getMessage()` / `getPayload()`. Build the copy with `message.withPayload(...)`: `OrderedMessage` overrides it to
+  keep `key` and `order`, `Message.of(...)` drops them.
+- The `@MessageHandler` method was chosen from the payload type **before** the chain ran and is never re-resolved.
+  Any type is allowed mid-chain, but what reaches the method must fit its 1st parameter, and its 2nd if it has one
+  (a method taking `OrderedMessage` fails on a plain `Message`). A misfit throws `ClassCastException` - on the
+  [built-in permanent-error list](#the-built-in-permanent-error-list), so a queued delivery dead-letters on the first
+  attempt unless the policy has `alwaysRetryOn(ClassCastException.class)`. Changing the type that decides the handler
+  belongs below dispatch, in a `DurableQueuesInterceptor` on `HandleQueuedMessage`.
+- `PatternMatchingMessageHandler` sorts its interceptors by `@InterceptorOrder` (unannotated = 10, ties keep
+  registration order).
+
+**`DurableLocalCommandBus`**: the `sendAndDontWait` chain runs on the consumer side and carries the `QueuedMessage`, so
+`setCommand` takes a `QueuedMessage` (`queued.withMessage(queued.getMessage().withPayload(cmd))`) or a plain
+`Message`. Rules for the command type: [LLM-reactive.md § Replacing the command](./LLM-reactive.md#replacing-the-command).
+
+```java
+@InterceptorOrder(2)   // before anything that reads the payload
+public class DecryptingCardNumberInterceptor implements MessageHandlerInterceptor {
+    @Override
+    public void intercept(InvokeMessageHandlerMethod operation,
+                          InterceptorChain<InvokeMessageHandlerMethod, Void, MessageHandlerInterceptor> chain) {
+        if (operation.getPayload() instanceof OrderPlaced order) {
+            var message = operation.getMessage();             // an OrderedMessage stays one: withPayload keeps key/order
+            operation.setMessage(message.withPayload(order.withCardNumber(decrypt(order.cardNumber()))));  // same type: fits
+        }
+        chain.proceed();
+    }
+}
+```
+
 ### Implementations
 
 | Implementation | Module |

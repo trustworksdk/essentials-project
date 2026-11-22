@@ -56,14 +56,14 @@ ARG JAVA_VERSION="17"
 # JAVA_HOME point at. The extras are installed so a branch that needs a different
 # JDK can be built with an explicit JAVA_HOME=/usr/lib/jvm/temurin-<v>-jdk-<arch>.
 ARG ADDITIONAL_JAVA_VERSIONS=""
-# Exact apt version of temurin-${JAVA_VERSION}-jdk (e.g. "25.0.5.0.0+8-0"); empty
+# Exact apt version of temurin-${JAVA_VERSION}-jdk (e.g. "25.0.5.1.0+2-0"); empty
 # installs the newest the Adoptium repo has. Applies to JAVA_VERSION only, never to
 # ADDITIONAL_JAVA_VERSIONS. List versions with `apt-cache madison temurin-25-jdk`.
 ARG JAVA_PACKAGE_VERSION=""
 # MAVEN_SHA512 must match MAVEN_VERSION — update both together.
 # Get the SHA512 from: https://archive.apache.org/dist/maven/maven-3/<version>/binaries/
-ARG MAVEN_VERSION="3.10.0"
-ARG MAVEN_SHA512="908b1501bfb420bf7c8affb855534a9c407fd6099367bfb9f2f2dcb8e9799102bffb84518cde74c679bd76870247c6528683abdd620581bffa90f95d92d175aa"
+ARG MAVEN_VERSION="3.10.1"
+ARG MAVEN_SHA512="8af2fcc48ee6b8f8fc0b21054226e14404b88500df6483cdeb3ae603408f6de27b1397ac591a9fb0d98fee64f4f624fee1383efd25b8998786cda1598fb9ea39"
 # JDT-LS (Eclipse Java LSP). SHA-256 must match the pinned tarball — update both
 # together. The build-date suffix is part of the filename. Get the SHA from:
 # https://download.eclipse.org/jdtls/milestones/<version>/<tarball>.sha256
@@ -76,9 +76,9 @@ ARG JDTLS_SHA256="b1f2abe0b3cccb462cf64fb4a5587c7d09df60cf8be7748b152cbd89d018bd
 # Refresh recipe:
 #   curl -fsSL https://download.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>.tar.gz.sha256
 #   curl -fsSL https://download.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>-aarch64.tar.gz.sha256
-ARG KOTLIN_LS_VERSION="263.7084.0"
-ARG KOTLIN_LS_SHA256_AMD64="ae0c4b01e17ab73a4a5227a78ea99e6dcbe3e499600315b22759a4e4cddd11df"
-ARG KOTLIN_LS_SHA256_ARM64="450ab7c1d80e48106aa429b48cb4226d82ca12a8a2400447ae02386794780cac"
+ARG KOTLIN_LS_VERSION="271.2085.0"
+ARG KOTLIN_LS_SHA256_AMD64="e398e799027f41749ea33faa57470307d13d40f910961858c7e30adbd778ae08"
+ARG KOTLIN_LS_SHA256_ARM64="877aee612a17dab48144466282a6414ec58ab428a10b97c7e13edd9b6b3dc96e"
 # rtk (Rust Token Killer). Per-arch release tarball from GitHub (amd64 → musl,
 # arm64 → gnu). SHA-256 = GitHub's published per-asset digest for the pinned tag,
 # verified at build. Refresh recipe (after bumping RTK_VERSION):
@@ -92,12 +92,12 @@ ARG KOTLIN_LS_SHA256_ARM64="450ab7c1d80e48106aa429b48cb4226d82ca12a8a2400447ae02
 # the hook core and every command filter, which is all this container uses; it
 # lacks only the pipeline engine and the llm-proxy setup that `rtk init -g`
 # would otherwise offer. Take the digests of the rtk-oss-* assets.
-ARG RTK_VERSION="1.1.0"
-ARG RTK_SHA256_AMD64="4dec94a64035e08189ae82fd5408fe4ae9ae27a665fc07e3e3ec3c4c2d8e8a3e"
+ARG RTK_VERSION="1.2.0"
+ARG RTK_SHA256_AMD64="a28407dc13038bdc9c2a1f5a047b0c636e0c1d495b15523576e2adb992a06a17"
 # Playwright release whose chromium-headless-shell post-create.sh downloads. Run with
 # npx, never added to the project: the Essentials build stays JVM-only.
 ARG PLAYWRIGHT_VERSION="1.55.0"
-ARG RTK_SHA256_ARM64="57a4fac13d18da77f0577ea8b68def7934b934bf76d0a6e161f0bfd06b1e1078"
+ARG RTK_SHA256_ARM64="6d176358458801879b445f1b420e3a9b47d2f0898b4c590f99ff94518654091c"
 # Review tools (INSTALL_REVIEW_TOOLS). Every pin below was checked against
 # OSV and the project's GitHub security advisories before it was added; re-check
 # both when bumping one.
@@ -154,10 +154,10 @@ ARG JSONSCHEMA_VERSION="4.26.0"
 # typescript-language-server requires, so an unpinned install leaves the server
 # unable to start and the LSP tool silently never comes up.
 ARG TYPESCRIPT_VERSION="6.0.3"
-ARG TS_LANGUAGE_SERVER_VERSION="6.0.2"
+ARG TS_LANGUAGE_SERVER_VERSION="6.1.0"
 ARG PYRIGHT_VERSION="1.1.414"
-ARG GRAPHIFY_VERSION="0.9.96"
-ARG HEADROOM_VERSION="0.42.0"
+ARG GRAPHIFY_VERSION="0.9.112"
+ARG HEADROOM_VERSION="0.44.0"
 
 # -----------------------------------------------------------------------------
 # JetBrains Configuration
@@ -197,7 +197,7 @@ RUN mkdir -p /out && if [ "${INSTALL_REVIEW_TOOLS}" = "true" ]; then \
 # -----------------------------------------------------------------------------
 # Pinned tag, not the floating :debian — a rebuild otherwise picks up whatever
 # base Microsoft published that day.
-FROM mcr.microsoft.com/devcontainers/base:2.2.3-trixie AS base
+FROM mcr.microsoft.com/devcontainers/base:2.2.6-trixie AS base
 
 # Re-declare ARGs after FROM (they don't persist across stages)
 ARG PROJECT_NAME
@@ -401,7 +401,7 @@ RUN if [ "${INSTALL_JAVA}" = "true" ]; then \
 # -----------------------------------------------------------------------------
 # Kotlin Language Server (Conditional)
 # Official JetBrains Kotlin LSP (https://github.com/Kotlin/kotlin-lsp), shipped
-# as a bundled IntelliJ-platform server (~400 MB compressed, ~800 MB extracted).
+# as a bundled IntelliJ-platform server (~370 MB compressed, ~1.2 GB extracted).
 # Runs on the JVM, so INSTALL_KOTLIN_LSP=true requires INSTALL_JAVA=true.
 # Tarballs are per-arch: amd64 has no suffix, arm64 uses "-aarch64".
 # The conventional binary name `kotlin-language-server` is symlinked to the
@@ -514,7 +514,7 @@ RUN if [ "${INSTALL_REVIEW_TOOLS}" = "true" ]; then \
 # -----------------------------------------------------------------------------
 # Pinned by tag AND multi-arch index digest: a floating :latest would put
 # whatever uv shipped that morning into every build, unverified.
-COPY --from=ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 /uv /uvx /tmp/uv-binaries/
+COPY --from=ghcr.io/astral-sh/uv:0.13.9@sha256:d3b601f0c7b118bc1753febf7c41cc80981df678445e0254284eecf84db79a7d /uv /uvx /tmp/uv-binaries/
 RUN cp /tmp/uv-binaries/uv /usr/local/bin/uv && \
     cp /tmp/uv-binaries/uvx /usr/local/bin/uvx && \
     chmod +x /usr/local/bin/uv /usr/local/bin/uvx && \

@@ -164,7 +164,7 @@ public final class DurableQueuesMicrometerInterceptor implements DurableQueuesIn
     @Override
     public Void intercept(HandleQueuedMessage operation, InterceptorChain<HandleQueuedMessage, Void, DurableQueuesInterceptor> interceptorChain) {
         interceptorChain.proceed();
-        meterRegistry.counter(HANDLED_QUEUED_MESSAGES_COUNTER_NAME, buildTagList(QUEUE_NAME_TAG_NAME, operation.message.getQueueName().toString()))
+        meterRegistry.counter(HANDLED_QUEUED_MESSAGES_COUNTER_NAME, buildTagList(QUEUE_NAME_TAG_NAME, operation.getMessage().getQueueName().toString()))
                      .increment();
         return null;
     }

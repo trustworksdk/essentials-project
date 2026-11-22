@@ -1,7 +1,7 @@
 # `slice-map` fixture — expected output
 
 Expected output for `references/slice/slice-map-template.html` and for the data contract in
-`commands/slice-map.md` §6, and (§ The Atlas pages) for the Slice Atlas page. The ground truth is
+`references/slice/slice-map-contract.md` § The `map` JSON, and (§ The Atlas pages) for the Slice Atlas page. The ground truth is
 written out here. Every row a DOM can show is also checked by `render-check.py`, which renders each data
 file in headless Chrome and asserts on the dumped DOM; its per-file values live in `expected.json`,
 next to this file. The rows marked **by eye** — pan, zoom, hover, click, double-click, maximise — need
@@ -36,7 +36,7 @@ import json, pathlib
 tpl = pathlib.Path('references/slice/slice-map-template.html').read_text()
 data = pathlib.Path('tests/fixtures/slice-map/sample-data.json').read_text().strip()
 old = 'const SLICE_MAP = /* __SLICE_MAP_DATA__ */ null;'
-assert old in tpl, 'placeholder line drifted — commands/slice-map.md §6 must be updated too'
+assert old in tpl, 'placeholder line drifted — references/slice/slice-map-contract.md must be updated too'
 pathlib.Path('/tmp/slice-map.html').write_text(tpl.replace(old, 'const SLICE_MAP = ' + data + ';'))
 EOF
 ```

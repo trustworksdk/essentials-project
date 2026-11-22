@@ -30,6 +30,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * An interceptor that records execution time for event store operations using the {@link MeasurementTaker} API.
  * <p>
  * The metric name always begins with {@value #METRIC_PREFIX} and any dynamic parameters (e.g. aggregate_type) are added as tags.
+ * <p>
+ * Ordering: this interceptor carries no {@link dk.trustworks.essentials.shared.interceptor.InterceptorOrder}, so it runs at the
+ * default order {@code 10}. Interceptors with a lower order run before it (further out in the chain); interceptors with the
+ * same order keep their registration order.
+ * The recorded time covers every interceptor nested inside it as well as the operation itself.
  */
 public class RecordExecutionTimeEventStoreInterceptor implements EventStoreInterceptor {
     public static final String           METRIC_PREFIX   = "essentials.eventstore";

@@ -219,6 +219,30 @@ if [ "${CLAUDE_STATUSLINE:-false}" = "true" ] && [ "${INSTALL_CLAUDE:-false}" = 
 fi
 
 # =============================================================================
+# claude-rc / claude-cm — Remote Control and Code Mode launchers
+# Puts `claude-rc` and `claude-cm` on PATH: two-line shims that run the sibling
+# claude-rc.sh (`claude --remote-control`) and claude-cm.sh (Code Mode, which
+# needs the feature-flag fetch and refuses agent teams). Each clears what blocks
+# its feature for that one process; DO_NOT_TRACK and agent teams stay on for
+# everything else (see each script's header). Same block as the
+# devcontainer-generator template (v5.11.0+), gated on INSTALL_CLAUDE here.
+# =============================================================================
+if [ "${INSTALL_CLAUDE:-false}" = "true" ]; then
+    for _launcher in claude-rc claude-cm; do
+        _launcher_sh="$(cd "$(dirname "$0")" && pwd)/${_launcher}.sh"
+        if [ -f "$_launcher_sh" ]; then
+            mkdir -p "$HOME/.local/bin"
+            printf '#!/usr/bin/env bash\nexec bash %q "$@"\n' "$_launcher_sh" > "$HOME/.local/bin/${_launcher}"
+            chmod 0755 "$HOME/.local/bin/${_launcher}"
+            echo "  → ${_launcher} → $_launcher_sh"
+        else
+            echo "  WARNING: $_launcher_sh not found; skipping the ${_launcher} launcher."
+        fi
+    done
+    unset _launcher _launcher_sh
+fi
+
+# =============================================================================
 # graphify Knowledge Graph (Conditional) — knowledge-graph indexer slot
 # https://github.com/safishamsi/graphify (MIT). A whole-system knowledge graph
 # (code + SQL + infra + docs) delivered as an agent skill + CLI. Installed as a
@@ -269,6 +293,56 @@ if [ "${INSTALL_GRAPHIFY:-false}" = "true" ]; then
                 # interpreter path, so this survives interpreter/tool upgrades.
                 ( cd /workspace && graphify hook install 2>&1 ) \
                     || echo "  INFO: 'graphify hook install' skipped (not a git repo yet?)."
+
+                # Refresh the graph when a FAST-FORWARD rebase ends. graphify's own
+                # hooks (checked on 0.9.96) already cover the other sequence ends: post-rewrite
+                # after a rebase, post-merge after a merge or pull (a pull --rebase
+                # with no local commits fast-forwards and fires post-merge), and the
+                # last pick of a cherry-pick range in post-commit. What none of them
+                # sees: `git rebase <upstream>` with no local commits checks out the
+                # result inside .git/rebase-merge and fires NO post-rewrite (measured,
+                # git 2.56.0), and graphify's post-checkout skips while rebase-merge
+                # exists — the graph stays stale until the next commit or checkout.
+                # This block is that one end (the devcontainer-generator template's
+                # sequence block, cut down to the case graphify misses, so no
+                # sequence end rebuilds twice). It is appended after graphify's own
+                # block (graphify rewrites only between its markers and runs its
+                # block in a subshell), and rewritten between our markers on every
+                # start; uninstall-stack.sh strips it. Into graphify's hooks
+                # directory: `git rev-parse --git-path hooks` follows core.hooksPath.
+                _hooks_dir="$(git -C /workspace rev-parse --git-path hooks 2>/dev/null)" || _hooks_dir=""
+                if [ -n "$_hooks_dir" ]; then
+                    case "$_hooks_dir" in /*) ;; *) _hooks_dir="/workspace/$_hooks_dir" ;; esac
+                    mkdir -p "$_hooks_dir"
+                    _path="$_hooks_dir/post-checkout"
+                    [ -s "$_path" ] || printf '#!/bin/sh\n' > "$_path"
+                    sed -i '/^# devcontainer-graphify-sequence-start$/,/^# devcontainer-graphify-sequence-end$/d' "$_path"
+                    cat >> "$_path" <<'SEQ_EOF'
+# devcontainer-graphify-sequence-start
+# managed by .devcontainer/scripts/post-create.sh (rewritten on every start)
+# Refreshes the graphify graph once when a fast-forward rebase ends — graphify's
+# own block above skips inside .git/rebase-merge, and git fires no post-rewrite
+# for it. Fails open.
+(
+[ "${GRAPHIFY_SKIP_HOOK:-0}" = "1" ] && exit 0
+command -v graphify >/dev/null 2>&1 || exit 0
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[ -f "$root/graphify-out/graph.json" ] || exit 0
+gd="$(git rev-parse --git-dir 2>/dev/null)" || exit 0
+# A linked worktree: the graph belongs to the primary checkout (graphify skips it too).
+[ "$(cd "$gd" && pwd)" = "$(cd "$(git rev-parse --git-common-dir)" && pwd)" ] || exit 0
+# Only a fast-forward rebase: its result checked out, nothing left to replay.
+[ "${3:-0}" = "1" ] && [ -d "$gd/rebase-merge" ] || exit 0
+grep -q '^[^#]' "$gd/rebase-merge/git-rebase-todo" 2>/dev/null && exit 0
+log="${HOME}/.cache/graphify-rebuild.log"
+mkdir -p "${log%/*}"
+echo "[graphify] post-checkout: fast-forward rebase done, launching background rebuild (log: $log)"
+cd "$root" && nohup graphify update "$root" >>"$log" 2>&1 &
+)
+# devcontainer-graphify-sequence-end
+SEQ_EOF
+                    chmod +x "$_path"
+                fi
 
                 # Make graphify's committed PreToolUse hook portable. On every
                 # `install --project`, graphify hardcodes the absolute exe path
@@ -548,9 +622,8 @@ fi
 # [code,mcp,proxy] pulls 28 packages including the ONNX/transformers ML stack.
 #
 # If you ever opt in: add `proxy` to the extras on BOTH `uv tool install` lines
-# below and DROP both `--with` flags — [proxy] already declares fastapi>=0.100.0
-# and a bounded mcp>=1.28.1,<2.0.0, making the two workarounds below redundant.
-# Also set HEADROOM_HTTP2=0 (headroom's own --http2 help warns HTTP/2 hits
+# below and DROP the `--with fastapi` flags — [proxy] already declares
+# fastapi>=0.100.0, making the workaround below redundant. Also set HEADROOM_HTTP2=0 (headroom's own --http2 help warns HTTP/2 hits
 # SSLV3_ALERT_BAD_RECORD_MAC when many concurrent streams are cancelled, which
 # is exactly Claude Code's traffic shape). Do NOT put ANTHROPIC_BASE_URL in
 # devcontainer.json containerEnv: a proxy that is not running would then break
@@ -567,13 +640,9 @@ fi
 # self-sufficient. We inject fastapi alone (~pure-python, no ML deps) rather
 # than pulling all of [proxy]. Drop this once upstream makes the import lazy.
 #
-# `--with "mcp<2"`: UPSTREAM BUG (headroom-ai 0.32.1). headroom declares an
-# unbounded `mcp>=1.0.0`, but the MCP Python SDK 2.0.0 removed the low-level
-# decorator API that headroom's server is written against — `Server` no longer
-# has .list_tools()/.call_tool(). With mcp 2.x resolved, `headroom mcp serve`
-# crashes at startup (AttributeError in ccr/mcp_server.py::_setup_handlers)
-# before completing the MCP handshake, so Claude Code reports the server as
-# failed. Pin to the 1.x line. Drop this once upstream supports mcp 2.x.
+# No `--with "mcp<2"` any more: headroom 0.43.0 ported its MCP servers to the MCP
+# Python SDK 2.x and its [mcp] extra now requires mcp>=2.2,<3 — the old 1.x pin
+# makes the install unsatisfiable.
 # =============================================================================
 if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then
     echo "Setting up headroom (context compression — MCP mode)..."
@@ -584,27 +653,30 @@ if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then
     # env is edited away. HEADROOM_BEACON is the one that matters: since 0.35.0 the
     # anonymous session-summary upload to Headroom Labs is ON by default and
     # fail-open, and it fires on the MCP path (after every headroom_compress).
-    # HEADROOM_OFFLINE is upstream's fail-closed master switch for all of it.
+    # HEADROOM_OFFLINE is upstream's fail-closed master switch for all of it —
+    # except for binaries.py's GitHub release downloads, which carry their own
+    # HEADROOM_BINARIES_OFFLINE switch (egress, not telemetry; only the proxy's
+    # --intercept-tool-results path fetches them, and we run no proxy).
     export HEADROOM_BEACON=off
     export HEADROOM_OFFLINE=1
+    export HEADROOM_BINARIES_OFFLINE=1
     export HEADROOM_UPDATE_CHECK=off
     export HEADROOM_WORKSPACE_DIR="$HOME/.headroom"
     if command -v uv &> /dev/null; then
         if ! command -v headroom &> /dev/null; then
             echo "  Installing headroom-ai[code,mcp] (uv tool — light extras, no proxy/ML deps)..."
-            uv tool install "headroom-ai[code,mcp]==${HEADROOM_VERSION:?HEADROOM_VERSION not set — Dockerfile ENV}" --with fastapi --with "mcp<2" 2>&1 \
-                || echo "  WARNING: headroom install failed. Retry with: uv tool install \"headroom-ai[code,mcp]==${HEADROOM_VERSION}\" --with fastapi --with \"mcp<2\"."
+            uv tool install "headroom-ai[code,mcp]==${HEADROOM_VERSION:?HEADROOM_VERSION not set — Dockerfile ENV}" --with fastapi 2>&1 \
+                || echo "  WARNING: headroom install failed. Retry with: uv tool install \"headroom-ai[code,mcp]==${HEADROOM_VERSION}\" --with fastapi."
         else
             echo "  headroom already installed ($(command -v headroom))"
-            # Self-heal an env that predates the mcp<2 pin (or was pushed onto
-            # mcp 2.x by `uv tool upgrade`): re-pin in place so `headroom mcp
-            # serve` can start. See the mcp<2 note above.
+            # An env from an older pin (0.42.x ran on MCP SDK 1.x; 0.43.0 moved to 2.x):
+            # reinstall at HEADROOM_VERSION so the server and its SDK match.
             headroom_py="$(uv tool dir 2>/dev/null)/headroom-ai/bin/python"
-            if [ -x "$headroom_py" ] && ! "$headroom_py" -c \
-                 'import mcp.server, sys; sys.exit(0 if hasattr(mcp.server.Server, "list_tools") else 1)' &> /dev/null; then
-                echo "  Re-pinning MCP SDK to 1.x (upstream mcp>=1.0.0 is unbounded)..."
-                uv tool install "headroom-ai[code,mcp]==${HEADROOM_VERSION:?HEADROOM_VERSION not set — Dockerfile ENV}" --force --with fastapi --with "mcp<2" 2>&1 \
-                    || echo "  WARNING: could not re-pin mcp<2 — 'headroom mcp serve' may fail to start."
+            have_headroom="$("$headroom_py" -c 'import importlib.metadata as m; print(m.version("headroom-ai"))' 2>/dev/null || true)"
+            if [ -x "$headroom_py" ] && [ "$have_headroom" != "${HEADROOM_VERSION:?HEADROOM_VERSION not set — Dockerfile ENV}" ]; then
+                echo "  Reinstalling headroom ${have_headroom:-?} -> ${HEADROOM_VERSION}..."
+                uv tool install "headroom-ai[code,mcp]==${HEADROOM_VERSION}" --force --with fastapi 2>&1 \
+                    || echo "  WARNING: could not reinstall headroom ${HEADROOM_VERSION} — 'headroom mcp serve' may fail to start."
             fi
         fi
 
@@ -614,8 +686,10 @@ if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then
         fi
 
         # Register headroom's MCP server with Claude Code (--force → idempotent
-        # across rebuilds). This exposes the on-demand compress/retrieve/stats
-        # tools; it does NOT start the always-on proxy and needs no API key.
+        # across rebuilds). This exposes the on-demand read/compress/retrieve/stats
+        # tools (_read only when HEADROOM_MCP_READ=on, and only under
+        # HEADROOM_MCP_READ_ROOTS); it does NOT start the always-on proxy and
+        # needs no API key.
         if [ "${INSTALL_CLAUDE:-false}" = "true" ] && command -v claude &> /dev/null && command -v headroom &> /dev/null; then
             echo "  Registering headroom MCP server with Claude Code (headroom mcp install)..."
             headroom mcp install --agent claude --force 2>&1 \
@@ -638,10 +712,13 @@ fi
 # The `rtk` binary is installed at build time (see Dockerfile). The hook is the
 # PROJECT's: .claude/hooks/rtk-bash-rewrite.sh, wired in the tracked
 # .claude/settings.json. It calls `rtk hook claude` and passes the rewrite on,
-# except that inside .claude/worktrees/ it never puts git behind rtk — Claude Code
-# refuses `rtk git …` from an agent started with isolation "worktree" (it cannot
-# see that the command targets the agent's own worktree), so with rtk's global
-# hook a worktree agent could not `git add` or `git commit` at all. This is the
+# with two exceptions. In auto mode (payload permission_mode "auto") it rewrites
+# nothing: the classifier reviews the command before the hook runs, so a rewrite
+# would be refused once and re-sent. And inside .claude/worktrees/ it drops any
+# rewrite that names git — Claude Code refuses an rtk command naming git from an
+# agent started with isolation "worktree" (it cannot see that the command targets
+# the agent's own worktree), so with rtk's global hook a worktree agent could not
+# `git add` or `git commit` at all. This is the
 # lean, proxy-free way to get rtk's job — independent of headroom.
 # =============================================================================
 if [ "${INSTALL_RTK:-false}" = "true" ]; then
@@ -663,18 +740,29 @@ if [ "${INSTALL_RTK:-false}" = "true" ]; then
 #
 # rtk's own hook (`rtk hook claude`) rewrites a Bash command to its rtk form — `git status` becomes
 # `rtk git status` — so the output is compressed before it reaches the model. This wrapper runs that
-# hook and passes its answer on unchanged, with one exception:
+# hook and passes its answer on unchanged, with two exceptions:
 #
-#   Inside a worktree under .claude/worktrees/, a rewrite that would put git behind rtk is dropped
-#   and the command runs as typed.
+#   In auto mode (the payload's "permission_mode" is "auto") nothing is rewritten: the command runs
+#   as typed.
+#
+# Why: auto mode's classifier reviews the command Claude wrote before this hook runs. A rewrite
+# returned in updatedInput is then denied with no verdict ("a hook changed this call's input after
+# auto mode reviewed it") and Claude must send the rewritten command again — one refused round trip
+# per rewritten call, more than rtk saves. See https://code.claude.com/docs/en/hooks
+# § "PreToolUse updatedInput in auto mode"; the mode is the common input field permission_mode
+# (same page, § "Common input fields"). Claude can still type `rtk …` itself in auto mode.
+#
+#   Inside a worktree under .claude/worktrees/, a rewrite whose command names git anywhere is
+#   dropped and the command runs as typed.
 #
 # Why: Claude Code refuses any git command from an agent started with isolation "worktree" unless it
-# can see that the command targets the agent's own worktree. `rtk git status` hides git behind a
-# launcher, so it is refused ("this command runs rtk with a git command among its operands … cannot
-# be shown not to be git. Refusing to run it"). Before this wrapper, worktree agents could not
-# `git add` or `git commit` at all; they called /usr/bin/git to get past rtk, or stopped with their
-# work staged. Every other rewrite (ls, grep, …) is still applied in a worktree: the guard only
-# reads git.
+# can see that the command targets the agent's own worktree. rtk is a launcher the guard cannot read,
+# so any rtk command that names git is refused: `rtk git status` ("this command runs rtk with a git
+# command among its operands … cannot be shown not to be git"), and just as much `rtk grep -n '"git"'
+# src` ("this command feeds rtk text naming git … cannot be shown to stay inside the worktree").
+# Before this wrapper, worktree agents could not `git add` or `git commit` at all; they called
+# /usr/bin/git to get past rtk, or stopped with their work staged. A rewrite that does not name git
+# (ls, grep foo, …) is still applied in a worktree: the guard only refuses what names git.
 #
 # .devcontainer/scripts/post-create.sh writes this file and wires it in the committed
 # .claude/settings.json, so every clone gets the same behaviour. It also strips rtk's own hook from
@@ -688,6 +776,9 @@ if [ "${INSTALL_RTK:-false}" = "true" ]; then
 # writer with SIGPIPE.
 input="$(cat)"
 [ "${RTK_HOOK_DISABLED:-}" = "1" ] && exit 0
+# Auto mode: leave the command as written (see the header). Matched on the raw JSON, so it needs no
+# jq; inside a JSON string the quotes are escaped (\"), so a command quoting this text cannot match.
+[[ "$input" =~ \"permission_mode\"[[:space:]]*:[[:space:]]*\"auto\" ]] && exit 0
 command -v rtk >/dev/null 2>&1 || exit 0
 
 out="$(printf '%s' "$input" | rtk hook claude)"
@@ -698,10 +789,10 @@ if [ "$rc" -eq 0 ] && [ -n "$out" ] && command -v jq >/dev/null 2>&1; then
   case "$cwd" in
     */.claude/worktrees/*)
       rewritten="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.updatedInput.command // empty' 2>/dev/null)"
-      # `rtk git …` anywhere in the command: at the start, after `&&`/`;`/`|`/`(`, or behind
-      # `rtk bypass` (1.0's name) or `rtk proxy` (its alias). Dropping the whole rewrite keeps
-      # the command exactly as the model wrote it.
-      if [[ "$rewritten" =~ (^|[^[:alnum:]_./-])rtk([[:space:]]+(bypass|proxy))?[[:space:]]+git([[:space:]]|$) ]]; then
+      # `git` as a word anywhere: `rtk git …` in any segment or behind `rtk proxy`, and git as text
+      # rtk is handed (`rtk grep '"git"'`, `.git/`). Over-matching only costs the compression;
+      # dropping the whole rewrite keeps the command exactly as the model wrote it.
+      if [[ "$rewritten" =~ (^|[^[:alnum:]_])git([^[:alnum:]_]|$) ]]; then
         exit 0
       fi
       ;;
@@ -952,7 +1043,12 @@ elif [ -z "${GIT_USER_NAME}" ] && [ -z "${GIT_USER_EMAIL}" ]; then
     echo "  See README.md -> Git Identity for details."
 fi
 
-git config --global --add safe.directory /workspace 2>/dev/null || true
+# safe.directory is an exact path, so /workspace does not cover the isolation worktrees Claude
+# Code creates under /workspace/.claude/worktrees/; the bind mount intermittently reports another
+# owner, and git then refuses a fresh worktree ("dubious ownership"). --replace-all --fixed-value
+# keeps one entry each instead of appending a duplicate on every run.
+git config --global --replace-all --fixed-value safe.directory /workspace /workspace 2>/dev/null || true
+git config --global --replace-all --fixed-value safe.directory '/workspace/.claude/worktrees/*' '/workspace/.claude/worktrees/*' 2>/dev/null || true
 
 # Bind-mount stat-race mitigation. /workspace is a `consistency=delegated` bind
 # mount, so inode/ctime drift makes git's default stat check report phantom
@@ -996,6 +1092,10 @@ if [ "${INSTALL_CLAUDE:-false}" = "true" ]; then
         echo ""
         echo "      See 'Authenticating Claude Code' at the top of README.md for details."
     fi
+    [ -x "$HOME/.local/bin/claude-rc" ] && \
+        echo "    → claude-rc: Remote Control session, DO_NOT_TRACK kept container-wide"
+    [ -x "$HOME/.local/bin/claude-cm" ] && \
+        echo "    → claude-cm: Code Mode (experimental); resume with 'claude-cm --continue|--resume'"
 fi
 if [ "${CLAUDE_STATUSLINE:-false}" = "true" ] && [ "${INSTALL_CLAUDE:-false}" = "true" ]; then
     echo "  Status line (model · context usage · branch · worktree)"

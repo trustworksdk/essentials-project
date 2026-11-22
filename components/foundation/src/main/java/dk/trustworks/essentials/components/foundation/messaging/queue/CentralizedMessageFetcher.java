@@ -429,7 +429,12 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                                 interceptors,
                                                 (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                 () -> {
-                                                    registration.messageHandler.handle(message);
+                                                    // The handler gets what the interceptors left on the operation - possibly a
+                                                    // replacement (e.g. decrypted) - while every queue write below keeps using
+                                                    // message, the entry selected for delivery (setMessage keeps the id)
+                                                    var deliveredMessage = operation.getMessage();
+                                                    registration.messageHandler.handle(deliveredMessage);
+                                                    DefaultDurableQueueConsumer.carryRedeliveryRequestToSelectedMessage(deliveredMessage, message);
                                                     return (Void) null;
                                                 })
                         .proceed();

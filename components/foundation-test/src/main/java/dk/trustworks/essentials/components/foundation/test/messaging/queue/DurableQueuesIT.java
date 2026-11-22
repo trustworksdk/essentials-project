@@ -24,7 +24,7 @@ import dk.trustworks.essentials.components.foundation.test.messaging.queue.test_
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.types.CorrelationId;
 import dk.trustworks.essentials.shared.collections.Lists;
-import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
+import dk.trustworks.essentials.shared.interceptor.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 
@@ -979,6 +979,299 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         } finally {
             // Always disable corruption to avoid affecting other tests
             jsonSerializerProxy.disableJSONCorruptionDuringDeserialization();
+        }
+    }
+
+
+    // ------------------------------------------------------------------------------------------------------------
+    // Interceptor operation replacement: an interceptor changes the input via the operation's setter and proceeds;
+    // whatever it leaves on the operation is what the default behaviour (and the handler) acts on
+    // ------------------------------------------------------------------------------------------------------------
+
+    @Test
+    void a_HandleQueuedMessage_interceptor_that_replaces_the_message_hands_the_replacement_to_the_handler() {
+        // Given
+        var queueName        = QueueName.of("TestQueue");
+        var originalPayload  = new OrderEvent.OrderAdded(OrderId.random(), CustomerId.random(), 1234);
+        var replacedPayload  = new OrderEvent.OrderAccepted(OrderId.random());
+        var replacingInterceptor = new OuterPayloadReplacingInterceptor(payload -> replacedPayload);
+        durableQueues.addInterceptor(replacingInterceptor);
+        try {
+            usingDurableQueue(() -> durableQueues.queueMessage(queueName, Message.of(originalPayload)));
+            var handler = new RecordingQueuedMessageHandler();
+
+            // When
+            var consumer = durableQueues.consumeFromQueue(queueName, RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 1), 1, handler);
+
+            // Then
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(handler.messages).hasSize(1));
+            assertThat(handler.messages.peek().getPayload()).isEqualTo(replacedPayload);
+            assertThat(replacingInterceptor.payloadsSeen).containsExactly(originalPayload);
+            // The queue entry the consumer selected is the one acknowledged
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0));
+            assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(0);
+            consumer.cancel();
+        } finally {
+            durableQueues.removeInterceptor(replacingInterceptor);
+        }
+    }
+
+    @Test
+    void two_ordered_HandleQueuedMessage_interceptors_that_replace_the_message_run_outer_first_and_the_handler_gets_the_inner_replacement() {
+        // Given
+        var queueName       = QueueName.of("TestQueue");
+        var originalPayload = new OrderEvent.OrderAdded(OrderId.random(), CustomerId.random(), 1234);
+        var outerPayload    = new OrderEvent.OrderAccepted(OrderId.random());
+        var innerPayload    = new OrderEvent.ProductRemovedFromOrder(OrderId.random(), ProductId.random());
+        var outer           = new OuterPayloadReplacingInterceptor(payload -> outerPayload);
+        var inner           = new InnerPayloadReplacingInterceptor(payload -> innerPayload);
+        // Added inner first, so the order comes from @InterceptorOrder and not from the order of registration
+        durableQueues.addInterceptor(inner);
+        durableQueues.addInterceptor(outer);
+        try {
+            usingDurableQueue(() -> durableQueues.queueMessage(queueName, Message.of(originalPayload)));
+            var handler = new RecordingQueuedMessageHandler();
+
+            // When
+            var consumer = durableQueues.consumeFromQueue(queueName, RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 1), 1, handler);
+
+            // Then
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(handler.messages).hasSize(1));
+            assertThat(outer.payloadsSeen).containsExactly(originalPayload);
+            assertThat(inner.payloadsSeen).containsExactly(outerPayload);
+            assertThat(handler.messages.peek().getPayload()).isEqualTo(innerPayload);
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0));
+            consumer.cancel();
+        } finally {
+            durableQueues.removeInterceptor(outer);
+            durableQueues.removeInterceptor(inner);
+        }
+    }
+
+    @Test
+    void acknowledgedWithHandler_set_by_an_inner_interceptor_survives_an_outer_interceptor_replacing_the_message() {
+        // Given
+        var queueName              = QueueName.of("TestQueue");
+        var inHandleChain          = new AtomicBoolean();
+        var acksOutsideHandleChain = new AtomicInteger();
+        var acksInsideHandleChain  = new AtomicInteger();
+        var outer                  = new OuterHandleChainTrackingInterceptor(inHandleChain, new OrderEvent.OrderAccepted(OrderId.random()));
+        var inner                  = new InnerAcknowledgingInterceptor(() -> durableQueues);
+        DurableQueuesInterceptor ackCounter = new TestDurableQueuesInterceptor() {
+            @Override
+            public boolean intercept(AcknowledgeMessageAsHandled operation, InterceptorChain<AcknowledgeMessageAsHandled, Boolean, DurableQueuesInterceptor> interceptorChain) {
+                if (inHandleChain.get()) {
+                    acksInsideHandleChain.incrementAndGet();
+                } else {
+                    acksOutsideHandleChain.incrementAndGet();
+                }
+                return interceptorChain.proceed();
+            }
+        };
+        durableQueues.addInterceptor(outer);
+        durableQueues.addInterceptor(inner);
+        durableQueues.addInterceptor(ackCounter);
+        try {
+            usingDurableQueue(() -> durableQueues.queueMessage(queueName, Message.of(new OrderEvent.OrderAdded(OrderId.random(), CustomerId.random(), 1234))));
+            var handler = new RecordingQueuedMessageHandler();
+
+            // When
+            var consumer = durableQueues.consumeFromQueue(queueName, RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 1), 1, handler);
+
+            // Then
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0));
+            assertThat(handler.messages).hasSize(1);
+            assertThat(inner.acknowledgeResults).containsExactly(true);
+            // Exactly once: an interceptor that acknowledges in the handler's transaction (PostgreSQL's
+            // SingleOperationTransactionDurableQueuesInterceptor) must not acknowledge again on top of the inner one
+            assertThat(acksInsideHandleChain.get()).isEqualTo(1);
+            // The consumer saw the flag on the operation and did not acknowledge the message a second time
+            Awaitility.await()
+                      .during(Duration.ofMillis(500))
+                      .atMost(Duration.ofSeconds(2))
+                      .until(() -> acksOutsideHandleChain.get() == 0);
+            assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(0);
+            consumer.cancel();
+        } finally {
+            durableQueues.removeInterceptor(outer);
+            durableQueues.removeInterceptor(inner);
+            durableQueues.removeInterceptor(ackCounter);
+        }
+    }
+
+    @Test
+    void a_QueueMessage_interceptor_that_replaces_the_message_queues_the_replacement() {
+        // Given
+        var queueName       = QueueName.of("TestQueue");
+        var replacedPayload = new OrderEvent.OrderAccepted(OrderId.random());
+        DurableQueuesInterceptor replacingInterceptor = new TestDurableQueuesInterceptor() {
+            @Override
+            public QueueEntryId intercept(QueueMessage operation, InterceptorChain<QueueMessage, QueueEntryId, DurableQueuesInterceptor> interceptorChain) {
+                operation.setMessage(operation.getMessage().withPayload(replacedPayload));
+                return interceptorChain.proceed();
+            }
+        };
+        durableQueues.addInterceptor(replacingInterceptor);
+        try {
+            // When
+            var id = withDurableQueue(() -> durableQueues.queueMessage(queueName,
+                                                                       Message.of(new OrderEvent.OrderAdded(OrderId.random(), CustomerId.random(), 1234),
+                                                                                  MessageMetaData.of("trace_id", "trace-1"))));
+
+            // Then
+            var queued = durableQueues.getQueuedMessage(id);
+            assertThat(queued).isPresent();
+            assertThat(queued.get().getPayload()).isEqualTo(replacedPayload);
+            assertThat(queued.get().getMetaData().get("trace_id")).isEqualTo("trace-1");
+
+            var handler  = new RecordingQueuedMessageHandler();
+            var consumer = durableQueues.consumeFromQueue(queueName, RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 1), 1, handler);
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(handler.messages).hasSize(1));
+            assertThat(handler.messages.peek().getPayload()).isEqualTo(replacedPayload);
+            consumer.cancel();
+        } finally {
+            durableQueues.removeInterceptor(replacingInterceptor);
+        }
+    }
+
+    @Test
+    void a_QueueMessages_interceptor_that_replaces_the_messages_queues_the_replacements() {
+        // Given
+        var queueName = QueueName.of("TestQueue");
+        var orderId1  = OrderId.random();
+        var orderId2  = OrderId.random();
+        DurableQueuesInterceptor replacingInterceptor = new TestDurableQueuesInterceptor() {
+            @Override
+            public List<QueueEntryId> intercept(QueueMessages operation, InterceptorChain<QueueMessages, List<QueueEntryId>, DurableQueuesInterceptor> interceptorChain) {
+                operation.setMessages(operation.getMessages()
+                                               .stream()
+                                               .<Message>map(message -> message.withPayload(new OrderEvent.OrderAccepted(((OrderEvent) message.getPayload()).orderId)))
+                                               .toList());
+                return interceptorChain.proceed();
+            }
+        };
+        durableQueues.addInterceptor(replacingInterceptor);
+        try {
+            // When
+            var ids = withDurableQueue(() -> durableQueues.queueMessages(queueName,
+                                                                         List.of(Message.of(new OrderEvent.OrderAdded(orderId1, CustomerId.random(), 1)),
+                                                                                 Message.of(new OrderEvent.OrderAdded(orderId2, CustomerId.random(), 2)))));
+
+            // Then
+            assertThat(ids).hasSize(2);
+            assertThat(durableQueues.getQueuedMessage(ids.get(0)).get().getPayload()).isEqualTo(new OrderEvent.OrderAccepted(orderId1));
+            assertThat(durableQueues.getQueuedMessage(ids.get(1)).get().getPayload()).isEqualTo(new OrderEvent.OrderAccepted(orderId2));
+
+            var handler  = new RecordingQueuedMessageHandler();
+            var consumer = durableQueues.consumeFromQueue(queueName, RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 1), 1, handler);
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> assertThat(handler.messages).hasSize(2));
+            assertThat(handler.messages.stream().map(Message::getPayload).toList())
+                    .containsExactlyInAnyOrder(new OrderEvent.OrderAccepted(orderId1), new OrderEvent.OrderAccepted(orderId2));
+            consumer.cancel();
+        } finally {
+            durableQueues.removeInterceptor(replacingInterceptor);
+        }
+    }
+
+    /**
+     * A {@link DurableQueuesInterceptor} for the tests, which needs no access to the {@link DurableQueues} it is added to
+     */
+    protected abstract static class TestDurableQueuesInterceptor implements DurableQueuesInterceptor {
+        @Override
+        public void setDurableQueues(DurableQueues durableQueues) {
+        }
+    }
+
+    /**
+     * Replaces the payload of the message being handled - via {@link QueuedMessage#withMessage(Message)}, so the queue
+     * entry keeps its id - and records the payload it saw. Subclasses carry the {@link InterceptorOrder}, which an
+     * anonymous class cannot.
+     */
+    protected abstract static class PayloadReplacingInterceptor extends TestDurableQueuesInterceptor {
+        private final Function<Object, Object> replacement;
+        final         List<Object>             payloadsSeen = new CopyOnWriteArrayList<>();
+
+        protected PayloadReplacingInterceptor(Function<Object, Object> replacement) {
+            this.replacement = replacement;
+        }
+
+        @Override
+        public Void intercept(HandleQueuedMessage operation, InterceptorChain<HandleQueuedMessage, Void, DurableQueuesInterceptor> interceptorChain) {
+            var message = operation.getMessage();
+            payloadsSeen.add(message.getPayload());
+            operation.setMessage(message.withMessage(message.getMessage().withPayload(replacement.apply(message.getPayload()))));
+            return interceptorChain.proceed();
+        }
+    }
+
+    @InterceptorOrder(1)
+    protected static class OuterPayloadReplacingInterceptor extends PayloadReplacingInterceptor {
+        protected OuterPayloadReplacingInterceptor(Function<Object, Object> replacement) {
+            super(replacement);
+        }
+    }
+
+    @InterceptorOrder(20)
+    protected static class InnerPayloadReplacingInterceptor extends PayloadReplacingInterceptor {
+        protected InnerPayloadReplacingInterceptor(Function<Object, Object> replacement) {
+            super(replacement);
+        }
+    }
+
+    /**
+     * Replaces the payload, and flags while the rest of the {@link HandleQueuedMessage} chain runs, so an
+     * acknowledgement made by the consumer afterwards can be told from one made inside the chain
+     */
+    @InterceptorOrder(1)
+    protected static class OuterHandleChainTrackingInterceptor extends TestDurableQueuesInterceptor {
+        private final AtomicBoolean inHandleChain;
+        private final Object        replacementPayload;
+
+        protected OuterHandleChainTrackingInterceptor(AtomicBoolean inHandleChain, Object replacementPayload) {
+            this.inHandleChain = inHandleChain;
+            this.replacementPayload = replacementPayload;
+        }
+
+        @Override
+        public Void intercept(HandleQueuedMessage operation, InterceptorChain<HandleQueuedMessage, Void, DurableQueuesInterceptor> interceptorChain) {
+            var message = operation.getMessage();
+            operation.setMessage(message.withMessage(message.getMessage().withPayload(replacementPayload)));
+            inHandleChain.set(true);
+            try {
+                return interceptorChain.proceed();
+            } finally {
+                inHandleChain.set(false);
+            }
+        }
+    }
+
+    /**
+     * Acknowledges the message after the handler returned, inside the chain, and tells the consumer so through
+     * {@link HandleQueuedMessage#acknowledgedWithHandler(boolean)}
+     */
+    @InterceptorOrder(20)
+    protected static class InnerAcknowledgingInterceptor extends TestDurableQueuesInterceptor {
+        private final Supplier<DurableQueues> durableQueues;
+        final         List<Boolean>           acknowledgeResults = new CopyOnWriteArrayList<>();
+
+        protected InnerAcknowledgingInterceptor(Supplier<DurableQueues> durableQueues) {
+            this.durableQueues = durableQueues;
+        }
+
+        @Override
+        public Void intercept(HandleQueuedMessage operation, InterceptorChain<HandleQueuedMessage, Void, DurableQueuesInterceptor> interceptorChain) {
+            var result       = interceptorChain.proceed();
+            var acknowledged = durableQueues.get().acknowledgeMessageAsHandled(operation.getMessage().getId());
+            acknowledgeResults.add(acknowledged);
+            operation.acknowledgedWithHandler(acknowledged);
+            return result;
         }
     }
 

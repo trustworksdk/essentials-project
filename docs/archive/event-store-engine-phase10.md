@@ -26,7 +26,7 @@ modules are listed in §10, and each one needs confirmation.
 | Engine `postgresql-event-log` | Built (phases 2-7), plain Java, raw pgjdbc | No change expected |
 | Processor `postgresql-event-log-processor` | `ViewProjection`, `EventReactor`, `EventLogEventStore` adapter, page sources, `EventLogCommits`, admin SPI `EventLogSubscriptionsApi` (phase 8) | Annotated base classes `EventLogViewProcessor` and `EventLogReactor` (§3.5) |
 | Migration `postgresql-event-log-migration` | Copy, verify, import, CLI (phase 9) | Documentation only |
-| Admin REST | `EssentialsAdminApiSpec` rows and `EventLogSubscriptionsController`, conditional on an `EventLogSubscriptionsApi` bean (8b-C, release notes §2.19) | The starter declares the bean (§3.4) |
+| Admin REST | `EssentialsAdminApiSpec` rows and `EventLogSubscriptionsController`, conditional on an `EventLogSubscriptionsApi` bean (8b-C, release notes §2.21) | The starter declares the bean (§3.4) |
 | Admin UI | No page for the event log | A view beside the shard-owned queue view (§4) |
 | Spring Boot starter | None; the performance lab builds the engine by hand (`EventLogBaselineScenario`) | `spring-boot-starter-postgresql-event-log` (§3) |
 | `LLM/`, `docs/` | Nothing mentions the event log | §5 |

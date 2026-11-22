@@ -37,8 +37,13 @@ class {{Slice}}Handler(
 
     @CmdHandler
     fun handle(cmd: {{Command}}) {
+        // A missing {{Entity}} throws IllegalStateException, never IllegalArgumentException (nor Kotlin's
+        // require(...), which throws it). A command sent with sendAndDontWait runs on a durable queue,
+        // whose consumer dead-letters an IllegalArgumentException on its first delivery (the built-in
+        // permanent-error list), yet the row may only be missing because the transaction that creates
+        // it has not committed yet. IllegalStateException is retried by the RedeliveryPolicy.
         val {{entity}} = {{entity}}s.findById(cmd.id.value)
-            ?: throw IllegalArgumentException("No {{Entity}} ${cmd.id.value}")
+            ?: throw IllegalStateException("No {{Entity}} ${cmd.id.value}")
 
         // TODO: call the ONE invariant method this slice's intent maps to. The Boolean-returning
         //       shape is the idempotent form — false means the state was already reached, so a

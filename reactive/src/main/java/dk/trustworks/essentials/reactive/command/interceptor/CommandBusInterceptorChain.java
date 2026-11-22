@@ -51,6 +51,38 @@ public interface CommandBusInterceptorChain {
      */
     CommandHandler matchedCommandHandler();
 
+    /**
+     * Replace the command the rest of the chain works on. A {@link CommandBusInterceptor} that changes the command
+     * (e.g. decrypts it) calls this before {@link #proceed()}; every later {@link CommandBusInterceptor} then receives the
+     * replacement (as its <code>command</code> parameter and from {@link #command()}), and so does the default
+     * {@link CommandBus} behaviour, which hands it to the {@link #matchedCommandHandler()}.<br>
+     * Commands are values: build a new command instead of mutating the one the chain carries.
+     * <p>
+     * <b>The {@link CommandHandler} is not re-resolved.</b> {@link #matchedCommandHandler()} was chosen from the command
+     * as it was <i>before</i> the chain ran, and stays the same throughout the chain. Any non-null value is accepted here,
+     * so an interceptor may change the command's type and a later interceptor may change it again; only the command that
+     * reaches the end of the chain has to fit: the default behaviour checks
+     * {@link CommandHandler#canHandle(Class) matchedCommandHandler().canHandle(command.getClass())} immediately before
+     * calling {@link CommandHandler#handle(Object)} and throws a {@link ClassCastException} if the handler cannot handle it.
+     * A replacement that has to change which handler runs cannot be done by a {@link CommandBusInterceptor}.
+     * <p>
+     * <b>{@code sendAndDontWait} on the durable command bus:</b> there the chain carries the queued command <i>message</i>
+     * (a {@code QueuedMessage}), not the command itself, so the replacement is the message carrying the command, e.g.
+     * {@code queuedMessage.withMessage(queuedMessage.getMessage().withPayload(newCommand))}. Decrypting a queued
+     * command, in particular one whose type decides the handler, is done at the durable-queue layer instead.
+     * <p>
+     * This default implementation throws {@link UnsupportedOperationException}; it exists so that third-party
+     * implementations of this interface keep compiling. The chains every Essentials {@link CommandBus} builds
+     * ({@link DefaultCommandBusInterceptorChain}) support it.
+     *
+     * @param command the command (on the durable {@code sendAndDontWait} path: the command message) that later
+     *                interceptors and the {@link CommandHandler} receive instead of the current one - never null
+     * @throws UnsupportedOperationException if this chain implementation does not support replacing the command
+     */
+    default void setCommand(Object command) {
+        throw new UnsupportedOperationException(this.getClass().getName() + " does not support replacing the command");
+    }
+
 
     /**
      * Create a new {@link CommandBusInterceptorChain} instance for the handling of a Command
@@ -76,7 +108,7 @@ public interface CommandBusInterceptorChain {
      */
     class DefaultCommandBusInterceptorChain implements CommandBusInterceptorChain {
         private static final Logger                                                                log = LoggerFactory.getLogger(DefaultCommandBusInterceptorChain.class);
-        private final        Object                                                                command;
+        private              Object                                                                command;
         private              CommandHandler                                                        matchedCommandHandler;
         private final        Iterator<CommandBusInterceptor>                                       interceptorsIterator;
         private final        BiFunction<CommandBusInterceptor, CommandBusInterceptorChain, Object> interceptorOperationInvoker;
@@ -121,6 +153,11 @@ public interface CommandBusInterceptorChain {
         @Override
         public Object command() {
             return command;
+        }
+
+        @Override
+        public void setCommand(Object command) {
+            this.command = requireNonNull(command, "No command provided");
         }
 
         @Override

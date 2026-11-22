@@ -35,6 +35,10 @@ No Essentials dependency found here · nothing to initialise
 This repository does not use Trustworks Essentials yet. Run /essentials:init to
 scaffold a new project, or just ask an Essentials question — the essentials-docs
 skill answers from the bundled docs without needing a project.
+
+New to event sourcing or CQRS? The words this plugin uses — event, command,
+decider, projection, aggregate, slice, bounded context — are explained at
+https://github.com/trustworksdk/essentials-project/blob/main/docs/concepts.md
 ```
 
 Then print the `━━━ SKILLS THAT FIRE ON THEIR OWN ━━━` and `━━━ CREATING AND UPDATING A PROJECT ━━━`
@@ -108,9 +112,8 @@ or auditing a slice, seeing the whole map, and reviewing a change.
                          per journey, a Diff lens against the branch's merge
                          base, field lineage, a coupling matrix and a metro
                          map, with an issues dock and deep links. Written by
-                         script; audits nothing. --per-app: one page per
-                         application of a multi-application folder, plus an
-                         index page.
+                         script; audits nothing. --out <dir> on a multi-application
+                         folder: one page per application, plus an index page.
   /essentials:slice-enrich
                          Catches older manifests up on the fields they lack —
                          flow, scenarios, summary, invariants, tier — drafted
@@ -150,13 +153,16 @@ or auditing a slice, seeing the whole map, and reviewing a change.
                          that release requires, under a decision note you approve,
                          on its own branch, code migrations included, gated by a
                          full build. Reports before it writes and offers each fix
-                         on its own. Never regenerates a skeleton or restructures
-                         slice source; --check shows the whole plan.
-                         --check is a report-only dry run.
+                         on its own, optionally one commit per fix on a branch,
+                         and writes what stays open to a backlog. Never regenerates a skeleton or restructures
+                         slice source; --check is a report-only dry run that
+                         shows the whole plan.
   /essentials:doctor     Checks this machine for the tools the commands run —
-                         python3, uv, the pinned JDK, Maven, Docker, npm — and
-                         says what each missing one costs: a command that stops,
-                         a gate not run, a compile-only build. Installs nothing.
+                         python3, uv, the pinned JDK, Maven, Docker, npm, git,
+                         ripgrep — and says what each missing one costs: a
+                         command that stops, a gate not run, a compile-only
+                         build. Profiles: init, review, slice, docs, upgrade.
+                         Installs nothing.
 
 ━━━ WHAT /essentials:init SETS UP ━━━
 
@@ -279,8 +285,11 @@ or auditing a slice, seeing the whole map, and reviewing a change.
   /essentials:slice-check ← existing project that follows the law; audit it
   /essentials:slice-discover ← existing project that does not; map it first
   /essentials:review      ← before you open a pull request
+  /essentials:doctor      ← a command stopped on a missing tool
   Just ask                ← both skills load themselves: a question routes to
                             the docs, a change request routes to the slice
+  New to event sourcing?  ← event, slice, lane, §R5, S1-S11, ESS id explained:
+                            https://github.com/trustworksdk/essentials-project/blob/main/docs/concepts.md
 ```
 
 Adapt the header line to what detection actually found. Name the language only if a build file

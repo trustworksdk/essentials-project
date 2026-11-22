@@ -3,7 +3,7 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
-## 0.60.1-23 — targets Essentials 0.60.1
+## 0.60.1-25 — targets Essentials 0.60.1
 
 - **Event log: releasing a parked aggregate** — the event-log reference says a held event that fails on a retry or
   discard becomes the new parked head, and that a retry hands over at most `pageSize` events per transaction.
@@ -18,20 +18,20 @@ targets, with a `-N` suffix for plugin-only releases.
   (`onStarted`/`onStopped`). The event-store reference says CDC with `wal2json` on PostgreSQL 17.12 / 18
   needs `wal2json` in `output_plugin_libraries`. The migration's epoch waits for prepared two-phase transactions too. No skill, rule or script changed.
 
-## 0.60.1-22 — targets Essentials 0.60.1
+## 0.60.1-24 — targets Essentials 0.60.1
 
 - **Event log: parked retries and the lease** — a new gotcha: an exclusive in-transaction subscription's parked retry
   must finish within `lease-local-stop`, since it holds the progress row the lease renewal waits on; a periodic
   subscription's retry holds no lock while its handler runs. No skill, rule or script changed.
 
-## 0.60.1-21 — targets Essentials 0.60.1
+## 0.60.1-23 — targets Essentials 0.60.1
 
 - **Event log: admin reset and stop() corrected** — the admin reset refusal is documented per processor kind (an
   inbox processor has no `rebuild()`), and only for processors that run in the application serving the admin call;
   after a `stop()` that timed out, a re-subscribe of the same exclusive key and `deleteRetiredInstance` are refused
   with `IllegalStateException` (the reference said they wait). No skill, rule or script changed.
 
-## 0.60.1-20 — targets Essentials 0.60.1
+## 0.60.1-22 — targets Essentials 0.60.1
 
 - **Event log: review fixes** — the event-log reference counts four processor base classes everywhere (the partitioned
   view processor was missing from the base-class sentences, the consistency table and the module index), names the
@@ -43,14 +43,14 @@ targets, with a `-N` suffix for plugin-only releases.
   in-memory projector and auto-flush beans and the partitioned processor in the start-up refusal; the admin-api page's
   Endpoints table gains the shard-owned queue and aggregate lifecycle and archive tags. No skill, rule or script changed.
 
-## 0.60.1-19 — targets Essentials 0.60.1
+## 0.60.1-21 — targets Essentials 0.60.1
 
 - **Event log: processor event type filter** — the event-log reference documents that every processor base class
   subscribes only to the event types its `@MessageHandler` methods handle when all handled payload types are final, and
   the `eventTypeFilter()` hook that widens it. The start-up refusal now names `pg_stat_activity`, the view the engine
   reads running writers from. No skill, rule or script changed.
 
-## 0.60.1-18 — targets Essentials 0.60.1
+## 0.60.1-20 — targets Essentials 0.60.1
 
 - **Event log: observability** — the event-log reference gains an Observability section: the
   `MicrometerEventLogObserver` meters (`essentials.eventlog.subscription.lag`, `.failed`, `.parked`, `.lease_lost`,
@@ -59,21 +59,21 @@ targets, with a `-N` suffix for plugin-only releases.
   old starter's properties, the per-subscriber TRACE logger `dk.trustworks.essentials.components.eventlog.Subscription.<subscriber>`,
   and causation bound by every processor base class. No skill, rule or script changed.
 
-## 0.60.1-17 — targets Essentials 0.60.1
+## 0.60.1-19 — targets Essentials 0.60.1
 
 - **Foundation: `PostgresqlNotificationDrain`** — the foundation reference documents the new helper for a hand-written
   LISTEN loop on a dedicated connection: `open(Connection)`, `next(timeoutMillis)` and `close()`, which keeps pgjdbc from
   holding notifications back while they arrive less than a millisecond apart, with a query-poll fallback. No skill, rule
   or script changed.
 
-## 0.60.1-16 — targets Essentials 0.60.1
+## 0.60.1-18 — targets Essentials 0.60.1
 
 - **Event log: atomic partitioned-view rebuild** — the event-log reference now states that
   `EventLogPartitionedViewProcessor.rebuild()` clears the view, purges its queue and resets the reading side in one
   transaction on the shard-owned queue too, since the shard-owned `purgeQueue` joins the caller's unit of work. No skill,
   rule or script changed.
 
-## 0.60.1-15 — targets Essentials 0.60.1
+## 0.60.1-17 — targets Essentials 0.60.1
 
 - **Event log: `EventLogPartitionedViewProcessor`** — the event-log reference documents the new base class that ports a
   classic `PartitionedViewEventProcessor`: each page of events is queued on `<name>:queue` in the page transaction, so
@@ -82,7 +82,7 @@ targets, with a `-N` suffix for plugin-only releases.
   porting table lists it, and the starter's unported-processor start-up error now names it for a classic partitioned
   view. No skill, rule or script changed.
 
-## 0.60.1-14 — targets Essentials 0.60.1
+## 0.60.1-16 — targets Essentials 0.60.1
 
 - **Event log: three traps retired** — the traps index retires the event-log traps for a hand-written inbox forwarder,
   the `onRebuild` hook and `EventLogReactor`'s at-least-once delivery: each describes behaviour that is the same as, or
@@ -90,7 +90,7 @@ targets, with a `-N` suffix for plugin-only releases.
   facts plainly — `EventLogInboxProcessor` forwards exactly once, `onRebuild` runs once per rebuild with no aggregate
   type, and a reactor is at least once like the classic `EventProcessor`. No skill, rule or script changed.
 
-## 0.60.1-13 — targets Essentials 0.60.1
+## 0.60.1-15 — targets Essentials 0.60.1
 
 - **Event log: a handler's connection error is parked** — the event-log reference now says that an exception a
   handler throws from a connection of its own (SQLState `08*`, `SQLTransientConnectionException`) is retried and then
@@ -99,9 +99,9 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Event log: a clear start-up error for unported processors** — with `essentials.event-log.enabled=true` the starter
   now fails start-up with a message naming each classic `EventProcessor`, `ViewEventProcessor` or
   `InTransactionEventProcessor` bean and the event-log base class to port it to, instead of a bare missing-bean error.
-  `ESS-138` and the event-log and starter references say so. No skill, rule or script changed.
+  `ESS-140` and the event-log and starter references say so. No skill, rule or script changed.
 
-## 0.60.1-12 — targets Essentials 0.60.1
+## 0.60.1-14 — targets Essentials 0.60.1
 
 - **New event store engine, preview** — a new reference, `LLM-postgresql-event-log.md`, covers the event log engine
   shipping as a preview in Essentials 0.61.0: when to choose it over the classic event store, enabling it with
@@ -109,12 +109,134 @@ targets, with a `-N` suffix for plugin-only releases.
   `onRebuild`), `EventLogReactor` and `EventLogInboxProcessor`, `CONTIGUOUS` and `FRESH` consistency and page
   transactions, porting from the `EventProcessor` family, the settings (including `hole-probe-wait-max`), the admin
   operations, the migration module and the known limits. The spring-boot-starter-modules and admin-api references gain
-  the starter and the seven `event-log-subscriptions` operations, and the traps index gains `ESS-138` and four
+  the starter and the seven `event-log-subscriptions` operations, and the traps index gains `ESS-140` and four
   event-log traps since retired.
   No skill, rule or script changed.
 - **Admin API operation count** — the admin-api, components and spring-boot-starter-modules references said the
   admin contract has 40 operations; it has 67 (the shard-owned queue and event-log subscription operations were not
   counted). No skill, rule or script changed.
+## 0.60.1-13 — targets Essentials 0.60.1
+- **Docs: interceptors that replace what they pass on.** The bundled `LLM-shared.md` states one contract for every
+  interceptor family (set the replacement on the operation before `proceed()`, the default behaviour reads the
+  operation); `LLM-foundation.md`, `LLM-reactive.md` and `LLM-postgresql-event-store.md` list each family's setters and
+  copy helpers (`HandleQueuedMessage.setMessage`, `InvokeMessageHandlerMethod.setMessage`,
+  `CommandBusInterceptorChain.setCommand`, `PersistedEvent.withEvent`) and the built-in interceptor ordering. New trap
+  `ESS-139`: a message-handler or command-bus interceptor that changes the payload's type fails with
+  `ClassCastException` - the handler was chosen before the chain ran. `LLM-reactive.md`'s `CommandBusInterceptorChain`
+  sketch now matches the interface (`matchedCommandHandler()`, no type parameter).
+
+## 0.60.1-12 — targets Essentials 0.60.1
+Fixes from a full review of the plugin: what generated projects do at runtime, script robustness on real
+machines, contradictions in the instructions, and how much text each command and skill loads.
+
+**Generated projects**
+- **WebFlux no longer blocks the event loop.** Both web stacks render `spring.threads.virtual.enabled: true`, so
+  Spring Boot runs every controller method that returns a plain value on a virtual thread instead of a Netty
+  event-loop thread. Before, every command and query in a WebFlux project ran its JDBC and unit of work on the
+  event loop: it passed every test and stalled under load. New S5 clause in the stack contract; `stack-lint`
+  rule `s5-webflux-virtual-threads` and an `/essentials:upgrade` Group C row report an existing project that
+  lacks it. `Mono`/`Flux` and Kotlin `suspend` handlers are not offloaded and must move blocking calls off the
+  loop themselves; an application `Executor` bean silently stops the offloading until
+  `spring.task.execution.mode: force` is set. The Kotlin guide no longer calls a `suspend` handler fine for
+  blocking work.
+- **A command that arrives before its entity is retried, not dead-lettered.** Service-entity command handlers
+  throw `IllegalStateException` for a missing entity. They threw `IllegalArgumentException`, which the durable
+  queue behind `sendAndDontWait` treats as permanent, so an automation or translation command that simply
+  arrived early was dead-lettered on its first delivery.
+- **The translation webhook fails closed and has its own path per event.** `POST /webhooks/<system>/<Event>`
+  answers 401 until `webhooks.<system>.shared-secret` is configured, then requires a matching
+  `X-Webhook-Secret` header (a placeholder, with a TODO to adopt the provider's signature scheme). Before, the
+  endpoint dispatched any request straight to the command bus, and a second translation slice for the same
+  system failed at startup with an ambiguous mapping. New S9 bullet.
+- The Maven wrapper verifies the Maven download's SHA-256 (new pin row).
+- The development database password applies only in the `dev` profile, which `spring-boot:run` activates; a
+  packaged application without `DATABASE_PASSWORD` no longer falls back to it.
+- Spring Modulith is no longer imported: nothing used it.
+- `.gitignore` covers `.env`, `.env.*` (keeping `.env.example`) and `*.log`. `IntegrationTestBase` validates the
+  table names it truncates. The translation templates no longer describe the publisher as an Outbox.
+
+**Scripts**
+- **Agent worktrees no longer double every slice.** The four manifest walkers (`slice-lint`, `slice-index`,
+  `slice-source`, `slice-law`) share one prune rule: every dot-directory, `target` and `node_modules`; `build`,
+  `out` and `dist` only outside a Java/Kotlin source root, so a package such as `adapters/out` is still read.
+  Before, a copy under `.claude/worktrees/` made `slice-lint` report every slice as a Blocking duplicate and the
+  pre-commit hook refused every commit.
+- **Non-UTF-8 input no longer crashes the scripts with exit 1** (which callers read as "findings"): a non-UTF-8
+  `slice.yaml` is a parse finding, diffs and sources are decoded with replacement, and `stack-lint` reports a
+  file it cannot read under "not run" instead of passing it silently. An unexpected `review-scan` error exits 2.
+- `slice-lint` treats a `jsonschema` older than 4.0 as absent (exit 2); before, it silently validated against
+  Draft 7 and changed its findings.
+- `review-scan` and `stack-lint` no longer drop the rest of a hunk, or misnumber lines, after a form feed or a
+  Unicode line separator.
+- The Slice Atlas Diff lens works on Python 3.11.0–3.11.3; its page data can no longer be corrupted by manifest
+  text; `slice-index html` and `slice-enrich apply` report unwritable output or a malformed accepted set with
+  their documented exit codes instead of a traceback.
+- macOS: the shell scripts users run were already bash 3.2/BSD-safe; the maintainer scripts that need bash 4.4
+  now say so up front, and a static portability test guards them. `doctor.sh` has an `upgrade` profile.
+- `check-citations` has a `repo-path` rule: a `docs/` or `LLM/` path in the plugin's markdown that the Essentials
+  repository no longer has (the file moved, or a release file is gone) is a finding, and a `cite-ok` marker does
+  not silence it. When the repository moved its release notes to `docs/releases/`, one such path was left in
+  `/essentials:upgrade` and nothing failed; it now cites `docs/releases/RELEASE-NOTES-0.60.1.md`.
+
+**Commands and skills**
+- `/essentials:upgrade` runs `doctor --for upgrade` first and falls back to `python3` where `uv` is missing; it
+  shows `--check` as its argument hint.
+- `/essentials:upgrade` helps with the findings an existing project already has. Before the first fix it shows
+  how many Blocking, Should-fix and Advisory fixes it will offer. It can work on an `essentials-conformance-<date>`
+  branch with one commit per fix. Should-fix and Advisory fixes come up to four at a time, each with its own
+  yes, and all the Advisory fixes can be skipped at once. Whatever stays open (skipped fixes, judgement rows,
+  findings in slice source) can be written to a backlog file at a path you choose. Each entry names the
+  command that fixes it later. When the closing `verify` fails, the run first checks whether the project
+  already failed before it started, and only then bisects the fix commits to the one to revert.
+- `/essentials:slice-check` ends its report by naming the command that owns each open finding: `--fix-manifests`,
+  `/essentials:slice-enrich`, `/essentials:upgrade`, `--fix-source`, or a change request through
+  `essentials-change`. When you decide to live with a finding, it prints the `slice-check-accepted.yaml` entry
+  to paste, with your reason and review date; it still never writes that file. `--fix-manifests` now refuses a
+  dirty working tree, as the reconciliation procedure always required.
+- Gate 7 (one event variant per file, §R3) is now checked by `slice-source.py` instead of by eye: a file in
+  `events/` with two or more event types is a Blocking `7 variants per file` finding, listing each type and
+  whether it is nested. `--fix-source` splits such a file only when every type is top-level. A nested variant
+  (`OrderEvent$OrderPlaced`) is reported and never moved, because the event store saved each event under that
+  class name, and moving the class would leave every stored event of that type unreadable.
+- `/essentials:review` lists every gate `slice-source.py` covers when the script cannot run (gates 8 and 11(c)
+  went missing).
+- `/essentials:intro` points newcomers at the new plain-language glossary, `docs/concepts.md` in the Essentials
+  repository. It explains event, command, decider, projection, aggregate, slice, CQRS, bounded context and the
+  plugin's own terms (slice law, write styles, S1-S11, ESS ids). `LLM.md` links it too, so the bundled
+  `references/llm/LLM.md` carries the link.
+- `/essentials:init`'s final report suggests the easiest first step: describe a feature in plain words and let
+  `essentials-change` scaffold the slice, then a first sequence (a command slice, a view slice over what it
+  records, run, call both endpoints). Before, it named only `/essentials:add-slice`, which asks for a slice kind
+  and a bounded context before a newcomer knows what those are.
+- `LLM.md` says what the event store's guarantees mean for a handler (views lag the append, delivery is at least
+  once, so handlers must be idempotent) and names a starting write style: a decider, as the plugin scaffolds.
+- Contradictions fixed: one language-detection rule; `essentials-change` tells an Essentials project that is not
+  on the slice law so instead of staying silent; § 5.4 finds a new event's view consumers through `who-reacts`;
+  the translation skill names DurableQueues and the Inbox correctly.
+- Smaller context: `slice-check` loads the law scoped to the project instead of the whole law, the schema and the
+  manifest guide (about 200 KB before the first gate, down to well under half), its gate table moved to
+  `references/slice/slice-check-gates.md` (anchors kept); `review` reads only the traps sections in scope (about
+  9 KB instead of 45 KB); the lint-gate material shared by `init` and `upgrade` moved to
+  `references/init-assets/lint-gate.md`; the slice-map data contract moved to
+  `references/slice/slice-map-contract.md`; the view and command skills load lane-specific material only for the
+  active lane.
+
+## 0.60.1-11 — targets Essentials 0.60.1
+
+- **Tracing and queue metrics interceptors** — the spring-boot-starter-modules reference says the durable-queue and
+  event-store tracing interceptors are registered when a Micrometer `Tracer`, `Propagator` and `ObservationRegistry` are
+  present, and `DurableQueuesMicrometerInterceptor` whenever a `MeterRegistry` is, each with an opt-out switch
+  (`essentials.durable-queues.tracing-enabled`, `essentials.durable-queues.queue-metrics-enabled`,
+  `essentials.eventstore.tracing-enabled`), instead of only with `management.tracing.enabled=true`, which Spring Boot 4
+  no longer reads. No skill, rule or script changed.
+
+## 0.60.1-10 — targets Essentials 0.60.1
+
+- **Event processor retry default** — the postgresql-event-store reference no longer says the default retry budget of
+  an `EventProcessor` or `ViewEventProcessor` outlasts a failover: the default stays about 10 s (20 redeliveries, 200 ms
+  growing ×1.1 to 3 s), and `FailoverRedeliveryPolicy` is an opt-in override of `getInboxRedeliveryPolicy()` /
+  `getDurableQueueRedeliveryPolicy()` for a processor whose handler waits for another processor's work. Corrects the
+  0.60.1-2 entry. No skill, rule or script changed.
 
 ## 0.60.1-9 — targets Essentials 0.60.1
 

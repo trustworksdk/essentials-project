@@ -23,7 +23,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
-import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
+import dk.trustworks.essentials.shared.interceptor.*;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
@@ -193,7 +193,7 @@ class InterceptorsOnShardOwnedIT {
 
             @Override
             public Void intercept(HandleQueuedMessage operation, InterceptorChain<HandleQueuedMessage, Void, DurableQueuesInterceptor> interceptorChain) {
-                seen.add(operation.message);
+                seen.add(operation.getMessage());
                 return interceptorChain.proceed();
             }
         });
@@ -262,6 +262,108 @@ class InterceptorsOnShardOwnedIT {
         assertThat(decoded.messageId().lane()).isNotNull();
     }
 
+    /**
+     * A {@code HandleQueuedMessage} interceptor replaces the message via {@link HandleQueuedMessage#setMessage} and
+     * proceeds; the handler gets the replacement, and the selected entry is still the one acknowledged. Here the
+     * replacement wraps the partial message, so it must not reach for anything the partial message cannot answer.
+     */
+    @Test
+    void a_delivery_interceptor_that_replaces_the_message_hands_the_replacement_to_the_handler() {
+        durableQueues.removeInterceptor(interceptor);
+        var replacing = new OuterPayloadReplacingInterceptor(payload -> new OrderPlaced("replaced", 1));
+        durableQueues.addInterceptor(replacing);
+
+        var handled = new CopyOnWriteArrayList<Object>();
+        durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
+                                                       .setQueueName(QUEUE)
+                                                       .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(200), 3))
+                                                       .setParallelConsumers(1)
+                                                       .setQueueMessageHandler(message -> handled.add(message.getPayload()))
+                                                       .build());
+        unitOfWorkFactory.usingUnitOfWork(() -> durableQueues.queueMessage(QUEUE, Message.of(new OrderPlaced("order-1", 100))));
+
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(handled).hasSize(1));
+        assertThat(handled).containsExactly(new OrderPlaced("replaced", 1));
+        assertThat(replacing.payloadsSeen).containsExactly(new OrderPlaced("order-1", 100));
+        Awaitility.await().atMost(Duration.ofSeconds(30))
+                  .untilAsserted(() -> assertThat(durableQueues.getTotalMessagesQueuedFor(QUEUE)).isZero());
+    }
+
+    /** Two ordered replacers: the outer one runs first, the inner one sees its replacement, the handler the inner's. */
+    @Test
+    void two_ordered_delivery_interceptors_that_replace_the_message_run_outer_first() {
+        durableQueues.removeInterceptor(interceptor);
+        var outer = new OuterPayloadReplacingInterceptor(payload -> new OrderPlaced("outer", 1));
+        var inner = new InnerPayloadReplacingInterceptor(payload -> new OrderPlaced("inner", 2));
+        // Inner first, so the order comes from @InterceptorOrder and not from the order of registration
+        durableQueues.addInterceptor(inner);
+        durableQueues.addInterceptor(outer);
+
+        var handled = new CopyOnWriteArrayList<Object>();
+        durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
+                                                       .setQueueName(QUEUE)
+                                                       .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(200), 3))
+                                                       .setParallelConsumers(1)
+                                                       .setQueueMessageHandler(message -> handled.add(message.getPayload()))
+                                                       .build());
+        unitOfWorkFactory.usingUnitOfWork(() -> durableQueues.queueMessage(QUEUE, Message.of(new OrderPlaced("order-1", 100))));
+
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(handled).hasSize(1));
+        assertThat(outer.payloadsSeen).containsExactly(new OrderPlaced("order-1", 100));
+        assertThat(inner.payloadsSeen).containsExactly(new OrderPlaced("outer", 1));
+        assertThat(handled).containsExactly(new OrderPlaced("inner", 2));
+    }
+
+    /** A {@code QueueMessage} interceptor that replaces the message via its setter queues the replacement. */
+    @Test
+    void an_enqueue_interceptor_that_replaces_the_message_queues_the_replacement() {
+        durableQueues.removeInterceptor(interceptor);
+        durableQueues.addInterceptor(new DurableQueuesInterceptor() {
+            @Override
+            public void setDurableQueues(DurableQueues durableQueues) {
+            }
+
+            @Override
+            public QueueEntryId intercept(QueueMessage operation, InterceptorChain<QueueMessage, QueueEntryId, DurableQueuesInterceptor> interceptorChain) {
+                operation.setMessage(operation.getMessage().withPayload(new OrderPlaced("replaced", 1)));
+                return interceptorChain.proceed();
+            }
+        });
+
+        var id = unitOfWorkFactory.withUnitOfWork(() -> durableQueues.queueMessage(QUEUE, Message.of(new OrderPlaced("order-1", 100))));
+
+        assertThat(durableQueues.getQueuedMessage(id)).hasValueSatisfying(
+                queued -> assertThat(queued.getPayload()).isEqualTo(new OrderPlaced("replaced", 1)));
+    }
+
+    /** A {@code QueueMessages} interceptor that replaces the messages via its setter queues the replacements. */
+    @Test
+    void a_batch_enqueue_interceptor_that_replaces_the_messages_queues_the_replacements() {
+        durableQueues.removeInterceptor(interceptor);
+        durableQueues.addInterceptor(new DurableQueuesInterceptor() {
+            @Override
+            public void setDurableQueues(DurableQueues durableQueues) {
+            }
+
+            @Override
+            public List<QueueEntryId> intercept(QueueMessages operation, InterceptorChain<QueueMessages, List<QueueEntryId>, DurableQueuesInterceptor> interceptorChain) {
+                operation.setMessages(operation.getMessages()
+                                               .stream()
+                                               .<Message>map(message -> message.withPayload(new OrderPlaced(((OrderPlaced) message.getPayload()).id() + "-replaced", 0)))
+                                               .toList());
+                return interceptorChain.proceed();
+            }
+        });
+
+        var ids = unitOfWorkFactory.withUnitOfWork(() -> durableQueues.queueMessages(QUEUE,
+                                                                                     List.of(Message.of(new OrderPlaced("order-1", 100)),
+                                                                                             Message.of(new OrderPlaced("order-2", 200)))));
+
+        assertThat(ids).hasSize(2);
+        assertThat(ids.stream().map(id -> durableQueues.getQueuedMessage(id).orElseThrow().getPayload()).toList())
+                .containsExactlyInAnyOrder(new OrderPlaced("order-1-replaced", 0), new OrderPlaced("order-2-replaced", 0));
+    }
+
     private static dk.trustworks.essentials.components.queue.shardowned.spi.QueueName engineName(QueueName queueName) {
         return dk.trustworks.essentials.components.queue.shardowned.spi.QueueName.of(queueName.toString());
     }
@@ -296,6 +398,45 @@ class InterceptorsOnShardOwnedIT {
         public Void intercept(HandleQueuedMessage operation, InterceptorChain<HandleQueuedMessage, Void, DurableQueuesInterceptor> interceptorChain) {
             operations.add("HandleQueuedMessage");
             return interceptorChain.proceed();
+        }
+    }
+
+    /**
+     * Replaces the payload of the message being handled via {@link QueuedMessage#withMessage(Message)} and records the
+     * payload it saw. Subclasses carry the {@link InterceptorOrder}.
+     */
+    private abstract static class PayloadReplacingInterceptor implements DurableQueuesInterceptor {
+        private final java.util.function.Function<Object, Object> replacement;
+        final         List<Object>                                payloadsSeen = new CopyOnWriteArrayList<>();
+
+        PayloadReplacingInterceptor(java.util.function.Function<Object, Object> replacement) {
+            this.replacement = replacement;
+        }
+
+        @Override
+        public void setDurableQueues(DurableQueues durableQueues) {
+        }
+
+        @Override
+        public Void intercept(HandleQueuedMessage operation, InterceptorChain<HandleQueuedMessage, Void, DurableQueuesInterceptor> interceptorChain) {
+            var message = operation.getMessage();
+            payloadsSeen.add(message.getPayload());
+            operation.setMessage(message.withMessage(message.getMessage().withPayload(replacement.apply(message.getPayload()))));
+            return interceptorChain.proceed();
+        }
+    }
+
+    @InterceptorOrder(1)
+    private static final class OuterPayloadReplacingInterceptor extends PayloadReplacingInterceptor {
+        OuterPayloadReplacingInterceptor(java.util.function.Function<Object, Object> replacement) {
+            super(replacement);
+        }
+    }
+
+    @InterceptorOrder(20)
+    private static final class InnerPayloadReplacingInterceptor extends PayloadReplacingInterceptor {
+        InnerPayloadReplacingInterceptor(java.util.function.Function<Object, Object> replacement) {
+            super(replacement);
         }
     }
 

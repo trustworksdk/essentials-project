@@ -210,6 +210,50 @@ class FrontendTooling(unittest.TestCase):
         self.assertEqual(self.tooling('not json'), "other")
 
 
+class SourceDecodingAndLines(unittest.TestCase):
+    """A source file is read whatever its bytes, and its lines are the ones `line_of` counts."""
+
+    CONFIG = Path("backend/src/main/kotlin/com/example/legacy/config/JacksonConfig.kt")
+
+    def lint_with(self, transform):
+        base = Path(__file__).resolve().parent / "violating" / "kotlin-pg-legacy"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "p"
+            shutil.copytree(base, root)
+            f = root / self.CONFIG
+            f.write_bytes(transform(f.read_bytes()))
+            lint = sl.Lint(root, sl.read_pins(sl.PLUGIN / sl.PINS_REL), {})
+            lint.run()
+            return [f.line for f in lint.findings if f.rule.check == "s3.3-own-json-mapper"], lint.not_run
+
+    def test_split_lines_counts_newlines_only(self):
+        self.assertEqual(sl.split_lines("a\x0cb\r\nc d\n"), ["a\x0cb", "c d"])
+
+    def test_a_latin1_byte_does_not_hide_the_file(self):
+        lines, _ = self.lint_with(lambda b: b.replace(b"@Configuration", b"// caf\xe9\n@Configuration", 1))
+        self.assertEqual(lines, [11])
+
+    def test_form_feeds_do_not_shift_the_annotation_lookback(self):
+        lines, _ = self.lint_with(lambda b: b.replace(b"@Configuration", b"\x0c\n" * 6 + b"@Configuration", 1))
+        self.assertEqual(lines, [16])
+
+    def test_an_unreadable_source_is_reported_not_run(self):
+        original = sl.read_project_text
+        target = self.CONFIG.name
+
+        def failing(path):
+            if path.name == target:
+                raise PermissionError("denied")
+            return original(path)
+        sl.read_project_text = failing
+        try:
+            lines, not_run = self.lint_with(lambda b: b)
+        finally:
+            sl.read_project_text = original
+        self.assertEqual(lines, [])
+        self.assertTrue(any(target in nr["reason"] and "cannot read" in nr["reason"] for nr in not_run), not_run)
+
+
 class ComputedOrvalConfig(unittest.TestCase):
     """A config only running it resolves: the checks that need its paths say they did not run, rather than
     guessing at src/shared/api."""

@@ -153,4 +153,22 @@ public interface QueuedMessage {
      * @return how long will the queue wait until it delivers the message to the {@link DurableQueueConsumer}
      */
     Duration getRedeliveryDelay();
+
+    /**
+     * Create a view of this queued message that carries a different {@link Message} and is otherwise this queued
+     * message: same {@link #getId() id}, queue, timestamps, delivery counters and delivery mode, and
+     * {@link #markForRedeliveryIn(Duration)} acts on this instance.<br>
+     * Use it from a {@link DurableQueuesInterceptor} that changes what a message carries before it is handled, e.g.
+     * decrypting it in {@code intercept(HandleQueuedMessage, ...)}, and put the result back with
+     * {@link HandleQueuedMessage#setMessage(QueuedMessage)}.<br>
+     * The result is a decorator, not an instance of this message's own class, so an {@code instanceof} check against
+     * an implementation class does not match it. It is equal to any {@link QueuedMessage} with the same id.
+     *
+     * @param message the replacement {@link Message}
+     * @return a {@link QueuedMessage} that returns {@code message} from {@link #getMessage()},
+     * {@link #getPayload()} and {@link #getMetaData()} and delegates everything else to this instance
+     */
+    default QueuedMessage withMessage(Message message) {
+        return MessageReplacedQueuedMessage.of(this, message);
+    }
 }

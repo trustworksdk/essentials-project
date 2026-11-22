@@ -29,8 +29,16 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
+import dk.trustworks.essentials.components.foundation.test.classpath.WithoutJarsClassLoader;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer.*;
+import io.micrometer.tracing.propagation.Propagator;
+import org.springframework.boot.micrometer.metrics.autoconfigure.*;
+import org.springframework.boot.micrometer.metrics.autoconfigure.export.simple.SimpleMetricsExportAutoConfiguration;
+import org.springframework.boot.micrometer.observation.autoconfigure.ObservationAutoConfiguration;
+import org.springframework.boot.micrometer.tracing.autoconfigure.NoopTracerAutoConfiguration;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.micrometer.MicrometerTracingEventStoreInterceptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.jdbc.autoconfigure.*;
@@ -42,6 +50,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -413,5 +422,139 @@ public class StarterAutoConfigurationIT {
                     assertThat(meterRegistry.get("essentials.cdc.fallback_total").counter().count())
                             .isGreaterThanOrEqualTo(1.0d);
                 });
+    }
+
+    // ------------------------------------------------------------------------------------------------------------
+    // Tracing and metrics interceptors: gated on the Micrometer beans being present, not on
+    // management.tracing.enabled, which Spring Boot 4 no longer reads. Boot's own auto-configurations provide the
+    // beans here (only the Propagator is supplied by hand, since no tracer bridge is on the test classpath), so these
+    // tests also prove the starter is ordered after them.
+    // ------------------------------------------------------------------------------------------------------------
+
+    private static final AutoConfigurations BOOT_METRICS =
+            AutoConfigurations.of(MetricsAutoConfiguration.class,
+                                  SimpleMetricsExportAutoConfiguration.class,
+                                  CompositeMeterRegistryAutoConfiguration.class);
+
+    private static final AutoConfigurations BOOT_TRACING =
+            AutoConfigurations.of(ObservationAutoConfiguration.class,
+                                  NoopTracerAutoConfiguration.class);
+
+    @Test
+    void no_tracing_or_queue_metrics_interceptors_without_micrometer_beans() {
+        contextRunner
+                .run(ctx -> {
+                    assertThat(ctx).doesNotHaveBean(DurableQueuesMicrometerTracingInterceptor.class);
+                    assertThat(ctx).doesNotHaveBean(MicrometerTracingEventStoreInterceptor.class);
+                    assertThat(ctx).doesNotHaveBean(DurableQueuesMicrometerInterceptor.class);
+                });
+    }
+
+    @Test
+    void queue_metrics_interceptor_is_registered_from_boots_meter_registry_without_tracing() {
+        contextRunner
+                .withConfiguration(BOOT_METRICS)
+                .run(ctx -> {
+                    assertThat(ctx).hasSingleBean(DurableQueuesMicrometerInterceptor.class);
+                    assertThat(ctx).hasSingleBean(MicrometerDurableQueueMessageObserver.class);
+                    assertThat(ctx).doesNotHaveBean(DurableQueuesMicrometerTracingInterceptor.class);
+                    assertThat(ctx).doesNotHaveBean(MicrometerTracingEventStoreInterceptor.class);
+                });
+    }
+
+    @Test
+    void tracing_interceptors_are_registered_from_boots_tracing_beans_without_management_tracing_enabled() {
+        contextRunner
+                .withConfiguration(BOOT_TRACING)
+                .withBean(Propagator.class, () -> Propagator.NOOP)
+                .withPropertyValues("management.tracing.export.enabled=false")
+                .run(ctx -> {
+                    assertThat(ctx).hasSingleBean(DurableQueuesMicrometerTracingInterceptor.class);
+                    assertThat(ctx).hasSingleBean(MicrometerTracingEventStoreInterceptor.class);
+                    assertThat(ctx).doesNotHaveBean(DurableQueuesMicrometerInterceptor.class);
+                });
+    }
+
+    @Test
+    void tracing_and_queue_metrics_interceptors_can_be_switched_off() {
+        contextRunner
+                .withConfiguration(BOOT_METRICS)
+                .withConfiguration(BOOT_TRACING)
+                .withBean(Propagator.class, () -> Propagator.NOOP)
+                .withPropertyValues("essentials.durable-queues.tracing-enabled=false",
+                                    "essentials.durable-queues.queue-metrics-enabled=false",
+                                    "essentials.eventstore.tracing-enabled=false")
+                .run(ctx -> {
+                    assertThat(ctx).doesNotHaveBean(DurableQueuesMicrometerTracingInterceptor.class);
+                    assertThat(ctx).doesNotHaveBean(MicrometerTracingEventStoreInterceptor.class);
+                    assertThat(ctx).doesNotHaveBean(DurableQueuesMicrometerInterceptor.class);
+                });
+    }
+
+    /**
+     * The baseline for the optional-dependency scenarios below: run the same way, through a class loader over the full
+     * test classpath, {@link OptionalLibrariesScenario} sees every bean it reports except the tracing interceptors, which
+     * need a {@code Tracer} bean it never registers.
+     */
+    @Test
+    void the_optional_libraries_scenario_sees_the_metrics_and_health_beans_with_every_optional_library_present() throws Throwable {
+        try (var everything = WithoutJarsClassLoader.fromTestClasspathWithout("everything", List.of())) {
+            assertThat(startTheStarterThrough(everything)).isEqualTo("durableQueuesMicrometerInterceptor,micrometerDurableQueueMessageObserver,durableQueuesHealthIndicator");
+        }
+    }
+
+    /**
+     * micrometer-tracing is an optional dependency, so an application without it - here one with Micrometer metrics, as
+     * Actuator gives it - must start, just without the tracing interceptors. It did not while their
+     * {@code Tracer} and {@code Propagator} parameters sat on {@link EventStoreConfiguration} or {@link EssentialsComponentsConfiguration} itself: introspecting the
+     * auto-configuration failed with {@code NoClassDefFoundError: io/micrometer/tracing/Tracer}.
+     */
+    @Test
+    void an_application_without_micrometer_tracing_starts_without_the_tracing_interceptors() throws Throwable {
+        try (var withoutTracing = WithoutJarsClassLoader.withoutMicrometerTracing()) {
+            assertThat(withoutTracing.hides("io.micrometer.tracing.Tracer")).isTrue();
+
+            assertThat(startTheStarterThrough(withoutTracing)).isEqualTo("durableQueuesMicrometerInterceptor,micrometerDurableQueueMessageObserver,durableQueuesHealthIndicator");
+        }
+    }
+
+    /**
+     * micrometer-core is an optional dependency, so an application without any Micrometer library of its own - no
+     * Actuator - must start, just without the metrics beans. It did not while {@link EventStoreConfiguration} or {@link EssentialsComponentsConfiguration} named
+     * {@code MeterRegistry} in its bean method signatures, directly or as {@code Optional<MeterRegistry>}: the context
+     * failed with {@code NoClassDefFoundError} or {@code TypeNotPresentException} for
+     * {@code io.micrometer.core.instrument.MeterRegistry}. micrometer-observation stays, as spring-context depends on it.
+     */
+    @Test
+    void an_application_without_micrometer_starts_without_the_metrics_beans() throws Throwable {
+        try (var withoutMicrometer = WithoutJarsClassLoader.withoutMicrometer()) {
+            assertThat(withoutMicrometer.hides("io.micrometer.core.instrument.MeterRegistry")).isTrue();
+            assertThat(withoutMicrometer.hides("io.micrometer.tracing.Tracer")).isTrue();
+
+            assertThat(startTheStarterThrough(withoutMicrometer)).isEqualTo("durableQueuesHealthIndicator");
+        }
+    }
+
+    /**
+     * spring-boot-health is a {@code provided} dependency, so an application without it - Micrometer metrics but no
+     * Actuator - must start, just without the health indicators. It did not while {@link EventStoreConfiguration} or {@link EssentialsComponentsConfiguration} named
+     * {@code HealthIndicator} in a bean method's return type: introspecting the auto-configuration failed with
+     * {@code NoClassDefFoundError: org/springframework/boot/health/contributor/HealthIndicator}.
+     */
+    @Test
+    void an_application_without_spring_boot_health_starts_without_the_health_indicators() throws Throwable {
+        try (var withoutHealth = WithoutJarsClassLoader.withoutSpringBootHealth()) {
+            assertThat(withoutHealth.hides("org.springframework.boot.health.contributor.HealthIndicator")).isTrue();
+
+            assertThat(startTheStarterThrough(withoutHealth)).isEqualTo("durableQueuesMicrometerInterceptor,micrometerDurableQueueMessageObserver");
+        }
+    }
+
+    private static Object startTheStarterThrough(WithoutJarsClassLoader classLoader) throws Throwable {
+        return classLoader.runStatic(OptionalLibrariesScenario.class.getName(),
+                                     "startTheStarter",
+                                     postgreSQLContainer.getJdbcUrl(),
+                                     postgreSQLContainer.getUsername(),
+                                     postgreSQLContainer.getPassword());
     }
 }

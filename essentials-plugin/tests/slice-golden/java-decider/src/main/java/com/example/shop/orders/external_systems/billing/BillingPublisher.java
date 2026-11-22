@@ -13,7 +13,8 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * OUTBOUND half of the billing ACL (the Outbox pattern).
+ * OUTBOUND half of the billing ACL: an Essentials EventProcessor, whose events reach it
+ * through its own durable Inbox (no Outbox is involved), so a failed publish is retried by the queue.
  *
  * Internal event in, external call out. {@code EventProcessor} is the correct base for anything
  * that leaves the process: it is Inbox-backed, so a failed external call is redelivered under the

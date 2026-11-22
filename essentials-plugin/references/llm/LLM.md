@@ -1,6 +1,10 @@
 # Essentials - LLM Reference
 
 > **Navigation Index**: Entry point to module-specific documentation. For implementation details, see linked module docs.
+>
+> **Explaining the ideas to someone new** (event, command, decider, projection, aggregate, slice, CQRS, bounded
+> context, the plugin's terms): [docs/concepts.md](https://github.com/trustworksdk/essentials-project/blob/main/docs/concepts.md) is the plain-language glossary. It defines
+> words and links back here for every API; use it for meanings, these docs for signatures.
 
 ## TOC
 - [Quick Facts](#quick-facts)
@@ -176,7 +180,9 @@ unitOfWorkFactory.usingUnitOfWork(uow -> {
 **Package:** `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql`
 **Docs:** [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md)
 
-Event sourcing infrastructure:
+Event sourcing infrastructure. The append-only event log is the source of truth; every view is derived from it and
+can be rebuilt by replay. Views fed by asynchronous processors are eventually consistent (they lag the append),
+and delivery is at least once, so handlers must be idempotent.
 - Event streams (table per `AggregateType`)
 - Durable subscriptions with gap handling
 - `EventOrder` (per-aggregate) + `GlobalEventOrder` (per-type)
@@ -225,6 +231,11 @@ Domain modeling:
 - `Aggregate` - Modern aggregate pattern
 - `Decider` (typed errors) / `EventStreamDecider` + `EventStreamEvolver` - Functional style; two separate families, plus Kotlin's `Decider`/`Evolver` (see the note under the Components table)
 - `AggregateRepository` / `StatefulAggregateRepository` - Load/save
+
+**Start here (write side):** for new code use a decider: Kotlin `Decider` + `Evolver`
+([LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md)), Java `EventStreamDecider` + `EventStreamEvolver`.
+Choose another style only for a reason: [LLM-eventsourced-aggregates.md § Pattern Selection](LLM-eventsourced-aggregates.md#pattern-selection).
+This matches what the essentials plugin scaffolds.
 
 ### Database Schema Harness
 

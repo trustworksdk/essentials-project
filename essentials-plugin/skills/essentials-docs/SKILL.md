@@ -2,9 +2,10 @@
 name: essentials-docs
 description: >
   Trustworks Essentials Java/Kotlin framework knowledge. Use for questions or code touching
-  `dk.trustworks.essentials.*` — event store, durable queues, fenced locks, event-sourced aggregates
-  (StatefulAggregate, Decider, EventProcessor), unit-of-work, single-value types (CharSequenceType,
-  NumberType), or `spring-boot-starter-postgresql`/`mongodb` artifacts.
+  `dk.trustworks.essentials.*` — event store, durable queues, Inbox/Outbox, fenced locks, event-sourced
+  aggregates (StatefulAggregate, Decider, EventProcessor, ViewEventProcessor, InTransactionEventProcessor),
+  kotlin-eventsourcing, DocumentDB, unit-of-work, single-value types (CharSequenceType, NumberType), the
+  Jackson wire format, or `spring-boot-starter-postgresql`/`-postgresql-event-store`/`mongodb` artifacts.
 user-invocable: false
 ---
 
@@ -16,25 +17,10 @@ All paths below are relative to `${CLAUDE_PLUGIN_ROOT}/`. The full LLM-tailored 
 
 ## Step 1 — Detect the project's primary backend language
 
-Before applying design guidance, determine whether the project is **Kotlin** or **Java**:
-
-| Detection signal | Conclusion |
-|---|---|
-| `.kt` / `.kts` files exist under `backend/src/` (or anywhere in the project) | Kotlin |
-| `pom.xml` references `kotlin-maven-plugin` or `org.jetbrains.kotlin:kotlin-stdlib` | Kotlin |
-| Only `.java` files exist; no Kotlin stdlib in `pom.xml` | Java |
-| Mixed: both `.kt` and `.java` present | Pick the language of the **file currently being edited**; if no file is being edited, prefer Kotlin (the project is Kotlin-first) |
-
-Use these commands when in doubt:
-
-```bash
-find . -type f \( -name '*.kt' -o -name '*.kts' \) -not -path '*/target/*' -not -path '*/build/*' | head -1
-find . -type f -name '*.java' -not -path '*/target/*' -not -path '*/build/*' | head -1
-grep -l 'kotlin-maven-plugin\|kotlin-stdlib' pom.xml backend/pom.xml 2>/dev/null
-```
-
-The detection table this plugin uses everywhere lives in
-`references/slice/slice-authoring.md` §1 — read it there rather than re-deriving the signals.
+Before applying design guidance, determine whether the project — or the bounded context being edited
+— is **Kotlin** or **Java**, with the detection table in `references/slice/slice-authoring.md` §1, the
+one this plugin uses everywhere. Read it there rather than re-deriving the signals. A bounded context
+holding both `.kt` and `.java` sources is stopped and reported, never guessed (§1, language-pure rule).
 
 The design guide is **language-neutral**: `references/design/essentials-design.md` shows Java and
 Kotlin side by side wherever they differ. The language you detect still matters, because the two use
@@ -158,9 +144,9 @@ For a full overview of the docs, the master index is `references/llm/LLM.md` —
 
 ## Step 6 — Proactive advisory (BEFORE editing Essentials code)
 
-When Claude is **about to write or modify** code that uses Essentials types (importing `dk.trustworks.essentials.*` or referencing framework types from the description above), open both of these before writing:
+When Claude is **about to write or modify** code that uses Essentials types (importing `dk.trustworks.essentials.*` or referencing framework types from the description above), open what the change needs before writing:
 
-- `Read` `references/design/essentials-design.md` — aggregate boundaries, event-processor selection (`InTransactionEventProcessor` vs `ViewEventProcessor`), uniqueness enforcement, error-handling policy, and the design anti-patterns. Language-neutral, with Java and Kotlin shown side by side.
+- **A modelling change** — a new aggregate or bounded context, event-processor selection (`InTransactionEventProcessor` vs `ViewEventProcessor`), uniqueness across aggregates, a moved consistency boundary, event design or error-handling policy → `Read` `references/design/essentials-design.md` in full (language-neutral, Java and Kotlin side by side). Any other edit, a one-line fix included, needs at most the one section of it the edit touches (`search.sh -t design "<term>"` finds it).
 - `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/slice-law.py --project <project root>` — the slice-design law (`rules/slice-design.md`, printed for the project's lanes and persistence), if the change adds, moves, or restructures a slice.
 
 **Apply** the guidance to what you write — don't just read it.

@@ -47,8 +47,13 @@ public class CancelOrderHandler extends AnnotatedCommandHandler {
 
     @CmdHandler
     public void handle(CancelOrder cmd) {
+        // A missing Order throws IllegalStateException, never IllegalArgumentException (nor FailFast's
+        // requireNonNull/requireTrue, which throw it). A command sent with sendAndDontWait runs on a
+        // durable queue, whose consumer dead-letters an IllegalArgumentException on its first delivery
+        // (the built-in permanent-error list), yet the row may only be missing because the transaction
+        // that creates it has not committed yet. IllegalStateException is retried by the RedeliveryPolicy.
         var order = orders.findById(cmd.id().toString())
-                .orElseThrow(() -> new IllegalArgumentException("No Order " + cmd.id().toString()));
+                .orElseThrow(() -> new IllegalStateException("No Order " + cmd.id().toString()));
 
         // TODO: call the ONE invariant method this slice's intent maps to. The boolean-returning
         //       shape below is the idempotent form — it returns false when the state was already

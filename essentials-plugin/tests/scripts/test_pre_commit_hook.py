@@ -15,7 +15,7 @@ stubs written here, so the result does not depend on whether this machine has uv
 interpreter running this file, which carries pyyaml and jsonschema.
 
 The SelfTest cases run the hook self-test of /essentials:upgrade Group A2, extracted verbatim from
-commands/upgrade.md, against the same repository: it must pass on an active hook, name the fault on an
+references/init-assets/lint-gate.md § The self-test, against the same repository: it must pass on an active hook, name the fault on an
 inactive one, and leave the real index and the working tree as they were.
 """
 
@@ -35,7 +35,7 @@ HOOK = PLUGIN / "references" / "init-assets" / "project" / ".githooks" / "pre-co
 LINT = PLUGIN / "scripts" / "slice-lint.py"
 SCHEMA = PLUGIN / "references" / "slice" / "slice-yaml.schema.json"
 FIXTURE = PLUGIN / "tests" / "fixtures" / "service-entity"
-UPGRADE = PLUGIN / "commands" / "upgrade.md"
+UPGRADE = PLUGIN / "references" / "init-assets" / "lint-gate.md"
 SELF_TEST_MARK = "# A2 hook self-test"
 
 # The one authoring mistake that makes a manifest unparseable: a braced path unquoted in a flow mapping.
@@ -176,7 +176,7 @@ class PreCommitHook(HookRepo):
 
 
 def self_test_snippet():
-    """The fenced bash block of upgrade.md Group A2 that starts with SELF_TEST_MARK, dedented."""
+    """The fenced bash block of lint-gate.md § The self-test that starts with SELF_TEST_MARK, dedented."""
     lines = UPGRADE.read_text().splitlines()
     start = next(i for i, line in enumerate(lines) if line.strip().startswith(SELF_TEST_MARK))
     end = next(i for i in range(start, len(lines)) if lines[i].strip() == "```")

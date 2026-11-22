@@ -24,6 +24,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
@@ -136,7 +137,7 @@ public class SnapshotConfiguration {
      * @param jsonSerializer The serializer responsible for converting events to and from JSON format.
      * @param properties The properties object containing configuration related to the event store,
      *                   including settings for snapshot storage such as the snapshot table name.
-     * @param meterRegistry An optional {@code MeterRegistry} for collecting metrics and monitoring
+     * @param beanFactory the bean factory the optional {@code MeterRegistry} is looked up in
      *                      performance; can be absent if not required.
      * @return An instance of {@code AggregateSnapshotStore} configured to use PostgreSQL for
      *         storing aggregate snapshots.
@@ -153,14 +154,14 @@ public class SnapshotConfiguration {
                                                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                          JSONEventSerializer jsonSerializer,
                                                          EssentialsEventStoreProperties properties,
-                                                         Optional<MeterRegistry> meterRegistry,
+                                                         BeanFactory beanFactory,
                                                          EssentialsComponentsProperties essentialsComponentsProperties) {
         return PostgresqlAggregateSnapshotStore.builder()
                                                .setEventStore(eventStore)
                                                .setUnitOfWorkFactory(unitOfWorkFactory)
                                                .setSnapshotTableName(Optional.ofNullable(properties.getSnapshots().getSnapshotTableName()))
                                                .setJsonSerializer(jsonSerializer)
-                                               .setMeterRegistry(meterRegistry)
+                                               .setMeterRegistry(OptionalMeterRegistry.from(beanFactory))
                                                .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
                                                .build();
     }
@@ -256,7 +257,7 @@ public class SnapshotConfiguration {
      *                                 used for transactional interactions with the Event Store.
      * @param properties               the configuration properties for the Event Store,
      *                                 which include snapshot-related settings.
-     * @param meterRegistry            an optional {@code MeterRegistry} for publishing metrics,
+     * @param beanFactory              the bean factory the optional {@code MeterRegistry} is looked up in,
      *                                 if a metrics system is enabled and available.
      * @return an instance of {@code PostgresqlAggregateSnapshotJobRepository}, configured according
      *         to the provided factory, properties, and metrics registry.
@@ -270,12 +271,12 @@ public class SnapshotConfiguration {
     @ConditionalOnMissingBean
     public AggregateSnapshotJobRepository aggregateSnapshotJobRepository(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                                         EssentialsEventStoreProperties properties,
-                                                                        Optional<MeterRegistry> meterRegistry,
+                                                                        BeanFactory beanFactory,
                                                                         EssentialsComponentsProperties essentialsComponentsProperties) {
         return PostgresqlAggregateSnapshotJobRepository.builder()
                                                        .setUnitOfWorkFactory(unitOfWorkFactory)
                                                        .setTableName(Optional.ofNullable(properties.getSnapshots().getDurable().getJobTableName()))
-                                                       .setMeterRegistry(meterRegistry)
+                                                       .setMeterRegistry(OptionalMeterRegistry.from(beanFactory))
                                                        .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
                                                        .build();
     }
@@ -288,7 +289,7 @@ public class SnapshotConfiguration {
      * @param jobRepository The repository for managing snapshot job records.
      * @param unitOfWorkFactory The factory for creating units of work for the event store.
      * @param settings The durable async snapshot processing settings.
-     * @param meterRegistry An optional meter registry for collecting metrics related to snapshot job processing.
+     * @param beanFactory the bean factory the optional {@code MeterRegistry} is looked up in
      * @return A configured {@link PostgresqlAggregateSnapshotJobProcessor} bean.
      */
     @Bean
@@ -299,14 +300,14 @@ public class SnapshotConfiguration {
                                                                                  AggregateSnapshotJobRepository jobRepository,
                                                                                  EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                                                  DurableAsyncSnapshotSettings settings,
-                                                                                 Optional<MeterRegistry> meterRegistry) {
+                                                                                 BeanFactory beanFactory) {
         return PostgresqlAggregateSnapshotJobProcessor.builder()
                                                       .setEventStore(eventStore)
                                                       .setSnapshotStore(snapshotStore)
                                                       .setJobRepository(jobRepository)
                                                       .setUnitOfWorkFactory(unitOfWorkFactory)
                                                       .setSettings(settings)
-                                                      .setMeterRegistry(meterRegistry)
+                                                      .setMeterRegistry(OptionalMeterRegistry.from(beanFactory))
                                                       .build();
     }
 
@@ -338,7 +339,7 @@ public class SnapshotConfiguration {
      * @param durableSettings the settings for handling durable asynchronous snapshots.
      * @param properties the properties for the essentials event store.
      * @param jobRepository an optional repository for aggregate snapshot jobs.
-     * @param meterRegistry an optional meter registry for recording metrics.
+     * @param beanFactory the bean factory the optional {@code MeterRegistry} is looked up in
      * @return an instance of {@link DefaultAggregateSnapshotRepositoryFactory}.
      */
     @Bean
@@ -358,7 +359,7 @@ public class SnapshotConfiguration {
                                                                                  DurableAsyncSnapshotSettings durableSettings,
                                                                                  EssentialsEventStoreProperties properties,
                                                                                  Optional<AggregateSnapshotJobRepository> jobRepository,
-                                                                                 Optional<MeterRegistry> meterRegistry,
+                                                                                 BeanFactory beanFactory,
                                                                                  EssentialsComponentsProperties essentialsComponentsProperties) {
         return new DefaultAggregateSnapshotRepositoryFactory(eventStore,
                                                              unitOfWorkFactory,
@@ -368,7 +369,7 @@ public class SnapshotConfiguration {
                                                              durableSettings,
                                                              properties,
                                                              jobRepository,
-                                                             meterRegistry,
+                                                             OptionalMeterRegistry.from(beanFactory),
                                                              essentialsComponentsProperties.getSchema().getMode().schemaOwnership());
     }
 

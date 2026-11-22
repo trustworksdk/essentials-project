@@ -24,7 +24,9 @@ audits own that.
 | What does **this change** get wrong? | **`/essentials:review`** (this) |
 | Does the whole project obey the slice law? | `/essentials:slice-check` |
 | Is the whole project behind the stack contract or the plugin's copies? | `/essentials:upgrade` |
-| What is here and how does it connect? | `/essentials:slice-map` |
+| What is here and how does it connect? | `/essentials:slice-map` (printed) or `/essentials:slice-map-html` (the page) |
+| Which human-owned manifest fields are missing, drafted from evidence? | `/essentials:slice-enrich` |
+| A codebase not on the slice law at all — what would it look like on it? | `/essentials:slice-discover` |
 
 Three kinds of finding id, one per source of truth — never a second list:
 
@@ -32,7 +34,7 @@ Three kinds of finding id, one per source of truth — never a second list:
 |---|---|---|---|
 | `ESS-NNN` | a framework trap | its line in `references/llm/LLM-traps.md` | `references/llm/LLM-traps.md#ess-NNN` |
 | `ESS-S<n>[.<m>]` | a stack-contract requirement | its heading in `references/stack/stack-contract.md` | the heading's anchor, as `stack-lint.py --rules --json` prints it |
-| `ESS-G<gate>[<clause>]` | a slice-law gate (`ESS-G4b` = gate 4(b)) | the gate table in `commands/slice-check.md` Step 2 | `commands/slice-check.md#g<gate>` |
+| `ESS-G<gate>[<clause>]` | a slice-law gate (`ESS-G4b` = gate 4(b)) | the gate table in `references/slice/slice-check-gates.md` (`/essentials:slice-check` Step 2) | `commands/slice-check.md#g<gate>` (the anchor stub in its gate index) |
 
 All links are relative to `${CLAUDE_PLUGIN_ROOT}`. Gate 12 (project-copy freshness) is not a review
 check: it is about the project, never about a change — `/essentials:upgrade` owns it.
@@ -210,9 +212,9 @@ and the same two over `BASE_TREE` into `lint.base.json` / `source.base.json`.
 |---|---|---|
 | `slice-lint.py` | 0, 1 | gates 1, 3 and 4 ran — except that `schemaValidated: false` in its JSON means gate 1(b) did not: **Not run: ESS-G1b** (findings win the exit code over a skipped validation) |
 | | 2 | No JSON (no `pyyaml`, unreadable schema): **Not run: ESS-G1, ESS-G3, ESS-G4**, naming the missing dependency. JSON with `schemaValidated: false` (no `jsonschema`): **Not run: ESS-G1b**, and the rest ran clean. Never read the manifests yourself instead: an unvalidated manifest set reported as clean is the failure gate 1 exists to prevent |
-| `slice-source.py` | 0, 1 | gates 6 (mappings, raw ids), 11(b) and 14 ran |
+| `slice-source.py` | 0, 1 | gates 7 and 8, gate 6's mapping and raw-id checks, gates 11(b), 11(c) and 14 ran, and `writeSites` is there for gates 15(a) and 19 to start from (slice-check.md Step 1.5) |
 | | 3 | incomplete, not a pass: each `unverified` entry for an in-scope slice goes under **Not run** with its reason; `unparsed` files likewise |
-| | 2 | **Not run: ESS-G6, ESS-G11b, ESS-G14** |
+| | 2 | **Not run: ESS-G6, ESS-G7, ESS-G8, ESS-G11b, ESS-G11c, ESS-G14**, and gates 15(a) and 19 have no `writeSites` to start from — the same set slice-check.md Step 1.5 lists |
 
 Both scripts put the id on each finding (`id`); it is the `gate` label's number and clause —
 `"4(b) sole owner"` → `ESS-G4b`, `"3 uniqueness"` → `ESS-G3`. A manifest slice-lint could not parse
@@ -255,7 +257,7 @@ adds or modifies, or be a direct consequence of one (a new decider with no wirin
 event the manifest does not declare). Something wrong on a line the change did not touch is pre-existing
 and out of scope, however visible it is in a file the change edited.
 
-**Strip comments before counting anything**, exactly as `commands/slice-check.md` Step 2 says and for
+**Strip comments before counting anything**, exactly as `references/slice/slice-check-gates.md` § Before any gate says and for
 the same reason: code that explains itself names the very annotations and keywords being counted.
 
 ### 4a — Every candidate, confirmed or dismissed
@@ -268,12 +270,27 @@ evidence. Never drop a candidate silently; an unexplained absence reads as a mis
 
 ### 4b — Traps the signatures cannot see
 
-Read `${CLAUDE_PLUGIN_ROOT}/references/llm/LLM-traps.md` — the whole index; it is short. For each in-scope
-source file, map its `dk.trustworks.essentials.*` imports to the index's `###` module headings (the
-package-to-module routing is the Module Index in `${CLAUDE_PLUGIN_ROOT}/skills/essentials-docs/SKILL.md`),
-and add `## Universal`, plus `## Upgrading` when the change touches a build or configuration file. For
-each line under those headings whose symptom plausibly fits a changed hunk, open its linked section
-before deciding. Report a trap only with evidence on a changed line; the id is the line's `ESS-NNN`. A
+Read only the in-scope parts of `${CLAUDE_PLUGIN_ROOT}/references/llm/LLM-traps.md`, never the whole
+index (it is over 40 KB, most of it modules the change does not touch). For each in-scope source file, map
+its `dk.trustworks.essentials.*` imports to their modules' docs with the Module Index in
+`${CLAUDE_PLUGIN_ROOT}/skills/essentials-docs/SKILL.md` (its Doc column, e.g. `LLM-foundation.md`). Each
+`###` module heading of the traps index names that doc — `### foundation ([LLM-foundation.md](…))` — so
+the doc names select the sections; module names do not, because a few differ (`types-jackson3` is filed
+under `### types-jackson`). Print `## Universal`, those module sections, and `## Upgrading` with its
+subsections when the change touches a build or configuration file (`upgrading=1` then, `0` otherwise).
+The command is POSIX awk, so it behaves the same with the BSD awk of macOS, gawk and mawk:
+
+```bash
+awk -v docs='LLM-foundation.md LLM-postgresql-event-store.md' -v upgrading=0 '
+  BEGIN { n = split(docs, d, " "); for (i = 1; i <= n; i++) want[d[i]] = 1 }
+  /^## /  { top = substr($0, 4); on = (top == "Universal" || (top == "Upgrading" && upgrading)); if (on) print; next }
+  /^### / { if (top != "Upgrading") on = (match($0, /\[LLM-[A-Za-z0-9.-]*\]/) && (substr($0, RSTART + 1, RLENGTH - 2) in want)); if (on) print; next }
+  on
+' "${CLAUDE_PLUGIN_ROOT}/references/llm/LLM-traps.md"
+```
+
+A module the change imports that has no `###` heading has no trap lines; that is not an error. For each
+line printed whose symptom plausibly fits a changed hunk, open its linked section before deciding. Report a trap only with evidence on a changed line; the id is the line's `ESS-NNN`. A
 trap `review-scan` already reported at that place is not reported twice.
 
 Severity of a trap row found here: **Blocking** when the owning section's failure is a startup failure,
@@ -282,11 +299,15 @@ lost or duplicated data, or persisted state that no longer reads back; **Should-
 
 ### 4c — The slice law (on the law only)
 
-Apply the gates of `${CLAUDE_PLUGIN_ROOT}/commands/slice-check.md` Step 2 **as written there** — never
-restated here — to the in-scope files, with the lane `slice-source.py` detected for each bounded
+Apply the gates of `${CLAUDE_PLUGIN_ROOT}/references/slice/slice-check-gates.md` (the gates
+`/essentials:slice-check` Step 2 runs) **as written there** — never restated here — to the in-scope
+files. Read only what the in-scope gates need: § Before any gate; the in-scope rows of § The gate table
+(`grep -E '^\| <a id="g(<n>|<n>)">' …/slice-check-gates.md`); the section whose heading names an
+in-scope gate (§ Notes on gates 2, 4, 6, 10 and 13, § Gates 5, 15, 17 and 18 per lane); and § Gate 14 —
+lane detection with § Gate applicability by lane whenever a lane-dependent gate is in scope, with the lane `slice-source.py` detected for each bounded
 context deciding which gates apply and how (its gate applicability table).
 
-- Gates 1, 3 and 4 are `slice-lint.py`'s; gate 8, gate 6's request-mapping and raw-id checks, gates 11(b)
+- Gates 1, 3 and 4 are `slice-lint.py`'s; gates 7 and 8, gate 6's request-mapping and raw-id checks, gates 11(b)
   and 11(c) and gate 14 are `slice-source.py`'s, and so are the `writeSites` gates 15(a) and 19 start
   from. Take them from Step 3; do not run them again by eye. What remains of gate 6 (the no-adapter
   rule, a view mapping reading a repository the slice does not own) is judgement.

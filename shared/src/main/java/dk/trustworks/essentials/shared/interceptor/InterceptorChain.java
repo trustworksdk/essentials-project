@@ -22,6 +22,11 @@ import java.util.function.*;
 /**
  * Generic interceptor chain concept that supports intercepting concrete {@link Interceptor} operations to modify the behaviour or
  * add to the default behaviour
+ * <p>
+ * The chain hands the same {@link #operation()} instance to every interceptor and to the default behaviour, so an
+ * interceptor changes the input of the operation by calling the operation's setter before {@link #proceed()}, and the
+ * output by returning a different value. The full contract, including how the default behaviour must read the
+ * operation, is described on {@link Interceptor}.
  *
  * @param <OPERATION>        the type of operation to intercept, aka. the argument to the interceptor
  * @param <RESULT>           the result of the operation

@@ -243,6 +243,68 @@ public interface PersistedEvent {
      */
     boolean valueEquals(PersistedEvent that);
 
+    /**
+     * Create a copy of this {@link PersistedEvent} that carries a different serialized {@link #event()} (payload),
+     * with every other property ({@link #eventId()}, {@link #aggregateType()}, {@link #aggregateId()},
+     * {@link #eventOrder()}, {@link #eventRevision()}, {@link #globalEventOrder()}, {@link #metaData()},
+     * {@link #timestamp()}, {@link #causedByEventId()}, {@link #correlationId()} and {@link #tenant()}) copied unchanged.<br>
+     * Intended for a read-side {@code EventStoreInterceptor} that transforms what was loaded (for example decrypts the
+     * payload) and returns the transformed event instead of the loaded one. <code>this</code> instance is not changed.<br>
+     * The copy is created using {@link #from(EventId, AggregateType, Object, EventJSON, EventOrder, EventRevision, GlobalEventOrder, EventMetaDataJSON, OffsetDateTime, Optional, Optional, Optional)},
+     * so it is a {@link DefaultPersistedEvent} whatever the type of <code>this</code> instance.
+     * Since {@link #equals(Object)} only compares {@link #eventId()}, the copy is equal to <code>this</code> instance;
+     * use {@link #valueEquals(PersistedEvent)} to tell them apart.
+     *
+     * @param event the serialized event the copy carries
+     * @return a new {@link PersistedEvent} with the given <code>event</code> and all other properties copied from <code>this</code> instance
+     */
+    default PersistedEvent withEvent(EventJSON event) {
+        requireNonNull(event, "No event provided");
+        return from(eventId(),
+                    aggregateType(),
+                    aggregateId(),
+                    event,
+                    eventOrder(),
+                    eventRevision(),
+                    globalEventOrder(),
+                    metaData(),
+                    timestamp(),
+                    causedByEventId(),
+                    correlationId(),
+                    tenant());
+    }
+
+    /**
+     * Create a copy of this {@link PersistedEvent} that carries a different serialized {@link #metaData()},
+     * with every other property ({@link #eventId()}, {@link #aggregateType()}, {@link #aggregateId()},
+     * {@link #event()}, {@link #eventOrder()}, {@link #eventRevision()}, {@link #globalEventOrder()},
+     * {@link #timestamp()}, {@link #causedByEventId()}, {@link #correlationId()} and {@link #tenant()}) copied unchanged.<br>
+     * Intended for a read-side {@code EventStoreInterceptor} that transforms what was loaded and returns the transformed
+     * event instead of the loaded one. <code>this</code> instance is not changed.<br>
+     * The copy is created using {@link #from(EventId, AggregateType, Object, EventJSON, EventOrder, EventRevision, GlobalEventOrder, EventMetaDataJSON, OffsetDateTime, Optional, Optional, Optional)},
+     * so it is a {@link DefaultPersistedEvent} whatever the type of <code>this</code> instance.
+     * Since {@link #equals(Object)} only compares {@link #eventId()}, the copy is equal to <code>this</code> instance;
+     * use {@link #valueEquals(PersistedEvent)} to tell them apart.
+     *
+     * @param metaData the serialized event metadata the copy carries
+     * @return a new {@link PersistedEvent} with the given <code>metaData</code> and all other properties copied from <code>this</code> instance
+     */
+    default PersistedEvent withMetaData(EventMetaDataJSON metaData) {
+        requireNonNull(metaData, "No metaData provided");
+        return from(eventId(),
+                    aggregateType(),
+                    aggregateId(),
+                    event(),
+                    eventOrder(),
+                    eventRevision(),
+                    globalEventOrder(),
+                    metaData,
+                    timestamp(),
+                    causedByEventId(),
+                    correlationId(),
+                    tenant());
+    }
+
     class DefaultPersistedEvent implements PersistedEvent {
         private final EventId                    eventId;
         private final Object                     aggregateId;

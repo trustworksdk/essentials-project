@@ -29,6 +29,7 @@ import dk.trustworks.essentials.components.foundation.ttl.TTLJob;
 import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
 import dk.trustworks.essentials.shared.network.Network;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
+import dk.trustworks.essentials.components.foundation.test.classpath.WithoutJarsClassLoader;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.jdbc.autoconfigure.*;
@@ -231,5 +232,72 @@ public class StarterAutoConfigurationIT {
                     assertThat(ctx.getBean(DurableQueuesHealthIndicator.class).health().getDetails())
                             .containsEntry(DurableQueuesHealthIndicator.DETAIL_DEAD_LETTER_THRESHOLD, 25L);
                 });
+    }
+
+    /**
+     * The baseline for the optional-dependency scenarios below: run the same way, through a class loader over the full
+     * test classpath, {@link OptionalLibrariesScenario} sees every bean it reports except the tracing interceptor, which
+     * need a {@code Tracer} bean it never registers.
+     */
+    @Test
+    void the_optional_libraries_scenario_sees_the_metrics_and_health_beans_with_every_optional_library_present() throws Throwable {
+        try (var everything = WithoutJarsClassLoader.fromTestClasspathWithout("everything", List.of())) {
+            assertThat(startTheStarterThrough(everything)).isEqualTo("durableQueuesMicrometerInterceptor,micrometerDurableQueueMessageObserver,durableQueuesHealthIndicator");
+        }
+    }
+
+    /**
+     * micrometer-tracing is an optional dependency, so an application without it - here one with Micrometer metrics, as
+     * Actuator gives it - must start, just without the tracing interceptor. It did not while the interceptor's
+     * {@code Tracer} and {@code Propagator} parameters sat on {@link EssentialsComponentsConfiguration} itself: introspecting the
+     * auto-configuration failed with {@code NoClassDefFoundError: io/micrometer/tracing/Tracer}.
+     */
+    @Test
+    void an_application_without_micrometer_tracing_starts_without_the_tracing_interceptor() throws Throwable {
+        try (var withoutTracing = WithoutJarsClassLoader.withoutMicrometerTracing()) {
+            assertThat(withoutTracing.hides("io.micrometer.tracing.Tracer")).isTrue();
+
+            assertThat(startTheStarterThrough(withoutTracing)).isEqualTo("durableQueuesMicrometerInterceptor,micrometerDurableQueueMessageObserver,durableQueuesHealthIndicator");
+        }
+    }
+
+    /**
+     * micrometer-core is an optional dependency, so an application without any Micrometer library of its own - no
+     * Actuator - must start, just without the metrics beans. It did not while {@link EssentialsComponentsConfiguration} named
+     * {@code MeterRegistry} in its bean method signatures, directly or as {@code Optional<MeterRegistry>}: the context
+     * failed with {@code NoClassDefFoundError} or {@code TypeNotPresentException} for
+     * {@code io.micrometer.core.instrument.MeterRegistry}. micrometer-observation stays, as spring-context depends on it.
+     */
+    @Test
+    void an_application_without_micrometer_starts_without_the_metrics_beans() throws Throwable {
+        try (var withoutMicrometer = WithoutJarsClassLoader.withoutMicrometer()) {
+            assertThat(withoutMicrometer.hides("io.micrometer.core.instrument.MeterRegistry")).isTrue();
+            assertThat(withoutMicrometer.hides("io.micrometer.tracing.Tracer")).isTrue();
+
+            assertThat(startTheStarterThrough(withoutMicrometer)).isEqualTo("durableQueuesHealthIndicator");
+        }
+    }
+
+    /**
+     * spring-boot-health is a {@code provided} dependency, so an application without it - Micrometer metrics but no
+     * Actuator - must start, just without the health indicators. It did not while {@link EssentialsComponentsConfiguration} named
+     * {@code HealthIndicator} in a bean method's return type: introspecting the auto-configuration failed with
+     * {@code NoClassDefFoundError: org/springframework/boot/health/contributor/HealthIndicator}.
+     */
+    @Test
+    void an_application_without_spring_boot_health_starts_without_the_health_indicators() throws Throwable {
+        try (var withoutHealth = WithoutJarsClassLoader.withoutSpringBootHealth()) {
+            assertThat(withoutHealth.hides("org.springframework.boot.health.contributor.HealthIndicator")).isTrue();
+
+            assertThat(startTheStarterThrough(withoutHealth)).isEqualTo("durableQueuesMicrometerInterceptor,micrometerDurableQueueMessageObserver");
+        }
+    }
+
+    private static Object startTheStarterThrough(WithoutJarsClassLoader classLoader) throws Throwable {
+        return classLoader.runStatic(OptionalLibrariesScenario.class.getName(),
+                                     "startTheStarter",
+                                     postgreSQLContainer.getJdbcUrl(),
+                                     postgreSQLContainer.getUsername(),
+                                     postgreSQLContainer.getPassword());
     }
 }

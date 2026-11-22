@@ -110,6 +110,27 @@ public interface SubscriptionGapHandler {
     }
 
     /**
+     * {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} without recording the new gaps the events
+     * reveal - it only resolves and promotes. For a caller that hands every one of the events to something that records
+     * the gaps they open itself: the CDC event store's back-fill and catch-up pages, whose events all pass the
+     * subscription's delivery gate, which records the gaps it sees open - at once, or kept in memory until the next
+     * resume point save. A row the page wrote as well would be one the gate does not know about, and is never resolved
+     * when it takes the gap's fill for that of a gap nothing recorded.
+     * <p>
+     * The default implementation is {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)}, new gaps
+     * included: the CDC event store only keeps gaps in memory with the {@link PostgresqlEventStreamGapHandler}'s handlers,
+     * which override this method.
+     *
+     * @return what the reconciliation changed for this subscriber - never a new gap, when overridden
+     */
+    default GapReconciliation reconcileGapsAndReportWithoutRecordingNewGaps(AggregateType aggregateType,
+                                                                          LongRange globalOrderQueryRange,
+                                                                          List<PersistedEvent> persistedEvents,
+                                                                          List<GlobalEventOrder> transientGapsIncludedInQuery) {
+        return reconcileGapsAndReport(aggregateType, globalOrderQueryRange, persistedEvents, transientGapsIncludedInQuery);
+    }
+
+    /**
      * Resolve the transient gaps that the given <b>gap fills</b> fill - and change nothing else: no new gaps are recorded
      * and no gap is promoted to a permanent one.
      * <p>

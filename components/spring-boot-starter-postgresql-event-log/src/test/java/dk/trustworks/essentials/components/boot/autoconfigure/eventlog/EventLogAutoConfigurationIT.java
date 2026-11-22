@@ -280,7 +280,7 @@ class EventLogAutoConfigurationIT {
 
     @Test
     void an_unported_old_processor_bean_fails_start_up_naming_it_before_its_missing_dependencies() {
-        // ESS-138: the guard runs before any bean is created, so the missing ViewEventProcessorDependencies is never reached
+        // ESS-140: the guard runs before any bean is created, so the missing ViewEventProcessorDependencies is never reached
         enabled().withUserConfiguration(OldProcessorConfiguration.class)
                  .run(ctx -> assertThat(ctx.getStartupFailure())
                          .isInstanceOf(IllegalStateException.class)

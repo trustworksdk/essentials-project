@@ -76,7 +76,7 @@ import java.util.*;
 public class EventLogAutoConfiguration {
 
     /**
-     * ESS-138: fails start-up with a message naming every classic processor bean ({@code EventProcessor},
+     * ESS-140: fails start-up with a message naming every classic processor bean ({@code EventProcessor},
      * {@code ViewEventProcessor}, {@code InTransactionEventProcessor}) and what to port it to, before any bean is created.
      * {@code static}, as a {@link org.springframework.beans.factory.config.BeanFactoryPostProcessor} bean must be.
      */

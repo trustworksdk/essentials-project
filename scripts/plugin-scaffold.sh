@@ -73,6 +73,13 @@
 if [ -z "${BASH_VERSION:-}" ]; then
     exec bash "$0" "$@"
 fi
+# Associative arrays, mapfile and `wait -n` need bash 4.3, an empty array under `set -u` 4.4. Under macOS's stock
+# bash 3.2 the script would not fail but misbehave (`declare -A` errors and the case table silently collapses), so stop.
+if [ "${BASH_VERSINFO[0]}" -lt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -lt 4 ]; }; then
+    echo "plugin-scaffold: needs bash 4.4 or newer, this is $BASH_VERSION. On macOS (stock bash 3.2): brew install bash," >&2
+    echo "  then rerun with Homebrew's bin ahead of /bin on PATH, or as: \"\$(brew --prefix)/bin/bash\" $0 ..." >&2
+    exit 2
+fi
 
 set -uo pipefail
 

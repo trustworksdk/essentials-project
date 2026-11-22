@@ -709,6 +709,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                     return Flux.empty();
                 }
 
+                // Spans the gap read up to awaitAcknowledgement: a fill whose acknowledgement commits in between is not emitted again
+                var read = awaitingAcknowledgement.map(GapFillsAwaitingAcknowledgement::beginRead).orElse(null);
                 try {
                     var resolveBatchSizeForThisQueryTiming = StopWatch.start("resolveBatchSizeForThisQuery (" + actualSubscriberId + ", " + aggregateType + ")");
 
@@ -747,6 +749,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                     // After an empty poll: straight over a hole at the read position, or nothing to read in the range at all
                     var rangeWithEvents  = rangeToRead(unitOfWork, aggregateType, nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery, batchFetchSize, consecutiveNoPersistedEventsReturned.get(), eventStreamLogName);
                     var globalOrderRange = rangeWithEvents.orElseGet(() -> LongRange.from(nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery));
+                    awaitingAcknowledgement.ifPresent(GapFillsAwaitingAcknowledgement::forgetResolvedGaps);
                     var transientGapsToIncludeInQuery = subscriptionGapHandler.map(gapHandler -> findTransientGapsToIncludeInQuery(gapHandler, aggregateType, globalOrderRange))
                                                                               .orElse(null);
 
@@ -845,6 +848,9 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                     // it holds its connection and a lock on the event table for the life of the process.
                     if (unitOfWork != null) {
                         rollbackIfStartedByThisPoll(unitOfWork, startedUnitOfWork, null, eventStreamLogName);
+                    }
+                    if (read != null) {
+                        read.close();
                     }
                 }
             }).doOnNext(event -> {
@@ -1237,6 +1243,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 return 0;
             }
 
+            // Spans the gap read up to the publishing: a fill whose acknowledgement commits in between is not published again
+            var read = awaitingAcknowledgement.map(GapFillsAwaitingAcknowledgement::beginRead).orElse(null);
             try {
                 var resolveBatchSizeForThisQueryTiming = StopWatch.start("resolveBatchSizeForThisQuery (" + subscriberId + ", " + aggregateType + ")");
                 long batchSizeForThisQuery = resolveBatchSizeForThisQuery(aggregateType,
@@ -1286,6 +1294,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 // After an empty poll: straight over a hole at the read position, or nothing to read in the range at all
                 var rangeWithEvents  = rangeToRead(unitOfWork, aggregateType, nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery, Math.min(batchFetchSize, remainingDemandForEvents), consecutiveNoPersistedEventsReturned.get(), eventStreamLogName);
                 var globalOrderRange = rangeWithEvents.orElseGet(() -> LongRange.from(nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery));
+                awaitingAcknowledgement.ifPresent(GapFillsAwaitingAcknowledgement::forgetResolvedGaps);
                 var transientGapsToIncludeInQuery = subscriptionGapHandler.map(gapHandler -> findTransientGapsToIncludeInQuery(gapHandler, aggregateType, globalOrderRange))
                                                                           .orElse(null);
 
@@ -1415,6 +1424,9 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 // it holds its connection and a lock on the event table for the life of the process.
                 if (unitOfWork != null) {
                     rollbackIfStartedByThisPoll(unitOfWork, startedUnitOfWork, null, eventStreamLogName);
+                }
+                if (read != null) {
+                    read.close();
                 }
             }
         }

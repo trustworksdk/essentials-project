@@ -17,12 +17,17 @@
 package dk.trustworks.essentials.examples.trading.config;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
+import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import org.springframework.beans.factory.annotation.Value;
 
 /**
  * The demo's {@link PartitionedViewEventProcessor}s, with the number of queue consumer threads per instance taken from
  * {@code trading-demo.views.partitioned-consumers} (default 1, the processor's own default). Every event of such a view
  * goes through its queue, so this - times the instances - is how many events of the view are handled at once.
+ * <p>
+ * Retries with a {@link FailoverRedeliveryPolicy} instead of the processor's default (about 10 s): the demo's handlers
+ * throw until another processor's work is there ("not yet"), and with the default such a message dead-letters during a
+ * failover - one killed instance of two dead-lettered 438 settlement reports.
  */
 public abstract class TradingDemoPartitionedViewEventProcessor extends PartitionedViewEventProcessor {
     private int     consumers       = 1;
@@ -30,6 +35,11 @@ public abstract class TradingDemoPartitionedViewEventProcessor extends Partition
 
     protected TradingDemoPartitionedViewEventProcessor(ViewEventProcessorDependencies dependencies) {
         super(dependencies);
+    }
+
+    @Override
+    protected RedeliveryPolicy getDurableQueueRedeliveryPolicy() {
+        return failoverRedeliveryPolicy(getDurableQueues().maxUnservedAfterInstanceLoss()).policy();
     }
 
     @Value("${trading-demo.views.partitioned-consumers:1}")

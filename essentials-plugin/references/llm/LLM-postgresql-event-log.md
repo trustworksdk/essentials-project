@@ -482,4 +482,4 @@ prepared transaction holds the copy until it is committed or rolled back, and is
 - [spring-boot-starter-modules](LLM-spring-boot-starter-modules.md#event-log-starter-preview) - the starter
 - [admin-api](LLM-admin-api.md) - the event-log subscription endpoints
 - [foundation](LLM-foundation.md) - `Inbox`, `UnitOfWork`, `@MessageHandler`, `Lifecycle`
-- [Traps](LLM-traps.md#ess-138) - ESS-138
+- [Traps](LLM-traps.md#ess-140) - ESS-140

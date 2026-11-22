@@ -119,16 +119,10 @@ than binding, the default status is 500. See `references/llm/LLM-types-spring-we
 § Validation runs — but watch the status code, and `references/llm/LLM-types-jackson.md`
 § Kotlin semantic types.
 
-**Kotlin: a value class in a handler signature needs an explicit operationId** (trap ESS-113). Kotlin
-mangles the JVM name of a handler that takes a value class as a parameter (nullable or `suspend`
-included) or returns one (`placeOrder-40lU5Lw`); springdoc uses that name as the `operationId`, and the
-generated frontend client inherits it. A value class only inside a generic (`List<OrderId>`) or a DTO
-does not mangle. Give exactly the mangling handlers
-`@Operation(operationId = "<sliceCamel>")` (`io.swagger.v3.oas.annotations.Operation`), named after the
-slice so it stays stable and unique; `@JvmName` is not an option on Spring's open methods. See
-`references/llm/LLM-types-spring-web.md` § Kotlin handler methods: set the operationId. The shipped
-templates keep value classes inside the request and response types, so no emitted handler mangles;
-the first edit that moves one into the signature — a typed `@PathVariable` id, say — does.
+**Kotlin: a value class in a handler signature needs an explicit operationId** (trap ESS-113,
+`slice-authoring.md` §4d). In a command slice it is `@Operation(operationId = "<sliceCamel>")`. The
+shipped templates keep value classes inside the request and response types, so no emitted handler
+mangles; the first edit that moves one into the signature — a typed `@PathVariable` id, say — does.
 
 **Language split (§R5) — never mix these:**
 
@@ -145,47 +139,27 @@ the first edit that moves one into the signature — a typed `@PathVariable` id,
 Glob <sourceRoot>/<packageDir>/<bc>/
 ```
 
+**Read `${CLAUDE_PLUGIN_ROOT}/references/slice/command-lane-<lane>.md` now** — `command-lane-decider.md`,
+`command-lane-service-entity.md` or `command-lane-aggregate.md`, the one for this `lane` and never the
+others. It holds this lane's part of Step 3 (what its BC scaffold leaves to the user, and why) and of
+Step 4 (the files the render writes). Every rule there binds here exactly as if it were written in
+this skill.
+
 If absent, pass `--new-bc`: the script emits the BC scaffold first, choosing the family by `lane`:
 
 | `lane` | Scaffold | Contents |
 |---|---|---|
 | `decider` | `templates/<language>/bc-scaffold/` | id type, sealed event parent, routing interface, `<Bc>Configuration` (aggregate-type configuration + decider beans only), BC `CLAUDE.md` — plus `templates/<language>/app-wiring/DeciderWiring` into the application package **only if the project has no decider configurator yet**: there is exactly one per application |
 | `service-entity` | `templates/<language>/bc-scaffold-service-entity/` | id type, sealed event parent, near-empty `<Bc>Configuration`, BC `CLAUDE.md`, and `entities/CLAUDE.md`. **No `routing/`** — there is no stream to select |
-| `aggregate` | `templates/java/bc-scaffold-aggregate/` | id type, sealed event parent, **the aggregate and its repository wrapper** (`aggregates/<Aggregate>.java`, `aggregates/<Aggregates>.java`), near-empty `<Bc>Configuration`, BC `CLAUDE.md`. **No `routing/`** — each handler loads by id, so there is no command-type-to-stream mapping. **Java only** — see below |
+| `aggregate` | `templates/java/bc-scaffold-aggregate/` | id type, sealed event parent, **the aggregate and its repository wrapper** (`aggregates/<Aggregate>.java`, `aggregates/<Aggregates>.java`), near-empty `<Bc>Configuration`, BC `CLAUDE.md`. **No `routing/`** — each handler loads by id, so there is no command-type-to-stream mapping. **Java only** — see `command-lane-aggregate.md` |
 
 **If the BC exists, confirm its lane before emitting anything** (§R5, and `slice-authoring.md` §1b).
 The lane is a per-BC property and a BC showing **two** — any two of per-slice deciders, `aggregates/`,
 `entities/` — is Blocking. Stop and report it; emitting into it deepens the violation.
 
-**On the `aggregate` lane, emit `command_aggregate` — but only in Java, and one file is still the
-user's.** The lane is templated: command type, thin handler (load → call one method → done), API
-file, event variant, manifest and both tests. Two caveats belong in the report every time:
-
-- **The aggregate method is an edit to an existing file, so it is the user's call.** The handler the
-  template emits calls `<Aggregate>.applyPlaceholder(...)`; the real invariant method has to be
-  written on `aggregates/<Aggregate>.java`, which another slice also owns. Never silently add a
-  method to an existing aggregate — name the method the handler expects, state the signature, and
-  let the user write it. This is the lane's equivalent of the service-entity lane's "the entity is
-  yours to write".
-- **Java only.** There is no `templates/kotlin/command_aggregate/`, deliberately: the aggregate family
-  (`AggregateRoot`, `StatefulAggregateRepository`) is Java-native and `/essentials:slice-check` treats
-  an `aggregates/` directory in a Kotlin BC as **Advisory** — reachable through interop, but not a
-  shape this plugin generates. If the BC is Kotlin and on this lane, emit nothing and say so: the
-  right move is a conversation about whether the BC belongs on the decider lane, which Kotlin has
-  first-class.
-
-**On the `service-entity` lane, `entities/` gets its orientation file but no entity.** The entity and
-its write repository are the only files on that lane that must name a persistence flavour, and no
-template ships for them — the Essentials JPA integration is EXPERIMENTAL upstream and its semantic-id
-story is unsettled (`slice-model.md` §3.5). Emit `entities/CLAUDE.md`, and state in the report that
-`<Entity>` and `<Entity>Repository` are the user's to write, against the contract that file carries.
-Never invent an entity from the placeholders.
-
-Neither scaffold creates `use_cases/_shared/`. On the decider lane a brand-new BC has no deciders, so
-a shared `State` there would have zero consumers — premature promotion baked into the scaffold;
-`_shared/` is created by hand later, when the third consumer appears. On the service-entity lane it is
-never created at all: there are no evolvers to promote, and a `_shared/` there is a service class in
-disguise (§R5).
+Neither the decider nor the service-entity scaffold creates `use_cases/_shared/`, and the lane file
+says what else the scaffold leaves to the user — on the aggregate lane the invariant method, on the
+service-entity lane the entity itself. Name those in the report.
 
 In Java the sealed parent's `permits` clause is generated with **this slice's event** as its first
 entry — an empty `permits` does not compile.
@@ -197,7 +171,7 @@ add it before going on — the slice does not compile without it:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py requires --lang <language> --kind command \
-    --lane <lane> [--new-bc] --build <the build file from add-slice Step 0>
+    --lane <lane> [--new-bc] --build <the project's build file, slice-authoring.md §2>
 ```
 
 Then render and wire in one call. Pass the inputs you were given; the script derives the rest
@@ -217,77 +191,16 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py render --lang <language> -
 Exit 2 means nothing was written: relay the message (an existing slice directory, a lane that does
 not match the BC's directories, the Kotlin aggregate lane, a template drift) and stop.
 
-**Exit 4 means the shell may not write the project** (a read-only filesystem, or a sandbox that lets
-the Write tool write but not Bash). Nothing was written. Do not stop, and never render a file by hand;
-take the emit fallback (`slice-authoring.md` §4b):
-
-1. Run the same command with `--emit` added, once. It writes nothing; its JSON report lists every file
-   in `files` with `path` (relative to `<projectRoot>`), `action` and `content`. If the output is too
-   large to read whole, run it again with `--only <path>` for each path in `files`: that prints the one
-   file's content, raw.
-2. Write every file with the Write tool at `<projectRoot>/<path>`, `content` verbatim: no edit, and no
-   TODO filled on the way. Never import or patch `render-slice.py`.
-3. Then run the same command with `verify` in place of `render` and without `--emit`. Exit 0: the slice is
-   rendered; go on from the emitted report as after a plain render. Exit 1 names each file `missing` or
-   `differs`: report them and stop. Never repair one by hand.
-
-Say in the final report, in one line, that the files were written through the emit fallback.
+**Exit 4 means the shell may not write the project.** Nothing was written. Do not stop, and never
+render a file by hand: take the emit fallback in `slice-authoring.md` §4b, all three steps, exactly
+as written there.
 
 The family is `command` on the decider lane, `command_service_entity` on the service-entity lane and
-`command_aggregate` on the aggregate lane; the tables below are what it writes.
+`command_aggregate` on the aggregate lane.
 
-**Decider lane — `templates/<language>/command/`:**
-
-| Template | Destination |
-|---|---|
-| `__Slice__.<ext>` | `<bc>/use_cases/<slice>/<Command>.<ext>` |
-| `__Slice__Decider.<ext>` | `<bc>/use_cases/<slice>/<Slice>Decider.<ext>` |
-| `__Slice__API.<ext>` | `<bc>/use_cases/<slice>/<Slice>API.<ext>` |
-| `events/__Event__.<ext>` | `<bc>/events/<Event>.<ext>` |
-| `test/__Slice__Test.<ext>` | test tree, mirroring the slice package |
-| `slice.yaml`, `CLAUDE.md.template` | `<bc>/use_cases/<slice>/` |
-
-**Service-entity lane — `templates/<language>/command_service_entity/`:**
-
-| Template | Destination |
-|---|---|
-| `__Slice__.<ext>` | `<bc>/use_cases/<slice>/<Command>.<ext>` |
-| `__Slice__Handler.<ext>` | `<bc>/use_cases/<slice>/<Slice>Handler.<ext>` |
-| `__Slice__API.<ext>` | `<bc>/use_cases/<slice>/<Slice>API.<ext>` |
-| `events/__Event__.<ext>` | `<bc>/events/<Event>.<ext>` |
-| `test/__Slice__Test.<ext>` | test tree — the **entity** unit test, pure, no Spring |
-| `test/__Slice__IT.<ext>` | test tree — through the `CommandBus`, asserting the event |
-| `slice.yaml`, `CLAUDE.md.template` | `<bc>/use_cases/<slice>/` |
-
-**Aggregate lane — `templates/java/command_aggregate/`:**
-
-| Template | Destination |
-|---|---|
-| `__Slice__.java` | `<bc>/use_cases/<slice>/<Command>.java` |
-| `__Slice__Handler.java` | `<bc>/use_cases/<slice>/<Slice>Handler.java` |
-| `__Slice__API.java` | `<bc>/use_cases/<slice>/<Slice>API.java` |
-| `events/__Event__.java` | `<bc>/events/<Event>.java` |
-| `test/__Slice__Test.java` | test tree — the **aggregate** unit test, pure, no Spring |
-| `test/__Slice__IT.java` | test tree — through the `CommandBus`, asserting the appended event |
-| `slice.yaml`, `CLAUDE.md.template` | `<bc>/use_cases/<slice>/` |
-
-**Not emitted, and reported instead:** the invariant method on `aggregates/<Aggregate>.java`. The
-handler names it; the user writes it.
-
-No decider, no evolver, no `GivenWhenThenScenario` on that lane — all three presuppose a stream. The
-conditional `State`/`Evolver` block below applies to the **decider lane only**.
-
-**Conditional — `--with-state`, only if this Decider must fold state to decide** (Step 2, Evolver placement):
-
-| Template | Destination |
-|---|---|
-| `__Aggregate__State.<ext>` | `<bc>/use_cases/<slice>/<Aggregate>State.<ext>` |
-| `__Aggregate__StateEvolver.<ext>` | `<bc>/use_cases/<slice>/<Aggregate>StateEvolver.<ext>` |
-
-They land **in the slice**, never in `use_cases/_shared/`. Leave the flag off when an idempotency
-check over the raw event list suffices — the shipped `place_order` example needs no state at all. If a
-`_shared/<Aggregate>State` already exists **and** this would be its third consumer with no new field
-required, leave the flag off and import that instead; say so in the report.
+The tables of what it writes, per lane, are in the lane file read at Step 3 — including the
+conditional `--with-state` files on the decider lane and, on the aggregate lane, what is reported
+instead of emitted.
 
 Then fill the TODOs the JSON lists under `todos` — the command's payload, the event's facts, the
 invariants — and replace the `placeholder` field the templates carry.
@@ -324,8 +237,10 @@ An unregistered Decider compiles, passes every unit test, and breaks every `@Spr
 2. **Java only:** the `permits` append is unchanged — a service-entity command slice still supplies
    an event variant, and `--wire` makes it. The aggregate lane has the same single edit.
 
-Do **not** name `EssentialsComponentsConfiguration` or `EssentialsComponentsProperties`: neither
-appears in any bundled doc, and the plugin never names an unproven symbol.
+Do **not** name `EssentialsComponentsConfiguration` or `EssentialsComponentsProperties` here. Handler
+registration is `ReactiveHandlersBeanPostProcessor`'s, governed by that one property, so neither class
+plays a part in it. Each exists twice, once per starter (`…boot.autoconfigure.postgresql` and
+`…boot.autoconfigure.mongodb`), and neither is in `api-provenance.md`, so no template may import one.
 
 **Every lane, Java — the typed edge.** When the slice's API takes a typed id (the aggregate-lane
 command and service-entity view templates do), run the S4 registration check in `slice-authoring.md`

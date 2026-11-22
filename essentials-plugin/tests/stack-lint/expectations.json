@@ -30,6 +30,7 @@
       "expectFacts": {"language": "kotlin", "db": "pg-event-sourced", "web": "webflux", "frontend": "embedded",
                       "essentialsVersion": "DEV-SNAPSHOT", "essentialsBehind": null},
       "findings": [
+        {"check": "s5-webflux-virtual-threads", "file": "backend/pom.xml", "line": 11},
         {"check": "s2.1-objenesis", "file": "backend/pom.xml", "line": 16},
         {"check": "s1-kotlin-compiler-floor", "file": "pom.xml", "line": 19, "targetOnly": true, "appliesWithUpgrade": false},
         {"check": "s7-model-converter", "file": "backend/pom.xml", "line": 15, "targetOnly": true, "appliesWithUpgrade": false},
@@ -145,6 +146,7 @@
       "exit": 1,
       "expectFacts": {"language": "java", "db": null, "web": "webflux"},
       "findings": [
+        {"check": "s5-webflux-virtual-threads", "file": "pom.xml", "line": 17},
         {"check": "s1-boot-patch", "file": "pom.xml", "line": 4},
         {"check": "s1-one-essentials-version", "file": "pom.xml", "line": 21},
         {"check": "s1-one-essentials-version", "file": "pom.xml", "line": 26},
@@ -199,6 +201,7 @@
       "exit": 1,
       "expectFacts": {"language": "kotlin", "web": "webflux"},
       "findings": [
+        {"check": "s5-webflux-virtual-threads", "file": "backend/pom.xml", "line": 12},
         {"check": "s1-boot-patch", "file": "pom.xml", "line": 4},
         {"check": "s1-kotlin-patch", "file": "pom.xml", "line": 20, "targetOnly": false, "appliesWithUpgrade": false},
         {"check": "s2.1-objenesis", "file": "backend/pom.xml", "line": 16},

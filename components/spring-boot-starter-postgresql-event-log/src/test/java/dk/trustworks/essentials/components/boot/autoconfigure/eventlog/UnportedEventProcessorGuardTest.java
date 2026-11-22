@@ -25,7 +25,7 @@ import java.lang.reflect.Modifier;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * ESS-138: with the guard registered (as {@link EventLogAutoConfiguration} registers it while the event log is enabled),
+ * ESS-140: with the guard registered (as {@link EventLogAutoConfiguration} registers it while the event log is enabled),
  * a classic processor bean fails start-up before it is created, with a message naming the bean, its class and what to
  * port it to; a context without one is unaffected.
  */

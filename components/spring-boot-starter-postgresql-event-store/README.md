@@ -133,7 +133,7 @@ Subscriptions let you react to events - for building read models, sending notifi
 
 | Bean | When Active | What It Does |
 |------|-------------|--------------|
-| `MicrometerTracingEventStoreInterceptor` | `management.tracing.enabled=true` | Adds distributed tracing spans to event store operations |
+| `MicrometerTracingEventStoreInterceptor` | Micrometer `Tracer`, `Propagator` and `ObservationRegistry` beans present and `essentials.eventstore.tracing-enabled=true` (default). Before 0.61.0: only with `management.tracing.enabled=true` | Adds distributed tracing spans to event store operations |
 | `RecordExecutionTimeEventStoreInterceptor` | Always | Logs slow event store operations based on configurable thresholds |
 | `MeasurementEventStoreSubscriptionObserver` | Always | Collects metrics about subscription processing (events/second, lag, etc.) |
 | `EventStoreSubscriptionMonitorManager` | Always | Periodically checks subscription health (enabled by default, runs every minute) |
@@ -163,6 +163,7 @@ essentials.eventstore.identifier-column-type=text
 essentials.eventstore.json-column-type=jsonb
 essentials.eventstore.use-event-stream-gap-handler=true
 essentials.eventstore.verbose-tracing=false
+essentials.eventstore.tracing-enabled=true
 essentials.eventstore.add-annotation-based-in-memory-projector=true
 essentials.eventstore.auto-flush-and-publish-after-append-to-stream=false
 ```
@@ -173,6 +174,7 @@ essentials.eventstore.auto-flush-and-publish-after-append-to-stream=false
 | `json-column-type` | `jsonb` | How events are stored: `jsonb` (queryable, slightly slower writes) or `json` (faster writes, no indexing)                                                            |
 | `use-event-stream-gap-handler` | `true` | Whether to detect and handle gaps in `GlobalEventOrder` (can happen during concurrent writes). See [Gap Handling](#gap-handling) before turning it off                |
 | `verbose-tracing` | `false` | When `true`, traces include low-level operations. When `false`, only high-level operations are traced                                                                |
+| `tracing-enabled` | `true` | Register `MicrometerTracingEventStoreInterceptor` when Micrometer tracing beans are present |
 | `add-annotation-based-in-memory-projector` | `true` | Auto-register the projector that supports `@EventHandler` methods on POJOs - See [In-Memory Projections](../eventsourced-aggregates/README.md#in-memory-projections) |
 | `auto-flush-and-publish-after-append-to-stream` | `false` | **Flush Publishing** - Publish events immediately after `appendToStream()` instead of waiting for commit. See [Flush Publishing](#flush-publishing)                  |
 

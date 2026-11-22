@@ -65,15 +65,16 @@ import io.micrometer.tracing.propagation.Propagator;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.slf4j.*;
+import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.health.autoconfigure.contributor.ConditionalOnEnabledHealthIndicator;
-import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.context.event.*;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.env.Environment;
@@ -133,29 +134,20 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @see dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockStorage
  * @see MultiTableChangeListener
  */
-@AutoConfiguration
+// Ordered after Spring Boot's Micrometer auto-configurations, so the @ConditionalOnBean checks for Tracer, Propagator,
+// ObservationRegistry and MeterRegistry see the beans those create. Named, not referenced: they are optional (provided).
+@AutoConfiguration(afterName = {
+        "org.springframework.boot.micrometer.observation.autoconfigure.ObservationAutoConfiguration",
+        "org.springframework.boot.micrometer.tracing.autoconfigure.MicrometerTracingAutoConfiguration",
+        "org.springframework.boot.micrometer.tracing.autoconfigure.NoopTracerAutoConfiguration",
+        "org.springframework.boot.micrometer.tracing.brave.autoconfigure.BraveAutoConfiguration",
+        "org.springframework.boot.micrometer.tracing.opentelemetry.autoconfigure.OpenTelemetryTracingAutoConfiguration",
+        "org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration",
+        "org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterRegistryAutoConfiguration"
+})
 @EnableConfigurationProperties(EssentialsComponentsProperties.class)
 public class EssentialsComponentsConfiguration {
     public static final Logger log = LoggerFactory.getLogger(EssentialsComponentsConfiguration.class);
-
-    @Bean
-    @ConditionalOnProperty(prefix = "management.tracing", name = "enabled", havingValue = "true")
-    public DurableQueuesMicrometerTracingInterceptor durableQueuesMicrometerTracingInterceptor(Optional<Tracer> tracer,
-                                                                                               Optional<Propagator> propagator,
-                                                                                               Optional<ObservationRegistry> observationRegistry,
-                                                                                               EssentialsComponentsProperties properties) {
-        return new DurableQueuesMicrometerTracingInterceptor(tracer.get(),
-                                                             propagator.get(),
-                                                             observationRegistry.get(),
-                                                             properties.getDurableQueues().isVerboseTracing());
-    }
-
-    @Bean
-    @ConditionalOnProperty(prefix = "management.tracing", name = "enabled", havingValue = "true")
-    public DurableQueuesMicrometerInterceptor durableQueuesMicrometerInterceptor(Optional<MeterRegistry> meterRegistry,
-                                                                                 EssentialsComponentsProperties properties) {
-        return new DurableQueuesMicrometerInterceptor(meterRegistry.get(), properties.getTracingProperties().getModuleTag());
-    }
 
     /**
      * Auto-registers any {@link CommandHandler} with the single {@link CommandBus} bean found<br>
@@ -218,12 +210,12 @@ public class EssentialsComponentsConfiguration {
     @ConditionalOnMissingBean
     public Jdbi jdbi(DataSource dataSource,
                      EssentialsComponentsProperties properties,
-                     Optional<MeterRegistry> meterRegistry) {
+                     BeanFactory beanFactory) {
         var jdbi = Jdbi.create(new TransactionAwareDataSourceProxy(dataSource));
         jdbi.installPlugin(new PostgresPlugin());
         if (properties.getMetrics().getSql().isEnabled()) {
             EssentialsQueryTagger.tagQueries(jdbi);
-            jdbi.setSqlLogger(new RecordSqlExecutionTimeLogger(measurementTakerFor(meterRegistry,
+            jdbi.setSqlLogger(new RecordSqlExecutionTimeLogger(measurementTakerFor(beanFactory,
                                                                                   properties.getMetrics().getSql().isEnabled(),
                                                                                   properties.getMetrics().getSql().toLogThresholds(),
                                                                                   RecordSqlExecutionTimeLogger.class),
@@ -357,38 +349,6 @@ public class EssentialsComponentsConfiguration {
     @ConditionalOnMissingBean(StatisticsCollectingDurableQueueMessageObserver.class)
     public StatisticsCollectingDurableQueueMessageObserver statisticsCollectingDurableQueueMessageObserver(QueueStatisticsRegistry queueStatisticsRegistry) {
         return new StatisticsCollectingDurableQueueMessageObserver(queueStatisticsRegistry);
-    }
-
-    /**
-     * The dead-letter counter, registered whenever a {@link MeterRegistry} is present and deliberately
-     * <em>not</em> gated behind {@code essentials.metrics.durable-queues.enabled}: that switch controls
-     * execution-time measurement, and a timing switch must not turn an incident counter off.
-     */
-    @Bean
-    @ConditionalOnBean(MeterRegistry.class)
-    @ConditionalOnMissingBean(MicrometerDurableQueueMessageObserver.class)
-    public MicrometerDurableQueueMessageObserver micrometerDurableQueueMessageObserver(MeterRegistry meterRegistry,
-                                                                                        EssentialsComponentsProperties properties) {
-        return new MicrometerDurableQueueMessageObserver(meterRegistry, properties.getTracingProperties().getModuleTag());
-    }
-
-    /**
-     * Surfaces dead-letter counts on {@code /actuator/health}. Registered by default, and reports {@code UP}
-     * regardless of the counts until {@code essentials.durable-queues.health.dead-letter-threshold} is set to a
-     * positive number — see {@link DurableQueuesHealthIndicator} for why that default is not timidity.
-     * <p>
-     * Turn it off entirely with {@code management.health.durable-queues.enabled=false}.
-     */
-    @Bean
-    @ConditionalOnClass(HealthIndicator.class)
-    @ConditionalOnEnabledHealthIndicator("durablequeues")
-    @ConditionalOnMissingBean(DurableQueuesHealthIndicator.class)
-    public DurableQueuesHealthIndicator durableQueuesHealthIndicator(DurableQueues durableQueues,
-                                                                                         EssentialsComponentsProperties properties) {
-        var health = properties.getDurableQueues().getHealth();
-        return new DurableQueuesHealthIndicator(durableQueues,
-                                                          health.getDeadLetterThreshold(),
-                                                          health.getCacheTimeToLive());
     }
 
     /**
@@ -580,8 +540,8 @@ public class EssentialsComponentsConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public RecordExecutionTimeMessageHandlerInterceptor measurementMessageHandlerInterceptor(EssentialsComponentsProperties properties,
-                                                                                             Optional<MeterRegistry> meterRegistry) {
-        return new RecordExecutionTimeMessageHandlerInterceptor(measurementTakerFor(meterRegistry,
+                                                                                             BeanFactory beanFactory) {
+        return new RecordExecutionTimeMessageHandlerInterceptor(measurementTakerFor(beanFactory,
                                                                                 properties.getMetrics().getMessageHandler().isEnabled(),
                                                                                 properties.getMetrics().getMessageHandler().toLogThresholds(),
                                                                                 RecordExecutionTimeMessageHandlerInterceptor.class),
@@ -591,8 +551,8 @@ public class EssentialsComponentsConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public RecordExecutionTimeCommandBusInterceptor measurementCommandBusInterceptor(EssentialsComponentsProperties properties,
-                                                                                     Optional<MeterRegistry> meterRegistry) {
-        return new RecordExecutionTimeCommandBusInterceptor(measurementTakerFor(meterRegistry,
+                                                                                     BeanFactory beanFactory) {
+        return new RecordExecutionTimeCommandBusInterceptor(measurementTakerFor(beanFactory,
                                                                             properties.getMetrics().getCommandBus().isEnabled(),
                                                                             properties.getMetrics().getCommandBus().toLogThresholds(),
                                                                             RecordExecutionTimeCommandBusInterceptor.class),
@@ -602,8 +562,8 @@ public class EssentialsComponentsConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public RecordExecutionTimeDurableQueueInterceptor measurementDurableQueuesInterceptor(EssentialsComponentsProperties properties,
-                                                                                          Optional<MeterRegistry> meterRegistry) {
-        return new RecordExecutionTimeDurableQueueInterceptor(measurementTakerFor(meterRegistry,
+                                                                                          BeanFactory beanFactory) {
+        return new RecordExecutionTimeDurableQueueInterceptor(measurementTakerFor(beanFactory,
                                                                               properties.getMetrics().getDurableQueues().isEnabled(),
                                                                               properties.getMetrics().getDurableQueues().toLogThresholds(),
                                                                               RecordExecutionTimeDurableQueueInterceptor.class),
@@ -742,20 +702,20 @@ public class EssentialsComponentsConfiguration {
     /**
      * Assembles the {@link MeasurementTaker} for one metrics subsystem.
      * <p>
-     * This is where {@code Optional<MeterRegistry>} is allowed to live and is unwrapped on the spot: an
-     * {@code Optional} injection point is idiomatic in a {@code @Bean} method, and nothing downstream sees it. The
-     * per-subsystem {@link LogThresholds} are why there is one taker per subsystem rather than a single global one —
-     * they differ per subsystem by design. A disabled subsystem gets {@link MeasurementTaker#none()}, which the
-     * interceptors detect via {@link MeasurementTaker#isRecording()} and skip all context assembly.
+     * The Micrometer registry is looked up here, through {@link OptionalMeterRegistry}, rather than injected as an
+     * {@code Optional<MeterRegistry>} parameter, because that parameter type keeps an application without
+     * micrometer-core from starting - see {@link OptionalMeterRegistry}. The per-subsystem {@link LogThresholds} are
+     * why there is one taker per subsystem rather than a single global one — they differ per subsystem by design. A
+     * disabled subsystem gets {@link MeasurementTaker#none()}, which the interceptors detect via
+     * {@link MeasurementTaker#isRecording()} and skip all context assembly.
      *
-     * @param meterRegistry the optionally-present Micrometer registry
-     * @param enabled       whether this subsystem records at all
-     * @param thresholds    the log-level thresholds for this subsystem
-     * @param loggerOwner   the class the logging recorder logs under
+     * @param beanFactory the bean factory the optionally-present Micrometer registry is looked up in
+     * @param enabled     whether this subsystem records at all
+     * @param thresholds  the log-level thresholds for this subsystem
+     * @param loggerOwner the class the logging recorder logs under
      * @return the taker, or {@link MeasurementTaker#none()} when disabled
      */
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    private static MeasurementTaker measurementTakerFor(Optional<MeterRegistry> meterRegistry,
+    private static MeasurementTaker measurementTakerFor(BeanFactory beanFactory,
                                                         boolean enabled,
                                                         LogThresholds thresholds,
                                                         Class<?> loggerOwner) {
@@ -764,8 +724,110 @@ public class EssentialsComponentsConfiguration {
         }
         return MeasurementTaker.builder()
                                .setLoggingRecorder(loggerOwner, thresholds)
-                               .setMeterRegistry(meterRegistry)
+                               .setMeterRegistry(OptionalMeterRegistry.from(beanFactory))
                                .build();
     }
 
+    /**
+     * Holds the beans that need micrometer-core, an optional dependency of this starter. Spring reflects on every method
+     * of a configuration class to deduce bean types, and reflecting on a method resolves its parameter and return types,
+     * so a {@code MeterRegistry} parameter on the outer configuration class itself made every application without
+     * micrometer-core fail to start with {@code NoClassDefFoundError: io/micrometer/core/instrument/MeterRegistry}. This
+     * class is guarded by class <em>name</em>, so it is never reflected on unless micrometer-core is present.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "io.micrometer.core.instrument.MeterRegistry")
+    static class MicrometerMetricsConfiguration {
+        /**
+         * Counts processed, handled, retried and dead-lettered messages and gauges the queued and dead-letter messages per
+         * queue. Registered whenever a {@link MeterRegistry} is present, independent of tracing, unless
+         * {@code essentials.durable-queues.queue-metrics-enabled=false}. Until 0.61.0 it required
+         * {@code management.tracing.enabled=true}.
+         */
+        @Bean
+        @ConditionalOnBean(type = "io.micrometer.core.instrument.MeterRegistry")
+        @ConditionalOnProperty(prefix = "essentials.durable-queues", name = "queue-metrics-enabled", havingValue = "true", matchIfMissing = true)
+        public DurableQueuesMicrometerInterceptor durableQueuesMicrometerInterceptor(MeterRegistry meterRegistry,
+                                                                                     EssentialsComponentsProperties properties) {
+            return new DurableQueuesMicrometerInterceptor(meterRegistry, properties.getTracingProperties().getModuleTag());
+        }
+
+        /**
+         * The dead-letter counter, registered whenever a {@link MeterRegistry} is present and deliberately
+         * <em>not</em> gated behind {@code essentials.metrics.durable-queues.enabled}: that switch controls
+         * execution-time measurement, and a timing switch must not turn an incident counter off.
+         */
+        @Bean
+        @ConditionalOnBean(MeterRegistry.class)
+        @ConditionalOnMissingBean(MicrometerDurableQueueMessageObserver.class)
+        public MicrometerDurableQueueMessageObserver micrometerDurableQueueMessageObserver(MeterRegistry meterRegistry,
+                                                                                            EssentialsComponentsProperties properties) {
+            return new MicrometerDurableQueueMessageObserver(meterRegistry, properties.getTracingProperties().getModuleTag());
+        }
+    }
+
+    /**
+     * Holds the health indicator beans, which need spring-boot-health, an optional dependency of this starter. Guarded by
+     * class <em>name</em> for the same reason as {@link MicrometerMetricsConfiguration}: a bean method on the outer
+     * configuration class whose return type implements {@code HealthIndicator} made every application without
+     * spring-boot-health fail to start with {@code NoClassDefFoundError: org/springframework/boot/health/contributor/HealthIndicator}.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "org.springframework.boot.health.contributor.HealthIndicator")
+    static class HealthIndicatorConfiguration {
+        /**
+         * Surfaces dead-letter counts on {@code /actuator/health}. Registered by default, and reports {@code UP}
+         * regardless of the counts until {@code essentials.durable-queues.health.dead-letter-threshold} is set to a
+         * positive number — see {@link DurableQueuesHealthIndicator} for why that default is not timidity.
+         * <p>
+         * Turn it off entirely with {@code management.health.durable-queues.enabled=false}.
+         */
+        @Bean
+        @ConditionalOnEnabledHealthIndicator("durablequeues")
+        @ConditionalOnMissingBean(DurableQueuesHealthIndicator.class)
+        public DurableQueuesHealthIndicator durableQueuesHealthIndicator(DurableQueues durableQueues,
+                                                                         EssentialsComponentsProperties properties) {
+            var health = properties.getDurableQueues().getHealth();
+            return new DurableQueuesHealthIndicator(durableQueues,
+                                                    health.getDeadLetterThreshold(),
+                                                    health.getCacheTimeToLive());
+        }
+    }
+
+    /**
+     * Holds the bean that needs Micrometer Tracing, an optional dependency of this starter. Spring reflects on every
+     * method of a configuration class to deduce bean types, and reflecting on a method resolves its parameter types, so
+     * a {@code io.micrometer.tracing.Tracer} or {@code io.micrometer.tracing.propagation.Propagator} parameter on
+     * {@link EssentialsComponentsConfiguration} itself made every application without micrometer-tracing fail to start with
+     * {@code NoClassDefFoundError: io/micrometer/tracing/Tracer}. This class is guarded by class <em>name</em>, so it is
+     * never reflected on unless those classes are present.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = {"io.micrometer.tracing.Tracer",
+                                "io.micrometer.tracing.propagation.Propagator",
+                                "io.micrometer.observation.ObservationRegistry"})
+    static class MicrometerTracingConfiguration {
+        /**
+         * Starts an observation per durable queue operation and carries the trace context from the enqueuing thread to the
+         * consumer. Registered when a Micrometer {@link Tracer}, {@link Propagator} and {@link ObservationRegistry} are all
+         * present, unless {@code essentials.durable-queues.tracing-enabled=false}. It does not read
+         * {@code management.tracing.export.enabled}: export is Spring Boot's concern (with OpenTelemetry, Spring Boot
+         * itself swaps in a no-op propagator when export is disabled). Until 0.61.0 it required
+         * {@code management.tracing.enabled=true}, which Spring Boot 4 no longer reads.
+         */
+        @Bean
+        @ConditionalOnBean(type = {"io.micrometer.tracing.Tracer",
+                                   "io.micrometer.tracing.propagation.Propagator",
+                                   "io.micrometer.observation.ObservationRegistry"})
+        @ConditionalOnProperty(prefix = "essentials.durable-queues", name = "tracing-enabled", havingValue = "true", matchIfMissing = true)
+        public DurableQueuesMicrometerTracingInterceptor durableQueuesMicrometerTracingInterceptor(Tracer tracer,
+                                                                                                   Propagator propagator,
+                                                                                                   ObservationRegistry observationRegistry,
+                                                                                                   EssentialsComponentsProperties properties) {
+            return new DurableQueuesMicrometerTracingInterceptor(tracer,
+                                                                 propagator,
+                                                                 observationRegistry,
+                                                                 properties.getDurableQueues().isVerboseTracing());
+        }
+    }
 }

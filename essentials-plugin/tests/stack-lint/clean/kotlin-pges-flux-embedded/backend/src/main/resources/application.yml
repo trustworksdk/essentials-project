@@ -1,6 +1,9 @@
 spring:
   application:
     name: golden
+  threads:
+    virtual:
+      enabled: true
   # Trap: a comment naming spring.data.mongodb.uri is not a key.
 server:
   port: 8080

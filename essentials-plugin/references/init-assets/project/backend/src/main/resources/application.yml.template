@@ -1,12 +1,29 @@
 spring:
   application:
     name: {{artifactId}}
+<!-- IF web=webflux -->
+  # Load-bearing on WebFlux (S5): the Essentials components block (JDBC, a thread-bound UnitOfWork). With this,
+  # Spring Boot runs every controller method that returns a plain value on a virtual thread (its
+  # applicationTaskExecutor) instead of a Netty event-loop thread. Methods returning Mono/Flux and Kotlin suspend
+  # functions still run on the event loop and must move blocking work off it themselves. An Executor bean of the
+  # application's own stops Boot creating applicationTaskExecutor, and the offloading stops with it, silently;
+  # add spring.task.execution.mode: force when you define one (not before: it also makes applicationTaskExecutor
+  # the @Async executor unless you declare an AsyncConfigurer).
+<!-- END web -->
+<!-- IF web=webmvc -->
+  # Requests are served on virtual threads, so the blocking Essentials components (JDBC, a thread-bound
+  # UnitOfWork) do not tie up a platform thread each (S5).
+<!-- END web -->
+  threads:
+    virtual:
+      enabled: true
 <!-- IF db!=mongo -->
   # Used when no Docker Compose service or test container provides the database; both override it.
+  # The password has no fallback here: the development one is in the `dev` profile at the end of this file.
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/{{artifactId}}}
     username: ${DATABASE_USERNAME:{{artifactId}}}
-    password: ${DATABASE_PASSWORD:{{artifactId}}}
+    password: ${DATABASE_PASSWORD}
 <!-- END db -->
 <!-- IF db=mongo -->
   # spring.mongodb.*, never spring.data.mongodb.*: the old keys are unbound in Spring Boot 4 and fall back
@@ -38,3 +55,15 @@ app:
 logging:
   level:
     {{packagePath}}: INFO
+<!-- IF db!=mongo -->
+
+---
+# Development only. spring-boot:run activates the `dev` profile (backend/pom.xml), so the packaged application
+# never falls back to the development password: without DATABASE_PASSWORD it fails to authenticate instead.
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    password: ${DATABASE_PASSWORD:{{artifactId}}}
+<!-- END db -->

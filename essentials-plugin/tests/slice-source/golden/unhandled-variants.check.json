@@ -40,7 +40,36 @@
     }
   ],
   "endpoints": [],
-  "findings": [],
+  "findings": [
+    {
+      "severity": "Blocking",
+      "impact": "coupling",
+      "gate": "7 variants per file",
+      "id": "ESS-G7",
+      "slice": null,
+      "file": "src/main/kotlin/com/example/post/letters/events/LetterEvent.kt",
+      "line": 6,
+      "message": "2 event types in one file: LetterPosted (line 5, top-level); LetterReturned (line 6, top-level)",
+      "hint": "one variant per file (\u00a7R3); every type is top-level, so a file per type keeps each class name",
+      "split": "rename-free",
+      "types": [
+        {
+          "name": "LetterPosted",
+          "line": 5,
+          "nested": false,
+          "binaryName": "com.example.post.letters.events.LetterPosted",
+          "afterSplit": "com.example.post.letters.events.LetterPosted"
+        },
+        {
+          "name": "LetterReturned",
+          "line": 6,
+          "nested": false,
+          "binaryName": "com.example.post.letters.events.LetterReturned",
+          "afterSplit": "com.example.post.letters.events.LetterReturned"
+        }
+      ]
+    }
+  ],
   "accepted": [],
   "expiredAcceptances": [],
   "unusedAcceptances": [],

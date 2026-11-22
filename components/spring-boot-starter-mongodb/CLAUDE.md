@@ -61,6 +61,7 @@ Beans wired (in order of dependency):
 
 ## Gotchas
 
+- **No optional type in a bean signature.** micrometer-core, micrometer-tracing and spring-boot-health are optional, and Spring reflects on every method of each auto-configuration and bean class: a `MeterRegistry`/`Tracer`/`HealthIndicator` parameter or return type, or an `Optional<MeterRegistry>` parameter, stops an application without that jar from starting. Put such beans in a nested `@ConditionalOnClass(name = …)` configuration; take `BeanFactory` + `OptionalMeterRegistry.from(beanFactory)` where the meter registry is optional. Guarded by `StarterAutoConfigurationIT` (`OptionalLibrariesScenario`, foundation-test `WithoutJarsClassLoader`)
 - `MongoFencedLockManager` calls `buildAndStart()` at bean creation → lock manager starts immediately during context refresh, before `LifecycleManager` kicks in.
 - `jsonSerializer` bean has `@ConditionalOnMissingClass("...JSONEventSerializer")` — if postgresql event store starter is also on classpath, it wins and this bean is skipped entirely.
 - `EssentialsImmutableJacksonModule` bean (→ Boot's web mapper): Objenesis on classpath AND `essentials.immutable-jackson-module-enabled=true` set explicitly - no `matchIfMissing`, deliberately (N-11, 0.60.1: on the web mapper it changes request binding). The property's default `true` is the persistence mapper's: `jsonSerializer(properties)` → `createJSONSerializer(boolean)`; `false` removes it from both; reading only, written bytes identical. Pinned by `StarterAutoConfigurationIT`.

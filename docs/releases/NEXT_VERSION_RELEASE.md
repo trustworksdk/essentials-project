@@ -28,14 +28,19 @@ and two lock waits removed.
   trace logging is off for.
 - Event processors: `PartitionedEventProcessor` runs its handlers on every instance on the shard-owned engine (§2.7),
   `PartitionedViewEventProcessor` does the same for views (§2.10), and both reset only while stopped on every instance;
-  an `EventProcessor` overridden to competing consumers on a per-node queue now refuses to start (§1); the default retry
-  budget outlasts a failover, minutes instead of ~10 s (§1.1.4).
-- Command handlers: an `AnnotatedCommandHandler` failure is logged at DEBUG, not ERROR - the sender reports it (§1.1.5).
-- CDC: the inbox deletes a row once it is dispatched by default, instead of keeping it until the TTL job (§1.1.6).
-- Shard-owned queues: `purgeQueue` inside a unit of work commits or rolls back with it (§1.1.7).
+  an `EventProcessor` overridden to competing consumers on a per-node queue now refuses to start (§1); an opt-in
+  `FailoverRedeliveryPolicy` retries for long enough to outlast a failover (§2.18).
+- Command handlers: an `AnnotatedCommandHandler` failure is logged at DEBUG, not ERROR - the sender reports it (§1.1.4).
+- CDC: the inbox deletes a row once it is dispatched by default, instead of keeping it until the TTL job (§1.1.5).
+- Spring Boot starters: the tracing and queue metrics interceptors are registered when the Micrometer beans are
+  present, not only with `management.tracing.enabled=true`, which Spring Boot 4 no longer reads (§1.1.6).
 - Fenced locks: opt-in spreading of async-acquired locks, and so of exclusive processors, over the instances (§2.9).
+- Interceptors: every interceptor family can replace what it passes on - queue, message-handler, command-bus and
+  event-store interceptors share one contract (§2.19); handlers now receive replacements and `PatternMatchingMessageHandler`
+  honours `@InterceptorOrder` (§1.1.7).
+- Shard-owned queues: `purgeQueue` inside a unit of work commits or rolls back with it (§1.1.8).
 - A new event store engine, as a **preview** and off by default (`essentials.event-log.enabled`): its modules, a
-  Spring Boot starter, admin operations and an admin console view (§2.19-§2.24). Existing event processors must be
+  Spring Boot starter, admin operations and an admin console view (§2.21-§2.26). Existing event processors must be
   ported to run on it.
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1). The
@@ -172,45 +177,7 @@ different policy for a declared class, change its annotation.
 serialization and an insert inside the command's transaction - every tenth event of every aggregate without an
 interval of its own. `@AggregateSnapshotPolicy` keeps its own default of 100. Set the property to keep the old interval.
 
-#### 1.1.4 Event processors retry a failed message for minutes, not seconds (`postgresql-event-store`)
-
-The default `RedeliveryPolicy` of an `EventProcessor`'s inbox (`getInboxRedeliveryPolicy()`) and a `ViewEventProcessor`'s
-queue (`getDurableQueueRedeliveryPolicy()`) retried 20 times, from 200 ms growing ×1.1 to 3 s: about 10 s, then a dead
-letter. A handler that throws until another processor's work is there - "not yet", retried - therefore dead-lettered
-during any failover, which takes the lock timeout (15 s) or the queue's window (30 s) to start, and every later message
-of that aggregate waited behind the dead letter. Measured in the trading demo: one killed instance of two dead-lettered
-438 settlement reports.
-
-The default now outlasts a failover: it starts at 200 ms, doubles to a 10 s cap, and retries for 4 × (lock timeout +
-the queue's window), derived from the actual settings - the lock manager's `lockTimeOut`, and the new
-`DurableQueues.maxUnservedAfterInstanceLoss()`: the time until delivery can actually resume after an instance is lost,
-the implementation's own detection interval included. On `PostgresqlDurableQueues` and MongoDB it is twice the
-`message-handling-timeout`: a surviving instance's stuck-message reset takes back claims at least one timeout old, but
-runs at most once per timeout per queue, so a claim made just after a reset is only taken back by the one after the next.
-On the shard-owned engine it is the lease TTL plus one heartbeat interval, a third of the lease TTL, since a surviving
-instance takes a dead one's units only on its next heartbeat tick after the lease TTL has passed. With the PostgreSQL
-and MongoDB starters' 15 s lock timeout and 30 s `message-handling-timeout` (a 60 s window) that is 36 redeliveries
-over about 5 minutes; an earlier build of this change counted the timeout once (a 30 s window) and gave 24 redeliveries
-over about 3 minutes.
-On the shard-owned engine with its default 30 s lease TTL (a 40 s window) it is 28 redeliveries over about 3.7 minutes.
-A queue that does not report a window counts as 30 s: with a 15 s lock timeout, 24 redeliveries over about 3 minutes.
-`start()` logs the budget in one line.
-
-A handler that runs longer than the `message-handling-timeout` is still WARNed about at the timeout itself, not at the
-longer window: the consumers read the new `DurableQueues.messageHandlingTimeout()`, since a stuck-message reset may
-deliver the message a second time as soon as its claim is that old.
-
-- **What changes for you:** a message that can never succeed (a bug, a poison message) now dead-letters after minutes,
-  and later messages of its aggregate wait that long. A message that succeeds on an early retry is unaffected.
-- **To keep the old budget:** override `getInboxRedeliveryPolicy()` / `getDurableQueueRedeliveryPolicy()`. A processor
-  that already overrides them is unaffected. `FailoverRedeliveryPolicy.outlasting(...)` sizes your own `Inbox` policies
-  the same way.
-- New additive SPI methods, all with defaults: `FencedLockManager.getLockTimeOut()`,
-  `DurableQueues`/`Inboxes.maxUnservedAfterInstanceLoss()`, `DurableQueues.messageHandlingTimeout()`,
-  `EventStoreSubscriptionManager.getFencedLockManager()`, and
-  the shard-owned `MessageQueues.leaseTtl()`.
-
-#### 1.1.5 A failed command is no longer logged at ERROR by `AnnotatedCommandHandler` (`reactive`)
+#### 1.1.4 A failed command is no longer logged at ERROR by `AnnotatedCommandHandler` (`reactive`)
 
 `AnnotatedCommandHandler` logged every exception its handler method threw at ERROR, with the full stack trace, and then
 rethrew it - so every failure was reported twice, once here and once by whoever sent the command, and once more per
@@ -226,7 +193,7 @@ DEBUG at all.
 `SendAndDontWaitErrorHandler` that logs nothing. Then override `getExceptionLogLevel` in your handler to return
 `Optional.of(Level.ERROR)`, or log in that error handler.
 
-#### 1.1.6 The CDC inbox deletes a row once it is dispatched (`postgresql-event-store`)
+#### 1.1.5 The CDC inbox deletes a row once it is dispatched (`postgresql-event-store`)
 
 `essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy` (`CdcDispatcherProperties.dispatchedRowPolicy`) now
 defaults to `DELETE`; it was `MARK_DISPATCHED`. In INBOX delivery mode the dispatcher used to keep every row it had
@@ -247,7 +214,64 @@ published. Then set `essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-pol
 `CdcDispatcherProperties.setDispatchedRowPolicy(DispatchedRowPolicy.MARK_DISPATCHED)`) to keep the old behaviour.
 Note the key is `cdc-dispatcher`: a `dispatcher:` block binds to nothing, silently.
 
-#### 1.1.7 A shard-owned `purgeQueue` inside a unit of work commits or rolls back with it (`postgresql-queue-shard-owned`, `postgresql-queue-shard-owned-adapter`)
+#### 1.1.6 Tracing and queue metrics interceptors follow the Micrometer beans, not `management.tracing.enabled` (Spring Boot starters)
+
+The PostgreSQL and MongoDB starters registered `DurableQueuesMicrometerTracingInterceptor` and
+`DurableQueuesMicrometerInterceptor`, and the event store starter `MicrometerTracingEventStoreInterceptor`, only with
+`management.tracing.enabled=true`. Spring Boot 4 replaced that property with `management.tracing.export.enabled` and no
+longer reads it, so an application that moved to the new property lost all three. A durable queue consumer then ran
+without the enqueuer's trace context (no trace or span id in its logs), and the per-queue counters and gauges
+(`DurableQueues_QueuedMessages_Processed`, `…_Handled`, `…_Retries`, `DurableQueues_DeadLetterMessages_Processed` and the
+queued/dead-letter gauges) were missing. This was also the case in 0.50.0.
+
+They are now registered by what is present:
+
+- the two tracing interceptors when a Micrometer `Tracer`, `Propagator` and `ObservationRegistry` bean are all present;
+- `DurableQueuesMicrometerInterceptor` whenever a `MeterRegistry` bean is present, independent of tracing.
+
+Each has its own switch, default `true`: `essentials.durable-queues.tracing-enabled`,
+`essentials.durable-queues.queue-metrics-enabled` and `essentials.eventstore.tracing-enabled`. The starters are also
+ordered after Spring Boot's Micrometer auto-configurations, so these checks, and the existing one for
+`MicrometerDurableQueueMessageObserver`, see the beans Spring Boot creates.
+
+An application without `micrometer-tracing` on its classpath starts as before, without the two tracing interceptors (see
+the tracing interceptors row in §3).
+
+`management.tracing.export.enabled` is not read: whether spans are exported is Spring Boot's concern. Note that with the
+OpenTelemetry bridge and export disabled, Spring Boot itself installs a no-op propagator, so the trace context is then not
+carried across a queue, just as for HTTP and Kafka.
+
+**How to observe it:** with `management.tracing.export.enabled=true` and no `management.tracing.enabled`, a message
+enqueued inside a span used to be handled with no trace or span id in the consumer's MDC, and
+`/actuator/metrics/DurableQueues_QueuedMessages_Processed` answered 404. Now the consumer logs the enqueuer's trace id
+and the metric is present.
+
+**What to do:** remove a `management.tracing.enabled: true` kept only for Essentials. An application with tracing or a
+`MeterRegistry` but without that property gets the interceptors now; if you do not want them, set the matching switch
+above to `false`.
+
+#### 1.1.7 Handlers and inner interceptors now receive what an interceptor replaced (foundation, `reactive`)
+
+Follows from §2.19. Check interceptors you already have:
+
+- **Replacements now arrive.** The queue consumers, `PatternMatchingMessageHandler` and the command buses hand the
+  handler what is on the operation (or chain) when the chain ends, not what they captured before it. An interceptor
+  that already replaced a command now changes what the handler receives. Writing the `final` field
+  `HandleQueuedMessage.message` by reflection still has no effect on the handler; use `setMessage(...)`.
+- **An interceptor that reads the operation through `getMessage()` after `proceed()`** (for logging or tracing) now
+  sees the last replacement an inner interceptor made, not the original. The public `HandleQueuedMessage.message`
+  field keeps answering the original.
+- **`PatternMatchingMessageHandler` now orders its `MessageHandlerInterceptor`s by `@InterceptorOrder`.** It used to run
+  them in registration order whatever their annotation; unannotated ones (order 10) keep their registration order among
+  themselves. Annotated message-handler interceptors on an Inbox, Outbox or event processor may now run in a different
+  order (`8bdec9710`).
+- **`RecordExecutionTimeCommandBusInterceptor`** tags `command_type` with the command as it reaches it, so a command
+  replaced by an interceptor ordered before it is tagged with the replacement's type.
+
+**What to do:** nothing, unless one of your interceptors relied on the old order, or on reading the original after
+`proceed()`; then give it an explicit `@InterceptorOrder`, or keep the original in a local before `proceed()`.
+
+#### 1.1.8 A shard-owned `purgeQueue` inside a unit of work commits or rolls back with it (`postgresql-queue-shard-owned`, `postgresql-queue-shard-owned-adapter`)
 
 `ShardOwnedDurableQueues.purgeQueue` used to delete the queue's messages on a connection of its own, committed at once,
 even when called inside a `UnitOfWork`. Now, inside a unit of work that carries a JDBC connection (a
@@ -261,7 +285,7 @@ engine SPI gains `MessageQueue.purge(Connection)` (`PostgresqlMessageQueue` impl
 **What changes for you:** a purge you call inside a unit of work - `Inbox.deleteAllMessages()`,
 `Outbox.deleteAllMessages()`, a classic processor reset that purges its queue, your own code - is no longer kept if
 that unit of work then rolls back, and its rows stay locked until the unit of work ends. This is what made
-`EventLogPartitionedViewProcessor.rebuild()` atomic (§2.22).
+`EventLogPartitionedViewProcessor.rebuild()` atomic (§2.24).
 
 **What to do:** nothing, unless you relied on a purge inside a unit of work surviving that unit of work's rollback;
 then call it outside the unit of work.
@@ -519,8 +543,9 @@ and `exclusiveSubscriptionLockName`.
 ### 2.11 `InvokeMessageHandlerMethod` exposes the message being handled (foundation)
 
 `InvokeMessageHandlerMethod` - the operation a `MessageHandlerInterceptor` sees around every `@MessageHandler` call -
-now has `message` and `messagPayload` as public final fields, like `methodToInvoke` and `invokeMethodOn` already were,
-so an interceptor can read the `Message` and its metadata without reflection. Additive; nothing to change.
+now has `getMessage()` and `getPayload()`, so an interceptor can read the `Message` and its metadata without
+reflection; the `message` and `messagPayload` fields stay private. Additive; nothing to change. Replace the message
+with `setMessage(...)` (§2.19).
 
 ### 2.12 CDC: an out-of-order commit no longer costs each subscriber a commit of its own (`postgresql-event-store`)
 
@@ -697,13 +722,92 @@ Additive: the existing methods are unchanged; their javadoc now says when they a
 while holding the generation lock, as the built-in scan's rollover does) and points to the guarded variant. The
 `essentials-trading-demo` rolls its accounts with the guarded repository method (`aad1916a3`).
 
-### 2.18 `AppendedEvents.appended` is public, for `EventStore` implementations (`postgresql-event-store`)
+### 2.18 `FailoverRedeliveryPolicy`: an event processor retry budget that outlasts a failover, opt-in (`postgresql-event-store`)
+
+The default `RedeliveryPolicy` of an `EventProcessor`'s inbox (`getInboxRedeliveryPolicy()`) and a `ViewEventProcessor`'s
+queue (`getDurableQueueRedeliveryPolicy()`) is unchanged: 20 redeliveries, from 200 ms growing ×1.1 to 3 s, about 10 s,
+then a dead letter. A handler that throws until another processor's work is there - "not yet", retried - can therefore
+dead-letter during a failover, which takes the lock timeout (15 s) or the queue's window (30 s) to start, and every later
+message of that aggregate waits behind the dead letter. Measured in the trading demo: one killed instance of two
+dead-lettered 438 settlement reports.
+
+A processor with such a handler can now override the getter with a policy that outlasts a failover:
+
+```java
+@Override
+protected RedeliveryPolicy getInboxRedeliveryPolicy() {           // ViewEventProcessor: getDurableQueueRedeliveryPolicy()
+    return failoverRedeliveryPolicy(inboxes.maxUnservedAfterInstanceLoss()).policy();  // views: getDurableQueues()...
+}
+```
+
+It starts at 200 ms, doubles to a 10 s cap, and retries for 4 × (lock timeout + the queue's window), derived from the
+actual settings - the lock manager's `lockTimeOut`, and the new `DurableQueues.maxUnservedAfterInstanceLoss()`: the time
+until delivery can actually resume after an instance is lost, the implementation's own detection interval included. On
+`PostgresqlDurableQueues` and MongoDB it is twice the `message-handling-timeout`: a surviving instance's stuck-message
+reset takes back claims at least one timeout old, but runs at most once per timeout per queue, so a claim made just after
+a reset is only taken back by the one after the next. On the shard-owned engine it is the lease TTL plus one heartbeat
+interval, a third of the lease TTL. With the PostgreSQL and MongoDB starters' 15 s lock timeout and 30 s
+`message-handling-timeout` (a 60 s window) that is 36 redeliveries over about 5 minutes; on the shard-owned engine with
+its default 30 s lease TTL (a 40 s window) 28 redeliveries over about 3.7 minutes. A queue that does not report a window
+counts as 30 s. `FailoverRedeliveryPolicy.outlasting(lockTimeOut, queueWindow)` sizes your own `Inbox` policies the same
+way. The cost: a message that can never succeed (a bug, a poison message) dead-letters after minutes, and later messages
+of its aggregate wait that long.
+
+`start()` logs the retry budget in one line: the default policy, the failover policy with what it was derived from, or
+the processor's own.
+
+A handler that runs longer than the `message-handling-timeout` is WARNed about at the timeout itself, not at the longer
+window: the consumers read the new `DurableQueues.messageHandlingTimeout()`, since a stuck-message reset may deliver the
+message a second time as soon as its claim is that old.
+
+- New additive SPI methods, all with defaults: `FencedLockManager.getLockTimeOut()`,
+  `DurableQueues`/`Inboxes.maxUnservedAfterInstanceLoss()`, `DurableQueues.messageHandlingTimeout()`,
+  `EventStoreSubscriptionManager.getFencedLockManager()`, and
+  the shard-owned `MessageQueues.leaseTtl()`.
+
+### 2.19 Interceptors can replace what they pass on, in every interceptor family (foundation, `reactive`, `postgresql-event-store`, `shared`)
+
+An interceptor can now change the input of the operation it intercepts - decrypt a payload on the way in, enrich it,
+rewrite metadata - and the rest of the chain and the handler receive the replacement. Before, only some operations
+allowed it, and the others failed silently: an interceptor that built a new `Message` had nowhere to put it, so the
+handler got the original. One contract now holds for every family, documented on `Interceptor` and in
+`LLM/LLM-shared.md`: call the operation's setter before `proceed()`, change the output by returning something else, and
+the default behaviour reads the operation, never a value captured before the chain ran.
+
+- **Copy helpers** (`031ed10b0`): `Message.withPayload(...)` / `withMetaData(...)`, overridden by `OrderedMessage` to
+  keep its key and order; `QueuedMessage.withMessage(Message)`; `PersistedEvent.withEvent(EventJSON)` /
+  `withMetaData(EventMetaDataJSON)` (`1da420812`).
+- **`DurableQueuesInterceptor`**: `HandleQueuedMessage.setMessage(...)` (`031ed10b0`); the replacement must keep the
+  message's id, and acknowledging, retrying and dead-lettering keep acting on the entry selected for delivery. All three
+  queue consumers - PostgreSQL/MongoDB, the centralized fetcher and the shard-owned adapter - now hand the handler the
+  operation's message.
+- **`MessageHandlerInterceptor`**: `InvokeMessageHandlerMethod.setMessage(...)`, `getMessage()`, `getPayload()`
+  (`8bdec9710`).
+- **`CommandBusInterceptor`**: `CommandBusInterceptorChain.setCommand(...)` (`73f003f32`). It is a default method that
+  throws `UnsupportedOperationException`, so third-party chain implementations keep compiling; every Essentials bus
+  supports it.
+- **`EventStoreInterceptor`**: the existing setters on `AppendToStream`, `FetchStream` and `LoadEventsByGlobalOrder`
+  are now covered by contract tests, and the built-in interceptors document their order (`189856532`).
+
+Where the handler was chosen before the chain ran - a `@MessageHandler` method, a command handler - it is never
+re-resolved. Any type is allowed mid-chain, but what reaches the handler must fit it; otherwise the call fails with a
+`ClassCastException`, which a queue consumer dead-letters on the first attempt (`LLM/LLM-traps.md` `ESS-139`). A
+decryption that decides which handler runs belongs in a `DurableQueuesInterceptor` on `HandleQueuedMessage`.
+`HandleMessage` of the raw shard-owned engine stays a record without a setter until the next major.
+
+Additive: no interceptor interface changed signature. Read the current message with `getMessage()` and replace it
+with the setters. The public `HandleQueuedMessage.message` field stays `final` and keeps holding the message selected
+for delivery, so an interceptor that reads it never sees a replacement - switch it to `getMessage()` if it should.
+Design:
+`docs/design/interceptor-operation-replacement.md`. Behaviour changes: §1.1.7.
+
+### 2.20 `AppendedEvents.appended` is public, for `EventStore` implementations (`postgresql-event-store`)
 
 `AppendedEvents.appended(List<PersistedEvent>)` is now public, so an `EventStore` other than `PostgresqlEventStore` can report its appends to `AppendedEvents.recordDuring` (which `EventStreamDeciderCommandHandlerAdapter` uses to return the events a command appended). Additive; nothing to change. (Event store redesign, phase 8b.)
 
-### 2.19 Admin API: seven operations for the new event-log engine's subscriptions (`admin-api-spec`, `spring-boot-starter-admin-api`, `admin-api-client-java`)
+### 2.21 Admin API: seven operations for the new event-log engine's subscriptions (`admin-api-spec`, `spring-boot-starter-admin-api`, `admin-api-client-java`)
 
-**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.22): there is deliberately no `EventStoreSubscriptionManager` adapter.
+**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.24): there is deliberately no `EventStoreSubscriptionManager` adapter.
 
 The admin contract (`essentials-admin-api.yaml`) and the generated Java client grow by seven additive paths under the new
 tag `event-log-subscriptions`, for the subscriptions of the new event store engine (`postgresql-event-log`,
@@ -715,13 +819,13 @@ leave it out to address an exclusive subscription.
 
 `spring-boot-starter-admin-api` serves these paths only when the application has an `EventLogSubscriptionsApi` bean
 (`DefaultEventLogSubscriptionsApi` over an `EventLog`). The new `spring-boot-starter-postgresql-event-log` declares one
-when it is enabled (§2.20); an existing application serves nothing new and changes nothing; the paths answer 404 as any area without its SPI bean does. The
+when it is enabled (§2.22); an existing application serves nothing new and changes nothing; the paths answer 404 as any area without its SPI bean does. The
 starter now depends on `postgresql-event-log-processor`, as it does on the shard-owned queue engine. The admin console
-shows them in its event-log subscriptions view (§2.23). (Event store redesign, phase 8b.)
+shows them in its event-log subscriptions view (§2.25). (Event store redesign, phase 8b.)
 
-### 2.20 Spring Boot starter for the new event store engine, preview (`spring-boot-starter-postgresql-event-log`)
+### 2.22 Spring Boot starter for the new event store engine, preview (`spring-boot-starter-postgresql-event-log`)
 
-**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.22): there is deliberately no `EventStoreSubscriptionManager` adapter.
+**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.24): there is deliberately no `EventStoreSubscriptionManager` adapter.
 
 The new module `spring-boot-starter-postgresql-event-log` auto-configures the new event store engine
 (`postgresql-event-log`) and its `EventStore` adapter (`EventLogEventStore`, `postgresql-event-log-processor`). It is
@@ -737,9 +841,9 @@ The new module `spring-boot-starter-postgresql-event-log` auto-configures the ne
 - a lifecycle bean that starts every `ViewProjection` and `EventReactor` bean once the context is refreshed and stops them
   before the engine stops (not in schema mode `emit`). It registers each one's aggregate type with the engine first, so
   a projection-only application need not;
-- an `EventLogProcessorDependencies` bean for the annotated processor base classes (§2.22);
+- an `EventLogProcessorDependencies` bean for the annotated processor base classes (§2.24);
 - with the admin API starter and an `EssentialsSecurityProvider` present, the `EventLogSubscriptionsApi` the admin API's
-  event-log subscription endpoints need (§2.19).
+  event-log subscription endpoints need (§2.21).
 
 Every `EventLogSettings` value is a property under `essentials.event-log.*` (for example `backstop-interval`,
 `lease-duration`, `node-name`), with the engine's defaults.
@@ -748,31 +852,31 @@ Every `EventLogSettings` value is a property under `essentials.event-log.*` (for
 starter removes the old starter's `EventStoreConfiguration` from the auto-configurations while it is enabled, through an
 `AutoConfigurationImportFilter`. That stops the old subscription manager, gap handler and CDC beans from being built on
 top of the adapter, which does not support them. The old starter's snapshot, closing-books and aggregate admin
-configurations stay and run on the adapter (§2.21). The old processors (`EventProcessor`, `ViewEventProcessor`,
+configurations stay and run on the adapter (§2.23). The old processors (`EventProcessor`, `ViewEventProcessor`,
 `InTransactionEventProcessor`) do not run under the new engine: start-up fails before any bean is created, with one line
-per such bean naming it, its class and the base class to port it to, instead of a bare missing-bean error (ESS-138).
-Port them to `EventLogReactor`, `EventLogInboxProcessor`, `EventLogViewProcessor` and `EventLogPartitionedViewProcessor` (§2.22), or to `ViewProjection`
+per such bean naming it, its class and the base class to port it to, instead of a bare missing-bean error (ESS-140).
+Port them to `EventLogReactor`, `EventLogInboxProcessor`, `EventLogViewProcessor` and `EventLogPartitionedViewProcessor` (§2.24), or to `ViewProjection`
 and `EventReactor`.
 
 **Schema modes.** In `validate`, the engine's own schema is validated when the `EventLog` bean is built, so a missing one
 fails start-up with a `SchemaValidationException` even when an aggregate type is registered while the context is built.
 In `emit`, an aggregate type's tables go into the emitted script and nothing is created on the database. With `essentials.event-log.enabled` unset or `false`, the filter removes nothing.
 
-### 2.21 The snapshot beans accept any `ConfigurableEventStore` (`spring-boot-starter-postgresql-event-store`)
+### 2.23 The snapshot beans accept any `ConfigurableEventStore` (`spring-boot-starter-postgresql-event-store`)
 
-**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.22): there is deliberately no `EventStoreSubscriptionManager` adapter.
+**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.24): there is deliberately no `EventStoreSubscriptionManager` adapter.
 
 `SnapshotConfiguration`'s snapshot store, snapshot job processor and snapshot repository factory beans, and
 `DefaultAggregateSnapshotRepositoryFactory` (its constructors, builder field and `Builder.setEventStore`), now take
 `ConfigurableEventStore<? extends AggregateEventStreamConfiguration>` instead of
 `ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration>`. They only pass the store on to
 `PostgresqlAggregateSnapshotRepository`, which already accepted any configuration type, so snapshots now also work on the
-new engine's adapter (§2.20). Source- and behaviour-compatible: code that passes the old `PostgresqlEventStore` compiles
+new engine's adapter (§2.22). Source- and behaviour-compatible: code that passes the old `PostgresqlEventStore` compiles
 and works as before.
 
-### 2.22 Annotated processor base classes for the new event store engine, preview (`postgresql-event-log-processor`)
+### 2.24 Annotated processor base classes for the new event store engine, preview (`postgresql-event-log-processor`)
 
-**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.22): there is deliberately no `EventStoreSubscriptionManager` adapter.
+**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.24): there is deliberately no `EventStoreSubscriptionManager` adapter.
 
 Two abstract classes port an existing processor to the new engine by swapping its superclass:
 `EventLogViewProcessor` for a `ViewEventProcessor`, `EventLogReactor` for an `EventProcessor`. Each is a thin shell over
@@ -851,15 +955,15 @@ to the event; `start()` refuses a queue implementation that does not keep key or
 `onRebuild(ProjectionContext)` stops this instance's consumers, refuses while any other instance consumes the queue (or
 the queue implementation cannot tell), then in one transaction of the page source runs `onRebuild`, purges the queue
 (queued, in-flight and dead-lettered messages) and resets the reading side, and restarts. The cleared view, the empty
-queue and the reset progress commit together or not at all: the purge joins the rebuild's unit of work (§1.1.7). The
+queue and the reset progress commit together or not at all: the purge joins the rebuild's unit of work (§1.1.8). The
 trading demo's two partitioned views run on it.
 
-### 2.23 Admin console: a view for the new event-log engine's subscriptions (`spring-boot-starter-admin-ui`)
+### 2.25 Admin console: a view for the new event-log engine's subscriptions (`spring-boot-starter-admin-ui`)
 
-**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.22): there is deliberately no `EventStoreSubscriptionManager` adapter.
+**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.24): there is deliberately no `EventStoreSubscriptionManager` adapter.
 
 The admin console has a new **Event-log subscriptions** view under *Event store*, for the subscriptions of the new event
-store engine. It uses only the seven `event-log-subscriptions` operations of the admin API (§2.19). It lists every
+store engine. It uses only the seven `event-log-subscriptions` operations of the admin API (§2.21). It lists every
 instance's subscriptions from the database, and you can filter the list by aggregate type. For each subscription it
 shows the subscriber, aggregate type, instance, mode, progress model, a status, resume point, lag, lease owner and fence,
 and the number of parked events. Pick a subscription to see its details and its parked events, page by page. From there
@@ -874,11 +978,11 @@ The status column is the console's own summary of the row (parked, not leased, l
 the contract. "Reset to the head" means the row's resume point plus its lag, read again when you confirm the reset.
 (Event store redesign, phase 10.)
 
-### 2.24 The new event store engine, preview (`postgresql-event-log`, `postgresql-event-log-processor`, `postgresql-event-log-migration`)
+### 2.26 The new event store engine, preview (`postgresql-event-log`, `postgresql-event-log-processor`, `postgresql-event-log-migration`)
 
-**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.22): there is deliberately no `EventStoreSubscriptionManager` adapter.
+**Preview:** 0.61.0 ships the new event store engine as a preview. It is opt-in (`essentials.event-log.enabled=true`), and its API, properties and tables may change in a minor release. The classic event store stays the default and fully supported. Existing `EventProcessor`s and `ViewEventProcessor`s do not run on the new engine and must be ported (§2.24): there is deliberately no `EventStoreSubscriptionManager` adapter.
 
-Three new modules make up the engine that §2.19-§2.23 build on:
+Three new modules make up the engine that §2.21-§2.25 build on:
 
 - `postgresql-event-log`: the `EventLog`. Appends and stream loads, and subscriptions that follow the database's own
   transaction visibility (a watermark from the `pg_stat_activity` view) instead of CDC, a gap handler or a fenced lock. Two
@@ -888,8 +992,8 @@ Three new modules make up the engine that §2.19-§2.23 build on:
   prefixed `el_`. It refuses to start where the role cannot see other backends' `backend_xid` (grant
   `pg_read_all_stats`).
 - `postgresql-event-log-processor`: `ViewProjection` (each page in one transaction with its resume point) and
-  `EventReactor` (at least once), the annotated base classes (§2.22), the `EventStore` adapter `EventLogEventStore` for
-  aggregate repositories, snapshots and closing books, and the admin SPI (§2.19).
+  `EventReactor` (at least once), the annotated base classes (§2.24), the `EventStore` adapter `EventLogEventStore` for
+  aggregate repositories, snapshots and closing books, and the admin SPI (§2.21).
 - `postgresql-event-log-migration`: a one-way, same-database move of aggregate types from the classic engine's tables,
   with online copy epochs, a short cut-over with every classic node stopped, hash verification and the import of
   resume points. It only reads the classic tables; there is no way back but a backup.
@@ -1057,7 +1161,7 @@ classic engine's (p99 1.14× with one instance, 0.91× with two), about 1.2-1.3�
 statements per order, and about 19 % less WAL. How it works: `docs/design/event-log.md`; the consumer reference:
 `LLM/LLM-postgresql-event-log.md`. (Event store redesign, phases 2-10.)
 
-### 2.25 `PostgresqlNotificationDrain`: LISTEN notifications without pgjdbc holding them back (foundation)
+### 2.27 `PostgresqlNotificationDrain`: LISTEN notifications without pgjdbc holding them back (foundation)
 
 New public helper `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlNotificationDrain` for a
 hand-written LISTEN loop on a dedicated connection: `open(Connection)`, `next(timeoutMillis)` and `close()` (call it
@@ -1068,7 +1172,7 @@ pgjdbc's internals change; `openQueryPoll` forces the poll. Lifted from the new 
 which now uses it unchanged; the shard-owned queue's listener uses it too (§3). `ListenNotify` and
 `MultiTableChangeListener` are unchanged. Requires `org.postgresql:postgresql` on the classpath, as before.
 
-### 2.26 New event store engine: Micrometer meters (`postgresql-event-log`, `spring-boot-starter-postgresql-event-log`)
+### 2.28 New event store engine: Micrometer meters (`postgresql-event-log`, `spring-boot-starter-postgresql-event-log`)
 
 **Preview.** `MicrometerEventLogObserver` (package `dk.trustworks.essentials.components.eventlog.observability.micrometer`)
 binds the engine's `EventLogObserver` callbacks to Micrometer, with the tags of the old engine's subscription meters
@@ -1090,7 +1194,7 @@ its own (`essentials.event-log.metrics.enabled=false` switches it off); an appli
 the starter. `EventLogObserver` gained `onReaderCursor(aggregateType, cursor)` and `nanos` variants of
 `onPageCommitted`/`onPageFailed`, all default methods: an existing observer compiles and is still called.
 
-### 2.27 New event store engine starter: tracing and append timing, as on the old engine (`spring-boot-starter-postgresql-event-log`)
+### 2.29 New event store engine starter: tracing and append timing, as on the old engine (`spring-boot-starter-postgresql-event-log`)
 
 **Preview.** The starter now declares the event store interceptors the old starter's `EventStoreConfiguration` declares
 (which it drops), under the same conditions and properties: `RecordExecutionTimeEventStoreInterceptor`
@@ -1101,7 +1205,7 @@ interceptor as a `PersistableEventEnricher`, so an append stores the current tra
 metadata, as the old engine does. Both need Micrometer (and Micrometer Tracing) on the class path; without it nothing is
 declared.
 
-### 2.28 New event store engine: per-subscriber TRACE and causation in every processor (`postgresql-event-log`, `postgresql-event-log-processor`)
+### 2.30 New event store engine: per-subscriber TRACE and causation in every processor (`postgresql-event-log`, `postgresql-event-log-processor`)
 
 **Preview.** Each subscription logs per event at TRACE on a logger of its own,
 `dk.trustworks.essentials.components.eventlog.Subscription.<subscriber>` (characters outside `[A-Za-z0-9_-]` become `_`):
@@ -1113,7 +1217,7 @@ call, as `EventLogInboxProcessor` and `EventLogPartitionedViewProcessor` already
 the delivered event as its `caused_by_event_id` (and a command or queued message it sends carries it on). Before, such
 events had no cause.
 
-### 2.29 New event store engine: processors read only the event types they handle (`postgresql-event-log-processor`)
+### 2.31 New event store engine: processors read only the event types they handle (`postgresql-event-log-processor`)
 
 **Preview.** `EventLogViewProcessor`, `EventLogReactor`, `EventLogInboxProcessor` and `EventLogPartitionedViewProcessor`
 now subscribe with an `EventTypeFilter` built from the payload parameter types of their `@MessageHandler` methods, so
@@ -1135,6 +1239,10 @@ database work per event.
 
 | Area | Fix | Commit |
 |---|---|---|
+| Durable queues (`postgresql-queue`) | A message a `HandleQueuedMessage` interceptor of your own acknowledged inside the handler's chain (recording it with `HandleQueuedMessage.acknowledgedWithHandler(...)`) was acknowledged a second time by the built-in `SingleOperationTransactionDurableQueuesInterceptor`, whenever your interceptor ran after it (an `@InterceptorOrder` above 10). Before: the second acknowledgement found the row gone, logged `Couldn't Acknowledge with id '…' - it may already have been deleted` at ERROR, and overwrote your interceptor's `true` with `false`, so the centralized fetcher (the default) reported the message as already handled and never called `DurableQueueMessageObserver.messageHandled` for it. The message itself was handled and deleted once. After: the built-in interceptor leaves a message already recorded as acknowledged alone; one acknowledgement, no ERROR, and the message counts as handled | - |
+| Tracing and queue metrics (Spring Boot starters) | `DurableQueuesMicrometerTracingInterceptor`, `DurableQueuesMicrometerInterceptor` and `MicrometerTracingEventStoreInterceptor` were registered only with `management.tracing.enabled=true`, which Spring Boot 4 no longer reads - see §1.1.6. They now follow the Micrometer beans, with an opt-out switch each | - |
+| Tracing interceptors (Spring Boot starters) | Fixes an unreleased regression from the change in the row above (§1.1.6): an application without `micrometer-tracing` on its classpath - an optional dependency of the starters, so one with Spring Boot Actuator but no tracer - could not start. The tracing interceptor bean methods took `Tracer` and `Propagator` parameters directly, and Spring reflects on every method of an auto-configuration class, so the PostgreSQL, MongoDB and event store starters all failed. Before: the context failed with `NoClassDefFoundError: io/micrometer/tracing/Tracer` (`Failed to introspect Class [...EssentialsComponentsConfiguration]` / `[...EventStoreConfiguration]`). After: it starts, without `DurableQueuesMicrometerTracingInterceptor` and `MicrometerTracingEventStoreInterceptor`; with micrometer-tracing present nothing changes. Released versions are not affected | - |
+| Metrics and health beans (Spring Boot starters) | An application without `micrometer-core`, or without `spring-boot-health` - both optional for the starters, so any application without Spring Boot Actuator - could not start. Spring reflects on every method of an auto-configuration class and of every bean class, so Micrometer or `HealthIndicator` types in a `@Bean` method's signature (`MeterRegistry` and `Optional<MeterRegistry>` parameters, the `DurableQueuesHealthIndicator` and CDC health indicator return types) or in a bean class's private methods (`DefaultAggregateLifecycleStatisticsApi`) failed the context for the PostgreSQL, MongoDB and event store starters. Before: `NoClassDefFoundError: io/micrometer/core/instrument/MeterRegistry` or `.../boot/health/contributor/HealthIndicator` (`Failed to parse configuration class [...EssentialsComponentsConfiguration]`, `Failed to introspect Class [...EventStoreConfiguration]`, or `Post-processing of merged bean definition failed` for `aggregateLifecycleStatisticsApi`). After: it starts; without micrometer-core there are no queue metrics, Micrometer monitors or meter-based statistics, and without spring-boot-health no health indicators. With both present nothing changes. 0.60.0 is affected | - |
 | Shard-owned queues (`postgresql-queue-shard-owned`, admin API) | Opening a dead letter's details in the admin UI answered 404 (`No message 'o-62-2252' in shard-owned queue …`): looking a message up by id searched queued messages only, though a dead letter keeps its id. It now finds dead letters too, with the error that parked them. The `MessageQueue` SPI gains `getDeadLetter(MessageId)` (a `default` returning empty); `getMessage` stays live-only | - |
 | Shard-owned queues (`postgresql-queue-shard-owned`) | The blocked-key warning named the queue by its internal number (`Queue 30, ordered shard 61: …`), so an operator could not tell which queue's dead letters to open. It now gives the registered name with the id (`Queue 'Inbox:Orders:ExchangeReports' (id 30), …`), read once from the registry when first logged | - |
 | CDC (`postgresql-event-store`) | A CDC subscription that falls more than a page behind the bus under a burst - routine, and healed within milliseconds by catching up from the event store - logged a WARN and an INFO line every time, a screenful per burst. Each occurrence is now DEBUG, and each subscription logs one INFO line a minute counting them; the `live_source.overflow.count` metric is unchanged | - |
@@ -1149,10 +1257,12 @@ database work per event.
 | Event store (CDC) | When a CDC subscription falls behind the bus and catches up, or moves onto the bus after polling, it must re-read the gaps it is still waiting for. The event that fills one may have committed while the subscription was off the bus, and is then only in the database. The catch-up asked for only the lowest 1 000 awaited global orders, plus the 50 transient gaps the gap handler's query selects (20 newest, 10 lowest, 20 rotating). With more outstanding gaps than that, which happens in bursts with many rolled-back appends, an older but not-lowest gap's late event was missed. It was then delivered after later events of its own aggregate, or never: after the gap timeout it was given up and recorded as a permanent gap over an event that exists. A catch-up now reads every awaited gap. Narrow gaps are listed in batches of up to 1 000 global orders per statement, and the middle of a wide gap is read as one range, so the cost is about one statement per 1 000 awaited orders, never one per order. Nothing to change. Polling was not affected: a gap is always asked for before it is given up. Design: `docs/archive/cdc-deferred-gap-recording.md`. | - |
 | `Money` JSON (`types-jackson3`) | `MoneyDeserializer` reads a quoted amount, `{"amount":"99.99","currency":"USD"}`, as the number it holds, the way a `NumberType` field already reads a quoted number. The LLM docs showed that quoted form as `Money`'s format, though `Money` is written with the amount as a JSON number; they now show `{"amount":99.99,"currency":"USD"}`. A numeric amount keeps the scale it was written with, as before; a quoted amount that is not a number, or an amount that is neither a number nor a string, is refused with a `MismatchedInputException`, and so is a `currency` that is not a JSON string (`null`, a number, a boolean, an object or an array). A quoted amount is held to Jackson's number-length limit (`StreamReadConstraints.maxNumberLength`, 1000 characters by default) like a numeric one, and a longer one is refused with a `StreamConstraintsException`; the same goes for a quoted number read into a `NumberType`, and for a map key read into a `NumberType`. Only text made of digits, signs, `.`, `e` and `E` is held to that limit: longer text with any other character is reported as not a valid number, as before, so for a quoted amount or `NumberType` value a registered `DeserializationProblemHandler` still sees it. A map key read into a `NumberType` that is not a valid number (text that is not a number, a fraction for an integral type, or over-long text with any other character) now goes to `DeserializationProblemHandler.handleWeirdKey`, which can supply a replacement key, and without a handler is refused with an `InvalidFormatException` instead of a bare `NumberFormatException`. A quoted number read into a `BigInteger`-based `NumberType` is also held to Jackson's BigInteger scale limit (`StreamReadConstraints.validateBigIntegerScale`), so a short text with an extreme exponent is refused with a `StreamConstraintsException` instead of being expanded. A quoted amount and a quoted number read into a `NumberType` are read by one shared rule, so the trimming, the length limit and the reporting of text that does not parse (a `NumberFormatException` or an `ArithmeticException` while reading it) cannot drift apart between the two; a quoted amount's problem is still reported against `BigDecimal`. What `Money` writes is unchanged. | `900902000`, `9b9d8c6b1`, `c8e8331eb`, `1873fc544`, `04b0de48c`, `8de9f0e91` |
 | Shard-owned queue (ordered lane) | With the one horizon probe per pump pass (§2.4), an ordered owner whose rows for the pass had not been read yet - no batched read and no read-ahead - had to discard the pump's probe, since its own read comes after it. It told that case by comparing the probe's `System.nanoTime()` stamp against `Long.MAX_VALUE`, which holds only while the stamp is non-negative; `System.nanoTime()` has an arbitrary origin and may be negative, and the subtraction then overflowed and kept the probe. The watermark could then step over a message whose transaction had not committed, so the cursor skipped that message and only the head sweep delivered it, late. The owner now discards the probe whenever no rows were read before it, whatever the clock reads. Nothing to do on upgrade. | `fb8f73801` |
+| Event store (CDC) | With CDC on, a durable subscription could keep a row in `transient_subscriber_gaps` for a gap whose event existed and had already been handled. The row survived a graceful stop. Because a transient gap records an event the subscriber is still owed, a later subscription was handed that event again, and until then every gap query of the subscription included the row. In the trading demo a handful of the roughly 2 000 open gaps per view were such rows. This affected builds since the deferred gap recording in #57 (`687826c69`), which is unreleased. The cause: a back-fill or catch-up page, or a poll while CDC was not active, wrote a gap row as soon as it found the hole. The subscription's delivery gate also kept the same gap in memory until the next resume-point save. When the event filling the gap arrived on the CDC bus first, the gate took it for the fill of a gap nothing had recorded, so the subscriber's acknowledgement deleted nothing. Now only the gate records the gaps of a subscription that defers gap recording. Back-fill and catch-up pages no longer record new gaps of their own; they go through the new `SubscriptionGapHandler.reconcileGapsAndReportWithoutRecordingNewGaps`, an additive default method. While the subscription polls, the gate keeps no gaps in memory, and it records the gaps it already kept when it switches to polling. To observe the fix: a gap's row is gone from `transient_subscriber_gaps` once the subscriber has acknowledged the event that fills it, however that event arrived. Nothing to do on upgrade. Reproducers: `CdcEventStoreDeferredGapRecordingIT` (`a_gap_a_back_fill_page_finds_*`, `a_gap_a_poll_finds_*`, `a_gap_kept_in_memory_and_polled_again_*`) | - |
 | Shard-owned queue (both lanes) | When a unit was re-acquired on the same pump, its new owner could be added while the pump was still dropping the old one, and the pump's map from a unit's wake-up to its owners (§2.3) could then lose the new owner. For the rest of that owner's tenure a signalled wake-up for its unit did not name it, so the pump visited it only when its own schedule came due or on the full scan every `pollBackstop`, and an enqueue on the same instance sent a `NOTIFY` instead of waking it in memory (§2.2). Nothing was lost; delivery for that unit was slower. Adding and dropping an owner now update the map atomically for the unit. Nothing to do on upgrade. | `083a7a216` |
-| Shard-owned queues (`postgresql-queue-shard-owned`) | The cross-instance wake-up (Tier 1, `ShardWakeupListener`) stalled under dense notification traffic: pgjdbc's `getNotifications(200)` hands nothing back while notifications keep arriving less than ~1 ms apart, so owners on other instances were woken late, by the backstop (`pollBackstop`, 500 ms by default) at worst. The listener now drains with `PostgresqlNotificationDrain` (§2.25). To observe it: cross-instance commit-to-handler latency under sustained load (`ShardWakeupListenerDrainIT`, `-Dbenchmark.run=true`, 10 s backstop): p50 / p99 at 1 000 msg/s 18.6 / 566 ms before, 0.19 / 0.28 ms after; the old drain in the same run 88 / 973 ms at 1 000 msg/s and 3.5 s / 55 s at 3 000 msg/s, against 0.19 / 0.30 ms. Nothing to do on upgrade; a WARN `Cannot pin pgjdbc's notification peek` means a pgjdbc version whose internals changed, and the listener then polls with `SELECT 1` instead. | - |
+| Shard-owned queues (`postgresql-queue-shard-owned`) | The cross-instance wake-up (Tier 1, `ShardWakeupListener`) stalled under dense notification traffic: pgjdbc's `getNotifications(200)` hands nothing back while notifications keep arriving less than ~1 ms apart, so owners on other instances were woken late, by the backstop (`pollBackstop`, 500 ms by default) at worst. The listener now drains with `PostgresqlNotificationDrain` (§2.27). To observe it: cross-instance commit-to-handler latency under sustained load (`ShardWakeupListenerDrainIT`, `-Dbenchmark.run=true`, 10 s backstop): p50 / p99 at 1 000 msg/s 18.6 / 566 ms before, 0.19 / 0.28 ms after; the old drain in the same run 88 / 973 ms at 1 000 msg/s and 3.5 s / 55 s at 3 000 msg/s, against 0.19 / 0.30 ms. Nothing to do on upgrade; a WARN `Cannot pin pgjdbc's notification peek` means a pgjdbc version whose internals changed, and the listener then polls with `SELECT 1` instead. | - |
 | New event store engine, preview (`postgresql-event-log`) | Under load, an aggregate type with rolled-back appends could hold its watermark for 1-6 s, so every `CONTIGUOUS` subscription of that type stopped delivering while appends kept coming. When several types were read in one flush, the reader recorded the whole flush's wall time as each type's running-set probe cost, and the probe clock (`cost x 100 x max(1, backends / 10)`) then put the next running-set read seconds out. A hole retires only through a running-set read, so the watermark waited. To observe it: `EventLogObserver.onRead`'s `oldestCandidateAge` climbed to seconds during bursts. Now only a probe measured on its own sets the cost, and a flush of several types keeps the previous one. Nothing to do on upgrade. | phase 10 gate fix |
 | New event store engine, preview (`postgresql-event-log`) | Even with an honest probe cost, the probe clock's back-off (`cost x 100 x max(1, backends / 10)`, at most `probeBackoffMax`) put the next running-set read 1.8-3 s out at a 3-5 ms probe and a 60-connection pool. A hole left by a rolled-back append retires only through a running-set read, so the type's watermark - and every `CONTIGUOUS` subscription of it - waited that long. While a hole, range or candidate of a type is outstanding, the wait before its next running-set read is now capped by the new setting `EventLogSettings.holeProbeWaitMax` (Spring: `essentials.event-log.hole-probe-wait-max`), default 100 ms. Outside such holes nothing changes. While holes wait the probes may take more than the cost rule's ~1 % of a core (about 3-5 % per probing reader at a 3-5 ms probe); raise the setting to trade hole latency back for probe cost. Nothing to do on upgrade. | phase 10 gate fix |
+| Event store (polling subscriptions with `SubscriberAcknowledgement`) | Rarely, an event that filled a gap was delivered to the subscriber twice. It happened when the subscriber's acknowledgement of that event committed while a poll was running: the poll had read the gap while the acknowledgement's deletion of it was not yet committed, so it loaded the event again, and by the time it checked whether the event was still waiting for its acknowledgement the commit had already removed it from that list. The gap handler's in-memory copy of the transient gaps, refreshed by that poll before the commit, also kept the gap, so later polls could load the event again too. A poll now still treats a gap fill acknowledged during the poll as handed on, and every poll first clears the gaps of the fills acknowledged since the previous poll from the gap handler's in-memory copy. To observe the fix: the subscriber receives each gap fill once, even when its acknowledging unit of work commits while a poll is in flight. Nothing to do on upgrade. Reproducer: `PollingGapHandlingIT.an_acknowledgement_committing_while_a_poll_is_in_flight_does_not_deliver_the_gap_fill_again` | - |
 
 ---
 
@@ -1161,20 +1271,29 @@ database work per event.
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md).
 
-- `0.60.1-22` - the event-log reference warns that an exclusive in-transaction subscription's parked retry must finish
+- `0.60.1-24` - the event-log reference warns that an exclusive in-transaction subscription's parked retry must finish
   within `lease-local-stop`.
-- `0.60.1-21` - the event-log reference documents the admin reset refusal per processor kind and that a timed-out
+- `0.60.1-23` - the event-log reference documents the admin reset refusal per processor kind and that a timed-out
   `stop()` makes a re-subscribe of the key refuse rather than wait.
-- `0.60.1-20` - the event-log reference counts four processor base classes everywhere, names the `pg_stat_activity`
-  view as the watermark source, and documents the engine's review fixes (§2.24 "Hardened before release"); the admin
+- `0.60.1-22` - the event-log reference counts four processor base classes everywhere, names the `pg_stat_activity`
+  view as the watermark source, and documents the engine's review fixes (§2.26 "Hardened before release"); the admin
   API reference's Endpoints table gains the shard-owned queue and aggregate lifecycle and archive tags.
-- `0.60.1-15` - the event-log reference documents `EventLogPartitionedViewProcessor`, the port of a classic
-  `PartitionedViewEventProcessor` (§2.22), and lists it in the porting table.
-- `0.60.1-14` - the event-log reference's porting section states plainly that `EventLogInboxProcessor` forwards
+- `0.60.1-17` - the event-log reference documents `EventLogPartitionedViewProcessor`, the port of a classic
+  `PartitionedViewEventProcessor` (§2.24), and lists it in the porting table.
+- `0.60.1-16` - the event-log reference's porting section states plainly that `EventLogInboxProcessor` forwards
   exactly once, `onRebuild` runs once per rebuild and `EventLogReactor` is at least once; the three traps that framed
   these as pitfalls are retired.
-- `0.60.1-12` - a new reference, `LLM-postgresql-event-log.md`, for the new event store engine (preview, §2.24), the
-  trap `ESS-138`, and the admin API's operation count corrected to 67 (§6).
+- `0.60.1-14` - a new reference, `LLM-postgresql-event-log.md`, for the new event store engine (preview, §2.26), the
+  trap `ESS-140`, and the admin API's operation count corrected to 67 (§6).
+- `0.60.1-12` - generated WebFlux projects run blocking Essentials work off the event loop (virtual threads, new
+  S5 clause and `stack-lint` rule). Service-entity handlers signal a missing entity with a retryable
+  `IllegalStateException`, so a durable-queue command that arrives early is no longer dead-lettered. The
+  translation webhook fails closed and gets a per-event path. The Maven wrapper verifies its checksum, Spring
+  Modulith is gone and the dev password is dev-profile only. The slice scripts no longer double every slice in
+  a Claude Code worktree or crash on non-UTF-8 input. Commands and skills lose contradictions and load much
+  less text. To check an existing project: run `/essentials:upgrade --check`. `/essentials:upgrade` now shows how many fixes it will offer before the first one. It can commit each fix on its own branch, and it writes the findings you skip to a backlog file you choose. `/essentials:slice-check` ends by naming the command that owns each open finding, and prints a ready-to-paste `slice-check-accepted.yaml` entry for a finding you decide to keep. Gate 7 (one event variant per file) is now a script check, and `--fix-source` no longer offers to move a nested event variant, which would rename its stored class name and leave existing events unreadable. `/essentials:intro` points newcomers to the new glossary, [`docs/concepts.md`](../concepts.md) (§6).
+- `0.60.1-11` - the LLM docs describe when the starters register the tracing and queue metrics interceptors, and
+  their opt-out switches (§1.1.6).
 - `0.60.1-3` - the LLM docs show `Money`'s `amount` as a JSON number, the form it is written in, and say a quoted
   amount is also read (§3).
 - `0.60.1-2` - the LLM docs describe elastic pump connections, wake-after-commit, `JSONSerializer.readProperties` and
@@ -1196,6 +1315,10 @@ Not published; listed because they are the reference for how to use the framewor
 - **`essentials-trading-demo`** grows into a retail brokerage trading against the exchange-simulator and the
   payment-gateway: accounts, orders, funding, settlement and reconciliation, a phase 6 load driver (`run-load.sh`) and
   fault runs (`run-faults.sh`). See its `docs/EXPANSION_PLAN.md`.
+- **`essentials-trading-demo`'s processors retry with `FailoverRedeliveryPolicy`** (§2.18), set once in its
+  `TradingDemoEventProcessor`, `TradingDemoViewEventProcessor` and `TradingDemoPartitionedViewEventProcessor` bases:
+  its settlement and order-flow handlers throw "not yet" until another processor's work is there, and with the
+  framework's default budget a failover dead-lettered them.
 - **`essentials-trading-demo`: every view projection and query uses Jdbi through the `UnitOfWork`'s handle**, as
   0.60.1 made the original views do. A projection writes through the processor's own unit of work, so its view row
   commits together with the processor's progress by construction; with `JdbcTemplate` it did so only because the
@@ -1217,7 +1340,7 @@ Not published; listed because they are the reference for how to use the framewor
   sampling (`store-sample-every-days`), queue-depth sampling (`queue-sample-millis`) and, with
   `trading-demo.orders.router-stage-timings.enabled`, a split of the router stage into queue wait, exchange call and
   reports queue wait; its load report no longer times out on a database holding earlier runs. The CDC inbox deletes
-  dispatched rows, which is now the framework default (§1.1.6).
+  dispatched rows, which is now the framework default (§1.1.5).
   `reset-stack.sh` wipes the compose stack and its volumes before a run (the simulators' stores never prune and filled
   the disk), and under `compose` the load driver's `@load.local` users are stored with `{noop}` password hashes
   (`trading-demo.identity.unhashed-password-email-suffix`), so registering 10 000 of them no longer costs BCrypt.
@@ -1319,21 +1442,46 @@ Not published; listed because they are the reference for how to use the framewor
   and for the order flow's two reactions `trading-demo.orders.forwarding.batch-size`, as on the classic engine.
   `trading-demo.views.partitioned-forward-payloads` stays and applies to the classic engine only; on the new engine the
   partitioned views always queue the event payload. Those views, `AccountOverview` and `AccountActivity`, extend the
-  framework's `EventLogPartitionedViewProcessor` (§2.22): each page of events is queued in the page's own transaction, so
+  framework's `EventLogPartitionedViewProcessor` (§2.24): each page of events is queued in the page's own transaction, so
   every event is queued exactly once, and a rebuild truncates their tables and purges their queues, as the classic
   twins' reset does.
 
 ## 6. Documentation
 
-- A new LLM reference, `LLM/LLM-postgresql-event-log.md`, covers the new event store engine (preview, §2.24): when to
+- A new LLM reference, `LLM/LLM-postgresql-event-log.md`, covers the new event store engine (preview, §2.26): when to
   choose it over the classic event store, the starter, the processor base classes, consistency and page transactions,
   porting from the `EventProcessor` family, the settings (including `hole-probe-wait-max`), admin, migration and the
-  known limits. The traps index gains `ESS-138`: a classic processor failing start-up once the new engine is on. The
+  known limits. The traps index gains `ESS-140`: a classic processor failing start-up once the new engine is on. The
   porting section states plainly what each port keeps: `EventLogInboxProcessor` forwards exactly once, `onRebuild` runs
   once per rebuild with no aggregate type, and `EventLogReactor` is at least once like the classic `EventProcessor`. A contributor reference, `docs/design/event-log.md`, describes the engine as built; its plan documents
   moved to `docs/archive/`. The plugin ships the new reference (§4).
 - The admin API's LLM docs gave the contract as 40 operations; it has 67 (the shard-owned queue and event-log
   subscription operations were not counted).
+- **New: [`docs/concepts.md`](../concepts.md), a concepts page and glossary for newcomers** to Essentials, CQRS and
+  event sourcing. It explains event, handler and outbox, eventual consistency, event store (aggregate, stream,
+  `AggregateType`, `EventOrder` vs `GlobalEventOrder`), the three event processor kinds, command, decider,
+  projection, aggregate and slice. It also covers CQRS, the building blocks underneath (UnitOfWork,
+  DurableQueues, Inbox/Outbox, FencedLock, semantic types, optimistic concurrency), bounded contexts, and the
+  plugin's terms (slice law, write styles, `slice.yaml`, S1-S11, ESS ids). Each term links to the doc that owns
+  its API. It follows the same order as the animated
+  [`docs/event-sourcing-vs-crud/`](../event-sourcing-vs-crud/) walkthrough, which is now linked too. The README,
+  `LLM/LLM.md` and `/essentials:intro` point to it.
+- **[`docs/README.md`](../README.md), the index of `docs/`, gains a Start here section** (the concepts page and
+  the walkthrough) and points to the README, the LLM docs, the traps index (troubleshooting), the components
+  README and `examples/`.
+- **README:** Quick Start Path 2 no longer stops at injecting `EventStore`. A new step 4 links a complete service
+  in each write style: aggregate (Java), decider (Java), decider (Kotlin), and the plugin. It says where
+  `${essentials.version}` comes from and that `Amount`, `CurrencyCode` and `Percentage` ship with `types`.
+  Resources now link the docs index, the traps index (troubleshooting) and `examples/`. The duplicate
+  `kotlin-eventsourcing` in the use-case table is gone.
+- **`LLM/LLM.md`** explains what the event store's guarantees mean for a handler, and names a starting write style
+  (a decider) ahead of the full Pattern Selection table.
+- **Renaming or moving an event class leaves stored events unreadable** (new trap `ESS-138`, new section
+  `LLM-postgresql-event-store.md` § Renaming or moving an event class). A typed event is stored under its binary
+  class name (`FQCN:com.acme.orders.events.OrderEvent$OrderPlaced` in `event_type`, and the same name in a queued
+  message's `message_payload_type`), and nothing maps an old name to a new one. A rename, a package move, or moving
+  a nested event type to its own file makes every stored event of that type fail with `LoadingClassFailedException`.
+  Keep the name, or rewrite the stored values in the same release.
 - The LLM docs describe elastic pump connections, and their `InboxConfig.builder()` examples compile: that builder's
   methods take no `set` prefix (`inboxName`, `redeliveryPolicy`, ...), unlike `OutboxConfigBuilder`'s.
 - The LLM docs and the `types-jackson3` README show `Money` as `{"amount":99.99,"currency":"USD"}`, with the amount a
@@ -1357,3 +1505,6 @@ Not published; listed because they are the reference for how to use the framewor
 - `postgresql-queue-shard-owned`: the stuck-handler and kept-unit bounds (`stuckHandlerTimeout`, and how long a unit
   kept by a stop waits for that stop's flush) are read through a package-private clock that the integration tests
   advance instead of sleeping through them. No behaviour, setting or API changes.
+- Plugin `check-citations` (CI `plugin-docs`, step `citations`): new rule `repo-path` fails a `docs/` or `LLM/` path in
+  the plugin's markdown that the repository no longer has, so the next move of the repository's documents cannot
+  strand a path in the plugin unnoticed. It found one, in `/essentials:upgrade`, now fixed (plugin `0.60.1-12`).

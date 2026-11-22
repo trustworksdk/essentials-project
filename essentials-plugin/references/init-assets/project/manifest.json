@@ -397,7 +397,7 @@
     {
       "id": "maven-wrapper",
       "cwd": ".",
-      "run": "mvn -N -B -q org.apache.maven.plugins:maven-wrapper-plugin:{{pin:maven-wrapper-plugin}}:wrapper -Dmaven={{pin:Maven}} -Dtype=only-script",
+      "run": "mvn -N -B -q org.apache.maven.plugins:maven-wrapper-plugin:{{pin:maven-wrapper-plugin}}:wrapper -Dmaven={{pin:Maven}} -DdistributionSha256Sum={{pin:Maven distribution SHA-256}} -Dtype=only-script",
       "why": "Writes mvnw, mvnw.cmd and .mvn/wrapper/maven-wrapper.properties pinned to the stack pins. Needs a local mvn; without one the project builds with mvn once installed, and dev.sh falls back to it."
     },
     {

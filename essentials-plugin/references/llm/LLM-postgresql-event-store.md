@@ -294,6 +294,26 @@ List<OrderEvent> events = EventStreamEvolver.extractEventsAsList(
     stream.eventList(), OrderEvent.class);
 ```
 
+### Renaming or moving an event class
+
+A typed event is stored under its Java class name: the `event_type` column holds `FQCN:` followed by
+`Class.getName()`, the binary name, so a type nested in its sealed parent is stored as
+`com.acme.orders.events.OrderEvent$OrderPlaced`. Reading the event back loads that class by name
+(`EventType.toJavaClass`), and nothing maps an old name to a new one. A queued message carrying the event
+(an `Inbox`, a `DurableQueues` queue) records the same name in `message_payload_type`.
+
+So renaming an event class, moving it to another package, or moving a nested type out to a top-level file
+(or the reverse) changes the stored name. Every event already stored under the old name then fails with
+`LoadingClassFailedException: Failed to load class '…'` when its aggregate is loaded or a subscription
+reaches it.
+
+- Treat the binary name of a persisted event type as stored data, like its JSON property names.
+- Splitting a file of top-level Kotlin classes into one file per class in the same package keeps every
+  name. That move is safe.
+- To change a name anyway, rewrite the stored values in the same release, before the new code reads them:
+  `event_type` in each event stream table that holds the type, and `message_payload_type` for queued
+  messages that are still pending or dead-lettered. Rehearse it on a copy of real data.
+
 ### PersistedEvent API
 
 Interface: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent`
@@ -860,13 +880,17 @@ What a throw does:
    `EventProcessor`, the durable queue (`getDurableQueueRedeliveryPolicy()`) for a `ViewEventProcessor` once its direct
    handling failed. The queue's built-in permanent-error list applies, so an `IllegalArgumentException` dead-letters on
    the first attempt (see [LLM-foundation.md § The built-in permanent-error list](LLM-foundation.md#the-built-in-permanent-error-list)).
-2. When the redeliveries are used up, the message becomes a dead letter. **The default policy retries for minutes, not
-   seconds** (since 0.61): quick first retries (200 ms, doubling to 10 s), for 4 × (lock timeout + the queue's
-   `maxUnservedAfterInstanceLoss()`, twice the `message-handling-timeout` on `PostgresqlDurableQueues`) - about 5
-   minutes with the PostgreSQL starter's defaults - so a handler that throws until another
-   processor's work is there does not dead-letter while that work fails over to another instance. `start()` logs the
-   budget. A different budget: override the getter; to size your own `Inbox` policy the same way, use
-   `FailoverRedeliveryPolicy.outlasting(lockTimeOut, queueWindow)`.
+2. When the redeliveries are used up, the message becomes a dead letter. **The default policy retries for about 10 s**
+   (20 redeliveries, 200 ms growing ×1.1 to 3 s). A handler that throws until another processor's work is there ("not
+   yet") can dead-letter with that budget while the other work fails over to another instance (lock timeout 15 s,
+   queue window 30-60 s). Such a processor overrides the getter with the opt-in failover policy (since 0.61):
+   `failoverRedeliveryPolicy(inboxes.maxUnservedAfterInstanceLoss()).policy()` in `getInboxRedeliveryPolicy()`, or
+   `failoverRedeliveryPolicy(getDurableQueues().maxUnservedAfterInstanceLoss()).policy()` in a view's
+   `getDurableQueueRedeliveryPolicy()` - quick first retries (200 ms, doubling to 10 s), for 4 × (lock timeout + the
+   queue's `maxUnservedAfterInstanceLoss()`, twice the `message-handling-timeout` on `PostgresqlDurableQueues`), about
+   5 minutes with the PostgreSQL starter's defaults. The cost: a poison message dead-letters only after that long. To
+   size your own `Inbox` policy the same way, use `FailoverRedeliveryPolicy.outlasting(lockTimeOut, queueWindow)`.
+   `start()` logs which budget is in use.
 3. The subscription's resume point **keeps advancing**: the event is in the queue, so the processor goes on with the
    next events. Only that aggregate is held: messages are ordered by aggregate id (`OrderedMessage` key), and later
    events of the same aggregate wait behind its dead letter (a `ViewEventProcessor` queues them behind it), while every
@@ -1415,6 +1439,43 @@ public class LoggingEventStoreInterceptor implements EventStoreInterceptor {
 | `FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream` | — | Publish events at `CommitStage.Flush` (requires `EventStoreEventBus`) |
 | `MicrometerTracingEventStoreInterceptor` | `.micrometer` | Distributed tracing with Micrometer |
 | `RecordExecutionTimeEventStoreInterceptor` | `.micrometer` | Execution time metrics |
+
+None of the three carries `@InterceptorOrder`, so all run at the default order 10; interceptors with equal orders keep
+their registration order (the sort is stable).
+
+### Changing what is appended or loaded
+
+The shared contract ([LLM-shared.md § Changing what an operation carries](./LLM-shared.md#changing-what-an-operation-carries)):
+change the input with the operation's setter before `chain.proceed()`, the output by returning something else.
+
+- **Input setters**: `AppendToStream.setEventsToAppend(...)`, `setAppendEventsAfterEventOrder(...)`;
+  `FetchStream.setEventOrderRange(...)`, `setTenant(...)`; `LoadEventsByGlobalOrder.setGlobalEventOrderRange(...)`,
+  `setIncludeAdditionalGlobalOrders(...)`, `setOnlyIncludeEventIfItBelongsToTenant(...)`. `LoadEvent`, `LoadEvents`,
+  `LoadEventsCausedBy` and `LoadLastPersistedEventRelatedTo` carry query keys only - transform their result.
+- **Output copies**: `PersistedEvent.withEvent(EventJSON)` and `withMetaData(EventMetaDataJSON)` copy every other
+  property. The copy is a `DefaultPersistedEvent` and `equals` the original (same `eventId`); use `valueEquals` to tell
+  them apart.
+- **Rebuilding a `FetchStream` result** needs the aggregate type's stream configuration, which only
+  `ConfigurableEventStore` exposes:
+
+```java
+@Override
+public <ID> Optional<AggregateEventStream<ID>> intercept(FetchStream<ID> operation,
+        EventStoreInterceptorChain<FetchStream<ID>, Optional<AggregateEventStream<ID>>> chain) {
+    var configuration = ((ConfigurableEventStore<?>) chain.eventStore())
+            .getAggregateEventStreamConfiguration(operation.aggregateType);
+    return chain.proceed().map(stream -> AggregateEventStream.of(configuration,
+                                                                 stream.aggregateId(),
+                                                                 stream.eventOrderRangeIncluded(),
+                                                                 stream.events().map(e -> e.withEvent(decrypt(e.event())))));
+}
+```
+
+⚠️ **Encrypting on append, with `FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream`.** It publishes the
+`AggregateEventStream` its `proceed()` returned to in-transaction subscribers. An encrypting interceptor ordered after
+it (order > 10, inside it) must return the plaintext events in its result, or those subscribers receive ciphertext;
+one ordered before it (order < 10) leaves nothing to restore, because publication has already happened when its
+`proceed()` returns.
 
 ### EventStoreEventBus
 

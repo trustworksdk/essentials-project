@@ -29,3 +29,7 @@ The law has no numbered sections (`rules/slice-design.md` §4). <!-- expect: law
 
 A wrapped citation of the law is still checked: see `rules/slice-design.md`
 § Red banners. <!-- expect: law-section -->
+
+A repository file cited at the path it moved from: `docs/RELEASE-NOTES-0.60.0.md` §1.1. <!-- expect: repo-path -->
+A cite-ok marker meant for another rule does not hide it: [notes](docs/MIGRATION-0.60.md). <!-- cite-ok: a reason for some other rule --> <!-- expect: repo-path -->
+A release file the repository never had: `docs/releases/RELEASE-NOTES-0.0.1.md`. <!-- expect: repo-path -->

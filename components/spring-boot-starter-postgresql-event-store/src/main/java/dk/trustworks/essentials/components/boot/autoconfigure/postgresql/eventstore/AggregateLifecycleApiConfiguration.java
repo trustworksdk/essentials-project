@@ -24,6 +24,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.BeanFactory;
 import org.springframework.boot.autoconfigure.*;
 import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.context.annotation.Bean;
@@ -59,12 +60,12 @@ public class AggregateLifecycleApiConfiguration {
     public AggregateLifecycleStatisticsApi aggregateLifecycleStatisticsApi(EssentialsSecurityProvider securityProvider,
                                                                            AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
                                                                            AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
-                                                                           Optional<MeterRegistry> meterRegistry) {
+                                                                           BeanFactory beanFactory) {
         return DefaultAggregateLifecycleStatisticsApi.builder()
                                                      .setSecurityProvider(securityProvider)
                                                      .setSnapshotPolicyRegistry(snapshotPolicyRegistry)
                                                      .setClosingBooksPolicyRegistry(closingBooksPolicyRegistry)
-                                                     .setMeterRegistry(meterRegistry)
+                                                     .setMeterRegistry(OptionalMeterRegistry.from(beanFactory))
                                                      .build();
     }
 

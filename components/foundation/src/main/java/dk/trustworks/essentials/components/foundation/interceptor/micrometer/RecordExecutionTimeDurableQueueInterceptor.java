@@ -94,7 +94,7 @@ public class RecordExecutionTimeDurableQueueInterceptor implements DurableQueues
                                    .description("Time taken to handle a queued message by the QueuedMessageHandler")
                                    .tag("message_handler", FunctionalInterfaceLoggingNameResolver.resolveLoggingName(operation.messageHandler))
                                    .tag(MESSAGE_PAYLOAD_TYPE, operation.getMessage().getPayload() != null ? operation.getMessage().getPayload().getClass().getName() : "?")
-                                   .tag(QUEUE_NAME, operation.message.getQueueName())
+                                   .tag(QUEUE_NAME, operation.getMessage().getQueueName())
                                    .optionalTag(MODULE_TAG_NAME, moduleTag)
                                    .record(interceptorChain::proceed);
         } else {

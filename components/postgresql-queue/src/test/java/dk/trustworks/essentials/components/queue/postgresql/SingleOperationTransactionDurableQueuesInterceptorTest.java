@@ -161,6 +161,19 @@ class SingleOperationTransactionDurableQueuesInterceptorTest {
         verify(durableQueues).acknowledgeMessageAsHandled(MESSAGE_ID);
     }
 
+    @Test
+    void a_message_an_inner_interceptor_already_acknowledged_is_not_acknowledged_a_second_time() {
+        var operation = handleQueuedMessage();
+        // A second acknowledgement finds the row gone: PostgresqlDurableQueues returns false and logs an ERROR
+        when(durableQueues.acknowledgeMessageAsHandled(MESSAGE_ID)).thenReturn(false);
+
+        // An interceptor ordered after this one (inside its unit of work) acknowledged the message after the handler returned
+        interceptor.intercept(operation, handlerChain(() -> operation.acknowledgedWithHandler(true)));
+
+        verify(durableQueues, never()).acknowledgeMessageAsHandled(any(QueueEntryId.class));
+        assertThat(operation.getAcknowledgedWithHandler()).as("the inner interceptor's result is kept, so the consumer counts the message as handled").isTrue();
+    }
+
     private static HandleQueuedMessage handleQueuedMessage() {
         return handleQueuedMessage(() -> true);
     }

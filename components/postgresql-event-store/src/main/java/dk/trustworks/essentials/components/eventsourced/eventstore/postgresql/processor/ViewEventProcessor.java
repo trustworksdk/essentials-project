@@ -240,15 +240,6 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
         }
     }
 
-    /**
-     * Default: {@link #failoverRedeliveryPolicy(Optional)} with this view's queue's window - quick first retries, and
-     * retrying for long enough to outlast a failover. Override for a different budget.
-     */
-    @Override
-    protected RedeliveryPolicy getDurableQueueRedeliveryPolicy() {
-        return failoverRedeliveryPolicy(durableQueues.maxUnservedAfterInstanceLoss()).policy();
-    }
-
     private void startSubscribersAndDurableConsumer(String processorName, List<AggregateType> subscribeToEventsRelatedTo, FencedLock lock) {
         var redeliveryPolicy = getDurableQueueRedeliveryPolicy();
         logRedeliveryPolicy(processorName, redeliveryPolicy, failoverRedeliveryPolicy(durableQueues.maxUnservedAfterInstanceLoss()));

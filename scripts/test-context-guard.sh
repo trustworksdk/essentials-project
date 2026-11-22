@@ -1049,7 +1049,8 @@ while IFS= read -r line; do
 done <"$snapshot"
 expected=()
 for i in $(seq 7 19) $(seq 21 35) 20 3; do expected+=("/p/$i"); done
-[ "${listed[*]}" = "${expected[*]}" ] || fail "edited files listed as '${listed[*]}', expected '${expected[*]}'"
+# ${listed[*]-}: an empty array is unbound under `set -u` in bash before 4.4 (macOS ships 3.2).
+[ "${listed[*]-}" = "${expected[*]}" ] || fail "edited files listed as '${listed[*]-}', expected '${expected[*]}'"
 pass
 
 echo "test-context-guard: all cases passed"

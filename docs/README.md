@@ -11,8 +11,26 @@ documents, release notes and migration guides.
   open item.
 - **[`archive/`](archive)** — plans that have been carried out, and historical records. Kept for the reasoning;
   not a description of the current code.
-- The rest of this folder is reference material that is neither: the admin API contract, an explainer, and the
-  devcontainer's AI tooling.
+- The rest of this folder is reference material that is neither: the concepts page, the admin API contract, an
+  explainer, and the devcontainer's AI tooling.
+
+Elsewhere in the repository:
+
+- [README.md](../README.md): what Essentials is, the modules, and the Quick Start.
+- [LLM/LLM.md](../LLM/LLM.md): the module reference. It is written for AI coding agents, but is a compact,
+  readable API guide for people too.
+- [LLM/LLM-traps.md](../LLM/LLM-traps.md): troubleshooting. Things that compile, look right, and then fail at
+  runtime, in production or during a replay.
+- [components/README.md](../components/README.md): the event store, queues, locks and inbox/outbox, with
+  worked examples.
+- [examples/](../examples/): runnable demo applications.
+
+## Start here
+
+| Document | Covers |
+|---|---|
+| [concepts.md](concepts.md) | Concepts and glossary for newcomers to Essentials, CQRS and event sourcing |
+| [event-sourcing-vs-crud/](event-sourcing-vs-crud/index.html) | Animated walkthrough of a CRUD webshop and an event-sourced one, side by side; `SCRIPT.md` is its text |
 
 ## Design
 
@@ -44,5 +62,4 @@ documents, release notes and migration guides.
 | Document | Covers |
 |---|---|
 | [openapi/](openapi/README.md) | The admin API contract; `admin-ui-mockup/` is the admin UI's visual language |
-| [event-sourcing-vs-crud/](event-sourcing-vs-crud/index.html) | Explainer: event sourcing for CRUD developers |
 | [ai-tooling.md](ai-tooling.md) | The devcontainer's optional AI-assist stack |

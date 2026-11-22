@@ -100,7 +100,35 @@ from pathlib import Path
 FORMAT = 1
 
 ROLES = {"use_cases": "command", "views": "view", "automations": "automation", "external_systems": "translation"}
-SKIP_DIRS = {"target", "build", "node_modules", "dist"}
+
+# The one prune rule of every manifest walker. slice-lint.py, slice-index.py, slice-source.py and
+# slice-law.py each carry an identical copy of these constants and pruned_dir() — slice-lint.py is copied
+# into projects on its own, so it cannot import a shared one — and tests/scripts/test_slice_lint.py
+# fails when the four differ. A dot-directory is VCS or IDE state, or a full copy of the project: a
+# Claude Code agent worktree under .claude/worktrees/ holds every slice.yaml a second time, and a walker
+# that descended into it would report each slice as its own duplicate; it is pruned at any depth.
+# BUILD_OUTPUT_DIRS are build and package output, which can hold copied manifests too (IntelliJ's out/
+# copies resources from source roots). No build tool writes into a Java or Kotlin source root, though, and
+# there build, out and dist are ordinary package names (a hexagonal adapters/out, com.example.build):
+# inside src/<set>/java or src/<set>/kotlin those three are walked like any other package. target and
+# node_modules stay pruned there too (tests/slice-source/cases/tests holds a src/test/java/target that
+# the test-source walk must skip, as every other walk does).
+BUILD_OUTPUT_DIRS = frozenset({"target", "build", "out", "dist", "node_modules"})
+PACKAGE_NAMED_LIKE_OUTPUT = frozenset({"build", "out", "dist"})
+SOURCE_LANG_DIRS = frozenset({"java", "kotlin"})
+
+
+def pruned_dir(name: str, parent: tuple[str, ...]) -> bool:
+    """True for a directory no manifest walker descends into: any dot-directory, or build output outside
+    a source root. `parent` is the directory holding `name`, as path parts relative to the walked root."""
+    if name.startswith("."):
+        return True
+    if name not in BUILD_OUTPUT_DIRS:
+        return False
+    in_source_root = any(parent[i] == "src" and parent[i + 2] in SOURCE_LANG_DIRS for i in range(len(parent) - 2))
+    return not (in_source_root and name in PACKAGE_NAMED_LIKE_OUTPUT)
+
+
 NON_MAIN_SOURCE_SETS = {"test", "tests", "it", "integrationTest", "testFixtures", "intTest", "jmh"}
 # the non-main source sets that hold tests (plus any `src/*Test`); fixtures and benchmarks hold none
 TEST_SOURCE_SETS = NON_MAIN_SOURCE_SETS - {"testFixtures", "jmh"}
@@ -146,7 +174,7 @@ FAIL_ON = {"blocking": 0, "should-fix": 1, "advisory": 2}
 IMPACT = {
     "0 acceptance record": "documentation",
     "6 command mappings": "coupling", "6 endpoint route": "documentation", "6 discriminator": "documentation",
-    "6 undeclared mapping": "documentation", "6 raw id": "coupling",
+    "6 undeclared mapping": "documentation", "6 raw id": "coupling", "7 variants per file": "coupling",
     "8(d) command in domain": "coupling",
     "11(b) handled events": "documentation", "11(c) undeclared write": "documentation",
     "14 two write styles": "wrong-next-caller", "14 entities with event store": "wrong-next-caller",
@@ -1176,9 +1204,10 @@ def walk(root):
     sources, manifests, dirs, test_roots = [], [], [], []
     for dirpath, dirnames, filenames in os.walk(root):
         here = Path(dirpath)
+        parent = here.relative_to(root).parts
         keep = []
         for d in dirnames:
-            if d.startswith(".") or d in SKIP_DIRS:
+            if pruned_dir(d, parent):
                 continue
             if here.name == "src" and (d in NON_MAIN_SOURCE_SETS or d.endswith("Test")):
                 if d in TEST_SOURCE_SETS or d.endswith("Test"):
@@ -1197,10 +1226,12 @@ def walk(root):
 
 
 def walk_tests(test_root):
-    """Java and Kotlin files under one test source root."""
+    """Java and Kotlin files under one test source root (`<module>/src/<set>/<lang>`)."""
     out = []
+    module = test_root.parents[2]
     for dirpath, dirnames, filenames in os.walk(test_root):
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS)
+        parent = Path(dirpath).relative_to(module).parts
+        dirnames[:] = sorted(d for d in dirnames if not pruned_dir(d, parent))
         out.extend(Path(dirpath) / f for f in sorted(filenames) if Path(f).suffix in SOURCE_EXT)
     return out
 
@@ -1316,7 +1347,7 @@ class Project:
                 continue
             self.role_parents.add(d.parent)
             for child in sorted(p for p in d.iterdir() if p.is_dir()):
-                if child.name.startswith("_") or child.name.startswith(".") or child.name in SKIP_DIRS:
+                if child.name.startswith("_") or pruned_dir(child.name, d.relative_to(self.root).parts):
                     continue
                 slices[child] = Slice(child, d.name, d.parent)
         for m in manifest_paths:
@@ -1339,6 +1370,11 @@ class Project:
                 continue
             try:
                 doc = self.yaml.safe_load(s.manifest.read_text(encoding="utf-8"))
+            except UnicodeDecodeError as exc:
+                self.skipped_manifests.append({"file": rel(s.manifest, self.root), "reason":
+                                               f"does not parse (not UTF-8 text: byte 0x{exc.object[exc.start]:02X} at "
+                                               f"offset {exc.start}) — slice-lint reports it (gate 1(a))"})
+                continue
             except (OSError, self.yaml.YAMLError) as exc:
                 reason = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
                 self.skipped_manifests.append({"file": rel(s.manifest, self.root),
@@ -2437,6 +2473,7 @@ def check_json(project, today):
         _check_endpoints(project, s, facts, findings, unverified, endpoint_table)
         _check_raw_ids(project, s, findings)
     _check_boundaries(project, findings)
+    _check_event_files(project, findings)
     sites = write_sites(project)
     _check_undeclared_writes(sites, findings)
     lanes = []
@@ -2649,7 +2686,7 @@ def _check_endpoints(project, s, facts, findings, unverified, table):
     parsed = [(e, *parse_endpoint(e["path"])) for e in endpoints]
     try:
         manifest_lines = s.manifest.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         manifest_lines = []
 
     def declared_at(path):
@@ -2831,6 +2868,64 @@ def _check_lane(project, bc_obj, lane, findings):
                     f"declares lane: {d['lane']}, but the only write-style signal in '{bc}' is "
                     f"{described[detected]()}",
                     "`lane` is machine-derived; `--fix-manifests` repairs it"))
+
+
+# --------------------------------------------------------------------------------------------------
+# gate 7 (§R3, one event variant per file)
+# --------------------------------------------------------------------------------------------------
+
+def _binary_name(td):
+    """The name the event store records for td (`Class.getName()`): package, then each enclosing type, `$`-joined."""
+    chain, t = [], td
+    while t is not None:
+        chain.append(t.name)
+        t = t.outer
+    name = "$".join(reversed(chain))
+    return f"{td.file.package}.{name}" if td.file.package else name
+
+
+def _check_event_files(project, findings):
+    """An `events/` file declaring two or more concrete event types. An event type is a concrete type whose
+    supertypes reach a type declared in an `events/` directory of the same bounded context — a helper class or a
+    companion in the file is not one. Each finding carries `split`: `rename-free` when every type is top-level, so
+    one file per type keeps every class name; `renames` when one is nested, because moving it out changes the name
+    the event store recorded for every stored event of that type (`OrderEvent$OrderPlaced` → `OrderPlaced`)."""
+    audited = {b.key for b in project.bcs}  # where() answers against every BC; --bc narrows what is reported
+
+    def in_events(name, bc):
+        return any(project.where(d.file.path).part == "events" and project.where(d.file.path).bc is bc
+                   for d in project.types_by_name.get(name, []))
+
+    for f in project.files:
+        if f.error is not None:
+            continue
+        w = project.where(f.path)
+        if w.bc is None or w.part != "events" or w.excluded or w.bc.key not in audited:
+            continue
+        events = [td for td in f.types
+                  if td.concrete and "companion" not in td.mods
+                  and any(in_events(s, w.bc) for s in all_supers(project, td))]
+        if len(events) < 2:
+            continue
+        events.sort(key=lambda td: td.line)
+        nested = [td for td in events if td.outer is not None]
+        split = "renames" if nested else "rename-free"
+        listed = "; ".join(f"{td.name} (line {td.line}, {'nested in ' + td.outer.name if td.outer else 'top-level'})"
+                           for td in events)
+        if nested:
+            hint = ("one variant per file (§R3) — but splitting renames a stored event type: "
+                    + ", ".join(f"{_binary_name(td)} → {f.package + '.' if f.package else ''}{td.name}" for td in nested)
+                    + ". Events already stored under the old name stop deserializing (ESS-138); keeping them readable is a "
+                      "design decision, not a file move")
+        else:
+            hint = "one variant per file (§R3); every type is top-level, so a file per type keeps each class name"
+        out = finding("Blocking", "7 variants per file", None, f.rel, events[1].line,
+                      f"{len(events)} event types in one file: {listed}", hint)
+        out["split"] = split
+        out["types"] = [{"name": td.name, "line": td.line, "nested": td.outer is not None,
+                         "binaryName": _binary_name(td),
+                         "afterSplit": f"{f.package}.{td.name}" if f.package else td.name} for td in events]
+        findings.append(out)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -3280,6 +3375,9 @@ def read_acceptances(project, findings):
         text = path.read_text(encoding="utf-8")
         node = yaml.compose(text)
         data = yaml.safe_load(text)
+    except UnicodeDecodeError as exc:
+        bad(None, f"does not parse: not UTF-8 text (byte 0x{exc.object[exc.start]:02X} at offset {exc.start})")
+        return []
     except (OSError, yaml.YAMLError) as exc:
         mark = getattr(exc, "problem_mark", None)
         bad(mark.line + 1 if mark is not None else None, f"does not parse: {str(exc).splitlines()[0] if str(exc) else exc}")

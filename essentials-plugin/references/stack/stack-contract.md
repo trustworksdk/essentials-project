@@ -310,11 +310,39 @@ fun documentDbRepositoryFactory(
 ): DocumentDbRepositoryFactory = DocumentDbRepositoryFactory(jdbi, unitOfWorkFactory, jsonSerializer)
 ```
 
+**On WebFlux, a handler doing Essentials work runs off the event loop.** The starters are blocking,
+and a unit of work is bound to the thread that opened it. Set `spring.threads.virtual.enabled: true`:
+WebFlux then runs every handler method that returns a plain value on the `applicationTaskExecutor`,
+a virtual-thread executor, so a blocking unit of work never occupies an event-loop thread (on WebMvc
+the same property puts each request on a virtual thread). Two things undo it, and neither says so.
+An application-defined `Executor` bean stops Boot creating `applicationTaskExecutor`, and the
+handlers fall back onto the event loop. The fix is `spring.task.execution.mode: force`, set together
+with that bean and not before: it makes Boot create `applicationTaskExecutor` anyway, and also makes
+it the `@Async` executor unless the application declares its own `AsyncConfigurer`. A handler that
+returns `Mono`/`Flux`, or is a Kotlin `suspend fun`, is never offloaded: it must move its blocking
+Essentials work off the loop itself (`Mono.fromCallable(…).subscribeOn(Schedulers.boundedElastic())`,
+`withContext(Dispatchers.IO)`) or return a plain value. Either way the whole unit of work is one
+blocking call, never split across operators. The Java baseline (S1) is past the JDK releases on which
+`synchronized` pinned a virtual thread's carrier, so the Essentials docs' `ReentrantLock` advice for
+those releases does not bind here.
+
 > Proof: `references/llm/LLM-foundation.md` § UnitOfWork (Transactions);
 > `references/llm/LLM-postgresql-queue.md` § Transactions (and
 > `references/llm/LLM-springdata-mongo-queue.md` § Transactions);
 > `references/llm/LLM-postgresql-document-db.md` § Factory Creation;
-> `references/llm/LLM-eventsourced-aggregates.md` § Declaring Aggregates.
+> `references/llm/LLM-eventsourced-aggregates.md` § Declaring Aggregates;
+> `references/llm/LLM-spring-boot-starter-modules.md` § Web stack: WebMvc, not WebFlux (blocking
+> starters, thread-bound unit of work, one blocking call). The offloading is Spring Boot's
+> `WebFluxAutoConfiguration.WebFluxConfig.configureBlockingExecution`, which sets the
+> `BlockingExecutionConfigurer` executor only when virtual threads are enabled and an
+> `AsyncTaskExecutor` named `applicationTaskExecutor` exists; that bean comes from
+> `TaskExecutorConfigurations.TaskExecutorConfiguration`, gated on `@ConditionalOnMissingBean(Executor)`
+> or `spring.task.execution.mode=force`; the same configuration imports `AsyncConfigurerConfiguration`
+> (`@ConditionalOnMissingBean(AsyncConfigurer)`), whose `getAsyncExecutor` falls back to
+> `applicationTaskExecutor`. Which handlers it applies to is spring-webflux's
+> `RequestMappingHandlerAdapter.NonReactiveHandlerMethodPredicate`: a return type with no
+> `ReactiveAdapter`, and not a Kotlin suspending function. The pinning caveat:
+> `references/llm/LLM-postgresql-queue-shard-owned.md` (handlers run on virtual threads).
 
 ## S6 — Internal structure (MUST — governed elsewhere)
 
@@ -404,6 +432,11 @@ Two Essentials-specific requirements:
 - **Names are an injection surface.** Table, column, index, queue and collection names are
   string-concatenated into SQL/NoSQL. The framework's validation helpers are a convention check,
   not sanitization. Hardcode names; never accept one from a request.
+- **A webhook ingress fails closed.** An inbound translation endpoint turns whatever it accepts
+  into a command, and the permit-all default lets anyone reach it. It rejects every request until
+  its shared secret is configured (supplied from the environment, never committed), and only then
+  accepts a request that proves it — the generated placeholder compares a header in constant time;
+  replace it with the external system's own signature scheme, still failing closed.
 
 > Proof: `references/llm/LLM-admin-api.md` § Security; `references/llm/LLM-components.md`
 > § Security (the name checks are a first pass, not sanitising).
@@ -459,7 +492,7 @@ module. Embedded-frontend builds add the frontend to the same reactor (see `fron
 What Spring Boot already manages — Testcontainers, Mockito, AssertJ, Awaitility, Kotlin, the
 MongoDB driver — is moved through the version property Boot reads (`testcontainers.version`,
 `mockito.version`, …): a BOM imported under that parent is inert for anything the parent already
-manages, because the parent's management wins. What Boot does not manage — JDBI, Spring Modulith —
+manages, because the parent's management wins. What Boot does not manage — JDBI —
 is imported as a BOM.
 
 A **`skip-frontend` profile** must exist on any project whose package phase builds a frontend, so
@@ -501,12 +534,15 @@ files (`/essentials:upgrade` Group C and `/essentials:review` run it); the rest 
 - [ ] Domain writes go through the starter's `UnitOfWork` (S5)
 - [ ] Queue handlers are idempotent and rely on the `RedeliveryPolicy`, not a rollback, to retry; no `essentials.durable-queues.transactional-mode` left in configuration (S5)
 - [ ] Aggregates using policy annotations are declared via `EssentialsAggregateDeclarations` (S5)
+- [ ] On WebFlux, `spring.threads.virtual.enabled: true`, no application `Executor` bean, and no
+      `Mono`/`Flux`/`suspend` handler doing blocking Essentials work on the event loop (S5)
 - [ ] Code is organised by slice; `/essentials:slice-check` passes (S6)
 - [ ] `contracts/openapi.json` is generated by an integration test against a context with its
       database, and committed; the frontend build reads the committed file (S7)
 - [ ] `SingleValueTypeModelConverter` registered as a bean wherever springdoc runs (S7)
 - [ ] Frontend mode chosen explicitly; only that mode's pieces configured (S8)
 - [ ] Security replaced from the permit-all default; admin SPIs supplied if admin is enabled (S9)
+- [ ] Every webhook ingress fails closed until its secret is configured, and verifies the sender (S9)
 - [ ] Surefire/Failsafe split; Testcontainers 2.x artifact names **and packages** (S10)
 - [ ] `@AutoConfigureWebTestClient` imported from its Boot 4 package, or the client built
       explicitly (S10)
