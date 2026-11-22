@@ -109,6 +109,76 @@ class ViewProjectionIT extends AbstractProcessorIT {
         }
     }
 
+    private static final ViewProjection.Truncate TRUNCATE = connection -> {
+        try (var statement = connection.createStatement()) {
+            statement.execute("TRUNCATE view_totals, applied");
+        }
+    };
+
+    private static ViewProjection.PageApplier applyingAll() {
+        return (events, context) -> {
+            for (var event : events) {
+                applyToView(context.connection(), event);
+            }
+        };
+    }
+
+    @ParameterizedTest
+    @EnumSource(SourceKind.class)
+    void a_rebuild_of_a_running_projection_clears_a_stale_row_replays_and_runs_again(SourceKind kind) throws Exception {
+        appendEvents(-1);
+        var projection = projection(kind, Set.of(), ProcessorSeams.NONE, Ownership.perInstance("node-1"), applyingAll());
+        projection.start();
+        try {
+            awaitCaughtUp(projection.key());
+            execute("INSERT INTO view_totals VALUES ('stale', 1)");
+
+            assertThat(projection.rebuild(TRUNCATE)).isTrue();
+
+            assertThat(projection.isRunning()).as("restarted after the rebuild").isTrue();
+            awaitCaughtUp(projection.key());
+            assertThat(view()).as("the replayed view, without the stale row").isEqualTo(fold(Set.of()));
+            assertThat(applied()).hasSize(EVENTS).allSatisfy((order, times) -> assertThat(times).as("applied once since the rebuild: " + order).isEqualTo(1));
+        } finally {
+            projection.stop();
+        }
+    }
+
+    @Test
+    void a_rebuild_of_a_never_started_projection_returns_false_and_rolls_the_truncate_back() throws Exception {
+        var projection = projection(SourceKind.JDBI, Set.of(), ProcessorSeams.NONE, Ownership.perInstance("node-1"), applyingAll());
+        execute("INSERT INTO view_totals VALUES ('kept', 1)");
+
+        assertThat(projection.rebuild(TRUNCATE)).as("no progress row to reset").isFalse();
+
+        assertThat(view()).as("the truncate rolled back").isEqualTo(Map.of("kept", 1L));
+        assertThat(projection.isRunning()).as("never started, so not started by the rebuild").isFalse();
+    }
+
+    @Test
+    void an_engine_sourced_projection_rebuilds_only_through_a_data_source() throws Exception {
+        appendEvents(-1);
+        var projection = ViewProjection.builder("order-totals", ORDERS)
+                                       .onPage(applyingAll())
+                                       .ownership(Ownership.perInstance("node-1"))
+                                       .errors(errors())
+                                       .build(eventLog, serializer);
+        projection.start();
+        try {
+            awaitCaughtUp(projection.key());
+            assertThatThrownBy(() -> projection.rebuild(TRUNCATE)).isInstanceOf(IllegalStateException.class).hasMessageContaining("rebuild(DataSource, truncate)");
+
+            execute("INSERT INTO view_totals VALUES ('stale', 1)");
+            assertThat(projection.rebuild(pool, TRUNCATE)).isTrue();
+
+            assertThat(projection.isRunning()).isTrue();
+            awaitCaughtUp(projection.key());
+            assertThat(view()).isEqualTo(fold(Set.of()));
+        } finally {
+            projection.stop();
+        }
+    }
+
     @Test
     void a_rebuild_whose_truncate_fails_rolls_back_and_restarts_the_projection() throws Exception {
         appendEvents(-1);
