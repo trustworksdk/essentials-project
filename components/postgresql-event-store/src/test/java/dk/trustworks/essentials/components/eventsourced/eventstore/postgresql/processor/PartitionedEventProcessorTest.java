@@ -104,7 +104,7 @@ class PartitionedEventProcessorTest {
     }
 
     @Test
-    void an_event_processor_overriding_to_competing_consumers_where_key_order_is_not_kept_refuses_to_start() {
+    void an_event_processor_overriding_to_competing_consumers_where_key_order_is_not_kept_starts_and_warns() {
         var inboxes   = inboxes(false);
         var processor = new ThingsEventProcessor(inboxes) {
             @Override
@@ -113,9 +113,13 @@ class PartitionedEventProcessorTest {
             }
         };
 
-        assertThatThrownBy(processor::start).isInstanceOf(IllegalStateException.class)
-                                            .hasMessageContaining("could be handled out of order");
-        assertThat(processor.isStarted()).isFalse();
+        processor.start();
+
+        assertThat(processor.isStarted()).isTrue();
+        assertThat(consumptionModeOf(inboxes)).isEqualTo(MessageConsumptionMode.GlobalCompetingConsumers);
+        assertThat(logged(Level.WARN)).singleElement()
+                                      .satisfies(message -> assertThat(message).contains("can be handled out of order")
+                                                                               .contains("essentials.shard-owned-queue.durable-queues-enabled"));
     }
 
     @Test

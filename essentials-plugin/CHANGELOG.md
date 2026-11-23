@@ -3,6 +3,12 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.1-14 — targets Essentials 0.60.1
+- **Docs: an `EventProcessor` overridden to `GlobalCompetingConsumers` is warned about, not refused.** The bundled
+  `LLM-postgresql-event-store.md` said such a processor on a queue without cross-instance key order (`PostgresqlDurableQueues`,
+  MongoDB) refuses to start since 0.61. It now starts and logs a WARN at start, so existing applications keep running;
+  `PartitionedEventProcessor` still refuses on such a queue.
+
 ## 0.60.1-13 — targets Essentials 0.60.1
 - **Docs: interceptors that replace what they pass on.** The bundled `LLM-shared.md` states one contract for every
   interceptor family (set the replacement on the operation before `proceed()`, the default behaviour reads the
