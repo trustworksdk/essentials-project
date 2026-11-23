@@ -3,10 +3,11 @@
   "project": "kotlin-from-flag",
   "from": "0.50.0",
   "fromSource": "--from",
-  "to": "0.60.1",
+  "to": "0.61.0",
   "notes": [
     "references/stack/migrations/0.50-to-0.60.json",
-    "references/stack/migrations/0.60-to-0.60.json"
+    "references/stack/migrations/0.60-to-0.60.json",
+    "references/stack/migrations/0.60-to-0.61.json"
   ],
   "upToDate": false,
   "pins": [
@@ -14,7 +15,7 @@
       "pin": "essentials.version",
       "current": "0.50.0",
       "at": "pom.xml:10",
-      "target": "0.60.1",
+      "target": "0.61.0",
       "status": "move",
       "fix": {
         "mechanical": false,
@@ -23,10 +24,10 @@
       "tolerated": [],
       "reason": "the release itself",
       "cite": {
-        "path": "docs/releases/RELEASE-NOTES-0.60.1.md",
+        "path": "docs/releases/RELEASE-NOTES-0.61.0.md",
         "line": 1,
-        "token": "Essentials 0.60.1",
-        "url": "https://github.com/trustworksdk/essentials-project/blob/0.60.1/docs/RELEASE-NOTES-0.60.1.md#L1"
+        "token": "Essentials 0.61.0",
+        "url": "https://github.com/trustworksdk/essentials-project/blob/0.61.0/docs/releases/RELEASE-NOTES-0.61.0.md#L1"
       }
     },
     {
@@ -463,6 +464,50 @@
       ],
       "items": [
         "ESS-135"
+      ]
+    },
+    {
+      "id": "pins",
+      "kind": "pins",
+      "title": "Move essentials.version to 0.61.0",
+      "release": null,
+      "phase": null,
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/releases/RELEASE-NOTES-0.61.0.md",
+          "line": 1,
+          "token": "Essentials 0.61.0",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.61.0/docs/releases/RELEASE-NOTES-0.61.0.md#L1"
+        }
+      ]
+    },
+    {
+      "id": "deploy",
+      "kind": "checklist",
+      "title": "At the deploy: stop every 0.60.x shard-owned instance, apply the schema change under validate",
+      "release": null,
+      "phase": "deploy",
+      "ess": [],
+      "stackLint": [],
+      "cites": [
+        {
+          "path": "docs/releases/RELEASE-NOTES-0.61.0.md",
+          "line": 72,
+          "token": "stop every 0.60.x instance first",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.61.0/docs/releases/RELEASE-NOTES-0.61.0.md#L72"
+        },
+        {
+          "path": "docs/releases/RELEASE-NOTES-0.61.0.md",
+          "line": 101,
+          "token": "apply it under `validate`",
+          "url": "https://github.com/trustworksdk/essentials-project/blob/0.61.0/docs/releases/RELEASE-NOTES-0.61.0.md#L101"
+        }
+      ],
+      "items": [
+        "ESS-140",
+        "ESS-141"
       ]
     }
   ],

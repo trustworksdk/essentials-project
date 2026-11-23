@@ -1,9 +1,9 @@
 {
   "tool": "migration-plan",
   "project": "already-there",
-  "from": "0.60.1",
+  "from": "0.61.0",
   "fromSource": "pom.xml:8",
-  "to": "0.60.1",
+  "to": "0.61.0",
   "notes": [],
   "upToDate": true,
   "pins": [],
