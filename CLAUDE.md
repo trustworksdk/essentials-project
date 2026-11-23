@@ -41,6 +41,7 @@ mvn verify -Dfailsafe.forkCount=1                     # serialize ITs on a const
 mvn verify -Dfailsafe.forkCount=0.5C                  # more forks on a big machine — measure, don't assume
 mvn verify -Dbenchmark.run=true                       # also run the opt-in latency/throughput suites (off by default)
 mvn verify -Dloadtest.skip=true                       # skip the bulk-load suites (on by default) for a faster loop
+mvn verify -pl components/foundation,components/postgresql-event-store -Dessentials.postgres.base-image=postgres:18-bookworm -Dessentials.postgres.image=essentials-postgres:18-local  # pg_cron + CDC ITs on another PostgreSQL (repo image, docker/postgresql); default base 17.5
 scripts/test-timings.sh                               # rank test classes by elapsed time from the last run
 scripts/test-timings.sh --csv > before.csv            # capture a baseline to diff against
 ```

@@ -189,6 +189,7 @@ Enabling also requires, on the database side:
 - `wal_level = logical` (server restart; on RDS set `rds.logical_replication` and reboot)
 - `max_replication_slots` and `max_wal_senders` with headroom for one slot per pipeline
 - a role with `REPLICATION` — the tailer opens its own replication connection
+- for `wal2json`, on a server that has `output_plugin_libraries` (PostgreSQL 17.12, 18): `wal2json` added to it, or the slot is refused (`library "wal2json" may not be used as an output plugin`). SQL form quotes each name: `ALTER SYSTEM SET output_plugin_libraries = 'pgoutput', 'test_decoding', 'wal2json'`, then `SELECT pg_reload_conf()`
 - for `pgoutput`, a publication covering the event-stream tables; let the framework own it with `cdc.pg-output.publication.auto-manage=true` (`mode: FOR_TABLE_LIST` needs table ownership, `FOR_ALL_TABLES` needs superuser)
 
 If a prerequisite is missing, `cdc.mode=auto` (the default once enabled) keeps the application up and subscribers on polling — so a broken CDC setup costs latency, not correctness, and is easy to miss. Verify via `/actuator/health/cdc` or the admin API's `event-store/cdc/status`. Full checklist: [docs/design/cdc.md §1.1](https://github.com/trustworksdk/essentials-project/blob/0.61.0/docs/design/cdc.md).

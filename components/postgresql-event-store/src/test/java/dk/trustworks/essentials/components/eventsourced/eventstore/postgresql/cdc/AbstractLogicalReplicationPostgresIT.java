@@ -77,24 +77,27 @@ public class AbstractLogicalReplicationPostgresIT {
     public static final AggregateType ORDERS = AggregateType.of("Orders");
 
     /**
-     * Built from {@code docker/postgresql-wal2json/Dockerfile}, by this module's {@code docker-maven-plugin} execution
-     * before failsafe forks a JVM; the name comes from the POM property {@code essentials.wal2json.test-image}.
+     * The repository's PostgreSQL test image, built from {@code docker/postgresql/Dockerfile} (pg_cron and wal2json) by
+     * this module's {@code docker-maven-plugin} execution before failsafe forks a JVM; the name comes from the POM property
+     * {@code essentials.wal2json.test-image}, which is {@code essentials.postgres.image}.
      * <p>
      * Never build it per JVM under Maven: two failsafe forks building the same tag at once left one unable to find it,
      * and Testcontainers then tried to pull the local-only name from Docker Hub. Only a run outside Maven (an IDE) that
      * finds no such image builds it here, once. The stable tag and {@code deleteOnExit=false} keep that from leaving a
-     * dangling ~640 MB image behind on every run, so <b>bump the tag in the POM whenever the Dockerfile changes</b>.
+     * dangling ~640 MB image behind on every run, so <b>bump the tag in the root POM whenever the Dockerfile changes</b>.
      */
     protected static final Future<String> WAL2JSON_IMAGE = wal2jsonImage();
 
     private static Future<String> wal2jsonImage() {
-        var name = System.getProperty("essentials.wal2json.test-image", "essentials-test/postgres-wal2json:1");
+        var name = System.getProperty("essentials.wal2json.test-image", "essentials-postgres:17.5-2");
         try {
             DockerClientFactory.instance().client().inspectImageCmd(name).exec();
             return CompletableFuture.completedFuture(name);
         } catch (NotFoundException e) {
+            // An IDE run from the module directory: the Dockerfile and its initdb script are two levels up
             return new ImageFromDockerfile(name, false)
-                    .withFileFromClasspath("Dockerfile", "docker/postgresql-wal2json/Dockerfile");
+                    .withFileFromPath(".", java.nio.file.Path.of("../../docker/postgresql"))
+                    .withBuildArg("POSTGRES_IMAGE", "postgres:17.5-bookworm");
         }
     }
 
@@ -165,6 +168,7 @@ public class AbstractLogicalReplicationPostgresIT {
         replicationDataSource = replicationDataSource(host, port, db, user, pass);
         waitForPrimaryConnectionsReady();
 
+        allowWal2JsonAsOutputPlugin();
         // Fail-fast sanity checks (match tailer startup semantics)
         unitOfWorkFactory.usingUnitOfWork(uow -> {
             boolean logicalOk = PostgresqlUtil.isLogicalDecodingEnabled(uow.handle());
@@ -173,6 +177,50 @@ public class AbstractLogicalReplicationPostgresIT {
             boolean usable = PostgresqlUtil.isOutputPluginUsable(uow.handle(), "wal2json");
             if (!usable) throw new IllegalStateException("wal2json output plugin not usable");
         });
+    }
+
+    /**
+     * PostgreSQL 17.12 and 18 (later minors of earlier majors may have it too) refuse an output plugin that is not in
+     * {@code output_plugin_libraries} (default {@code pgoutput, test_decoding}). Older servers do not know the setting,
+     * so it is added only where it exists; this lets the suite run against a newer server
+     * ({@code -Dessentials.postgres.base-image=postgres:18-bookworm}). {@code ALTER SYSTEM} cannot run inside a
+     * transaction block, hence its own autocommit connection.
+     */
+    private void allowWal2JsonAsOutputPlugin() throws SQLException {
+        try (var connection = java.sql.DriverManager.getConnection(jdbcUrl, user, pass); var statement = connection.createStatement()) {
+            String allowed;
+            try (var resultSet = statement.executeQuery("SELECT setting FROM pg_settings WHERE name = 'output_plugin_libraries'")) {
+                if (!resultSet.next() || resultSet.getString(1).contains("wal2json")) {
+                    return;
+                }
+                allowed = resultSet.getString(1);
+            }
+            // A list setting: one quoted string 'a, b' would be ONE element named "a, b", so each name is quoted alone
+            var names = new java.util.ArrayList<>(java.util.Arrays.stream(allowed.split(",")).map(String::trim).filter(name -> !name.isEmpty()).toList());
+            names.add("wal2json");
+            statement.execute("ALTER SYSTEM SET output_plugin_libraries = " + String.join(", ", names.stream().map(name -> "'" + name + "'").toList()));
+            statement.execute("SELECT pg_reload_conf()");
+        }
+        // A backend applies a reload between statements, asynchronously: wait until a fresh session sees it
+        var deadline = System.currentTimeMillis() + 10_000;
+        while (true) {
+            try (var connection = java.sql.DriverManager.getConnection(jdbcUrl, user, pass); var statement = connection.createStatement();
+                 var resultSet = statement.executeQuery("SHOW output_plugin_libraries")) {
+                resultSet.next();
+                if (resultSet.getString(1).contains("wal2json")) {
+                    return;
+                }
+            }
+            if (System.currentTimeMillis() > deadline) {
+                throw new IllegalStateException("output_plugin_libraries did not pick up wal2json after pg_reload_conf()");
+            }
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+        }
     }
 
     private void waitForPrimaryConnectionsReady() throws SQLException {
