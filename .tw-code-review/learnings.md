@@ -164,3 +164,9 @@ _Added 2026-11-08; origin: teach_
 Don't flag PMD ConstructorCallsOverridableMethod in examples/** aggregates and projections (examples/**/views/**) - it is Essentials' registerEventHandler/apply-in-constructor pattern
 
 _Added 2026-11-08; origin: teach_
+
+## L-011 — Don't flag markdownlint MD022, MD024, MD031 or MD032 in LLM/**: the LLM referenc…
+
+Don't flag markdownlint MD022, MD024, MD031 or MD032 in LLM/**: the LLM reference docs are compact on purpose — headings and code fences without surrounding blank lines and a repeated '<X> Starter' heading per section are the files' convention throughout
+
+_Added 2026-11-20; origin: teach_

@@ -1,7 +1,7 @@
 {
   "schema": 2,
-  "projected_through": 60,
-  "asOf": "2026-11-08T06:57:04Z",
+  "projected_through": 91,
+  "asOf": "2026-11-21T09:09:44Z",
   "active_learnings": [
     {
       "id": "L-001",
@@ -316,6 +316,18 @@
         60
       ],
       "text": "Don't flag PMD ConstructorCallsOverridableMethod in examples/** aggregates and projections (examples/**/views/**) - it is Essentials' registerEventHandler/apply-in-constructor pattern"
+    },
+    {
+      "id": "L-011",
+      "predicate": {
+        "file": "LLM/**",
+        "message": "MD0(22|24|31|32)"
+      },
+      "action": "suppress",
+      "origin_event": [
+        85
+      ],
+      "text": "Don't flag markdownlint MD022, MD024, MD031 or MD032 in LLM/**: the LLM reference docs are compact on purpose — headings and code fences without surrounding blank lines and a repeated '<X> Starter' heading per section are the files' convention throughout"
     }
   ]
 }

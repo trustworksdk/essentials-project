@@ -100,6 +100,7 @@ reviews:
         - "**/README.md"
         - "docs/**/*.md"
         - "LLM-*.md"
+        - "LLM/**/*.md"
       public_symbol_globs:
         - "src/**/*.ts"
         - "src/**/*.tsx"
@@ -139,6 +140,12 @@ reviews:
 persistence:
   commit_reviews: false # reviews/ stays gitignored
   commit_learnings: true # learnings are the team's shared memory
+
+# The committed learnings log (.tw-code-review/learnings/events.jsonl). on-finish: /fix's finish, the end
+# of /review and /incremental, and /teach --rescind / --replace drop the events no learning needs
+# (learnings.md never changes, or nothing is written); manual: only /tw-code-review:teach --compact does.
+learnings:
+  compact: on-finish           # on-finish | manual
 
 # The sdd and refac bridges. `auto` reads them when present and degrades quietly when not;
 # `off` turns a bridge off entirely. Finer keys can only narrow the master `enabled` switch.

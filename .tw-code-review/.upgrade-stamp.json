@@ -76,10 +76,27 @@
       "notApplicable": [],
       "skipped": [],
       "to": "1.49.0"
+    },
+    {
+      "adopted": [
+        "1.61.0",
+        "1.60.0",
+        "1.56.0"
+      ],
+      "advisory": [],
+      "applied": [
+        "review-config@1.61.0",
+        "review-config@1.56.0"
+      ],
+      "at": "2026-11-23T07:49:24Z",
+      "from": "1.49.0",
+      "notApplicable": [],
+      "skipped": [],
+      "to": "1.69.0"
     }
   ],
   "plugin": "tw-code-review",
   "schema": 1,
-  "stampedAt": "2026-10-27T07:03:58Z",
-  "version": "1.49.0"
+  "stampedAt": "2026-11-23T07:49:24Z",
+  "version": "1.69.0"
 }
