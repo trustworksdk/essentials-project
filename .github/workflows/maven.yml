@@ -220,14 +220,6 @@ jobs:
           path: '**/target/failsafe-reports/'
           retention-days: 2
 
-      - name: Test Summary · Integration
-        if: always()
-        uses: test-summary/action@37b508cfee6d4d080eedd00b5bb240a6a784a6a5 # v2.6
-        with:
-          paths: '**/target/failsafe-reports/TEST-*.xml'
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-
   # Compile + unit tests on every supported JDK, the baseline 25 included (`verify` skips them). No Docker, so these
   # finish in a couple of minutes, which is also when a unit-test failure shows.
   unit:
