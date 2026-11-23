@@ -3,6 +3,15 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.61.0 — targets Essentials 0.61.0
+- **Targets Essentials 0.61.0.** The `essentials.version` pin moves to `0.61.0`; generated projects and
+  `/essentials:upgrade` use it, and the bundled LLM docs link to the `0.61.0` tag.
+- **`/essentials:upgrade` carries the 0.60 → 0.61 migration plan.** At the deploy: stop every 0.60.x instance on the
+  same shard-owned queues, since 0.61 writes a message format 0.60.x cannot read (`ESS-140`), and under
+  `essentials.schema.mode=validate` apply the `transient-gaps-index-dropped` change first (`ESS-141`). New trap
+  `ESS-142` explains the WARN an `EventProcessor` overridden to `GlobalCompetingConsumers` on a queue without
+  cross-instance key order now logs. The traps link to the new `docs/releases/MIGRATION-0.61.md`.
+
 ## 0.60.1-14 — targets Essentials 0.60.1
 - **Docs: an `EventProcessor` overridden to `GlobalCompetingConsumers` is warned about, not refused.** The bundled
   `LLM-postgresql-event-store.md` said such a processor on a queue without cross-instance key order (`PostgresqlDurableQueues`,
