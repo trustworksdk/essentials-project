@@ -250,14 +250,6 @@ jobs:
           path: '**/target/surefire-reports/'
           retention-days: 2
 
-      - name: Test Summary · Unit
-        if: always()
-        uses: test-summary/action@37b508cfee6d4d080eedd00b5bb240a6a784a6a5 # v2.6
-        with:
-          paths: '**/target/surefire-reports/TEST-*.xml'
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-
   # What the essentials plugin generates, built the way users get it (scripts/plugin-scaffold.sh): the /essentials:init
   # cells and the slice templates and fixtures on rendered host projects. In parallel with `verify`, whose wall clock
   # stays untouched. The generated projects depend on DEV-SNAPSHOT artifacts, which are not on Central, so this job
