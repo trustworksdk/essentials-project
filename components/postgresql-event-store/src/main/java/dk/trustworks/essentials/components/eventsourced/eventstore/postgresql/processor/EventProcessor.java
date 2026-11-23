@@ -559,9 +559,10 @@ public abstract class EventProcessor extends AbstractEventProcessor {
      * behind a {@code FencedLock} of the {@link Inbox}'s own. To run them on every instance, extend
      * {@link PartitionedEventProcessor} instead, which states that contract in its name.
      * <p>
-     * Returning {@link MessageConsumptionMode#GlobalCompetingConsumers} from an override is allowed only where
-     * {@link Inboxes#keepsKeyOrderAcrossInstances()}: elsewhere one aggregate's events could be handled out of order on two
-     * instances, so {@link #start()} refuses to start.
+     * Returning {@link MessageConsumptionMode#GlobalCompetingConsumers} from an override keeps one aggregate's events in
+     * order only where {@link Inboxes#keepsKeyOrderAcrossInstances()}: elsewhere they can be handled out of order on two
+     * instances, and {@link #start()} logs a WARN saying so (it still starts; with one instance, or handlers that do not
+     * need per-aggregate order, the combination is safe).
      *
      * @return the {@link MessageConsumptionMode} used by the consume event messages forwarded to the underlying {@link Inbox}
      */
@@ -589,14 +590,26 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     }
 
     /**
-     * Competing consumers on queues that keep a key in order per node only would handle one aggregate's events out of order
-     * on two instances: refused, before anything is created. Otherwise said once, at INFO, so a log shows where handlers run.
+     * Competing consumers on queues that keep a key in order per node only can handle one aggregate's events out of order
+     * on two instances. A {@link PartitionedEventProcessor}, whose contract is competing consumers, is refused before anything
+     * is created. A plain {@link EventProcessor} whose subclass overrides {@link #getInboxMessageConsumptionMode()} keeps
+     * starting, as it did before 0.61 (a single instance, or handlers that do not need per-aggregate order, are safe), and is
+     * warned about once at start. Otherwise said once, at INFO, so a log shows where handlers run.
      */
     private void checkInboxConsumptionMode(String processorName, MessageConsumptionMode mode) {
         if (mode != MessageConsumptionMode.GlobalCompetingConsumers) {
             return;
         }
         if (!inboxes.keepsKeyOrderAcrossInstances()) {
+            if (!(this instanceof PartitionedEventProcessor)) {
+                log.warn("[{}] Inbox consumed with GlobalCompetingConsumers, but {} does not keep an ordered message key in " +
+                                 "order across instances: with more than one instance, one aggregate's events can be handled " +
+                                 "out of order. Use a queue implementation that keeps key order across instances (the shard-owned " +
+                                 "engine: essentials.shard-owned-queue.durable-queues-enabled=true, with PartitionedEventProcessor), " +
+                                 "or let one instance handle the Inbox (SingleGlobalConsumer, EventProcessor's default)",
+                         processorName, inboxes.getClass().getSimpleName());
+                return;
+            }
             throw new IllegalStateException(msg("[{}] Inbox consumed with GlobalCompetingConsumers, but {} does not keep an ordered message key in " +
                                                         "order across instances: with more than one instance, one aggregate's events could be handled " +
                                                         "out of order. Use a queue implementation that keeps key order across instances (the shard-owned " +

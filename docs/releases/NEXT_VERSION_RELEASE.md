@@ -28,7 +28,7 @@ and two lock waits removed.
   trace logging is off for.
 - Event processors: `PartitionedEventProcessor` runs its handlers on every instance on the shard-owned engine (§2.7),
   `PartitionedViewEventProcessor` does the same for views (§2.10), and both reset only while stopped on every instance;
-  an `EventProcessor` overridden to competing consumers on a per-node queue now refuses to start (§1); an opt-in
+  an `EventProcessor` overridden to competing consumers on a per-node queue is warned about at start (§2.8); an opt-in
   `FailoverRedeliveryPolicy` retries for long enough to outlast a failover (§2.18).
 - Command handlers: an `AnnotatedCommandHandler` failure is logged at DEBUG, not ERROR - the sender reports it (§1.1.4).
 - CDC: the inbox deletes a row once it is dispatched by default, instead of keeping it until the TTL job (§1.1.5).
@@ -41,8 +41,7 @@ and two lock waits removed.
 
 There are no API removals. One schema change removes a redundant index on the event store's gap table (§1). The
 shard-owned adapter writes a new message format, and **0.60.x and this release must not run side by side against the
-same shard-owned queues** (§1). An `EventProcessor` overridden to `GlobalCompetingConsumers` on a queue that keeps key order per
-node only now refuses to start (§1).
+same shard-owned queues** (§1).
 
 ---
 
@@ -113,19 +112,6 @@ the spread.
   writes (it carries the `DROP INDEX IF EXISTS` and its ledger row), then start. In the default `create` mode nothing
   needs doing.
 - A 0.60.x instance restarting during a rolling upgrade creates the index again; the next start of this release drops it.
-
-**An `EventProcessor` whose inbox runs `GlobalCompetingConsumers` on a queue that cannot keep key order across
-instances no longer starts** (`postgresql-event-store`).
-
-Overriding `getInboxMessageConsumptionMode()` to `GlobalCompetingConsumers` lets every instance consume the processor's
-inbox. On `PostgresqlDurableQueues` and MongoDB, which keep an ordered key in order per node only, two instances can
-then handle one aggregate's events out of order - the `Inboxes` javadoc has always required `SingleGlobalConsumer` for
-ordered messages there, but nothing enforced it. `start()` now throws `IllegalStateException` for that combination,
-naming the fix. Nothing changes on the shard-owned engine, or for a processor that does not override the method.
-
-- **What to do:** remove the override (one instance handles the inbox again), or run the queues on the shard-owned engine
-  (`essentials.shard-owned-queue.durable-queues-enabled=true`) and extend the new `PartitionedEventProcessor` (§2.7).
-- With a single instance the combination was harmless; it still refuses, because the code cannot know it will stay one.
 
 ### 1.1 ⚠️ Silent behaviour changes
 
@@ -428,6 +414,16 @@ ordered message, the same key in two threads). Nothing said so above DEBUG. Now:
   hand - normal recovery - or the WARN above says a handler ran too long.
 
 The shard-owned engine already warned for its equivalent (a handler outlasting `leaseTtl`).
+
+An `EventProcessor` whose inbox runs `GlobalCompetingConsumers` on a queue that cannot keep key order across instances
+(`PostgresqlDurableQueues`, MongoDB, which keep an ordered key in order per node only) logs a WARN at start. Overriding
+`getInboxMessageConsumptionMode()` that way lets every instance consume the processor's inbox, and two instances can then
+handle one aggregate's events out of order - the `Inboxes` javadoc has always required `SingleGlobalConsumer` for ordered
+messages there. The processor still starts as before: with a single instance, or handlers that do not need per-aggregate
+order, the combination is safe. To keep order on several instances, remove the override, or run the queues on the
+shard-owned engine (`essentials.shard-owned-queue.durable-queues-enabled=true`) and extend `PartitionedEventProcessor`
+(§2.7), which refuses to start on a queue without cross-instance key order. Nothing changes on the shard-owned engine,
+or for a processor that does not override the method.
 
 Related: an `EventProcessor` with more than 4 inbox consumer threads (`getNumberOfParallelInboxMessageConsumers()`) says
 so at start, at INFO - each thread holds a pooled connection while it handles a message, so the connection pool has to
@@ -811,6 +807,10 @@ Design:
 0.60.1 shipped plugin `0.60.1`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../../essentials-plugin/CHANGELOG.md).
 
+- `0.60.1-14` - the LLM docs say an `EventProcessor` overridden to `GlobalCompetingConsumers` on a queue without
+  cross-instance key order is warned about at start, not refused (§2.8).
+- `0.60.1-13` - the LLM docs state one contract by which every interceptor family replaces what it passes on, and
+  list each family's setters and copy helpers (§2.19); new trap `ESS-139`.
 - `0.60.1-12` - generated WebFlux projects run blocking Essentials work off the event loop (virtual threads, new
   S5 clause and `stack-lint` rule). Service-entity handlers signal a missing entity with a retryable
   `IllegalStateException`, so a durable-queue command that arrives early is no longer dead-lettered. The
