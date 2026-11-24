@@ -23,7 +23,7 @@ import java.util.*;
 /**
  * Fails start-up with one clear message when {@code essentials.event-log.enabled=true} and the context still defines a
  * classic (old-engine) processor bean: an {@code EventProcessor}, {@code ViewEventProcessor} or
- * {@code InTransactionEventProcessor} subclass (ESS-140). The message names every such bean, its class and the new-engine
+ * {@code InTransactionEventProcessor} subclass (ESS-145). The message names every such bean, its class and the new-engine
  * base class to port it to.
  * <p>
  * A {@link BeanFactoryPostProcessor}, because it runs once every bean definition is registered and before any singleton

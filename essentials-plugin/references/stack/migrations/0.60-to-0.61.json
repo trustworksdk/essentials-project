@@ -1,0 +1,74 @@
+{
+  "from": "0.60.1",
+  "to": "0.61.0",
+  "guide": {
+    "path": "docs/releases/MIGRATION-0.61.md",
+    "line": 1,
+    "token": "Migration guide — 0.61"
+  },
+  "requiredPins": [
+    {
+      "pin": "essentials.version",
+      "tolerated": [],
+      "reason": "the release itself",
+      "cite": {
+        "path": "docs/releases/RELEASE-NOTES-0.61.0.md",
+        "line": 1,
+        "token": "Essentials 0.61.0"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "id": "pins",
+      "kind": "pins",
+      "title": "Move essentials.version to 0.61.0",
+      "cites": [
+        {
+          "path": "docs/releases/RELEASE-NOTES-0.61.0.md",
+          "line": 1,
+          "token": "Essentials 0.61.0"
+        }
+      ]
+    },
+    {
+      "id": "deploy",
+      "kind": "checklist",
+      "phase": "deploy",
+      "title": "At the deploy: stop every 0.60.x shard-owned instance, apply the schema change under validate",
+      "cites": [
+        {
+          "path": "docs/releases/RELEASE-NOTES-0.61.0.md",
+          "line": 72,
+          "token": "stop every 0.60.x instance first"
+        },
+        {
+          "path": "docs/releases/RELEASE-NOTES-0.61.0.md",
+          "line": 101,
+          "token": "apply it under `validate`"
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "ESS-140",
+      "phase": "deploy",
+      "cite": {
+        "path": "docs/releases/MIGRATION-0.61.md",
+        "line": 10,
+        "token": "## Shard-owned adapter: stop every 0.60.x instance first"
+      }
+    },
+    {
+      "id": "ESS-141",
+      "phase": "deploy",
+      "cite": {
+        "path": "docs/releases/MIGRATION-0.61.md",
+        "line": 24,
+        "token": "## Schema validate mode: apply the gap-table index drop"
+      }
+    }
+  ],
+  "fixedIn": []
+}

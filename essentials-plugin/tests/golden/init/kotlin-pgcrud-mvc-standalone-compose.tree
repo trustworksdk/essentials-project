@@ -25,7 +25,7 @@ frontend/.env.local
 
 ## Trustworks Essentials framework knowledge
 
-<!-- essentials-init: essentials 0.60.1 -->
+<!-- essentials-init: essentials 0.61.0 -->
 
 For ANY question about Trustworks Essentials APIs, modules, or patterns, **always consult the `essentials-docs` skill** from the `essentials` plugin. It auto-loads on Essentials-related questions and on code signals (imports of `dk.trustworks.essentials.*`, type names like `StatefulAggregate`, `DurableQueues`, `EventStore`, `FencedLock`, `Inbox`, `Outbox`, `UnitOfWork`, `Decider`, `EventProcessor`).
 
@@ -1315,7 +1315,7 @@ export default defineConfig({
              project as well: postgresql-document-db is written in Kotlin (S2.1). -->
         <kotlin.version>2.4.21</kotlin.version>
         <!-- One property drives every Essentials artifact (S1). -->
-        <essentials.version>0.60.1</essentials.version>
+        <essentials.version>0.61.0</essentials.version>
         <springdoc.version>3.1.1</springdoc.version>
         <!-- Spring Boot's parent already manages Testcontainers, Mockito, AssertJ, Awaitility and the MongoDB
              driver. A BOM imported below would be inert for them (the parent's management wins), so their

@@ -92,7 +92,7 @@ For a full overview of the docs, the master index is `references/llm/LLM.md` —
 | `postgresql-event-store` (`EventStore`, subscriptions, `EventProcessor`) | `LLM-postgresql-event-store.md` |
 | `eventsourced-aggregates` (`StatefulAggregate`, `Aggregate`, `Decider`, repositories) | `LLM-eventsourced-aggregates.md` |
 | `spring-postgresql-event-store` (Spring tx integration) | `LLM-spring-postgresql-event-store.md` |
-| `postgresql-event-log` / `postgresql-event-log-processor` / `spring-boot-starter-postgresql-event-log` (new event store engine, preview from 0.61.0: `EventLogViewProcessor`, `EventLogReactor`, `EventLogInboxProcessor`) | `LLM-postgresql-event-log.md` |
+| `postgresql-event-log` / `postgresql-event-log-processor` / `spring-boot-starter-postgresql-event-log` (new event store engine, preview: `EventLogViewProcessor`, `EventLogReactor`, `EventLogInboxProcessor`) | `LLM-postgresql-event-log.md` |
 | `postgresql-distributed-fenced-lock` | `LLM-postgresql-distributed-fenced-lock.md` |
 | `postgresql-queue` | `LLM-postgresql-queue.md` |
 | `postgresql-queue-shard-owned` (experimental shard-owned queue engine, not published) | `LLM-postgresql-queue-shard-owned.md` |

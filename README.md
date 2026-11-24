@@ -803,13 +803,13 @@ public class ImmutableOrder extends ImmutableValueObject {
 
 ## Version Compatibility
 
-> **Upgrading from 0.40.x?** Read [docs/releases/RELEASE-NOTES-0.50.0.md](docs/releases/RELEASE-NOTES-0.50.0.md) first — it lists
-> what you must change (Java 21, Spring Boot 4, Jackson 3, the removed Vaadin UI) and the three behaviour
-> changes that are silent at compile time.
+> **Upgrading from 0.60.x?** Read [docs/releases/MIGRATION-0.61.md](docs/releases/MIGRATION-0.61.md) first — two
+> changes need an action from some applications, and seven defaults change silently.
 
 | Essentials Version                                                       | Java | Spring Boot | Jackson                | Kotlin                    | Notes                    |
 |--------------------------------------------------------------------------|------|-------------|------------------------|---------------------------|--------------------------|
-| [0.60.0+](https://github.com/trustworksdk/essentials-project/tree/main)  | 25+ | 4.1.x | 3 | 2.3+ | Under active development |
+| [0.61.0+](https://github.com/trustworksdk/essentials-project/tree/main)  | 25+ | 4.1.x | 3 | 2.3+ | Under active development |
+| [0.60.0+](https://github.com/trustworksdk/essentials-project/tree/0.60.1) | 25+ | 4.1.x | 3 | 2.3+ | Maintained               |
 | [0.50.0+](https://github.com/trustworksdk/essentials-project/tree/0.50.0) | 21+ | 4.0.x | 3 (default) / 2        | 2.2+                      | Maintained               |
 | [0.40.24+](https://github.com/trustworksdk/essentials-project/tree/0.40.28) | 17+ | 3.3.x | 2 | 2.1+ | No longer maintained     |
 
@@ -824,8 +824,8 @@ supported — 4.0 moved to Jackson 3 and Jakarta EE 11, so a 3.x application can
 **PostgreSQL 15+.** Essentials supports the PostgreSQL majors the PostgreSQL community still patches
 ([versioning policy](https://www.postgresql.org/support/versioning/)): from 0.60.1 that is 15 and later, since 14
 reaches end of life on 2026-11-12. The floor follows that schedule, so it moves to 16 after 15's end of life on
-2027-11-11. An older server may still work with 0.60.x, since a patch release removes nothing, but it is untested
-and unsupported. 0.61 removes the code paths kept for servers older than 15. CI runs PostgreSQL 18.
+2027-11-11. An older server may still work, since the code paths kept for older servers have not been removed, but
+it is untested and unsupported. CI runs PostgreSQL 18.
 
 **Jackson.** From 0.60 Jackson 3 (`tools.jackson.core`) is the only supported major, matching what Spring Boot 4 ships;
 Jackson 2 support (`types-jackson`/`immutable-jackson`) ended with 0.50. The persisted JSON format is unchanged — see

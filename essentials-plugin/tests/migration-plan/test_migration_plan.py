@@ -113,7 +113,7 @@ class Plan(unittest.TestCase):
                                  "4. [stack-lint", "5. [review-scan", "6. [compile-and-fix on 0.60.0",
                                  "7. [checklist review", "8. [checklist deploy", "9. [checklist after",
                                  "10. [pins", "11. [compile-and-fix on 0.60.1", "12. [checklist review",
-                                 "13. [checklist deploy"])
+                                 "13. [checklist deploy", "14. [pins", "15. [checklist deploy"])
         self.assertIn("(also ESS-S5 s5-transactional-mode)", out)
 
     def test_runs_without_site_packages(self):

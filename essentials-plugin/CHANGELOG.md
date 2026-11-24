@@ -3,7 +3,7 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
-## 0.60.1-25 — targets Essentials 0.60.1
+## 0.61.0-13 — targets Essentials 0.61.0
 
 - **Event log: releasing a parked aggregate** — the event-log reference says a held event that fails on a retry or
   discard becomes the new parked head, and that a retry hands over at most `pageSize` events per transaction.
@@ -15,23 +15,22 @@ targets, with a `-N` suffix for plugin-only releases.
   `TenantSerializer` bean). The admin reset also refuses a `ViewProjection` bean's subscription (use its
   `rebuild(truncate)`), and the reference says a reset undoes nothing a handler wrote. The `stop()` gotcha says a re-subscribe of any key, not
   only an exclusive one, is refused while the old delivery thread runs. Meters are removed when the last instance stops
-  (`onStarted`/`onStopped`). The event-store reference says CDC with `wal2json` on PostgreSQL 17.12 / 18
-  needs `wal2json` in `output_plugin_libraries`. The migration's epoch waits for prepared two-phase transactions too. No skill, rule or script changed.
+  (`onStarted`/`onStopped`). The migration's epoch waits for prepared two-phase transactions too. No skill, rule or script changed.
 
-## 0.60.1-24 — targets Essentials 0.60.1
+## 0.61.0-12 — targets Essentials 0.61.0
 
 - **Event log: parked retries and the lease** — a new gotcha: an exclusive in-transaction subscription's parked retry
   must finish within `lease-local-stop`, since it holds the progress row the lease renewal waits on; a periodic
   subscription's retry holds no lock while its handler runs. No skill, rule or script changed.
 
-## 0.60.1-23 — targets Essentials 0.60.1
+## 0.61.0-11 — targets Essentials 0.61.0
 
 - **Event log: admin reset and stop() corrected** — the admin reset refusal is documented per processor kind (an
   inbox processor has no `rebuild()`), and only for processors that run in the application serving the admin call;
   after a `stop()` that timed out, a re-subscribe of the same exclusive key and `deleteRetiredInstance` are refused
   with `IllegalStateException` (the reference said they wait). No skill, rule or script changed.
 
-## 0.60.1-22 — targets Essentials 0.60.1
+## 0.61.0-10 — targets Essentials 0.61.0
 
 - **Event log: review fixes** — the event-log reference counts four processor base classes everywhere (the partitioned
   view processor was missing from the base-class sentences, the consistency table and the module index), names the
@@ -43,14 +42,14 @@ targets, with a `-N` suffix for plugin-only releases.
   in-memory projector and auto-flush beans and the partitioned processor in the start-up refusal; the admin-api page's
   Endpoints table gains the shard-owned queue and aggregate lifecycle and archive tags. No skill, rule or script changed.
 
-## 0.60.1-21 — targets Essentials 0.60.1
+## 0.61.0-9 — targets Essentials 0.61.0
 
 - **Event log: processor event type filter** — the event-log reference documents that every processor base class
   subscribes only to the event types its `@MessageHandler` methods handle when all handled payload types are final, and
   the `eventTypeFilter()` hook that widens it. The start-up refusal now names `pg_stat_activity`, the view the engine
   reads running writers from. No skill, rule or script changed.
 
-## 0.60.1-20 — targets Essentials 0.60.1
+## 0.61.0-8 — targets Essentials 0.61.0
 
 - **Event log: observability** — the event-log reference gains an Observability section: the
   `MicrometerEventLogObserver` meters (`essentials.eventlog.subscription.lag`, `.failed`, `.parked`, `.lease_lost`,
@@ -59,21 +58,21 @@ targets, with a `-N` suffix for plugin-only releases.
   old starter's properties, the per-subscriber TRACE logger `dk.trustworks.essentials.components.eventlog.Subscription.<subscriber>`,
   and causation bound by every processor base class. No skill, rule or script changed.
 
-## 0.60.1-19 — targets Essentials 0.60.1
+## 0.61.0-7 — targets Essentials 0.61.0
 
 - **Foundation: `PostgresqlNotificationDrain`** — the foundation reference documents the new helper for a hand-written
   LISTEN loop on a dedicated connection: `open(Connection)`, `next(timeoutMillis)` and `close()`, which keeps pgjdbc from
   holding notifications back while they arrive less than a millisecond apart, with a query-poll fallback. No skill, rule
   or script changed.
 
-## 0.60.1-18 — targets Essentials 0.60.1
+## 0.61.0-6 — targets Essentials 0.61.0
 
 - **Event log: atomic partitioned-view rebuild** — the event-log reference now states that
   `EventLogPartitionedViewProcessor.rebuild()` clears the view, purges its queue and resets the reading side in one
   transaction on the shard-owned queue too, since the shard-owned `purgeQueue` joins the caller's unit of work. No skill,
   rule or script changed.
 
-## 0.60.1-17 — targets Essentials 0.60.1
+## 0.61.0-5 — targets Essentials 0.61.0
 
 - **Event log: `EventLogPartitionedViewProcessor`** — the event-log reference documents the new base class that ports a
   classic `PartitionedViewEventProcessor`: each page of events is queued on `<name>:queue` in the page transaction, so
@@ -82,7 +81,7 @@ targets, with a `-N` suffix for plugin-only releases.
   porting table lists it, and the starter's unported-processor start-up error now names it for a classic partitioned
   view. No skill, rule or script changed.
 
-## 0.60.1-16 — targets Essentials 0.60.1
+## 0.61.0-4 — targets Essentials 0.61.0
 
 - **Event log: three traps retired** — the traps index retires the event-log traps for a hand-written inbox forwarder,
   the `onRebuild` hook and `EventLogReactor`'s at-least-once delivery: each describes behaviour that is the same as, or
@@ -90,7 +89,7 @@ targets, with a `-N` suffix for plugin-only releases.
   facts plainly — `EventLogInboxProcessor` forwards exactly once, `onRebuild` runs once per rebuild with no aggregate
   type, and a reactor is at least once like the classic `EventProcessor`. No skill, rule or script changed.
 
-## 0.60.1-15 — targets Essentials 0.60.1
+## 0.61.0-3 — targets Essentials 0.61.0
 
 - **Event log: a handler's connection error is parked** — the event-log reference now says that an exception a
   handler throws from a connection of its own (SQLState `08*`, `SQLTransientConnectionException`) is retried and then
@@ -99,22 +98,43 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Event log: a clear start-up error for unported processors** — with `essentials.event-log.enabled=true` the starter
   now fails start-up with a message naming each classic `EventProcessor`, `ViewEventProcessor` or
   `InTransactionEventProcessor` bean and the event-log base class to port it to, instead of a bare missing-bean error.
-  `ESS-140` and the event-log and starter references say so. No skill, rule or script changed.
+  `ESS-145` and the event-log and starter references say so. No skill, rule or script changed.
 
-## 0.60.1-14 — targets Essentials 0.60.1
+## 0.61.0-2 — targets Essentials 0.61.0
 
 - **New event store engine, preview** — a new reference, `LLM-postgresql-event-log.md`, covers the event log engine
-  shipping as a preview in Essentials 0.61.0: when to choose it over the classic event store, enabling it with
+  shipping as a preview in the next Essentials release: when to choose it over the classic event store, enabling it with
   `spring-boot-starter-postgresql-event-log`, the processor base classes `EventLogViewProcessor` (with `rebuild()` and
   `onRebuild`), `EventLogReactor` and `EventLogInboxProcessor`, `CONTIGUOUS` and `FRESH` consistency and page
   transactions, porting from the `EventProcessor` family, the settings (including `hole-probe-wait-max`), the admin
   operations, the migration module and the known limits. The spring-boot-starter-modules and admin-api references gain
-  the starter and the seven `event-log-subscriptions` operations, and the traps index gains `ESS-140` and four
+  the starter and the seven `event-log-subscriptions` operations, and the traps index gains `ESS-145` and four
   event-log traps since retired.
   No skill, rule or script changed.
 - **Admin API operation count** — the admin-api, components and spring-boot-starter-modules references said the
   admin contract has 40 operations; it has 67 (the shard-owned queue and event-log subscription operations were not
   counted). No skill, rule or script changed.
+
+## 0.61.0-1 — targets Essentials 0.61.0
+
+- **Event-store reference: CDC with `wal2json` on PostgreSQL 17.12 / 18** — such a server needs `wal2json` in
+  `output_plugin_libraries`; the reference says how to add it. No skill, rule or script changed.
+
+## 0.61.0 — targets Essentials 0.61.0
+- **Targets Essentials 0.61.0.** The `essentials.version` pin moves to `0.61.0`; generated projects and
+  `/essentials:upgrade` use it, and the bundled LLM docs link to the `0.61.0` tag.
+- **`/essentials:upgrade` carries the 0.60 → 0.61 migration plan.** At the deploy: stop every 0.60.x instance on the
+  same shard-owned queues, since 0.61 writes a message format 0.60.x cannot read (`ESS-140`), and under
+  `essentials.schema.mode=validate` apply the `transient-gaps-index-dropped` change first (`ESS-141`). New trap
+  `ESS-142` explains the WARN an `EventProcessor` overridden to `GlobalCompetingConsumers` on a queue without
+  cross-instance key order now logs. The traps link to the new `docs/releases/MIGRATION-0.61.md`.
+
+## 0.60.1-14 — targets Essentials 0.60.1
+- **Docs: an `EventProcessor` overridden to `GlobalCompetingConsumers` is warned about, not refused.** The bundled
+  `LLM-postgresql-event-store.md` said such a processor on a queue without cross-instance key order (`PostgresqlDurableQueues`,
+  MongoDB) refuses to start since 0.61. It now starts and logs a WARN at start, so existing applications keep running;
+  `PartitionedEventProcessor` still refuses on such a queue.
+
 ## 0.60.1-13 — targets Essentials 0.60.1
 - **Docs: interceptors that replace what they pass on.** The bundled `LLM-shared.md` states one contract for every
   interceptor family (set the replacement on the operation before `proceed()`, the default behaviour reads the

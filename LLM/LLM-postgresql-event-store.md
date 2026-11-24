@@ -605,7 +605,9 @@ public class OrderLedgerProcessor extends PartitionedEventProcessor {
   one calling something that takes one caller only - keep those on `EventProcessor`. Handlers of different aggregates
   writing one shared stream conflict on it more often (redelivered). Handlers must be idempotent.
 - An `EventProcessor` that overrides `getInboxMessageConsumptionMode()` to `GlobalCompetingConsumers` on a queue without
-  cross-instance key order refuses to start (since 0.61): it could handle one aggregate's events out of order.
+  cross-instance key order (`PostgresqlDurableQueues`, MongoDB) still starts, but logs a WARN at start (since 0.61): with
+  more than one instance it can handle one aggregate's events out of order. Remove the override, or move to the
+  shard-owned engine and `PartitionedEventProcessor`, which refuses to start on such a queue.
 
 #### Views on several instances: `PartitionedViewEventProcessor`
 
