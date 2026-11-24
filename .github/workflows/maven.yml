@@ -220,6 +220,12 @@ jobs:
           path: '**/target/failsafe-reports/'
           retention-days: 2
 
+      # Own script, not a marketplace action: unofficial actions are not allowed.
+      - name: Test Summary · Integration
+        if: always()
+        continue-on-error: true
+        run: python3 .github/scripts/junit-summary.py --type failsafe --title "Integration Tests (JDK ${{ matrix.java-version }})"
+
   # Compile + unit tests on every supported JDK, the baseline 25 included (`verify` skips them). No Docker, so these
   # finish in a couple of minutes, which is also when a unit-test failure shows.
   unit:
@@ -249,6 +255,12 @@ jobs:
           name: junit-results-unit-jdk${{ matrix.java-version }}
           path: '**/target/surefire-reports/'
           retention-days: 2
+
+      # Own script, not a marketplace action: unofficial actions are not allowed.
+      - name: Test Summary · Unit
+        if: always()
+        continue-on-error: true
+        run: python3 .github/scripts/junit-summary.py --type surefire --title "Unit Tests (JDK ${{ matrix.java-version }})"
 
   # What the essentials plugin generates, built the way users get it (scripts/plugin-scaffold.sh): the /essentials:init
   # cells and the slice templates and fixtures on rendered host projects. In parallel with `verify`, whose wall clock
