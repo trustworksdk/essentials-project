@@ -1,6 +1,6 @@
 # Event Store Subscriptions — Redesign Proposal
 
-> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.61.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
+> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.62.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
 
 **Status:** Proposal. Nothing here is built or measured. Written 2026-10-23; revised 2026-11-10 to fold in
 what we learned from Marten's event store (a reference description of it, `marten-event-store-design.md`, was removed on 2026-11-15; it is in git history).

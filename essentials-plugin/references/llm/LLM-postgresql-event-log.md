@@ -1,6 +1,6 @@
 # PostgreSQL Event Log (new event store engine, preview) - LLM Reference
 
-> Quick reference for LLMs. The new event store engine and its typed processors. **Preview in 0.61.0**: the engine,
+> Quick reference for LLMs. The new event store engine and its typed processors. **Preview in 0.62.0**: the engine,
 > the processor module, the starter and their properties may change in a minor release. The classic event store
 > ([LLM-postgresql-event-store.md](LLM-postgresql-event-store.md)) stays the default and fully supported.
 
@@ -248,7 +248,7 @@ classic. Hooks: `numberOfParallelQueuedMessageConsumers()`, `durableQueueRedeliv
 `rebuild()` stops this instance's consumers, refuses while another instance consumes the queue (stop it everywhere else
 first, as for the classic reset), then in one page-source transaction runs `onRebuild`, purges the queue (dead letters
 included) and resets the reading side, and restarts. The cleared view, the empty queue and the reset progress commit
-together or not at all: the purge joins the transaction's unit of work (the shard-owned `purgeQueue` does since 0.61.0).
+together or not at all: the purge joins the transaction's unit of work (the shard-owned `purgeQueue` does since 0.62.0).
 
 ### Lambda builders
 

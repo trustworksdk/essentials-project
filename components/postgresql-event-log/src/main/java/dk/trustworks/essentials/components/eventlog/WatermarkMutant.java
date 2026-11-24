@@ -101,7 +101,7 @@ enum WatermarkMutant {
     /** A failed page is retried whole, never shrunk; when its retries are used up its first event is parked */
     NO_SHRINK,
     /**
-     * The pre-0.61.0 classification: an I/O-classified exception the handler threw (SQLState {@code 08*},
+     * The pre-0.62.0 classification: an I/O-classified exception the handler threw (SQLState {@code 08*},
      * {@link java.sql.SQLTransientConnectionException}, also wrapped) counts as the engine's I/O failure, retried forever
      * and never parked, though the page connection is fine
      */

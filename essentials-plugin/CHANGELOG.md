@@ -3,6 +3,12 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.61.0-14 — targets Essentials 0.61.0
+
+- **Event log: preview in 0.62.0** — 0.61.0 shipped without the new event store engine, so the event-log reference,
+  the module index, the traps index and the docs skill now say it is a preview from 0.62.0 instead of 0.61.0. No
+  skill, rule or script changed.
+
 ## 0.61.0-13 — targets Essentials 0.61.0
 
 - **Event log: releasing a parked aggregate** — the event-log reference says a held event that fails on a retry or

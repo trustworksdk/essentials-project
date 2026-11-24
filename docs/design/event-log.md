@@ -6,7 +6,7 @@
 `spring-boot-starter-admin-ui`.
 **Packages:** `dk.trustworks.essentials.components.eventlog`, `…eventlog.processor` (admin SPI in `…processor.api`),
 `…eventlog.migration`, `dk.trustworks.essentials.components.boot.autoconfigure.eventlog`.
-**Status:** **Preview in 0.61.0.** Built in phases 2-10 of the event store redesign; off by default
+**Status:** **Preview in 0.62.0.** Built in phases 2-10 of the event store redesign; off by default
 (`essentials.event-log.enabled`). The API, the properties and the table layout may change in a minor release. The
 classic engine (`postgresql-event-store`) stays the default and fully supported, and was not changed by this work.
 
@@ -250,7 +250,7 @@ connection) retries the same page indefinitely with a
 doubling backoff (`retryBackoffInitial` to `retryBackoffMax`), never shrinking or parking. A **handler failure**
 shrinks the page (`StepDown`: halve, keep the size inside the suspect range), retries the failing event alone
 `retryAttempts` times, then **parks** it in `el_parked_events`; `ParkEventException` parks at once (I14). What the handler throws on a live page connection is a handler failure even
-when it is I/O-classified (SQLState `08*` or `SQLTransientConnectionException` in the cause chain): before 0.61.0
+when it is I/O-classified (SQLState `08*` or `SQLTransientConnectionException` in the cause chain): before 0.62.0
 shipped such a failure was retried forever and stalled the subscription (mutant `HANDLER_IO_RETRIED_FOREVER`). An
 `Error` from the handler is a handler failure too (`AssertionError`, `StackOverflowError`), except the ones that say
 nothing about the event: `OutOfMemoryError`, `InternalError`, `UnknownError` and `LinkageError` (a broken deployment),
@@ -263,7 +263,7 @@ transaction; the next unhandled event then becomes the head with a `RETRY` reque
 never runs in one transaction and a crash between serves loses nothing (`ParkedEvents.rehead`). A held event that fails
 (or throws `ParkEventException`) becomes the head with one attempt counted, after the events before it are applied
 (in-transaction: in a second transaction, the first having rolled back), and the events after it wait behind it. Before
-0.61.0 shipped, one failing held event failed every retry and every discard of its head, and the aggregate could never
+0.62.0 shipped, one failing held event failed every retry and every discard of its head, and the aggregate could never
 be released.
 
 ### 5.6 Leases and ownership

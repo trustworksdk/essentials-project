@@ -31,7 +31,7 @@
     <artifactId>postgresql-event-log-processor</artifactId>
     <name>postgresql-event-log-processor</name>
     <description>
-        The application layer of the new event store engine (preview in 0.61.0): typed,
+        The application layer of the new event store engine (preview in 0.62.0): typed,
         deserialized events, the ViewProjection and EventReactor processors, the JDBI unit-of-work and Spring page
         transaction sources, the Spring commit path and the EventLogSubscriptionsApi admin SPI. Design: docs/design/event-log.md.
     </description>

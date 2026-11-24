@@ -1,6 +1,6 @@
 # Event store redesign, phase 10: starter, admin UI, documentation and the trading demo
 
-> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.61.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
+> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.62.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
 
 **Status:** decided 2026-11-18 (§11). Built on `feature/event-store-engine-phase9` (from `a0560df3c`).
 When phase 10 is done, this file and its siblings (phases 2-9) move to `docs/archive/` or are folded into the

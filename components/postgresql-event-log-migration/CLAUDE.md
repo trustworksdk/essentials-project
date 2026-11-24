@@ -1,7 +1,7 @@
 # postgresql-event-log-migration
 
 The one-way move of aggregate types from `PostgresqlEventStore`'s tables to the event log's, in the same database.
-**Preview in 0.61.0**: published, and its API may change in a minor release.
+**Preview in 0.62.0**: published, and its API may change in a minor release.
 
 - Reference: `docs/design/event-log.md` §10. Consumer doc: `LLM/LLM-postgresql-event-log.md` ("Migrating existing data").
   Design, operator procedure and gate results: `docs/archive/event-store-engine-phase9.md` (archived; "§n" in source

@@ -1,7 +1,7 @@
 # postgresql-event-log
 
 The new PostgreSQL event store engine ("event log"), built beside `components/postgresql-event-store`, which it must
-not change. **Preview in 0.61.0**: published, off by default in the starter, and its API may change in a minor release.
+not change. **Preview in 0.62.0**: published, off by default in the starter, and its API may change in a minor release.
 
 - Reference for the engine as built: `docs/design/event-log.md` (storage, append, tail reader, probe clock, subscriptions,
   leases, wake-ups, invariants, the phase-10 gate). Consumer doc: `LLM/LLM-postgresql-event-log.md`. The bullets below are

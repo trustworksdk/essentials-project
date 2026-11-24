@@ -517,6 +517,8 @@ database work per event.
 0.61.0 shipped plugin `0.61.0`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md).
 
+- **0.61.0-14** — the event-log reference, module index and traps index say the new engine is a preview from 0.62.0,
+  not 0.61.0, which shipped without it.
 - **0.61.0-12** — the event-log reference warns that an exclusive in-transaction subscription's parked retry must finish
   within `lease-local-stop`.
 - **0.61.0-11** — the event-log reference documents the admin reset refusal per processor kind and that a timed-out

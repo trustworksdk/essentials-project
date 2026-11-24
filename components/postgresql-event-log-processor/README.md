@@ -10,7 +10,7 @@ The application layer of the new event store engine (`postgresql-event-log`):
 - the page transaction sources `UnitOfWorkPageTransactions` and `SpringPageTransactions`;
 - `EventLogSubscriptionsApi`, the admin SPI behind the admin API's `event-log-subscriptions` operations.
 
-> **Preview in 0.61.0.** The API may change in a minor release. The classic processors do not run on the new engine;
+> **Preview in 0.62.0.** The API may change in a minor release. The classic processors do not run on the new engine;
 > port them as the LLM doc describes.
 
 ```xml

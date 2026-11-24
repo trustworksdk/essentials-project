@@ -7,7 +7,7 @@ transaction under `SHARE` locks; `verify()`, `verifyAll()` and `verifyAfterCutov
 Subscriptions' resume points are imported per mapping (`ImportedSubscription`). `MigrationCli` runs the same from a YAML
 file. The classic tables are only read.
 
-> **Preview in 0.61.0.** There is no way back after the cut-over except restoring a backup: rehearse it on a copy of
+> **Preview in 0.62.0.** There is no way back after the cut-over except restoring a backup: rehearse it on a copy of
 > the database first.
 
 ```xml

@@ -3,7 +3,7 @@
 Auto-configuration for the new PostgreSQL event store engine (`postgresql-event-log`) and its `EventStore` adapter
 (`postgresql-event-log-processor`).
 
-> **Preview in 0.61.0.** The starter, its properties and the engine's API may change in a minor release. The old event store
+> **Preview in 0.62.0.** The starter, its properties and the engine's API may change in a minor release. The old event store
 > (`spring-boot-starter-postgresql-event-store`) stays the default and fully supported.
 
 ```xml

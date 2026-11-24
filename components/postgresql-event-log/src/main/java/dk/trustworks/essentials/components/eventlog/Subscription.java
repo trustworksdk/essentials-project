@@ -2113,7 +2113,7 @@ final class Subscription {
      * @param pageConnectionLost whether the page connection is closed or invalid; asked only when {@code thrownByHandler},
      *                           and only on the failure path
      * @param seams              mutant {@link WatermarkMutant#HANDLER_IO_RETRIED_FOREVER} restores the classification
-     *                           before 0.61.0
+     *                           before 0.62.0
      */
     static boolean isEngineFailure(boolean thrownByHandler, Throwable error, java.util.function.BooleanSupplier pageConnectionLost, TestSeams seams) {
         if (!thrownByHandler || isEnvironmentFailure(error)) {
@@ -2149,7 +2149,7 @@ final class Subscription {
 
     /**
      * The cause chain holds an {@code SQLException} of class {@code 08} (connection exception) or a
-     * {@link SQLTransientConnectionException}; since 0.61.0 used only by mutant {@link WatermarkMutant#HANDLER_IO_RETRIED_FOREVER}
+     * {@link SQLTransientConnectionException}; since 0.62.0 used only by mutant {@link WatermarkMutant#HANDLER_IO_RETRIED_FOREVER}
      */
     static boolean isIoFailure(Throwable error) {
         var depth = 0;

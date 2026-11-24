@@ -4,7 +4,7 @@ The new PostgreSQL event store engine: append, stream loads and watermark-based 
 (`CONTIGUOUS` and `FRESH`), with engine leases for exclusive subscriptions, page transactions, retry and parking, and
 cross-JVM wake-ups. Plain Java on raw pgjdbc; payloads are JSON text, stored byte for byte.
 
-> **Preview in 0.61.0.** The API, the settings and the table layout may change in a minor release. The classic event
+> **Preview in 0.62.0.** The API, the settings and the table layout may change in a minor release. The classic event
 > store (`postgresql-event-store`) stays the default and fully supported.
 
 ```xml

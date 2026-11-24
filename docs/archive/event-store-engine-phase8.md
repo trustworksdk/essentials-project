@@ -1,6 +1,6 @@
 # Event store redesign, phase 8: engine design
 
-> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.61.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
+> **ARCHIVED (2026-11-19).** The new event store engine is built and ships as a preview in 0.62.0. The engine as built is described in [`../design/event-log.md`](../design/event-log.md); this document is kept for its decisions and gate results. Section references of the form "phase N §x" in source comments point here.
 
 **Status:** decided 2026-11-17 (§15); split into 8a and 8b. 8a built 2026-11-17, gate passed (§16); 8b built 2026-11-17, gate passed (§18). Built on `feature/event-store-engine-phase8` (from
 phase 7, `9d147a6bb`). When phase 8 is done, this file moves to `docs/archive/` or is folded into the redesign's record.

@@ -1,7 +1,7 @@
 # spring-boot-starter-postgresql-event-log
 
 Spring Boot auto-configuration for the new event store engine (`postgresql-event-log`) and its `EventStore` adapter
-(`postgresql-event-log-processor`). **Preview in 0.61.0**, off by default. Reference: `docs/design/event-log.md` §9; consumer doc `LLM/LLM-postgresql-event-log.md`; history `docs/archive/event-store-engine-phase10.md` §3.
+(`postgresql-event-log-processor`). **Preview in 0.62.0**, off by default. Reference: `docs/design/event-log.md` §9; consumer doc `LLM/LLM-postgresql-event-log.md`; history `docs/archive/event-store-engine-phase10.md` §3.
 
 ## What it wires (`EventLogAutoConfiguration`, only with `essentials.event-log.enabled=true`)
 
