@@ -195,4 +195,77 @@ class EventLogTakeoverIT extends AbstractLeaseIT {
         }
         assertFoldEqual(a);
     }
+
+    // ---- the automatic retry of a parked aggregate across a takeover ----
+
+    /** @return how long after the stored {@code next_retry_at} the new owner's first automatic retry started, in ms by the database's clock */
+    private long takeoverRetryLateness(WatermarkMutant... mutants) throws Exception {
+        var settings = LEASE.withParkedRetry(Duration.ofSeconds(3), Duration.ofSeconds(3));
+        var poisoned = new AtomicBoolean(true);
+        PageHandler handler = PageHandler.perEvent((event, tx) -> {
+            if (poisoned.get() && event.aggregateId().equals("poison")) {
+                throw new IllegalStateException("poison fails");
+            }
+        });
+        var a     = eventLog("node-a", settings);
+        var first = inTransaction(a, "parker", ConsistencyMode.FRESH, handler, TestSeams.NONE);
+        awaitOwned(first);
+        var head = append(a, "poison", 1).getFirst();
+        var sql  = "SELECT next_retry_at FROM " + EventLogSchema.PARKED_EVENTS_TABLE + " WHERE subscriber = 'parker' AND global_order = " + head;
+        awaitTrue(() -> {
+            try {
+                return queryLong("SELECT count(*) FROM " + EventLogSchema.PARKED_EVENTS_TABLE + " WHERE subscriber = 'parker' AND next_retry_at IS NOT NULL") == 1;
+            } catch (SQLException e) {
+                return false;
+            }
+        });
+        String stored;
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement(); var resultSet = statement.executeQuery(sql)) {
+            resultSet.next();
+            stored = resultSet.getString(1);
+        }
+        first.stop();
+
+        var lateness = new java.util.concurrent.CompletableFuture<Long>();
+        var b = eventLog("node-b", settings);
+        poisoned.set(false);
+        var second = inTransaction(b, "parker", ConsistencyMode.FRESH, handler, seams(new TestSeams.Hooks() {
+            @Override
+            public void beforeParkedRetry(String subscriber, long parkedHead, boolean auto) throws Exception {
+                if (auto && parkedHead == head && !lateness.isDone()) {
+                    try (var connection = dataSource.getConnection(); var statement = connection.createStatement();
+                         var resultSet = statement.executeQuery("SELECT next_retry_at, round(extract(epoch FROM clock_timestamp() - next_retry_at) * 1000) FROM " +
+                                                                        EventLogSchema.PARKED_EVENTS_TABLE + " WHERE subscriber = 'parker' AND global_order = " + head)) {
+                        resultSet.next();
+                        if (!stored.equals(resultSet.getString(1))) {
+                            lateness.completeExceptionally(new AssertionError("next_retry_at moved from " + stored + " to " + resultSet.getString(1)));
+                        } else {
+                            lateness.complete(resultSet.getLong(2));
+                        }
+                    }
+                }
+            }
+        }, mutants));
+        awaitOwned(second);
+        var result = lateness.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+        awaitTrue(() -> {
+            try {
+                return queryLong("SELECT count(*) FROM " + EventLogSchema.PARKED_EVENTS_TABLE + " WHERE subscriber = 'parker'") == 0;
+            } catch (SQLException e) {
+                return false;
+            }
+        });
+        return result;
+    }
+
+    @Test
+    void a_new_owner_continues_the_stored_retry_schedule_of_a_parked_aggregate() throws Exception {
+        assertThat(takeoverRetryLateness()).as("ms after next_retry_at").isNotNegative();
+    }
+
+    @Test
+    void must_fail_when_the_schedule_is_not_loaded_a_new_owner_retries_at_once() throws Exception {
+        assertThat(takeoverRetryLateness(WatermarkMutant.PARKED_RETRY_SCHEDULE_NOT_LOADED)).as("ms after next_retry_at").isNegative();
+    }
 }
+

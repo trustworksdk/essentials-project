@@ -67,7 +67,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * ({@link StepDown}); an event failing alone is retried {@link EventLogSettings#retryAttempts()} times with a doubling
  * backoff, then parked in {@code el_parked_events} - in the page transaction that moves past it (in-transaction), or in
  * autocommit before it counts as handled (periodic). A {@link ParkEventException} parks at once. The later events of a
- * parked event's aggregate are parked behind it ({@link ParkedEvents}) until {@link #retryParked(long)} or
+ * parked event's aggregate are parked behind it ({@link ParkedEvents}) until a retry succeeds - automatic, on a
+ * doubling backoff from {@link ErrorSettings#parkedRetryInitial()} to {@link ErrorSettings#parkedRetryMax()}, unless the
+ * head failed with a {@link ParkEventException} - or an operator's {@link #retryParked(long)} or
  * {@link #discardParked(long)}; every other aggregate continues. An interrupted handler is not handled.
  * {@link #stop()} saves once more.
  */
@@ -203,6 +205,7 @@ final class Subscription {
     /** When the next parked check is due (0: at once), and how many ran; delivery thread */
     private long                                 nextParkedCheckNanos;
     private volatile long                        parkedChecks;
+    private volatile long                        parkedStatements;
     // ---- exclusive subscriptions; both null for a non-exclusive one ----
     private final Lease                          lease;
     private final LeaseKeeper                    keeper;
@@ -255,7 +258,7 @@ final class Subscription {
         this.filterDigest = spec.filterDigest();
         this.fromHead = spec.fromHead();
         this.stepDown = new StepDown(errors.pageSize(), seams.has(GROW_INSIDE_SUSPECT_RANGE));
-        this.parked = new ParkedEvents(key, loop.dataSource());
+        this.parked = new ParkedEvents(key, loop.dataSource(), errors, seams);
     }
 
     /**
@@ -1123,7 +1126,7 @@ final class Subscription {
             log.debug("Subscription {} on {} waits for the reader's watermark (held by {})", key.subscriber(), key.aggregateType(), heldBy);
             observer.onWaitingForWatermark(key.subscriber(), key.aggregateType(), true, Set.copyOf(heldBy));
         }
-        type.awaitChange(version, settings.backstopInterval());
+        type.awaitChange(version, Duration.ofNanos(untilParkedRetry(settings.backstopInterval().toNanos())));
     }
 
     private void endWait() {
@@ -1331,7 +1334,7 @@ final class Subscription {
                 detach(reason);
                 return;
             }
-            var batch = current.take(poll);
+            var batch = current.take(untilParkedRetry(poll));
             if (batch == null) {
                 maybeSave();
                 continue;
@@ -1466,7 +1469,7 @@ final class Subscription {
                 drain();
                 continue;
             }
-            var batch = current.take(poll);
+            var batch = current.take(untilParkedRetry(poll));
             if (batch == null) {
                 maybeSave();
                 continue;
@@ -1816,7 +1819,7 @@ final class Subscription {
     private static ParkedEvents.Row parkRow(StoredEvent event, int attempts, Throwable error) {
         if (error instanceof ParkEventException parkNow) {
             var cause = parkNow.getCause();
-            return new ParkedEvents.Row(event, null, attempts, cause != null ? cause.getClass().getName() : ParkEventException.class.getName(), parkNow.getMessage());
+            return new ParkedEvents.Row(event, null, attempts, cause != null ? cause.getClass().getName() : ParkEventException.class.getName(), parkNow.getMessage(), true);
         }
         return new ParkedEvents.Row(event, null, attempts, error.getClass().getName(), error.getMessage());
     }
@@ -1864,7 +1867,8 @@ final class Subscription {
                 failingOrder = -1;
             }
             if (row.blockedBy() == null && !seams.has(NO_AGGREGATE_HOLD)) {
-                parked.hold(row.event().aggregateId(), row.globalOrder());
+                var wait = parked.firstWaitMillis(row.terminal());
+                parked.hold(row.event().aggregateId(), row.globalOrder(), row.terminal(), wait == null ? 0 : wait);
             }
             observer.onParked(key.subscriber(), key.aggregateType(), row.globalOrder(), row.blockedBy(), row.attempts());
         }
@@ -2175,14 +2179,19 @@ final class Subscription {
 
     // ---- retry and discard of a parked aggregate ----
 
-    private record ParkedRequest(long head, boolean discard, CompletableFuture<Boolean> result) {
+    /** A retry or discard to serve: an operator's ({@code auto = false}) or the retry schedule's */
+    private record ParkedRequest(long head, boolean discard, boolean auto, CompletableFuture<Boolean> result) {
     }
 
+    /** The most due heads one pass of the due check queues */
+    static final int PARKED_RETRY_BATCH = 4;
+
     /**
-     * Retry the aggregate parked at {@code head}: on the delivery thread, between pages, one transaction locks the head's
-     * and its held rows, hands their events to the handler in order, deletes the rows and runs the progress
-     * compare-and-set unchanged; after it commits the aggregate is no longer held. If it fails the head's attempts grow
-     * and the aggregate stays held.
+     * Retry the aggregate parked at {@code head}: on the delivery thread, between pages, one transaction reads the head's
+     * and its held rows, hands their events to the handler in order, then locks the progress row and the parked rows (late
+     * locking), checks nothing moved, deletes the rows and runs the progress compare-and-set unchanged; after it commits
+     * the aggregate is no longer held. If it fails the head's attempts and retries grow, its next automatic retry moves
+     * out, and the aggregate stays held.
      *
      * @return {@code true} once applied; {@code false} if it failed, {@code head} is not parked, or a reset intervened
      */
@@ -2199,7 +2208,7 @@ final class Subscription {
     }
 
     private CompletableFuture<Boolean> requestParked(long head, boolean discard) {
-        var request = new ParkedRequest(head, discard, new CompletableFuture<>());
+        var request = new ParkedRequest(head, discard, false, new CompletableFuture<>());
         parkedRequests.add(request);
         // Read after the add, as the delivery thread clears the flag before its last drain: one of the two sees the request
         if (!acceptsParkedRequests) {
@@ -2230,10 +2239,11 @@ final class Subscription {
         }
         nextParkedCheckNanos = now + settings.effectiveParkedCheckInterval().toNanos();
         parkedChecks++;
+        parkedStatements++;
         for (var request : parked.requests()) {
             var queued = parkedRequests.stream().anyMatch(r -> r.head() == request.head());
             if (!queued) {
-                parkedRequests.add(new ParkedRequest(request.head(), request.discard(), new CompletableFuture<>()));
+                parkedRequests.add(new ParkedRequest(request.head(), request.discard(), false, new CompletableFuture<>()));
             }
         }
     }
@@ -2243,13 +2253,66 @@ final class Subscription {
         return parkedChecks;
     }
 
-    /** Delivery thread, between pages: run the retry and discard requests, the stored ones first read by the parked check */
+    /** @return the statements the parked check, the due check and the serves sent; for tests */
+    long parkedStatements() {
+        return parkedStatements;
+    }
+
+    /**
+     * The due check: while this subscription holds at least one aggregate, queue an automatic retry for each
+     * non-terminal head whose due time passed, at most {@link #PARKED_RETRY_BATCH} per pass and none already queued. In
+     * memory: no statement unless something is due (I17)
+     */
+    private void checkDueRetries() throws SQLException {
+        if (seams.has(PARKED_RETRY_STATEMENT_WHEN_IDLE)) {
+            parkedStatements++;
+            parked.requests();
+        }
+        if (parked.heldCount() == 0 || seams.has(PARKED_RETRY_NEVER_DUE)) {
+            return;
+        }
+        var earliest = parked.earliestDueNanos();
+        var now      = System.nanoTime();
+        if (earliest == null || earliest - now > 0) {
+            return;
+        }
+        for (var head : parked.dueHeads(now, PARKED_RETRY_BATCH)) {
+            if (parkedRequests.stream().noneMatch(r -> r.head() == head)) {
+                parkedRequests.add(new ParkedRequest(head, false, true, new CompletableFuture<>()));
+            }
+        }
+    }
+
+    /**
+     * @return {@code waitNanos}, cut to the earliest due time of a parked head while one is held, so an idle subscription
+     * wakes for its next automatic retry on time
+     */
+    private long untilParkedRetry(long waitNanos) {
+        if (parked.heldCount() == 0 || seams.has(PARKED_RETRY_NEVER_DUE)) {
+            return waitNanos;
+        }
+        var earliest = parked.earliestDueNanos();
+        return earliest == null ? waitNanos : Math.max(0, Math.min(waitNanos, earliest - System.nanoTime()));
+    }
+
+    /**
+     * Delivery thread, between pages: run the retry and discard requests - the stored ones first read by the parked
+     * check, then the automatic retries the due check finds due. A serve that does not succeed moves its head's due time
+     * forward
+     */
     private void serveParkedRequests() throws Exception {
         checkParkedRequests();
+        checkDueRetries();
         ParkedRequest request;
         while ((request = parkedRequests.poll()) != null) {
             try {
-                request.result().complete(releaseParked(request.head(), request.discard()));
+                seams.hooks().beforeParkedRetry(key.subscriber(), request.head(), request.auto());
+                parkedStatements++;
+                var served = releaseParked(request.head(), request.discard());
+                if (!served) {
+                    parked.postpone(request.head(), System.nanoTime());
+                }
+                request.result().complete(served);
             } catch (Exception | Error e) {
                 request.result().completeExceptionally(e);
                 throw e;
@@ -2267,24 +2330,23 @@ final class Subscription {
         }
         PageTransactionSource.OpenPage open = null;
         Long newHead = null;
+        Throwable newHeadFailure = null;
         try {
             open = pageSource.begin();
             var connection = open.connection();
-            // The serve locks the progress row before the handler runs (the order a reset locks in, which an in-transaction
-            // handler needs): the same lease bound as a page. An exclusive subscription's renewal waits on that lock, so the
-            // retry must finish within lease-local-stop or the deadline check below rolls it back
+            // Late locking: the parked rows are read unlocked and the handler runs with no lock on the progress row; only
+            // then is the progress row locked under the guard, before the parked rows (the order a reset locks in, or the two
+            // deadlock), and the set checked unchanged. Holding the progress row across the handler stalled LEASE_RENEW,
+            // one statement for every lease of this JVM, for as long as the handler ran
             boundByLease(connection);
-            // The progress row first, epoch- and fence-guarded, in the order a reset locks
-            if (!seams.has(SERVE_WITHOUT_EPOCH)
-                    && !ParkedEvents.lockProgress(connection, key, seams.has(SERVE_WITHOUT_EPOCH) ? null : (Long) resetEpoch,
-                                                  seams.has(SERVE_WITHOUT_FENCE) ? null : boundFence())) {
+            if (seams.has(SERVE_LOCKS_PROGRESS_FIRST) && !lockProgressGuarded(connection)) {
                 var ending = open;
                 open = null;
                 rollback(ending);
                 onProgressConflict();
                 return false;
             }
-            var orders = parked.lock(connection, head);
+            var orders = parked.read(connection, head);
             if (orders.isEmpty()) {
                 var ending = open;
                 open = null;
@@ -2292,17 +2354,9 @@ final class Subscription {
                 releaseHeld(head);
                 return false;
             }
-            var events = new ArrayList<StoredEvent>();
-            try (var statement = connection.prepareStatement(statements.byOrders())) {
-                statement.setArray(1, connection.createArrayOf("bigint", orders.toArray(Long[]::new)));
-                try (var resultSet = statement.executeQuery()) {
-                    while (resultSet.next()) {
-                        events.add(mapper.map(resultSet));
-                    }
-                }
-            }
+            var events   = readByOrders(connection, orders);
             var toHandle = discard ? events.stream().filter(event -> event.globalOrder() != head).toList() : events;
-            // At most one page per serve: the rest waits behind the next unhandled event, made the head with a retry request
+            // At most one page per serve: the rest waits behind the next unhandled event, made the head and due at once
             var page = toHandle.size() > errors.pageSize() ? toHandle.subList(0, errors.pageSize()) : toHandle;
             var failedAt = -1;
             Exception failure = null;
@@ -2332,25 +2386,33 @@ final class Subscription {
                 open = pageSource.begin();
                 connection = open.connection();
                 boundByLease(connection);
-                if (!lockProgressGuarded(connection) || !new HashSet<>(parked.lock(connection, head)).equals(new HashSet<>(orders))) {
-                    var ending = open;
-                    open = null;
-                    rollback(ending);
-                    onProgressConflict();
-                    return false;
-                }
                 var prefix = page.subList(0, failedAt);
                 if (!prefix.isEmpty()) {
                     pageHandler.handle(prefix, handlerTransaction(open));
                     failIfRollbackOnly(open);
                 }
+                if (!lockServed(connection, head, orders)) {
+                    var ending = open;
+                    open = null;
+                    rollback(ending);
+                    return false;
+                }
                 parked.rehead(connection, head, handledOrders(head, prefix), promoted, failure, false);
                 newHead = promoted;
-            } else if (page.size() < toHandle.size()) {
-                newHead = toHandle.get(page.size()).globalOrder();
-                parked.rehead(connection, head, handledOrders(head, page), newHead, null, true);
+                newHeadFailure = failure;
             } else {
-                parked.delete(connection, orders);
+                if (!lockServed(connection, head, orders)) {
+                    var ending = open;
+                    open = null;
+                    rollback(ending);
+                    return false;
+                }
+                if (page.size() < toHandle.size()) {
+                    newHead = toHandle.get(page.size()).globalOrder();
+                    parked.rehead(connection, head, handledOrders(head, page), newHead, null, true);
+                } else {
+                    parked.delete(connection, orders);
+                }
             }
             var expected = model == ProgressModel.PERIODIC || seams.has(PROGRESS_WITHOUT_EXPECTED_RESUME) ? null : (Long) lastSaved;
             if (!ProgressStore.saveInTransaction(connection, key, lastSaved, seams.has(SERVE_WITHOUT_EPOCH) ? null : boundEpoch(),
@@ -2405,14 +2467,10 @@ final class Subscription {
             reportError(e);
             log.warn("Subscription {} on {}: {} of the aggregate parked at global_order {} failed; it stays held", key.subscriber(), key.aggregateType(),
                      discard ? "discard" : "retry", head, e);
-            try {
-                parked.failedAgainGuarded(head, e, resetEpoch, boundFence());
-            } catch (SQLException again) {
-                log.warn("Subscription {} on {}: counting the failed attempt failed", key.subscriber(), key.aggregateType(), again);
-            }
+            countFailedRetry(head, e);
             return false;
         }
-        rehold(head, newHead);
+        rehold(head, newHead, newHeadFailure);
         return true;
     }
 
@@ -2428,6 +2486,7 @@ final class Subscription {
     private boolean releaseParkedPeriodic(long head, boolean discard) throws Exception {
         PageTransactionSource.OpenPage open = null;
         Long newHead = null;
+        Throwable newHeadFailure = null;
         try {
             open = engineSource.begin();
             var connection = open.connection();
@@ -2481,13 +2540,13 @@ final class Subscription {
             open = engineSource.begin();
             connection = open.connection();
             boundByLease(connection);
-            if (!lockProgressGuarded(connection) || !new HashSet<>(parked.lock(connection, head)).equals(new HashSet<>(orders))) {
+            if (!lockServed(connection, head, orders)) {
                 var ending = open;
                 open = null;
                 rollback(ending);
-                onProgressConflict();
                 return false;
             }
+            newHeadFailure = failure;
             if (newHead != null) {
                 parked.rehead(connection, head, handledOrders(head, applied), newHead, failure, failure == null);
             } else {
@@ -2533,14 +2592,10 @@ final class Subscription {
             reportError(e);
             log.warn("Subscription {} on {}: {} of the aggregate parked at global_order {} failed; it stays held", key.subscriber(), key.aggregateType(),
                      discard ? "discard" : "retry", head, e);
-            try {
-                parked.failedAgainGuarded(head, e, resetEpoch, boundFence());
-            } catch (SQLException again) {
-                log.warn("Subscription {} on {}: counting the failed attempt failed", key.subscriber(), key.aggregateType(), again);
-            }
+            countFailedRetry(head, e);
             return false;
         }
-        rehold(head, newHead);
+        rehold(head, newHead, newHeadFailure);
         return true;
     }
 
@@ -2548,6 +2603,27 @@ final class Subscription {
     private boolean lockProgressGuarded(Connection connection) throws SQLException {
         return seams.has(SERVE_WITHOUT_EPOCH)
                || ParkedEvents.lockProgress(connection, key, (Long) resetEpoch, seams.has(SERVE_WITHOUT_FENCE) ? null : boundFence());
+    }
+
+    /**
+     * The late locks of a serve, after its handler ran: the progress row under the guard, then the parked rows of
+     * {@code head}, which must still be the {@code orders} the serve read. A guard that matches nothing is a progress
+     * conflict ({@link #onProgressConflict()}); a changed set leaves the serve to a later pass (the operator's stored
+     * request is read again, the automatic retry is due again)
+     *
+     * @return whether the serve may write and commit; on {@code false} the caller rolls back
+     */
+    private boolean lockServed(Connection connection, long head, List<Long> orders) throws Exception {
+        if (!lockProgressGuarded(connection)) {
+            onProgressConflict();
+            return false;
+        }
+        if (!new HashSet<>(parked.lock(connection, head)).equals(new HashSet<>(orders))) {
+            log.debug("Subscription {} on {}: the rows parked at {} changed during a serve; it is served again later", key.subscriber(), key.aggregateType(), head);
+            return false;
+        }
+        seams.hooks().afterServeLocked(key.subscriber(), head);
+        return true;
     }
 
     private List<StoredEvent> readByOrders(Connection connection, List<Long> orders) throws SQLException {
@@ -2582,15 +2658,34 @@ final class Subscription {
         return lease != null && !seams.has(NO_LOCAL_DEADLINE) && lease.pastDeadline();
     }
 
-    /** After a committed serve: the aggregate of {@code head} is released, or, with a {@code newHead}, held behind that */
-    private void rehold(long head, Long newHead) {
+    /**
+     * A retry of {@code head} failed with {@code error}: one more attempt and retry on its row, guarded, and its next due
+     * time - the stored one, or one backoff later if the update matched no row
+     */
+    private void countFailedRetry(long head, Throwable error) {
+        ParkedEvents.Failed stored = null;
+        try {
+            stored = parked.failedAgainGuarded(head, error, resetEpoch, boundFence());
+        } catch (SQLException | LeaseLostException again) {
+            log.warn("Subscription {} on {}: counting the failed attempt failed", key.subscriber(), key.aggregateType(), again);
+        }
+        parked.failed(head, error, stored);
+    }
+
+    /**
+     * After a committed serve: the aggregate of {@code head} is released, or, with a {@code newHead}, held behind that,
+     * whose schedule starts over: due at once if it has not run, after the first wait if it failed ({@code failure}), never
+     * if that failure was terminal
+     */
+    private void rehold(long head, Long newHead, Throwable failure) {
         if (newHead == null) {
             releaseHeld(head);
             return;
         }
         var aggregateId = parked.release(head);
         if (aggregateId != null) {
-            parked.hold(aggregateId, newHead);
+            var wait = parked.reheadWaitMillis(failure);
+            parked.hold(aggregateId, newHead, failure instanceof ParkEventException, wait == null ? 0 : wait);
             heldChanged();
         }
     }

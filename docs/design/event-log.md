@@ -14,7 +14,7 @@ This document describes the engine as it is built: its storage, the append path,
 and what the processor module, the starter, the admin surface and the migration tool add. It is a reference for the
 system as it stands, not a record of how it came to be. The decisions, the alternatives that were rejected and the
 gate runs are in the plan documents listed below. Source comments and Javadoc in the three engine modules cite this
-document (for example "see docs/design/event-log.md §5.5"), and the invariant ids I1-I16 refer to §11.
+document (for example "see docs/design/event-log.md §5.5"), and the invariant ids I1-I17 refer to §11.
 
 | Document | Contents |
 |---|---|
@@ -266,6 +266,34 @@ never runs in one transaction and a crash between serves loses nothing (`ParkedE
 0.62.0 shipped, one failing held event failed every retry and every discard of its head, and the aggregate could never
 be released.
 
+**Automatic retry** (I17). The engine retries a parked aggregate by itself, forever, unless its head is **terminal**: a
+head that failed with `ParkEventException` waits for an operator. The latest failure decides: a terminal head whose
+operator retry fails with an ordinary exception retries by itself from then on, and a retrying head whose retry throws
+`ParkEventException` becomes terminal. `el_parked_events` keeps the schedule on the head row: `retries` (failed
+retries), `next_retry_at` (null for a held row and a terminal head), `terminal`, `last_failed_at`. A park stores
+`next_retry_at = now() + parkedRetryInitial`; each failed retry (operator or automatic) stores
+`now() + min(parkedRetryMax, parkedRetryInitial * 2^retries)`; a new head (`rehead`) starts over - at once if it has not
+run (the rest of a backlog), after `parkedRetryInitial` if it failed. Defaults 1 s doubling to 5 min, engine-wide on
+`EventLogSettings` and per subscription on `ErrorSettings`. `ParkedEvents` keeps the schedule in memory (due-ordered,
+earliest at hand), loaded with the held set: `PARKED_HEADS` returns each head's remaining wait measured by the database's
+clock, turned into a local `nanoTime` due time, so a new owner continues the schedule and node clocks do not matter. The
+due check in `Subscription.serveParkedRequests()` runs after the operator's parked check: while an aggregate is held and
+a non-terminal head is due, it queues an automatic request for at most four due heads per pass (none already queued), on
+the same queue and serve path as the operator's. It sends no statement while nothing is due, and nothing at all while
+nothing is held. The wait loops sleep at most until the earliest due time while something is held, so an idle
+subscription retries on time. A serve that does not succeed moves the head's due time forward even if its guarded update
+matched no row, so it never runs in a tight loop. Only the running owner serves: a standby holds no schedule, a reset
+reloads it, a lost lease clears it.
+
+**Late locking.** Every in-transaction serve, operator and automatic alike (`Subscription.releaseParked`), reads the
+head's and held rows unlocked, runs the handler in the page transaction with no lock on the progress row, and only then
+locks the progress row under `FENCE_GUARD` (`PARKED_SERVE_GUARD`) and after it the parked rows - the order a reset
+locks in, or a reset racing the serve deadlocks - checks that the set is unchanged (else it rolls back and the serve
+runs again later), deletes or re-heads the rows, saves and commits. `LEASE_RENEW` is one statement for every lease of
+the JVM and waits on any progress row it renews, so a serve that held the row across a slow handler stalled every
+exclusive subscription's renewal (mutant `SERVE_LOCKS_PROGRESS_FIRST`, `EventLogLeaseIT`). A reset that arrives while
+the handler runs goes ahead at once; the serve's late lock sees the new epoch and rolls back.
+
 ### 5.6 Leases and ownership
 
 An **exclusive** subscription (key `(subscriber, type, '')`) runs on an engine lease, not a `FencedLockManager`. One
@@ -336,13 +364,12 @@ the backstop.
 and get subscriptions with their lag, page parked events, reset (also inside a caller's transaction), retry or discard a
 parked head, and delete a retired per-instance row. A retry or discard is stored as a request on the parked row; the node
 that runs the subscription serves it at its next parked check (at most every `parkedCheckInterval`), or at once when it
-runs on the answering node. The serve transaction locks the progress row before the parked rows, in the order a reset
-does, so the two cannot deadlock.
+runs on the answering node. The engine's own automatic retries (§5.5) take the same queue and serve path. A serve locks
+the progress row before the parked rows, in the order a reset does, so the two cannot deadlock.
 
-An in-transaction subscription's serve hands every held event of the aggregate to the page handler inside that
-transaction, so it holds the progress row while the handler runs. For an exclusive subscription the keeper's renewal
-waits on that row, so the serve must finish within `leaseLocalStop` or its deadline check rolls it back; a slow
-aggregate needs a larger `leaseLocalStop` / `leaseDuration`. A `PERIODIC` subscription's serve holds no lock while its
+An in-transaction subscription's serve hands every held event of the aggregate to the page handler inside one
+transaction, but takes its locks only after the handler returned (late locking, §5.5): the keeper's renewal never waits
+on a serve's handler, and a reset during the handler goes first and rolls the serve back. A `PERIODIC` subscription's serve holds no lock while its
 handler runs (`releaseParkedPeriodic`): a short transaction reads the held events, the handler runs with nothing locked
 (the local deadline checked before each call), and a second short transaction - progress row first again - checks
 that nothing moved, deletes the rows and saves. A reset or lease change in between refuses that step and the events
@@ -417,9 +444,10 @@ Defined in the redesign's "Invariants" section; each has an IT and, where it mak
 | I11 | The running set is read after the statement's snapshot | Combined probe; one running set last in a flush (§4) |
 | I12 | `CONTIGUOUS` never delivers above the watermark; page transactions apply each event once | `HeldBack`, progress update last (§5.3) |
 | I13 | Filtered catch-up never skips a late matching event | Catch-up only to the watermark; F4 start; detach after overflow |
-| I14 | A failing event is isolated, retried, parked; no other event is lost or applied twice | `StepDown`, parking (§5.5) |
+| I14 | A failing event is isolated, retried, parked; no other event is lost or applied twice; a parked aggregate is applied in order when its retry succeeds, by an operator or automatically | `StepDown`, parking, automatic retry (§5.5) |
 | I15 | Catch-up reads never exceed the per-database cap | `CatchUpPermits` |
-| I16 | An owner that cannot renew stops before its lease expires; a renewal never extends a lease whose fence changed | Local deadline, `LEASE_RENEW` keyed by fence (§5.6) |
+| I16 | An owner that cannot renew stops before its lease expires; a renewal never extends a lease whose fence changed | Local deadline, `LEASE_RENEW` keyed by fence (§5.6); late locking of parked serves (§5.5) |
+| I17 | A non-terminal parked head of a running subscription is retried no later than `parkedRetryMax` plus one loop pass after it is due; a terminal one only on request | `ParkedEvents` schedule, due check, wait loops cut to the earliest due time (§5.5) |
 
 ## 12. Settings
 
@@ -428,7 +456,7 @@ Every `EventLogSettings` value is a property under `essentials.event-log.*`; the
 `subscription-buffer-size`, `catch-up-permits`, `hole-range-threshold`, `probe-backoff-min`/`-max`,
 `woken-probe-min`, `hole-probe-wait-max` (100 ms), `cross-jvm-wake-up`, `woken-read-min`, `notify-send-min`,
 `lease-duration`/`lease-renewal-interval`/`lease-local-stop` (15 s / 4 s / 7 s), `retry-attempts` (3),
-`retry-backoff-initial`/`-max`, `progress-save-interval` (1 s).
+`retry-backoff-initial`/`-max`, `parked-retry-initial`/`-max` (1 s / 5 min), `progress-save-interval` (1 s).
 
 ## 13. Measured
 

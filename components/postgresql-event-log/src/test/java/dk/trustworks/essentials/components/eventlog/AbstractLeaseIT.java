@@ -44,7 +44,9 @@ abstract class AbstractLeaseIT extends AbstractEventLogIT {
                                                           .withProbeBackoff(Duration.ofMillis(25), Duration.ofMillis(100))
                                                           .withProgressSaveInterval(Duration.ZERO)
                                                           .withLease(Duration.ofSeconds(2), Duration.ofMillis(500), Duration.ofSeconds(1))
-                                                          .withLeaseStatementTimeout(Duration.ofSeconds(1));
+                                                          .withLeaseStatementTimeout(Duration.ofSeconds(1))
+                                                          // A park stays parked unless a test asks for the automatic retry
+                                                          .withParkedRetry(Duration.ofHours(1), Duration.ofHours(1));
 
     private final List<EventLog>     eventLogs     = new CopyOnWriteArrayList<>();
     private final List<Subscription> subscriptions = new CopyOnWriteArrayList<>();

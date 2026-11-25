@@ -162,6 +162,14 @@ public class EssentialsEventLogProperties {
      * Most time between two running-set reads of an aggregate type while a hole, range or candidate of it is outstanding: caps the probe back-off, so a rolled-back append's hole does not hold the watermark for seconds. The probe cost budget (~1 % of a core) is a soft target while holes wait.
      */
     private Duration holeProbeWaitMax = Duration.ofMillis(100);
+    /**
+     * How long after it parked the engine retries a parked aggregate whose head did not fail with a ParkEventException (a terminal park waits for an operator); doubled per further failure, up to parked-retry-max. Retried forever, in the aggregate's order.
+     */
+    private Duration parkedRetryInitial = Duration.ofSeconds(1);
+    /**
+     * The longest wait between two automatic retries of a parked aggregate; at least parked-retry-initial.
+     */
+    private Duration parkedRetryMax = Duration.ofMinutes(5);
 
     /**
      * @return the settings these properties describe
@@ -197,7 +205,9 @@ public class EssentialsEventLogProperties {
                                     nodeName,
                                     parkedCheckInterval,
                                     adminListLimit,
-                                    holeProbeWaitMax);
+                                    holeProbeWaitMax,
+                                    parkedRetryInitial,
+                                    parkedRetryMax);
     }
 
     public boolean isEnabled() {
@@ -454,5 +464,21 @@ public class EssentialsEventLogProperties {
 
     public void setHoleProbeWaitMax(Duration holeProbeWaitMax) {
         this.holeProbeWaitMax = holeProbeWaitMax;
+    }
+
+    public Duration getParkedRetryInitial() {
+        return parkedRetryInitial;
+    }
+
+    public void setParkedRetryInitial(Duration parkedRetryInitial) {
+        this.parkedRetryInitial = parkedRetryInitial;
+    }
+
+    public Duration getParkedRetryMax() {
+        return parkedRetryMax;
+    }
+
+    public void setParkedRetryMax(Duration parkedRetryMax) {
+        this.parkedRetryMax = parkedRetryMax;
     }
 }

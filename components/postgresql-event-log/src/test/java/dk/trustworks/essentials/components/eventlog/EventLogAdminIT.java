@@ -75,10 +75,14 @@ class EventLogAdminIT extends AbstractLeaseIT {
     }
 
     private Subscription parkedOnA(EventLog logA, boolean inTransaction, WatermarkMutant... mutants) throws Exception {
+        return parkedOnA(logA, inTransaction, TestSeams.Hooks.NONE, mutants);
+    }
+
+    private Subscription parkedOnA(EventLog logA, boolean inTransaction, TestSeams.Hooks hooks, WatermarkMutant... mutants) throws Exception {
         var recorder = recorder();
         var a = inTransaction
-                ? inTransaction(logA, SUB, ConsistencyMode.FRESH, PageHandler.perEvent((event, tx) -> recorder.handle(event)), seams(TestSeams.Hooks.NONE, mutants))
-                : periodic(logA, SUB, recorder, seams(TestSeams.Hooks.NONE, mutants));
+                ? inTransaction(logA, SUB, ConsistencyMode.FRESH, PageHandler.perEvent((event, tx) -> recorder.handle(event)), seams(hooks, mutants))
+                : periodic(logA, SUB, recorder, seams(hooks, mutants));
         awaitOwned(a);
         append(logA, "order-1", 3);
         append(logA, "order-2", 2);
@@ -244,19 +248,26 @@ class EventLogAdminIT extends AbstractLeaseIT {
      * failure)
      */
     /**
-     * In-transaction: the serve holds the progress row across the handler, so the reset waits for it and is ordered after
-     * it. Periodic: the handler runs with nothing locked, so the reset goes ahead at once; the serve's second step then
-     * sees the new epoch and refuses, and the events are delivered again (at least once).
+     * In-transaction: the serve is held after its late locks (progress row, then parked rows), so the reset waits for it
+     * and is ordered after it. Periodic: the serve is held in the handler, with nothing locked, so the reset goes ahead at
+     * once; the serve's second step then sees the new epoch and refuses, and the events are delivered again (at least
+     * once). An in-transaction serve held in its handler behaves as the periodic one (late locking).
      */
     private Object requestRacingReset(boolean inTransaction, WatermarkMutant... mutants) throws Exception {
         var logA = eventLog("A");
         var logB = eventLog("B");
-        headGate = new Gate(true);
+        var serveGate = new Gate(inTransaction);
+        headGate = new Gate(!inTransaction);
         gatedHead = 1;
-        var a = parkedOnA(logA, inTransaction, mutants);
+        var a = parkedOnA(logA, inTransaction, new TestSeams.Hooks() {
+            @Override
+            public void afterServeLocked(String subscriber, long head) throws Exception {
+                serveGate.pass();
+            }
+        }, mutants);
         var epoch = row(SUB).resetEpoch();
         assertThat(logB.admin().retryParked(adminKey(SUB), 1)).isEqualTo(ParkedRequestResult.ACCEPTED);
-        headGate.awaitReached();
+        (inTransaction ? serveGate : headGate).awaitReached();
         var reset = CompletableFuture.supplyAsync(() -> {
             try {
                 return logB.admin().reset(adminKey(SUB), 1);
@@ -271,6 +282,7 @@ class EventLogAdminIT extends AbstractLeaseIT {
             await().atMost(WAIT).until(reset::isDone);
         }
         headGate.open();
+        serveGate.open();
         Object outcome;
         try {
             outcome = reset.get(WAIT.toSeconds(), TimeUnit.SECONDS);
@@ -470,4 +482,48 @@ class EventLogAdminIT extends AbstractLeaseIT {
     void a_held_aggregate_reads_requests_at_most_once_per_interval() throws Exception {
         assertThat(parkedChecksOverTenIntervals(true)).isBetween(1L, 11L);
     }
+
+    // ---- an operator's retry racing an automatic one ----
+
+    @Test
+    void an_operator_retry_racing_an_automatic_retry_applies_the_aggregate_once_in_order() throws Exception {
+        var logA     = eventLog("A", LEASE.withParkedRetry(Duration.ofMillis(100), Duration.ofMillis(100)));
+        var failing  = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var autoGate = new Gate(false);
+        var a = periodic(logA, SUB, event -> {
+            if (failing.get() && event.aggregateId().equals("order-1")) {
+                throw new IllegalStateException("order-1 fails for now");
+            }
+            delivered.add(event.globalOrder());
+        }, seams(new TestSeams.Hooks() {
+            @Override
+            public void beforeParkedRetry(String subscriber, long head, boolean auto) throws Exception {
+                if (auto && head == 1) {
+                    autoGate.pass();
+                }
+            }
+        }));
+        awaitOwned(a);
+        append(logA, "order-1", 3);
+        append(logA, "order-2", 2);
+        await().atMost(WAIT).until(() -> parkedRows(SUB) == 3);
+        awaitTrue(() -> delivered.equals(List.of(4L, 5L)));
+        autoGate.arm();
+        autoGate.awaitReached();
+        failing.set(false);
+        var operator = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                return logA.admin().retryParked(adminKey(SUB), 1);
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        assertThat(operator.get(WAIT.toSeconds(), TimeUnit.SECONDS)).isIn(ParkedRequestResult.ACCEPTED, ParkedRequestResult.DONE, ParkedRequestResult.FAILED);
+        autoGate.open();
+        await().atMost(WAIT).until(() -> parkedRows(SUB) == 0);
+        awaitTrue(() -> delivered.size() >= 5);
+        assertThat(delivered).as("each event once, the aggregate in order").containsExactly(4L, 5L, 1L, 2L, 3L);
+        assertThat(a.isRunning()).isTrue();
+    }
 }
+

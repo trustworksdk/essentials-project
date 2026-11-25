@@ -41,7 +41,9 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
     static final EventLogSettings FAST = EventLogSettings.defaults()
                                                          .withBackstopInterval(Duration.ofMillis(25))
                                                          .withProbeBackoff(Duration.ofMillis(25), Duration.ofMillis(100))
-                                                         .withProgressSaveInterval(Duration.ZERO);
+                                                         .withProgressSaveInterval(Duration.ZERO)
+                                                         // A park stays parked unless a test asks for the automatic retry
+                                                         .withParkedRetry(Duration.ofHours(1), Duration.ofHours(1));
 
     protected EventLog            eventLog;
     protected AggregateTypeTables tables;

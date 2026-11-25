@@ -126,6 +126,20 @@ record TestSeams(Set<WatermarkMutant> mutants, Hooks hooks, String readTable) {
         default void onRelease(String subscriber, List<StoredEvent> rows, long receivedWatermark) throws Exception {
         }
 
+        /**
+         * Delivery thread: a serve of the aggregate parked at {@code head} is about to start, by an operator's request
+         * ({@code auto = false}) or the retry schedule ({@code true})
+         */
+        default void beforeParkedRetry(String subscriber, long head, boolean auto) throws Exception {
+        }
+
+        /**
+         * Delivery thread: a serve of the aggregate parked at {@code head} took its late locks - the progress row, then
+         * the parked rows - and is about to write and commit
+         */
+        default void afterServeLocked(String subscriber, long head) throws Exception {
+        }
+
         /** An event is parked ({@code blockedBy} null) or held behind a parked head */
         default void onPark(String subscriber, long globalOrder, Long blockedBy) throws Exception {
         }

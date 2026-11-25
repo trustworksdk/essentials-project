@@ -300,4 +300,74 @@ class EventLogLeaseIT extends AbstractLeaseIT {
     void must_fail_RENEW_PER_LEASE() throws Exception {
         assertThat(renewalStatementsPerPass(RENEW_PER_LEASE)).isGreaterThan(100);
     }
+
+    // ---- a slow parked serve does not hold the JVM's one renewal (late locking) ----
+
+    /**
+     * @return whether another exclusive subscription's lease kept being renewed, never more than {@code leaseLocalStop}
+     * apart, for six renewals while a parked serve's handler was held
+     */
+    private boolean renewedDuringSlowServe(WatermarkMutant... mutants) throws Exception {
+        var log      = eventLog("node-a", LEASE.withParkedRetry(Duration.ofMillis(100), Duration.ofMillis(100)));
+        var renewals = new CopyOnWriteArrayList<Long>();
+        log.leaseSeams(seams(new TestSeams.Hooks() {
+            @Override
+            public void afterRenewalBeforeConfirm(List<ProgressStore.Key> keys) {
+                if (keys.contains(key("other"))) {
+                    renewals.add(System.nanoTime());
+                }
+            }
+        }));
+        var poisoned = new AtomicBoolean(true);
+        var gate     = new Gate(false);
+        var slow = inTransaction(log, "slow", ConsistencyMode.FRESH, PageHandler.perEvent((event, tx) -> {
+            if (event.aggregateId().equals("poison")) {
+                if (poisoned.get()) {
+                    throw new IllegalStateException("poison fails");
+                }
+                gate.pass();
+            }
+        }), seams(TestSeams.Hooks.NONE, mutants));
+        var other = periodic(log, "other", event -> {
+        }, TestSeams.NONE);
+        awaitOwned(slow);
+        awaitOwned(other);
+        append(log, "poison", 1);
+        awaitTrue(() -> {
+            try {
+                return queryLong("SELECT count(*) FROM " + EventLogSchema.PARKED_EVENTS_TABLE + " WHERE subscriber = 'slow'") == 1;
+            } catch (SQLException e) {
+                return false;
+            }
+        });
+        gate.arm();
+        poisoned.set(false);
+        gate.awaitReached();
+        var reachedAt = System.nanoTime();
+        var before    = renewals.size();
+        try {
+            await().atMost(WAIT).until(() -> renewals.size() >= before + 6);
+        } finally {
+            gate.open();
+        }
+        var previous = reachedAt;
+        var maxGap   = 0L;
+        for (var at : renewals.subList(before, before + 6)) {
+            maxGap = Math.max(maxGap, at - previous);
+            previous = at;
+        }
+        // Under the lock-first mutant the renewal waits on the serve's lock until the serve's idle timeout (one lease) ends it
+        return maxGap < LEASE.leaseLocalStop().toNanos();
+    }
+
+    @Test
+    void a_slow_parked_serve_does_not_stop_another_exclusive_subscriptions_renewal() throws Exception {
+        assertThat(renewedDuringSlowServe()).isTrue();
+    }
+
+    @Test
+    void must_fail_SERVE_LOCKS_PROGRESS_FIRST() throws Exception {
+        assertThat(renewedDuringSlowServe(SERVE_LOCKS_PROGRESS_FIRST)).isFalse();
+    }
 }
+

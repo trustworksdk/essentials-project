@@ -52,12 +52,34 @@ class SubscriptionDefinitionTest {
     }
 
     @Test
+    void the_parked_retry_backoff_doubles_up_to_its_cap_and_never_overflows() {
+        var errors = ErrorSettings.defaults(EventLogSettings.defaults());
+        assertThat(errors.parkedRetryBackoff(0)).isEqualTo(Duration.ofSeconds(1));
+        assertThat(errors.parkedRetryBackoff(1)).isEqualTo(Duration.ofSeconds(2));
+        assertThat(errors.parkedRetryBackoff(8)).isEqualTo(Duration.ofSeconds(256));
+        assertThat(errors.parkedRetryBackoff(9)).isEqualTo(Duration.ofMinutes(5));
+        assertThat(errors.parkedRetryBackoff(-3)).isEqualTo(Duration.ofSeconds(1));
+        for (var retries : new int[]{30, 33, 62, 63, 64, 1_000, Integer.MAX_VALUE}) {
+            assertThat(errors.parkedRetryBackoff(retries)).as("retries %d", retries).isEqualTo(Duration.ofMinutes(5));
+        }
+        // A cap near the largest Duration in nanos: the shift must not wrap to a short or negative wait
+        var huge = errors.withParkedRetry(Duration.ofMillis(3), Duration.ofNanos(Long.MAX_VALUE));
+        assertThat(huge.parkedRetryBackoff(62)).isEqualTo(Duration.ofNanos(Long.MAX_VALUE));
+        assertThat(huge.parkedRetryBackoff(20)).isEqualTo(Duration.ofMillis(3L << 20));
+        assertThatThrownBy(() -> errors.withParkedRetry(Duration.ZERO, Duration.ofSeconds(1))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> errors.withParkedRetry(Duration.ofSeconds(2), Duration.ofSeconds(1))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> EventLogSettings.defaults().withParkedRetry(Duration.ofSeconds(2), Duration.ofSeconds(1))).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void error_defaults_come_from_the_event_log_settings() {
         var defaults = ErrorSettings.defaults(EventLogSettings.defaults());
         assertThat(defaults).isEqualTo(new ErrorSettings(3, Duration.ofMillis(10), Duration.ofSeconds(10), 100));
         assertThat(defaults.backoff(0)).isEqualTo(Duration.ofMillis(10));
         assertThat(defaults.backoff(3)).isEqualTo(Duration.ofMillis(80));
         assertThat(defaults.backoff(30)).isEqualTo(Duration.ofSeconds(10));
+        assertThat(defaults.parkedRetryInitial()).isEqualTo(Duration.ofSeconds(1));
+        assertThat(defaults.parkedRetryMax()).isEqualTo(Duration.ofMinutes(5));
     }
 
     @Test

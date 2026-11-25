@@ -272,6 +272,24 @@ enum WatermarkMutant {
      */
     RESET_OUTSIDE_CALLER_TRANSACTION,
 
+    // ---- automatic retry of parked aggregates; subscription mutants ----
+
+    /** The due check never queues an automatic retry: a parked aggregate waits for an operator forever (I17) */
+    PARKED_RETRY_NEVER_DUE,
+    /** A terminal head ({@link ParkEventException}) is scheduled like any other and retried automatically (I17) */
+    PARKED_RETRY_TERMINAL_RETRIED,
+    /** A failed retry stores the first wait again instead of doubling it: a hopeless head is retried at the initial rate */
+    PARKED_RETRY_BACKOFF_NOT_ADVANCED,
+    /** The due check reads the parked heads on every pass, even with nothing held (cost 0 without a parked aggregate) */
+    PARKED_RETRY_STATEMENT_WHEN_IDLE,
+    /** A (re)load ignores the stored {@code next_retry_at}: every head is due at once, so a new owner restarts the schedule */
+    PARKED_RETRY_SCHEDULE_NOT_LOADED,
+    /**
+     * An in-transaction serve locks the progress row before its handler runs, as before late locking: a slow handler
+     * stalls the JVM's one lease renewal, and with it every exclusive subscription's lease (I16)
+     */
+    SERVE_LOCKS_PROGRESS_FIRST,
+
     // ---- migration guard and progress import; on the event log's admin seams ----
 
     /**

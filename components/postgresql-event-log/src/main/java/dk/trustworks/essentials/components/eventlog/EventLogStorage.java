@@ -251,33 +251,58 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
     static final String PAGE_IDLE_TIMEOUT = "SELECT set_config('idle_in_transaction_session_timeout', ?, true)";
 
     // ---- parked events; the subscription key's three parameters first unless said otherwise ----
-    /** Then global_order, aggregate_id, blocked_by, attempts, error_type, error_message */
+    /**
+     * Then global_order, aggregate_id, blocked_by, attempts, error_type, error_message, terminal, the wait in milliseconds
+     * before the first automatic retry ({@code null}: none - a held row or a terminal head), whether it failed (a head)
+     */
     static final String PARK_EVENT =
-            "INSERT INTO " + PARKED_EVENTS_TABLE + " (subscriber, aggregate_type, instance_name, global_order, aggregate_id, blocked_by, attempts, error_type, error_message)\n" +
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING";
+            "INSERT INTO " + PARKED_EVENTS_TABLE + " (subscriber, aggregate_type, instance_name, global_order, aggregate_id, blocked_by, attempts, error_type, error_message, terminal, next_retry_at, last_failed_at)\n" +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::boolean, now() + ?::bigint * interval '1 millisecond', CASE WHEN ?::boolean THEN now() END) ON CONFLICT DO NOTHING";
     /**
      * The periodic park insert, guarded on the progress row: the key, then {@link #FENCE_GUARD}'s
-     * parameters, then global_order, aggregate_id, blocked_by, attempts, error_type, error_message. The {@code FOR SHARE}
+     * parameters, then {@link #PARK_EVENT}'s values. The {@code FOR SHARE}
      * guard waits for a reset or claim that got there first and re-checks against its row version. Returns the guard's
      * and the insert's row counts
      */
     static final String PARK_EVENT_GUARDED =
             "WITH guard AS (SELECT 1 FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD + " FOR SHARE),\n" +
-                    "ins AS (INSERT INTO " + PARKED_EVENTS_TABLE + " (subscriber, aggregate_type, instance_name, global_order, aggregate_id, blocked_by, attempts, error_type, error_message)\n" +
-                    "        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? FROM guard\n" +
+                    "ins AS (INSERT INTO " + PARKED_EVENTS_TABLE + " (subscriber, aggregate_type, instance_name, global_order, aggregate_id, blocked_by, attempts, error_type, error_message, terminal, next_retry_at, last_failed_at)\n" +
+                    "        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::boolean, now() + ?::bigint * interval '1 millisecond', CASE WHEN ?::boolean THEN now() END FROM guard\n" +
                     "        ON CONFLICT DO NOTHING RETURNING 1)\n" +
                     "SELECT (SELECT count(*) FROM guard), (SELECT count(*) FROM ins)";
     /**
-     * {@link #PARKED_FAILED_AGAIN} guarded as {@link #PARK_EVENT_GUARDED}: error_type, error_message, the key, the head,
-     * then the key and {@link #FENCE_GUARD}'s parameters
+     * A retry of a parked head failed again: one more attempt and retry, the latest failure decides whether it is terminal,
+     * and the next automatic retry is due {@code min(max, initial * 2^retries)} after now (none if terminal). Returns the
+     * retries and the wait in milliseconds by the database's clock ({@code null} if terminal)
+     */
+    static final String FAILED_AGAIN_SET =
+            "UPDATE " + PARKED_EVENTS_TABLE + " SET attempts = attempts + 1, retries = retries + 1, error_type = ?, error_message = ?, requested = NULL, requested_at = NULL,\n" +
+                    " terminal = ?::boolean, last_failed_at = now(),\n" +
+                    " next_retry_at = CASE WHEN ?::boolean THEN NULL ELSE now() + least(?::float8, ?::float8 * power(2::float8, least(retries + 1, 62))) * interval '1 millisecond' END\n";
+    /** The returned retries and remaining wait of {@link #FAILED_AGAIN_SET} */
+    static final String FAILED_AGAIN_RETURNING =
+            " RETURNING retries, CASE WHEN next_retry_at IS NULL THEN NULL ELSE greatest(0, extract(epoch FROM next_retry_at - now()) * 1000)::bigint END";
+    /** Mutant {@code PARKED_RETRY_BACKOFF_NOT_ADVANCED}: the exponent of {@link #FAILED_AGAIN_SET} */
+    static final String FAILED_AGAIN_EXPONENT = "least(retries + 1, 62)";
+    /**
+     * {@link #PARKED_FAILED_AGAIN} guarded as {@link #PARK_EVENT_GUARDED}: its parameters, then the key and
+     * {@link #FENCE_GUARD}'s parameters
      */
     static final String PARKED_FAILED_AGAIN_GUARDED =
-            "UPDATE " + PARKED_EVENTS_TABLE + " SET attempts = attempts + 1, error_type = ?, error_message = ?, requested = NULL, requested_at = NULL\n" +
-                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?\n" +
-                    "   AND EXISTS (SELECT 1 FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD + " FOR SHARE)";
-    /** The held aggregates: every parked head */
+            FAILED_AGAIN_SET + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?\n" +
+                    "   AND EXISTS (SELECT 1 FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD + " FOR SHARE)\n" +
+                    FAILED_AGAIN_RETURNING;
+    /**
+     * The held aggregates: every parked head, whether it is terminal, its failed retries and the wait in milliseconds
+     * until its next automatic retry, by the database's clock ({@code null}: none stored)
+     */
     static final String PARKED_HEADS =
-            "SELECT aggregate_id, global_order FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND blocked_by IS NULL ORDER BY global_order";
+            "SELECT aggregate_id, global_order, terminal, retries, CASE WHEN next_retry_at IS NULL THEN NULL ELSE greatest(0, extract(epoch FROM next_retry_at - now()) * 1000)::bigint END\n" +
+                    "  FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND blocked_by IS NULL ORDER BY global_order";
+    /** Then the head twice: the head and every row held behind it, unlocked, in order (a serve's first read) */
+    static final String PARKED_ROWS =
+            "SELECT global_order, blocked_by FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND (global_order = ? OR blocked_by = ?)\n" +
+                    "ORDER BY global_order";
     /** Then the head twice: the head and every row held behind it, locked, in order */
     static final String PARKED_LOCK =
             "SELECT global_order, blocked_by FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND (global_order = ? OR blocked_by = ?)\n" +
@@ -285,16 +310,19 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
     /** Then {@code bigint[]} global orders */
     static final String PARKED_DELETE =
             "DELETE FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ANY(?::bigint[])";
-    /** error_type, error_message, then the key, then the head */
+    /** error_type, error_message, terminal twice, the longest and the first automatic-retry wait in milliseconds, then the key, then the head */
     static final String PARKED_FAILED_AGAIN =
-            "UPDATE " + PARKED_EVENTS_TABLE + " SET attempts = attempts + 1, error_type = ?, error_message = ?, requested = NULL, requested_at = NULL\n" + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?";
+            FAILED_AGAIN_SET + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?\n" + FAILED_AGAIN_RETURNING;
     /**
      * A held row becomes its aggregate's head ({@code blocked_by = NULL}): attempts + ?, error_type and error_message
-     * (kept when null), requested (null clears it; {@code requested_at} follows), then the key, then the new head
+     * (kept when null), requested (null clears it; {@code requested_at} follows), terminal, the wait in milliseconds before
+     * its first automatic retry ({@code null}: none), whether it failed; then the key, then the new head. Its schedule
+     * restarts
      */
     static final String PARKED_NEW_HEAD =
             "UPDATE " + PARKED_EVENTS_TABLE + " SET blocked_by = NULL, attempts = attempts + ?, error_type = coalesce(?, error_type), error_message = coalesce(?, error_message),\n" +
-                    " requested = ?, requested_at = CASE WHEN ? IS NULL THEN NULL ELSE now() END\n" +
+                    " requested = ?, requested_at = CASE WHEN ? IS NULL THEN NULL ELSE now() END,\n" +
+                    " retries = 0, terminal = ?::boolean, next_retry_at = now() + ?::bigint * interval '1 millisecond', last_failed_at = CASE WHEN ?::boolean THEN now() ELSE last_failed_at END\n" +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?";
     /** The rows held behind the old head now wait on the new one: the new head, then the key, then the old head */
     static final String PARKED_REPOINT =

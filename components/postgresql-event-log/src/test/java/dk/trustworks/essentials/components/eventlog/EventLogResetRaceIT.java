@@ -22,7 +22,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.*;
+import java.time.Duration;
 
 import static dk.trustworks.essentials.components.eventlog.WatermarkMutant.*;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -296,4 +297,66 @@ class EventLogResetRaceIT extends AbstractLeaseIT {
         assertThat(standby.lease().state()).isEqualTo(Lease.State.STANDBY);
         assertThat(row(SUB).fence()).as("no standby claimed").isEqualTo(before.fence());
     }
+
+    // ---- a reset racing an automatic parked serve ----
+
+    /**
+     * Event 1 (aggregate {@code poison}) parks; its automatic retry is held in the handler after writing its view row; a
+     * rebuild - the view emptied and the subscription reset to 1 in one transaction - commits meanwhile, not waiting on
+     * the serve, which holds no lock yet; then the serve is released and must roll back
+     *
+     * @return the view's defects once everything is applied again from the reset point
+     */
+    private long resetRacingAnAutomaticServe(boolean exclusive) throws Exception {
+        eventLog = eventLog("node-a", LEASE.withParkedRetry(Duration.ofMillis(100), Duration.ofMillis(100)));
+        createView(VIEW);
+        var poisoned = new AtomicBoolean(true);
+        var gate     = new Gate(false);
+        var view     = viewWriter(VIEW, "A");
+        inTransaction(exclusive, (page, tx) -> {
+            for (var event : page) {
+                if (event.aggregateId().equals("poison") && poisoned.get()) {
+                    throw new IllegalStateException("poison fails");
+                }
+            }
+            view.handle(page, tx);
+            if (page.stream().anyMatch(event -> event.aggregateId().equals("poison"))) {
+                gate.pass();
+            }
+        }, TestSeams.NONE);
+        append(eventLog, "poison", 1);
+        append(eventLog, "order-1", 5);
+        await().atMost(WAIT).until(() -> resumeFrom(exclusive) == 7);
+        assertThat(queryLong("SELECT count(*) FROM " + EventLogSchema.PARKED_EVENTS_TABLE)).isEqualTo(1);
+        gate.arm();
+        poisoned.set(false);
+        gate.awaitReached();
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                try (var connection = dataSource.getConnection()) {
+                    connection.setAutoCommit(false);
+                    try (var statement = connection.createStatement()) {
+                        statement.execute("DELETE FROM " + VIEW);
+                    }
+                    var key = exclusive ? ProgressKey.exclusive(SUB, TYPE) : new ProgressKey(SUB, TYPE, INSTANCE);
+                    assertThat(eventLog.admin().reset(key, 1, connection)).isTrue();
+                    connection.commit();
+                }
+            } catch (SQLException e) {
+                throw new IllegalStateException(e);
+            }
+        }).get(WAIT.toSeconds(), java.util.concurrent.TimeUnit.SECONDS);
+        assertThat(queryLong("SELECT count(*) FROM " + EventLogSchema.PARKED_EVENTS_TABLE)).as("the reset deleted the parked rows").isZero();
+        gate.open();
+        await().atMost(WAIT).until(() -> resumeFrom(exclusive) == 7 && queryLong("SELECT count(*) FROM " + VIEW) >= 6);
+        assertThat(queryLong("SELECT count(*) FROM " + EventLogSchema.PARKED_EVENTS_TABLE)).isZero();
+        return viewDefects(VIEW, 6);
+    }
+
+    @ParameterizedTest(name = "exclusive={0}")
+    @ValueSource(booleans = {false, true})
+    void a_reset_racing_an_automatic_parked_serve_rolls_the_serve_back(boolean exclusive) throws Exception {
+        assertThat(resetRacingAnAutomaticServe(exclusive)).as("each event once in the view").isZero();
+    }
 }
+

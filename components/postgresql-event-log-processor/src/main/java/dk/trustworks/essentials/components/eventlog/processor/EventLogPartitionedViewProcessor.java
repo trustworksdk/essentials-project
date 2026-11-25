@@ -407,7 +407,7 @@ public abstract class EventLogPartitionedViewProcessor implements Lifecycle {
             var base     = owner.errorSettings().orElseGet(() -> ErrorSettings.defaults(owner.dependencies.eventLog().settings()));
             var pageSize = owner.forwardPageSize();
             requireTrue(pageSize >= 1 && pageSize <= ErrorSettings.MAX_PAGE_SIZE, "forwardPageSize must be 1.." + ErrorSettings.MAX_PAGE_SIZE + ", was " + pageSize);
-            this.errorSettings = new ErrorSettings(base.retryAttempts(), base.backoffStart(), base.backoffMax(), pageSize);
+            this.errorSettings = new ErrorSettings(base.retryAttempts(), base.backoffStart(), base.backoffMax(), pageSize, base.parkedRetryInitial(), base.parkedRetryMax());
             seams(owner.seams);
         }
 

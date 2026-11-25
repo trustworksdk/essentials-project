@@ -198,12 +198,23 @@ public final class EventLogSchemaContributor implements DynamicSchemaContributor
                         "    parked_at       timestamptz NOT NULL DEFAULT now(),\n" +
                         "    requested       text        CHECK (requested IN ('RETRY', 'DISCARD')),\n" +
                         "    requested_at    timestamptz,\n" +
+                        "    retries         integer     NOT NULL DEFAULT 0,\n" +
+                        "    next_retry_at   timestamptz,\n" +
+                        "    terminal        boolean     NOT NULL DEFAULT false,\n" +
+                        "    last_failed_at  timestamptz,\n" +
                         "    PRIMARY KEY (subscriber, aggregate_type, instance_name, global_order)\n" +
                         ")",
                 // An operator's retry or discard request on a parked head, served by the node that runs the
                 // subscription; added to a table created without it
                 "ALTER TABLE " + PARKED_EVENTS_TABLE + " ADD COLUMN IF NOT EXISTS requested text CHECK (requested IN ('RETRY', 'DISCARD'))",
                 "ALTER TABLE " + PARKED_EVENTS_TABLE + " ADD COLUMN IF NOT EXISTS requested_at timestamptz",
+                // The automatic retry of a parked head: failed retries so far, when the next is due (null for a held row
+                // and a terminal head), whether only an operator may retry it (a ParkEventException), the last failure;
+                // added to a table created without them
+                "ALTER TABLE " + PARKED_EVENTS_TABLE + " ADD COLUMN IF NOT EXISTS retries integer NOT NULL DEFAULT 0",
+                "ALTER TABLE " + PARKED_EVENTS_TABLE + " ADD COLUMN IF NOT EXISTS next_retry_at timestamptz",
+                "ALTER TABLE " + PARKED_EVENTS_TABLE + " ADD COLUMN IF NOT EXISTS terminal boolean NOT NULL DEFAULT false",
+                "ALTER TABLE " + PARKED_EVENTS_TABLE + " ADD COLUMN IF NOT EXISTS last_failed_at timestamptz",
                 createIndexUnlessPresent(PARKED_EVENTS_TABLE, PARKED_EVENTS_TABLE + "_aggregate",
                                          "CREATE INDEX IF NOT EXISTS " + PARKED_EVENTS_TABLE + "_aggregate ON " + PARKED_EVENTS_TABLE +
                                                  " (subscriber, aggregate_type, instance_name, aggregate_id, global_order)"),
