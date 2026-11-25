@@ -3,6 +3,13 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.61.0-2 — targets Essentials 0.61.0
+
+- **Foundation and shard-owned references: no "from 0.61" promise** — the references said an incomplete
+  `RedeliveryPolicy` builder and a shard-owned builder without a `UnitOfWorkFactory` fail to build from 0.61. 0.61.0
+  shipped with both still only WARNing; the references now say a later 0.6x minor release will refuse them. No skill,
+  rule or script changed.
+
 ## 0.61.0-1 — targets Essentials 0.61.0
 
 - **Event-store reference: CDC with `wal2json` on PostgreSQL 17.12 / 18** — such a server needs `wal2json` in

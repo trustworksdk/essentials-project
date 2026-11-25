@@ -30,8 +30,9 @@ import java.util.*;
  * message), an unset multiplier is {@code 0.0} (the follow-up delay never grows). An unset delay already fails, but as a
  * {@code requireNonNull} on a field name, typically during Spring bean creation, where it reads like a wiring problem.
  * <p>
- * In 0.60.x every problem found is logged in one WARN that names the setter to call, and {@code build()} otherwise
- * behaves as before. From 0.61 {@code build()} throws {@link IllegalArgumentException} instead.
+ * Every problem found is logged in one WARN that names the setter to call, and {@code build()} otherwise behaves as
+ * before. A later 0.6x minor release will make {@code build()} throw {@link IllegalArgumentException} instead (QL-3;
+ * 0.61.0 did not).
  */
 final class RedeliveryPolicyBuilderChecks {
     private static final Logger log = LoggerFactory.getLogger(RedeliveryPolicy.class);
@@ -76,11 +77,11 @@ final class RedeliveryPolicyBuilderChecks {
 
     void warnIfIncomplete() {
         if (!problems.isEmpty()) {
-            log.warn("Incomplete RedeliveryPolicy built with {}: {}. From 0.61 build() will throw an IllegalArgumentException instead.",
+            log.warn("Incomplete RedeliveryPolicy built with {}: {}. A later release will make build() throw an IllegalArgumentException instead.",
                      builderName, String.join("; ", problems));
             EssentialsRunReport.addToCurrent(EssentialsRunReport.Finding.warn("RedeliveryPolicy built with " + builderName,
                                                                                       "incomplete: " + String.join("; ", problems),
-                                                                                      "Call the setters named on the builder. From 0.61 build() throws an IllegalArgumentException instead"));
+                                                                                      "Call the setters named on the builder. A later release will make build() throw an IllegalArgumentException instead"));
         }
     }
 }

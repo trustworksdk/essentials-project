@@ -230,12 +230,12 @@ public class ShardOwnedDurableQueues implements DurableQueues {
         if (unitOfWorkFactory == null) {
             log.warn("ShardOwnedDurableQueues was built without a UnitOfWorkFactory: every enqueue commits on its own connection "
                      + "and is NOT rolled back with the caller's transaction, so an Outbox on this engine is not transactional. "
-                     + "Call setUnitOfWorkFactory(...) on the builder - from 0.61 the builder will require one.");
+                     + "Call setUnitOfWorkFactory(...) on the builder - a later release will make the builder require one.");
             EssentialsRunReport.addToCurrent(EssentialsRunReport.Finding.warn(
                     "ShardOwnedDurableQueues",
                     "built without a UnitOfWorkFactory: every enqueue commits on its own connection and is NOT rolled back with the caller's transaction, "
                             + "so an Outbox on this engine is not transactional",
-                    "Call setUnitOfWorkFactory(...) on ShardOwnedDurableQueuesBuilder - from 0.61 the builder requires one"));
+                    "Call setUnitOfWorkFactory(...) on ShardOwnedDurableQueuesBuilder - a later release will make the builder require one"));
         }
     }
 

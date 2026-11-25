@@ -295,7 +295,7 @@ RedeliveryPolicy.exponentialBackoff(
 every setter except `setDeliveryErrorHandler`.** An unset `setMaximumNumberOfRedeliveries` silently means **0**
 redeliveries (the first failure dead-letters the message) and an unset multiplier means no growth. Since 0.60.1
 `build()` logs one WARN naming each missing or out-of-range setter (delays, multiplier < 1.0, maximum redeliveries not
-set explicitly - pass `0` if you mean it); from 0.61 it throws `IllegalArgumentException` instead.
+set explicitly - pass `0` if you mean it); a later 0.6x minor release will make it throw `IllegalArgumentException` instead (0.61.0 did not).
 
 ### MessageDeliveryErrorHandler
 
