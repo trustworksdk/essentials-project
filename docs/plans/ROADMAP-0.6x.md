@@ -144,8 +144,10 @@ shows up only as stale data.
 **Count only real sweep recoveries (NW-4).** The shard-owned engine's `sweepRecoveries` statistic also counts a row
 that committed between a pass's cursor read and its head sweep (two statements, two snapshots). Nothing was stepped
 over, and the counter's Javadoc already says a recovery is "not a defect by itself", but a dashboard alerting on it
-fires on harmless rows, most often in the start-up sweep. **Fix:** count only swept rows with `seq <= safeCursor`, and
-say in the release notes that the counter's meaning narrowed.
+fires on harmless rows, most often in the start-up sweep. 0.61.1 documents this and names
+`sweepRecoveriesBehindCursor` (ordered lane, `snapshot()` only) as the counter to alert on. **Open, for a minor:**
+count only swept rows with `seq <= safeCursor` in `sweepRecoveries` itself (and for the unordered lane), and say in
+the release notes that the counter's meaning narrowed.
 
 ### Database schema at startup
 
