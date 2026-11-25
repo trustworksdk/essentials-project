@@ -151,6 +151,8 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
 
         var received   = new CopyOnWriteArrayList<Long>();
         var resets     = new CopyOnWriteArrayList<Long>();
+        // The resume point stored in the database at the moment the subscription reports the reset
+        var storedAtReset = new CopyOnWriteArrayList<Long>();
         var resetLatch = new CountDownLatch(1);
 
         var subscriberId = SubscriberId.of("orders-sub-it");
@@ -173,6 +175,10 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
                     @Override
                     public void onResetFrom(EventStoreSubscription s, GlobalEventOrder g) {
                         resets.add(g.longValue());
+                        // Called after the reset is saved and before the subscription restarts, so nothing can have
+                        // moved the stored resume point on yet
+                        durableSubscriptionRepository.getResumePoint(subscriberId, ORDERS)
+                                                     .ifPresent(rp -> storedAtReset.add(rp.getResumeFromAndIncluding().longValue()));
                         resetLatch.countDown();
                     }
 
@@ -264,18 +270,10 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
         assertThat(resetLatch.await(10, TimeUnit.SECONDS)).isTrue();
         assertThat(resets).contains(2L);
 
-        // pollDelay(ZERO): the reset persists the rewound resume point synchronously, so the DB
-        // holds 2 the instant the reset completes; re-processing then re-advances it and the 1s
-        // snapshot persists the higher value. Observe from t=0 so the synchronously-persisted reset
-        // value is caught deterministically regardless of re-delivery speed.
-        await()
-                  .pollDelay(Duration.ZERO)
-                  .atMost(Duration.ofSeconds(5))
-                  .pollInterval(Duration.ofMillis(50))
-                  .untilAsserted(() -> {
-                      var rp = durableSubscriptionRepository.getResumePoint(subscriberId, ORDERS).orElseThrow();
-                      assertThat(rp.getResumeFromAndIncluding().longValue()).isEqualTo(2L);
-                  });
+        // The reset is stored in the database before the subscription restarts. It is read from onResetFrom rather than
+        // polled from here: the replay re-advances the stored resume point within one snapshot interval (75 ms in this
+        // test), so a poll from this thread could miss the rewound value when it is delayed (seen on CI: expected 2, was 6)
+        assertThat(storedAtReset).as("resume point stored when the reset was reported").containsExactly(2L);
 
         // Wait until the replay after the reset has delivered GO=5 again (GO=2 is a permanent gap). The baseline was
         // taken before the poison was injected: a baseline taken here could already include the replayed GO=5 when
