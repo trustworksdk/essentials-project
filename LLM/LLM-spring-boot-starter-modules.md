@@ -184,10 +184,11 @@ Package: `dk.trustworks.essentials.components.boot.autoconfigure.eventlog`. Off 
 - `AnnotationBasedInMemoryProjector` (with `eventsourced-aggregates`) and the auto-flush interceptor - as the Event Store starter declares them, under its properties
 - `EventLogProcessorLifecycle` - starts `ViewProjection` / `EventReactor` beans after refresh, stops them before the engine (not in schema mode `emit`)
 - `EventLogSubscriptionsApi` - with the Admin API starter and an `EssentialsSecurityProvider`
+- `EventLogParkedHealthIndicator` (`eventLogParked`) - with Spring Boot's health support: terminal parked heads report `essentials.event-log.health.terminal-parked-status` (default `DOWN`), retrying heads alone `UP`; one summary read per `essentials.event-log.health.cache-ttl` (10 s); off with `management.health.eventLogParked.enabled=false`. Keep it out of the liveness and readiness groups
 
 With the Event Store starter also on the class path, an `AutoConfigurationImportFilter` drops its `EventStoreConfiguration` while enabled: no `EventStoreSubscriptionManager`, gap handler, CDC, `EventProcessorDependencies` or `ViewEventProcessorDependencies`. Classic `EventProcessor`/`ViewEventProcessor`/`PartitionedViewEventProcessor`/`InTransactionEventProcessor` beans then fail start-up with a message naming each bean and the event-log base class to port it to.
 
-**Properties:** every `EventLogSettings` value under `essentials.event-log.*` (for example `page-size`, `backstop-interval`, `lease-duration`, `node-name`, `hole-probe-wait-max`) - see [Settings](LLM-postgresql-event-log.md#settings).
+**Properties:** every `EventLogSettings` value under `essentials.event-log.*` (for example `page-size`, `backstop-interval`, `lease-duration`, `node-name`, `hole-probe-wait-max`, `parked-retry-initial` / `parked-retry-max`), plus `essentials.event-log.health.*` for the health indicator - see [Settings](LLM-postgresql-event-log.md#settings).
 
 ### Admin API Starter
 
@@ -204,7 +205,7 @@ Package: `dk.trustworks.essentials.components.boot.autoconfigure.admin.api`
 public class EssentialsAdminApiAutoConfiguration
 ```
 
-**Endpoints:** 67 operations under `/api/essentials/admin/v1` — see [LLM-admin-api.md](LLM-admin-api.md)
+**Endpoints:** 69 operations under `/api/essentials/admin/v1` — see [LLM-admin-api.md](LLM-admin-api.md)
 
 **Required:** Implement `EssentialsAuthenticatedUser` and `EssentialsSecurityProvider` beans. Both default to no-access, so an application that implements neither exposes nothing.
 

@@ -18,7 +18,8 @@ remove it, instead of keeping it because nobody can tell._
 - Shard-owned queues: `purgeQueue` inside a unit of work commits or rolls back with it (§1.1.1).
 - A new event store engine, as a **preview** and off by default (`essentials.event-log.enabled`): its modules, a
   Spring Boot starter, admin operations and an admin console view (§2.2-§2.7). Existing event processors must be
-  ported to run on it.
+  ported to run on it. Its parked aggregates retry by themselves, with meters, bulk admin operations and a health
+  indicator (§2.13).
 
 ---
 
@@ -39,6 +40,7 @@ remove it, instead of keeping it because nobody can tell._
    - [2.10 New event store engine starter: tracing and append timing, as on the old engine (`spring-boot-starter-postgresql-event-log`)](#210-new-event-store-engine-starter-tracing-and-append-timing-as-on-the-old-engine-spring-boot-starter-postgresql-event-log)
    - [2.11 New event store engine: per-subscriber TRACE and causation in every processor (`postgresql-event-log`, `postgresql-event-log-processor`)](#211-new-event-store-engine-per-subscriber-trace-and-causation-in-every-processor-postgresql-event-log-postgresql-event-log-processor)
    - [2.12 New event store engine: processors read only the event types they handle (`postgresql-event-log-processor`)](#212-new-event-store-engine-processors-read-only-the-event-types-they-handle-postgresql-event-log-processor)
+   - [2.13 New event store engine: parked aggregates retry by themselves (`postgresql-event-log`, `postgresql-event-log-processor`, `spring-boot-starter-postgresql-event-log`, admin API and console)](#213-new-event-store-engine-parked-aggregates-retry-by-themselves-postgresql-event-log-postgresql-event-log-processor-spring-boot-starter-postgresql-event-log-admin-api-and-console)
 3. [Bug fixes](#3-bug-fixes)
 4. [The `essentials` Claude Code plugin](#4-the-essentials-claude-code-plugin)
 5. [Examples](#5-examples)
@@ -307,8 +309,8 @@ Hardened before release (code review of the preview). Each item changed what an 
   it reads the held events in one short transaction and deletes them and saves progress in another, so a slow handler
   no longer blocks the lease renewal. Before, an exclusive subscription's retry slower than `lease-local-stop` (7 s)
   was rolled back every time and the aggregate stayed parked. A reset during the handler now goes ahead and the events
-  are delivered again. An exclusive *in-transaction* subscription's retry must still finish within `lease-local-stop`
-  (the handler runs inside that transaction); raise it for slow aggregates.
+  are delivered again. An in-transaction subscription's retry now also runs its handler before it locks the progress
+  row (§2.13), so no parked retry has to finish within `lease-local-stop` any more.
 - The lease keeper survives a renewal pass that ends in an `Error`; before, its thread ended and every exclusive
   subscription of the node suspended until another subscription registered. A retry or discard request made while a
   subscription is stopping now completes (with an exception) instead of never completing.
@@ -499,6 +501,64 @@ database work per event.
   `JSONEventSerializer` maps stored event type names to classes other than the named ones, or add names to
   `super.eventTypeFilter()`.
 
+### 2.13 New event store engine: parked aggregates retry by themselves (`postgresql-event-log`, `postgresql-event-log-processor`, `spring-boot-starter-postgresql-event-log`, admin API and console)
+
+**Preview.** A parked aggregate no longer waits for an operator. The engine retries it by itself, in the aggregate's
+order, forever: first `parkedRetryInitial` (1 s) after it parked, then after each failed retry twice as long, at most
+`parkedRetryMax` (5 min). A downstream outage that parked events therefore heals on its own once it ends, at most
+about `parkedRetryMax` later. (`7367c9bc0`)
+
+- **Terminal heads wait for an operator.** A head is terminal when it failed with `ParkEventException`. The processors
+  (`postgresql-event-log-processor`, and so every base class) now throw `ParkEventException` for an event whose payload
+  or metadata text is not JSON at all (blank, truncated), so it parks as terminal at once instead of retrying
+  (`4704c1e2c`). An unknown event class, or valid JSON that does not fit the class, keeps retrying, so a rolling
+  deployment that brings the class heals it. The latest failure decides: a terminal head whose operator retry fails
+  with an ordinary exception retries by itself from then on, and a retrying head that throws `ParkEventException`
+  becomes terminal.
+- **Settings.** `EventLogSettings.parkedRetryInitial` / `parkedRetryMax`, per subscription on `ErrorSettings` (its
+  four-argument constructor is kept); Spring: `essentials.event-log.parked-retry-initial` / `parked-retry-max`.
+- **Cost.** Only the running owner retries, at most four due heads per pass, on the same serve path as an operator's
+  retry. While nothing is parked or due no extra statement is sent. The schedule lives on the parked row
+  (`el_parked_events` gains `retries`, `next_retry_at`, `terminal`, `last_failed_at`, added with
+  `ADD COLUMN IF NOT EXISTS`) and is measured by the database's clock, so a new lease owner continues it.
+- **Late locking.** Every serve of a parked head, automatic or operator, runs the handler with no lock on the progress
+  row and locks it only afterwards. Before, an in-transaction subscription's retry held the progress row while its
+  handler ran, the lease renewal waited on it, and a retry slower than `lease-local-stop` (7 s) was rolled back every
+  time. A reset during the handler now goes ahead and the retry rolls back.
+- **Meters and observer** (`03eb00714`): `essentials.eventlog.subscription.parked.heads{state=retrying|terminal}` (gauge),
+  `essentials.eventlog.subscription.parked.retries{origin=auto|operator, outcome=released|failed|deferred}` (counter) and
+  `essentials.eventlog.subscription.parked.oldest.age` (time gauge). `EventLogObserver` gains the default methods
+  `onParkedRetry` and `onParkedHeads`; `SubscriptionStatus` gains `retryingHeads` and `terminalHeads` (old constructor
+  kept, deprecated).
+- **Admin** (`d23c91436`, `0de20325e`): `EventLogAdmin.retryAllParked(key)` / `discardAllParked(key)` store the request
+  on every parked head of a subscription in one statement (`BulkParkedResult`), and `parkedSummary()` reads every
+  subscription's parked heads in one statement. `SubscriptionRow` gains `retryingHeads`, `terminalHeads`,
+  `oldestParkedAt`, `nextRetryAt`, `maxRetries`, `lastFailedAt`; `ParkedRow` gains `retries`, `nextRetryAt`,
+  `terminal`, `lastFailedAt` (old constructors kept, deprecated). The admin API adds `POST
+  .../parked-events/retry-all` and `.../parked-events/discard-all` (`SUBSCRIPTION_WRITER`), so the event-log area has
+  nine operations and the contract 69; the API rows carry the same new fields. The console's event-log view shows
+  "N terminal - needs action" / "N retrying - self-healing", the oldest parked age, per head its retries, next retry
+  and last failure, and *Retry all parked* / *Discard all parked* buttons (discard asks you to type the subscriber).
+- **Health indicator** (`a642d7e84`): `EventLogParkedHealthIndicator` (`eventLogParked`) on `/actuator/health`. Retrying
+  heads alone report `UP`; a terminal head reports `essentials.event-log.health.terminal-parked-status` (default
+  `DOWN`); a failing read reports `DOWN`. The summary is cached for `essentials.event-log.health.cache-ttl` (10 s). Off
+  with `management.health.eventLogParked.enabled=false`. `spring-boot-health` is now a `provided` dependency of the
+  starter.
+
+**What changes for you:** parked aggregates are released without you once the cause goes away. A
+`ParkEventException` you throw for a condition that may pass now makes the head terminal; throw an ordinary exception
+instead. On upgrade, a head parked before it has no stored schedule and is **due at once**: every aggregate parked under
+an earlier preview build is retried as soon as its subscription runs.
+
+**What to do:** keep `eventLogParked` out of the `liveness` and `readiness` health groups - a terminal park is a data
+problem a restart does not fix, and every replica reports it - and alert on it or on
+`essentials.eventlog.subscription.parked.heads{state=terminal}` instead. If the composite `/actuator/health` is a probe,
+set `terminal-parked-status` to a status the probe ignores or switch the indicator off.
+
+**How to observe it:** a parked head's `nextRetryAt` in the admin API or console, and
+`essentials.eventlog.subscription.parked.retries{origin=auto}` counting. Before, a parked aggregate stayed parked until
+an operator retried or discarded it.
+
 ---
 
 ## 3. Bug fixes
@@ -517,6 +577,10 @@ database work per event.
 0.61.0 shipped plugin `0.61.0`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md).
 
+- **0.61.0-15** — the event-log reference documents parked aggregates that retry by themselves (§2.13): terminal
+  heads, the two settings, the parked meters and observer callbacks, the bulk admin operations and the health
+  indicator; it drops the `lease-local-stop` gotcha for parked retries, leads with the measured benefits over the
+  classic engine with CDC, and the admin API count is 69.
 - **0.61.0-14** — the event-log reference, module index and traps index say the new engine is a preview from 0.62.0,
   not 0.61.0, which shipped without it.
 - **0.61.0-12** — the event-log reference warns that an exclusive in-transaction subscription's parked retry must finish

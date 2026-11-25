@@ -3,6 +3,21 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.61.0-15 — targets Essentials 0.61.0
+
+- **Event log: parked aggregates retry by themselves** — the event-log reference says a parked aggregate is retried by
+  the engine (`parked-retry-initial` 1 s doubling to `parked-retry-max` 5 min, forever) unless its head is terminal (a
+  `ParkEventException`, or a payload that is not JSON), lists the new settings, the parked meters
+  (`…parked.heads`, `…parked.retries`, `…parked.oldest.age`), the observer callbacks `onParkedRetry` / `onParkedHeads`,
+  the bulk admin operations and the `EventLogParkedHealthIndicator` with its properties. The gotcha that an exclusive
+  in-transaction subscription's parked retry must finish within `lease-local-stop` is gone: a parked retry no longer
+  holds the progress row while its handler runs.
+- **Event log: when to use it** — the reference leads with what the phase-10 gate measured against the classic engine
+  with CDC (median commit-to-handled latency, WAL, no logical replication; throughput and p99 on a par) and adds the
+  2026-11-20 CPU follow-up to the known limits.
+- **Admin API: 69 operations** — the admin API, components and starter references count the two new event-log
+  operations (retry all and discard all parked events). No skill, rule or script changed.
+
 ## 0.61.0-14 — targets Essentials 0.61.0
 
 - **Event log: preview in 0.62.0** — 0.61.0 shipped without the new event store engine, so the event-log reference,

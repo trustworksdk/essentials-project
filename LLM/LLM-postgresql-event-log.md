@@ -13,6 +13,7 @@
 | **Packages** | `dk.trustworks.essentials.components.eventlog` (engine), `…eventlog.processor` (processors, adapter, admin SPI under `…processor.api`), `…eventlog.migration` |
 | **Tables** | Prefixed `el_` (`el_progress`, one event table per aggregate type, …) |
 | **Status** | Preview, off by default (`essentials.event-log.enabled=false`) |
+| **Benefits vs classic + CDC** | Commit-to-handled p50 about 20-31 ms against 171-232 ms; 15-20 % less WAL; no logical replication or gap handling. Throughput and p99 about even (phase-10 gate) |
 | **Replaces** | Nothing yet. It runs instead of the classic engine in one application, never beside it on the same aggregate types |
 
 ## TOC
@@ -32,7 +33,11 @@
 ## When to use it
 
 Choose the classic event store for production systems today. Consider the event log when you can run a preview and
-want what it changes:
+want what it changes. Measured against the classic engine with CDC in the phase-10 load gate (trading demo, one and two
+instances): a typical event reaches its handler much sooner after commit - commit-to-handled p50 about 20-31 ms against
+171-232 ms - while throughput and p99 latency are about even (on a par, not better); about 15-20 % less WAL per order;
+and it gets there without logical replication (no `wal2json`, replication slot or `output_plugin_libraries`) and without
+the classic gap machinery. It costs more database CPU (see [Known limits](#known-limits)).
 
 - **Subscriptions without CDC, gap handler or fenced lock.** A subscription follows the database's own transaction
   visibility (a watermark from the `pg_stat_activity` view, counting only this database's writers), so it never skips a late commit and needs no gap handling.
@@ -41,7 +46,9 @@ want what it changes:
   models, `FRESH` (every committed event as soon as it is seen, per-aggregate order only) for reactions.
 - **Views committed with their resume point.** A view's writes and its progress commit in one page transaction.
 - **Retry, page shrinking and parking are the engine's**: a failing event is retried alone, then parked; the rest of the
-  stream continues. Parked events are retried or discarded from the admin API. A parked event holds its aggregate:
+  stream continues. A parked aggregate **retries by itself** (1 s, doubling to 5 min, forever) unless its head is
+  terminal (a `ParkEventException`, or a payload that is not JSON), so a downstream outage heals without an operator.
+  Parked events can also be retried or discarded from the admin API, one at a time or all of a subscription's at once. A parked event holds its aggregate:
   a retry or discard hands the head (on a retry) and the events held behind it to the handler, at most `pageSize` per
   transaction (the next one then heads the aggregate with a retry request). A held event that fails becomes the new
   head, after the events before it are applied - retry or discard it next; nothing gets stuck behind a second poison event.
@@ -282,6 +289,19 @@ engine's own work (the page connection lost, beginning or committing the page, t
 indefinitely without shrinking and without parking, so a database outage never parks events. There is **no permanent-error list**: an
 `IllegalArgumentException` is retried and parked like any other failure.
 
+**Parked aggregates retry by themselves.** A parked aggregate is retried by the engine, in its order, forever: first
+`parked-retry-initial` (1 s) after it parked, then after each failed retry twice as long, at most `parked-retry-max`
+(5 min). A head is **terminal** - retried only when an operator asks - when it failed with `ParkEventException`; with the
+processors (and so the base classes) also when its payload or metadata text is not JSON at all (blank, truncated), which
+`EventDeserializer` reports as a `ParkEventException`. An unknown event class, or valid JSON that does not fit the class,
+is an ordinary failure and keeps retrying, so a rolling deployment that brings the class heals it. The latest failure
+decides: a terminal head whose operator retry fails with an ordinary exception retries by itself from then on, and a
+retrying head that throws `ParkEventException` becomes terminal. The schedule is stored on the parked row and measured by
+the database's clock, so a new lease owner continues it; a head parked before the upgrade (no stored schedule) is due at
+once. Only the running owner retries, at most four due heads per pass, through the same serve path as an operator's
+retry; while nothing is parked or due it sends no extra statement. Every serve, automatic or operator, runs the handler
+with no lock on the progress row and locks it only afterwards, so a slow retry never delays lease renewals.
+
 ## Porting from the EventProcessor family
 
 The classic processors do not run on the new engine: there is deliberately no `EventStoreSubscriptionManager` adapter.
@@ -343,6 +363,9 @@ most often touched:
 | `page-size` | `100` | Most events in one page transaction; also `EventLogInboxProcessor`'s default `forwardPageSize()` |
 | `retry-attempts` | `3` | Retries of an event failing alone before it is parked |
 | `retry-backoff-initial` / `retry-backoff-max` | `10ms` / `10s` | Doubling backoff between those retries, and after an I/O failure |
+| `parked-retry-initial` / `parked-retry-max` | `1s` / `5m` | Automatic retry of a parked, non-terminal aggregate: first wait, doubled per failed retry up to the max; forever. Per subscription: `ErrorSettings.parkedRetryInitial` / `parkedRetryMax` |
+| `health.cache-ttl` | `10s` | How long `EventLogParkedHealthIndicator` reuses its parked summary |
+| `health.terminal-parked-status` | `DOWN` | Health status while any subscription has a terminal parked head (any Spring Boot status code) |
 | `progress-save-interval` | `1s` | Periodic resume-point save of `FRESH` reactors |
 | `hole-probe-wait-max` | `100ms` | Most time between two running-set probes of an aggregate type while a hole of it waits |
 | `cross-jvm-wake-up` | `true` | `NOTIFY`/`LISTEN` wake-ups between instances |
@@ -372,6 +395,9 @@ observer bean **replaces** it - to keep both, extend `MicrometerEventLogObserver
 | `essentials.eventlog.subscription.parked` | counter | parked heads and events held behind them |
 | `essentials.eventlog.subscription.lease_lost` | counter | leases an exclusive subscription lost |
 | `essentials.eventlog.subscription.page` | timer, `outcome=committed\|failed` | in-transaction page time (handler included); periodic subscriptions have no pages |
+| `essentials.eventlog.subscription.parked.heads` | gauge, `state=retrying\|terminal` | parked heads the engine retries by itself, and terminal ones only an operator can release. A growing `terminal` needs action |
+| `essentials.eventlog.subscription.parked.retries` | counter, `origin=auto\|operator`, `outcome=released\|failed\|deferred` | serves of a parked head: released (applied or discarded), failed again, or deferred (nothing stored: a reset, takeover or change got there first) |
+| `essentials.eventlog.subscription.parked.oldest.age` | time gauge | how long the oldest parked head has been parked; 0 when none is |
 | `essentials.eventlog.lease.renewal_failed` | counter, no subscriber tag | lease keeper passes that failed |
 | `essentials.eventlog.reader.oldest_candidate_age` | time gauge, `aggregate_type` (and `Module`) only | how long the tail reader's oldest unresolved hole candidate has waited; 0 when none. While it grows the type's watermark stands still and every `CONTIGUOUS` subscriber of the type waits: an append that drew a hole has not ended |
 
@@ -380,7 +406,20 @@ owns it again and saves; a stopped subscription's meters are removed once the la
 (`EventLogObserver.onStarted` / `onStopped`, one pair per delivery thread; instances share their meters). An observer that
 throws is logged (WARN at most once a minute) and ignored - it never stops delivery.
 
-Meters are cached per subscription and updated per page, read or failure, never per event.
+Meters are cached per subscription and updated per page, read or failure, never per event. The parked meters come from
+two `EventLogObserver` callbacks: `onParkedRetry(subscriber, aggregateType, head, auto, outcome, retries, nextIn)` once
+per serve of a parked head, and `onParkedHeads(subscriber, aggregateType, retrying, terminal, oldestAge)` whenever the
+held set or the retry schedule changes. A handle's `status()` (`SubscriptionStatus`) carries `retryingHeads` and
+`terminalHeads` (they add up to `heldAggregates`).
+
+**Health.** With Spring Boot's health support the starter declares `EventLogParkedHealthIndicator` (`eventLogParked`),
+which reads every subscription's parked heads in one statement (`EventLogAdmin.parkedSummary()`), cached for
+`essentials.event-log.health.cache-ttl` (10 s). Only retrying heads, or none: `UP` (they heal by themselves; the details
+list them). A terminal head: `essentials.event-log.health.terminal-parked-status` (default `DOWN`). A failing read:
+`DOWN`. The details name per subscription the terminal and retrying counts, the oldest park, the next retry and the last
+failure. A terminal park is a data problem that a restart does not fix and every replica reports alike, so **keep
+`eventLogParked` out of the liveness and readiness groups**; point alerting at it instead. Switch it off with
+`management.health.eventLogParked.enabled=false`.
 
 **A long transaction and the watermark.** A hole in a type's `global_order` is resolved once no transaction that was
 running when it appeared can still commit into it. Any transaction of the database that holds an xid (it has written
@@ -418,9 +457,14 @@ names to other classes) or add names. A changed filter keeps the subscription's 
 
 `EventLogSubscriptionsApi` (`…eventlog.processor.api`, implementation `DefaultEventLogSubscriptionsApi(securityProvider,
 eventLog)`) answers from the database, so any instance sees every instance's subscriptions. Through
-`spring-boot-starter-admin-api` it is served as seven operations under `/event-log/subscriptions` (tag
-`event-log-subscriptions`): list, get, parked events, reset, retry or discard a parked event, delete a retired
-per-instance subscription. Reads need `SUBSCRIPTION_READER`, changes `SUBSCRIPTION_WRITER`; `ESSENTIALS_ADMIN` does both.
+`spring-boot-starter-admin-api` it is served as nine operations under `/event-log/subscriptions` (tag
+`event-log-subscriptions`): list, get, parked events, reset, retry or discard a parked event, retry all or discard all of a
+subscription's parked heads, delete a retired per-instance subscription. The bulk operations
+(`EventLogAdmin.retryAllParked` / `discardAllParked`) store the request on every parked head in one statement and return
+how many (`BulkParkedResult`: `subscriptionFound`, `requested`, `nudgedLocally`); the node that runs the subscription
+serves them a few per pass, terminal heads included. Subscription rows carry `retryingHeads`, `terminalHeads`,
+`oldestParkedAt`, `nextRetryAt`, `maxRetries` and `lastFailedAt`; parked rows `retries`, `nextRetryAt`, `terminal` and
+`lastFailedAt`. Reads need `SUBSCRIPTION_READER`, changes `SUBSCRIPTION_WRITER`; `ESSENTIALS_ADMIN` does both.
 **Reset refuses a view or processor subscription** (`IllegalArgumentException` naming its owner; HTTP 400) - a
 `ViewProjection` bean (call its `rebuild(truncate)`), one of an
 `EventLogViewProcessor` or `EventLogPartitionedViewProcessor` (call its `rebuild()`, which clears the view, or purges the
@@ -431,7 +475,9 @@ application that serves the admin call are known: a subscription of a processor 
 not refused, nor is a `ViewProjection` built outside the context. A reset moves the resume point only: nothing a
 handler wrote is undone, so a refused view would re-apply events on top of its rows. The starter wires the refusal; by hand it is
 `DefaultEventLogSubscriptionsApi(securityProvider, eventLog, key -> Optional<reason>)`.
-The admin console (`spring-boot-starter-admin-ui`) shows them under *Event store → Event-log subscriptions*. Details:
+The admin console (`spring-boot-starter-admin-ui`) shows them under *Event store → Event-log subscriptions*: retrying
+and terminal counts, the oldest parked age, per head its retries, next retry and last failure, and *Retry all parked* /
+*Discard all parked* buttons. Details:
 [LLM-admin-api.md](LLM-admin-api.md).
 
 ## Migrating existing data
@@ -449,8 +495,10 @@ prepared transaction holds the copy until it is committed or rolled back, and is
 
 - **Preview.** API, properties and table layout may change in a minor release.
 - **More database CPU.** The phase-10 load gate (trading demo, one and two instances) measured about 1.2-1.3× the classic
-  engine's PostgreSQL CPU per order and about 22 % more statements, for about 19 % less WAL and equal throughput. Size
-  the database for it.
+  engine's PostgreSQL CPU per order and about 22 % more statements, for 15-20 % less WAL and equal throughput. Since
+  then the processors read only the event types they handle; a follow-up on 2026-11-20 (4-day trading-demo runs)
+  measured 1.04× the classic engine's PostgreSQL CPU per order with one instance and 1.11× with two. Size the database
+  for it.
 - **Aggregate types are strings** in the processor constructors and builders, not `AggregateType`.
 - **No polling, CDC, `EventStoreSubscriptionManager`, in-transaction event processors or multi-type subscriptions.**
 - **One `EventLog` per `DataSource`.**
@@ -462,17 +510,18 @@ prepared transaction holds the copy until it is committed or rolled back, and is
   its port target, for example `Bean 'orderProjection' (com.x.OrderProjection) is an old-engine ViewEventProcessor. With essentials.event-log.enabled=true it must be ported to EventLogViewProcessor - see LLM-postgresql-event-log.md § Porting from the EventProcessor family.`
   Port it (above).
 - ⚠️ **A downstream outage the handler calls parks events.** A handler's own connection error is a handler failure:
-  after `retry-attempts` retries the event is parked (as the classic Inbox dead-letters). Raise `retry-attempts` /
-  `retry-backoff-max` for a subscription that must ride out a longer outage, and retry the parked aggregates after it.
+  after `retry-attempts` retries the event is parked (as the classic Inbox dead-letters). The engine then retries the
+  parked aggregate by itself (`parked-retry-initial` doubling to `parked-retry-max`), so it is released once the
+  outage ends, up to `parked-retry-max` (5 min) late; lower that for a faster recovery. Do not throw
+  `ParkEventException` for a condition that may pass: it makes the head terminal, and only an operator releases it.
 - ⚠️ **`stop()` returns after 30 s even if a handler ignores interrupts**, with a WARN; `isRunning()` stays `true`
   until the delivery thread really ends; until then, in the same `EventLog`, a re-subscribe of the same key (exclusive or
   not) and `deleteRetiredInstance` of its row are refused with `IllegalStateException`. `EventLog.stop()` interrupts
   every subscription first and waits for them together, so several stuck handlers cost one timeout, not one each.
-- ⚠️ **An exclusive in-transaction subscription's parked retry must finish within `lease-local-stop`** (7 s by default):
-  it hands every held event of the aggregate to the handler in one transaction that holds the progress row, which the
-  lease renewal waits on, so a slower retry is rolled back and the aggregate stays parked. Raise `lease-local-stop` /
-  `lease-duration` for such a subscription. A periodic subscription's retry holds no lock while its handler runs; a
-  reset meanwhile makes it deliver the events again (at least once).
+- ⚠️ **A reset during a parked retry wins.** Every parked retry, automatic or operator, runs its handler before it locks
+  the progress row, so lease renewals never wait on it and a reset meanwhile goes ahead: an in-transaction retry then
+  rolls back, while a periodic subscription's retry has already handled the events and delivers
+  them again (at least once).
 - ⚠️ **Payload columns are `json`, not `jsonb`**: the stored text is the serializer's compact output, byte-equal to the
   classic engine's.
 

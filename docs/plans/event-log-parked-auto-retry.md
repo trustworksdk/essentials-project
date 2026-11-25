@@ -1,6 +1,6 @@
 # Event log: parked aggregates retry by themselves
 
-Status: plan, not built. Decided 2026-11-25: a parked aggregate is retried by the engine forever on a capped backoff
+Status: built, steps 1-10 done (7367c9bc0..0de20325e, docs in the commit that closes it). Decided 2026-11-25: a parked aggregate is retried by the engine forever on a capped backoff
 (1 s doubling to 5 min, configurable); only a `ParkEventException` stops for an operator. Per-aggregate order is
 kept exactly as today.
 
