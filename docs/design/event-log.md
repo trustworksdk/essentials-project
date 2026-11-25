@@ -332,7 +332,9 @@ the backstop.
 - **`ViewProjection`** (`CONTIGUOUS`, exclusive, page transactions) and **`EventReactor`** (`FRESH`, exclusive,
   periodic progress) are built from a builder (`ViewProjection.builder(subscriber, type)…build(eventLog, serializer)`)
   with lambda dispatch by payload class (`Dispatch`). They catch nothing: retries, shrinking and parking are the engine's.
-  Deserialization runs inside the handler call, so a bad payload is a handler failure and parks.
+  Deserialization runs inside the handler call, so a bad payload is a handler failure: an unknown event class or JSON
+  that does not fit the class retries, while a payload or metadata text that is not JSON at all throws
+  `ParkEventException` and parks as terminal at once.
   `ViewProjection.rebuild(Truncate)` and `EventReactor.reset(StartFrom)` reset one subscription.
 - **Annotated base classes**, for porting the classic processors by superclass swap: `EventLogViewProcessor` (one
   `ViewProjection` per aggregate type, `rebuild()` with the `onRebuild(ProjectionContext)` hook, clear and reset in one

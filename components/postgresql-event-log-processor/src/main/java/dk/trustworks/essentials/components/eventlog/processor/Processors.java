@@ -26,7 +26,8 @@ final class Processors {
     }
 
     /**
-     * Deserialize inside the handler call, so a failure is a handler failure: retried, then parked. Since 0.62.0
+     * Deserialize inside the handler call, so a failure is a handler failure: retried, then parked (text that is not JSON
+     * at all parks at once as terminal, see {@link EventDeserializer}). Since 0.62.0
      * that holds even for a failure wrapped in an I/O-classified exception, so the former mutant that did so is retired
      */
     static DeliveredEvent deserialize(EventDeserializer deserializer, StoredEvent event, ProcessorSeams seams) throws SQLException {

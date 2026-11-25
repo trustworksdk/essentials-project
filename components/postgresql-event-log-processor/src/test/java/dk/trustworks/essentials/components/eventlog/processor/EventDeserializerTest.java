@@ -16,12 +16,14 @@
 
 package dk.trustworks.essentials.components.eventlog.processor;
 
-import dk.trustworks.essentials.components.eventlog.StoredEvent;
+import dk.trustworks.essentials.components.eventlog.*;
 import dk.trustworks.essentials.components.eventlog.processor.test_data.Added;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.EventMetaData;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
+import dk.trustworks.essentials.components.foundation.json.JSONDeserializationException;
 import dk.trustworks.essentials.components.foundation.types.*;
+import dk.trustworks.essentials.shared.reflection.LoadingClassFailedException;
 import org.junit.jupiter.api.Test;
 
 import java.time.OffsetDateTime;
@@ -121,5 +123,67 @@ class EventDeserializerTest {
     @Test
     void an_unknown_payload_class_throws() {
         assertThatThrownBy(() -> deserializer.deserialize(stored("FQCN:no.such.Type", "{}", null))).isInstanceOf(RuntimeException.class);
+    }
+
+    @Test
+    void the_jackson_parser_exception_name_is_the_real_class() {
+        // Matched by name because the module has no Jackson dependency: a Jackson rename must fail here, not silently retry forever
+        assertThat(EventDeserializer.JACKSON_STREAM_READ_EXCEPTION).isEqualTo(tools.jackson.core.exc.StreamReadException.class.getName());
+        assertThat(tools.jackson.core.exc.StreamReadException.class.isAssignableFrom(tools.jackson.databind.DatabindException.class)).isFalse();
+    }
+
+    @Test
+    void a_payload_that_is_not_json_parks_as_terminal_naming_the_event() {
+        for (var malformed : List.of("{not json", "{\"orderId\":\"o1\",\"amount\":1", "{\"orderId\":\"o1\",\"amount\":1} trailing", "", "  ")) {
+            var stored = stored("FQCN:" + Added.class.getName(), malformed, null);
+
+            assertThatThrownBy(() -> deserializer.deserialize(stored))
+                    .as(malformed)
+                    .isInstanceOfSatisfying(ParkEventException.class, e -> {
+                        assertThat(e.event()).isSameAs(stored);
+                        assertThat(e).hasCauseInstanceOf(JSONDeserializationException.class)
+                                     .hasMessageContaining("payload")
+                                     .hasMessageContaining(stored.eventId().toString())
+                                     .hasMessageContaining("not valid JSON");
+                    });
+        }
+    }
+
+    @Test
+    void metadata_that_is_not_json_parks_as_terminal() {
+        var stored = new StoredEvent("Orders", 7, 3, UUID.randomUUID(), null, null, "FQCN:" + Added.class.getName(), 1, OffsetDateTime.now(), "o1",
+                                     deserializer.serializer().serialize(new Added("o1", 5)), "{broken", null);
+
+        assertThatThrownBy(() -> deserializer.deserialize(stored)).isInstanceOf(ParkEventException.class)
+                                                                  .hasMessageContaining("metadata");
+    }
+
+    @Test
+    void an_unknown_payload_class_is_an_ordinary_failure_that_retries() {
+        // A rolling deployment brings the class: retrying heals it
+        assertThatThrownBy(() -> deserializer.deserialize(stored("FQCN:no.such.Type", "{\"a\":1}", null)))
+                .isNotInstanceOf(ParkEventException.class)
+                .isInstanceOf(LoadingClassFailedException.class);
+        // Even with a payload that would not parse: the class is resolved first, and its absence is the healable part
+        assertThatThrownBy(() -> deserializer.deserialize(stored("FQCN:no.such.Type", "{not json", null)))
+                .isNotInstanceOf(ParkEventException.class);
+    }
+
+    @Test
+    void valid_json_of_the_wrong_shape_is_an_ordinary_failure_that_retries() {
+        // A deployment can bring the class's new shape: retrying may heal it
+        for (var wrongShape : List.of("{\"orderId\":\"o1\",\"amount\":\"abc\"}", "[1,2]", "\"text\"", "{\"orderId\":{},\"amount\":1}")) {
+            assertThatThrownBy(() -> deserializer.deserialize(stored("FQCN:" + Added.class.getName(), wrongShape, null)))
+                    .as(wrongShape)
+                    .isInstanceOf(JSONDeserializationException.class)
+                    .isNotInstanceOf(ParkEventException.class);
+        }
+    }
+
+    @Test
+    void the_parser_failure_is_found_anywhere_in_the_cause_chain_and_nothing_else_matches() {
+        var parserFailure = new tools.jackson.core.exc.UnexpectedEndOfInputException(null, null, "end");
+        assertThat(EventDeserializer.isStreamReadFailure(new RuntimeException(new RuntimeException(parserFailure)))).isTrue();
+        assertThat(EventDeserializer.isStreamReadFailure(new IllegalStateException("x", new IllegalArgumentException()))).isFalse();
     }
 }
