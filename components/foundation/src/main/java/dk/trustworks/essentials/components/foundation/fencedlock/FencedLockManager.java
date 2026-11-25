@@ -50,6 +50,10 @@ import java.util.Optional;
 public interface FencedLockManager extends Lifecycle {
     /**
      * Lookup a lock
+     * <p>
+     * The result is a snapshot of the lock's stored state, not the {@link FencedLock} this lock manager holds: calling
+     * {@link FencedLock#release()} on it releases nothing (a {@link DBFencedLockManager} logs that at WARN). Release the
+     * instance the acquire returned or {@link LockCallback#lockAcquired(FencedLock)} was given.
      *
      * @param lockName the name of the lock
      * @return an {@link Optional} with the locks current state or {@link Optional#empty()} if the lock doesn't exist

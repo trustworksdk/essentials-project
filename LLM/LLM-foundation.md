@@ -699,7 +699,9 @@ lockManager.acquireLockAsync(LockName.of("ScheduledTask"), new LockCallback() {
 
 **Async acquiring across a lock manager `stop()`/`start()`** (the database-backed `PostgresqlFencedLockManager` and `MongoFencedLockManager`):
 
-- `stop()` cancels each async acquiring but keeps its registration (the lock name and its `LockCallback`); `start()` resumes every registration not cancelled with `cancelAsyncLockAcquiring`, with the callback it holds, and logs each one at WARN. Call `cancelAsyncLockAcquiring(lockName)` in your component's own stop, or the next `start()` gives the lock to the old callback again.
+- `stop()` cancels each async acquiring but keeps its registration (the lock name and its `LockCallback`); `start()` resumes every registration not cancelled with `cancelAsyncLockAcquiring`, with the callback it holds, and logs each one at WARN (at INFO when the start follows an ended lock confirmation, the documented recovery). Call `cancelAsyncLockAcquiring(lockName)` in your component's own stop, or the next `start()` gives the lock to the old callback again.
+- `acquireLockAsync` while the lock manager is not started registers nothing for a lock name without a kept registration: the next `start()` does not acquire that lock, and the call is logged at WARN. Start the lock manager before the components that acquire locks, or call `acquireLockAsync` again after it started.
+- `LockCallback` threading: outside a shutdown, `lockReleased` runs after its `lockAcquired` has returned; during a shutdown it can run on another thread while `lockAcquired` is still running. Make `lockReleased` safe to run alongside `lockAcquired` (guard the started state with a lock or an atomic).
 - While the lock manager is started, a repeated `acquireLockAsync` for a lock name registered since the last `start()`, or with the kept callback itself, does nothing and keeps the registered callback. One with another callback for a registration a `stop()` kept replaces it, as `cancelAsyncLockAcquiring` followed by `acquireLockAsync` would: the lock, when this instance holds it, is released first (which calls `lockReleased` on every callback registered with the lock, the old callback included when its resumed acquiring acquired it; any other caller in this JVM holding the same lock loses it too, see [Ownership is per lock-manager instance](#ownership-is-per-lock-manager-instance-not-per-caller-or-thread)), and after that the old callback is not called again. A failure of that release (a `lockReleased` callback throwing, say) is logged and the new callback is registered all the same; a critical error is rethrown. While it is stopped, a call with another callback replaces the registered one (no lock is held then) and `start()` schedules it; a call for a name with no registration registers nothing.
 
 **Lock confirmation ended:** when a critical error ends the scheduled lock confirmation, the lock manager releases locally every lock it holds (`lockReleased` is called and `LockReleased` published; the database rows are not released and expire after the lock timeout, so another instance can take a lock only after that) and publishes `FencedLockEvents.LockConfirmationEnded`; from then on `isLockConfirmationEnded()` returns `true` while `isStarted()` is still `true`. Until the lock manager is stopped and started again (or the application restarted), `tryAcquireLock` returns empty, `acquireLock` throws `IllegalStateException` and an async acquiring acquires nothing. No starter registers a health indicator for this state; call `isLockConfirmationEnded()` from your own.
@@ -707,7 +709,8 @@ lockManager.acquireLockAsync(LockName.of("ScheduledTask"), new LockCallback() {
 ### Pattern: Lock Status Queries
 
 ```java
-// Check if lock exists in database
+// Check if lock exists in database - a snapshot; release() on it releases nothing (logged at WARN):
+// release the FencedLock the acquire returned or lockAcquired was given
 Optional<FencedLock> lockInfo = lockManager.lookupLock(LockName.of("my-lock"));
 
 // Check if THIS instance holds the lock

@@ -235,38 +235,13 @@ RW-12 to RW-18 concern `DBFencedLockManager` (`components/foundation/.../fencedl
 interfaces in the same package, as changed on the `feat-slice-atlas` line: a `stop()` now keeps every async registration
 and `start()` resumes it, and an ended lock confirmation refuses every acquire until a stop and start.
 
-**An async acquire while the lock manager cannot acquire is dropped without a trace (RW-12).**
-
-- **Problem:** `DBFencedLockManager.acquireLockAsync` keeps a call made while the lock manager is stopped only when a
-  `stop()` kept a registration for the same lock name: the new callback then replaces the kept one, and `start()`
-  schedules it. For a lock name with no registration, the call falls through to the
-  `!started || stopping || shutdown != null || executor == null` check and is dropped with a DEBUG line. A registration
-  is missing exactly when the previous owner behaved well and called `cancelAsyncLockAcquiring` in its own stop, which
-  `an_async_acquiring_cancelled_while_the_lock_manager_is_stopped_is_not_resumed_by_its_start` pins. Separately,
-  `acquireLockAsync` does not check `confirmationEnded`, while `_tryAcquireLock`, the retry loops of
-  `tryAcquireLock(name, timeout)` and `acquireLock`, and `asyncLockAcquiringTick` do. Each entry point checks its own
-  subset of the five lifecycle flags (`started`, `stopping`, `paused`, `shutdown`, `confirmationEnded`) by hand, so a
-  missing check reads the same as a deliberate one.
-- **Consequence:** a component started before the lock manager, or recreated while it is stopped, gets its lock if its
-  predecessor leaked the registration, and never gets it if the predecessor cleaned up. Nothing above DEBUG says so.
-  The Leadership Election example in `LLM/LLM-foundation.md` documents this trap instead of avoiding it (RW-19). After
-  the confirmation has ended, `acquireLockAsync` registers an acquiring whose ticks log at DEBUG and do nothing, and
-  `stop()` drops it.
-- **Fix:**
-  - Keep a call made while stopped for every lock name: `computeIfAbsent` a kept `AsyncLockAcquiring` with an
-    already-cancelled sentinel future, so `start()`, `stop()` and `shutdownStarting` never meet a null future, and let
-    `start()` schedule it like any other kept registration. If that is not wanted, log the dropped call at WARN, and
-    state in the `acquireLockAsync` javadoc that a call while stopped is kept only for a lock name with a kept
-    registration. Either way, add a test for the cancelled-predecessor case that asserts the chosen outcome.
-  - Collect the refusal rule in one private method, for example
-    `Optional<String> acquireRefusedBecause(boolean holdingReentrantLock)`, which returns the reason (stopping,
-    shutting down, confirmation ended). Call it from every acquire path, build the log lines and
-    `IllegalStateException` messages from the reason, and decide there whether `acquireLockAsync` registers after the
-    confirmation has ended. That only makes sense if the registration is kept for the next start; otherwise refuse it
-    like the other acquires. If the per-site checks are deliberate, say so in the `confirmationEnded` field javadoc.
-  - It changes what a call while stopped does, so it needs a release-notes entry.
-
-(review findings F-931, F-947, F-953)
+**An async acquire while the lock manager cannot acquire is dropped (RW-12, remainder).** 0.61.1 logs the dropped
+call at WARN and documents it in `acquireLockAsync` (pinned by
+`an_async_acquiring_requested_while_the_lock_manager_is_stopped_is_logged_at_warn_and_not_acquired_by_its_start`).
+Open, for a minor because it changes behaviour: keep a call made while stopped for every lock name (`computeIfAbsent` a
+kept `AsyncLockAcquiring` with an already-cancelled sentinel future, scheduled by `start()`); make `acquireLockAsync`
+check `confirmationEnded`; and collect the refusal rule (`started`, `stopping`, `paused`, `shutdown`,
+`confirmationEnded`) in one private method such as `Optional<String> acquireRefusedBecause(boolean holdingReentrantLock)`.
 
 **Replacing a kept async registration is inferred, and has side effects (RW-13).**
 
@@ -347,84 +322,17 @@ and `start()` resumes it, and an ended lock confirmation refuses every acquire u
 
 (review findings F-956, F-965)
 
-**The WARN for a resumed registration fires on the documented recovery, and names no owner (RW-15).**
+**Name the owner of a resumed registration (RW-15, remainder).** 0.61.1 logs the resumes at INFO when the start
+follows an ended lock confirmation and names callbacks by `toString()` (builder-made ones print their consumers).
+Open: let `LockCallbackBuilder` take an optional owner description that the framework components set (the processor or
+inbox name), and consider keeping the WARN only for a registration not registered again within one
+`lockConfirmationInterval` (fits RW-13).
 
-- **Problem:** `DBFencedLockManager.start()` logs every registration it resumes at WARN: "A component that no longer
-  wants the lock must call cancelAsyncLockAcquiring when it stops, or its callback is given the lock again". A stop and
-  start of the lock manager is also the documented way back from an ended lock confirmation (class javadoc, "The state
-  left behind", and `LockConfirmationEnded`), and on that path every component is alive and rightly keeps its
-  registration. The WARN names the owner by `kept.lockCallback().getClass().getName()`. `LockCallbackBuilder` builds
-  through `LockCallback.lockCallback`, which returns an anonymous class, so every builder-made callback logs as
-  `LockCallback$1`. That covers `ViewEventProcessor`, `ExclusiveAsynchronousSubscription`, `DefaultEssentialsScheduler`,
-  `Inboxes` and `Outboxes`, most of the framework's own lock users.
-- **Consequence:** the recovery logs one WARN per event processor, subscription, inbox, outbox and scheduler, each
-  suggesting a leak, on the path where an operator reads the log most closely. That hides the real leak the WARN was
-  added to expose, and when there is one, the class name does not say which component left it.
-- **Fix:** record in `stop()` whether `confirmationEnded` was set, and on the following `start()` log the resumes at
-  INFO when it was. Or log one INFO summary that lists the resumed lock names, and keep the WARN for a registration
-  whose callback has not been registered again within one `lockConfirmationInterval` (this fits the delayed first tick
-  in RW-13). To name the owner, also log the callback's `toString()` and give the callback `LockCallback.lockCallback`
-  builds a `toString()`; better still, let `LockCallbackBuilder` take an optional owner description that the framework
-  components set (the processor or inbox name). Update the class javadoc and
-  `start_logs_each_resumed_async_acquiring_at_warn_naming_the_lock_and_the_callbacks_class`, and add a case that
-  resumes a builder-made callback and asserts that the WARN names more than the anonymous class.
-
-(review findings F-963, F-964)
-
-**Releasing a `lookupLock` copy or a stale `FencedLock` does nothing, silently (RW-16).**
-
-- **Problem:** `DBFencedLockManager.releaseLock` now releases only when `holds(lock)`, an identity check against the
-  instance this lock manager holds; before, it was enough that a lock of that name was held. So `release()` on the
-  `FencedLock` that `lookupLock` returns, or on a stale instance, does nothing. There is no log line at any level, and
-  `release()` returns `void`. `FencedLock.release()`'s javadoc says that releasing the copy does nothing, but its first
-  sentence still says "Only works if `isLockedByThisLockManagerInstance()` is true", and for a copy of a lock this
-  instance holds, `DBFencedLock.isLockedByThisLockManagerInstance()` returns true. The code now has three notions of
-  the same lock: `equals` compares the name, the local release compares identity, and the release in the database
-  compares name and fence token. Neither the `FencedLockManager.lookupLock` javadoc nor the lock status section of
-  `LLM/LLM-foundation.md` mentions it. No test calls `release()` on a `lookupLock` result
-  (`DBFencedLockManagerLostLockReleaseTest` pins only the stale-instance half).
-- **Consequence:** code written against the old behaviour, such as `lookupLock(name).ifPresent(FencedLock::release)`
-  in an admin or clean-up routine, silently keeps the lock held, and nothing in the logs shows it. A later change to
-  `holds` could change the announced behaviour without a test failing.
-- **Fix:** pick one identity for an acquisition and state it in `FencedLock.release()`.
-  - Option A, closer to the fencing model: in `releaseLock`, resolve the argument to the held instance when its name
-    and fence token both match, and release that instance, so its callbacks run and `LockReleased` is published once.
-    A stale instance (older token) still releases nothing. Every case the class javadoc gives for the identity check
-    carries a newer token, so name plus token separates them just as well.
-  - Option B, keep identity: rewrite the first sentence to say that `release()` works only on the instance the acquire
-    returned or passed to `lockAcquired`, and that `isLockedByThisLockManagerInstance()` on a `lookupLock` copy is a
-    snapshot of the row, not proof that the object can release the lock. Say the same on `lookupLock` and in
-    `LLM/LLM-foundation.md`.
-
-  Either way, log a release that does nothing: at WARN when this instance holds the name under another instance (a
-  `lookupLock` copy or a stale acquisition; release the `FencedLock` the acquire returned), at DEBUG when the name is
-  not held. Pin the outcome with a test in `DBFencedLockManagerAcquiredCallbackErrorTest`, whose
-  `InMemoryLockStorage.lookupLockInDB` returns a real copy, for example
-  `releasing_the_lookupLock_copy_of_a_held_lock_releases_nothing` for option B: the row stays locked with the same
-  token, no `lockReleased` and no `LockReleased`, and the confirmation keeps advancing `lockLastConfirmedTimestamp`.
-  Option A changes the behaviour again, so it needs a release-notes entry.
-
-(review findings F-966, F-968, F-970)
-
-**`lockReleased` can overlap `lockAcquired` during shutdown, and `LockCallback` does not say so (RW-17).**
-
-- **Problem:** during shutdown, a `cancelAsyncLockAcquiring` that lands after `asyncLockAcquiringTick` has checked its
-  registration releases the lock through `releaseLockDuringShutdown`. That release is one bounded
-  `ShutdownContext.attemptCleanup`, which may skip the wait for `reentrantLock` or give it up. `releaseLocally` then
-  calls `lockReleased` on the cancelling thread while `lockAcquired` may still be running on the tick thread. The only
-  record of this is a comment inside `asyncLockAcquiringTick`; `LockCallback` states no threading contract at all.
-- **Consequence:** the framework's own callbacks (event processors, inbox consumers wired in `onLockAcquired`, the
-  scheduler) are written as if the two calls were sequential. During shutdown such a callback can tear down state that
-  its own `lockAcquired` is still building, and an application's callback has no way to know it must guard against it.
-- **Fix:** state the contract in the `LockCallback` javadoc and in `DBFencedLockManager.acquireLockAsync`: outside
-  shutdown, `lockReleased` for an acquisition runs after its `lockAcquired` has returned; during shutdown it may run on
-  another thread while `lockAcquired` is still running, so a `lockAcquired` that starts work needs a `lockReleased`
-  that is safe to run alongside it (guard the started state with a lock or an atomic). If that is not acceptable, close
-  the gap: a per-registration flag that the tick sets around `lockAcquired`; the shutdown release then skips the local
-  `lockReleased`, and the tick calls it itself when `lockAcquired` returns. Then check the framework's callbacks against
-  the contract chosen.
-
-(review findings F-967)
+**`lockReleased` can overlap `lockAcquired` during shutdown (RW-17, remainder).** 0.61.1 states the contract in
+the `LockCallback` javadoc, `acquireLockAsync` and `LLM/LLM-foundation.md`. Open: check the framework's own callbacks
+(event processors, exclusive subscriptions, inbox consumers, the scheduler) against it, or close the gap with a
+per-registration flag that the tick sets around `lockAcquired`, so the shutdown release leaves the local
+`lockReleased` to the tick.
 
 **Two async-acquiring races no test reaches, and two loose ends in the tests (RW-18).**
 

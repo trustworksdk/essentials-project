@@ -495,9 +495,20 @@ class DBFencedLockManagerLostLockReleaseTest {
         // And a critical error that has ended the scheduled confirmation, releasing that lock locally
         endTheConfirmationWithACriticalError(() -> assertThat(asyncReleased).hasSize(1));
 
-        // When the lock manager is stopped and started again
+        // When the lock manager is stopped and started again - the documented recovery, so the resumed registration is
+        // logged at INFO, not with the WARN about a possibly leaked registration
         lockManager.stop();
-        lockManager.start();
+        var resumeLogEvents = captureLockManagerLog();
+        try {
+            lockManager.start();
+            assertThat(resumeLogEvents.list.stream()
+                                           .filter(event -> event.getFormattedMessage().contains("Resuming async lock acquiring for lock '" + LOCK_NAME + "'"))
+                                           .map(ILoggingEvent::getLevel)
+                                           .toList())
+                    .containsExactly(Level.INFO);
+        } finally {
+            detachLockManagerLog(resumeLogEvents);
+        }
 
         // Then the lock manager acquires locks again ...
         var otherLock = lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
