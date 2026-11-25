@@ -256,6 +256,8 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
                            }
                            """;
 
+        // How often GO=5 was delivered before the reset; the replay must deliver it at least once more
+        long initialCount5 = received.stream().filter(go -> go == 5L).count();
         inboxRepository.insertRaw(slotName, "0/POISON", poisonWal, "RECEIVED");
 
         // --- Then: reset is invoked and durable resume point forced to 2 ---
@@ -275,9 +277,9 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
                       assertThat(rp.getResumeFromAndIncluding().longValue()).isEqualTo(2L);
                   });
 
-        // Wait until replay has actually started (GO=2 is a permanent gap).
-        // We avoid clearing the list to prevent racing with an already in-flight replay.
-        long initialCount5 = received.stream().filter(go -> go == 5L).count();
+        // Wait until the replay after the reset has delivered GO=5 again (GO=2 is a permanent gap). The baseline was
+        // taken before the poison was injected: a baseline taken here could already include the replayed GO=5 when
+        // the replay is quick, and the wait would then expect a delivery that never comes
         await()
                   .atMost(Duration.ofSeconds(10))
                   .pollInterval(Duration.ofMillis(50))
