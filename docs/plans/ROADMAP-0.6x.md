@@ -170,11 +170,6 @@ deadlock with instances using the table, which 0.60.1 fixed for 14+ only. **Fix:
 drop `ListenNotifyPostgresql12IT` and `MultiTableChangeListenerPostgresql12IT`, and log a WARN at startup on a server
 below the supported floor. Not in a patch: a 0.60.x deployment on PostgreSQL 13 or 14 keeps working.
 
-**Index DDL without a table lock on every boot (NW-2).** `CREATE INDEX IF NOT EXISTS` takes a SHARE lock on the table
-even when the index exists, so every startup briefly stalls the queue's and the event store's writers while the
-schema transaction runs. It can no longer deadlock (0.60.1), but the stall grows with the length of that transaction.
-**Fix:** check `pg_indexes` first, in a `DO` block like the trigger's, and only create a missing index.
-
 **Lock order of the event store's startup transaction (NW-3).** The event store applies several event tables in one
 schema transaction. A user transaction that writes those tables in the opposite order could, in theory, deadlock with
 a starting instance. Not reproduced. **Plan:** confirm or rule out with a test like `QueueSchemaReapplyConcurrencyIT`
