@@ -291,10 +291,14 @@ public abstract class AggregateRoot<ID, EVENT_TYPE, AGGREGATE_TYPE extends Aggre
      * @return the {@link AggregateState} implementation to use for the {@link #state} instance
      */
     protected Class<?> resolveStateImplementationClass() {
-        var aggregateStateType = GenericType.resolveGenericTypeForInterface(this.getClass(),
-                                                                            WithState.class,
-                                                                            3);
-        return aggregateStateType;
+        // Found through superclasses too, so a subclass of a concrete aggregate (class SpecialOrder extends Order) resolves
+        // the state type its superclass declares
+        return GenericType.resolveTypeArgument(this.getClass(), WithState.class, 3)
+                          .orElseThrow(() -> new IllegalStateException(msg("Cannot resolve the AggregateState type of {}: it must implement {} with a concrete " +
+                                                                                   "AGGREGATE_STATE type argument (directly or through a superclass), " +
+                                                                                   "or override resolveStateImplementationClass()",
+                                                                           this.getClass().getName(),
+                                                                           WithState.class.getName())));
     }
 
     /**

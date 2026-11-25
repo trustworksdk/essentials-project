@@ -122,23 +122,11 @@ empty when no row matches (drop the `coalesce`, map a null `MAX` to empty), with
 It changes what a custom strategy receives, so it belongs in a minor with a release-notes entry. Found while writing
 `AsyncAggregateSnapshotRepositoryAfterCommitIT` (F-121).
 
-**One type-argument resolver, in `shared` (RW-5; review F-093, F-095, F-096).**
-
-- **Problem:** 0.60.1 fixed command-type resolution for deciders in a module-local helper,
-  `EventStreamDeciderCommandTypes.resolveCommandTypeArgument`, which walks superclasses and sub-interfaces and maps type
-  variables through each parameterisation. The general resolver it replaced,
-  `GenericType.resolveGenericTypeForInterface` in `shared`, keeps the old limitation: it inspects only the class's own
-  `getGenericInterfaces()`. It is still used by `modern.AggregateRoot.resolveStateImplementationClass` and
-  `SpringTransactionAwareUnitOfWorkFactory.resolveUnitOfWorkType`.
-- **Consequence:** a subclass of a concrete aggregate (`class SpecialOrder extends Order`, where `Order implements
-  WithState<...>`) still fails with an `IllegalStateException`. And the helper was made `public`, in the regular
-  `adapters` package, only so the parent package can call it, so consumers can now compile against it; no LLM doc
-  mentions it.
-- **Fix:** an additive `GenericType` method returning `Optional`, for example
-  `resolveTypeArgument(Class<?> forType, Class<?> genericSupertype, int typeArgumentIndex)`, used by all three callers.
-  Then remove `EventStreamDeciderCommandTypes` from the public API (make it package-private, or fold it into the new
-  resolver). 0.60.1 shipped it `public` and `@Deprecated(forRemoval = true, since = "0.60.1")`, so the removal can go
-  in the next minor.
+**Make `EventStreamDeciderCommandTypes` package-private (RW-5 remainder; review F-096).** 0.61.1 added
+`GenericType.resolveTypeArgument` and switched every caller to it, so subclasses of concrete aggregates and Spring
+unit-of-work factories resolve. Left for the next minor: `EventStreamDeciderCommandTypes` is still `public` and
+`@Deprecated(forRemoval = true, since = "0.60.1")` (its `resolveCommandTypeArgument` now delegates to the new method);
+make it package-private.
 
 ### Observability
 

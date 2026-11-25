@@ -13,6 +13,8 @@ targets, with a `-N` suffix for plugin-only releases.
   `SpringMongoTransactionAwareUnitOfWorkFactory` handles each message in a `UnitOfWork` of its own; it does not, it only
   lets an enqueue join the caller's. The reference now says a handler that needs atomic writes opens a transaction
   itself.
+- **`shared` reference: `GenericType.resolveTypeArgument`** - the new resolver that finds a type argument through
+  superclasses and sub-interfaces (Essentials 0.61.1).
 
 ## 0.61.0-1 — targets Essentials 0.61.0
 
