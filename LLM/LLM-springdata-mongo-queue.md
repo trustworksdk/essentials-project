@@ -59,7 +59,7 @@ MongoDurableQueues.builder()
 | `setMessageHandlingTimeout` | `Duration` | Stuck message timeout. Defaults to `DEFAULT_MESSAGE_HANDLING_TIMEOUT` (30s) |
 | `setSharedQueueCollectionName` | `String` | Collection name (⚠️ [injection risk](#security)) |
 | `setQueuePollingOptimizerFactory` | `Function<ConsumeFromQueue, QueuePollingOptimizer>` | Custom optimizer |
-| `setUnitOfWorkFactory` | `SpringMongoTransactionAwareUnitOfWorkFactory` | Optional; handle each message in a `UnitOfWork` - see [Transactions](#transactions) |
+| `setUnitOfWorkFactory` | `SpringMongoTransactionAwareUnitOfWorkFactory` | Optional; a `queueMessage` inside a caller's `UnitOfWork` joins it (Outbox). The handler is **not** run in a `UnitOfWork` - see [Transactions](#transactions) |
 
 ### Basic Setup
 ```java
@@ -112,10 +112,17 @@ Every queue operation runs in its own transaction: queueing, fetching, acknowled
 separate single-document operations, so a handler failure can never roll back the retry count. (0.60 removed
 `TransactionalMode`; its `FullyTransactional` mode broke exactly that.)
 
-With a `SpringMongoTransactionAwareUnitOfWorkFactory` (`setUnitOfWorkFactory`, requires a replica set) each message is
-handled inside a `UnitOfWork` of its own, and a `queueMessage` called inside a caller's `UnitOfWork` joins it - the
-enqueue commits or rolls back with the caller's writes, which is what an Outbox relies on. A plain Spring
-`@Transactional`/`TransactionTemplate` on the `MongoTransactionManager` is joined too.
+With a `SpringMongoTransactionAwareUnitOfWorkFactory` (`setUnitOfWorkFactory`, requires a replica set) a
+`queueMessage` called inside a caller's `UnitOfWork` joins it - the enqueue commits or rolls back with the caller's
+writes, which is what an Outbox relies on. A plain Spring `@Transactional`/`TransactionTemplate` on the
+`MongoTransactionManager` is joined too.
+
+The factory does **not** put the message handler in a `UnitOfWork`: unlike `postgresql-queue`, the MongoDB queue has
+no interceptor that wraps handling in one, so a handler's MongoDB writes commit one by one, apart from the message's
+acknowledgement. A handler that needs its writes to be atomic opens a transaction itself
+(`unitOfWorkFactory.usingUnitOfWork(...)` or a `TransactionTemplate`); a failure then rolls those writes back and the
+message is retried as a failed attempt. Either way the acknowledgement is its own transaction, so a rollback inside
+the handler never un-acknowledges a message that was already acknowledged.
 
 An enqueue **outside** any `UnitOfWork` or Spring transaction commits on its own and is not undone by a later
 rollback of the caller's work - e.g. `Outbox.sendMessage` called before the business transaction starts. The first

@@ -9,6 +9,10 @@ targets, with a `-N` suffix for plugin-only releases.
   `RedeliveryPolicy` builder and a shard-owned builder without a `UnitOfWorkFactory` fail to build from 0.61. 0.61.0
   shipped with both still only WARNing; the references now say a later 0.6x minor release will refuse them. No skill,
   rule or script changed.
+- **MongoDB queue reference: the handler does not run in a `UnitOfWork`** - the reference said a
+  `SpringMongoTransactionAwareUnitOfWorkFactory` handles each message in a `UnitOfWork` of its own; it does not, it only
+  lets an enqueue join the caller's. The reference now says a handler that needs atomic writes opens a transaction
+  itself.
 
 ## 0.61.0-1 — targets Essentials 0.61.0
 

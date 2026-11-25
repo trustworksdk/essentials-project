@@ -215,9 +215,9 @@ unit of work of its own (`SingleOperationTransactionDurableQueuesInterceptor`), 
 back with the message's outcome. `MongoDurableQueues` has no counterpart, and `DefaultDurableQueueConsumer` opens none,
 so with `SpringMongoTransactionAwareUnitOfWorkFactory` a handler's writes are transactional only if the handler opens a
 unit of work itself (`MongoSpringRollbackOnlyTransactionInQueuedMessageHandlerIT` does exactly that). The module's
-`CLAUDE.md` claimed parity until 2026-10-14. **Fix:** decide between parity (a handle-message interceptor for
-`MongoDurableQueues` when a transaction-aware factory is configured, opt-in in a minor because it changes when a
-handler's writes commit) and documenting the difference in `LLM/LLM-springdata-mongo-queue.md`.
+`CLAUDE.md` claimed parity until 2026-10-14, and `LLM/LLM-springdata-mongo-queue.md` until 0.61.1, which documents
+the difference now. **Open:** whether to add parity - a handle-message interceptor for `MongoDurableQueues` when a
+transaction-aware factory is configured, opt-in in a minor because it changes when a handler's writes commit.
 
 **A configurable timeout for the queue consumer's fetch (RW-6; review F-007).** `DefaultDurableQueueConsumer`'s poll
 has a commented-out `.timeout(Duration.ofSeconds(5))` and a `TODO: In the future support configurable timeout`. A fetch
