@@ -125,6 +125,35 @@
         </div>
     </section>
 
+    <section class="card" id="view-fault-panel">
+        <h1>Make a view fail (new event store engine)</h1>
+        <p class="explain">
+            Only with the <code>event-log</code> profile. While a fault is on, the orders view fails on every order
+            placed, so the engine <em>parks</em> that order: the order is held back from the view, every other order and
+            view keeps running. Watch it in the
+            <a th:href="@{/essentials/admin}">Essentials admin console</a>, <em>Event store - Event-log subscriptions</em>,
+            subscription <code>OrdersProjection</code>. Place a few orders as Alice, or start the background traffic.
+        </p>
+        <p class="now" id="view-fault-text">Reading...</p>
+        <div class="controls">
+            <div class="control">
+                <button type="button" id="view-fault-retrying">Fail - retrying</button>
+                <p class="hint">An ordinary error, like a database or downstream outage. The engine retries each parked
+                    order by itself (1 s, doubling, at most 5 min apart). Switch the fault off and the parked orders
+                    heal on their own - no click needed (or use <em>Retry all parked</em> to skip the wait).</p>
+            </div>
+            <div class="control">
+                <button type="button" id="view-fault-terminal">Fail - terminal</button>
+                <p class="hint">A <code>ParkEventException</code>: a failure no retry can fix. The order stays parked until
+                    an operator retries or discards it in the admin console. The health endpoint reports it.</p>
+            </div>
+            <div class="control">
+                <button type="button" id="view-fault-off">Off</button>
+                <p class="hint">New orders reach the view again. Orders already parked stay parked until retried.</p>
+            </div>
+        </div>
+    </section>
+
     <section class="card" id="system-panel">
         <h1>System at a glance</h1>
         <p class="explain">

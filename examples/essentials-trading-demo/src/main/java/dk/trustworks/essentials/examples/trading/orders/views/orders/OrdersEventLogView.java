@@ -19,6 +19,7 @@ package dk.trustworks.essentials.examples.trading.orders.views.orders;
 import dk.trustworks.essentials.components.eventlog.processor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.examples.trading._demo_harness.demo_control.ViewFaultSwitch;
 import dk.trustworks.essentials.examples.trading.config.*;
 import dk.trustworks.essentials.examples.trading.orders.events.*;
 import dk.trustworks.essentials.examples.trading.orders.types.OrdersAggregateTypes;
@@ -38,16 +39,21 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 @Service
 public class OrdersEventLogView extends TradingDemoEventLogViewProcessor {
     private final OrdersProjection projection;
+    private final ViewFaultSwitch  viewFault;
 
     public OrdersEventLogView(EventLogProcessorDependencies dependencies,
                               EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
-                              OrdersProjection projection) {
+                              OrdersProjection projection,
+                              ViewFaultSwitch viewFault) {
         super("OrdersProjection", List.of(OrdersAggregateTypes.ORDERS), dependencies, unitOfWorkFactory);
         this.projection = requireNonNull(projection, "No projection provided");
+        this.viewFault = requireNonNull(viewFault, "No viewFault provided");
     }
 
     @MessageHandler
     void handle(OrderPlaced e, DeliveredEvent event) {
+        // The operator page's demo fault: parks newly placed orders, retrying or terminal (demo harness only)
+        viewFault.check("the orders view");
         projection.on(pageHandle(), e, event.eventOrder().longValue());
     }
 

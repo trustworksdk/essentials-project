@@ -628,6 +628,11 @@ Not published; listed because they are the reference for how to use the framewor
   every event is queued exactly once, and a rebuild truncates their tables and purges their queues, as the classic
   twins' reset does.
 
+- `essentials-trading-demo`: the operator page `/ops` has a *Make a view fail* card for the new event store engine
+  (`event-log` profile). *Fail - retrying* makes the orders view throw on every newly placed order, so the engine parks
+  those orders and retries them by itself until the fault is switched off; *Fail - terminal* throws
+  `ParkEventException`, so they stay parked until an operator retries or discards them in the admin console (§2.13).
+
 ---
 
 ## 6. Documentation
