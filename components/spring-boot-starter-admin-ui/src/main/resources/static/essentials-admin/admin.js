@@ -1124,6 +1124,33 @@ const actions = {
             eventLogState.lastRequest = { key: k, action: 'Discard', globalOrder: Number(globalOrder), result: answer?.result };
         }
     }),
+    /* Bulk requests: stored on every parked head of the subscription in one statement, terminal heads included, and
+       served by the instance running it a few heads per pass. The answer says how many heads it was stored on. */
+    eventLogRetryAll: (subscriber, data) => ({
+        title: 'Retry all parked heads?', danger: false, confirmLabel: 'Retry all',
+        body: `<p>Retries every parked head of ${eventLogKeyLabel(eventLogKeyOf(data))}
+           (<strong>${esc(data.elParkedHeads)}</strong> now), terminal ones included. A head that succeeds releases the
+           events of its aggregate held behind it; one that fails again stays parked.</p>
+           <p>The request is stored on every head and served by the instance running the subscription, a few heads at a
+           time. Retrying heads are also retried by the engine on their own; this does not wait for their next retry.</p>`,
+        run: async () => {
+            const k = eventLogKeyOf(data);
+            const answer = await api(`/event-log/subscriptions/${encodeURIComponent(k.subscriber)}/aggregate-types/${encodeURIComponent(k.aggregateType)}/parked-events/retry-all?instanceName=${encodeURIComponent(k.instanceName)}`, { method: 'POST' });
+            eventLogState.lastRequest = { key: k, action: 'Retry all', bulk: answer };
+        }
+    }),
+    eventLogDiscardAll: (subscriber, data) => ({
+        title: 'Discard all parked heads?', danger: true, confirmLabel: 'Discard all', requireText: data.elSubscriber,
+        body: `<p>Deletes every parked head of ${eventLogKeyLabel(eventLogKeyOf(data))}
+           (<strong>${esc(data.elParkedHeads)}</strong> now) <strong>without handling them</strong>. The subscriber never
+           sees those events; the events of their aggregates held behind them are handled next. Not recoverable.</p>
+           <p>The request is stored on every head and served as a retry is.</p>`,
+        run: async () => {
+            const k = eventLogKeyOf(data);
+            const answer = await api(`/event-log/subscriptions/${encodeURIComponent(k.subscriber)}/aggregate-types/${encodeURIComponent(k.aggregateType)}/parked-events/discard-all?instanceName=${encodeURIComponent(k.instanceName)}`, { method: 'POST' });
+            eventLogState.lastRequest = { key: k, action: 'Discard all', bulk: answer };
+        }
+    }),
     /* "The head" is not an operation of the contract: it is the row's resume point plus its lag, read again when the
        reset is confirmed, so the figure is no older than the click. */
     eventLogReset: (subscriber, data) => ({
@@ -1867,11 +1894,34 @@ const eventLogKeyLabel = (k) => `<code class="mono">${esc(k.subscriber)}</code> 
 
 /* Not a field of the contract: a reading of the row's own fields, worst first. */
 function eventLogStatus(s) {
+    /* Terminal heads need an operator's retry or discard; retrying heads heal on their own once the cause is gone. */
+    if (s.terminalHeads > 0) {
+        return badge('serious', `${num(s.terminalHeads)} terminal - needs action`)
+            + (s.retryingHeads > 0 ? ` ${badge('warning', `${num(s.retryingHeads)} retrying`)}` : '');
+    }
+    if (s.retryingHeads > 0) return badge('warning', `${num(s.retryingHeads)} retrying - self-healing`);
     if (s.parkedHeads > 0) return badge('serious', `${num(s.parkedHeads)} parked`);
     if (!s.exclusive) return badge('neutral', 'Per instance');
     if (s.leaseOwner == null) return badge('warning', 'Not leased');
     return badge('good', 'Leased');
 }
+
+/* How long ago an ISO timestamp was, from this browser's clock: "45 s", "12 min", "3 h", "2 d". */
+function age(v) {
+    if (v == null) return nil();
+    const seconds = Math.max(0, Math.round((Date.now() - Date.parse(v)) / 1000));
+    const text = seconds < 60 ? `${seconds} s` : seconds < 3600 ? `${Math.floor(seconds / 60)} min`
+        : seconds < 86400 ? `${Math.floor(seconds / 3600)} h` : `${Math.floor(seconds / 86400)} d`;
+    return `<span title="${ts(v)}">${text}</span>`;
+}
+
+const bulkOutcome = (bulk) => {
+    if (!bulk?.subscriptionFound) return badge('warning', 'No such subscription');
+    if (!bulk.requested) return badge('neutral', 'Nothing parked - no head to request');
+    return badge('neutral', `Stored on ${num(bulk.requested)} parked head${bulk.requested === 1 ? '' : 's'}; ${bulk.nudgedLocally
+        ? 'the instance that took the request runs the subscription and is serving them now'
+        : 'the instance running the subscription serves them at its next parked check'}`);
+};
 
 const parkedRequestOutcome = {
     ACCEPTED: () => badge('neutral', 'Accepted - stored on the parked head; the instance running the subscription serves it at its next parked check'),
@@ -1909,13 +1959,17 @@ views.eventLogSubscriptions = async () => {
       <td>${s.leaseOwner ? `<span class="mono" title="${s.leaseUntil ? 'until ' + esc(s.leaseUntil) : ''}">${esc(s.leaseOwner)}</span>` : nil()}</td>
       <td class="num">${num(s.fence)}</td>
       <td class="num">${s.parkedTotal > 0 ? `${num(s.parkedTotal)} <span class="nil">(${num(s.parkedHeads)} head${s.parkedHeads === 1 ? '' : 's'})</span>` : num(0)}</td>
+      <td class="num">${s.retryingHeads > 0 || s.terminalHeads > 0
+            ? `${num(s.retryingHeads)} <span class="nil">/</span> ${num(s.terminalHeads)}` : nil()}</td>
+      <td>${age(s.oldestParkedAt)}</td>
     </tr>`;
     };
 
     const cols = [
         { label: 'Subscriber' }, { label: 'Aggregate type' }, { label: 'Instance' }, { label: 'Mode' },
         { label: 'Progress model' }, { label: 'Status' }, { label: 'Resume point', num: true }, { label: 'Lag', num: true },
-        { label: 'Lease owner' }, { label: 'Fence', num: true }, { label: 'Parked', num: true }
+        { label: 'Lease owner' }, { label: 'Fence', num: true }, { label: 'Parked', num: true },
+        { label: 'Retrying / terminal', num: true }, { label: 'Oldest parked' }
     ];
 
     const toolbar = `
@@ -1934,8 +1988,10 @@ views.eventLogSubscriptions = async () => {
         })
         + `<p class="hint">Read from the database, so this covers every instance, not only the one serving this console.
              An exclusive subscription is run by the instance holding its lease; a per-instance one by the instance it
-             names. Lag counts the global orders of the aggregate type past the resume point. At most the event log's
-             admin list limit of rows is shown.</p>`,
+             names. Lag counts the global orders of the aggregate type past the resume point. A retrying parked head is
+             retried by the engine on its own and heals once its cause is gone; a terminal one (a ParkEventException or
+             malformed JSON) needs an operator's retry or discard. At most the event log's admin list limit of rows is
+             shown.</p>`,
         'GET /event-log/subscriptions', true);
 
     return toolbar + list + (selected ? await eventLogDetail(selected) : '');
@@ -1966,8 +2022,12 @@ async function eventLogDetail(k) {
         return `<tr>
       <td class="num">${num(p.globalOrder)}</td>
       <td class="mono">${esc(p.aggregateId)}</td>
-      <td>${head ? badge('serious', 'Parked head') : `${badge('neutral', 'Held behind')} ${num(p.blockedBy)}`}</td>
+      <td>${head ? `${badge('serious', 'Parked head')} ${p.terminal ? badge('serious', 'Terminal - needs action')
+            : badge('warning', 'Retrying - self-healing')}` : `${badge('neutral', 'Held behind')} ${num(p.blockedBy)}`}</td>
       <td class="num">${num(p.attempts)}</td>
+      <td class="num">${head ? num(p.retries) : nil()}</td>
+      <td>${head && !p.terminal ? ts(p.nextRetryAt) : nil()}</td>
+      <td>${ts(p.lastFailedAt)}</td>
       <td class="truncate" title="${esc(p.errorMessage ?? '')}">${p.errorType ? esc(p.errorType) : nil()}${p.errorMessage
             ? `<br><span class="nil">${esc(p.errorMessage)}</span>` : ''}</td>
       <td>${ts(p.parkedAt)}</td>
@@ -1982,7 +2042,7 @@ async function eventLogDetail(k) {
 
     const parkedCols = [
         { label: 'Global order', num: true }, { label: 'Aggregate id' }, { label: 'Role' }, { label: 'Attempts', num: true },
-        { label: 'Last error' }, { label: 'Parked' }, { label: 'Waiting request' }, { label: '', width: '170px', sticky: true }
+        { label: 'Retries', num: true }, { label: 'Next retry' }, { label: 'Last failed' }, { label: 'Last error' }, { label: 'Parked' }, { label: 'Waiting request' }, { label: '', width: '170px', sticky: true }
     ];
 
     const pager = page ? `<div class="toolbar" style="margin:8px 12px">
@@ -1995,11 +2055,17 @@ async function eventLogDetail(k) {
 
     return `${heading}
     ${request ? `<div class="banner banner-info"><span aria-hidden="true">○</span><div>
-        <strong>${esc(request.action)} of the parked head at global order ${num(request.globalOrder)}:</strong>
-        ${(parkedRequestOutcome[request.result] ?? (() => badge('neutral', request.result)))()}</div></div>` : ''}
+        ${request.bulk !== undefined
+            ? `<strong>${esc(request.action)} of the parked heads:</strong> ${bulkOutcome(request.bulk)}`
+            : `<strong>${esc(request.action)} of the parked head at global order ${num(request.globalOrder)}:</strong>
+        ${(parkedRequestOutcome[request.result] ?? (() => badge('neutral', request.result)))()}`}</div></div>` : ''}
 
     <div class="toolbar">
       <div class="spacer"></div>
+      <button class="btn btn-sm" data-act="eventLogRetryAll" data-name="${esc(k.subscriber)}" ${eventLogKeyAttrs(k)}
+              data-el-parked-heads="${esc(s.parkedHeads)}" ${writeDisabled || (s.parkedHeads > 0 ? '' : 'disabled title="Nothing parked"')}>Retry all parked</button>
+      <button class="btn btn-sm btn-danger" data-act="eventLogDiscardAll" data-name="${esc(k.subscriber)}" ${eventLogKeyAttrs(k)}
+              data-el-parked-heads="${esc(s.parkedHeads)}" ${writeDisabled || (s.parkedHeads > 0 ? '' : 'disabled title="Nothing parked"')}>Discard all parked</button>
       <button class="btn btn-sm btn-danger" data-act="eventLogReset" data-name="${esc(k.subscriber)}" ${eventLogKeyAttrs(k)}
               data-el-resume-point="${esc(s.resumePoint)}" data-el-lag="${s.lag ?? ''}" ${writeDisabled}>Reset resume point</button>
       ${s.exclusive ? '' : `<button class="btn btn-sm btn-danger" data-act="eventLogDeleteInstance" data-name="${esc(k.subscriber)}"
@@ -2022,6 +2088,12 @@ async function eventLogDetail(k) {
         ${kvItem('Lease until', ts(s.leaseUntil))}
         ${kvItem('Fence', num(s.fence))}
         ${kvItem('Parked', `${num(s.parkedTotal)} (${num(s.parkedHeads)} head${s.parkedHeads === 1 ? '' : 's'})`)}
+        ${kvItem('Retrying heads', `${num(s.retryingHeads)} <span class="nil">self-healing</span>`)}
+        ${kvItem('Terminal heads', s.terminalHeads > 0 ? `${badge('serious', num(s.terminalHeads))} <span class="nil">need action</span>` : num(0))}
+        ${kvItem('Oldest parked', s.oldestParkedAt ? `${age(s.oldestParkedAt)} <span class="nil">ago</span>` : nil())}
+        ${kvItem('Next automatic retry', ts(s.nextRetryAt))}
+        ${kvItem('Most retries of a head', num(s.maxRetries))}
+        ${kvItem('Last failure', ts(s.lastFailedAt))}
         ${kvItem('Filter digest', s.filterDigest ? `<span class="mono">${esc(s.filterDigest)}</span>` : nil())}
         ${kvItem('Updated', ts(s.updatedAt))}
       </div>`, 'GET /event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}')}
@@ -2030,8 +2102,11 @@ async function eventLogDetail(k) {
         ? table(parkedCols, page.events.map(parkedRow), { empty: eventLogState.after > 0 ? 'No more parked events' : 'No parked events' })
           + pager
           + `<p class="hint">A parked head is an event whose handling failed; the later events of its aggregate are held
-               behind it and are handled once it is retried successfully or discarded. A request is stored on the head
-               and served by the instance running the subscription.</p>`
+               behind it and are handled once it is retried successfully or discarded. A retrying head is retried by the
+               engine on its own, with a growing wait between retries, and heals once its cause is gone; a terminal head
+               (its latest failure was a ParkEventException or malformed JSON) is never retried automatically and needs
+               an operator's retry or discard. A request is stored on the head and served by the instance running the
+               subscription.</p>`
         : errorState(settled[1].reason, 'essentials_subscription_reader'),
         'GET /event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events', true)}`;
 }

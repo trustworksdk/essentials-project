@@ -379,10 +379,13 @@ public class AdminUiDemoApplication {
         var updated = OffsetDateTime.parse("2026-07-31T11:20:00Z");
         var exclusive = new ApiEventLogSubscription("OrderProjector", "Orders", "", true, "CONTIGUOUS", "PERIODIC", 918150, 0,
                                                     Optional.of("node-1/orders-1"), Optional.of(updated.plusSeconds(30)), OptionalLong.of(17),
-                                                    updated, Optional.empty(), 1, 3, OptionalLong.of(54));
+                                                    updated, Optional.empty(), 2, 4, OptionalLong.of(54), 1, 1,
+                                                    Optional.of(OffsetDateTime.parse("2026-07-31T11:18:02Z")), Optional.of(updated.plusSeconds(16)), 5,
+                                                    Optional.of(updated.minusSeconds(16)));
         var retired = new ApiEventLogSubscription("AuditTrail", "Orders", "orders-2", false, "FRESH", "IN_HANDLER_TRANSACTION", 902114, 0,
                                                   Optional.empty(), Optional.empty(), OptionalLong.empty(),
-                                                  updated.minusDays(3), Optional.of("9f2c41"), 0, 0, OptionalLong.of(16090));
+                                                  updated.minusDays(3), Optional.of("9f2c41"), 0, 0, OptionalLong.of(16090), 0, 0,
+                                                  Optional.empty(), Optional.empty(), 0, Optional.empty());
         when(api.getSubscriptions(any(), any())).thenReturn(List.of(exclusive, retired));
         when(api.getSubscription(any(), any())).thenAnswer(call -> {
             var key = call.getArgument(1, dk.trustworks.essentials.components.eventlog.ProgressKey.class);
@@ -393,12 +396,22 @@ public class AdminUiDemoApplication {
                 new ApiParkedEventsPage.ApiParkedEvent(918151, "order-4711", OptionalLong.empty(), 3,
                                                        Optional.of("java.lang.IllegalStateException"),
                                                        Optional.of("Order order-4711 has no customer"), parkedAt,
-                                                       Optional.empty(), Optional.empty()),
+                                                       Optional.empty(), Optional.empty(), 5, Optional.of(updated.plusSeconds(16)), false,
+                                                       Optional.of(updated.minusSeconds(16))),
                 new ApiParkedEventsPage.ApiParkedEvent(918163, "order-4711", OptionalLong.of(918151), 0, Optional.empty(),
-                                                       Optional.empty(), parkedAt.plusSeconds(4), Optional.empty(), Optional.empty()),
+                                                       Optional.empty(), parkedAt.plusSeconds(4), Optional.empty(), Optional.empty(), 0,
+                                                       Optional.empty(), false, Optional.empty()),
                 new ApiParkedEventsPage.ApiParkedEvent(918170, "order-4711", OptionalLong.of(918151), 0, Optional.empty(),
-                                                       Optional.empty(), parkedAt.plusSeconds(9), Optional.empty(), Optional.empty())),
+                                                       Optional.empty(), parkedAt.plusSeconds(9), Optional.empty(), Optional.empty(), 0,
+                                                       Optional.empty(), false, Optional.empty()),
+                new ApiParkedEventsPage.ApiParkedEvent(918190, "order-4802", OptionalLong.empty(), 1,
+                                                       Optional.of("dk.trustworks.essentials.components.eventlog.ParkEventException"),
+                                                       Optional.of("Malformed JSON payload"), parkedAt.plusSeconds(40),
+                                                       Optional.empty(), Optional.empty(), 0, Optional.empty(), true,
+                                                       Optional.of(parkedAt.plusSeconds(40)))),
                 OptionalLong.empty()));
+        when(api.retryAllParked(any(), any())).thenReturn(new ApiBulkParkedRequestResult(true, 2, true));
+        when(api.discardAllParked(any(), any())).thenReturn(new ApiBulkParkedRequestResult(true, 2, false));
         when(api.retryParkedEvent(any(), any(), anyLong())).thenReturn(ParkedRequestResult.ACCEPTED);
         when(api.discardParkedEvent(any(), any(), anyLong())).thenReturn(ParkedRequestResult.ACCEPTED);
         when(api.resetSubscription(any(), any(), anyLong())).thenReturn(true);

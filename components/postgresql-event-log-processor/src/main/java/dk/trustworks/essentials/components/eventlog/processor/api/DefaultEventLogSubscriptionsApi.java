@@ -108,6 +108,20 @@ public final class DefaultEventLogSubscriptionsApi implements EventLogSubscripti
     }
 
     @Override
+    public ApiBulkParkedRequestResult retryAllParked(Object principal, ProgressKey key) {
+        writer(principal);
+        requireNonNull(key, "No key provided");
+        return call("retry every parked head of " + key, () -> ApiBulkParkedRequestResult.from(eventLog.admin().retryAllParked(key)));
+    }
+
+    @Override
+    public ApiBulkParkedRequestResult discardAllParked(Object principal, ProgressKey key) {
+        writer(principal);
+        requireNonNull(key, "No key provided");
+        return call("discard every parked head of " + key, () -> ApiBulkParkedRequestResult.from(eventLog.admin().discardAllParked(key)));
+    }
+
+    @Override
     public boolean deleteRetiredInstance(Object principal, ProgressKey key) {
         writer(principal);
         requireNonNull(key, "No key provided");

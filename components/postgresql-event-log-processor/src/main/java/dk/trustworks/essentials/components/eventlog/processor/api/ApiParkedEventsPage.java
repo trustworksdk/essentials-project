@@ -33,12 +33,26 @@ public record ApiParkedEventsPage(List<ApiParkedEvent> events, OptionalLong next
         return new ApiParkedEventsPage(page.rows().stream().map(ApiParkedEvent::from).toList(), page.nextAfter());
     }
 
-    /** One parked row: {@link ParkedRow}; {@code blockedBy} empty for a parked head */
+    /**
+     * One parked row: {@link ParkedRow}; {@code blockedBy} empty for a parked head. A head that is not {@code terminal}
+     * is retried by the engine on its own at {@code nextRetryAt}; a terminal one waits for an operator's retry or discard.
+     */
     public record ApiParkedEvent(long globalOrder, String aggregateId, OptionalLong blockedBy, int attempts, Optional<String> errorType,
-                                 Optional<String> errorMessage, OffsetDateTime parkedAt, Optional<String> requested, Optional<OffsetDateTime> requestedAt) {
+                                 Optional<String> errorMessage, OffsetDateTime parkedAt, Optional<String> requested, Optional<OffsetDateTime> requestedAt,
+                                 int retries, Optional<OffsetDateTime> nextRetryAt, boolean terminal, Optional<OffsetDateTime> lastFailedAt) {
+        /**
+         * @deprecated use the canonical constructor, which carries the retry state; this one reports no retries, no
+         * schedule and not terminal
+         */
+        @Deprecated(forRemoval = true, since = "0.62.0")
+        public ApiParkedEvent(long globalOrder, String aggregateId, OptionalLong blockedBy, int attempts, Optional<String> errorType,
+                              Optional<String> errorMessage, OffsetDateTime parkedAt, Optional<String> requested, Optional<OffsetDateTime> requestedAt) {
+            this(globalOrder, aggregateId, blockedBy, attempts, errorType, errorMessage, parkedAt, requested, requestedAt, 0, Optional.empty(), false, Optional.empty());
+        }
+
         public static ApiParkedEvent from(ParkedRow row) {
             return new ApiParkedEvent(row.globalOrder(), row.aggregateId(), row.blockedBy(), row.attempts(), row.errorType(), row.errorMessage(), row.parkedAt(),
-                                      row.requested(), row.requestedAt());
+                                      row.requested(), row.requestedAt(), row.retries(), row.nextRetryAt(), row.terminal(), row.lastFailedAt());
         }
     }
 }

@@ -50,6 +50,19 @@ public interface EventLogSubscriptionsApi {
 
     ParkedRequestResult discardParkedEvent(Object principal, ProgressKey key, long headGlobalOrder);
 
+    /**
+     * Retry every parked head of the subscription, terminal ones included: the request is stored on each head in one
+     * statement and served by the instance running the subscription, a few heads per pass, as a single retry is. The
+     * events held behind a head follow it. This call does not wait for the heads to be served.
+     *
+     * @return {@link ApiBulkParkedRequestResult#subscriptionFound()} {@code false} if there is no such subscription (nothing
+     * is stored); otherwise how many heads the request was stored on
+     */
+    ApiBulkParkedRequestResult retryAllParked(Object principal, ProgressKey key);
+
+    /** As {@link #retryAllParked}, but every parked head is deleted without being handled; the events held behind them are handled next */
+    ApiBulkParkedRequestResult discardAllParked(Object principal, ProgressKey key);
+
     /** Delete a retired per-instance subscription's row and parked rows */
     boolean deleteRetiredInstance(Object principal, ProgressKey key);
 }

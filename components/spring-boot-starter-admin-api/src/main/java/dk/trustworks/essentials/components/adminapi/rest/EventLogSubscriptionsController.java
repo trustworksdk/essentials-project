@@ -93,6 +93,20 @@ public class EventLogSubscriptionsController {
         return new EventLogParkedRequestResult(eventLogSubscriptionsApi.discardParkedEvent(principal(), new ProgressKey(subscriber, aggregateType, instanceName), globalOrder));
     }
 
+    @PostMapping(SUBSCRIPTION + "/parked-events/retry-all")
+    public ApiBulkParkedRequestResult retryAllParked(@PathVariable String subscriber,
+                                                     @PathVariable String aggregateType,
+                                                     @RequestParam(defaultValue = "") String instanceName) {
+        return eventLogSubscriptionsApi.retryAllParked(principal(), new ProgressKey(subscriber, aggregateType, instanceName));
+    }
+
+    @PostMapping(SUBSCRIPTION + "/parked-events/discard-all")
+    public ApiBulkParkedRequestResult discardAllParked(@PathVariable String subscriber,
+                                                       @PathVariable String aggregateType,
+                                                       @RequestParam(defaultValue = "") String instanceName) {
+        return eventLogSubscriptionsApi.discardAllParked(principal(), new ProgressKey(subscriber, aggregateType, instanceName));
+    }
+
     @DeleteMapping(SUBSCRIPTION + "/instances/{instanceName}")
     public DeleteResult deleteRetiredInstance(@PathVariable String subscriber,
                                               @PathVariable String aggregateType,

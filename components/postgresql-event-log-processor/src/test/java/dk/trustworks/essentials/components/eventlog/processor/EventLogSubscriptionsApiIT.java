@@ -92,4 +92,54 @@ class EventLogSubscriptionsApiIT extends AbstractProcessorIT {
         assertThat(api.deleteRetiredInstance(WRITER, key)).isTrue();
         assertThat(api.getSubscription(READER, key)).isEmpty();
     }
+
+    @Test
+    void the_retry_state_is_shown_and_every_parked_head_can_be_retried_or_discarded_at_once() throws Exception {
+        appendEvents(-1);
+        var reactor = EventReactor.builder("bulk-notifier", ORDERS)
+                                  .ownership(Ownership.perInstance("node-1"))
+                                  .on(Added.class, event -> {
+                                      if (event.globalOrder().longValue() == X) {
+                                          throw new IllegalStateException("always fails");
+                                      }
+                                  })
+                                  .errors(errors())
+                                  .build(eventLog, serializer)
+                                  .start();
+        var api = new DefaultEventLogSubscriptionsApi(ROLES, eventLog);
+        var key = reactor.key();
+        try {
+            awaitTrue("parked", Duration.ofSeconds(10), () -> api.getParkedEvents(READER, key, 0, 100).events().stream().anyMatch(event -> event.globalOrder() == X));
+
+            // An ordinary failure is retried by the engine on its own: retrying, not terminal, with a next retry scheduled
+            var head = api.getParkedEvents(READER, key, 0, 100).events().stream().filter(event -> event.globalOrder() == X).findFirst().orElseThrow();
+            assertThat(head.terminal()).isFalse();
+            assertThat(head.lastFailedAt()).isPresent();
+            var subscription = api.getSubscription(READER, key).orElseThrow();
+            assertThat(subscription.retryingHeads()).isEqualTo(1);
+            assertThat(subscription.terminalHeads()).isZero();
+            assertThat(subscription.oldestParkedAt()).isPresent();
+
+            assertThatThrownBy(() -> api.retryAllParked(READER, key)).isInstanceOf(EssentialsSecurityException.class);
+            assertThatThrownBy(() -> api.discardAllParked(READER, key)).isInstanceOf(EssentialsSecurityException.class);
+
+            var unknown = api.retryAllParked(WRITER, ProgressKey.exclusive("nobody", ORDERS));
+            assertThat(unknown.subscriptionFound()).isFalse();
+            assertThat(unknown.requested()).isZero();
+
+            var retried = api.retryAllParked(WRITER, key);
+            assertThat(retried.subscriptionFound()).isTrue();
+            assertThat(retried.requested()).isEqualTo(1);
+
+            // The retry fails again and the head stays parked; a discard-all then releases the aggregate
+            awaitTrue("the retry served", Duration.ofSeconds(10), () -> api.getParkedEvents(READER, key, 0, 100).events().stream().allMatch(event -> event.requested().isEmpty()));
+            var discarded = api.discardAllParked(WRITER, key);
+            assertThat(discarded.subscriptionFound()).isTrue();
+            assertThat(discarded.requested()).isEqualTo(1);
+            awaitTrue("the head discarded and the held events released", Duration.ofSeconds(10), () -> api.getParkedEvents(READER, key, 0, 100).events().isEmpty());
+            assertThat(api.getSubscription(READER, key).orElseThrow().retryingHeads()).isZero();
+        } finally {
+            reactor.stop();
+        }
+    }
 }

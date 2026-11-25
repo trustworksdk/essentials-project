@@ -73,8 +73,9 @@ class AdminUiContractParityTest {
         // slow-query and the table statistics paths bring it to 50, running a scheduler job on demand to 51,
         // the four event-causation lookups to 55, resuming a subscription stopped by its error policy to 56, and
         // releasing a shard-owned ordered unit a stop kept behind a hung handler to 57, and the new event store
-        // engine's seven event-log subscription paths to 64.
-        assertThat(contractPaths).hasSize(48 + 16);
+        // engine's seven event-log subscription paths to 64, and retrying or discarding every parked head of an
+        // event-log subscription at once to 66.
+        assertThat(contractPaths).hasSize(48 + 18);
         assertThat(calledPaths()).isNotEmpty();
     }
 
@@ -117,6 +118,8 @@ class AdminUiContractParityTest {
             "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events",
             "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/{globalOrder}/retry",
             "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/{globalOrder}/discard",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/retry-all",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/discard-all",
             "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/reset",
             "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/instances/{instanceName}");
 

@@ -196,6 +196,82 @@ class EventLogSubscriptionsEndpointsTest {
     }
 
     @Test
+    void the_retry_state_of_the_parked_heads_is_on_the_wire() throws Exception {
+        var failed = OffsetDateTime.parse("2026-11-17T08:02:00Z");
+        var subscription = new ApiEventLogSubscription("orders-view", "Orders", "", true, "CONTIGUOUS", "WATERMARK", 42, 3, Optional.empty(), Optional.empty(),
+                                                       OptionalLong.empty(), OffsetDateTime.parse("2026-11-17T09:00:00Z"), Optional.empty(), 3, 5, OptionalLong.of(1),
+                                                       2, 1, Optional.of(OffsetDateTime.parse("2026-11-17T08:00:00Z")), Optional.of(failed.plusSeconds(4)), 6,
+                                                       Optional.of(failed));
+        when(api.getSubscription(any(), any())).thenReturn(Optional.of(subscription));
+
+        mockMvc.perform(get(SUBSCRIPTION))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$.retryingHeads").value(2))
+               .andExpect(jsonPath("$.terminalHeads").value(1))
+               .andExpect(jsonPath("$.oldestParkedAt").isString())
+               .andExpect(jsonPath("$.nextRetryAt").isString())
+               .andExpect(jsonPath("$.maxRetries").value(6))
+               .andExpect(jsonPath("$.lastFailedAt").isString());
+
+        var retrying = new ApiParkedEventsPage.ApiParkedEvent(7, "order-1", OptionalLong.empty(), 3, Optional.of("java.lang.IllegalStateException"), Optional.of("boom"),
+                                                              OffsetDateTime.parse("2026-11-17T08:00:00Z"), Optional.empty(), Optional.empty(), 4,
+                                                              Optional.of(failed.plusSeconds(4)), false, Optional.of(failed));
+        var terminal = new ApiParkedEventsPage.ApiParkedEvent(9, "order-2", OptionalLong.empty(), 1, Optional.of("ParkEventException"), Optional.empty(),
+                                                              OffsetDateTime.parse("2026-11-17T08:00:00Z"), Optional.empty(), Optional.empty(), 0,
+                                                              Optional.empty(), true, Optional.of(failed));
+        when(api.getParkedEvents(any(), any(), anyLong(), anyInt())).thenReturn(new ApiParkedEventsPage(List.of(retrying, terminal), OptionalLong.empty()));
+
+        mockMvc.perform(get(SUBSCRIPTION + "/parked-events"))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$.events[0].retries").value(4))
+               .andExpect(jsonPath("$.events[0].terminal").value(false))
+               .andExpect(jsonPath("$.events[0].nextRetryAt").isString())
+               .andExpect(jsonPath("$.events[0].lastFailedAt").isString())
+               .andExpect(jsonPath("$.events[1].terminal").value(true))
+               .andExpect(jsonPath("$.events[1].nextRetryAt").value(nullValue()));
+    }
+
+    @Test
+    void retry_all_and_discard_all_return_the_bulk_result() throws Exception {
+        when(api.retryAllParked(any(), any())).thenReturn(new ApiBulkParkedRequestResult(true, 3, true));
+        when(api.discardAllParked(any(), any())).thenReturn(new ApiBulkParkedRequestResult(true, 2, false));
+
+        mockMvc.perform(post(SUBSCRIPTION + "/parked-events/retry-all").param("instanceName", "pod-2"))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$.subscriptionFound").value(true))
+               .andExpect(jsonPath("$.requested").value(3))
+               .andExpect(jsonPath("$.nudgedLocally").value(true));
+        verify(api).retryAllParked(any(), eq(new ProgressKey("orders-view", "Orders", "pod-2")));
+
+        mockMvc.perform(post(SUBSCRIPTION + "/parked-events/discard-all"))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$.requested").value(2))
+               .andExpect(jsonPath("$.nudgedLocally").value(false));
+        verify(api).discardAllParked(any(), eq(ProgressKey.exclusive("orders-view", "Orders")));
+        verify(api, never()).retryParkedEvent(any(), any(), anyLong());
+        verify(api, never()).discardParkedEvent(any(), any(), anyLong());
+    }
+
+    @Test
+    void retry_all_of_an_unknown_subscription_reports_it_as_not_found_like_a_single_retry() throws Exception {
+        when(api.retryAllParked(any(), any())).thenReturn(new ApiBulkParkedRequestResult(false, 0, false));
+
+        mockMvc.perform(post(SUBSCRIPTION + "/parked-events/retry-all"))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$.subscriptionFound").value(false))
+               .andExpect(jsonPath("$.requested").value(0));
+    }
+
+    @Test
+    void a_caller_without_the_writer_role_cannot_retry_or_discard_all() throws Exception {
+        when(api.retryAllParked(any(), any())).thenThrow(new EssentialsSecurityException("missing SUBSCRIPTION_WRITER"));
+        when(api.discardAllParked(any(), any())).thenThrow(new EssentialsSecurityException("missing SUBSCRIPTION_WRITER"));
+
+        mockMvc.perform(post(SUBSCRIPTION + "/parked-events/retry-all")).andExpect(status().isForbidden());
+        mockMvc.perform(post(SUBSCRIPTION + "/parked-events/discard-all")).andExpect(status().isForbidden());
+    }
+
+    @Test
     void delete_retired_instance_takes_the_instance_from_the_path() throws Exception {
         when(api.deleteRetiredInstance(any(), any())).thenReturn(true);
 

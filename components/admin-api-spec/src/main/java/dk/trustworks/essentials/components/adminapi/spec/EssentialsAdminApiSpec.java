@@ -103,7 +103,8 @@ final class EssentialsAdminApiSpec {
             ApiAggregateArchiveStatistics.class,
             ApiEventLogSubscription.class,
             ApiParkedEventsPage.class,
-            ApiParkedEventsPage.ApiParkedEvent.class);
+            ApiParkedEventsPage.ApiParkedEvent.class,
+            ApiBulkParkedRequestResult.class);
 
     /**
      * Reference-typed DTO properties that are verified to always be present, and are therefore marked
@@ -188,7 +189,11 @@ final class EssentialsAdminApiSpec {
                     "fence", "The fencing token of the latest lease of an exclusive subscription. Null when it was never leased.",
                     "filterDigest", "The digest of the subscription's event filter. Null when the subscription has no filter.",
                     "lag", "How many global orders of the aggregate type lie past the resume point. Never negative. Null "
-                            + "when the aggregate type is not registered in the database.")),
+                            + "when the aggregate type is not registered in the database.",
+                    "oldestParkedAt", "When the longest-parked head was parked. Null when nothing is parked.",
+                    "nextRetryAt", "The earliest automatic retry of a parked head. Null when no head is retrying. Terminal "
+                            + "heads are never retried automatically.",
+                    "lastFailedAt", "The latest failure of a parked head. Null when nothing is parked or no failure was recorded.")),
             Map.entry("ApiParkedEventsPage", Map.of(
                     "nextAfter", "The afterGlobalOrder of the next page. Null when this page was not full and so is the last.")),
             Map.entry("ApiParkedEvent", Map.of(
@@ -196,7 +201,11 @@ final class EssentialsAdminApiSpec {
                     "errorType", "The exception type of the last failed attempt. Null for an event held behind a head.",
                     "errorMessage", "The exception message of the last failed attempt. Null when there was none.",
                     "requested", "RETRY or DISCARD while an operator's request waits to be served. Null otherwise.",
-                    "requestedAt", "When the waiting request was made. Null when no request waits.")));
+                    "requestedAt", "When the waiting request was made. Null when no request waits.",
+                    "nextRetryAt", "When the engine retries this parked head on its own. Null for a terminal head and for an "
+                            + "event held behind a head.",
+                    "lastFailedAt", "When this parked head last failed. Null for an event held behind a head and when no failure "
+                            + "was recorded.")));
 
     /** Tag name &rarr; description, in display order. */
     static final Map<String, String> TAGS = new LinkedHashMap<>() {{
@@ -793,6 +802,28 @@ final class EssentialsAdminApiSpec {
          .pathParam("globalOrder", new IntegerSchema().format("int64"), "The global order of the parked head.")
          .queryParam("instanceName", eventLogInstanceNameSchema(), false, EVENT_LOG_INSTANCE_NAME)
          .responseRef("EventLogParkedRequestResult", "What became of the request.");
+
+        b.operation(EventLogSubscriptionsApi.class, "retryAllParked")
+         .tag("event-log-subscriptions").post("/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/retry-all")
+         .summary("Retry every parked head of an event log subscription, terminal heads included. The request is stored "
+                  + "on each head in one statement and served by the instance running the subscription a few heads per "
+                  + "pass, as a single retry is. The events held behind a head follow it. Does not wait for the heads to "
+                  + "be served.")
+         .roles(SUBSCRIPTION_W, ADMIN)
+         .pathParam("subscriber", new StringSchema(), "The subscriber.")
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
+         .queryParam("instanceName", eventLogInstanceNameSchema(), false, EVENT_LOG_INSTANCE_NAME)
+         .responseRef("ApiBulkParkedRequestResult", "Whether the subscription exists and how many parked heads the request was stored on.");
+
+        b.operation(EventLogSubscriptionsApi.class, "discardAllParked")
+         .tag("event-log-subscriptions").post("/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/discard-all")
+         .summary("Discard every parked head of an event log subscription: delete each without handling it, after which "
+                  + "the events held behind them are handled. Served as a retry-all is.")
+         .roles(SUBSCRIPTION_W, ADMIN)
+         .pathParam("subscriber", new StringSchema(), "The subscriber.")
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
+         .queryParam("instanceName", eventLogInstanceNameSchema(), false, EVENT_LOG_INSTANCE_NAME)
+         .responseRef("ApiBulkParkedRequestResult", "Whether the subscription exists and how many parked heads the request was stored on.");
 
         b.operation(EventLogSubscriptionsApi.class, "deleteRetiredInstance")
          .tag("event-log-subscriptions").delete("/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/instances/{instanceName}")
