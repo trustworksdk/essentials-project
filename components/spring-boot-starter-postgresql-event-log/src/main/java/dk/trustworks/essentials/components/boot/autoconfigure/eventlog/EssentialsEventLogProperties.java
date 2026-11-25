@@ -170,6 +170,11 @@ public class EssentialsEventLogProperties {
      * The longest wait between two automatic retries of a parked aggregate; at least parked-retry-initial.
      */
     private Duration parkedRetryMax = Duration.ofMinutes(5);
+    /**
+     * The {@code EventLogParkedHealthIndicator} on {@code /actuator/health} (switch it off with
+     * {@code management.health.eventLogParked.enabled=false}). Keep it out of the liveness and readiness groups.
+     */
+    private final HealthProperties health = new HealthProperties();
 
     /**
      * @return the settings these properties describe
@@ -480,5 +485,50 @@ public class EssentialsEventLogProperties {
 
     public void setParkedRetryMax(Duration parkedRetryMax) {
         this.parkedRetryMax = parkedRetryMax;
+    }
+
+    /**
+     * @return the {@code EventLogParkedHealthIndicator}'s properties, under {@code essentials.event-log.health}
+     */
+    public HealthProperties getHealth() {
+        return health;
+    }
+
+    /**
+     * The {@code EventLogParkedHealthIndicator}'s properties, under {@code essentials.event-log.health}. The indicator
+     * reports terminal parked heads (an event that failed with {@code ParkEventException}: only an operator can release
+     * it). That is a data problem, not a sick instance: restarting or unreadying a pod does not release the event, and every
+     * replica reports the same rows. So do not add the indicator to the {@code liveness} or {@code readiness} health
+     * groups, or a data problem restarts pods; alert on it instead.
+     */
+    public static class HealthProperties {
+        /**
+         * How long the parked summary is reused before the health indicator reads it again, so frequent probes do not each
+         * run a statement. Zero reads on every call.
+         */
+        private Duration cacheTtl = Duration.ofSeconds(10);
+        /**
+         * The health status the parked-events health indicator reports while any subscription has a terminal parked head
+         * (one only an operator can release); any Spring Boot status code, for instance DOWN, OUT_OF_SERVICE or a custom
+         * one. Retrying heads alone always report UP. Keep the indicator out of the liveness and readiness groups, or a
+         * data problem restarts pods.
+         */
+        private String terminalParkedStatus = "DOWN";
+
+        public Duration getCacheTtl() {
+            return cacheTtl;
+        }
+
+        public void setCacheTtl(Duration cacheTtl) {
+            this.cacheTtl = cacheTtl;
+        }
+
+        public String getTerminalParkedStatus() {
+            return terminalParkedStatus;
+        }
+
+        public void setTerminalParkedStatus(String terminalParkedStatus) {
+            this.terminalParkedStatus = terminalParkedStatus;
+        }
     }
 }

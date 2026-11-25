@@ -307,11 +307,31 @@ class EventLogAutoConfigurationIT {
     }
 
     @Test
+    void the_parked_health_indicator_is_registered_reads_the_database_and_can_be_switched_off() {
+        enabled().withPropertyValues("essentials.event-log.health.terminal-parked-status=OUT_OF_SERVICE")
+                 .run(ctx -> {
+                     assertThat(ctx).hasNotFailed();
+                     assertThat(ctx).hasSingleBean(EventLogParkedHealthIndicator.class);
+                     var health = ctx.getBean(EventLogParkedHealthIndicator.class).health();
+                     // A real parkedSummary() statement against the engine's schema: nothing parked, so UP
+                     assertThat(health.getStatus()).isEqualTo(org.springframework.boot.health.contributor.Status.UP);
+                     assertThat(health.getDetails()).containsEntry(EventLogParkedHealthIndicator.DETAIL_TOTAL_TERMINAL_HEADS, 0L)
+                                                    .containsEntry(EventLogParkedHealthIndicator.DETAIL_TERMINAL_PARKED_STATUS, "OUT_OF_SERVICE");
+                 });
+        enabled().withPropertyValues("management.health.eventLogParked.enabled=false")
+                 .run(ctx -> {
+                     assertThat(ctx).hasNotFailed();
+                     assertThat(ctx).doesNotHaveBean(EventLogParkedHealthIndicator.class);
+                 });
+    }
+
+    @Test
     void disabled_leaves_the_old_event_store_in_place() {
         runner().run(ctx -> {
             assertThat(ctx).hasNotFailed();
             assertThat(ctx).doesNotHaveBean(EventLog.class);
             assertThat(ctx).doesNotHaveBean(EventLogAutoConfiguration.class);
+            assertThat(ctx).doesNotHaveBean(EventLogParkedHealthIndicator.class);
             assertThat(ctx.getBean(EventStore.class)).isNotInstanceOf(EventLogEventStore.class);
             assertThat(ctx).hasSingleBean(EventStoreSubscriptionManager.class);
         });

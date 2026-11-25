@@ -42,6 +42,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.health.autoconfigure.contributor.ConditionalOnEnabledHealthIndicator;
+import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.context.annotation.*;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -83,6 +85,31 @@ public class EventLogAutoConfiguration {
     @Bean
     static UnportedEventProcessorGuard unportedEventProcessorGuard() {
         return new UnportedEventProcessorGuard();
+    }
+
+    /**
+     * Holds the health indicator, which needs spring-boot-health, an optional ({@code provided}) dependency of this
+     * starter; guarded by class <em>name</em> so this configuration is never reflected on without it (as the old starter's
+     * {@code EventStoreConfiguration.HealthIndicatorConfiguration}).
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "org.springframework.boot.health.contributor.HealthIndicator")
+    static class HealthIndicatorConfiguration {
+        /**
+         * Reports parked heads on {@code /actuator/health}: a terminal one with
+         * {@code essentials.event-log.health.terminal-parked-status} (default {@code DOWN}), retrying ones as {@code UP}.
+         * Keep it out of the liveness and readiness groups: a terminal park is a data problem that a restart does not fix.
+         * Switch it off with {@code management.health.eventLogParked.enabled=false}.
+         */
+        @Bean
+        @ConditionalOnEnabledHealthIndicator("eventLogParked")
+        @ConditionalOnMissingBean
+        public EventLogParkedHealthIndicator eventLogParkedHealthIndicator(EventLog eventLog, EssentialsEventLogProperties properties) {
+            var health = properties.getHealth();
+            return new EventLogParkedHealthIndicator(eventLog.admin(),
+                                                     new Status(health.getTerminalParkedStatus()),
+                                                     health.getCacheTtl());
+        }
     }
 
     /**

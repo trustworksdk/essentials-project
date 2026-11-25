@@ -80,6 +80,15 @@
             <version>${spring-boot.version}</version>
             <optional>true</optional>
         </dependency>
+        <!-- EventLogParkedHealthIndicator and @ConditionalOnEnabledHealthIndicator (Spring Boot 4 moved both into
+             spring-boot-health); provided, as in the old event-store starter: the indicator is registered only when the
+             application has it -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-health</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
@@ -174,12 +183,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-actuator-autoconfigure</artifactId>
-            <version>${spring-boot.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-health</artifactId>
             <version>${spring-boot.version}</version>
             <scope>test</scope>
         </dependency>

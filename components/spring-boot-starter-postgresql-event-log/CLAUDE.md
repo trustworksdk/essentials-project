@@ -15,6 +15,7 @@ Spring Boot auto-configuration for the new event store engine (`postgresql-event
 | `EventLogProcessorLifecycle` | `SmartLifecycle` that registers each `ViewProjection` / `EventReactor` bean's aggregate type, starts it, stops them before the `EventLog`; nothing in schema mode `emit` |
 | `EventLogProcessorDependencies` | For `EventLogViewProcessor` / `EventLogReactor` / `EventLogInboxProcessor` subclass beans (the last also takes the `Inboxes` and the transaction-aware `UnitOfWorkFactory`). Those are foundation `Lifecycle`s: the base starter's `DefaultLifecycleManager` starts them (off in `emit`), not `EventLogProcessorLifecycle` |
 | `UnportedEventProcessorGuard` | `static` `BeanFactoryPostProcessor` bean (ESS-145): fails start-up naming each classic `EventProcessor`/`ViewEventProcessor`/`InTransactionEventProcessor` bean + port target. BFPP, not `FailureAnalyzer`: runs after all definitions, before any singleton, so it beats the missing `*Dependencies` error; a `FailureAnalyzer` only rewrites the report of that error. Types via `getType(name, false)`, matched by class name |
+| `EventLogParkedHealthIndicator` | Nested `HealthIndicatorConfiguration` (guarded by the `HealthIndicator` class name), `@ConditionalOnEnabledHealthIndicator("eventLogParked")` (off: `management.health.eventLogParked.enabled=false`). One `parkedSummary()` per `essentials.event-log.health.cache-ttl` (10 s); terminal head -> `essentials.event-log.health.terminal-parked-status` (`DOWN`), retrying only -> UP, read failure -> DOWN. Keep it out of liveness/readiness groups |
 | `EventLogSubscriptionsApi` | `EventLogAdminApiAutoConfiguration`, with the admin API starter and an `EssentialsSecurityProvider` |
 
 ## Gotchas
@@ -28,7 +29,7 @@ Spring Boot auto-configuration for the new event store engine (`postgresql-event
 
 ## Tests
 
-Unit: `EssentialsEventLogPropertiesTest`, `EventLogImportFilterTest`, `MissingDependencyFailureAnalyzerRegistrationTest`, `UnportedEventProcessorGuardTest` (`ApplicationContextRunner`; the real-wiring arm is in `EventLogAutoConfigurationIT`).
+Unit: `EssentialsEventLogPropertiesTest`, `EventLogParkedHealthIndicatorTest`, `EventLogImportFilterTest`, `MissingDependencyFailureAnalyzerRegistrationTest`, `UnportedEventProcessorGuardTest` (`ApplicationContextRunner`; the real-wiring arm is in `EventLogAutoConfigurationIT`).
 
 Integration (one static container, `public` schema recreated per test): `EventLogAutoConfigurationIT`, `EventLogSchemaModeIT`,
 `EventLogAdminApiIT`. They import every auto-configuration on the class path through `@EnableAutoConfiguration`, never
@@ -45,7 +46,7 @@ duplicate `essentialsEventStore`; removing the filter from `spring.factories` fa
 - **Processors register their own aggregate type** before subscribing: `EventLogProcessorLifecycle` for `ViewProjection` /
   `EventReactor` beans, the base classes at `start()`. Registration creates the engine's default tables (in `create`).
 - `micrometer-core` and `micrometer-tracing` are `optional` (as in the event-store starter); the tests need
-  `spring-boot-health` (test scope): `EssentialsComponentsConfiguration` cannot be introspected without it.
+  `spring-boot-health` (now `provided`, for the health indicator): `EssentialsComponentsConfiguration` cannot be introspected without it.
 - Observability: `MicrometerMetricsConfiguration` declares an `EventLogMetrics` (a starter type, so the `eventLog` bean
   names no Micrometer class) that builds a `MicrometerEventLogObserver` from the `MeterRegistry` looked up when the
   `EventLog` is built - no `@ConditionalOnBean(MeterRegistry)`, so no ordering against the metrics auto-configuration.

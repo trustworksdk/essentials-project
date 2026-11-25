@@ -94,4 +94,25 @@ class EssentialsEventLogPropertiesTest {
         }
         assertThat(values).hasSize(EventLogSettings.class.getRecordComponents().length);
     }
+
+    @Test
+    void the_health_indicator_properties_default_to_a_ten_second_cache_and_down() {
+        var health = new EssentialsEventLogProperties().getHealth();
+        assertThat(health.getCacheTtl()).isEqualTo(Duration.ofSeconds(10));
+        assertThat(health.getTerminalParkedStatus()).isEqualTo("DOWN");
+    }
+
+    @Test
+    void the_health_indicator_properties_bind() {
+        var values = Map.of("essentials.event-log.health.cache-ttl", "30s",
+                            "essentials.event-log.health.terminal-parked-status", "OUT_OF_SERVICE");
+
+        var health = new Binder(new MapConfigurationPropertySource(values))
+                .bind("essentials.event-log", EssentialsEventLogProperties.class)
+                .get()
+                .getHealth();
+
+        assertThat(health.getCacheTtl()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(health.getTerminalParkedStatus()).isEqualTo("OUT_OF_SERVICE");
+    }
 }
