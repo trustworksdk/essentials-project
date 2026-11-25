@@ -215,6 +215,58 @@ class PostgresqlDurableSubscriptionRepositoryIT {
                                                .one());
     }
 
+    /**
+     * Reproducer for the intermittent failure of
+     * {@code EventStoreSubscriptionManager_2_node_exclusivelySubscribeToAggregateEventsAsynchronously_IT#subscribe}
+     * (node1's resume point read back as 180 instead of 213), with each step done by the call the subscription code
+     * makes, in the order the failing run's log shows:
+     * <ol>
+     *     <li>node2 holds the fenced lock; its last periodic save stored 178.</li>
+     *     <li>The database pauses. node2's I/O retry of #180 is overtaken by #181, so its in-memory resume point is 182.</li>
+     *     <li>node1 acquires the lock and reads the row: it starts from 178 ({@code ExclusiveAsynchronousSubscription.subscribeOnLockAcquired}).</li>
+     *     <li>node2 learns it lost the lock. Its subscriber is disposed while #180 is retried, and
+     *     {@code PersistedEventSubscriber.holdResumePointAt} rewinds the resume point to 180 with
+     *     {@code setResumeFromAndIncluding}, which starts reposition epoch 1.</li>
+     *     <li>node2's {@code unsubscribeOnLockReleased} then saves it ({@code persistResumePointUntilSettled}), although
+     *     the lock now belongs to node1. Saves are not fenced by the lock, and epoch 1 beats the stored epoch 0.</li>
+     *     <li>node1 handles 178..212 and saves 213 in epoch 0. The guard refuses this save and every later one for as long
+     *     as node1 holds the lock. The stored row stays at 180, behind everything node1 handled.</li>
+     * </ol>
+     */
+    @Test
+    @Disabled("Known bug, not fixed: the guard treats the previous lock holder's in-memory hold (an epoch bump) as a reset, so the new holder's saves are refused for its whole tenure. " +
+            "Fixing it needs resume point saves fenced by the lock token, or the final save made before the lock is released - both contract changes")
+    void test_a_late_save_by_the_previous_lock_holder_does_not_block_the_new_lock_holders_saves() {
+        var repository = new PostgresqlDurableSubscriptionRepository(jdbi, eventStore);
+        repository.createResumePoint(SUBSCRIBER_ID, ORDERS, GlobalEventOrder.of(1));
+
+        // 1. node2 holds the lock and its periodic save stores 178
+        var node2 = repository.getResumePoint(SUBSCRIBER_ID, ORDERS).orElseThrow();
+        node2.advanceResumeFromAndIncluding(GlobalEventOrder.of(178));
+        repository.saveResumePoint(node2);
+        assertStored(178, 0);
+
+        // 2. #181 completes while #180 is retried on I/O
+        node2.advanceResumeFromAndIncluding(GlobalEventOrder.of(182));
+
+        // 3. node1 acquires the lock and reads the row
+        var node1 = repository.getOrCreateResumePoint(SUBSCRIBER_ID, ORDERS, aggregateType -> GlobalEventOrder.of(1));
+        assertThat(node1.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(178));
+
+        // 4. + 5. node2's subscriber is stopped during #180's retry: the hold rewinds to 180 (epoch 1), then the lock release saves it
+        node2.setResumeFromAndIncluding(GlobalEventOrder.of(180));
+        repository.saveResumePoint(node2);
+
+        // 6. node1, the lock holder, handled 178..212 and saves
+        node1.advanceResumeFromAndIncluding(GlobalEventOrder.of(213));
+        repository.saveResumePoint(node1);
+
+        var stored = repository.getResumePoint(SUBSCRIBER_ID, ORDERS).orElseThrow();
+        assertThat(stored.getResumeFromAndIncluding())
+                .as("the lock holder's progress is stored, not the previous holder's late rewind")
+                .isEqualTo(GlobalEventOrder.of(213));
+    }
+
     private void assertStored(long resumeFromAndIncluding, long repositionEpoch) {
         var stored = jdbi.withHandle(handle -> handle.createQuery("SELECT resume_from_and_including_global_eventorder, reposition_epoch FROM " + DEFAULT_DURABLE_SUBSCRIPTIONS_TABLE_NAME +
                                                                           " WHERE subscriber_id = :subscriber_id AND aggregate_type = :aggregate_type")
