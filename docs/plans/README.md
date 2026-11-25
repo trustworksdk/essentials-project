@@ -4,7 +4,7 @@ Work that is **not built yet**: plans, proposals and improvement lists. A docume
 items. When the work ships, the part that describes the feature goes into a reference document in `docs/` (or the
 module's `LLM/` doc), and the plan moves to [`../archive/`](../archive).
 
-Last checked against the code: 2026-11-08.
+Last checked against the code: 2026-11-25 (`main` after 0.61.0, plus the 0.61.1 fixes).
 
 ## Documents
 
@@ -12,11 +12,11 @@ Last checked against the code: 2026-11-08.
 |---|---|---|
 | [ROADMAP-0.6x.md](ROADMAP-0.6x.md) | Whole framework | The open fixes and improvements for the 0.6x line, bucketed by the earliest release they may ship in. Items are deleted when shipped. |
 | [durable-queues-improvement-plan.md](durable-queues-improvement-plan.md) | `postgresql-queue`, shard-owned engine | D4 virtual-thread handlers for the classic queue; E3 document a lower HikariCP `minimumIdle`; F5 a retrying shard-owned message keeps no error; C4 "skip the ordered claim" (reverted, measure first); batched acknowledgements. |
-| [shard-owned-queue-polling-reduction.md](shard-owned-queue-polling-reduction.md) | Shard-owned engine | Item 1(b) cache the Micrometer queue-depth read; items 2 and 4 (parked on `wip/` branches); item 5. |
-| [shard-owned-consumer-overhead-proposal.md](shard-owned-consumer-overhead-proposal.md) | Shard-owned engine | Candidate 2: the cost of the batched cursor read when units are split (profile first). |
+| [shard-owned-queue-polling-reduction.md](shard-owned-queue-polling-reduction.md) | Shard-owned engine | Item 1(b) cache the Micrometer queue-depth read - since 0.61.0 the interceptor is registered whenever a `MeterRegistry` bean exists, so this read now runs in every Actuator application; items 2 and 4 (their `wip/sq-item2` and `wip/sq-item4` branches no longer exist, so start over); item 5. Items 1(a) and 3 shipped in 0.61.0. |
+| [shard-owned-consumer-overhead-proposal.md](shard-owned-consumer-overhead-proposal.md) | Shard-owned engine | Candidate 1 shipped in 0.61.0. Candidate 2: the cost of the batched cursor read when units are split (profile first). |
 | [shard-owned-test-time-reduction.md](shard-owned-test-time-reduction.md) | Shard-owned engine tests | Items 1–4 and 6 done (engine module 12:42 → 8:40). Open: §7, a profiling pass over the remaining waits in `ShardOwnedLifecycleIT` and `ShardOwnedUnsubscribeIT`, then SQL lease ageing where safe. |
 | [subscription-improvements.md](subscription-improvements.md) | Event store subscriptions | S2 interruptible (reactive) wake-up; S3 consumer-group-scoped resume points; S4 trimming the one-event overlap after a crash. S1 phase 1, S5 and S6 are built. |
-| [event-store-subscription-redesign.md](event-store-subscription-redesign.md) | Event store subscriptions | Whole document: a proposal, nothing built or measured. |
+| [event-store-subscription-redesign.md](event-store-subscription-redesign.md) | Event store subscriptions | Built and measured on `feature/event-store-engine-phase9` (phases 0-10), not merged; 0.61.0 shipped without it. On `main`, only point 4 (fence every resume-point write) is done, for the existing engine (0.61.1, `fence_token`). |
 
 ## Open items from documents kept elsewhere
 
@@ -30,4 +30,5 @@ document above.
 | Key-partitioned processing §9.1 batched handling of queued messages; §9.2 a rebuild path for `InTransactionEventProcessor` | [../design/key-partitioned-event-processing.md](../design/key-partitioned-event-processing.md) |
 | Schema harness step 8 (Mongo contributors and `MongoSchemaApplier`), steps 11–12 (`essentials-schema-flyway`, `essentials-schema-liquibase`) | [../design/database-schema-harness.md](../design/database-schema-harness.md) §9 |
 | A start-up check of total connections held against the pool size | [../archive/processor-settings-inventory.md](../archive/processor-settings-inventory.md) §3 |
+| Shard-owned cross-process wake-ups fall back to the 500 ms backstop above roughly 1 000-3 000 notifications/s: `ShardWakeupListener` drains pgjdbc with `getNotifications(200)`, which holds notifications back under dense traffic (messages are late, never lost). Measured on the event-log branch; applies to `main` | `feature/event-store-engine-phase9`, `docs/plans/pgjdbc-notification-drain-options.md` |
 | Load-test the failure paths: run the phase-6 harness with faults injected (CDC gap stalls, failed-batch replay, closing-books rollover, two-instance ownership), and line the load driver's start up with the exchange day so A/B arms trade the same number of days (compare equal `steadyState.bursts`) | Review-fix performance A/B, 2026-11-08 |
