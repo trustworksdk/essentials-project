@@ -358,12 +358,37 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
                     "       RETURNING 1)\n" +
                     "SELECT (SELECT count(*) FROM p), (SELECT count(*) FROM u)";
     /**
+     * Store a request on every parked head of a subscription (a bulk retry or discard): the key, then requested, then
+     * the key. Returns whether the progress row exists and how many heads took the request
+     */
+    static final String PARKED_REQUEST_ALL =
+            "WITH p AS (SELECT 1 FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?),\n" +
+                    "u AS (UPDATE " + PARKED_EVENTS_TABLE + " SET requested = ?, requested_at = now()\n" +
+                    "       WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND blocked_by IS NULL AND EXISTS (SELECT 1 FROM p)\n" +
+                    "       RETURNING 1)\n" +
+                    "SELECT (SELECT count(*) FROM p), (SELECT count(*) FROM u)";
+    /**
+     * The parked heads of every subscription, one row per subscription that has one, for a health check: no parameter.
+     * Heads only ({@code blocked_by IS NULL}); the parked table holds only what failed, so a scan of it is small. Columns:
+     * subscriber, aggregate_type, instance_name, retrying heads, terminal heads, the oldest parked_at, the earliest
+     * next_retry_at of a retrying head, the latest last_failed_at, and the error type and message of the terminal head
+     * that failed last (null without a terminal head)
+     */
+    static final String ADMIN_PARKED_SUMMARY =
+            "SELECT subscriber, aggregate_type, instance_name, count(*) FILTER (WHERE NOT terminal), count(*) FILTER (WHERE terminal), min(parked_at),\n" +
+                    "       min(next_retry_at) FILTER (WHERE NOT terminal), max(last_failed_at),\n" +
+                    "       (array_agg(error_type ORDER BY last_failed_at DESC NULLS LAST, global_order DESC) FILTER (WHERE terminal))[1],\n" +
+                    "       (array_agg(error_message ORDER BY last_failed_at DESC NULLS LAST, global_order DESC) FILTER (WHERE terminal))[1]\n" +
+                    "  FROM " + PARKED_EVENTS_TABLE + " WHERE blocked_by IS NULL\n" +
+                    " GROUP BY subscriber, aggregate_type, instance_name ORDER BY aggregate_type, subscriber, instance_name";
+    /**
      * The admin listing, one statement: every progress row with its parked head count and total and its lag, the
      * head of each listed aggregate type read once from the type's event table through {@code el_aggregate_types} (so a
      * type no node of this JVM registered still shows). Optional aggregate type twice, then the limit. Columns:
      * subscriber, aggregate_type, instance_name, exclusive, consistency_mode, progress_model, resume_from, reset_epoch,
      * lease_owner, lease_until, lease_fence, updated_at, filter_digest, parked heads, parked total, lag (null if the type is
-     * not registered)
+     * not registered), then over the parked heads: retrying heads, terminal heads, the oldest parked_at, the earliest
+     * next_retry_at of a retrying head, the most retries, the latest last_failed_at (the timestamps null without one)
      */
     static final String ADMIN_SUBSCRIPTIONS =
             "WITH p AS MATERIALIZED (SELECT * FROM " + PROGRESS_TABLE + " WHERE (?::text IS NULL OR aggregate_type = ?)\n" +
@@ -371,21 +396,29 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
                     "h AS MATERIALIZED (SELECT t.aggregate_type,\n" +
                     "                          coalesce((xpath('/row/m/text()', query_to_xml(format('SELECT max(global_order) AS m FROM %I', t.event_table), false, true, '')))[1]::text::bigint, 0) AS head\n" +
                     "                     FROM " + AGGREGATE_TYPES_TABLE + " t WHERE t.aggregate_type IN (SELECT DISTINCT aggregate_type FROM p)),\n" +
-                    "c AS (SELECT e.subscriber, e.aggregate_type, e.instance_name, count(*) FILTER (WHERE e.blocked_by IS NULL) AS heads, count(*) AS total\n" +
+                    "c AS (SELECT e.subscriber, e.aggregate_type, e.instance_name, count(*) FILTER (WHERE e.blocked_by IS NULL) AS heads, count(*) AS total,\n" +
+                    "             count(*) FILTER (WHERE e.blocked_by IS NULL AND NOT e.terminal) AS retrying, count(*) FILTER (WHERE e.blocked_by IS NULL AND e.terminal) AS terminal,\n" +
+                    "             min(e.parked_at) FILTER (WHERE e.blocked_by IS NULL) AS oldest, min(e.next_retry_at) FILTER (WHERE e.blocked_by IS NULL AND NOT e.terminal) AS next_retry,\n" +
+                    "             max(e.retries) FILTER (WHERE e.blocked_by IS NULL) AS max_retries, max(e.last_failed_at) FILTER (WHERE e.blocked_by IS NULL) AS last_failed\n" +
                     "        FROM " + PARKED_EVENTS_TABLE + " e JOIN p USING (subscriber, aggregate_type, instance_name)\n" +
                     "       GROUP BY e.subscriber, e.aggregate_type, e.instance_name)\n" +
                     "SELECT p.subscriber, p.aggregate_type, p.instance_name, p.exclusive, p.consistency_mode, p.progress_model, p.resume_from, p.reset_epoch,\n" +
                     "       p.lease_owner, p.lease_until, p.lease_fence, p.updated_at, p.filter_digest, coalesce(c.heads, 0), coalesce(c.total, 0),\n" +
-                    "       greatest(h.head - (p.resume_from - 1), 0)\n" +
+                    "       greatest(h.head - (p.resume_from - 1), 0), coalesce(c.retrying, 0), coalesce(c.terminal, 0), c.oldest, c.next_retry, coalesce(c.max_retries, 0), c.last_failed\n" +
                     "  FROM p LEFT JOIN c USING (subscriber, aggregate_type, instance_name) LEFT JOIN h USING (aggregate_type)\n" +
                     " ORDER BY p.aggregate_type, p.subscriber, p.instance_name";
     /** {@link #ADMIN_SUBSCRIPTIONS} for one key: the key */
     static final String ADMIN_SUBSCRIPTION =
             ADMIN_SUBSCRIPTIONS.replace("WHERE (?::text IS NULL OR aggregate_type = ?)\n", "WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ?\n")
                                .replace(" LIMIT ?),\n", "),\n");
-    /** One subscription's parked rows above a global order: the key, the lower bound (exclusive), the limit */
+    /**
+     * One subscription's parked rows above a global order: the key, the lower bound (exclusive), the limit. Columns:
+     * global_order, aggregate_id, blocked_by, attempts, error_type, error_message, parked_at, requested, requested_at,
+     * retries, next_retry_at, terminal, last_failed_at
+     */
     static final String ADMIN_PARKED =
-            "SELECT global_order, aggregate_id, blocked_by, attempts, error_type, error_message, parked_at, requested, requested_at FROM " + PARKED_EVENTS_TABLE +
+            "SELECT global_order, aggregate_id, blocked_by, attempts, error_type, error_message, parked_at, requested, requested_at, retries, next_retry_at, terminal, last_failed_at FROM " +
+                    PARKED_EVENTS_TABLE +
                     " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order > ? ORDER BY global_order LIMIT ?";
     /**
      * Delete a retired instance's row and its parked rows: only a non-exclusive row nobody holds a lease on.

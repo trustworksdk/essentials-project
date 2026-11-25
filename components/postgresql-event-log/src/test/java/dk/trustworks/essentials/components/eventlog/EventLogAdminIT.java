@@ -42,11 +42,16 @@ class EventLogAdminIT extends AbstractLeaseIT {
     private volatile long       gatedHead = -1;
     /** Each event of {@code order-1} takes this long once {@link #broken} is cleared: a slow retry */
     private volatile long       slowMillis = 0;
+    /** Set: {@code order-1}'s events fail with an ordinary exception, so a failed retry leaves a retrying head */
+    private volatile boolean    failPlain;
 
     private PeriodicHandler recorder() {
         return event -> {
             if (broken && event.aggregateId().equals("order-1")) {
                 throw new ParkEventException("broken");
+            }
+            if (failPlain && event.aggregateId().equals("order-1")) {
+                throw new IllegalStateException("still failing");
             }
             if (event.globalOrder() == gatedHead && headGate != null) {
                 headGate.pass();
@@ -524,6 +529,97 @@ class EventLogAdminIT extends AbstractLeaseIT {
         awaitTrue(() -> delivered.size() >= 5);
         assertThat(delivered).as("each event once, the aggregate in order").containsExactly(4L, 5L, 1L, 2L, 3L);
         assertThat(a.isRunning()).isTrue();
+    }
+
+    // ---- parked statistics, bulk requests and the summary (plan step 7) ----
+
+    @Test
+    void the_listing_and_the_parked_rows_show_the_retry_state_of_a_terminal_then_a_retrying_head() throws Exception {
+        var logA = eventLog("A");
+        var logB = eventLog("B");
+        parkedOnA(logA);
+
+        var terminal = logB.admin().subscription(adminKey(SUB)).orElseThrow();
+        assertThat(terminal.parkedHeads()).isEqualTo(1);
+        assertThat(terminal.retryingHeads()).isZero();
+        assertThat(terminal.terminalHeads()).isEqualTo(1);
+        assertThat(terminal.oldestParkedAt()).isPresent();
+        assertThat(terminal.nextRetryAt()).as("a terminal head is never due").isEmpty();
+        assertThat(terminal.maxRetries()).isZero();
+        assertThat(terminal.lastFailedAt()).isPresent();
+        var rows = logB.admin().parked(adminKey(SUB), 0, 10).rows();
+        assertThat(rows).hasSize(3);
+        assertThat(rows.get(0).terminal()).isTrue();
+        assertThat(rows.get(0).retries()).isZero();
+        assertThat(rows.get(0).nextRetryAt()).isEmpty();
+        assertThat(rows.get(0).lastFailedAt()).isPresent();
+        assertThat(rows.get(1).terminal()).isFalse();
+        assertThat(rows.get(1).nextRetryAt()).as("a held row has no schedule").isEmpty();
+        assertThat(rows.get(1).lastFailedAt()).as("a held row has not run").isEmpty();
+        var summary = logB.admin().parkedSummary();
+        assertThat(summary).hasSize(1);
+        assertThat(summary.getFirst().key()).isEqualTo(adminKey(SUB));
+        assertThat(summary.getFirst().terminalHeads()).isEqualTo(1);
+        assertThat(summary.getFirst().retryingHeads()).isZero();
+        assertThat(summary.getFirst().oldestParkedAt()).isEqualTo(terminal.oldestParkedAt().orElseThrow());
+        assertThat(summary.getFirst().nextRetryAt()).isEmpty();
+        assertThat(summary.getFirst().lastTerminalErrorType()).hasValueSatisfying(type -> assertThat(type).contains("ParkEventException"));
+        assertThat(summary.getFirst().lastTerminalErrorMessage()).hasValueSatisfying(message -> assertThat(message).contains("broken"));
+
+        // An operator retry that fails with an ordinary exception: the latest failure makes the head retrying
+        failPlain = true;
+        // retryParked waits only one parked check interval for the local serve: a serve that ends later answers
+        // ACCEPTED (the request stays stored and is served anyway), so wait for the failed retry to be recorded
+        assertThat(logA.admin().retryParked(adminKey(SUB), 1)).isIn(ParkedRequestResult.FAILED, ParkedRequestResult.ACCEPTED);
+        org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(10))
+                                 .until(() -> logB.admin().parked(adminKey(SUB), 0, 1).rows().getFirst().retries() == 1);
+        var retrying = logB.admin().subscription(adminKey(SUB)).orElseThrow();
+        assertThat(retrying.retryingHeads()).isEqualTo(1);
+        assertThat(retrying.terminalHeads()).isZero();
+        assertThat(retrying.maxRetries()).isEqualTo(1);
+        assertThat(retrying.nextRetryAt()).hasValueSatisfying(at -> assertThat(at).isAfter(retrying.lastFailedAt().orElseThrow()));
+        var head = logB.admin().parked(adminKey(SUB), 0, 1).rows().getFirst();
+        assertThat(head.terminal()).isFalse();
+        assertThat(head.retries()).isEqualTo(1);
+        assertThat(head.nextRetryAt()).isEqualTo(retrying.nextRetryAt());
+        var retryingSummary = logB.admin().parkedSummary().getFirst();
+        assertThat(retryingSummary.retryingHeads()).isEqualTo(1);
+        assertThat(retryingSummary.terminalHeads()).isZero();
+        assertThat(retryingSummary.nextRetryAt()).isEqualTo(retrying.nextRetryAt());
+        assertThat(retryingSummary.lastTerminalErrorType()).as("no terminal head").isEmpty();
+        assertThat(logB.admin().subscriptions(Optional.empty())).filteredOn(r -> r.key().equals(adminKey(SUB))).singleElement()
+                                                                .extracting(SubscriptionRow::retryingHeads).isEqualTo(1L);
+    }
+
+    @Test
+    void a_bulk_retry_on_the_node_that_runs_the_subscription_is_read_at_once() throws Exception {
+        var logA = eventLog("A", LEASE.withParkedCheckInterval(Duration.ofSeconds(30)));
+        var a    = parkedOnA(logA);
+        // The parked check that runs right after the park sets the interval going: only the nudge reads earlier
+        awaitTrue(() -> a.parkedChecks() >= 1);
+        assertThat(logA.admin().retryAllParked(adminKey(SUB))).isEqualTo(new BulkParkedResult(true, 1, true));
+        assertThat(within(Duration.ofSeconds(10), () -> parkedRows(SUB) == 0 && delivered.size() == 5)).as("served long before the interval").isTrue();
+        assertThat(delivered).containsExactly(4L, 5L, 1L, 2L, 3L);
+        assertThat(logA.admin().parkedSummary()).isEmpty();
+        assertThat(logA.admin().retryAllParked(adminKey(SUB))).as("nothing parked").isEqualTo(new BulkParkedResult(true, 0, false));
+    }
+
+    @Test
+    void a_bulk_discard_from_the_other_node_is_served_by_the_owner() throws Exception {
+        var logA = eventLog("A");
+        var logB = eventLog("B");
+        parkedOnA(logA);
+        assertThat(logB.admin().discardAllParked(adminKey(SUB))).isEqualTo(new BulkParkedResult(true, 1, false));
+        assertThat(logB.admin().parked(adminKey(SUB), 0, 10).rows()).extracting(r -> r.requested().orElse("-")).containsExactly("DISCARD", "-", "-");
+        assertThat(within(WAIT, () -> parkedRows(SUB) == 0 && delivered.size() == 4)).isTrue();
+        assertThat(delivered).as("the head unhandled, the held events in order").containsExactly(4L, 5L, 2L, 3L);
+    }
+
+    @Test
+    void a_bulk_request_on_an_unknown_subscription_stores_nothing() throws Exception {
+        var logA = eventLog("A");
+        assertThat(logA.admin().retryAllParked(adminKey("no-such"))).isEqualTo(new BulkParkedResult(false, 0, false));
+        assertThat(logA.admin().discardAllParked(adminKey("no-such"))).isEqualTo(new BulkParkedResult(false, 0, false));
     }
 }
 

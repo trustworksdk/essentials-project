@@ -65,6 +65,27 @@ public interface EventLogAdmin {
     ParkedRequestResult discardParked(ProgressKey key, long head) throws SQLException;
 
     /**
+     * Retry every parked head of the subscription: the request is stored on each head's row in one statement. If this
+     * node runs the subscription and owns it, it is told to read the requests at once; it serves them a few per pass,
+     * as it serves a single request, and this call does not wait for them. Otherwise the node that runs it serves them at
+     * its next parked check. Terminal heads are retried too; the events held behind a head are not requested
+     * individually, they follow their head.
+     *
+     * @return whether the subscription exists, how many heads the request was stored on and whether this node was nudged
+     */
+    BulkParkedResult retryAllParked(ProgressKey key) throws SQLException;
+
+    /** As {@link #retryAllParked}, but every parked head is deleted without being handled; the events held behind them are applied */
+    BulkParkedResult discardAllParked(ProgressKey key) throws SQLException;
+
+    /**
+     * The parked heads of every subscription, one entry per subscription with at least one, in one statement over the
+     * parked heads only: counts by state, the oldest park, the next automatic retry, the last failure and the last
+     * terminal error. Cheap enough for a health check.
+     */
+    List<ParkedSummary> parkedSummary() throws SQLException;
+
+    /**
      * Delete the row of a retired instance and its parked rows: only a per-instance (non-exclusive) row,
      * never one this event log runs. An instance that runs on another node finds its row gone at its next save.
      *

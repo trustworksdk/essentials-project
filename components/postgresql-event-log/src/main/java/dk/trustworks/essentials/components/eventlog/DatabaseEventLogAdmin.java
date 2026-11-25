@@ -84,7 +84,9 @@ final class DatabaseEventLogAdmin implements EventLogAdmin {
                                                  Optional.ofNullable(resultSet.getString(9)), Optional.ofNullable(resultSet.getObject(10, OffsetDateTime.class)),
                                                  noFence ? OptionalLong.empty() : OptionalLong.of(fence), resultSet.getObject(12, OffsetDateTime.class),
                                                  Optional.ofNullable(resultSet.getString(13)), resultSet.getLong(14), resultSet.getLong(15),
-                                                 noLag ? OptionalLong.empty() : OptionalLong.of(lag)));
+                                                 noLag ? OptionalLong.empty() : OptionalLong.of(lag), resultSet.getLong(17), resultSet.getLong(18),
+                                                 Optional.ofNullable(resultSet.getObject(19, OffsetDateTime.class)), Optional.ofNullable(resultSet.getObject(20, OffsetDateTime.class)),
+                                                 resultSet.getInt(21), Optional.ofNullable(resultSet.getObject(22, OffsetDateTime.class))));
                 }
             }
         }
@@ -107,7 +109,9 @@ final class DatabaseEventLogAdmin implements EventLogAdmin {
                     rows.add(new ParkedRow(resultSet.getLong(1), resultSet.getString(2), head ? OptionalLong.empty() : OptionalLong.of(blockedBy), resultSet.getInt(4),
                                            Optional.ofNullable(resultSet.getString(5)), Optional.ofNullable(resultSet.getString(6)),
                                            resultSet.getObject(7, OffsetDateTime.class), Optional.ofNullable(resultSet.getString(8)),
-                                           Optional.ofNullable(resultSet.getObject(9, OffsetDateTime.class))));
+                                           Optional.ofNullable(resultSet.getObject(9, OffsetDateTime.class)), resultSet.getInt(10),
+                                           Optional.ofNullable(resultSet.getObject(11, OffsetDateTime.class)), resultSet.getBoolean(12),
+                                           Optional.ofNullable(resultSet.getObject(13, OffsetDateTime.class))));
                 }
             }
         }
@@ -176,6 +180,56 @@ final class DatabaseEventLogAdmin implements EventLogAdmin {
             Thread.currentThread().interrupt();
             return ParkedRequestResult.ACCEPTED;
         }
+    }
+
+    @Override
+    public BulkParkedResult retryAllParked(ProgressKey key) throws SQLException {
+        return requestAll(key, false);
+    }
+
+    @Override
+    public BulkParkedResult discardAllParked(ProgressKey key) throws SQLException {
+        return requestAll(key, true);
+    }
+
+    private BulkParkedResult requestAll(ProgressKey key, boolean discard) throws SQLException {
+        requireNonNull(key, "No key provided");
+        long exists;
+        int  stored;
+        try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement(EventLogStorage.PARKED_REQUEST_ALL)) {
+            var p = ProgressStore.bindKey(statement, 1, key.internal());
+            statement.setString(p++, discard ? "DISCARD" : "RETRY");
+            ProgressStore.bindKey(statement, p, key.internal());
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                exists = resultSet.getLong(1);
+                stored = (int) resultSet.getLong(2);
+            }
+        }
+        if (exists == 0) {
+            return new BulkParkedResult(false, 0, false);
+        }
+        if (stored == 0) {
+            return new BulkParkedResult(true, 0, false);
+        }
+        var local = subscriptions.get().stream().filter(s -> s.key().equals(key.internal()) && s.servesParked()).findFirst();
+        local.ifPresent(Subscription::nudgeParkedCheck);
+        return new BulkParkedResult(true, stored, local.isPresent());
+    }
+
+    @Override
+    public List<ParkedSummary> parkedSummary() throws SQLException {
+        var rows = new ArrayList<ParkedSummary>();
+        try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement(EventLogStorage.ADMIN_PARKED_SUMMARY);
+             var resultSet = statement.executeQuery()) {
+            while (resultSet.next()) {
+                rows.add(new ParkedSummary(new ProgressKey(resultSet.getString(1), resultSet.getString(2), resultSet.getString(3)), resultSet.getLong(4), resultSet.getLong(5),
+                                           resultSet.getObject(6, OffsetDateTime.class), Optional.ofNullable(resultSet.getObject(7, OffsetDateTime.class)),
+                                           Optional.ofNullable(resultSet.getObject(8, OffsetDateTime.class)), Optional.ofNullable(resultSet.getString(9)),
+                                           Optional.ofNullable(resultSet.getString(10))));
+            }
+        }
+        return rows;
     }
 
     @Override

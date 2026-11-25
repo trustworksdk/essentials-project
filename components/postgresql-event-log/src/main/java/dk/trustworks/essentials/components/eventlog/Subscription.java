@@ -208,6 +208,8 @@ final class Subscription {
     private volatile boolean                     acceptsParkedRequests = true;
     /** When the next parked check is due (0: at once), and how many ran; delivery thread */
     private long                                 nextParkedCheckNanos;
+    /** Set by an operator's bulk request on this node: the next parked check reads at once, whatever its interval */
+    private volatile boolean                     parkedCheckNudged;
     private volatile long                        parkedChecks;
     private volatile long                        parkedStatements;
     // ---- exclusive subscriptions; both null for a non-exclusive one ----
@@ -2245,6 +2247,20 @@ final class Subscription {
         return request.result();
     }
 
+    /**
+     * An operator stored requests on many parked heads (a bulk retry or discard): the next parked check reads them at
+     * once instead of waiting out its interval, and a delivery thread waiting on its inbox (or, before it attached, on
+     * the reader) is woken to run it. The serves then drain the queue as they do any request; nothing waits on them
+     */
+    void nudgeParkedCheck() {
+        parkedCheckNudged = true;
+        var current = inbox;
+        if (current != null) {
+            current.nudge();
+        }
+        wakeUp();
+    }
+
     private void failParkedRequests() {
         ParkedRequest request;
         while ((request = parkedRequests.poll()) != null) {
@@ -2262,6 +2278,10 @@ final class Subscription {
             return;
         }
         var now = System.nanoTime();
+        if (parkedCheckNudged) {
+            parkedCheckNudged = false;
+            nextParkedCheckNanos = 0;
+        }
         if (nextParkedCheckNanos != 0 && now - nextParkedCheckNanos < 0) {
             return;
         }
