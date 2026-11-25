@@ -187,6 +187,45 @@ public interface EventLogObserver {
     default void onHeldAggregates(String subscriber, String aggregateType, int count) {
     }
 
+    /** How a serve of a parked head ended, for {@link #onParkedRetry} */
+    enum ParkedRetryOutcome {
+        /** The serve committed: the head was retried (or discarded) and its aggregate released or moved to a new head */
+        RELEASED,
+        /** The head (or, on a discard, nothing) failed again: its retries grew and its next automatic retry moved out */
+        FAILED,
+        /**
+         * The serve did not run to the end and stored nothing: the head was no longer parked, a reset or takeover got there
+         * first, or the parked rows changed meanwhile. An automatic retry is due again one backoff later
+         */
+        DEFERRED
+    }
+
+    /**
+     * A serve of a parked head ended: an automatic retry of the retry schedule or an operator's retry or discard. Delivery
+     * thread, once per serve - never per event.
+     *
+     * @param head    the {@code global_order} of the parked head served
+     * @param auto    {@code true} for an automatic retry, {@code false} for an operator's request
+     * @param outcome how it ended
+     * @param retries the head's failed retries after the serve ({@link ParkedRetryOutcome#RELEASED}: before it)
+     * @param nextIn  the wait until the head's next automatic retry, or {@code null} when none is scheduled (the head was
+     *                released, is terminal or is no longer held)
+     */
+    default void onParkedRetry(String subscriber, String aggregateType, long head, boolean auto, ParkedRetryOutcome outcome, int retries, Duration nextIn) {
+    }
+
+    /**
+     * The subscription's parked heads changed: the held set (a park, a release, a new head, a load at start or after a
+     * reposition, a standby) or the retry schedule (a failed retry). Delivery thread; only on such a change, never per
+     * event or per pass.
+     *
+     * @param retrying  heads the engine retries by itself
+     * @param terminal  heads that failed with a {@link ParkEventException}: only an operator retries or discards them
+     * @param oldestAge how long the oldest parked head has been parked, {@link Duration#ZERO} when none is
+     */
+    default void onParkedHeads(String subscriber, String aggregateType, int retrying, int terminal, Duration oldestAge) {
+    }
+
     /**
      * A delivery thread acquired a catch-up permit. Delivery thread.
      *

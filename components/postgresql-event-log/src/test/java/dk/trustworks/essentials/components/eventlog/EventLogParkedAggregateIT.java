@@ -626,4 +626,77 @@ class EventLogParkedAggregateIT extends AbstractPageIT {
     void must_fail_when_the_schedule_is_not_loaded_a_restart_retries_at_once() throws Exception {
         assertThat(restartKeepsSchedule(WatermarkMutant.PARKED_RETRY_SCHEDULE_NOT_LOADED)).isNotEmpty();
     }
+
+    // ---- the parked heads and their serves as the observer and the status see them (step 6) ----
+
+    /** @return the status the public handle reports for {@code subscription} */
+    private static SubscriptionStatus status(Subscription subscription) {
+        return new DefinedSubscription(Definitions.definition(PROJECTION, TYPE, "node-1", 1, ConsistencyMode.CONTIGUOUS, null), subscription).status();
+    }
+
+    /** @return the observed serves of {@code head} with {@code prefix} ({@code auto/FAILED} say), in order */
+    private List<String> observedServes(long head, String prefix) {
+        return reads.parkedRetries.stream().filter(r -> r.startsWith(head + "/" + prefix + "/")).toList();
+    }
+
+    @Test
+    void the_observer_sees_failed_automatic_retries_with_growing_retries_then_the_release() throws Exception {
+        var subscription = start(SHORT_RETRY, countingAutoRetries());
+        var a            = parkA1();
+        assertThat(reads.parkedHeads).as("the park").contains("1/0");
+        assertThat(status(subscription).retryingHeads()).isEqualTo(1);
+        assertThat(status(subscription).terminalHeads()).isZero();
+
+        awaitTrue(() -> observedServes(a[0], "auto/FAILED").size() >= 3);
+        var failed  = observedServes(a[0], "auto/FAILED");
+        var retries = failed.stream().map(r -> Integer.parseInt(r.split("/")[3])).toList();
+        assertThat(retries).as("each failed retry counts one more").startsWith(1).isSortedAccordingTo(Integer::compare).doesNotHaveDuplicates();
+        assertThat(failed).as("a failed retry has its next one scheduled").allMatch(r -> r.endsWith("/next"));
+
+        broken = false;
+        awaitTrue(this::noneParked);
+        awaitTrue(() -> !observedServes(a[0], "auto/RELEASED").isEmpty());
+        assertThat(observedServes(a[0], "auto/RELEASED").getFirst()).as("released: nothing scheduled").endsWith("/none");
+        awaitTrue(() -> reads.parkedHeads.getLast().equals("0/0"));
+        assertThat(status(subscription).retryingHeads()).isZero();
+        assertThat(status(subscription).heldAggregates()).isZero();
+        assertThat(viewRow("A")).isEqualTo(chain(a[0], a[1], a[2]));
+    }
+
+    @Test
+    void a_park_event_exception_head_is_reported_terminal_until_an_operator_retries_it() throws Exception {
+        terminalA1 = true;
+        var subscription = start(SHORT_RETRY, countingAutoRetries());
+        var a            = parkA1();
+        assertThat(reads.parkedHeads.getLast()).isEqualTo("0/1");
+        var status = status(subscription);
+        assertThat(status.terminalHeads()).isEqualTo(1);
+        assertThat(status.retryingHeads()).isZero();
+        assertThat(status.heldAggregates()).isEqualTo(1);
+
+        terminalA1 = false;
+        broken = false;
+        assertThat(subscription.retryParked(a[0]).get(30, TimeUnit.SECONDS)).isTrue();
+        assertThat(reads.parkedRetries).containsExactly(a[0] + "/operator/RELEASED/0/none");
+        assertThat(reads.parkedHeads.getLast()).isEqualTo("0/0");
+        assertThat(status(subscription).terminalHeads()).isZero();
+    }
+
+    @Test
+    void the_parked_heads_are_not_reported_per_page_while_nothing_is_parked() throws Exception {
+        broken = false;
+        var subscription = start(SHORT_RETRY, countingAutoRetries());
+        commitAppend("B", 1);
+        awaitCaughtUp(PROJECTION);
+        var reported = reads.parkedHeads.size();
+        for (var i = 0; i < 5; i++) {
+            commitAppend("B", 1);
+        }
+        awaitCaughtUp(PROJECTION);
+        var iterations = subscription.iterations();
+        awaitTrue(() -> subscription.iterations() >= iterations + 3);
+        assertThat(reads.parkedHeads).as("only the load at start").hasSize(reported).allMatch("0/0"::equals);
+        assertThat(reads.parkedRetries).isEmpty();
+        assertThat(subscription.parkedStatements()).isZero();
+    }
 }

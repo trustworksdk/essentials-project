@@ -16,6 +16,7 @@
 package dk.trustworks.essentials.components.eventlog.observability.micrometer;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import dk.trustworks.essentials.components.eventlog.EventLogObserver.ParkedRetryOutcome;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.TimeUnit;
@@ -170,6 +171,37 @@ class MicrometerEventLogObserverTest {
         }
         assertThat(registry.find(PAGE_METRIC).timers()).hasSize(2);
         assertThat(registry.find(LAG_METRIC).gauges()).hasSize(1);
+    }
+
+    @Test
+    void parked_heads_are_gauged_by_state_with_the_oldest_heads_age_and_removed_on_stop() {
+        observer.onStarted(VIEW, ORDERS);
+        observer.onParkedHeads(VIEW, ORDERS, 2, 1, java.time.Duration.ofMinutes(5));
+
+        assertThat(registry.get(PARKED_HEADS_METRIC).tag(SUBSCRIBER_TAG, VIEW).tag(STATE_TAG, "retrying").gauge().value()).isEqualTo(2);
+        assertThat(registry.get(PARKED_HEADS_METRIC).tag(SUBSCRIBER_TAG, VIEW).tag(STATE_TAG, "terminal").gauge().value()).isEqualTo(1);
+        var age = registry.get(PARKED_OLDEST_AGE_METRIC).tag(SUBSCRIBER_TAG, VIEW).tag(MODULE_TAG_NAME, "orders-module").timeGauge();
+        // The age grows with time between callbacks: at least what was reported
+        assertThat(age.value(TimeUnit.SECONDS)).isGreaterThanOrEqualTo(300).isLessThan(360);
+
+        observer.onParkedHeads(VIEW, ORDERS, 0, 0, java.time.Duration.ZERO);
+        assertThat(age.value(TimeUnit.SECONDS)).as("nothing parked").isZero();
+        assertThat(registry.get(PARKED_HEADS_METRIC).tag(STATE_TAG, "terminal").gauge().value()).isZero();
+
+        observer.onParkedRetry(VIEW, ORDERS, 7, true, ParkedRetryOutcome.FAILED, 1, java.time.Duration.ofSeconds(2));
+        observer.onParkedRetry(VIEW, ORDERS, 7, true, ParkedRetryOutcome.FAILED, 2, java.time.Duration.ofSeconds(4));
+        observer.onParkedRetry(VIEW, ORDERS, 7, false, ParkedRetryOutcome.RELEASED, 2, null);
+        assertThat(registry.get(PARKED_RETRIES_METRIC).tag(ORIGIN_TAG, "auto").tag(OUTCOME_TAG, "failed").counter().count()).isEqualTo(2);
+        assertThat(registry.get(PARKED_RETRIES_METRIC).tag(ORIGIN_TAG, "operator").tag(OUTCOME_TAG, "released").counter().count()).isEqualTo(1);
+        assertThat(registry.find(PARKED_RETRIES_METRIC).counters()).as("registered on first use").hasSize(2);
+
+        observer.onStopped(VIEW, ORDERS);
+        assertThat(registry.find(PARKED_HEADS_METRIC).gauges()).isEmpty();
+        assertThat(registry.find(PARKED_RETRIES_METRIC).counters()).isEmpty();
+        assertThat(registry.find(PARKED_OLDEST_AGE_METRIC).timeGauges()).isEmpty();
+        // A late callback after the stop registers nothing again
+        observer.onParkedHeads(VIEW, ORDERS, 1, 0, java.time.Duration.ZERO);
+        assertThat(registry.find(PARKED_HEADS_METRIC).gauges()).isEmpty();
     }
 
     @Test

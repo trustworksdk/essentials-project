@@ -127,6 +127,21 @@ abstract class AbstractSubscriptionIT extends AbstractEventLogIT {
             detachReasons.add(reason);
             detaches.incrementAndGet();
         }
+
+        /** Every serve of a parked head, in order, as {@code head/auto|operator/OUTCOME/retries/next|none} */
+        final List<String> parkedRetries = new CopyOnWriteArrayList<>();
+        /** Every parked-heads report, in order, as {@code retrying/terminal} */
+        final List<String> parkedHeads   = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void onParkedRetry(String subscriber, String aggregateType, long head, boolean auto, ParkedRetryOutcome outcome, int retries, Duration nextIn) {
+            parkedRetries.add(head + "/" + (auto ? "auto" : "operator") + "/" + outcome + "/" + retries + "/" + (nextIn == null ? "none" : "next"));
+        }
+
+        @Override
+        public void onParkedHeads(String subscriber, String aggregateType, int retrying, int terminal, Duration oldestAge) {
+            parkedHeads.add(retrying + "/" + terminal);
+        }
     }
 
     /**

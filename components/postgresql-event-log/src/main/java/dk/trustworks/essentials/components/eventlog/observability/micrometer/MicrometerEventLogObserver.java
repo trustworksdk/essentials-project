@@ -26,8 +26,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The Micrometer binding of {@link EventLogObserver}: a lag gauge, failure, park and lease-loss counters and a page timer
- * per subscription. Meter names mirror the old engine's {@code essentials.eventstore.subscription.*} family under the
+ * The Micrometer binding of {@link EventLogObserver}: a lag gauge, failure, park and lease-loss counters, a page timer
+ * and the parked heads (a gauge by state, a retry counter by origin and outcome, the oldest head's age) per subscription. Meter names mirror the old engine's {@code essentials.eventstore.subscription.*} family under the
  * {@code essentials.eventlog.} prefix, with the same tags: {@value #SUBSCRIBER_TAG}, {@value #AGGREGATE_TYPE_TAG} and the
  * optional {@value #MODULE_TAG_NAME}. A per-process {@code instance} tag is left to the registry's common tags (or the
  * scrape), as for every other Essentials meter.
@@ -43,6 +43,10 @@ public class MicrometerEventLogObserver implements EventLogObserver {
     public static final String AGGREGATE_TYPE_TAG = "aggregate_type";
     public static final String MODULE_TAG_NAME    = "Module";
     public static final String OUTCOME_TAG        = "outcome";
+    /** Tag of {@value #PARKED_HEADS_METRIC}: {@code retrying} or {@code terminal} */
+    public static final String STATE_TAG          = "state";
+    /** Tag of {@value #PARKED_RETRIES_METRIC}: {@code auto} or {@code operator} */
+    public static final String ORIGIN_TAG         = "origin";
 
     /**
      * Gauge: events between the subscription's last saved resume point and the reader's cursor for its aggregate type,
@@ -67,6 +71,19 @@ public class MicrometerEventLogObserver implements EventLogObserver {
      * (docs/design/event-log.md §4). Updated on every tail read.
      */
     public static final String OLDEST_CANDIDATE_AGE_METRIC = "essentials.eventlog.reader.oldest_candidate_age";
+    /**
+     * Gauge: the subscription's parked heads, tag {@value #STATE_TAG} {@code retrying} (the engine retries them on its
+     * backoff) or {@code terminal} (failed with a {@code ParkEventException}; only an operator retries or discards them).
+     * Updated when the held set or the retry schedule changes
+     */
+    public static final String PARKED_HEADS_METRIC = "essentials.eventlog.subscription.parked.heads";
+    /**
+     * Counter of serves of a parked head, tags {@value #ORIGIN_TAG} ({@code auto} or {@code operator}) and
+     * {@value #OUTCOME_TAG} ({@code released}, {@code failed} or {@code deferred})
+     */
+    public static final String PARKED_RETRIES_METRIC = "essentials.eventlog.subscription.parked.retries";
+    /** Time gauge: how long the subscription's oldest parked head has been parked, zero when none is */
+    public static final String PARKED_OLDEST_AGE_METRIC = "essentials.eventlog.subscription.parked.oldest.age";
 
     private final MeterRegistry                                registry;
     private final String                                       moduleTag;
@@ -128,6 +145,16 @@ public class MicrometerEventLogObserver implements EventLogObserver {
         final Timer      committed;
         final Timer      pageFailed;
         final Gauge      lag;
+        final AtomicLong retrying          = new AtomicLong();
+        final AtomicLong terminal          = new AtomicLong();
+        /** When the oldest parked head was parked ({@link System#nanoTime()}), {@link Long#MIN_VALUE} when none is */
+        final AtomicLong oldestParkedNanos = new AtomicLong(Long.MIN_VALUE);
+        final Gauge      retryingHeads;
+        final Gauge      terminalHeads;
+        final TimeGauge  oldestParkedAge;
+        /** The retry counters, registered on first use: origin and outcome */
+        final ConcurrentHashMap<String, Counter> retries = new ConcurrentHashMap<>();
+        final Tags       tags;
 
         SubscriptionMeters(Key key, AtomicLong cursor) {
             this.cursor = cursor;
@@ -135,6 +162,16 @@ public class MicrometerEventLogObserver implements EventLogObserver {
             if (moduleTag != null) {
                 tags = tags.and(MODULE_TAG_NAME, moduleTag);
             }
+            this.tags = tags;
+            retryingHeads = Gauge.builder(PARKED_HEADS_METRIC, retrying, AtomicLong::doubleValue).description("Parked heads").tags(tags).tag(STATE_TAG, "retrying")
+                                 .strongReference(true).register(registry);
+            terminalHeads = Gauge.builder(PARKED_HEADS_METRIC, terminal, AtomicLong::doubleValue).description("Parked heads").tags(tags).tag(STATE_TAG, "terminal")
+                                 .strongReference(true).register(registry);
+            oldestParkedAge = TimeGauge.builder(PARKED_OLDEST_AGE_METRIC, oldestParkedNanos, TimeUnit.NANOSECONDS, SubscriptionMeters::age)
+                                       .description("How long the oldest parked head has been parked")
+                                       .tags(tags)
+                                       .strongReference(true)
+                                       .register(registry);
             lag = Gauge.builder(LAG_METRIC, this, SubscriptionMeters::lag)
                  .description("Events between the subscription's saved resume point and the reader's cursor")
                  .tags(tags)
@@ -148,9 +185,28 @@ public class MicrometerEventLogObserver implements EventLogObserver {
         }
 
         void remove() {
-            for (var meter : List.of(lag, failed, parked, leaseLost, committed, pageFailed)) {
+            for (var meter : List.of(lag, failed, parked, leaseLost, committed, pageFailed, retryingHeads, terminalHeads, oldestParkedAge)) {
                 registry.remove(meter);
             }
+            for (var meter : retries.values()) {
+                registry.remove(meter);
+            }
+        }
+
+        static double age(AtomicLong parkedAtNanos) {
+            var at = parkedAtNanos.get();
+            return at == Long.MIN_VALUE ? 0 : Math.max(0, System.nanoTime() - at);
+        }
+
+        Counter retries(boolean auto, ParkedRetryOutcome outcome) {
+            var origin = auto ? "auto" : "operator";
+            var value  = outcome.name().toLowerCase(java.util.Locale.ROOT);
+            return retries.computeIfAbsent(origin + ':' + value, k -> Counter.builder(PARKED_RETRIES_METRIC)
+                                                                             .description("Serves of a parked head by origin and outcome")
+                                                                             .tags(tags)
+                                                                             .tag(ORIGIN_TAG, origin)
+                                                                             .tag(OUTCOME_TAG, value)
+                                                                             .register(registry));
         }
 
         double lag() {
@@ -197,6 +253,22 @@ public class MicrometerEventLogObserver implements EventLogObserver {
     @Override
     public void onParked(String subscriber, String aggregateType, long globalOrder, Long blockedBy, int attempts) {
         meters(subscriber, aggregateType).parked.increment();
+    }
+
+    @Override
+    public void onParkedRetry(String subscriber, String aggregateType, long head, boolean auto, ParkedRetryOutcome outcome, int retries, java.time.Duration nextIn) {
+        meters(subscriber, aggregateType).retries(auto, outcome).increment();
+    }
+
+    @Override
+    public void onParkedHeads(String subscriber, String aggregateType, int retrying, int terminal, java.time.Duration oldestAge) {
+        var meters = metersIfRunning(subscriber, aggregateType);
+        if (meters == null) {
+            return;
+        }
+        meters.retrying.set(retrying);
+        meters.terminal.set(terminal);
+        meters.oldestParkedNanos.set(retrying + terminal == 0 ? Long.MIN_VALUE : System.nanoTime() - oldestAge.toNanos());
     }
 
     @Override

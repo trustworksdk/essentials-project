@@ -60,12 +60,15 @@ final class ParkedEvents {
         boolean      terminal;
         int          retries;
         long         dueNanos;
+        /** When it was parked ({@link System#nanoTime()}): the database's {@code parked_at}, measured by its clock */
+        final long   parkedAtNanos;
 
-        Head(String aggregateId, long order, boolean terminal, int retries) {
+        Head(String aggregateId, long order, boolean terminal, int retries, long parkedAtNanos) {
             this.aggregateId = aggregateId;
             this.order = order;
             this.terminal = terminal;
             this.retries = retries;
+            this.parkedAtNanos = parkedAtNanos;
         }
     }
 
@@ -108,8 +111,9 @@ final class ParkedEvents {
                     if (resultSet.wasNull() || seams.has(WatermarkMutant.PARKED_RETRY_SCHEDULE_NOT_LOADED)) {
                         waitMillis = 0;
                     }
+                    var ageMillis = resultSet.getLong(6);
                     held.put(aggregateId, order);
-                    var head = new Head(aggregateId, order, terminal, retries);
+                    var head = new Head(aggregateId, order, terminal, retries, now - Duration.ofMillis(ageMillis).toNanos());
                     heads.put(order, head);
                     schedule(head, now + Duration.ofMillis(waitMillis).toNanos());
                 }
@@ -147,6 +151,48 @@ final class ParkedEvents {
             result.add(head.order);
         }
         return result;
+    }
+
+    /** @return the failed retries of {@code head}, {@code 0} if it is not held */
+    int retries(long head) {
+        var entry = heads.get(head);
+        return entry == null ? 0 : entry.retries;
+    }
+
+    /** @return the wait from {@code now} until {@code head}'s next automatic retry, or {@code null} if none is scheduled */
+    Duration nextRetryIn(long head, long now) {
+        var entry = heads.get(head);
+        if (entry == null || !due.contains(entry)) {
+            return null;
+        }
+        return Duration.ofNanos(Math.max(0, entry.dueNanos - now));
+    }
+
+    /** @return the heads with an automatic retry scheduled */
+    int retryingCount() {
+        var count = 0;
+        for (var head : heads.values()) {
+            if (!head.terminal) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** @return the terminal heads: only an operator retries them */
+    int terminalCount() {
+        return heads.size() - retryingCount();
+    }
+
+    /** @return when the oldest held head was parked ({@link System#nanoTime()}), or {@code null} if none is held */
+    Long oldestParkedAtNanos() {
+        Long oldest = null;
+        for (var head : heads.values()) {
+            if (oldest == null || head.parkedAtNanos - oldest < 0) {
+                oldest = head.parkedAtNanos;
+            }
+        }
+        return oldest;
     }
 
     /** @return whether {@code head} is a terminal head (only an operator retries it) */
@@ -202,10 +248,16 @@ final class ParkedEvents {
      * {@code waitMillis} ({@code terminal}: never)
      */
     void hold(String aggregateId, long head, boolean terminal, long waitMillis) {
+        hold(aggregateId, head, terminal, waitMillis, 0);
+    }
+
+    /** {@link #hold(String, long, boolean, long)} for a head parked {@code ageMillis} ago (a held row made the head) */
+    void hold(String aggregateId, long head, boolean terminal, long waitMillis, long ageMillis) {
         if (held.putIfAbsent(aggregateId, head) == null) {
-            var entry = new Head(aggregateId, head, terminal, 0);
+            var now   = System.nanoTime();
+            var entry = new Head(aggregateId, head, terminal, 0, now - Duration.ofMillis(ageMillis).toNanos());
             heads.put(head, entry);
-            schedule(entry, System.nanoTime() + Duration.ofMillis(waitMillis).toNanos());
+            schedule(entry, now + Duration.ofMillis(waitMillis).toNanos());
         }
     }
 
@@ -389,9 +441,12 @@ final class ParkedEvents {
      *
      * @param failure      the error {@code newHead} failed with (one attempt counted), or {@code null} if it has not run
      * @param requestRetry {@code true} to leave a retry request on the new head, so the next parked check serves it
+     * @return how long ago the new head's row was parked, in milliseconds by the database's clock ({@code 0} if no row
+     * matched)
      */
-    void rehead(Connection connection, long oldHead, List<Long> handled, long newHead, Throwable failure, boolean requestRetry) throws SQLException {
+    long rehead(Connection connection, long oldHead, List<Long> handled, long newHead, Throwable failure, boolean requestRetry) throws SQLException {
         var terminal = failure instanceof ParkEventException;
+        long ageMillis;
         if (!handled.isEmpty()) {
             delete(connection, handled);
         }
@@ -411,7 +466,9 @@ final class ParkedEvents {
             statement.setBoolean(8, failure != null);
             var p = bindKey(statement, 9);
             statement.setLong(p, newHead);
-            statement.executeUpdate();
+            try (var resultSet = statement.executeQuery()) {
+                ageMillis = resultSet.next() ? resultSet.getLong(1) : 0;
+            }
         }
         try (var statement = connection.prepareStatement(EventLogStorage.PARKED_REPOINT)) {
             statement.setLong(1, newHead);
@@ -419,6 +476,7 @@ final class ParkedEvents {
             statement.setLong(p, oldHead);
             statement.executeUpdate();
         }
+        return ageMillis;
     }
 
     /**

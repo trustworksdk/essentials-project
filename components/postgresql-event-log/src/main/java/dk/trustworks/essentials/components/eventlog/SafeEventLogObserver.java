@@ -219,6 +219,24 @@ final class SafeEventLogObserver implements EventLogObserver {
     }
 
     @Override
+    public void onParkedRetry(String subscriber, String aggregateType, long head, boolean auto, ParkedRetryOutcome outcome, int retries, Duration nextIn) {
+        try {
+            delegate.onParkedRetry(subscriber, aggregateType, head, auto, outcome, retries, nextIn);
+        } catch (RuntimeException e) {
+            failed("onParkedRetry", e);
+        }
+    }
+
+    @Override
+    public void onParkedHeads(String subscriber, String aggregateType, int retrying, int terminal, Duration oldestAge) {
+        try {
+            delegate.onParkedHeads(subscriber, aggregateType, retrying, terminal, oldestAge);
+        } catch (RuntimeException e) {
+            failed("onParkedHeads", e);
+        }
+    }
+
+    @Override
     public void onCatchUpPermit(String subscriber, String aggregateType, long waitNanos, int inUse) {
         try {
             delegate.onCatchUpPermit(subscriber, aggregateType, waitNanos, inUse);

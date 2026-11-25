@@ -38,9 +38,23 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param fence             the fence the exclusive subscription delivers under, empty unless it owns the lease
  * @param heldAggregates    aggregates held behind a parked head (one per parked head)
  * @param lastError         the last failure, as {@code class: message}, if any
+ * @param retryingHeads     parked heads the engine retries by itself on its backoff
+ * @param terminalHeads     parked heads that failed with a {@link ParkEventException}: only an operator retries or
+ *                          discards them ({@code retryingHeads + terminalHeads = heldAggregates})
  */
 public record SubscriptionStatus(SubscriptionDefinition definition, String progressModel, String phase, long resumePoint, long receivedWatermark,
-                                 OptionalLong lag, Optional<String> leaseState, OptionalLong fence, int heldAggregates, Optional<String> lastError) {
+                                 OptionalLong lag, Optional<String> leaseState, OptionalLong fence, int heldAggregates, Optional<String> lastError,
+                                 int retryingHeads, int terminalHeads) {
+    /**
+     * @deprecated use the canonical constructor, which carries the retrying and terminal head counts; this one reports
+     * every held aggregate as retrying
+     */
+    @Deprecated(forRemoval = true, since = "0.62.0")
+    public SubscriptionStatus(SubscriptionDefinition definition, String progressModel, String phase, long resumePoint, long receivedWatermark,
+                              OptionalLong lag, Optional<String> leaseState, OptionalLong fence, int heldAggregates, Optional<String> lastError) {
+        this(definition, progressModel, phase, resumePoint, receivedWatermark, lag, leaseState, fence, heldAggregates, lastError, heldAggregates, 0);
+    }
+
     public SubscriptionStatus {
         requireNonNull(definition, "No definition provided");
         requireNonNull(progressModel, "No progressModel provided");

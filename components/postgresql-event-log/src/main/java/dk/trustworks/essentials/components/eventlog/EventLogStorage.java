@@ -251,6 +251,8 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
     static final String PAGE_IDLE_TIMEOUT = "SELECT set_config('idle_in_transaction_session_timeout', ?, true)";
 
     // ---- parked events; the subscription key's three parameters first unless said otherwise ----
+    /** How long ago a parked row was parked, in milliseconds by the database's clock */
+    static final String PARKED_AGE_MILLIS = "greatest(0, extract(epoch FROM now() - parked_at) * 1000)::bigint";
     /**
      * Then global_order, aggregate_id, blocked_by, attempts, error_type, error_message, terminal, the wait in milliseconds
      * before the first automatic retry ({@code null}: none - a held row or a terminal head), whether it failed (a head)
@@ -293,11 +295,13 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
                     "   AND EXISTS (SELECT 1 FROM " + PROGRESS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND " + FENCE_GUARD + " FOR SHARE)\n" +
                     FAILED_AGAIN_RETURNING;
     /**
-     * The held aggregates: every parked head, whether it is terminal, its failed retries and the wait in milliseconds
-     * until its next automatic retry, by the database's clock ({@code null}: none stored)
+     * The held aggregates: every parked head, whether it is terminal, its failed retries, the wait in milliseconds
+     * until its next automatic retry ({@code null}: none stored) and how long ago it was parked, in milliseconds, both by
+     * the database's clock
      */
     static final String PARKED_HEADS =
-            "SELECT aggregate_id, global_order, terminal, retries, CASE WHEN next_retry_at IS NULL THEN NULL ELSE greatest(0, extract(epoch FROM next_retry_at - now()) * 1000)::bigint END\n" +
+            "SELECT aggregate_id, global_order, terminal, retries, CASE WHEN next_retry_at IS NULL THEN NULL ELSE greatest(0, extract(epoch FROM next_retry_at - now()) * 1000)::bigint END,\n" +
+                    "       " + PARKED_AGE_MILLIS + "\n" +
                     "  FROM " + PARKED_EVENTS_TABLE + " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND blocked_by IS NULL ORDER BY global_order";
     /** Then the head twice: the head and every row held behind it, unlocked, in order (a serve's first read) */
     static final String PARKED_ROWS =
@@ -317,13 +321,14 @@ static final String LEASE_CLAIM_NEW = leaseClaimNew(null);
      * A held row becomes its aggregate's head ({@code blocked_by = NULL}): attempts + ?, error_type and error_message
      * (kept when null), requested (null clears it; {@code requested_at} follows), terminal, the wait in milliseconds before
      * its first automatic retry ({@code null}: none), whether it failed; then the key, then the new head. Its schedule
-     * restarts
+     * restarts. Returns how long ago the row was parked, in milliseconds by the database's clock
      */
     static final String PARKED_NEW_HEAD =
             "UPDATE " + PARKED_EVENTS_TABLE + " SET blocked_by = NULL, attempts = attempts + ?, error_type = coalesce(?, error_type), error_message = coalesce(?, error_message),\n" +
                     " requested = ?, requested_at = CASE WHEN ? IS NULL THEN NULL ELSE now() END,\n" +
                     " retries = 0, terminal = ?::boolean, next_retry_at = now() + ?::bigint * interval '1 millisecond', last_failed_at = CASE WHEN ?::boolean THEN now() ELSE last_failed_at END\n" +
-                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?";
+                    " WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND global_order = ?\n" +
+                    " RETURNING " + PARKED_AGE_MILLIS;
     /** The rows held behind the old head now wait on the new one: the new head, then the key, then the old head */
     static final String PARKED_REPOINT =
             "UPDATE " + PARKED_EVENTS_TABLE + " SET blocked_by = ? WHERE subscriber = ? AND aggregate_type = ? AND instance_name = ? AND blocked_by = ?";

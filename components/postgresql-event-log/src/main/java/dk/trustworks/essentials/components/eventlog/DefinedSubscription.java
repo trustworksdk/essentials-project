@@ -64,7 +64,8 @@ final class DefinedSubscription implements SubscriptionHandle {
         return new SubscriptionStatus(definition, subscription.model().name(), subscription.phase().name(), resumePoint, subscription.receivedWatermark(), lag,
                                       lease == null ? Optional.empty() : Optional.of(lease.state().name()),
                                       fence == null ? OptionalLong.empty() : OptionalLong.of(fence.fence()), subscription.heldAggregates(),
-                                      error == null ? Optional.empty() : Optional.of(error.getClass().getName() + ": " + error.getMessage()));
+                                      error == null ? Optional.empty() : Optional.of(error.getClass().getName() + ": " + error.getMessage()),
+                                      subscription.retryingHeads(), subscription.terminalHeads());
     }
 
     @Override

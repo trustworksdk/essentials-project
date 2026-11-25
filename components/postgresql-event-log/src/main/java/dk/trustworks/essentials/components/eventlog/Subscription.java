@@ -118,6 +118,10 @@ final class Subscription {
     // ---- status ----
     private volatile Throwable                   lastError;
     private volatile int                         heldAggregates;
+    private volatile int                         retryingHeads;
+    private volatile int                         terminalHeads;
+    /** Set by {@link #countFailedRetry} during a serve: the serve failed, as opposed to being deferred */
+    private boolean                              serveFailed;
     private final ReaderLoop                     loop;
     private final EventLogStorage.TailStatements statements;
     private final TailReader.RowMapper           mapper;
@@ -530,6 +534,29 @@ final class Subscription {
     private void heldChanged() {
         heldAggregates = parked.heldCount();
         observer.onHeldAggregates(key.subscriber(), key.aggregateType(), heldAggregates);
+        parkedHeadsChanged();
+    }
+
+    /**
+     * The parked heads or their schedule changed: the retrying and terminal counts are kept for the status and reported
+     * to the observer with the oldest head's age. Only on a change, never per event or per pass
+     */
+    private void parkedHeadsChanged() {
+        retryingHeads = parked.retryingCount();
+        terminalHeads = parked.terminalCount();
+        var oldest = parked.oldestParkedAtNanos();
+        var age    = oldest == null ? Duration.ZERO : Duration.ofNanos(Math.max(0, System.nanoTime() - oldest));
+        observer.onParkedHeads(key.subscriber(), key.aggregateType(), retryingHeads, terminalHeads, age);
+    }
+
+    /** @return the parked heads retried automatically; for the status */
+    int retryingHeads() {
+        return retryingHeads;
+    }
+
+    /** @return the terminal parked heads: only an operator retries them; for the status */
+    int terminalHeads() {
+        return terminalHeads;
     }
 
     /** @return the last failure, or {@code null}; for the status */
@@ -757,6 +784,7 @@ final class Subscription {
         ownedFence = null;
         positionAt(lastSaved);
         parked.clear();
+        heldChanged();
         repositionTo = null;
         leaseLost = false;
         lease.standby();
@@ -2308,10 +2336,17 @@ final class Subscription {
             try {
                 seams.hooks().beforeParkedRetry(key.subscriber(), request.head(), request.auto());
                 parkedStatements++;
+                var retriesBefore = parked.retries(request.head());
+                serveFailed = false;
                 var served = releaseParked(request.head(), request.discard());
+                var now    = System.nanoTime();
                 if (!served) {
-                    parked.postpone(request.head(), System.nanoTime());
+                    parked.postpone(request.head(), now);
                 }
+                var outcome = served ? EventLogObserver.ParkedRetryOutcome.RELEASED
+                                     : serveFailed ? EventLogObserver.ParkedRetryOutcome.FAILED : EventLogObserver.ParkedRetryOutcome.DEFERRED;
+                observer.onParkedRetry(key.subscriber(), key.aggregateType(), request.head(), request.auto(), outcome,
+                                       served ? retriesBefore : parked.retries(request.head()), served ? null : parked.nextRetryIn(request.head(), now));
                 request.result().complete(served);
             } catch (Exception | Error e) {
                 request.result().completeExceptionally(e);
@@ -2331,6 +2366,7 @@ final class Subscription {
         PageTransactionSource.OpenPage open = null;
         Long newHead = null;
         Throwable newHeadFailure = null;
+        long newHeadAgeMillis = 0;
         try {
             open = pageSource.begin();
             var connection = open.connection();
@@ -2397,7 +2433,7 @@ final class Subscription {
                     rollback(ending);
                     return false;
                 }
-                parked.rehead(connection, head, handledOrders(head, prefix), promoted, failure, false);
+                newHeadAgeMillis = parked.rehead(connection, head, handledOrders(head, prefix), promoted, failure, false);
                 newHead = promoted;
                 newHeadFailure = failure;
             } else {
@@ -2409,7 +2445,7 @@ final class Subscription {
                 }
                 if (page.size() < toHandle.size()) {
                     newHead = toHandle.get(page.size()).globalOrder();
-                    parked.rehead(connection, head, handledOrders(head, page), newHead, null, true);
+                    newHeadAgeMillis = parked.rehead(connection, head, handledOrders(head, page), newHead, null, true);
                 } else {
                     parked.delete(connection, orders);
                 }
@@ -2470,7 +2506,7 @@ final class Subscription {
             countFailedRetry(head, e);
             return false;
         }
-        rehold(head, newHead, newHeadFailure);
+        rehold(head, newHead, newHeadFailure, newHeadAgeMillis);
         return true;
     }
 
@@ -2487,6 +2523,7 @@ final class Subscription {
         PageTransactionSource.OpenPage open = null;
         Long newHead = null;
         Throwable newHeadFailure = null;
+        long newHeadAgeMillis = 0;
         try {
             open = engineSource.begin();
             var connection = open.connection();
@@ -2548,7 +2585,7 @@ final class Subscription {
             }
             newHeadFailure = failure;
             if (newHead != null) {
-                parked.rehead(connection, head, handledOrders(head, applied), newHead, failure, failure == null);
+                newHeadAgeMillis = parked.rehead(connection, head, handledOrders(head, applied), newHead, failure, failure == null);
             } else {
                 parked.delete(connection, orders);
             }
@@ -2595,7 +2632,7 @@ final class Subscription {
             countFailedRetry(head, e);
             return false;
         }
-        rehold(head, newHead, newHeadFailure);
+        rehold(head, newHead, newHeadFailure, newHeadAgeMillis);
         return true;
     }
 
@@ -2670,6 +2707,8 @@ final class Subscription {
             log.warn("Subscription {} on {}: counting the failed attempt failed", key.subscriber(), key.aggregateType(), again);
         }
         parked.failed(head, error, stored);
+        serveFailed = true;
+        parkedHeadsChanged();
     }
 
     /**
@@ -2677,7 +2716,7 @@ final class Subscription {
      * whose schedule starts over: due at once if it has not run, after the first wait if it failed ({@code failure}), never
      * if that failure was terminal
      */
-    private void rehold(long head, Long newHead, Throwable failure) {
+    private void rehold(long head, Long newHead, Throwable failure, long newHeadAgeMillis) {
         if (newHead == null) {
             releaseHeld(head);
             return;
@@ -2685,7 +2724,7 @@ final class Subscription {
         var aggregateId = parked.release(head);
         if (aggregateId != null) {
             var wait = parked.reheadWaitMillis(failure);
-            parked.hold(aggregateId, newHead, failure instanceof ParkEventException, wait == null ? 0 : wait);
+            parked.hold(aggregateId, newHead, failure instanceof ParkEventException, wait == null ? 0 : wait, newHeadAgeMillis);
             heldChanged();
         }
     }
