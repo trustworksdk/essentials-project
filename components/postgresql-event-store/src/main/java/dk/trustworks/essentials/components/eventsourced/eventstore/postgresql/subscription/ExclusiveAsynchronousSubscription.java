@@ -135,6 +135,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
         resumePoint = durableSubscriptionRepository.getOrCreateResumePoint(subscriberId,
                 aggregateType,
                 onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder);
+        fenceResumePointSaves(fencedLock);
         log.info("[{}-{}] Starting subscription from globalEventOrder: {}",
                 subscriberId,
                 aggregateType,
@@ -151,6 +152,23 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
         }
 
         subscribeFromResumePoint();
+    }
+
+    /**
+     * Every save of the resume point from now on carries the token of the lock just acquired, so the repository refuses a
+     * late save of the previous lock holder once this holder has saved, and refuses this holder's saves once a later holder
+     * has - see {@link SubscriptionResumePoint#fencedBy(long)}
+     */
+    private void fenceResumePointSaves(FencedLock fencedLock) {
+        var fenceToken = fencedLock.getCurrentToken();
+        if (fenceToken != null) {
+            resumePoint.fencedBy(fenceToken);
+        } else {
+            log.warn("[{}-{}] The acquired lock '{}' has no fence token - the resume point is saved without one",
+                     subscriberId,
+                     aggregateType,
+                     fencedLock.getName());
+        }
     }
 
     /**
@@ -401,8 +419,14 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                     subscriberId,
                     aggregateType,
                     subscribeFromAndIncludingGlobalOrder);
+            if (!overrideResumePointWhileHoldingTheLock(subscribeFromAndIncludingGlobalOrder)) {
+                log.info("[{}-{}] Cannot reset resume point to fromAndIncluding {} because the underlying lock was lost before the reset was saved",
+                         subscriberId,
+                         aggregateType,
+                         subscribeFromAndIncludingGlobalOrder);
+                return;
+            }
             stop();
-            overrideResumePoint(subscribeFromAndIncludingGlobalOrder);
             resetProcessor.accept(subscribeFromAndIncludingGlobalOrder);
             start();
         } else {
@@ -413,6 +437,40 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                     isStarted(),
                     isActive());
 
+        }
+    }
+
+    /**
+     * Stores the reset while this instance still holds the fenced lock, and only then lets the lock go ({@link #resetFrom}
+     * stops the subscription afterwards, which releases it). Saved after the release, as before, another instance could
+     * acquire the lock and read the old resume point first - and its first save, carrying its newer lock token, would then
+     * overwrite the reset. Saved before, the reset carries this holder's token: it passes the repository's guard, and every
+     * later lock holder reads it.<br>
+     * The subscriber is disposed first and given the time a lock release gives it to complete, so it does not move the
+     * resume point after the reset (a subscriber stopped during a retry holds the resume point at the retried event).
+     *
+     * @return false if the lock was lost before the reset could be saved - nothing was reset
+     */
+    private boolean overrideResumePointWhileHoldingTheLock(GlobalEventOrder subscribeFromAndIncludingGlobalOrder) {
+        synchronized (subscriberLifecycleLock) {
+            if (!active) {
+                return false;
+            }
+            var subscriber = subscription;
+            if (subscriber != null) {
+                subscriber.dispose();
+                subscription = null;
+                try {
+                    // Allow the reactive components to complete, as on a lock release
+                    if (!isShutdownCleanupAbandoned()) {
+                        Thread.sleep(500);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            overrideResumePoint(subscribeFromAndIncludingGlobalOrder);
+            return true;
         }
     }
 

@@ -20,6 +20,9 @@ remove it, instead of keeping it because nobody can tell._
   Spring Boot starter, admin operations and an admin console view (§2.2-§2.7). Existing event processors must be
   ported to run on it. Its parked aggregates retry by themselves, with meters, bulk admin operations and a health
   indicator (§2.13).
+- Exclusive subscriptions (classic event store): a stored resume point no longer stops moving after a lock
+  hand-over during a database outage, and a reset is saved before the lock is released; a schema change adds a
+  `fence_token` column to the durable subscriptions table (§1, §3).
 
 ---
 
@@ -51,7 +54,25 @@ remove it, instead of keeping it because nobody can tell._
 
 ## 1. Breaking — what you MUST apply
 
-None so far.
+**Under `essentials.schema.mode=validate`: apply the new schema change `durable-subscriptions-fence-token` before the
+first start (`postgresql-event-store`).** It adds a nullable column `fence_token BIGINT` to the durable subscriptions
+table (default name `durable_subscriptions`), which fences resume-point saves of exclusive subscriptions by their lock
+token (§3). Under `create` (the default) the column is added on start, only when it is missing, so a running instance is
+not locked out of the table. Under `validate` the first start is refused, naming `durable-subscriptions-fence-token` as
+not applied: run with `emit` to write the script and apply it, or run the statement yourself
+(`ALTER TABLE durable_subscriptions ADD COLUMN IF NOT EXISTS fence_token BIGINT`) and then the script's ledger insert.
+The column is nullable, so instances of the previous release keep working against the altered table during a rolling
+upgrade. Their saves carry no token and are checked by the reposition epoch alone, as before, so **the hazard the
+column fixes (§3) persists until every instance runs this release**.
+
+**If the fenced-lock tokens restart, clear the stored tokens.** Lock tokens only ever grow while the fenced-locks table
+(default `fenced_locks`) keeps its rows. If that table is dropped and recreated, truncated, restored from an older backup,
+or the lock manager is pointed at a different table, new lock holders get tokens lower than those stored in
+`durable_subscriptions.fence_token`, and every save of an exclusive subscription is refused (one WARN per subscription:
+`Did not save resumeFromAndIncluding … was written by a newer fenced lock holder (stored fence token is newer than …)`;
+the stored resume point stops moving). Recovery: with the exclusive subscriptions stopped, or at least before their next
+save, run `UPDATE durable_subscriptions SET fence_token = NULL` (all rows, or `WHERE subscriber_id = …` for one); the
+next save of each lock holder then stores its own token.
 
 ### 1.1 ⚠️ Silent behaviour changes
 
@@ -569,6 +590,7 @@ an operator retried or discarded it.
 | Shard-owned queues (`postgresql-queue-shard-owned`) | The cross-instance wake-up (Tier 1, `ShardWakeupListener`) stalled under dense notification traffic: pgjdbc's `getNotifications(200)` hands nothing back while notifications keep arriving less than ~1 ms apart, so owners on other instances were woken late, by the backstop (`pollBackstop`, 500 ms by default) at worst. The listener now drains with `PostgresqlNotificationDrain` (§2.8). To observe it: cross-instance commit-to-handler latency under sustained load (`ShardWakeupListenerDrainIT`, `-Dbenchmark.run=true`, 10 s backstop): p50 / p99 at 1 000 msg/s 18.6 / 566 ms before, 0.19 / 0.28 ms after; the old drain in the same run 88 / 973 ms at 1 000 msg/s and 3.5 s / 55 s at 3 000 msg/s, against 0.19 / 0.30 ms. Nothing to do on upgrade; a WARN `Cannot pin pgjdbc's notification peek` means a pgjdbc version whose internals changed, and the listener then polls with `SELECT 1` instead. | - |
 | New event store engine, preview (`postgresql-event-log`) | Under load, an aggregate type with rolled-back appends could hold its watermark for 1-6 s, so every `CONTIGUOUS` subscription of that type stopped delivering while appends kept coming. When several types were read in one flush, the reader recorded the whole flush's wall time as each type's running-set probe cost, and the probe clock (`cost x 100 x max(1, backends / 10)`) then put the next running-set read seconds out. A hole retires only through a running-set read, so the watermark waited. To observe it: `EventLogObserver.onRead`'s `oldestCandidateAge` climbed to seconds during bursts. Now only a probe measured on its own sets the cost, and a flush of several types keeps the previous one. Nothing to do on upgrade. | phase 10 gate fix |
 | New event store engine, preview (`postgresql-event-log`) | Even with an honest probe cost, the probe clock's back-off (`cost x 100 x max(1, backends / 10)`, at most `probeBackoffMax`) put the next running-set read 1.8-3 s out at a 3-5 ms probe and a 60-connection pool. A hole left by a rolled-back append retires only through a running-set read, so the type's watermark - and every `CONTIGUOUS` subscription of it - waited that long. While a hole, range or candidate of a type is outstanding, the wait before its next running-set read is now capped by the new setting `EventLogSettings.holeProbeWaitMax` (Spring: `essentials.event-log.hole-probe-wait-max`), default 100 ms. Outside such holes nothing changes. While holes wait the probes may take more than the cost rule's ~1 % of a core (about 3-5 % per probing reader at a 3-5 ms probe); raise the setting to trade hole latency back for probe cost. Nothing to do on upgrade. | phase 10 gate fix |
+| Exclusive subscriptions (`postgresql-event-store`) | After a lock hand-over during a database outage, an exclusive subscription's stored resume point stopped moving for as long as the new lock holder held the lock, and the next restart or hand-over redelivered every event since the hand-over (no event was skipped). Cause: the previous holder, stopped while it retried an event, held its resume point at that event, which starts a new reposition epoch, and saved it after the new holder had read the row; saves were not checked against the lock, the newer epoch won, and the reposition-epoch guard then refused every save of the new holder. Affects 0.60.0 to 0.61.0, and the same way the batched exclusive subscription and a graceful stop whose final save lands after another instance took the lock. Fix: every resume-point save of an exclusive subscription carries the token of the fenced lock it acquired (`SubscriptionResumePoint.fencedBy` / `getFenceToken`), the table stores the highest token written (new column `fence_token`, schema change `durable-subscriptions-fence-token`, see §1), a save with a newer token wins whatever its reposition epoch, one with the same token is checked against the epoch as before (a reset still wins over that holder's in-flight saves), and one with an older token is refused. Non-exclusive subscriptions and `resetStoredResumePoint` save without a token and behave as before. `EventStoreSubscription.resetFrom` on an exclusive subscription now saves the reset before it lets go of the lock (it saved after the release, so an instance that took the lock over in between could read the old resume point and resume from there - with the token rule its first save would then have overwritten the reset), so the next lock holder resumes from the reset point. Until every instance runs this release, an instance of the previous release still saves without a token (see §1). How to observe: before, the new holder logged once `Did not save resumeFromAndIncluding … the stored resume point was repositioned by another writer (stored reposition epoch is newer than 0)` and `durable_subscriptions.resume_from_and_including_global_eventorder` stayed behind its progress; after, the new holder's saves land and `fence_token` holds its lock's token. A refusal now comes from the previous holder, late, and its WARN also names the fence token. A row frozen by the bug heals at the new holder's first save after the upgrade. Pinned by `PostgresqlDurableSubscriptionRepositoryIT` and `EventStoreSubscriptionManager_2_node_exclusive_resetFrom_IT`. | this commit |
 
 ---
 

@@ -21,7 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 
 import java.time.OffsetDateTime;
-import java.util.Objects;
+import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 
@@ -44,6 +44,22 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * ({@link #advanceResumeFromAndIncluding(GlobalEventOrder)}) does not. A {@link DurableSubscriptionRepository} writes
  * the epoch together with the value and refuses a write whose epoch is older than the stored one, so a save that
  * captured the resume point <i>before</i> a reset can never overwrite the reset, whichever commits first.
+ * <p>
+ * <b>Fence token:</b> an exclusive subscription marks the resume point it reads on acquiring its fenced lock with that
+ * lock's token ({@link #fencedBy(long)}), and every save of it carries the token. The repository stores the highest token
+ * written and lets the token take precedence over the reposition epoch when two lock holders' writes meet:
+ * <ul>
+ *     <li>a save with a <i>newer</i> token than the stored one (or the first fenced save) is written whatever the epochs -
+ *     it comes from a newer lock holder, which read the row when it acquired the lock and owns it from then on</li>
+ *     <li>a save with the <i>same</i> token is checked against the epoch as above - one lock holder's own reset wins over
+ *     its own in-flight saves</li>
+ *     <li>a save with an <i>older</i> token is refused - it comes from a previous lock holder, late</li>
+ *     <li>a save without a token (a non-exclusive subscription, an operator moving a stored resume point) is checked
+ *     against the epoch only, and leaves the stored token as it is</li>
+ * </ul>
+ * Without the token, a previous lock holder's late save - one that rewound its resume point while it was being stopped,
+ * which starts a new epoch - would have the newer epoch, and the new lock holder's saves would be refused for as long as
+ * it held the lock.
  */
 public final class SubscriptionResumePoint {
     private final    SubscriberId     subscriberId;
@@ -53,6 +69,8 @@ public final class SubscriptionResumePoint {
     /** The value and epoch most recently confirmed written to the underlying store - {@link #isChanged()} is derived from them. */
     private volatile Snapshot         lastPersisted;
     private volatile OffsetDateTime   lastUpdated;
+    /** The fenced lock token the saves of this resume point carry - {@code null} when not saved under a fenced lock. See {@link #fencedBy(long)} */
+    private volatile Long             fenceToken;
 
     /**
      * The value of a resume point together with the reposition epoch it belongs to - what a save writes, and what
@@ -116,6 +134,32 @@ public final class SubscriptionResumePoint {
 
     public OffsetDateTime getLastUpdated() {
         return lastUpdated;
+    }
+
+    /**
+     * Mark this resume point as owned by the holder of a fenced lock: every later save of it carries {@code fenceToken},
+     * and the {@link DurableSubscriptionRepository} refuses it once a newer token has been written - see the class javadoc.<br>
+     * Called by an exclusive subscription with the token of the lock it acquired, right after reading the resume point.
+     * The token cannot move backwards, so a resume point fenced by a newer lock holder is never re-fenced by an older one.
+     *
+     * @param fenceToken the token of the fenced lock held while this resume point is saved; must be {@code >= 0}
+     * @return this resume point
+     */
+    public synchronized SubscriptionResumePoint fencedBy(long fenceToken) {
+        requireTrue(fenceToken >= 0, "fenceToken must be >= 0");
+        var current = this.fenceToken;
+        requireTrue(current == null || fenceToken >= current,
+                    "Cannot fence a resume point with an older token than the one it already carries");
+        this.fenceToken = fenceToken;
+        return this;
+    }
+
+    /**
+     * @return the fenced lock token every save of this resume point carries, or {@link Optional#empty()} when the resume
+     * point is not saved under a fenced lock (see {@link #fencedBy(long)})
+     */
+    public Optional<Long> getFenceToken() {
+        return Optional.ofNullable(fenceToken);
     }
 
     /**
@@ -269,6 +313,7 @@ public final class SubscriptionResumePoint {
                 ", aggregateType=" + aggregateType +
                 ", resumeFromAndIncluding=" + resumeFromAndIncluding +
                 ", repositionEpoch=" + repositionEpoch +
+                (fenceToken != null ? ", fenceToken=" + fenceToken : "") +
                 ", lastUpdated=" + lastUpdated +
                 '}';
     }
