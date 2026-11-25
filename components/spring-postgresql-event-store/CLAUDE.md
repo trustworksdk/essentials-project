@@ -28,7 +28,7 @@ Thin adapter — one class only. All event storage logic lives in `postgresql-ev
 
 ## Extension Points
 
-- `PersistedEventsCommitLifecycleCallback` — register via `registerPersistedEventsCommitLifeCycleCallback(callback)`. Called `beforeCommit` (throws → aborts tx) and `afterCommit` (exceptions swallowed and logged).
+- `PersistedEventsCommitLifecycleCallback` — register via `registerPersistedEventsCommitLifeCycleCallback(callback)`. Called `beforeCommit` (throws → aborts tx), `afterCommit` and `afterRollback` (both: exceptions swallowed and logged). `afterRollback` gets both event lists, like the JDBI path.
 - `EventStoreUnitOfWorkFactory` SPI — extend `SpringTransactionAwareEventStoreUnitOfWorkFactory` to override `createUnitOfWorkForFactoryManagedTransaction` / `createUnitOfWorkForSpringManagedTransaction` if custom UoW subclass needed.
 
 ## Gotchas

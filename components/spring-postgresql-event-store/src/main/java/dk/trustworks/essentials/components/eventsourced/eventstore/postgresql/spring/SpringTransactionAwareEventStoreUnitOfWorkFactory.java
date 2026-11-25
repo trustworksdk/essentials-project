@@ -93,6 +93,29 @@ public class SpringTransactionAwareEventStoreUnitOfWorkFactory
         unitOfWork.beforeCommitEventsPersisted.clear();
     }
 
+    /**
+     * The events persisted in this unit of work were rolled back, including those a completed {@code beforeCommit}
+     * round had already moved on to the after-commit list, so they are reported as rolled back and never as committed
+     * (the same as {@code EventStoreManagedUnitOfWork#afterRollback} on the JDBI path)
+     */
+    @Override
+    protected void afterRollbackAfterCallingLifecycleCallbackResources(SpringTransactionAwareEventStoreUnitOfWork unitOfWork) {
+        var rolledBackEvents = new ArrayList<PersistedEvent>(unitOfWork.afterCommitEventsPersisted.size() + unitOfWork.beforeCommitEventsPersisted.size());
+        rolledBackEvents.addAll(unitOfWork.afterCommitEventsPersisted);
+        rolledBackEvents.addAll(unitOfWork.beforeCommitEventsPersisted);
+        unitOfWork.afterCommitEventsPersisted.clear();
+        unitOfWork.beforeCommitEventsPersisted.clear();
+        log.trace("Calling PersistedEventsCommitLifecycleCallback#afterRollback after rolling back the Spring Transaction-Aware UnitOfWork: {}", unitOfWork.info());
+        for (var callback : persistedEventsLifecycleCallbacks) {
+            try {
+                log.trace("AfterRollback PersistedEvents for {} with {} persisted events", callback.getClass().getName(), rolledBackEvents.size());
+                callback.afterRollback(unitOfWork, rolledBackEvents);
+            } catch (RuntimeException e) {
+                log.error(msg("Failed {} failed during afterRollback PersistedEvents", callback.getClass().getName()), e);
+            }
+        }
+    }
+
     @Override
     public EventStoreUnitOfWorkFactory registerPersistedEventsCommitLifeCycleCallback(PersistedEventsCommitLifecycleCallback callback) {
         persistedEventsLifecycleCallbacks.add(requireNonNull(callback, "No callback provided"));

@@ -52,51 +52,11 @@ creation fails naming it when it is missing (SB-2).
 ## P1: 0.60.x patch releases
 
 Bug fixes only; no API breaks. Everything planned here before the 2026-10-14 review fix waves shipped in 0.60.1;
-the items below are still open.
+nothing is open now.
 
-**`afterRollback` is never called on the Spring event-store unit of work (RW-1).**
-
-- **Problem:** `SpringTransactionAwareEventStoreUnitOfWorkFactory` does not override
-  `afterRollbackAfterCallingLifecycleCallbackResources`, so `PersistedEventsCommitLifecycleCallback#afterRollback` is
-  never called on the Spring path, for any rollback. `EventStoreManagedUnitOfWork` (the JDBI path) calls it, and
-  `EventStoreEventBus` implements it.
-- **Consequence:** a callback that undoes in-memory work when events it saw in `beforeCommit` are rolled back is never
-  told about the rollback in a Spring application. Found while pinning F-122: the assertion that the callback received
-  the rolled-back event in `afterRollback` fails.
-- **Fix:** override the method so it hands the units of work's `beforeCommitEventsPersisted` and
-  `afterCommitEventsPersisted` to each callback's `afterRollback`, then clears them. Put the `afterRollback` assertion
-  back into `SpringTransactionAwareEventStoreUnitOfWorkFactory_RollbackOnlyIT` (its recording callback needs an
-  `afterRollbackEvents` list). User-visible: release-notes entry under bug fixes.
-
-**A stop while the fenced lock is still being acquired can strand the lock (RW-11; review F-843).**
-
-- **Problem:** `DBFencedLockManager.cancelAsyncLockAcquiring` (`components/foundation/.../fencedlock/DBFencedLockManager.java:1025`)
-  removes and cancels the acquiring future, then releases the lock only if `locksAcquiredByThisLockManager` holds it
-  at that moment. It does not take `reentrantLock`, so it does not wait for an acquiring tick that is already running
-  (`asyncLockAcquiringTick`, line 959). The first tick runs as soon as `acquireLockAsync` schedules it (initial delay
-  0), so a `stop()` straight after `start()` usually lands while that tick is in flight. The tick then completes:
-  it records the lock (line 983) and calls the cancelled caller's `lockAcquired` (line 985). Nothing releases that
-  lock until a later cancel for the same lock name (a `stop()` after a restart, line 1031-1034) or the lock manager's
-  own `stop()` (line 508), and the lock confirmation keeps confirming it. Seen with an exclusive
-  `InTransactionEventProcessor` (`start()`, `stop()`, `start()`): the stopped subscription's `lockAcquired` ran after its `stop()` and registered
-  its handler on the local event bus again (`ExclusiveInTransactionSubscription.java:81-89`); the subscription
-  `start()` created never became active. An `ExclusiveAsynchronousSubscription` gets `onLockAcquired` the same way
-  (`ExclusiveAsynchronousSubscription.java:114`); its `request` refuses while it is not started (line 286).
-- **Consequence:** an exclusive subscription stopped while that tick is in flight leaves this instance holding its
-  lock, so no other instance can take the subscription over until that lock is released. Started again, it reports
-  itself started while `isActive()` stays false: the new subscription's ticks find the lock already held by this
-  instance and do nothing. For an exclusive `InTransactionEventProcessor` the stopped processor keeps handling events
-  appended on this instance, in their transactions, until its lock is released: the late `lockAcquired` sets `active`
-  and re-adds its local-event-bus handler, and neither `ExclusiveInTransactionSubscription.onEvent` nor
-  `InTransactionEventProcessor.invokeHandler` checks whether it is started. In the run above, the next `stop()`
-  released the lock. The `EventProcessorIT` restart tests wait for the processor to be
-  active before they stop it, so they do not cover this.
-  `ViewEventProcessor`, `Inboxes`, `Outboxes` and `DefaultEssentialsScheduler` call `cancelAsyncLockAcquiring` too;
-  whether they end up the same way was not checked.
-- **Fix:** make the cancel and the tick exclusive. Either `cancelAsyncLockAcquiring` takes `reentrantLock` around
-  its release check, or the tick hands the lock to its callback only while its own future is still the one in
-  `asyncLockAcquirings`, and releases it otherwise. Pin it with a `start()`, `stop()`, `start()` loop that asserts
-  the restarted processor becomes active and that the stopped processor handles no event appended after its `stop()`. User-visible: release-notes entry under bug fixes.
+None open. RW-1 is fixed for 0.61.1 (see `docs/releases/NEXT_VERSION_RELEASE.md` §3); RW-11 was fixed in 0.60.1
+(`DBFencedLockManager.asyncLockAcquiringTick` re-checks the registration and releases a lock acquired for a cancelled
+acquiring).
 
 ---
 
