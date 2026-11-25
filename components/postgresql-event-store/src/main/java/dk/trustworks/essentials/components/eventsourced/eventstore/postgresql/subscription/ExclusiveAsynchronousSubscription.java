@@ -135,6 +135,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
         resumePoint = durableSubscriptionRepository.getOrCreateResumePoint(subscriberId,
                 aggregateType,
                 onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder);
+        fenceResumePointSaves(fencedLock);
         log.info("[{}-{}] Starting subscription from globalEventOrder: {}",
                 subscriberId,
                 aggregateType,
@@ -151,6 +152,23 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
         }
 
         subscribeFromResumePoint();
+    }
+
+    /**
+     * Every save of the resume point from now on carries the token of the lock just acquired, so the repository refuses a
+     * late save of the previous lock holder once this holder has saved, and refuses this holder's saves once a later holder
+     * has - see {@link SubscriptionResumePoint#fencedBy(long)}
+     */
+    private void fenceResumePointSaves(FencedLock fencedLock) {
+        var fenceToken = fencedLock.getCurrentToken();
+        if (fenceToken != null) {
+            resumePoint.fencedBy(fenceToken);
+        } else {
+            log.warn("[{}-{}] The acquired lock '{}' has no fence token - the resume point is saved without one",
+                     subscriberId,
+                     aggregateType,
+                     fencedLock.getName());
+        }
     }
 
     /**

@@ -278,6 +278,99 @@ class EventStoreSubscriptionManager_exclusivelySubscribeToAggregateEventsAsynchr
         assertThat(productsSubscriptionResumePoint.get().getResumeFromAndIncluding()).isEqualTo(lastProductEvent.globalEventOrder().increment());// When the subscriber is stopped we store the next global event order
     }
 
+    /**
+     * Both exclusive asynchronous subscriptions - per event and batched - fence the resume point they read on acquiring the
+     * lock with the lock's token, and the saves carry it into the {@code fence_token} column
+     */
+    @Test
+    void the_resume_point_of_an_exclusive_subscription_is_saved_with_its_lock_token() {
+        var durableSubscriptionRepository = new PostgresqlDurableSubscriptionRepository(jdbi, eventStore);
+        eventStoreSubscriptionManagerNode1 = EventStoreSubscriptionManager.createFor(eventStore,
+                                                                                     50,
+                                                                                     Duration.ofMillis(100),
+                                                                                     PostgresqlFencedLockManager.builder()
+                                                                                                                .setJdbi(jdbi)
+                                                                                                                .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                                                                .setLockManagerInstanceId("Node1")
+                                                                                                                .setLockTimeOut(Duration.ofSeconds(3))
+                                                                                                                .setLockConfirmationInterval(Duration.ofSeconds(1))
+                                                                                                                .build(),
+                                                                                     Duration.ofSeconds(1),
+                                                                                     durableSubscriptionRepository);
+        eventStoreSubscriptionManagerNode1.start();
+
+        var tokensAtAcquisition = new java.util.concurrent.ConcurrentHashMap<SubscriberId, Long>();
+        var fencedResumePoints  = new java.util.concurrent.ConcurrentHashMap<SubscriberId, Optional<Long>>();
+        class RecordingLockAwareSubscriber implements FencedLockAwareSubscriber {
+            private final SubscriberId subscriberId;
+
+            RecordingLockAwareSubscriber(SubscriberId subscriberId) {
+                this.subscriberId = subscriberId;
+            }
+
+            @Override
+            public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint resumeFromAndIncluding) {
+                tokensAtAcquisition.put(subscriberId, fencedLock.getCurrentToken());
+                fencedResumePoints.put(subscriberId, resumeFromAndIncluding.getFenceToken());
+            }
+
+            @Override
+            public void onLockReleased(FencedLock fencedLock) {
+            }
+        }
+        var perEvent = SubscriberId.of("OrdersPerEvent");
+        var batched  = SubscriberId.of("OrdersBatched");
+        var received = new java.util.concurrent.CopyOnWriteArrayList<PersistedEvent>();
+        eventStoreSubscriptionManagerNode1.exclusivelySubscribeToAggregateEventsAsynchronously(perEvent,
+                                                                                               ORDERS,
+                                                                                               GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                                                               Optional.empty(),
+                                                                                               new RecordingLockAwareSubscriber(perEvent),
+                                                                                               new PersistedEventHandler() {
+                                                                                                   @Override
+                                                                                                   public void onResetFrom(EventStoreSubscription eventStoreSubscription, GlobalEventOrder globalEventOrder) {
+                                                                                                   }
+
+                                                                                                   @Override
+                                                                                                   public void handle(PersistedEvent event) {
+                                                                                                       received.add(event);
+                                                                                                   }
+                                                                                               });
+        eventStoreSubscriptionManagerNode1.exclusivelyBatchSubscribeToAggregateEventsAsynchronously(batched,
+                                                                                                    ORDERS,
+                                                                                                    aggregateType -> GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                                                                    Optional.empty(),
+                                                                                                    10,
+                                                                                                    Duration.ofMillis(100),
+                                                                                                    new RecordingLockAwareSubscriber(batched),
+                                                                                                    events -> {
+                                                                                                        received.addAll(events);
+                                                                                                        return events.size();
+                                                                                                    });
+
+        var orderId = OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(() -> eventStore.appendToStream(ORDERS, orderId, List.of(new OrderEvent.OrderAdded(orderId, CustomerId.random(), 1),
+                                                                                                    new OrderEvent.OrderAccepted(orderId))));
+
+        Awaitility.waitAtMost(Duration.ofSeconds(30))
+                  .untilAsserted(() -> assertThat(received).hasSize(4));
+        for (var subscriberId : List.of(perEvent, batched)) {
+            assertThat(fencedResumePoints.get(subscriberId)).as("%s: the resume point handed to onLockAcquired is fenced", subscriberId)
+                                                            .contains(tokensAtAcquisition.get(subscriberId));
+            Awaitility.waitAtMost(Duration.ofSeconds(30))
+                      .untilAsserted(() -> assertThat(storedFenceToken(subscriberId)).as("%s: stored fence token", subscriberId)
+                                                                                    .isEqualTo(tokensAtAcquisition.get(subscriberId)));
+        }
+    }
+
+    private Long storedFenceToken(SubscriberId subscriberId) {
+        return jdbi.withHandle(handle -> handle.createQuery("SELECT fence_token FROM durable_subscriptions WHERE subscriber_id = :subscriber_id AND aggregate_type = :aggregate_type")
+                                               .bind("subscriber_id", subscriberId.toString())
+                                               .bind("aggregate_type", ORDERS.toString())
+                                               .mapTo(Long.class)
+                                               .one());
+    }
+
     @Test
     void test_start_and_stop_subscription() {
         System.out.println("********** Start test_start_and_stop_subscription ***********");

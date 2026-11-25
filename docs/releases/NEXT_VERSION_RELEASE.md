@@ -38,7 +38,9 @@ remove it, instead of keeping it because nobody can tell._
   event-store interceptors share one contract (§2.19); handlers now receive replacements and `PatternMatchingMessageHandler`
   honours `@InterceptorOrder` (§1.1.7).
 
-There are no API removals. One schema change removes a redundant index on the event store's gap table (§1). The
+There are no API removals. One schema change removes a redundant index on the event store's gap table (§1); another
+adds a `fence_token` column to the durable subscriptions table, which ends exclusive subscriptions' resume points
+freezing after a lock hand-over (§1, §3). The
 shard-owned adapter writes a new message format, and **0.60.x and this release must not run side by side against the
 same shard-owned queues** (§1).
 
@@ -78,7 +80,15 @@ same shard-owned queues** (§1).
 
 ## 1. Breaking — what you MUST apply
 
-None so far.
+**Under `essentials.schema.mode=validate`: apply the new schema change `durable-subscriptions-fence-token` before the
+first start (`postgresql-event-store`).** It adds a nullable column `fence_token BIGINT` to the durable subscriptions
+table (default name `durable_subscriptions`), which fences resume-point saves of exclusive subscriptions by their lock
+token (§3). Under `create` (the default) the column is added on start, only when it is missing, so a running instance is
+not locked out of the table. Under `validate` the first start is refused, naming `durable-subscriptions-fence-token` as
+not applied: run with `emit` to write the script and apply it, or run the statement yourself
+(`ALTER TABLE durable_subscriptions ADD COLUMN IF NOT EXISTS fence_token BIGINT`) and then the script's ledger insert.
+The column is nullable, so instances of the previous release keep working against the altered table during a rolling
+upgrade; their saves carry no token and are checked as before.
 
 ### 1.1 ⚠️ Silent behaviour changes
 
@@ -173,6 +183,7 @@ None so far.
 | Area | Fix | Commit |
 |---|---|---|
 | CDC (`postgresql-event-store`) | PostgreSQL 17.12 and 18 refuse an output plugin that is not listed in `output_plugin_libraries` (default `pgoutput, test_decoding`), so creating a `wal2json` slot fails with `library "wal2json" may not be used as an output plugin`: under `cdc.mode=require` start-up fails, under `auto` subscribers silently stay on polling. What to do: add `wal2json` to the setting (`postgresql.conf`: `output_plugin_libraries = 'pgoutput, test_decoding, wal2json'`; SQL: `ALTER SYSTEM SET output_plugin_libraries = 'pgoutput', 'test_decoding', 'wal2json'`, each name quoted on its own, then `SELECT pg_reload_conf()`), or use `pgoutput`. How to observe: `Wal2JsonLogicalDecodingPlugin.unusableReason` read only "wal2json plugin not usable"; it now names `output_plugin_libraries` and both ways to add `wal2json`. `pgoutput` is unaffected. | ported from `bbf1d28f0` |
+| Exclusive subscriptions (`postgresql-event-store`) | After a lock hand-over during a database outage, an exclusive subscription's stored resume point stopped moving for as long as the new lock holder held the lock, and the next restart or hand-over redelivered every event since the hand-over (no event was skipped). Cause: the previous holder, stopped while it retried an event, held its resume point at that event, which starts a new reposition epoch, and saved it after the new holder had read the row; saves were not checked against the lock, the newer epoch won, and the reposition-epoch guard then refused every save of the new holder. Affects 0.60.0 to 0.61.0, and the same way the batched exclusive subscription and a graceful stop whose final save lands after another instance took the lock. Fix: every resume-point save of an exclusive subscription carries the token of the fenced lock it acquired (`SubscriptionResumePoint.fencedBy` / `getFenceToken`), the table stores the highest token written (new column `fence_token`, schema change `durable-subscriptions-fence-token`, see §1), a save with a newer token wins whatever its reposition epoch, one with the same token is checked against the epoch as before (a reset still wins over that holder's in-flight saves), and one with an older token is refused. Non-exclusive subscriptions and `resetStoredResumePoint` save without a token and behave as before. How to observe: before, the new holder logged once `Did not save resumeFromAndIncluding … the stored resume point was repositioned by another writer (stored reposition epoch is newer than 0)` and `durable_subscriptions.resume_from_and_including_global_eventorder` stayed behind its progress; after, the new holder's saves land and `fence_token` holds its lock's token. A refusal now comes from the previous holder, late, and its WARN also names the fence token. A row frozen by the bug heals at the new holder's first save after the upgrade. Pinned by `PostgresqlDurableSubscriptionRepositoryIT`. | this commit |
 
 ---
 

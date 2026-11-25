@@ -69,6 +69,12 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
      * The default name for the table name that will store the durable resume points
      */
     public static final  String                          DEFAULT_DURABLE_SUBSCRIPTIONS_TABLE_NAME = "durable_subscriptions";
+    /**
+     * The id of the schema change that adds the nullable {@code fence_token} column to the durable subscriptions table -
+     * the highest fenced lock token that wrote a resume point (see {@link SubscriptionResumePoint}).
+     * Under {@code essentials.schema.mode=validate} it must be applied before the first start of a release that has it
+     */
+    public static final  String                          FENCE_TOKEN_SCHEMA_CHANGE_ID             = "durable-subscriptions-fence-token";
     private final        Jdbi                            jdbi;
     private final        String                          durableSubscriptionsTableName;
     private final        HandleAwareUnitOfWorkFactory<?> unitOfWorkFactory;
@@ -162,7 +168,8 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
 
     /**
      * The durable subscriptions table - one resume point per {@code (subscriber_id, aggregate_type)}, plus the
-     * {@code reposition_epoch} column added in 0.60 (see {@link SubscriptionResumePoint}).
+     * {@code reposition_epoch} column added in 0.60 and the {@code fence_token} column added by the change
+     * {@value #FENCE_TOKEN_SCHEMA_CHANGE_ID} (both: see {@link SubscriptionResumePoint}).
      */
     @Override
     public List<SchemaChange> contribute(SchemaContext context) {
@@ -182,7 +189,15 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                                                addColumnUnlessPresent(this.durableSubscriptionsTableName,
                                                                       "reposition_epoch",
                                                                       "ALTER TABLE " + this.durableSubscriptionsTableName +
-                                                                              " ADD COLUMN IF NOT EXISTS reposition_epoch BIGINT NOT NULL DEFAULT 0")));
+                                                                              " ADD COLUMN IF NOT EXISTS reposition_epoch BIGINT NOT NULL DEFAULT 0")),
+                       // Added after 0.61.0 as its own change: editing the statements above would change that change's checksum.
+                       // The highest fenced lock token that wrote the row - NULL until an exclusive subscription saves it (see SubscriptionResumePoint)
+                       SchemaChange.repeatable(FENCE_TOKEN_SCHEMA_CHANGE_ID,
+                                               durableSubscriptionsTableName,
+                                               addColumnUnlessPresent(this.durableSubscriptionsTableName,
+                                                                      "fence_token",
+                                                                      "ALTER TABLE " + this.durableSubscriptionsTableName +
+                                                                              " ADD COLUMN IF NOT EXISTS fence_token BIGINT")));
     }
 
     @Override
@@ -345,14 +360,18 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                                                                           (first, second) -> first,
                                                                           IdentityHashMap::new));
         try {
-            // The reposition_epoch guard makes a write that captured the resume point before a reset (an older epoch) a
+            // The fence_token guard refuses a write from a previous fenced lock holder once a newer holder has written, and lets
+            // the newer holder's writes through whatever their reposition epoch. Between writes carrying the same token, or
+            // none, the reposition_epoch guard makes a write that captured the resume point before a reset (an older epoch) a
             // no-op once the reset is stored, whichever of the two commits first - see SubscriptionResumePoint
             int[] rowsUpdatedPerResumePoint = unitOfWorkFactory.withUnitOfWork(uow -> {
                 var preparedBatch = uow.handle().prepareBatch("UPDATE " + this.durableSubscriptionsTableName +
                                                                       " SET resume_from_and_including_global_eventorder = :resume_from_and_including_global_eventorder," +
-                                                                      " reposition_epoch = :reposition_epoch, last_updated = :last_updated" +
+                                                                      " reposition_epoch = :reposition_epoch, last_updated = :last_updated," +
+                                                                      " fence_token = COALESCE(CAST(:fence_token AS BIGINT), fence_token)" +
                                                                       " WHERE aggregate_type = :aggregate_type AND subscriber_id = :subscriber_id" +
-                                                                      " AND reposition_epoch <= :reposition_epoch");
+                                                                      " AND ((CAST(:fence_token AS BIGINT) IS NOT NULL AND (fence_token IS NULL OR fence_token < CAST(:fence_token AS BIGINT)))" +
+                                                                      "   OR ((CAST(:fence_token AS BIGINT) IS NULL OR fence_token = CAST(:fence_token AS BIGINT)) AND reposition_epoch <= :reposition_epoch))");
 
                 changedResumePoints.forEach(subscriptionResumePoint -> {
                     var snapshot = boundSnapshots.get(subscriptionResumePoint);
@@ -362,6 +381,7 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                             .bind("subscriber_id", subscriptionResumePoint.getSubscriberId())
                             .bind("resume_from_and_including_global_eventorder", snapshot.resumeFromAndIncluding())
                             .bind("reposition_epoch", snapshot.repositionEpoch())
+                            .bind("fence_token", subscriptionResumePoint.getFenceToken().orElse(null))
                             .bind("last_updated", now)
                             .add();
                 });
@@ -405,7 +425,8 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
     }
 
     /**
-     * No row was updated: either the stored reposition epoch is newer than the one bound, or the row is gone.
+     * No row was updated: the stored reposition epoch is newer than the one bound, the stored fence token is newer than
+     * the one bound (the save came from a previous fenced lock holder), or the row is gone.
      * Either way the bound snapshot can never be written, so it is recorded as dealt with instead of being retried
      * on every save.
      */
@@ -419,12 +440,14 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                       snapshot.repositionEpoch(),
                       subscriptionResumePoint.getRepositionEpoch());
         } else if (warnedAboutRefusedSave.add(subscriptionResumePoint)) {
-            log.warn("[{}-{}] Did not save resumeFromAndIncluding {}: the stored resume point was repositioned by another writer (stored reposition epoch is newer than {}) " +
+            log.warn("[{}-{}] Did not save resumeFromAndIncluding {}: the stored resume point was repositioned by another writer (stored reposition epoch is newer than {}), " +
+                             "was written by a newer fenced lock holder (stored fence token is newer than {}), " +
                              "or no longer exists. The stored resume point is kept; restart the subscription to pick it up. Further refusals are logged at DEBUG",
                      subscriptionResumePoint.getSubscriberId(),
                      subscriptionResumePoint.getAggregateType(),
                      snapshot.resumeFromAndIncluding(),
-                     snapshot.repositionEpoch());
+                     snapshot.repositionEpoch(),
+                     subscriptionResumePoint.getFenceToken().map(String::valueOf).orElse("none"));
         } else {
             log.debug("[{}-{}] Did not save resumeFromAndIncluding {} from reposition epoch {}: refused again",
                       subscriptionResumePoint.getSubscriberId(),

@@ -121,7 +121,13 @@ public interface DurableSubscriptionRepository {
      * {@link SubscriptionResumePoint#getRepositionEpoch() reposition epoch} together - and refuse the write when the stored
      * epoch is newer, so a save that captured a resume point before a reset cannot overwrite the reset. A written snapshot
      * is recorded with {@link SubscriptionResumePoint#markAsPersisted(SubscriptionResumePoint.Snapshot, java.time.OffsetDateTime)},
-     * a refused one with {@link SubscriptionResumePoint#markAsSuperseded(SubscriptionResumePoint.Snapshot)}
+     * a refused one with {@link SubscriptionResumePoint#markAsSuperseded(SubscriptionResumePoint.Snapshot)}<br>
+     * A resume point saved by an exclusive subscription carries the token of the fenced lock its subscription holds
+     * ({@link SubscriptionResumePoint#getFenceToken()}). An implementation that can should store the highest token written and
+     * refuse a write with an older one, letting a write with a newer token through whatever its reposition epoch - the rule
+     * in full is in the {@link SubscriptionResumePoint} javadoc; {@link PostgresqlDurableSubscriptionRepository} is the reference.
+     * An implementation that ignores the token keeps the reposition epoch guard alone, and with it the hazard the token exists for:
+     * a late save of a previous lock holder can make the store refuse the new lock holder's saves
      *
      * @param resumePoints the resume points to save
      */
