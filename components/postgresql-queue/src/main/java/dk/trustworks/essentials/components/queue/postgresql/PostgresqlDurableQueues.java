@@ -1768,7 +1768,12 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
-     * Work in progress - doesn't handle competing consumers yet
+     * Claims messages from several queues in one statement - the strategy the {@link CentralizedMessageFetcher} switches
+     * to when batched fetching is enabled ({@link PostgresqlDurableQueuesBuilder#setUseBatchedFetch(boolean)}, off by
+     * default) and more queues are active than {@link PostgresqlDurableQueuesBuilder#setBatchedFetchSwitchThreshold(int)}.
+     * Each queue gets at most its free worker slots, and queues with no registered consumer are skipped. Safe with
+     * competing consumers: rows are locked with {@code FOR UPDATE SKIP LOCKED}, so two instances never claim the same
+     * message (see {@link DurableQueuesSql#buildBatchedSqlStatement})
      */
     @Override
     public List<QueuedMessage> fetchNextBatchOfMessagesBatched(Collection<QueueName> queueNames,

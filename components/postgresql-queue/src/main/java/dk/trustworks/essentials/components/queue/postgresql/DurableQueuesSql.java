@@ -218,7 +218,10 @@ public class DurableQueuesSql {
     }
 
     /**
-     * Builds a batched SQL statement for retrieving messages from multiple queues - work in progress (doesn't handle competing consumers yet due to )
+     * Builds the batched SQL statement that claims messages from several queues in one round trip. Safe with competing
+     * consumers: the candidate rows are locked with {@code FOR UPDATE SKIP LOCKED} and updated by primary-key array, so two
+     * instances (or threads) running it at the same time never claim the same message - pinned by
+     * {@code BatchedFetchStrategyIT.concurrent_batched_fetches_from_two_instances_never_claim_the_same_message_twice}.
      * <p>
      * Each queue is handed at most its available worker slots: its oldest eligible messages by
      * {@code (next_delivery_ts, id)}, unordered messages and the heads of its ordered keys alike, leaving out the heads

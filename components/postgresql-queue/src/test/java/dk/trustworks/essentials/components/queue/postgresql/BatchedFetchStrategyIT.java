@@ -540,6 +540,62 @@ class BatchedFetchStrategyIT {
         // genuine race, and a fast instance legitimately drains every queue before the other one polls.
     }
 
+    /**
+     * The batched fetch under real contention: four threads, two per instance, run the batched claim against the same
+     * table at the same time until every message is claimed. The end-to-end test above cannot guarantee that two claims
+     * ever overlap (one instance may drain everything before the other polls); this one makes them overlap, so a claim
+     * that does not lock its rows (<code>FOR UPDATE SKIP LOCKED</code>) hands the same message to two callers.
+     */
+    @Test
+    void concurrent_batched_fetches_from_two_instances_never_claim_the_same_message_twice() throws Exception {
+        var messagesPerQueue = 300;
+        var durableQueues1   = newDurableQueues();
+        var queueNames       = registerQueues(durableQueues1, QUEUE_COUNT_ABOVE_THRESHOLD);
+        var durableQueues2   = newDurableQueues();
+        registerQueues(durableQueues2, queueNames);
+        var expectedCount = 0;
+        for (var queueName : queueNames) {
+            for (int i = 0; i < messagesPerQueue; i++) {
+                durableQueues1.queueMessage(queueName, Message.of("message-" + queueName + "-" + i));
+                expectedCount++;
+            }
+        }
+
+        var claimed  = new ConcurrentLinkedQueue<QueueEntryId>();
+        var start    = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            var fetchers = new ArrayList<java.util.concurrent.Future<?>>();
+            for (var durableQueues : List.of(durableQueues1, durableQueues1, durableQueues2, durableQueues2)) {
+                fetchers.add(executor.submit(() -> {
+                    start.await();
+                    var emptyFetchesInARow = 0;
+                    while (emptyFetchesInARow < 3) {
+                        var messages = durableQueues.fetchNextBatchOfMessagesBatched(queueNames, Map.of(), slotsFor(queueNames, 8));
+                        if (messages.isEmpty()) {
+                            emptyFetchesInARow++;
+                        } else {
+                            emptyFetchesInARow = 0;
+                            messages.forEach(message -> claimed.add(message.getId()));
+                        }
+                    }
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (var fetcher : fetchers) {
+                fetcher.get(60, java.util.concurrent.TimeUnit.SECONDS);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(claimed)
+                .as("Competing batched fetches must never claim the same message twice")
+                .doesNotHaveDuplicates();
+        assertThat(claimed).hasSize(expectedCount);
+    }
+
     // ------------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------------

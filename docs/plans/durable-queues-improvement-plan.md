@@ -31,13 +31,6 @@ Measure first: `pg_stat_statements` calls and total time per statement at 0, 100
 
 The shard-owned engine acknowledges in batches on the poller's connection. Since D1, a successful handler's acknowledgement runs inside the handler's own transaction, which makes the handler's effects and the acknowledgement atomic. Batching is therefore only possible for handlers that do not need that atomicity: `UnitOfWorkMode.NONE` handlers and handlers with no database side effects. Decide whether that subset is large enough to be worth a second acknowledgement path before designing it.
 
-### Batched fetch: stale "work in progress" javadoc
-
-`PostgresqlDurableQueues.fetchNextBatchOfMessagesBatched` and `DurableQueuesSql`'s batched statement builder are still documented as "work in progress — doesn't handle competing consumers yet" (the `DurableQueuesSql` sentence is also cut off: "due to )"). The strategy is opt-in (`PostgresqlDurableQueuesBuilder.setUseBatchedFetch`, default `false`), covered by `BatchedFetchStrategyIT`, and its statement now locks with `FOR UPDATE SKIP LOCKED` and updates by primary-key array, like the per-queue claims.
-
-- Add a competing-consumers test: two `PostgresqlDurableQueues` instances on the same table, both with batched fetch, assert no message is delivered twice.
-- If it passes, replace the javadoc with what the strategy does and when the fetcher switches to it. If it fails, fix the statement or document the restriction on `setUseBatchedFetch`.
-
 ## Shard-owned engine (`postgresql-queue-shard-owned`)
 
 ### F5. A message being retried shows no error

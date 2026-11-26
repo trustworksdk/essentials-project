@@ -165,6 +165,10 @@ Not published; listed because they are the reference for how to use the framewor
   types in either order. `EventStoreSchemaReapplyConcurrencyIT` now asserts the re-apply never waits for such an append;
   the existing test only checked both sides succeed, which still passed when PostgreSQL broke a real deadlock and the
   applier retried (NW-3, ruled out).
+- Test and javadoc only: the opt-in batched fetch (`PostgresqlDurableQueuesBuilder.setUseBatchedFetch`) was documented
+  as "work in progress - doesn't handle competing consumers yet". It does: `BatchedFetchStrategyIT` now runs the
+  batched claim from four threads on two instances against one table at once and finds no message claimed twice
+  (removing the statement's `FOR UPDATE SKIP LOCKED` makes it fail). The javadoc now says what the strategy does.
 - Test only: `SubscriptionResetOnPoisonNotifierIT` no longer polls for a resume point the replay re-advances within
   75 ms; it reads the stored reset when the subscription reports it (CI failure on `f86018aaf`).
 - The repository's PostgreSQL test image (`docker/postgresql`, now `essentials-postgres:17.5-2`) runs the server its tag
