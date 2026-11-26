@@ -129,6 +129,13 @@ Not published; listed because they are the reference for how to use the framewor
   only if `isAwaitedAsGap` reads that handler's transient gaps on every call; otherwise a `CdcEventStore` over the
   decorator skips them, and `awaitProcessed` can report an event the subscriber still awaits as a gap as processed.
   Only matters for an `EventStore` you wrote that decorates one of Essentials'; when in doubt, return empty (RW-7).
+- Leadership Election example (`LLM/LLM-foundation.md`): `start()` now checks `lockManager.isStarted()`, logs a WARN and
+  stays not running when the lock manager is not started (for example `start-life-cycles=false` without a manual start,
+  or `emit` mode); before, it reported itself running while no leader was ever elected. The text also says that the
+  example's `stop()` release is not bounded by `essentials.life-cycles.shutdown-timeout` (against an unreachable database
+  it waits out the connection-pool timeout) and how to bound it with `stop(Runnable)`. An application that copied the
+  example should make the same two changes. `DefaultLifecycleManagerTest` now pins the start/stop order the example
+  relies on: `DefaultLifecycleManager`'s phase stays below `SmartLifecycle.DEFAULT_PHASE` (RW-19).
 
 ---
 

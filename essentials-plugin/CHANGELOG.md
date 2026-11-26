@@ -23,6 +23,8 @@ targets, with a `-N` suffix for plugin-only releases.
   next fence token; `lockReleased` does not mean another instance holds the lock.
 - **Event-store reference: forward `isAwaitedAsGap` and `transientGapsReadFrom()` both or neither** - a decorator that
   names a gap handler its `isAwaitedAsGap` does not read makes `awaitProcessed` miss that handler's transient gaps.
+- **Foundation reference: the Leadership Election example** checks that the lock manager is started (WARN, stays not
+  running otherwise) and says its shutdown release is not bounded by the Essentials shutdown timeout.
 - **Shard-owned reference: which sweep counter to alert on** - not `sweepRecoveries` by its value (it counts harmless
   rows too); `sweepRecoveriesBehindCursor` on the ordered lane.
 

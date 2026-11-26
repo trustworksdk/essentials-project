@@ -417,36 +417,6 @@ starter that WARNs once when a DML statement runs with no active transaction.
 
 Everything planned here before 2026-10-13 shipped in 0.60.1.
 
-- **The Leadership Election example (RW-19).** The example in `LLM/LLM-foundation.md` § Leadership Election is a
-  `SmartLifecycle` at `DEFAULT_PHASE`, so it starts after `DefaultLifecycleManager` (phase `Integer.MAX_VALUE - 1`)
-  has started the lock manager, and stops before it. Three gaps:
-  - Its `start()` calls `acquireLockAsync` and sets `running = true` whatever the lock manager's state, although the
-    paragraph under it says that such a call while the lock manager is not started registers nothing and logs only at
-    DEBUG (`start-life-cycles=false` without a manual start, `emit` mode). An application copied from it reports the
-    bean as running while no leader is ever elected, the exact trap the section describes. Fix: log at WARN in
-    `start()` when `!lockManager.isStarted()` ("FencedLockManager is not started - no leader will be elected for
-    ..."); a WARN rather than an exception, so `emit` mode, where no `Lifecycle` bean is started by design, keeps
-    working. RW-12 may make the call while stopped work instead; then describe that.
-  - Its `stop()` calls `cancelAsyncLockAcquiring(LEADER_LOCK)` before `DefaultLifecycleManager.stop()` calls
-    `signalShutdownStarting`. The lock manager's `shutdown` is still unset, so `DBFencedLockManager.releaseLock`
-    releases through `withUnitOfWork` with no time limit instead of the bounded `releaseLockDuringShutdown`; neither
-    `essentials.life-cycles.shutdown-timeout` nor `ShutdownContext.attemptCleanup`'s single attempt applies. Against a
-    database that is unreachable at shutdown, the leader's release waits out the connection-pool timeout on Spring's
-    shutdown thread. Fix: either implement `stop(Runnable callback)` and run the cancel off the shutdown thread,
-    calling `callback.run()` in a `finally`, so Spring bounds it by `spring.lifecycle.timeout-per-shutdown-phase`; or
-    keep the synchronous `stop()` and add one sentence saying that this release is not bounded by
-    `essentials.life-cycles.shutdown-timeout` and waits for the connection timeout against an unreachable database.
-  - The start and stop order the example relies on is held in place only by a comment in
-    `DefaultLifecycleManager.getPhase()`; no test refers to `getPhase()` or `DEFAULT_PHASE`. A change of the phase (to
-    `DEFAULT_PHASE`, "to start last") fails nothing and brings back the failure the example was rewritten to avoid.
-    Fix: add a test such as
-    `its_phase_is_below_the_default_phase_so_an_application_smart_lifecycle_starts_after_and_stops_before_it` to
-    `components/foundation/.../lifecycle/DefaultLifecycleManagerTest.java`, asserting that `getPhase()` is below
-    `SmartLifecycle.DEFAULT_PHASE` (optionally also a small Spring context test of the order), and point the
-    `getPhase()` comment at it.
-
-  The `LLM/` edit needs a `plugin.json` version bump; ship it with the next plugin release. (review findings F-980,
-  F-981, F-982)
 - **The README's account of a replaced async registration is shorter than the LLM doc's (RW-20).**
   `components/foundation/README.md`, in the paragraph on what a lock manager's `stop()` keeps, says that the release on
   a replaced registration "calls `lockReleased` on the callbacks registered with it". `LLM/LLM-foundation.md`

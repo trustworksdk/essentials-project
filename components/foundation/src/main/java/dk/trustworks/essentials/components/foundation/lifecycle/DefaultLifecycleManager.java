@@ -219,6 +219,9 @@ public final class DefaultLifecycleManager implements SmartLifecycle, LifecycleM
     @Override
     public int getPhase() {
         // The higher the phase value the earlier it is shut down and the later it starts
+        // Must stay below SmartLifecycle.DEFAULT_PHASE: an application SmartLifecycle at the default phase (the Leadership
+        // Election example in LLM-foundation.md) relies on starting after the lock manager and stopping before it.
+        // Pinned by DefaultLifecycleManagerTest.its_phase_is_below_the_default_phase_so_an_application_smart_lifecycle_starts_after_and_stops_before_it
         return Integer.MAX_VALUE - 1;
     }
 }

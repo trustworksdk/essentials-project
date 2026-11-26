@@ -776,6 +776,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class LeaderElection implements SmartLifecycle {          // Spring's SmartLifecycle at its default phase - see below
+    private static final Logger   log         = LoggerFactory.getLogger(LeaderElection.class);
     private static final LockName LEADER_LOCK = LockName.of("service-leader");
 
     private final    FencedLockManager lockManager;
@@ -788,6 +789,10 @@ public class LeaderElection implements SmartLifecycle {          // Spring's Sma
 
     @Override
     public void start() {                                         // runs after the lifecycle manager has started the lock manager
+        if (!lockManager.isStarted()) {                           // e.g. start-life-cycles=false without a manual start, or emit mode
+            log.warn("FencedLockManager is not started - no leader will be elected for '{}'", LEADER_LOCK);
+            return;                                               // not running: do not report a leader election that never happens
+        }
         lockManager.acquireLockAsync(
             LEADER_LOCK,
             new LockCallback() {
@@ -811,7 +816,9 @@ public class LeaderElection implements SmartLifecycle {          // Spring's Sma
     public void stop() {                                          // runs before the lock manager stops
         running = false;
         lockManager.cancelAsyncLockAcquiring(LEADER_LOCK);        // releases the lock when this instance holds it; without this
-                                                                  // the lock manager's next start() gives the lock to this callback again
+                                                                  // the lock manager's next start() gives the lock to this callback again.
+                                                                  // Not bounded by essentials.life-cycles.shutdown-timeout: against an
+                                                                  // unreachable database it waits out the connection-pool timeout
     }
 
     @Override
@@ -821,7 +828,7 @@ public class LeaderElection implements SmartLifecycle {          // Spring's Sma
 }
 ```
 
-Why `SmartLifecycle` at the default phase, and not `@PostConstruct`: the starters' `DefaultLifecycleManager` starts every Essentials `Lifecycle` bean not started yet, the lock manager included, in its own `start()` at phase `Integer.MAX_VALUE - 1` (unless it is set to start none of them: `essentials.life-cycles.start-life-cycles=false` under either starter, or `essentials.schema.mode=emit` under `spring-boot-starter-postgresql`), and a `SmartLifecycle` at `SmartLifecycle.DEFAULT_PHASE` (`Integer.MAX_VALUE`) starts after it and stops before it. `@PostConstruct` runs before either, and `spring-boot-starter-postgresql` starts the lock manager when it creates it only in `essentials.schema.mode=create`. So under `spring-boot-starter-postgresql` outside `create`, with the lifecycle manager starting none of them, nothing starts the lock manager and this example elects no leader either: with `start-life-cycles=false`, start the lock manager yourself before this bean starts; in `emit` mode no `Lifecycle` bean is started, by design. An `acquireLockAsync` for a lock name with no registration, made while the lock manager is not started, registers nothing and logs only at DEBUG: no leader is ever elected, and nothing above DEBUG says so. Do not implement Essentials' `Lifecycle` here instead: `DefaultLifecycleManager` starts those beans one after another in the order the application context returns them, so nothing makes this one start after the lock manager.
+Why `SmartLifecycle` at the default phase, and not `@PostConstruct`: the starters' `DefaultLifecycleManager` starts every Essentials `Lifecycle` bean not started yet, the lock manager included, in its own `start()` at phase `Integer.MAX_VALUE - 1` (unless it is set to start none of them: `essentials.life-cycles.start-life-cycles=false` under either starter, or `essentials.schema.mode=emit` under `spring-boot-starter-postgresql`), and a `SmartLifecycle` at `SmartLifecycle.DEFAULT_PHASE` (`Integer.MAX_VALUE`) starts after it and stops before it. `@PostConstruct` runs before either, and `spring-boot-starter-postgresql` starts the lock manager when it creates it only in `essentials.schema.mode=create`. So under `spring-boot-starter-postgresql` outside `create`, with the lifecycle manager starting none of them, nothing starts the lock manager and this example elects no leader either: with `start-life-cycles=false`, start the lock manager yourself before this bean starts; in `emit` mode no `Lifecycle` bean is started, by design. An `acquireLockAsync` for a lock name with no registration, made while the lock manager is not started, registers nothing (logged at WARN since 0.61.1): no leader is ever elected. That is why `start()` checks `isStarted()` first and stays not running, rather than reporting itself running with no election under way. `stop()` runs before the lifecycle manager signals shutdown to the lock manager, so its release is not bounded by `essentials.life-cycles.shutdown-timeout`: against an unreachable database it waits out the connection-pool timeout on Spring's shutdown thread. To bound it, implement `stop(Runnable callback)` instead, cancel on another thread and call `callback.run()` in a `finally`; Spring then bounds it by `spring.lifecycle.timeout-per-shutdown-phase`. Do not implement Essentials' `Lifecycle` here instead: `DefaultLifecycleManager` starts those beans one after another in the order the application context returns them, so nothing makes this one start after the lock manager.
 
 ### Implementations
 

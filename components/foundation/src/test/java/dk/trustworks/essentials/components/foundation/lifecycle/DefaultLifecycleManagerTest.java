@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.foundation.lifecycle;
 
 import dk.trustworks.essentials.shared.Lifecycle;
 import org.junit.jupiter.api.Test;
-import org.springframework.context.ApplicationContext;
+import org.springframework.context.*;
 
 import java.time.Duration;
 import java.util.*;
@@ -30,6 +30,16 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 class DefaultLifecycleManagerTest {
+
+    /**
+     * An application {@code SmartLifecycle} at the default phase (the Leadership Election example in
+     * {@code LLM/LLM-foundation.md}) relies on starting after this manager has started the lock manager and stopping
+     * before it stops it. That holds only while this manager's phase is below {@code SmartLifecycle.DEFAULT_PHASE}.
+     */
+    @Test
+    void its_phase_is_below_the_default_phase_so_an_application_smart_lifecycle_starts_after_and_stops_before_it() {
+        assertThat(new DefaultLifecycleManager(true).getPhase()).isLessThan(SmartLifecycle.DEFAULT_PHASE);
+    }
     private static final String BEAN_NAME = "beanName";
 
     @Test
