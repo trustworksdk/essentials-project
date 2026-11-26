@@ -257,7 +257,13 @@ public interface Inboxes {
             private      Consumer<Message>    messageConsumer;
             public final QueueName            inboxQueueName;
             public final InboxConfig          config;
-            private      DurableQueueConsumer durableQueueConsumer;
+            private volatile DurableQueueConsumer durableQueueConsumer;
+            /**
+             * Taken by both {@link LockCallback} methods of the {@link MessageConsumptionMode#SingleGlobalConsumer} mode, so
+             * a <code>lockReleased</code> that runs before a still-running <code>lockAcquired</code> (possible during a shutdown,
+             * see {@link LockCallback}) is seen by it
+             */
+            private final    Object               lockCallbackMonitor = new Object();
 
             public DurableQueueBasedInbox(InboxConfig config,
                                           Consumer<Message> messageConsumer) {
@@ -327,17 +333,27 @@ public interface Inboxes {
                         fencedLockManager.acquireLockAsync(lockName,
                                                            LockCallback.builder()
                                                                        .onLockAcquired(lock -> {
-                                                                           log.info("FencedLock '{}' for Inbox '{}' was ACQUIRED - will start Exclusive DurableQueueConsumer", lockName, config.inboxName);
-                                                                           durableQueueConsumer = consumeFromDurableQueue(lock);
-                                                                           log.info("Exclusive DurableQueueConsumer for Inbox '{}': {}", config.inboxName, durableQueueConsumer);
+                                                                           synchronized (lockCallbackMonitor) {
+                                                                               // During a shutdown lockReleased can run before this callback (see
+                                                                               // LockCallback): a consumer started now would run without the lock
+                                                                               if (!lock.isLocked()) {
+                                                                                   log.info("FencedLock '{}' for Inbox '{}' was released before lockAcquired ran - not starting the Exclusive DurableQueueConsumer", lockName, config.inboxName);
+                                                                                   return;
+                                                                               }
+                                                                               log.info("FencedLock '{}' for Inbox '{}' was ACQUIRED - will start Exclusive DurableQueueConsumer", lockName, config.inboxName);
+                                                                               durableQueueConsumer = consumeFromDurableQueue(lock);
+                                                                               log.info("Exclusive DurableQueueConsumer for Inbox '{}': {}", config.inboxName, durableQueueConsumer);
+                                                                           }
                                                                        })
                                                                        .onLockReleased(lock -> {
-                                                                           if (durableQueueConsumer != null) {
-                                                                               log.info("FencedLock '{}' for Inbox '{}' was RELEASED - will stop Exclusive DurableQueueConsumer: {}", lockName, config.inboxName, durableQueueConsumer);
-                                                                               durableQueueConsumer.cancel();
-                                                                               log.info("Stopped Exclusive DurableQueueConsumer for Inbox '{}': {}", config.inboxName, durableQueueConsumer);
-                                                                           } else {
-                                                                               log.warn("FencedLock '{}' for Inbox '{}' was RELEASED - didn't find an Exclusive DurableQueueConsumer!", lockName, config.inboxName);
+                                                                           synchronized (lockCallbackMonitor) {
+                                                                               if (durableQueueConsumer != null) {
+                                                                                   log.info("FencedLock '{}' for Inbox '{}' was RELEASED - will stop Exclusive DurableQueueConsumer: {}", lockName, config.inboxName, durableQueueConsumer);
+                                                                                   durableQueueConsumer.cancel();
+                                                                                   log.info("Stopped Exclusive DurableQueueConsumer for Inbox '{}': {}", config.inboxName, durableQueueConsumer);
+                                                                               } else {
+                                                                                   log.warn("FencedLock '{}' for Inbox '{}' was RELEASED - didn't find an Exclusive DurableQueueConsumer!", lockName, config.inboxName);
+                                                                               }
                                                                            }
                                                                        })
                                                                        .build());
