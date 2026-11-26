@@ -3,6 +3,25 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.61.0-3 — targets Essentials 0.61.0
+
+- **Foundation reference: a lost fenced lock can be won straight back** - after a database outage longer than the
+  lock timeout, the instance that lost a lock can win it again through its still-running `acquireLockAsync`, under the
+  next fence token; `lockReleased` does not mean another instance holds the lock.
+- **Event-store reference: forward `isAwaitedAsGap` and `transientGapsReadFrom()` both or neither** - a decorator that
+  names a gap handler its `isAwaitedAsGap` does not read makes `awaitProcessed` miss that handler's transient gaps.
+- **Foundation reference: the Leadership Election example** checks that the lock manager is started (WARN, stays not
+  running otherwise) and says its shutdown release is not bounded by the Essentials shutdown timeout.
+- **Foundation reference: `PostgresqlNotificationDrain`** - for a hand-written LISTEN loop on a dedicated pgjdbc
+  connection; pgjdbc's `getNotifications(timeout)` holds back a dense notification stream (Essentials 0.61.1).
+- **Durable-queues reference: a lower HikariCP `minimumIdle` for queue-only services** - the pool keeps every
+  connection open by default; the trade-off and the LISTEN connection to leave room for.
+- **Durable-queues and MongoDB-queue references: a stalled connection holds a poll** - set the driver's socket timeout
+  (pgjdbc `socketTimeout`, MongoDB `socketTimeoutMS`); both wait forever by default.
+- **Shard-owned reference: a failing message keeps its error on its live row** - read by id through
+  `MessageQueue.lastError(MessageId)` / `getQueuedMessage(...).getLastDeliveryError()`, not on a page of messages; a
+  takeover dead-letter keeps it; re-apply `engine-schema` under `validate` (Essentials 0.61.1).
+
 ## 0.61.0-2 — targets Essentials 0.61.0
 
 - **Foundation and shard-owned references: no "from 0.61" promise** — the references said an incomplete
@@ -18,19 +37,6 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Foundation reference: fenced-lock async acquiring** - an `acquireLockAsync` while the lock manager is not
   started is lost and logged at WARN; the `LockCallback` threading contract during shutdown; `release()` on a
   `lookupLock` copy releases nothing (Essentials 0.61.1).
-- **Foundation reference: a lost fenced lock can be won straight back** - after a database outage longer than the
-  lock timeout, the instance that lost a lock can win it again through its still-running `acquireLockAsync`, under the
-  next fence token; `lockReleased` does not mean another instance holds the lock.
-- **Event-store reference: forward `isAwaitedAsGap` and `transientGapsReadFrom()` both or neither** - a decorator that
-  names a gap handler its `isAwaitedAsGap` does not read makes `awaitProcessed` miss that handler's transient gaps.
-- **Foundation reference: the Leadership Election example** checks that the lock manager is started (WARN, stays not
-  running otherwise) and says its shutdown release is not bounded by the Essentials shutdown timeout.
-- **Foundation reference: `PostgresqlNotificationDrain`** - for a hand-written LISTEN loop on a dedicated pgjdbc
-  connection; pgjdbc's `getNotifications(timeout)` holds back a dense notification stream (Essentials 0.61.1).
-- **Durable-queues reference: a lower HikariCP `minimumIdle` for queue-only services** - the pool keeps every
-  connection open by default; the trade-off and the LISTEN connection to leave room for.
-- **Durable-queues and MongoDB-queue references: a stalled connection holds a poll** - set the driver's socket timeout
-  (pgjdbc `socketTimeout`, MongoDB `socketTimeoutMS`); both wait forever by default.
 - **Shard-owned reference: which sweep counter to alert on** - not `sweepRecoveries` by its value (it counts harmless
   rows too); `sweepRecoveriesBehindCursor` on the ordered lane.
 

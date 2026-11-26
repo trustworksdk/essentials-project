@@ -113,6 +113,11 @@ None so far.
 0.61.0 shipped plugin `0.61.0`. Plugin releases that follow it are listed here, newest first;
 the full entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md).
 
+- **0.61.0-3** — references follow this release's later documentation and fixes: a lost fenced lock can be won
+  straight back; forward `isAwaitedAsGap` and `transientGapsReadFrom()` both or neither; the Leadership Election
+  example checks the lock manager is started; `PostgresqlNotificationDrain`; a lower HikariCP `minimumIdle` for
+  queue-only services; set the driver's socket timeout so a stalled connection cannot hold a poll; a shard-owned live message's
+  `lastError` and the takeover dead-letter keeping it.
 - **0.61.0-2** — references follow this release's documentation fixes: no "from 0.61" promises for the
   redelivery-policy and shard-owned builder checks; the MongoDB queue handler does not run in a `UnitOfWork`;
   `GenericType.resolveTypeArgument`; the fenced-lock async-acquiring notes and `LockCallback` threading contract; which
