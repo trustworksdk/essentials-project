@@ -118,6 +118,15 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
 
     private void onLockAcquired(FencedLock fencedLock) {
         synchronized (subscriberLifecycleLock) {
+            // During a shutdown the lock manager can release the lock, and call lockReleased, before this callback runs (see
+            // LockCallback): a subscriber subscribed now would deliver events without the lock, after stop()
+            if (!started || !fencedLock.isLocked()) {
+                log.info("[{}-{}] FencedLock '{}' was released, or the subscription stopped, before lockAcquired ran - not subscribing",
+                         subscriberId,
+                         aggregateType,
+                         lockName);
+                return;
+            }
             subscribeOnLockAcquired(fencedLock);
         }
     }

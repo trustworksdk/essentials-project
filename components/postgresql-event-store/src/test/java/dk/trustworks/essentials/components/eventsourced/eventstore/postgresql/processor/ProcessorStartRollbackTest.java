@@ -250,6 +250,8 @@ class ProcessorStartRollbackTest {
         var lockCallback = org.mockito.ArgumentCaptor.forClass(LockCallback.class);
         verify(fencedLockManager).acquireLockAsync(any(LockName.class), lockCallback.capture());
         var lock = mock(FencedLock.class);
+        // Held, as lockAcquired is handed it - it starts nothing for a lock no longer held
+        when(lock.isLocked()).thenReturn(true);
         when(lock.getCurrentToken()).thenReturn(1L);
 
         assertThatThrownBy(() -> lockCallback.getValue().lockAcquired(lock)).isSameAs(failure);
@@ -441,6 +443,8 @@ class ProcessorStartRollbackTest {
         var lockCallback = org.mockito.ArgumentCaptor.forClass(LockCallback.class);
         verify(fencedLockManager).acquireLockAsync(any(LockName.class), lockCallback.capture());
         var lock = mock(FencedLock.class);
+        // Held, as lockAcquired is handed it - it starts nothing for a lock no longer held
+        when(lock.isLocked()).thenReturn(true);
         when(lock.getCurrentToken()).thenReturn(1L);
 
         assertThatThrownBy(() -> lockCallback.getValue().lockAcquired(lock)).isSameAs(failure);

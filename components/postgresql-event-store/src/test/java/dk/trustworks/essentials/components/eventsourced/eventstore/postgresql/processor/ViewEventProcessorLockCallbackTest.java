@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
+import dk.trustworks.essentials.components.foundation.test.fencedlock.ShutdownOverlapFencedLockManager;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -77,7 +78,7 @@ class ViewEventProcessorLockCallbackTest {
         var callbackCaptor = ArgumentCaptor.forClass(LockCallback.class);
         verify(fencedLockManager).acquireLockAsync(any(LockName.class), callbackCaptor.capture());
         var callback = callbackCaptor.getValue();
-        var lock     = mock(FencedLock.class);
+        var lock     = heldLock();
 
         var acquireFailure = new AtomicReference<Throwable>();
         var acquiring      = new Thread(() -> runCapturing(() -> callback.lockAcquired(lock), acquireFailure), "lock-acquired");
@@ -138,7 +139,7 @@ class ViewEventProcessorLockCallbackTest {
         var callbackCaptor = ArgumentCaptor.forClass(LockCallback.class);
         verify(fencedLockManager).acquireLockAsync(any(LockName.class), callbackCaptor.capture());
         var callback = callbackCaptor.getValue();
-        var lock     = mock(FencedLock.class);
+        var lock     = heldLock();
 
         callback.lockAcquired(lock);
         callback.lockReleased(lock);
@@ -170,7 +171,7 @@ class ViewEventProcessorLockCallbackTest {
         var callbackCaptor = ArgumentCaptor.forClass(LockCallback.class);
         verify(fencedLockManager).acquireLockAsync(any(LockName.class), callbackCaptor.capture());
         var callback = callbackCaptor.getValue();
-        var lock     = mock(FencedLock.class);
+        var lock     = heldLock();
 
         // A throwing lock-acquired callback makes the lock manager release the lock again
         assertThatThrownBy(() -> callback.lockAcquired(lock)).isInstanceOf(IllegalStateException.class);
@@ -207,7 +208,7 @@ class ViewEventProcessorLockCallbackTest {
         var callbackCaptor = ArgumentCaptor.forClass(LockCallback.class);
         verify(fencedLockManager).acquireLockAsync(any(LockName.class), callbackCaptor.capture());
         var callback = callbackCaptor.getValue();
-        var lock     = mock(FencedLock.class);
+        var lock     = heldLock();
         callback.lockAcquired(lock);
 
         assertThatThrownBy(() -> callback.lockReleased(lock)).isSameAs(thingsFailure);
@@ -243,7 +244,7 @@ class ViewEventProcessorLockCallbackTest {
         var callbackCaptor = ArgumentCaptor.forClass(LockCallback.class);
         verify(fencedLockManager).acquireLockAsync(any(LockName.class), callbackCaptor.capture());
         var callback = callbackCaptor.getValue();
-        var lock     = mock(FencedLock.class);
+        var lock     = heldLock();
         callback.lockAcquired(lock);
 
         assertThatThrownBy(() -> callback.lockReleased(lock)).isSameAs(sharedFailure);
@@ -278,7 +279,7 @@ class ViewEventProcessorLockCallbackTest {
         var callbackCaptor = ArgumentCaptor.forClass(LockCallback.class);
         verify(fencedLockManager).acquireLockAsync(any(LockName.class), callbackCaptor.capture());
         var callback = callbackCaptor.getValue();
-        var lock     = mock(FencedLock.class);
+        var lock     = heldLock();
 
         assertThatThrownBy(() -> callback.lockAcquired(lock)).isSameAs(subscribeFailure);
         assertThat(subscribeFailure.getSuppressed()).containsExactly(unsubscribeFailure);
@@ -310,11 +311,61 @@ class ViewEventProcessorLockCallbackTest {
         var callbackCaptor = ArgumentCaptor.forClass(LockCallback.class);
         verify(fencedLockManager).acquireLockAsync(any(LockName.class), callbackCaptor.capture());
         var callback = callbackCaptor.getValue();
-        var lock     = mock(FencedLock.class);
+        var lock     = heldLock();
 
         assertThatThrownBy(() -> callback.lockAcquired(lock)).isSameAs(subscribeFailure);
         assertThat(subscribeFailure.getSuppressed()).containsExactly(unsubscribeFailure);
         verify(othersSubscription).unsubscribe();
+    }
+
+    @Test
+    void a_lock_acquired_arriving_after_stop_released_the_lock_starts_no_consumer_and_no_subscriptions() {
+        // During a shutdown the lock manager can release the lock, and call lockReleased, before the async acquiring
+        // tick's lockAcquired has run (see LockCallback) - ShutdownOverlapFencedLockManager replays that without timing
+        var subscriptionManager = mock(EventStoreSubscriptionManager.class);
+        when(subscriptionManager.getEventStore()).thenReturn(mock(EventStore.class));
+        var fencedLockManager = new ShutdownOverlapFencedLockManager();
+        fencedLockManager.start();
+        var durableQueues = mock(DurableQueues.class);
+        when(durableQueues.consumeFromQueue(any(QueueName.class), any(RedeliveryPolicy.class), anyInt(), any(QueuedMessageHandler.class))).thenReturn(mock(DurableQueueConsumer.class));
+        var lockName = LockName.of("ThingsViewProcessor:lock");
+
+        var processor = new ThingsViewProcessor(subscriptionManager, fencedLockManager, durableQueues);
+        processor.start();
+        processor.stop();
+        fencedLockManager.deliverLateLockAcquired(lockName);
+
+        assertThat(fencedLockManager.wasCancelled(lockName)).isTrue();
+        verify(durableQueues, never()).consumeFromQueue(any(QueueName.class), any(RedeliveryPolicy.class), anyInt(), any(QueuedMessageHandler.class));
+        verify(subscriptionManager, never()).subscribeToAggregateEventsAsynchronously(any(), any(), any(Function.class), any(PersistedEventHandler.class));
+    }
+
+    @Test
+    void an_ordinary_lock_acquired_starts_the_consumer_and_the_subscriptions() {
+        var subscriptionManager = mock(EventStoreSubscriptionManager.class);
+        when(subscriptionManager.getEventStore()).thenReturn(mock(EventStore.class));
+        var fencedLockManager = new ShutdownOverlapFencedLockManager();
+        fencedLockManager.start();
+        var durableQueues = mock(DurableQueues.class);
+        when(durableQueues.consumeFromQueue(any(QueueName.class), any(RedeliveryPolicy.class), anyInt(), any(QueuedMessageHandler.class))).thenReturn(mock(DurableQueueConsumer.class));
+        when(subscriptionManager.subscribeToAggregateEventsAsynchronously(any(), eq(THINGS), any(Function.class), any(PersistedEventHandler.class)))
+                .thenReturn(mock(EventStoreSubscription.class));
+
+        var processor = new ThingsViewProcessor(subscriptionManager, fencedLockManager, durableQueues);
+        processor.start();
+        fencedLockManager.deliverLockAcquired(LockName.of("ThingsViewProcessor:lock"));
+
+        verify(durableQueues).consumeFromQueue(any(QueueName.class), any(RedeliveryPolicy.class), anyInt(), any(QueuedMessageHandler.class));
+        verify(subscriptionManager).subscribeToAggregateEventsAsynchronously(any(), eq(THINGS), any(Function.class), any(PersistedEventHandler.class));
+    }
+
+    /**
+     * A lock as lockAcquired is handed it: held - lockAcquired starts nothing for a lock that is no longer held
+     */
+    private static FencedLock heldLock() {
+        var lock = mock(FencedLock.class);
+        when(lock.isLocked()).thenReturn(true);
+        return lock;
     }
 
     private static void runCapturing(Runnable runnable, AtomicReference<Throwable> failure) {

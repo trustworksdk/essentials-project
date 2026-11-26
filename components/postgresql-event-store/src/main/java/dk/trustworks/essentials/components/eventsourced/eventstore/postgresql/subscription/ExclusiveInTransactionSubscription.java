@@ -52,6 +52,11 @@ public class ExclusiveInTransactionSubscription extends AbstractEventStoreSubscr
     private final EventHandler localEventBusHandler = this::onEvent;
 
     private volatile boolean active;
+    /**
+     * Taken by both {@link LockCallback} methods, so a <code>lockReleased</code> that runs before a still-running
+     * <code>lockAcquired</code> (possible during a shutdown, see {@link LockCallback}) is seen by it
+     */
+    private final Object lockCallbackMonitor = new Object();
 
     /**
      * @param context           the arguments shared by every subscription — see {@link EventStoreSubscriptionContext#builder()}
@@ -79,39 +84,51 @@ public class ExclusiveInTransactionSubscription extends AbstractEventStoreSubscr
             fencedLockManager.acquireLockAsync(lockName, new LockCallback() {
                 @Override
                 public void lockAcquired(FencedLock lock) {
-                    log.info("[{}-{}] Acquired lock.",
-                            subscriberId,
-                            aggregateType);
-                    active = true;
-                    eventStoreSubscriptionObserver.lockAcquired(lock, ExclusiveInTransactionSubscription.this);
+                    synchronized (lockCallbackMonitor) {
+                        // During a shutdown the lock manager can release the lock, and call lockReleased, before this callback
+                        // runs (see LockCallback): a handler added now would handle events without the lock, after stop()
+                        if (!started || !lock.isLocked()) {
+                            log.info("[{}-{}] FencedLock '{}' was released, or the subscription stopped, before lockAcquired ran - not adding the event handler",
+                                     subscriberId,
+                                     aggregateType,
+                                     lockName);
+                            return;
+                        }
+                        log.info("[{}-{}] Acquired lock.",
+                                subscriberId,
+                                aggregateType);
+                        active = true;
+                        eventStoreSubscriptionObserver.lockAcquired(lock, ExclusiveInTransactionSubscription.this);
 
-                    eventStore.localEventBus()
-                            .addSyncSubscriber(localEventBusHandler);
-
+                        eventStore.localEventBus()
+                                .addSyncSubscriber(localEventBusHandler);
+                    }
                 }
 
                 @Override
                 public void lockReleased(FencedLock lock) {
-                    if (!active) {
-                        return;
-                    }
-                    log.info("[{}-{}] Lock Released. Stopping subscription",
-                            subscriberId,
-                            aggregateType);
-                    eventStoreSubscriptionObserver.lockReleased(lock, ExclusiveInTransactionSubscription.this);
-                    try {
-                        eventStore.localEventBus()
-                                .removeSyncSubscriber(localEventBusHandler);
-                    } catch (Exception e) {
-                        log.error(msg("[{}-{}] Failed to dispose subscription flux",
+                    synchronized (lockCallbackMonitor) {
+                        if (!active) {
+                            return;
+                        }
+                        log.info("[{}-{}] Lock Released. Stopping subscription",
                                 subscriberId,
-                                aggregateType), e);
-                    }
+                                aggregateType);
+                        eventStoreSubscriptionObserver.lockReleased(lock, ExclusiveInTransactionSubscription.this);
+                        try {
+                            eventStore.localEventBus()
+                                    .removeSyncSubscriber(localEventBusHandler);
+                        } catch (Exception e) {
+                            log.error(msg("[{}-{}] Failed to dispose subscription flux",
+                                    subscriberId,
+                                    aggregateType), e);
+                        }
 
-                    active = false;
-                    log.info("[{}-{}] Stopped subscription",
-                            subscriberId,
-                            aggregateType);
+                        active = false;
+                        log.info("[{}-{}] Stopped subscription",
+                                subscriberId,
+                                aggregateType);
+                    }
                 }
 
             });

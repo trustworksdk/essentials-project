@@ -330,12 +330,6 @@ Open: let `LockCallbackBuilder` take an optional owner description that the fram
 inbox name), and consider keeping the WARN only for a registration not registered again within one
 `lockConfirmationInterval` (fits RW-13).
 
-**`lockReleased` can overlap `lockAcquired` during shutdown (RW-17, remainder).** 0.61.1 states the contract in
-the `LockCallback` javadoc, `acquireLockAsync` and `LLM/LLM-foundation.md`. Open: check the framework's own callbacks
-(event processors, exclusive subscriptions, inbox consumers, the scheduler) against it, or close the gap with a
-per-registration flag that the tick sets around `lockAcquired`, so the shutdown release leaves the local
-`lockReleased` to the tick.
-
 ### Value types
 
 **OpenAPI and AssertJ support (SJ-6).** Two problems:
