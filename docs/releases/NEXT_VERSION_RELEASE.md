@@ -149,6 +149,10 @@ Not published; listed because they are the reference for how to use the framewor
   queues can lower HikariCP's `minimumIdle` (`spring.datasource.hikari.minimum-idle`), which defaults to the pool size
   and so keeps every connection open while the queues are idle; the docs give the trade-off and why to keep it at least
   one above the starter's LISTEN connection. No default changes (E3).
+- Durable queues (`LLM/LLM-postgresql-queue.md`, `LLM/LLM-springdata-mongo-queue.md`): queue statements run with no
+  timeout of their own, so a fetch on a stalled connection waits as long as the driver does - forever by default in
+  both pgjdbc and the MongoDB driver. The docs now say to set the driver's socket timeout (`socketTimeout`,
+  `socketTimeoutMS`); a per-consumer fetch timeout is planned for a minor release (RW-6).
 
 ---
 

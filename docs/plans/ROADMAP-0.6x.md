@@ -200,9 +200,10 @@ the difference now. **Open:** whether to add parity - a handle-message intercept
 transaction-aware factory is configured, opt-in in a minor because it changes when a handler's writes commit.
 
 **A configurable timeout for the queue consumer's fetch (RW-6; review F-007).** `DefaultDurableQueueConsumer`'s poll
-has a commented-out `.timeout(Duration.ofSeconds(5))` and a `TODO: In the future support configurable timeout`. A fetch
-that hangs (a stalled connection without a socket timeout) holds the consumer's poll thread indefinitely. **Fix:** an
-optional fetch timeout on `ConsumeFromQueue`, unset by default, and remove the TODO.
+sets no timeout, so a fetch on a stalled connection without a socket timeout holds the consumer's poll thread
+indefinitely. 0.61.1 documents the remedy that covers every statement - the driver's socket timeout (pgjdbc
+`socketTimeout`, MongoDB `socketTimeoutMS`) - and replaces the stale TODO with a pointer here. **Open, for a minor:** an
+optional fetch timeout on `ConsumeFromQueue`, unset by default.
 
 ### Fenced locks
 

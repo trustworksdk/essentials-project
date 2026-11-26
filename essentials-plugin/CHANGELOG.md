@@ -29,6 +29,8 @@ targets, with a `-N` suffix for plugin-only releases.
   connection; pgjdbc's `getNotifications(timeout)` holds back a dense notification stream (Essentials 0.61.1).
 - **Durable-queues reference: a lower HikariCP `minimumIdle` for queue-only services** - the pool keeps every
   connection open by default; the trade-off and the LISTEN connection to leave room for.
+- **Durable-queues and MongoDB-queue references: a stalled connection holds a poll** - set the driver's socket timeout
+  (pgjdbc `socketTimeout`, MongoDB `socketTimeoutMS`); both wait forever by default.
 - **Shard-owned reference: which sweep counter to alert on** - not `sweepRecoveries` by its value (it counts harmless
   rows too); `sweepRecoveriesBehindCursor` on the ordered lane.
 

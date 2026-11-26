@@ -247,6 +247,11 @@ durableQueues.start();  // Creates MessageListenerContainer
 //       new SingleValueTypeConverter(QueueEntryId.class, QueueName.class)))
 ```
 
+**5. A stalled connection holds the consumer's poll**
+Queue operations set no timeout of their own, and the MongoDB driver's `socketTimeoutMS` defaults to 0 (wait forever),
+so a fetch on a half-open connection blocks the polling thread indefinitely. Set `socketTimeoutMS` in the connection
+string, well above the longest operation the application runs.
+
 ## Monitoring
 
 ### DurableQueues API
