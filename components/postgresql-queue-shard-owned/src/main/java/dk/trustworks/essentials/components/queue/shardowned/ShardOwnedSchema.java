@@ -261,6 +261,18 @@ public final class ShardOwnedSchema {
         statements.add(addColumnUnlessPresent(DLQ_TABLE, "blocked_by_key_order",
                                               "ALTER TABLE %s ADD COLUMN IF NOT EXISTS blocked_by_key_order bigint".formatted(DLQ_TABLE)));
 
+        // The error of a live message's latest failed delivery, so an operator can see why a message keeps failing
+        // before it is dead-lettered, and a takeover that dead-letters it can keep that error. Written only on the
+        // failure paths (the owners' retry, a pull session's fail) and read only by-id and by the admin listing -
+        // never by the delivery SELECT. Added after both live tables shipped, so it is added rather than declared in
+        // their CREATE TABLE: one statement shape for a new and an existing installation. Nullable, no default, so
+        // the ADD COLUMN is a catalog-only change, and an instance of an older release, which never names the
+        // column, keeps working against the same table during a rolling upgrade.
+        for (var liveTable : List.of(UNORDERED_TABLE, ORDERED_TABLE)) {
+            statements.add(addColumnUnlessPresent(liveTable, "last_error",
+                                                  "ALTER TABLE %s ADD COLUMN IF NOT EXISTS last_error text".formatted(liveTable)));
+        }
+
         statements.add("""
                           CREATE TABLE IF NOT EXISTS %s (
                               queue_id    smallint    NOT NULL,

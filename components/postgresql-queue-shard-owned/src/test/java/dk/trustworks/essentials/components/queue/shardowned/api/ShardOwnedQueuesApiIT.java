@@ -157,6 +157,28 @@ class ShardOwnedQueuesApiIT {
     }
 
     @Test
+    void a_live_message_read_by_id_carries_the_error_of_its_last_recorded_failure() throws Exception {
+        var failed = queues.queue(ORDERS).enqueue(Message.of("failed".getBytes(StandardCharsets.UTF_8), 1));
+        var fresh  = queues.queue(ORDERS).enqueue(Message.of("fresh".getBytes(StandardCharsets.UTF_8), 1));
+        // What an owner's retry stores; written directly so the read is tested without racing a consumer
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "UPDATE " + ShardOwnedSchema.UNORDERED_TABLE + " SET attempts = 1, last_error = ?"
+                             + " WHERE queue_id = (SELECT queue_id FROM " + ShardOwnedSchema.REGISTRY_TABLE + " WHERE queue_name = ?)"
+                             + " AND shard = ? AND seq = ?")) {
+            statement.setString(1, "java.lang.IllegalStateException: cannot ship");
+            statement.setString(2, ORDERS.value());
+            statement.setInt(3, failed.shard());
+            statement.setLong(4, failed.sequence());
+            assertThat(statement.executeUpdate()).isOne();
+        }
+
+        assertThat(api.getMessage(reader(), ORDERS, failed).orElseThrow().lastError())
+                .isEqualTo("java.lang.IllegalStateException: cannot ship");
+        assertThat(api.getMessage(reader(), ORDERS, fresh).orElseThrow().lastError()).isNull();
+    }
+
+    @Test
     void a_payload_that_is_not_text_is_rendered_as_hex_rather_than_as_replacement_characters() throws Exception {
         var binary = new byte[]{(byte) 0xC3, (byte) 0x28, (byte) 0xA0, (byte) 0xA1};
         var id     = queues.queue(ORDERS).enqueue(Message.of(binary, 1));

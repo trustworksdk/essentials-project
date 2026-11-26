@@ -441,8 +441,8 @@ final class ShardOwner implements LeasedOwner {
         // it. The charge above is the only count it has; once that reaches the policy's limit it is parked here.
         for (var seq : storage.exhaustedAfterTakeover(connection, ShardOwnedSchema.UNORDERED_TABLE, shard,
                                                        redeliveryPolicy.maxAttempts())) {
-            if (storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard, seq,
-                                                ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS, instanceId, fence)) {
+            if (storage.moveExhaustedByTakeoversToDeadLetterIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard, seq,
+                                                                    instanceId, fence)) {
                 // Counted before the observer is told: the move has committed, so an observer that throws must not take
                 // the count with it - no later pass finds the row to move again.
                 metrics.deadLettered.increment();
@@ -1017,7 +1017,7 @@ final class ShardOwner implements LeasedOwner {
         }
         var delay = redeliveryPolicy.delayAfter(attempts);
         if (!storage.scheduleRetryIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, shard, row.seq(), attempts,
-                                          delay.toMillis(), instanceId, fence)
+                                          delay.toMillis(), instanceId, fence, DeliveryErrorText.describe(cause))
                 && leaseLost("retry")) {
             // The successor redelivers it; scheduling it here as well would deliver it twice
             synchronized (stateLock) {

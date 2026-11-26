@@ -45,7 +45,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers(disabledWithoutDocker = true)
 class DeadLetterErrorTextOnShardOwnedIT {
 
-    private static final QueueName QUEUE = QueueName.of("orders");
+    private static final QueueName QUEUE          = QueueName.of("orders");
+    private static final QueueName RETRYING_QUEUE = QueueName.of("retrying-orders");
 
     @Container
     static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17.5-bookworm");
@@ -67,6 +68,7 @@ class DeadLetterErrorTextOnShardOwnedIT {
 
         ShardOwnedSchema.recreate(dataSource);
         ShardOwnedSchema.registerQueue(dataSource, engineName(QUEUE), 2);
+        ShardOwnedSchema.registerQueue(dataSource, engineName(RETRYING_QUEUE), 2);
 
         queues = new RegisteredMessageQueues(dataSource);
         durableQueues = ShardOwnedDurableQueues.builder()
@@ -112,6 +114,31 @@ class DeadLetterErrorTextOnShardOwnedIT {
         var id = unitOfWorkFactory.withUnitOfWork(() -> durableQueues.queueMessage(QUEUE, OrderedMessage.of("order-2", "key-1", 0)));
 
         assertRootCauseRecorded(id, "order-2");
+    }
+
+    @Test
+    void a_message_waiting_for_its_retry_reports_the_error_of_its_failed_delivery() {
+        // A backoff far longer than the test, so the message is read while it waits for its retry
+        durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
+                                                       .setQueueName(RETRYING_QUEUE)
+                                                       .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMinutes(5), 3))
+                                                       .setParallelConsumers(1)
+                                                       .setQueueMessageHandler(message -> {
+                                                           throw new RuntimeException("handler wrapper",
+                                                                                      new IllegalStateException("cannot ship " + message.getPayload()));
+                                                       })
+                                                       .build());
+        var id = unitOfWorkFactory.withUnitOfWork(() -> durableQueues.queueMessage(RETRYING_QUEUE, Message.of("order-3")));
+
+        Awaitility.await().atMost(Duration.ofSeconds(30))
+                  .untilAsserted(() -> assertThat(durableQueues.getQueuedMessage(id).orElseThrow().getTotalDeliveryAttempts()).isEqualTo(1));
+
+        var queued = durableQueues.getQueuedMessage(id).orElseThrow();
+        assertThat(queued.isDeadLetterMessage()).isFalse();
+        assertThat(queued.getLastDeliveryError())
+                .as("the live message carries the error its failed delivery recorded, rendered as a dead letter's")
+                .startsWith("Root cause: java.lang.IllegalStateException: cannot ship order-3")
+                .contains("java.lang.RuntimeException: handler wrapper");
     }
 
     private void assertRootCauseRecorded(QueueEntryId id, String payload) {

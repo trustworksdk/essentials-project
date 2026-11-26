@@ -179,17 +179,6 @@ below the supported floor. Not in a patch: a 0.60.x deployment on PostgreSQL 13 
 - Do not build it on `MultiTableChangeListener`. Reuse the LISTEN-connection loop it got in 0.60.1 (liveness probe,
   re-LISTEN on reconnect, close on stop) by extracting it.
 
-**Keep a pull session's error on a shard-owned live row (RW-3; review F-128).** A pull session's failure
-(`RowLeaseQueueSession.fail`, `ShardQueueSession`) counts an attempt but discards the error, because the live lanes have
-no `last_error` column. When such a message later reaches its limit at a takeover, the takeover's dead-letter pass can
-only store the generic `EXHAUSTED_BY_TAKEOVERS` text (reworded in 0.60.1 so it no longer claims that no failure was
-recorded). **Fix:** add `last_error text` to both live tables (foundation's `PostgresqlSchemaStatements.addColumnUnlessPresent` in
-`ShardOwnedSchema`'s statements, which the engine's `ShardOwnedSchemaContributor` carries into the schema harness);
-have the session fail paths and the owner's retry
-path store `DeliveryErrorText` (`failSessionRow`, `countAndScheduleRetryIfOwned`); and have the takeover move write
-`COALESCE(stored error, EXHAUSTED_BY_TAKEOVERS)`. Check the schema golden tests and the WAL cost of the wider row on the
-failure path only.
-
 **A MongoDB queue handler does not run in a unit of work (RW-4).** `PostgresqlDurableQueues` handles each message in a
 unit of work of its own (`SingleOperationTransactionDurableQueuesInterceptor`), so a handler's writes commit or roll
 back with the message's outcome. `MongoDurableQueues` has no counterpart, and `DefaultDurableQueueConsumer` opens none,

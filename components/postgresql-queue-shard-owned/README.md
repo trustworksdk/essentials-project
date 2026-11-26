@@ -296,13 +296,22 @@ queue.getMessage(messageId).ifPresent(m -> log.warn("attempt {} of {}, enqueued 
                                                     m.attempts(), m.id(), m.enqueuedAt()));
 ```
 
-The last delivery error is not on `QueuedMessage`; it is on `DeadLetter(id, key, payload, payloadType,
+A dead letter's error is on `DeadLetter(id, key, payload, payloadType,
 attempts, lastError)`, read through `deadLetters(offset, limit)`. `lastError` is the failing
 exception as `<type>: <message>`; when the handler's exception reached the engine wrapped, it starts
 with a `Root cause: <type>: <message>` summary of the innermost cause, followed by the outermost
 exception — the same summary `PostgresqlDurableQueues` puts in front of its stored stack trace. The
 summary spans several lines when the root cause's message does (PostgreSQL errors often carry `Detail:`
 or `Where:` lines), so the first line alone is not always the whole root cause.
+
+Since 0.61.1 a live message keeps the error of its latest failed delivery too, read by id with
+`MessageQueue.lastError(id)` (`Optional<String>`, a primary-key lookup), in the same rendering, so you can see
+why a message keeps failing before it is dead-lettered. It is not on `QueuedMessage`, so a page from
+`messages(offset, limit, ascending)` carries no errors; look up the ones you need by id. It is written by the owner's retry and by a pull session's
+`fail(id, cause)`, never on the delivery path, and is `null` for a message that has not failed. When a takeover
+dead-letters a message that reached its attempt limit by crashing its handlers, the dead letter keeps that stored
+error, and carries the generic `EXHAUSTED_BY_TAKEOVERS` text only when none was stored. The column
+(`last_error text` on `shard_queue_unordered` and `shard_queue_ordered`) is added on start-up when missing.
 
 That is a cost paid per lookup by the handler that wants it, rather than per message by everyone.
 

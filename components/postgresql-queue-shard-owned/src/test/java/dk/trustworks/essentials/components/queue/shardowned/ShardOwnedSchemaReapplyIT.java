@@ -105,6 +105,9 @@ class ShardOwnedSchemaReapplyIT {
         try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
             statement.execute("DROP INDEX " + ShardOwnedSchema.UNORDERED_TABLE + "_visible");
             statement.execute("ALTER TABLE " + ShardOwnedSchema.INSTANCE_TABLE + " DROP COLUMN incarnation");
+            // The live lanes as a release before 0.61.1 created them
+            statement.execute("ALTER TABLE " + ShardOwnedSchema.UNORDERED_TABLE + " DROP COLUMN last_error");
+            statement.execute("ALTER TABLE " + ShardOwnedSchema.ORDERED_TABLE + " DROP COLUMN last_error");
         }
         assertThat(indexExists(ShardOwnedSchema.UNORDERED_TABLE + "_visible")).isFalse();
         assertThat(columnExists(ShardOwnedSchema.INSTANCE_TABLE, "incarnation")).isFalse();
@@ -113,6 +116,8 @@ class ShardOwnedSchemaReapplyIT {
 
         assertThat(indexExists(ShardOwnedSchema.UNORDERED_TABLE + "_visible")).isTrue();
         assertThat(columnExists(ShardOwnedSchema.INSTANCE_TABLE, "incarnation")).isTrue();
+        assertThat(columnExists(ShardOwnedSchema.UNORDERED_TABLE, "last_error")).isTrue();
+        assertThat(columnExists(ShardOwnedSchema.ORDERED_TABLE, "last_error")).isTrue();
     }
 
     private List<String> locksWaitedFor() throws SQLException {

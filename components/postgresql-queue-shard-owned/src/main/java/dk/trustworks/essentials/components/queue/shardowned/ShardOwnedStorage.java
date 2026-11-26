@@ -708,18 +708,29 @@ public final class ShardOwnedStorage {
      * A row lease session's {@code fail}: count the attempt and hand the row back, visible at once, in one statement
      * guarded by the session's row lease. The count is the stored one plus one - the session pulled it with that
      * count - never a constant, which reset the budget of every message a session failed. A row another session has
-     * claimed since this one's lease lapsed is left alone.
+     * claimed since this one's lease lapsed is left alone. The row's stored {@code last_error} is left as it is.
      *
      * @return whether the row was still this session's
      */
     public boolean failSessionRow(Connection connection, int shard, long seq, long sessionFence) throws SQLException {
+        return failSessionRow(connection, shard, seq, sessionFence, null);
+    }
+
+    /**
+     * {@link #failSessionRow(Connection, int, long, long)}, also storing the failure as the row's {@code last_error}.
+     *
+     * @param error the failure as {@link DeliveryErrorText} renders it; null leaves the stored one as it is
+     * @return whether the row was still this session's
+     */
+    public boolean failSessionRow(Connection connection, int shard, long seq, long sessionFence, String error) throws SQLException {
         try (var statement = connection.prepareStatement(
-                "UPDATE " + UNORDERED_TABLE + " SET attempts = attempts + 1, visible_at = now(), lease = NULL, lease_until = NULL"
+                "UPDATE " + UNORDERED_TABLE + " SET attempts = attempts + 1, visible_at = now(), lease = NULL, lease_until = NULL, last_error = COALESCE(?, last_error)"
                         + " WHERE queue_id = ? AND shard = ? AND seq = ? AND lease = ?")) {
-            statement.setShort(1, queueId);
-            statement.setInt(2, shard);
-            statement.setLong(3, seq);
-            statement.setLong(4, sessionFence);
+            statement.setString(1, error);
+            statement.setShort(2, queueId);
+            statement.setInt(3, shard);
+            statement.setLong(4, seq);
+            statement.setLong(5, sessionFence);
             return statement.executeUpdate() > 0;
         }
     }
@@ -1213,12 +1224,14 @@ public final class ShardOwnedStorage {
      * It must hold for every row that pass can park, and the pass cannot tell them apart. Usually no failure was ever
      * recorded for the message - its handler never returned, or its owner lost the shard before recording one - but
      * a pull session's failure counts on the same row and does not dead-letter, so some of the attempts may have
-     * failed. The live lanes keep no error text, so there is none to carry over. The text used to say that no failure
-     * was ever recorded, which was false for such a row.
+     * failed. Since 0.61.1 a live row keeps the error of its latest recorded failure ({@code last_error}), and the pass
+     * stores that instead ({@link #moveExhaustedByTakeoversToDeadLetterIfOwned}); this text is stored only for a row
+     * that has none - no failure recorded, or recorded by an instance of an older release, which kept no error on a
+     * live row. The text used to say that no failure was ever recorded, which was false for such a row.
      */
     public static final String EXHAUSTED_BY_TAKEOVERS = "Reached its attempt limit when the shard was taken over: an earlier "
-            + "delivery ended with its process stopping (crashed or killed) or losing the shard, and any error a pull "
-            + "session recorded before that is not kept on a live row";
+            + "delivery ended with its process stopping (crashed or killed) or losing the shard, and no error from an "
+            + "earlier delivery is stored on its live row";
 
     /**
      * The error recorded for a message of either lane dead-lettered as its unit was released while the message was still
@@ -1226,12 +1239,14 @@ public final class ShardOwnedStorage {
      * shard with the message in its handler longer than {@code stuckHandlerTimeout} - when the attempt that release charged
      * brought it to the redelivery limit (see {@link #chargeRowsInHandler}); also the message of the cause the owner hands
      * to {@code QueueObserver.deadLettered} for it. The delivery that brought it here recorded no failure: its handler had
-     * not returned. The earlier attempts may have been failures, but the live lanes keep no error text.
+     * not returned. The earlier attempts may have been failures; the error of the latest one is on the live row's
+     * {@code last_error} (since 0.61.1) but is not carried into this dead letter, whose text a retried move matches on
+     * ({@link #isDeadLetteredWith}).
      */
     public static final String EXHAUSTED_IN_A_RELEASED_HANDLER = "Reached its attempt limit when its shard or ordered unit was "
             + "released while this message was still in a handler that had not returned (past stuckHandlerTimeout, or an ordered "
             + "unit released on request), which counts that delivery as an attempt; any error an earlier delivery recorded is "
-            + "not kept on a live row";
+            + "not carried into this dead letter";
 
     /**
      * Bulk attempt increment on takeover.
@@ -2323,9 +2338,12 @@ public final class ShardOwnedStorage {
      * This write is durability backup, not the retry mechanism. The owner keeps the message in an
      * in-memory timer wheel and re-dispatches from there without reading it back; the row exists so
      * that a crash does not lose the backoff.
+     * <p>
+     * The row's {@code last_error} is left as it is; the owners' and the pull sessions' retries go through the
+     * overloads that take the error and store it.
      */
     public void scheduleRetry(Connection connection, String table, int shard, long seq, int attempts, long delayMillis) throws SQLException {
-        scheduleRetry(connection, table, shard, seq, attempts, delayMillis, null, null, 0L);
+        scheduleRetry(connection, table, shard, seq, attempts, delayMillis, null, null, 0L, null);
     }
 
     /**
@@ -2340,7 +2358,21 @@ public final class ShardOwnedStorage {
     public boolean scheduleRetryIfOwned(Connection connection, String table, int shard, long seq, int attempts, long delayMillis,
                                         String owner, long fence) throws SQLException {
         requireNonNull(owner, "No owner provided");
-        return scheduleRetry(connection, table, shard, seq, attempts, delayMillis, laneOf(table), owner, fence);
+        return scheduleRetry(connection, table, shard, seq, attempts, delayMillis, laneOf(table), owner, fence, null);
+    }
+
+    /**
+     * {@link #scheduleRetryIfOwned(Connection, String, int, long, int, long, String, long)}, also storing the failure as
+     * the row's {@code last_error}, so an operator reading a message that keeps failing sees why before it is
+     * dead-lettered, and a takeover that later dead-letters it keeps that error (see {@link #EXHAUSTED_BY_TAKEOVERS}).
+     *
+     * @param error the failure as {@link DeliveryErrorText} renders it
+     */
+    public boolean scheduleRetryIfOwned(Connection connection, String table, int shard, long seq, int attempts, long delayMillis,
+                                        String owner, long fence, String error) throws SQLException {
+        requireNonNull(owner, "No owner provided");
+        requireNonNull(error, "No error provided");
+        return scheduleRetry(connection, table, shard, seq, attempts, delayMillis, laneOf(table), owner, fence, error);
     }
 
     /**
@@ -2351,7 +2383,19 @@ public final class ShardOwnedStorage {
     public boolean countAndScheduleRetryIfOwned(Connection connection, String table, int shard, long seq, long delayMillis,
                                                 String owner, long fence) throws SQLException {
         requireNonNull(owner, "No owner provided");
-        return scheduleRetry(connection, table, shard, seq, null, delayMillis, laneOf(table), owner, fence);
+        return scheduleRetry(connection, table, shard, seq, null, delayMillis, laneOf(table), owner, fence, null);
+    }
+
+    /**
+     * {@link #countAndScheduleRetryIfOwned(Connection, String, int, long, long, String, long)}, also storing the failure as
+     * the row's {@code last_error}.
+     *
+     * @param error the failure as {@link DeliveryErrorText} renders it; null leaves the stored one as it is
+     */
+    public boolean countAndScheduleRetryIfOwned(Connection connection, String table, int shard, long seq, long delayMillis,
+                                                String owner, long fence, String error) throws SQLException {
+        requireNonNull(owner, "No owner provided");
+        return scheduleRetry(connection, table, shard, seq, null, delayMillis, laneOf(table), owner, fence, error);
     }
 
     /**
@@ -2384,12 +2428,15 @@ public final class ShardOwnedStorage {
 
     /**
      * @param attempts the count to write, or null to count this attempt on the stored one
+     * @param error    the failure to store as {@code last_error}, or null to leave the stored one as it is. Only named in
+     *                 the statement when given, so a caller that stores none does not need the column
      */
     private boolean scheduleRetry(Connection connection, String table, int shard, long seq, Integer attempts, long delayMillis,
-                                  String lane, String owner, long fence) throws SQLException {
+                                  String lane, String owner, long fence, String error) throws SQLException {
         try (var statement = connection.prepareStatement(
                 "UPDATE " + table + " u SET attempts = " + (attempts != null ? "?" : "u.attempts + 1")
                         + ", visible_at = now() + make_interval(secs => ? / 1000.0)"
+                        + (error != null ? ", last_error = ?" : "")
                         // A failure, not a requested redelivery: clear the mark (see REDELIVERY_REQUESTED)
                         + (ORDERED_TABLE.equals(table) ? ", lease = NULL" : "")
                         + " WHERE u.queue_id = ? AND u.shard = ? AND u.seq = ?"
@@ -2399,6 +2446,9 @@ public final class ShardOwnedStorage {
                 statement.setInt(index++, attempts);
             }
             statement.setLong(index++, delayMillis);
+            if (error != null) {
+                statement.setString(index++, error);
+            }
             statement.setShort(index++, queueId);
             statement.setInt(index++, shard);
             statement.setLong(index++, seq);
@@ -2421,7 +2471,7 @@ public final class ShardOwnedStorage {
      *         succeed silently in that case, which let a caller report a dead letter that did not exist
      */
     public boolean moveToDeadLetter(Connection connection, String table, String lane, int shard, long seq, String error) throws SQLException {
-        return moveToDeadLetter(connection, table, lane, shard, seq, error, null, 0L);
+        return moveToDeadLetter(connection, table, lane, shard, seq, error, null, 0L, false);
     }
 
     /**
@@ -2435,11 +2485,28 @@ public final class ShardOwnedStorage {
     public boolean moveToDeadLetterIfOwned(Connection connection, String table, String lane, int shard, long seq, String error,
                                            String owner, long fence) throws SQLException {
         requireNonNull(owner, "No owner provided");
-        return moveToDeadLetter(connection, table, lane, shard, seq, error, owner, fence);
+        return moveToDeadLetter(connection, table, lane, shard, seq, error, owner, fence, false);
     }
 
+    /**
+     * The takeover exhaustion pass's {@link #moveToDeadLetterIfOwned}: the dead letter's {@code last_error} is the error
+     * the row stored at its latest recorded failure - an owner's retry or a pull session's {@code fail} - and
+     * {@link #EXHAUSTED_BY_TAKEOVERS} only when the row stored none (no failure recorded, or recorded by a release
+     * before 0.61.1, which kept no error on a live row).
+     *
+     * @return false, with nothing changed, when the owner no longer holds the lease or the row is gone
+     */
+    public boolean moveExhaustedByTakeoversToDeadLetterIfOwned(Connection connection, String table, String lane, int shard, long seq,
+                                                               String owner, long fence) throws SQLException {
+        requireNonNull(owner, "No owner provided");
+        return moveToDeadLetter(connection, table, lane, shard, seq, EXHAUSTED_BY_TAKEOVERS, owner, fence, true);
+    }
+
+    /**
+     * @param keepStoredError true: the row's own {@code last_error} wins, {@code error} is the fallback when it has none
+     */
     private boolean moveToDeadLetter(Connection connection, String table, String lane, int shard, long seq, String error,
-                                     String owner, long fence) throws SQLException {
+                                     String owner, long fence, boolean keepStoredError) throws SQLException {
         var autoCommit = connection.getAutoCommit();
         connection.setAutoCommit(false);
         try {
@@ -2447,7 +2514,8 @@ public final class ShardOwnedStorage {
             try (var insert = connection.prepareStatement(
                     "INSERT INTO " + DLQ_TABLE + " (queue_id, shard, source_lane, msg_key, key_order, seq,"
                             + " payload, payload_type, attempts, last_error)"
-                            + " SELECT queue_id, shard, ?, " + keyColumns + ", seq, payload, payload_type, attempts, ?"
+                            + " SELECT queue_id, shard, ?, " + keyColumns + ", seq, payload, payload_type, attempts, "
+                            + (keepStoredError ? "COALESCE(m.last_error, ?)" : "?")
                             + " FROM " + table + " m WHERE m.queue_id = ? AND m.shard = ? AND m.seq = ?"
                             + (owner != null ? ownedByClause("m") : ""))) {
                 insert.setString(1, lane);
@@ -2802,6 +2870,27 @@ public final class ShardOwnedStorage {
 
     public record StoredMessage(String key, byte[] payload, int payloadType, int attempts,
                                 java.time.Instant enqueuedAt, java.time.Instant visibleAt, long keyOrder) {
+    }
+
+    /**
+     * The error of one live message's latest recorded failure - its {@code last_error}, written by the owners' retry and
+     * a pull session's {@code fail}, rendered by {@link DeliveryErrorText}. A primary-key point lookup like
+     * {@link #findMessage}, for a by-id admin read; never on the delivery path.
+     *
+     * @return the stored error, or empty when the message is not in its lane or has no recorded failure
+     */
+    public Optional<String> findLastError(int shard, long seq, boolean ordered) throws SQLException {
+        var table = ordered ? ORDERED_TABLE : UNORDERED_TABLE;
+        try (var connection = open();
+             var statement = connection.prepareStatement(
+                     "SELECT last_error FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            statement.setLong(3, seq);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next() ? Optional.ofNullable(resultSet.getString(1)) : Optional.empty();
+            }
+        }
     }
 
     /**

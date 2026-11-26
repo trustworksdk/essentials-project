@@ -1658,6 +1658,12 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     @Override
+    public Optional<String> lastError(MessageId messageId) throws SQLException {
+        requireNonNull(messageId, "No messageId provided");
+        return storage.findLastError(messageId.shard(), messageId.sequence(), isOrdered(messageId));
+    }
+
+    @Override
     public Optional<DeadLetter> getDeadLetter(MessageId messageId) throws SQLException {
         requireNonNull(messageId, "No messageId provided");
         return storage.findDeadLetter(messageId.shard(), messageId.sequence(), isOrdered(messageId))

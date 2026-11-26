@@ -135,6 +135,32 @@ class ShardOwnedPullSessionIT {
      * write in the engine is subject to.
      */
     @Test
+    void a_failed_message_keeps_the_error_of_its_failure_on_its_live_row() throws Exception {
+        try (var queue = queue("pull-fail")) {
+            queue.enqueue(Message.of("fails".getBytes(StandardCharsets.UTF_8), 1));
+
+            try (var session = queue.openSession(SessionScope.SHARD, Duration.ofSeconds(30))) {
+                var pulled = new ArrayList<QueueSession.PulledMessage>();
+                for (var attempt = 0; attempt < 10 && pulled.isEmpty(); attempt++) {
+                    pulled.addAll(session.poll(10));
+                }
+                assertThat(pulled).hasSize(1);
+                var id = pulled.getFirst().id();
+
+                session.fail(id, new IllegalStateException("wrapper", new IllegalArgumentException("the real reason")));
+
+                var stored = SingleRowQueries.queryForRow(dataSource, "Reading the stored failure of " + id,
+                                                          "SELECT attempts, last_error FROM " + ShardOwnedSchema.UNORDERED_TABLE
+                                                                  + " WHERE queue_id = ? AND shard = ? AND seq = ?",
+                                                          row -> List.of(row.getInt(1), String.valueOf(row.getString(2))),
+                                                          QUEUE_ID, id.shard(), id.sequence());
+                assertThat(stored.get(0)).isEqualTo(1);
+                assertThat((String) stored.get(1)).contains("IllegalArgumentException: the real reason", "IllegalStateException: wrapper");
+            }
+        }
+    }
+
+    @Test
     void a_session_can_extend_its_lease_and_is_refused_once_superseded() throws Exception {
         try (var queue = queue("pull-3")) {
             queue.enqueue(Message.of("only".getBytes(StandardCharsets.UTF_8), 1));

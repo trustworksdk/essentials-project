@@ -33,16 +33,6 @@ The shard-owned engine acknowledges in batches on the poller's connection. Since
 
 ## Shard-owned engine (`postgresql-queue-shard-owned`)
 
-### F5. A message being retried shows no error
-
-Only the dead-letter table has a `last_error` column. `ShardOwnedStorage.scheduleRetry` and `scheduleRetryIfOwned` take no error, and the live tables store none, so an operator looking at a message that keeps failing cannot see why until it is dead-lettered. The dead-letter error text is rendered by `DeliveryErrorText`.
-
-Decide:
-1. Add a nullable `last_error text` column to the live tables through `ShardOwnedSchema` (additive, behind the existing catalog check for columns added after the table shipped), and write it on every retry. The retry update is already not a HOT update (`visible_at` is indexed, F7), so the extra column costs only the row width.
-2. Keep the live tables narrow and log the error at retry time only.
-
-Either way, store the root cause, as the classic queue does through `DeliveryErrorDescription`.
-
 ### F10. NOTIFY cost on the commit path
 
 One channel per queue was tried and performed worse (closed). The local hand-off already wakes the owner after commit instead of notifying inside an autocommit transaction (`ShardOwnedQueue.wakesAfterCommit`). Not yet measured: commit throughput with N concurrent producers, with NOTIFY on and off. Measure before changing anything. The related pgjdbc notification drain limit is tracked in [`README.md`](README.md) under "Open items from documents kept elsewhere".

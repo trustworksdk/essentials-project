@@ -137,11 +137,19 @@ public final class RowLeaseQueueSession implements QueueSession {
             // Hand it straight back rather than waiting out the lease: the caller has told us it is
             // not working on it any more, so holding it hidden would be a delay with no purpose. The
             // attempt is counted on the row's own count, and only while this session still holds the row.
-            if (!storage.failSessionRow(connection, id.shard(), id.sequence(), fence)) {
+            if (!storage.failSessionRow(connection, id.shard(), id.sequence(), fence, errorText(cause))) {
                 log.warn("Session {}: the failure of {} was not recorded - its lease had lapsed", fence, id);
             }
         }
         shardBySeq.remove(id.sequence());
+    }
+
+    /**
+     * The text a pull session stores as a failed row's {@code last_error}: {@link DeliveryErrorText}'s, as the owners
+     * store it, or null for a caller that gave no cause, which leaves the row's stored error as it is.
+     */
+    static String errorText(Throwable cause) {
+        return cause == null ? null : DeliveryErrorText.describe(cause);
     }
 
     @Override

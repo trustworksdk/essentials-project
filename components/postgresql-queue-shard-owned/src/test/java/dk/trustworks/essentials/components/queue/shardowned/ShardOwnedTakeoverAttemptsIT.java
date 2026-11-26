@@ -245,6 +245,53 @@ class ShardOwnedTakeoverAttemptsIT {
     }
 
     @Test
+    void a_takeover_dead_letter_keeps_the_error_of_the_messages_last_recorded_failure() throws Exception {
+        var deliveries = new AtomicInteger();
+        var policy     = RedeliveryPolicy.fixed(Duration.ofMillis(10), 3);
+        var queues     = new ArrayList<ShardOwnedQueue>();
+        try {
+            var seed = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "seed");
+            queues.add(seed);
+            seed.enqueue(List.of(bytes("fails-then-crashes")), 1);
+
+            // Owner 1: the first delivery fails and records it (attempts 1), the second takes the process down.
+            // Owner 2: its takeover charges that delivery (attempts 2), and its own delivery takes the process down too
+            for (var owner = 1; owner <= 2; owner++) {
+                var expectedDeliveries = owner == 1 ? 2 : 3;
+                var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-" + owner);
+                queues.add(queue);
+                queue.startConsuming((messageId, payload, payloadType) -> {
+                    if (deliveries.incrementAndGet() == 1) {
+                        throw new IllegalStateException("wrapper", new IllegalArgumentException("the recorded failure"));
+                    }
+                    awaitUninterruptibly(crashedHandlersRelease, null);
+                }, SHORT_LEASE, SHARD_COUNT, policy);
+                Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> deliveries.get() == expectedDeliveries);
+                queue.stopAbruptly();
+                CrashedInstances.ageMembershipOf(dataSource, QUEUE_ID, "instance-" + owner);
+            }
+
+            // Owner 3: its takeover charges the third delivery, which reaches the limit and dead-letters it
+            try (var last = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-3")) {
+                last.startConsuming((messageId, payload, payloadType) -> deliveries.incrementAndGet(),
+                                    SHORT_LEASE, SHARD_COUNT, policy);
+                Awaitility.await().atMost(Duration.ofSeconds(20))
+                          .untilAsserted(() -> assertThat(last.deadLetterCount()).isEqualTo(1L));
+                assertThat(deliveries.get()).isEqualTo(3);
+                assertThat(last.deadLetters().getFirst().error())
+                        .as("the error the failed delivery recorded, not the generic takeover text")
+                        .isNotEqualTo(ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS)
+                        .contains("IllegalArgumentException: the recorded failure", "IllegalStateException: wrapper");
+            }
+        } finally {
+            crashedHandlersRelease.countDown();
+            for (var queue : queues) {
+                queue.close();
+            }
+        }
+    }
+
+    @Test
     void redeliveries_a_handler_requested_never_bring_a_message_closer_to_a_takeover_dead_letter() throws Exception {
         var deliveries = new AtomicInteger();
         var handled    = new AtomicInteger();

@@ -399,6 +399,24 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     }
 
     /**
+     * The error of a live message's latest recorded failure - why a message that keeps failing has not been delivered
+     * yet, before it is dead-lettered. A by-id read for an admin surface or an operator, like {@link #getMessage}; not
+     * on {@link QueuedMessage}, and therefore not on {@link #messages} either: a page of messages carries no errors.
+     * <p>
+     * Rendered as a dead letter's {@link DeadLetter#lastError()}: the failing exception as {@code <type>: <message>},
+     * preceded by a {@code Root cause: ...} summary when the exception wraps another. Written by the owner's retry and by
+     * a session's {@link QueueSession#fail}, never on the delivery path.
+     *
+     * @return the stored error; empty when the message is not in its lane (handled, deleted, dead-lettered - see
+     * {@link #getDeadLetter}), has not failed, or failed under a release before 0.61.1, which stored no error on a live
+     * message. The default finds none; an engine that stores the error overrides it
+     * @since 0.61.1
+     */
+    default Optional<String> lastError(MessageId messageId) throws SQLException {
+        return Optional.empty();
+    }
+
+    /**
      * Return a dead letter to its lane for redelivery, resetting its attempt count.
      *
      * @return true if it was still parked and has been resurrected
