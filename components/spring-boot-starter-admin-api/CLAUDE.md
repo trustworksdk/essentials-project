@@ -32,7 +32,7 @@ All plain unit tests — **no Docker, no database**. SPIs are Mockito mocks.
 
 | Test | Gates |
 |---|---|
-| `AdminApiContractConformanceTest` | {verb, path} served == {verb, path} declared, **both directions**; reads contract from classpath (`/openapi/essentials-admin-api.yaml`, test dep on `admin-api-spec`). Has an explicit 40-operation count assertion so it cannot pass vacuously — bump it when adding an operation |
+| `AdminApiContractConformanceTest` | {verb, path} served == {verb, path} declared, **both directions**; reads contract from classpath (`/openapi/essentials-admin-api.yaml`, test dep on `admin-api-spec`). Has an explicit 69-operation count assertion so it cannot pass vacuously — bump it when adding an operation |
 | `AdminApiSerializationTest` | Value types render as primitives; `rest.dto` field names match contract schemas |
 | `AdminApiEndpointsTest` | `MockMvcBuilders.standaloneSetup` — routing, param defaults, 200/400/401/403/404/500 |
 | `EssentialsAdminApiAutoConfigurationTest` | `WebApplicationContextRunner` — bean wiring, `enabled=false`, base-path property |
@@ -49,7 +49,7 @@ Every bean is `@ConditionalOnMissingBean` — a consumer can replace any control
 ## Gotchas
 
 - **`@ConditionalOnBean` needs the ordering to be right.** It is evaluated against the beans registered so far, so `@AutoConfiguration(afterName = …)` must name every auto-configuration defining an SPI bean — `EssentialsComponentsConfiguration`, `EventStoreConfiguration`, and the four aggregate ones. Miss one and its controller is silently skipped and answers 404, which is worse than the loud startup failure it replaced. The startup summary exists so that failure mode is visible.
-- **A deployment serves a subset, by design** — and can serve nothing at all. The conformance test compares the contract against controller *classes*, so it is unaffected by runtime conditions; the contract keeps promising all 40 operations. Documented for consumers in `docs/openapi/README.md`.
+- **A deployment serves a subset, by design** — and can serve nothing at all. The conformance test compares the contract against controller *classes*, so it is unaffected by runtime conditions; the contract keeps promising all 69 operations. Documented for consumers in `docs/openapi/README.md`.
 - **Add an operation ⇒ 3 places**: SPI interface, `EssentialsAdminApiSpec` mapping table, controller here. The conformance test fails until all three agree — that is the point.
 - **Never reuse `EssentialTypesJacksonModule`** from `types-jackson3` — this module does not depend on it and ships its own serializers (`AdminApiJacksonModule`). Keep `AdminApiJacksonModule` in sync with `EssentialsValueTypeModelConverter` in `admin-api-spec` — the converter decides the schema, this decides the wire.
 - **Controllers map the property placeholder, not a literal** — path assertions must resolve `essentials.admin-api.base-path`. In `standaloneSetup`, use `.addPlaceholderValue(...)`.

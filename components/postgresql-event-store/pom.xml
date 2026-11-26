@@ -219,6 +219,14 @@
             <artifactId>HikariCP</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Phase-0 spike P0.17 only (spike/AlternativeClientSpikeIT): a Vert.x LISTEN client measured against
+             pgjdbc's notification drain. Netty comes through the Spring Boot BOM, see vertx.version in the root pom. -->
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-pg-client</artifactId>
+            <version>${vertx.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

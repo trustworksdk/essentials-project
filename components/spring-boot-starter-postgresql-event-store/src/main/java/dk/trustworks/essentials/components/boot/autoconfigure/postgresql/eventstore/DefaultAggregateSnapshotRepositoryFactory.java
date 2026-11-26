@@ -20,7 +20,7 @@ import dk.trustworks.essentials.components.foundation.schema.SchemaOwnership;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -35,7 +35,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * synchronous snapshots, asynchronous in-memory snapshots, and asynchronous durable snapshots.
  */
 public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnapshotRepositoryFactory {
-    private final ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
+    private final ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore;
     private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork>               unitOfWorkFactory;
     private final JSONEventSerializer                                                       jsonSerializer;
     private final AggregateSnapshotStore                                                    snapshotStore;
@@ -60,7 +60,7 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
      * @param meterRegistry the optional meter registry for monitoring and metrics
      * @throws IllegalArgumentException if any of the provided parameters is null
      */
-    DefaultAggregateSnapshotRepositoryFactory(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+    DefaultAggregateSnapshotRepositoryFactory(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                               EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                               JSONEventSerializer jsonSerializer,
                                               AggregateSnapshotStore snapshotStore,
@@ -78,7 +78,7 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
      *                        factory creates - the same table the {@link AggregateSnapshotStore} bean contributes
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    DefaultAggregateSnapshotRepositoryFactory(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+    DefaultAggregateSnapshotRepositoryFactory(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                               EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                               JSONEventSerializer jsonSerializer,
                                               AggregateSnapshotStore snapshotStore,
@@ -163,7 +163,7 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
      * plain-value setter and an {@code Optional} overload.
      */
     public static final class Builder {
-        private ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
+        private ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore;
         private EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
         private JSONEventSerializer jsonSerializer;
         private AggregateSnapshotStore snapshotStore;
@@ -177,7 +177,7 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
          * @param eventStore required
          * @return this builder
          */
-        public Builder setEventStore(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+        public Builder setEventStore(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore) {
             this.eventStore = eventStore;
             return this;
         }

@@ -189,6 +189,9 @@ the number they have where they are defined, never renumbered: `ESS-S<n>` for a 
 - <a id="ess-084"></a>`ESS-084` `MongoTransactionException` on lock acquisition — standalone MongoDB → [LLM-springdata-mongo-distributed-fenced-lock.md § Gotchas](LLM-springdata-mongo-distributed-fenced-lock.md#gotchas)
 - <a id="ess-085"></a>`ESS-085` Lock contention or leaked locks — shared instance IDs, no try-with-resources, confirmation near timeout → [LLM-springdata-mongo-distributed-fenced-lock.md § Gotchas](LLM-springdata-mongo-distributed-fenced-lock.md#gotchas)
 
+### postgresql-event-log ([LLM-postgresql-event-log.md](LLM-postgresql-event-log.md))
+- <a id="ess-145"></a>`ESS-145` Start-up fails with "Bean '…' (…) is an old-engine EventProcessor/ViewEventProcessor/PartitionedViewEventProcessor/InTransactionEventProcessor" after `essentials.event-log.enabled=true` — classic processors do not run on the new engine and there is no adapter; the message names every such bean and its port target: port it to `EventLogViewProcessor`/`EventLogReactor`/`EventLogInboxProcessor`/`EventLogPartitionedViewProcessor` → [LLM-postgresql-event-log.md § Porting from the EventProcessor family](LLM-postgresql-event-log.md#porting-from-the-eventprocessor-family)
+
 ---
 
 ## Spring Boot starters
@@ -257,3 +260,7 @@ A retired id keeps its line here, anchor included, so a citation of it still res
 "retired:", why, and the id that replaced it, if any.
 
 - <a id="ess-114"></a>`ESS-114` A `ViewEventProcessor` event neither in the view nor in its queue — retired: a failed handler that appended events or changed an aggregate is now queued in a `UnitOfWork` of its own once the subscription's `UnitOfWork` rolled back and the `SubscriptionErrorPolicy` has used up its retries (`PersistedEventHandler#handOffFailedEvent`), so the event is no longer lost under any policy; no replacement → [LLM-postgresql-event-store.md § ViewEventProcessor](LLM-postgresql-event-store.md#vieweventprocessor)
+- <a id="ess-146"></a>`ESS-146` Events reach an inbox twice — retired: not a pitfall: `EventLogInboxProcessor` forwards exactly once; hand-rolled forwarding is covered in the porting guide; no replacement → [LLM-postgresql-event-log.md § Porting from the EventProcessor family](LLM-postgresql-event-log.md#porting-from-the-eventprocessor-family)
+- <a id="ess-147"></a>`ESS-147` A rebuilt view keeps stale rows — retired: not a pitfall: rebuild hook semantics are documented in the porting guide; no replacement → [LLM-postgresql-event-log.md § Porting from the EventProcessor family](LLM-postgresql-event-log.md#porting-from-the-eventprocessor-family)
+- <a id="ess-143"></a>`ESS-143` A subscription stalls on one event and never parks it, the handler having thrown an I/O-classified exception (SQLState `08*`, `SQLTransientConnectionException`) — retired: fixed in 0.62.0 before release: handler-thrown connection errors are now retried and parked; only a failure of the engine's own page connection or statements is retried indefinitely; no replacement → [LLM-postgresql-event-log.md § Gotchas](LLM-postgresql-event-log.md#gotchas)
+- <a id="ess-144"></a>`ESS-144` Duplicate side effects after a restart — retired: not a pitfall: same at-least-once contract as the classic `EventProcessor`; no replacement → [LLM-postgresql-event-log.md § Porting from the EventProcessor family](LLM-postgresql-event-log.md#porting-from-the-eventprocessor-family)

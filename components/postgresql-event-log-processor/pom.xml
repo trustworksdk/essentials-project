@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ Copyright 2021-2026 the original author or authors.
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~      https://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dk.trustworks.essentials</groupId>
+        <artifactId>parent</artifactId>
+        <version>${revision}</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
+    <groupId>dk.trustworks.essentials.components</groupId>
+
+    <artifactId>postgresql-event-log-processor</artifactId>
+    <name>postgresql-event-log-processor</name>
+    <description>
+        The application layer of the new event store engine (preview in 0.62.0): typed,
+        deserialized events, the ViewProjection and EventReactor processors, the JDBI unit-of-work and Spring page
+        transaction sources, the Spring commit path and the EventLogSubscriptionsApi admin SPI. Design: docs/design/event-log.md.
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-event-log</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>foundation</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- the JSON event serializer, EventMetaData, AggregateIdSerializer and TenantSerializer (§3.1, §11.2) -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-event-store</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- provided: only MigrationSourceTables (design phase 9 §2.1, unit 9-F) uses it. The migration tool is used once
+             per application and is deleted with the old engine, so it must not ride on every adopter's classpath -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-event-log-migration</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- provided: third-party integrations are never transitive (root CLAUDE.md) -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${postgresql.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jdbi</groupId>
+            <artifactId>jdbi3-core</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <!-- the application's JSONEventSerializer is Jackson 3, optional in foundation and postgresql-event-store -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3-bom.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- only in the EventStore adapter's pollEvents signatures, which throw (design phase 8 §5.2) -->
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-core</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-tx</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-jdbc</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>${archunit-junit5.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>foundation-test</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- EventLogInboxProcessorIT: the inbox's durable queues -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-queue</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- EventLogPartitionedViewProcessorIT: a queue engine that keeps key order across instances -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-queue-shard-owned-adapter</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- the repository IT copies (design phase 8 §9.5, RepositoryItCopiesTest), as their original modules declare them -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>eventsourced-aggregates</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>spring-postgresql-event-store</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials</groupId>
+            <artifactId>types-jackson3</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials</groupId>
+            <artifactId>immutable-jackson3</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jdbi</groupId>
+            <artifactId>jdbi3-postgres</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.objenesis</groupId>
+            <artifactId>objenesis</artifactId>
+            <version>${objenesis.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

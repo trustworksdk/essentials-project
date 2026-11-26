@@ -1725,6 +1725,10 @@ public final class ShardOwnedStorage {
         // verified against a role holding only table and sequence privileges. If a deployment ever
         // redacts it this returns a SUBSET, which is unsafe rather than merely degraded, so the
         // engine probes for it at start-up rather than trusting it here.
+        //
+        // The view, not pg_stat_get_activity(NULL) directly: once pgJDBC prepares the statement on the server the
+        // planner has already removed the view's joins, so calling the function saves nothing, and measured it cost
+        // more per call (docs/design/durable-queue-measurements.md §3.18). The start-up check reads the same view.
         try (var statement = connection.prepareStatement(
                 "SELECT backend_xid::text::bigint FROM pg_stat_activity WHERE backend_xid IS NOT NULL");
              var resultSet = statement.executeQuery()) {
@@ -3015,13 +3019,20 @@ public final class ShardOwnedStorage {
      * Remove everything for this queue, across both lanes and the dead letter table.
      */
     public long purge() throws SQLException {
-        var removed = 0L;
         try (var connection = open()) {
-            for (var table : List.of(UNORDERED_TABLE, ORDERED_TABLE, DLQ_TABLE)) {
-                try (var statement = connection.prepareStatement("DELETE FROM " + table + " WHERE queue_id = ?")) {
-                    statement.setShort(1, queueId);
-                    removed += statement.executeUpdate();
-                }
+            return purge(connection);
+        }
+    }
+
+    /**
+     * As {@link #purge()}, on the caller's connection and transaction, which is neither committed nor rolled back here.
+     */
+    public long purge(Connection connection) throws SQLException {
+        var removed = 0L;
+        for (var table : List.of(UNORDERED_TABLE, ORDERED_TABLE, DLQ_TABLE)) {
+            try (var statement = connection.prepareStatement("DELETE FROM " + table + " WHERE queue_id = ?")) {
+                statement.setShort(1, queueId);
+                removed += statement.executeUpdate();
             }
         }
         return removed;

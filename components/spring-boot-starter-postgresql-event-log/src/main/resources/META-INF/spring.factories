@@ -1,0 +1,4 @@
+org.springframework.boot.autoconfigure.AutoConfigurationImportFilter=\
+  dk.trustworks.essentials.components.boot.autoconfigure.eventlog.EventLogImportFilter
+org.springframework.boot.diagnostics.FailureAnalyzer=\
+  dk.trustworks.essentials.components.foundation.boot.MissingDependencyFailureAnalyzer

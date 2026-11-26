@@ -50,7 +50,8 @@ class AdminApiContractConformanceTest {
             AggregateLifecycleStatisticsController.class,
             AggregateArchiveController.class,
             AggregateArchiveStatisticsController.class,
-            ShardOwnedQueuesController.class);
+            ShardOwnedQueuesController.class,
+            EventLogSubscriptionsController.class);
 
     private static final String CONTRACT_RESOURCE = "/openapi/essentials-admin-api.yaml";
 
@@ -76,9 +77,11 @@ class AdminApiContractConformanceTest {
         // letter is recovered. The ranked slow-query and the table statistics operations bring it to 53,
         // running a scheduler job on demand to 54, the four event-causation lookups to 58, resuming a
         // subscription stopped by its error policy to 59, and releasing a shard-owned ordered unit a stop kept
-        // behind a handler still running to 60.
-        assertThat(contractOperations()).hasSize(60);
-        assertThat(implementedOperations()).hasSize(60);
+        // behind a handler still running to 60, and the new event store engine's seven subscription operations
+        // (event-log-subscriptions) to 67, and retrying or discarding every parked head of an event-log
+        // subscription at once to 69.
+        assertThat(contractOperations()).hasSize(69);
+        assertThat(implementedOperations()).hasSize(69);
     }
 
     @Test

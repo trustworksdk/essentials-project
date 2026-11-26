@@ -1,0 +1,2 @@
+dk.trustworks.essentials.components.boot.autoconfigure.eventlog.EventLogAutoConfiguration
+dk.trustworks.essentials.components.boot.autoconfigure.eventlog.EventLogAdminApiAutoConfiguration

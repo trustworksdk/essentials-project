@@ -20,7 +20,7 @@ import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.Essenti
 import dk.trustworks.essentials.components.eventsourced.aggregates.EssentialsAggregateDeclarations;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -131,7 +131,7 @@ public class SnapshotConfiguration {
      * all required dependencies are available in the Spring context.
      *
      * @param eventStore The event store used for event sourcing operations, configured with
-     *                   {@code SeparateTablePerAggregateEventStreamConfiguration}.
+     *                   any {@code AggregateEventStreamConfiguration} (the old engine or the event log adapter).
      * @param unitOfWorkFactory The factory for creating instances of {@code EventStoreUnitOfWork},
      *                          which are used to manage transactional operations on the event store.
      * @param jsonSerializer The serializer responsible for converting events to and from JSON format.
@@ -150,7 +150,7 @@ public class SnapshotConfiguration {
             JSONEventSerializer.class
     })
     @ConditionalOnMissingBean
-    public AggregateSnapshotStore aggregateSnapshotStore(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+    public AggregateSnapshotStore aggregateSnapshotStore(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                          JSONEventSerializer jsonSerializer,
                                                          EssentialsEventStoreProperties properties,
@@ -295,7 +295,7 @@ public class SnapshotConfiguration {
     @Bean
     @ConditionalOnBean(AggregateSnapshotJobRepository.class)
     @ConditionalOnMissingBean
-    public PostgresqlAggregateSnapshotJobProcessor aggregateSnapshotJobProcessor(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+    public PostgresqlAggregateSnapshotJobProcessor aggregateSnapshotJobProcessor(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                                                  AggregateSnapshotStore snapshotStore,
                                                                                  AggregateSnapshotJobRepository jobRepository,
                                                                                  EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
@@ -351,7 +351,7 @@ public class SnapshotConfiguration {
             AggregateSnapshotStore.class
     })
     @ConditionalOnMissingBean
-    public AggregateSnapshotRepositoryFactory aggregateSnapshotRepositoryFactory(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+    public AggregateSnapshotRepositoryFactory aggregateSnapshotRepositoryFactory(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                                                  EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                                                  JSONEventSerializer jsonSerializer,
                                                                                  AggregateSnapshotStore snapshotStore,

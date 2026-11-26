@@ -1,0 +1,165 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package dk.trustworks.essentials.components.eventlog;
+
+import org.junit.jupiter.api.Test;
+
+import java.util.*;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * The prefix {@code P}, the run-length runs above it, their pruning, and the dedupe rule.
+ */
+class HandledSetTest {
+    @Test
+    void everything_at_or_below_the_prefix_is_handled() {
+        var set = new HandledSet(10);
+        assertThat(set.contains(1)).isTrue();
+        assertThat(set.contains(10)).isTrue();
+        assertThat(set.contains(11)).isFalse();
+        assertThat(set.resumeFrom()).isEqualTo(11);
+    }
+
+    @Test
+    void handled_orders_above_the_prefix_form_runs_that_merge() {
+        var set = new HandledSet(10);
+        set.add(13);
+        set.add(15);
+        assertThat(set.runCount()).isEqualTo(2);
+        set.add(14);
+        assertThat(set.runCount()).as("13-15 merged").isEqualTo(1);
+        set.add(12);
+        set.add(20);
+        assertThat(set.runCount()).isEqualTo(2);
+        assertThat(set.contains(11)).isFalse();
+        assertThat(set.contains(12)).isTrue();
+        assertThat(set.contains(15)).isTrue();
+        assertThat(set.contains(16)).isFalse();
+        assertThat(set.contains(20)).isTrue();
+        assertThat(set.highest()).isEqualTo(20);
+        assertThat(set.prefix()).as("adding never moves P").isEqualTo(10);
+    }
+
+    @Test
+    void adding_an_order_already_handled_changes_nothing() {
+        var set = new HandledSet(10);
+        set.add(5);
+        set.add(12);
+        set.add(12);
+        assertThat(set.runCount()).isEqualTo(1);
+        assertThat(set.contains(12)).isTrue();
+    }
+
+    @Test
+    void advancing_the_prefix_prunes_and_trims_runs() {
+        var set = new HandledSet(10);
+        set.add(12);
+        set.add(13);
+        set.add(15);
+        set.add(16);
+        set.add(17);
+        set.add(30);
+        set.advanceTo(16);
+        assertThat(set.prefix()).isEqualTo(16);
+        assertThat(set.runCount()).as("12-13 pruned, 15-17 trimmed to 17, 30 kept").isEqualTo(2);
+        assertThat(set.contains(17)).isTrue();
+        assertThat(set.contains(18)).isFalse();
+        assertThat(set.contains(30)).isTrue();
+        set.advanceTo(40);
+        assertThat(set.runCount()).isZero();
+        assertThat(set.highest()).isEqualTo(40);
+    }
+
+    @Test
+    void the_prefix_never_moves_down() {
+        var set = new HandledSet(10);
+        set.add(12);
+        set.advanceTo(5);
+        assertThat(set.prefix()).isEqualTo(10);
+        assertThat(set.contains(12)).isTrue();
+    }
+
+    @Test
+    void a_reset_repositions_and_forgets_the_runs() {
+        var set = new HandledSet(10);
+        set.add(12);
+        set.reset(3);
+        assertThat(set.prefix()).isEqualTo(3);
+        assertThat(set.contains(4)).isFalse();
+        assertThat(set.contains(12)).isFalse();
+        assertThat(set.runCount()).isZero();
+    }
+
+    @Test
+    void gaps_are_the_unhandled_ranges_between_the_prefix_and_the_highest_handled_order() {
+        var set = new HandledSet(10);
+        assertThat(set.gaps(10)).as("no run, no gap").isEmpty();
+        set.add(11);
+        assertThat(set.gaps(10)).as("a run adjacent to P leaves no gap").isEmpty();
+        set.add(13);
+        set.add(14);
+        set.add(20);
+        assertThat(set.highest()).isEqualTo(20);
+        assertThat(set.gaps(10)).containsExactly(new HandledSet.Gap(12, 12), new HandledSet.Gap(15, 19));
+        assertThat(set.gaps(10).getFirst().single()).isTrue();
+        assertThat(set.gaps(10).getLast().single()).isFalse();
+        set.add(12);
+        assertThat(set.gaps(10)).containsExactly(new HandledSet.Gap(15, 19));
+        set.advanceTo(16);
+        assertThat(set.gaps(10)).containsExactly(new HandledSet.Gap(17, 19));
+    }
+
+    @Test
+    void gaps_above_the_limit_are_not_listed() {
+        var set = new HandledSet(0);
+        set.add(2);
+        set.add(4);
+        set.add(6);
+        assertThat(set.gaps(3)).hasSize(3);
+        assertThat(set.gaps(2)).as("three gaps, limit 2: the bridge falls back to P").isNull();
+    }
+
+    @Test
+    void add_range_marks_the_covered_range_except_holes_and_ranges() {
+        var set = new HandledSet(10);
+        set.add(12);
+        set.add(30);
+        set.addRange(10, 25, new TreeSet<>(List.of(15L, 40L)), new TreeMap<>(Map.of(18L, 20L, 50L, 60L)));
+        // handled: 11..14, 16..17, 21..25, 30; unhandled 15, 18..20
+        assertThat(set.prefix()).isEqualTo(10);
+        assertThat(set.contains(11)).isTrue();
+        assertThat(set.contains(15)).isFalse();
+        assertThat(set.contains(16)).isTrue();
+        assertThat(set.contains(18)).isFalse();
+        assertThat(set.contains(20)).isFalse();
+        assertThat(set.contains(21)).isTrue();
+        assertThat(set.contains(26)).isFalse();
+        assertThat(set.gaps(10)).containsExactly(new HandledSet.Gap(15, 15), new HandledSet.Gap(18, 20), new HandledSet.Gap(26, 29));
+    }
+
+    @Test
+    void add_range_merges_with_neighbouring_runs_and_ignores_orders_below_the_prefix() {
+        var set = new HandledSet(100);
+        set.add(105);
+        set.add(120);
+        set.addRange(90, 119, Collections.emptySortedSet(), Collections.emptySortedMap());
+        assertThat(set.runCount()).as("one run from P + 1 to 120").isEqualTo(1);
+        assertThat(set.prefix()).isEqualTo(100);
+        assertThat(set.gaps(10)).isEmpty();
+        assertThat(set.highest()).isEqualTo(120);
+    }
+}

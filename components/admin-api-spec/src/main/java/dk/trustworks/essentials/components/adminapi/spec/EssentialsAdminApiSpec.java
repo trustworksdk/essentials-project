@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.adminapi.spec;
 
 import dk.trustworks.essentials.components.adminapi.spec.OpenApiSpecGenerator.SpecBuilder;
+import dk.trustworks.essentials.components.eventlog.processor.api.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.queue.shardowned.api.*;
@@ -64,7 +65,8 @@ final class EssentialsAdminApiSpec {
             AggregateLifecycleStatisticsApi.class,
             AggregateArchiveApi.class,
             AggregateArchiveStatisticsApi.class,
-            ShardOwnedQueuesApi.class);
+            ShardOwnedQueuesApi.class,
+            EventLogSubscriptionsApi.class);
 
     /** DTO record types reflected into {@code components.schemas} (nested types are resolved transitively). */
     static final List<Class<?>> DTO_CLASSES = List.of(
@@ -98,7 +100,11 @@ final class EssentialsAdminApiSpec {
             ApiAggregateSnapshotStatistics.class,
             ApiAggregateClosingBooksStatistics.class,
             ApiArchivedGeneration.class,
-            ApiAggregateArchiveStatistics.class);
+            ApiAggregateArchiveStatistics.class,
+            ApiEventLogSubscription.class,
+            ApiParkedEventsPage.class,
+            ApiParkedEventsPage.ApiParkedEvent.class,
+            ApiBulkParkedRequestResult.class);
 
     /**
      * Reference-typed DTO properties that are verified to always be present, and are therefore marked
@@ -108,50 +114,53 @@ final class EssentialsAdminApiSpec {
      * Every other component stays optional unless listed here, so a generated client is never told a field is
      * guaranteed when the server can legitimately send {@code null}.
      */
-    static final Map<String, Set<String>> ALWAYS_PRESENT_PROPERTIES = Map.of(
-            "ApiDBFencedLock", Set.of("lockName"),
-            "ApiQueuedMessage", Set.of("id", "queueName"),
-            "ApiQueueStatistics", Set.of("queueName", "depth"),
-            "ApiSubscription", Set.of("subscriberId", "aggregateType"),
-            "ApiSubscriptionStatistics", Set.of("subscriberId", "aggregateType", "statisticsSince",
-                                                "lifecycle", "eventHandling", "polling", "lock", "reset"),
-            "ApiCdcStatus", Set.of("availability", "configuration", "slot"),
-            "ApiTableStatistics", Set.of("section", "tableName", "totalSize", "tableSize", "indexSize", "indexes"),
-            "ApiIndexStatistics", Set.of("indexName", "size"),
-            "ApiScheduledJobRun", Set.of("jobName", "jobType", "startedAt"),
-            "ApiCausationEvent", Set.of("eventId", "aggregateType", "aggregateId", "eventType", "timestamp"));
+    static final Map<String, Set<String>> ALWAYS_PRESENT_PROPERTIES = Map.ofEntries(
+            Map.entry("ApiDBFencedLock", Set.of("lockName")),
+            Map.entry("ApiQueuedMessage", Set.of("id", "queueName")),
+            Map.entry("ApiQueueStatistics", Set.of("queueName", "depth")),
+            Map.entry("ApiSubscription", Set.of("subscriberId", "aggregateType")),
+            Map.entry("ApiSubscriptionStatistics", Set.of("subscriberId", "aggregateType", "statisticsSince",
+                                                          "lifecycle", "eventHandling", "polling", "lock", "reset")),
+            Map.entry("ApiCdcStatus", Set.of("availability", "configuration", "slot")),
+            Map.entry("ApiTableStatistics", Set.of("section", "tableName", "totalSize", "tableSize", "indexSize", "indexes")),
+            Map.entry("ApiIndexStatistics", Set.of("indexName", "size")),
+            Map.entry("ApiScheduledJobRun", Set.of("jobName", "jobType", "startedAt")),
+            Map.entry("ApiCausationEvent", Set.of("eventId", "aggregateType", "aggregateId", "eventType", "timestamp")),
+            Map.entry("ApiEventLogSubscription", Set.of("subscriber", "aggregateType", "instanceName", "consistencyMode", "progressModel", "updatedAt")),
+            Map.entry("ApiParkedEventsPage", Set.of("events")),
+            Map.entry("ApiParkedEvent", Set.of("aggregateId", "parkedAt")));
 
     /**
      * DTO properties that are {@code null} by design, with the reason surfaced as the property description.
      * Reflection cannot derive these: they are either role-gated redactions or components that are not running
      * in the queried instance.
      */
-    static final Map<String, Map<String, String>> NULLABLE_PROPERTIES = Map.of(
-            "ApiQueryStatistics", Map.of(
+    static final Map<String, Map<String, String>> NULLABLE_PROPERTIES = Map.ofEntries(
+            Map.entry("ApiQueryStatistics", Map.of(
                     "cacheHitRatio", "Shared-buffer hits as a percentage 0-100 of all shared blocks the statement "
-                            + "accessed. Null when it accessed no shared blocks."),
-            "ApiTableStatistics", Map.of(
+                            + "accessed. Null when it accessed no shared blocks.")),
+            Map.entry("ApiTableStatistics", Map.of(
                     "cacheHitRatio", "Shared-buffer hits as a percentage 0-100 of the table's and its indexes' block "
                             + "requests. Null while there has been no block access since the statistics were reset.",
                     "lastVacuum", "The most recent manual or automatic vacuum. Null if the table was never vacuumed.",
-                    "lastAnalyze", "The most recent manual or automatic analyze. Null if the table was never analyzed."),
-            "ApiScheduledJobRun", Map.of(
-                    "error", "The exception type and message. Null when the run succeeded."),
-            "ApiIndexStatistics", Map.of(
+                    "lastAnalyze", "The most recent manual or automatic analyze. Null if the table was never analyzed.")),
+            Map.entry("ApiScheduledJobRun", Map.of(
+                    "error", "The exception type and message. Null when the run succeeded.")),
+            Map.entry("ApiIndexStatistics", Map.of(
                     "cacheHitRatio", "Shared-buffer hits as a percentage 0-100 of the index's block requests. Null while "
-                            + "there has been no block access since the statistics were reset."),
-            "ApiQueuedMessage", Map.of(
+                            + "there has been no block access since the statistics were reset.")),
+            Map.entry("ApiQueuedMessage", Map.of(
                     "payload", "The raw message payload. Null unless the caller holds the QUEUE_PAYLOAD_READER "
                             + "or ESSENTIALS_ADMIN role.",
                     "orderedMessageKey", "The key of an ordered message. Null for an unordered message.",
                     "orderedMessageOrder", "The order of an ordered message. Null for an unordered message.",
                     "referencedAggregateType", "Set when the message refers to a persisted event as the inbox messages "
                             + "of an EventProcessor do. It is the aggregate type and orderedMessageKey is the aggregate id. "
-                            + "Null for every other message."),
-            "ApiCdcStatus", Map.of(
+                            + "Null for every other message.")),
+            Map.entry("ApiCdcStatus", Map.of(
                     "tailer", "Null when no WAL replication tailer is running in this instance.",
-                    "dispatcher", "Null when no CDC dispatcher is running in this instance."),
-            "ApiSubscription", Map.of(
+                    "dispatcher", "Null when no CDC dispatcher is running in this instance.")),
+            Map.entry("ApiSubscription", Map.of(
                     "lastUpdated", "When the durable resume point was last updated. Null when the subscription has no "
                             + "durable resume point - see durableResumePointPresent.",
                     "active", "Whether the subscription is currently active. Null when the subscription is not running "
@@ -168,11 +177,35 @@ final class EssentialsAdminApiSpec {
                             + "failure (mode STOP or RETRY_N_THEN_STOP). It then handles no further events until it is resumed or "
                             + "started again. active stays true for "
                             + "such a subscription. Always false for an in-transaction subscription. Null when the "
-                            + "subscription is not running in this instance."),
-            "ApiCausationEvent", Map.of(
+                            + "subscription is not running in this instance.")),
+            Map.entry("ApiCausationEvent", Map.of(
                     "causedByEventId", "The id of the event that caused this one. Null when no cause was recorded. Events "
                             + "started by a request or a person have none. Neither do events persisted before causation "
-                            + "was recorded."));
+                            + "was recorded.")),
+            Map.entry("ApiEventLogSubscription", Map.of(
+                    "leaseOwner", "The node and instance holding the lease of an exclusive subscription. Null while no instance "
+                            + "holds it and for a per-instance subscription.",
+                    "leaseUntil", "When the lease of an exclusive subscription expires. Null while no instance holds it.",
+                    "fence", "The fencing token of the latest lease of an exclusive subscription. Null when it was never leased.",
+                    "filterDigest", "The digest of the subscription's event filter. Null when the subscription has no filter.",
+                    "lag", "How many global orders of the aggregate type lie past the resume point. Never negative. Null "
+                            + "when the aggregate type is not registered in the database.",
+                    "oldestParkedAt", "When the longest-parked head was parked. Null when nothing is parked.",
+                    "nextRetryAt", "The earliest automatic retry of a parked head. Null when no head is retrying. Terminal "
+                            + "heads are never retried automatically.",
+                    "lastFailedAt", "The latest failure of a parked head. Null when nothing is parked or no failure was recorded.")),
+            Map.entry("ApiParkedEventsPage", Map.of(
+                    "nextAfter", "The afterGlobalOrder of the next page. Null when this page was not full and so is the last.")),
+            Map.entry("ApiParkedEvent", Map.of(
+                    "blockedBy", "The global order of the parked head this event is held behind. Null for a parked head.",
+                    "errorType", "The exception type of the last failed attempt. Null for an event held behind a head.",
+                    "errorMessage", "The exception message of the last failed attempt. Null when there was none.",
+                    "requested", "RETRY or DISCARD while an operator's request waits to be served. Null otherwise.",
+                    "requestedAt", "When the waiting request was made. Null when no request waits.",
+                    "nextRetryAt", "When the engine retries this parked head on its own. Null for a terminal head and for an "
+                            + "event held behind a head.",
+                    "lastFailedAt", "When this parked head last failed. Null for an event held behind a head and when no failure "
+                            + "was recorded.")));
 
     /** Tag name &rarr; description, in display order. */
     static final Map<String, String> TAGS = new LinkedHashMap<>() {{
@@ -188,6 +221,9 @@ final class EssentialsAdminApiSpec {
         put("aggregate-lifecycle-statistics", "Inspect aggregate snapshot and closing-books runtime statistics.");
         put("aggregate-archive", "Inspect archived closing-books generations.");
         put("aggregate-archive-statistics", "Inspect aggregate archive runtime statistics.");
+        put("event-log-subscriptions", "Inspect the subscriptions of the new event store engine (the event log) from the database, "
+                                       + "page their parked events, retry or discard a parked event, reset a subscription, and "
+                                       + "delete a retired per-instance subscription. Answered from the database by any instance.");
     }};
 
     // Wire role strings (kept in sync with EssentialsSecurityRoles).
@@ -695,6 +731,118 @@ final class EssentialsAdminApiSpec {
          .summary("Return aggregate archive statistics per aggregate type.")
          .roles(SUBSCRIPTION_R, ADMIN)
          .responseArray("ApiAggregateArchiveStatistics");
+
+        // ---- event-log-subscriptions ----
+        // The new event store engine's subscriptions, answered from the database by whichever instance gets the request.
+        // A subscription is keyed by (subscriber, aggregate type, instance name); an exclusive subscription's instance
+        // name is empty, so it is an optional query parameter defaulting to the exclusive row rather than a path segment.
+        b.operation(EventLogSubscriptionsApi.class, "getSubscriptions")
+         .tag("event-log-subscriptions").get("/event-log/subscriptions")
+         .summary("List the event log's subscriptions of every instance from the database, optionally of one aggregate "
+                  + "type. At most the event log's admin list limit of rows is returned.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .queryParam("aggregateType", new StringSchema(), false, "Only the subscriptions of this aggregate type.")
+         .responseArray("ApiEventLogSubscription");
+
+        b.operation(EventLogSubscriptionsApi.class, "getSubscription")
+         .tag("event-log-subscriptions").get("/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}")
+         .summary("Get one event log subscription from the database.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("subscriber", new StringSchema(), "The subscriber.")
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
+         .queryParam("instanceName", eventLogInstanceNameSchema(), false, EVENT_LOG_INSTANCE_NAME)
+         .responseOptionalRef("ApiEventLogSubscription", "The subscription.");
+
+        b.operation(EventLogSubscriptionsApi.class, "getParkedEvents")
+         .tag("event-log-subscriptions").get("/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events")
+         .summary("Page an event log subscription's parked events in global order: the parked heads and the events "
+                  + "of their aggregates held behind them. Empty for an unknown subscription.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("subscriber", new StringSchema(), "The subscriber.")
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
+         .queryParam("instanceName", eventLogInstanceNameSchema(), false, EVENT_LOG_INSTANCE_NAME)
+         .queryParam("afterGlobalOrder", new IntegerSchema().format("int64")._default(0), false,
+                     "Only parked events with a higher global order. Pass the previous page's nextAfter.")
+         .queryParam("limit", new IntegerSchema().format("int32").minimum(BigDecimal.ONE)
+                                                 .maximum(BigDecimal.valueOf(DefaultEventLogSubscriptionsApi.MAX_PAGE_SIZE))
+                                                 ._default(100), false,
+                     "Maximum number of parked events to return. A value above the maximum is capped.")
+         .responseRef("ApiParkedEventsPage", "One page of parked events.");
+
+        b.operation(EventLogSubscriptionsApi.class, "resetSubscription")
+         .tag("event-log-subscriptions").post("/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/reset")
+         .summary("Move an event log subscription's resume point to resumeFrom and delete its parked events and waiting "
+                  + "requests. The instance running it picks the new resume point up. Never creates a subscription.")
+         .roles(SUBSCRIPTION_W, ADMIN)
+         .pathParam("subscriber", new StringSchema(), "The subscriber.")
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
+         .queryParam("instanceName", eventLogInstanceNameSchema(), false, EVENT_LOG_INSTANCE_NAME)
+         .queryParam("resumeFrom", new IntegerSchema().format("int64").minimum(BigDecimal.ONE), true,
+                     "The first global order to handle after the reset.")
+         .responseRef("EventLogResetResult", "Whether the subscription was reset.");
+
+        b.operation(EventLogSubscriptionsApi.class, "retryParkedEvent")
+         .tag("event-log-subscriptions").post("/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/{globalOrder}/retry")
+         .summary("Retry a parked head. The request is stored on the head; the instance running the subscription serves "
+                  + "it at once when that is the instance answering, else at its next parked check.")
+         .roles(SUBSCRIPTION_W, ADMIN)
+         .pathParam("subscriber", new StringSchema(), "The subscriber.")
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
+         .pathParam("globalOrder", new IntegerSchema().format("int64"), "The global order of the parked head.")
+         .queryParam("instanceName", eventLogInstanceNameSchema(), false, EVENT_LOG_INSTANCE_NAME)
+         .responseRef("EventLogParkedRequestResult", "What became of the request.");
+
+        b.operation(EventLogSubscriptionsApi.class, "discardParkedEvent")
+         .tag("event-log-subscriptions").post("/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/{globalOrder}/discard")
+         .summary("Discard a parked head: delete it without handling it, after which the events held behind it are "
+                  + "handled. Served as a retry is.")
+         .roles(SUBSCRIPTION_W, ADMIN)
+         .pathParam("subscriber", new StringSchema(), "The subscriber.")
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
+         .pathParam("globalOrder", new IntegerSchema().format("int64"), "The global order of the parked head.")
+         .queryParam("instanceName", eventLogInstanceNameSchema(), false, EVENT_LOG_INSTANCE_NAME)
+         .responseRef("EventLogParkedRequestResult", "What became of the request.");
+
+        b.operation(EventLogSubscriptionsApi.class, "retryAllParked")
+         .tag("event-log-subscriptions").post("/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/retry-all")
+         .summary("Retry every parked head of an event log subscription, terminal heads included. The request is stored "
+                  + "on each head in one statement and served by the instance running the subscription a few heads per "
+                  + "pass, as a single retry is. The events held behind a head follow it. Does not wait for the heads to "
+                  + "be served.")
+         .roles(SUBSCRIPTION_W, ADMIN)
+         .pathParam("subscriber", new StringSchema(), "The subscriber.")
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
+         .queryParam("instanceName", eventLogInstanceNameSchema(), false, EVENT_LOG_INSTANCE_NAME)
+         .responseRef("ApiBulkParkedRequestResult", "Whether the subscription exists and how many parked heads the request was stored on.");
+
+        b.operation(EventLogSubscriptionsApi.class, "discardAllParked")
+         .tag("event-log-subscriptions").post("/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/discard-all")
+         .summary("Discard every parked head of an event log subscription: delete each without handling it, after which "
+                  + "the events held behind them are handled. Served as a retry-all is.")
+         .roles(SUBSCRIPTION_W, ADMIN)
+         .pathParam("subscriber", new StringSchema(), "The subscriber.")
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
+         .queryParam("instanceName", eventLogInstanceNameSchema(), false, EVENT_LOG_INSTANCE_NAME)
+         .responseRef("ApiBulkParkedRequestResult", "Whether the subscription exists and how many parked heads the request was stored on.");
+
+        b.operation(EventLogSubscriptionsApi.class, "deleteRetiredInstance")
+         .tag("event-log-subscriptions").delete("/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/instances/{instanceName}")
+         .summary("Delete the progress row and parked events of a retired per-instance subscription. Only a per-instance "
+                  + "row whose lease is not held, and never one the answering instance runs.")
+         .roles(SUBSCRIPTION_W, ADMIN)
+         .pathParam("subscriber", new StringSchema(), "The subscriber.")
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
+         .pathParam("instanceName", new StringSchema(), "The retired instance's name.")
+         .responseRef("DeleteResult", "Whether the subscription's row was deleted.");
+    }
+
+    private static final String EVENT_LOG_INSTANCE_NAME = "The instance name of a per-instance subscription. Omitted or "
+            + "empty for an exclusive subscription.";
+
+    private static StringSchema eventLogInstanceNameSchema() {
+        var schema = new StringSchema();
+        schema._default("");
+        return schema;
     }
 
     private static StringSchema queryStatisticsOrderSchema() {

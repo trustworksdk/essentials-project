@@ -75,7 +75,7 @@ In the demo it is the `(account_stream_id, event_order)` key of `projection_acco
 `EventStoreSubscription.resetFrom(...)`, which on the running subscription does stop → override and save the resume
 point → callback → start (`NonExclusiveAsynchronousSubscription.java:225-245`). The callback purges the processor's
 queue (`ViewEventProcessor.java:449-451`; the inbox for `EventProcessor`, `EventProcessor.java:382-384`) and calls
-`onSubscriptionsReset`, where the demo's projections `TRUNCATE` their tables (e.g. `AccountActivityProjection.java:158-159`).
+`onSubscriptionsReset`, where the demo's projections `TRUNCATE` their tables (e.g. `AccountActivityClassicView` calling `AccountActivityProjection.truncate()`).
 This is correct **because** exactly one instance handles events. Nothing else can be writing to the view between the
 truncate and the restart.
 

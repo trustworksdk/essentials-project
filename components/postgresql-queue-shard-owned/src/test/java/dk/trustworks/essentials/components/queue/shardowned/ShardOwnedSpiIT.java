@@ -123,6 +123,30 @@ class ShardOwnedSpiIT {
     }
 
     @Test
+    void a_purge_on_the_callers_connection_commits_and_rolls_back_with_the_callers_transaction() throws Exception {
+        try (var queue = queue("spi-purge")) {
+            queue.enqueue(Message.of("one".getBytes(StandardCharsets.UTF_8), 1));
+            queue.enqueue(Message.ordered("two".getBytes(StandardCharsets.UTF_8), 1, "k", 0));
+            assertThat(queue.depth().total()).isEqualTo(2L);
+
+            try (var connection = dataSource.getConnection()) {
+                connection.setAutoCommit(false);
+                assertThat(queue.purge(connection)).isEqualTo(2L);
+                connection.rollback();
+            }
+            assertThat(queue.depth().total()).as("the rolled-back purge left the messages in place").isEqualTo(2L);
+
+            try (var connection = dataSource.getConnection()) {
+                connection.setAutoCommit(false);
+                assertThat(queue.purge(connection)).isEqualTo(2L);
+                assertThat(queue.depth().total()).as("not removed before the caller commits").isEqualTo(2L);
+                connection.commit();
+            }
+            assertThat(queue.depth().total()).isZero();
+        }
+    }
+
+    @Test
     void depth_dead_letters_resurrect_and_purge_are_usable_through_the_contract() throws Exception {
         try (var queue = queue("spi-2")) {
             var alwaysFails = new ConsumerOptions(8, SHARD_COUNT, 2, RetryBackoff.fixed(Duration.ofMillis(10)));

@@ -52,7 +52,7 @@ fire.
 
 ```
 ESSENTIALS — Trustworks Essentials Java/Kotlin framework support
-Essentials project detected · [Kotlin | Java] · 31 bundled docs
+Essentials project detected · [Kotlin | Java] · 32 bundled docs
 
 Most of this plugin is not a command. Two skills load themselves — one when you
 ask about Essentials or Claude is about to touch dk.trustworks.essentials.* code,

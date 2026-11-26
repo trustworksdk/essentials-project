@@ -19,7 +19,7 @@ package dk.trustworks.essentials.examples.trading.orders.aggregates;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.examples.trading.orders.events.OrderEvent;
 import dk.trustworks.essentials.examples.trading.orders.types.*;
 import org.springframework.stereotype.Component;
@@ -38,7 +38,7 @@ public class Orders {
 
     private final StatefulAggregateRepository<OrderId, OrderEvent, Order> repository;
 
-    public Orders(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+    public Orders(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore) {
         requireNonNull(eventStore, "No eventStore provided");
         repository = StatefulAggregateRepository.from(eventStore, AGGREGATE_TYPE, reflectionBasedAggregateRootFactory(), Order.class);
     }

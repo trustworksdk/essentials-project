@@ -138,16 +138,43 @@ class PostgresqlFencedLockSpreadingIT {
         acquireAllLocksAsync(first, lock -> releases.computeIfAbsent(lock.getName().toString(), name -> new CopyOnWriteArrayList<>()).add(System.nanoTime()));
         Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> holders.size() == LOCKS);
 
-        var window = REBALANCE_INTERVAL.multipliedBy(13);
-        sleep(window);
+        // A lock manager releases at most one lock per rebalance interval, and only on that lock's own acquire tick, so
+        // the releases come 1-2 intervals apart (15 locks prefer node2 here: 8-15 s), and each lock comes back only after
+        // the grace plus up to one more tick. Wait for that to finish rather than for a fixed time: a fixed window raced
+        // the last take-back under build load
+        var startedAt = System.nanoTime();
+        Awaitility.await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(100))
+                  .until(() -> holders.size() == LOCKS && !releases.isEmpty() && noReleaseWithin(releases, SETTLED_AFTER));
+        var converged = Duration.ofNanos(System.nanoTime() - startedAt);
+        var releasesWhenSettled = releaseCount(releases);
 
-        // A lock released moments ago is held again once the grace has passed
-        Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> holders.size() == LOCKS);
+        // The membership stands: a lock taken back from its preferred owner is not released to it again
+        sleep(NOT_RELEASED_AGAIN_WINDOW);
+        assertThat(releaseCount(releases)).as("releases after every lock was taken back").isEqualTo(releasesWhenSettled);
+        assertThat(holders).as("locks held after the window").hasSize(LOCKS);
         assertThat(locksHeldBy()).containsOnlyKeys("node1");
         assertThat(releases).as("node1 released some locks to node2, their preferred owner").isNotEmpty();
         releases.forEach((lock, at) -> assertThat(at).as("releases of %s to a preferred owner that never takes it", lock).hasSize(1));
-        System.out.printf("%nReleases of locks nobody else takes, over %s: %d releases of %d locks%n%n",
-                          window, releases.values().stream().mapToInt(List::size).sum(), releases.size());
+        System.out.printf("%nReleases of locks nobody else takes: %d releases of %d locks, all taken back after %d ms%n%n",
+                          releasesWhenSettled, releases.size(), converged.toMillis());
+    }
+
+    /**
+     * Longer than the widest gap between two rebalance releases (two intervals) plus a take-back (grace plus a tick)
+     */
+    private static final Duration SETTLED_AFTER             = REBALANCE_INTERVAL.multipliedBy(6);
+    /**
+     * Without the suppression a taken-back lock would be released again within an interval or two of the take-back
+     */
+    private static final Duration NOT_RELEASED_AGAIN_WINDOW = REBALANCE_INTERVAL.multipliedBy(6);
+
+    private static boolean noReleaseWithin(Map<String, List<Long>> releases, Duration quiet) {
+        var latest = releases.values().stream().flatMap(List::stream).mapToLong(Long::longValue).max().orElseThrow();
+        return System.nanoTime() - latest >= quiet.toNanos();
+    }
+
+    private static int releaseCount(Map<String, List<Long>> releases) {
+        return releases.values().stream().mapToInt(List::size).sum();
     }
 
     private void startManagers(boolean spreadLocks) {

@@ -16,12 +16,12 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlNotificationDrain;
 import dk.trustworks.essentials.shared.Lifecycle;
-import org.postgresql.PGConnection;
 import org.slf4j.*;
 
 import javax.sql.DataSource;
-import java.sql.Connection;
+import java.sql.*;
 import java.util.Map;
 import java.util.concurrent.atomic.*;
 
@@ -124,19 +124,22 @@ public final class ShardWakeupListener implements Lifecycle, AutoCloseable {
         // a naive "just retry the read" would miss.
         while (running.get()) {
             try (var connection = dataSource.getConnection()) {
-                try (var statement = connection.createStatement()) {
-                    statement.execute("LISTEN " + CHANNEL);
+                // A pool that hands out connections with auto-commit off (spring.datasource.hikari.auto-commit=false)
+                // would run LISTEN in a transaction that never commits: no notification ever arrives, and Tier 1 is
+                // silently gone. Switched on for as long as this connection listens, and back before it is returned
+                var autoCommitWasOff = !connection.getAutoCommit();
+                if (autoCommitWasOff) {
+                    connection.setAutoCommit(true);
                 }
-                reconnects.increment();
-                var pgConnection = connection.unwrap(PGConnection.class);
-                while (running.get()) {
-                    var notifications = pgConnection.getNotifications(200);
-                    if (notifications == null) {
-                        continue;
-                    }
-                    for (var notification : notifications) {
-                        notificationsReceived.increment();
-                        signal(notification.getParameter());
+                try {
+                    listen(connection);
+                } finally {
+                    if (autoCommitWasOff) {
+                        try {
+                            connection.setAutoCommit(false);
+                        } catch (SQLException | RuntimeException e) {
+                            log.debug("Restoring auto-commit off on the wake-up listener's connection failed", e);
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -149,6 +152,30 @@ public final class ShardWakeupListener implements Lifecycle, AutoCloseable {
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     return;
+                }
+            }
+        }
+    }
+
+    /** LISTEN, then drain notifications until the listener stops; throws when the connection fails */
+    private void listen(Connection connection) throws Exception {
+        try (var statement = connection.createStatement()) {
+            statement.execute("LISTEN " + CHANNEL);
+        }
+        reconnects.increment();
+        // Not pgjdbc's getNotifications(200) directly: under a dense notification stream it holds every
+        // notification inside the driver until a 1 ms gap appears, which at a few thousand notifications/s
+        // made this tier no faster than the backstop. The drain is closed (the peek unpinned) before the
+        // connection goes back to the pool.
+        try (var drain = PostgresqlNotificationDrain.open(connection)) {
+            while (running.get()) {
+                var notifications = drain.next(200);
+                if (notifications == null) {
+                    continue;
+                }
+                for (var notification : notifications) {
+                    notificationsReceived.increment();
+                    signal(notification.getParameter());
                 }
             }
         }

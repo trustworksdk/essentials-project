@@ -1376,6 +1376,30 @@ ListenNotify.addChangeNotificationTriggerToTable(
 Flux<String> notifications = ListenNotify.listen(jdbi, "orders", Duration.ofMillis(100));
 ```
 
+#### PostgresqlNotificationDrain
+
+**Class**: `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlNotificationDrain`
+
+For a hand-written LISTEN loop that blocks on a dedicated connection. pgjdbc's `PGConnection.getNotifications(timeout)` returns nothing while notifications keep arriving less than ~1 ms apart, so under dense traffic it delivers late; the drain does not.
+
+```java
+try (var connection = dataSource.getConnection()) {          // auto-commit
+    try (var statement = connection.createStatement()) {
+        statement.execute("LISTEN my_channel");
+    }
+    try (var drain = PostgresqlNotificationDrain.open(connection)) {  // close() before the connection is released
+        while (running) {
+            var notifications = drain.next(200);              // may be null or empty
+            if (notifications != null) {
+                for (var n : notifications) { handle(n.getParameter()); }
+            }
+        }
+    }
+}
+```
+
+`open` pins pgjdbc's 1 ms socket peek off by reflection (`Mode.PINNED_PEEK`) and falls back to polling with `SELECT 1` (`Mode.QUERY_POLL`, one WARN per JVM) if pgjdbc's internals have changed; `openQueryPoll` forces the poll. One thread per drain. Needs `org.postgresql:postgresql` on the classpath (optional in foundation). `ListenNotify` and `MultiTableChangeListener` poll with the non-blocking `getNotifications()` and do not need it.
+
 #### MultiTableChangeListener
 
 **Class**: `dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener`

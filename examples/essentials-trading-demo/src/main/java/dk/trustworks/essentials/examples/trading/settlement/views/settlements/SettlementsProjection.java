@@ -16,114 +16,94 @@
 
 package dk.trustworks.essentials.examples.trading.settlement.views.settlements;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
-import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
-import dk.trustworks.essentials.examples.trading.settlement.aggregates.TradeSettlements;
 import dk.trustworks.essentials.examples.trading.settlement.events.*;
 import dk.trustworks.essentials.examples.trading.settlement.types.SettlementState;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
+import org.jdbi.v3.core.Handle;
 import org.springframework.stereotype.Service;
 
 import java.sql.Date;
-import java.util.List;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Every execution's settlement: state, intended date, amount, and for an abandoned one the exchange's outcome and
  * reason - the operator's settlement exceptions (Q-1).
  * <p>
- * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
- * {@link ViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
- * with Spring's {@code JdbcTemplate}, only while the Spring wiring binds both to one connection. The
- * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
- * which opens one.
+ * Engine-neutral: the tables, the event logic and the queries, on either event store engine. What feeds it is the
+ * engine's processor - {@link SettlementsClassicView} or {@link SettlementsEventLogView} - which hands each event here with
+ * the handle of the transaction it handles the event in, so the row commits together with that processor's progress.
+ * The constructor's DDL opens a unit of work of its own.
  */
 @Service
-public class SettlementsProjection extends TradingDemoViewEventProcessor {
-    public SettlementsProjection(ViewEventProcessorDependencies dependencies) {
-        super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
-                                                                                   CREATE TABLE IF NOT EXISTS projection_settlement (
-                                                                                       execution_id VARCHAR PRIMARY KEY,
-                                                                                       account_id VARCHAR NOT NULL,
-                                                                                       instrument_id VARCHAR NOT NULL,
-                                                                                       side VARCHAR NOT NULL,
-                                                                                       amount NUMERIC(24, 6) NOT NULL,
-                                                                                       currency VARCHAR NOT NULL,
-                                                                                       intended_settlement_date DATE NOT NULL,
-                                                                                       state VARCHAR NOT NULL,
-                                                                                       outcome VARCHAR NULL,
-                                                                                       reason VARCHAR NULL,
-                                                                                       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                                                                   )
-                                                                                   """));
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "CREATE INDEX IF NOT EXISTS projection_settlement_account ON projection_settlement (account_id)"));
+public class SettlementsProjection {
+    private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
+
+    public SettlementsProjection(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
+        unitOfWorkFactory.usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
+                                                                              CREATE TABLE IF NOT EXISTS projection_settlement (
+                                                                                  execution_id VARCHAR PRIMARY KEY,
+                                                                                  account_id VARCHAR NOT NULL,
+                                                                                  instrument_id VARCHAR NOT NULL,
+                                                                                  side VARCHAR NOT NULL,
+                                                                                  amount NUMERIC(24, 6) NOT NULL,
+                                                                                  currency VARCHAR NOT NULL,
+                                                                                  intended_settlement_date DATE NOT NULL,
+                                                                                  state VARCHAR NOT NULL,
+                                                                                  outcome VARCHAR NULL,
+                                                                                  reason VARCHAR NULL,
+                                                                                  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                                              )
+                                                                              """));
+        unitOfWorkFactory.usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), "CREATE INDEX IF NOT EXISTS projection_settlement_account ON projection_settlement (account_id)"));
     }
 
-    @Override
-    public String getProcessorName() {
-        return "SettlementsProjection";
+    void on(Handle handle, SettlementInstructed e) {
+        handle.createUpdate("""
+                                INSERT INTO projection_settlement (execution_id, account_id, instrument_id, side, amount, currency, intended_settlement_date, state)
+                                VALUES (:executionId, :accountId, :instrumentId, :side, :amount, :currency, :intendedSettlementDate, :state) ON CONFLICT (execution_id) DO NOTHING
+                                """)
+              .bind("executionId", e.executionId().toString())
+              .bind("accountId", e.accountId().toString())
+              .bind("instrumentId", e.instrumentId().toString())
+              .bind("side", e.side().name())
+              .bind("amount", e.amount().getAmount().value())
+              .bind("currency", e.amount().getCurrency().toString())
+              .bind("intendedSettlementDate", Date.valueOf(e.intendedSettlementDate()))
+              .bind("state", SettlementState.INSTRUCTED.name())
+              .execute();
     }
 
-    @Override
-    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-        return List.of(TradeSettlements.AGGREGATE_TYPE);
+    void on(Handle handle, SettlementPostponed e) {
+        handle.createUpdate("UPDATE projection_settlement SET intended_settlement_date = :intendedSettlementDate, updated_at = CURRENT_TIMESTAMP WHERE execution_id = :executionId AND state = :state")
+              .bind("intendedSettlementDate", Date.valueOf(e.intendedSettlementDate()))
+              .bind("executionId", e.executionId().toString())
+              .bind("state", SettlementState.INSTRUCTED.name())
+              .execute();
     }
 
-    @MessageHandler
-    void handle(SettlementInstructed e) {
-        getRequiredUnitOfWork().handle().createUpdate("""
-                                                          INSERT INTO projection_settlement (execution_id, account_id, instrument_id, side, amount, currency, intended_settlement_date, state)
-                                                          VALUES (:executionId, :accountId, :instrumentId, :side, :amount, :currency, :intendedSettlementDate, :state) ON CONFLICT (execution_id) DO NOTHING
-                                                          """)
-                                        .bind("executionId", e.executionId().toString())
-                                        .bind("accountId", e.accountId().toString())
-                                        .bind("instrumentId", e.instrumentId().toString())
-                                        .bind("side", e.side().name())
-                                        .bind("amount", e.amount().getAmount().value())
-                                        .bind("currency", e.amount().getCurrency().toString())
-                                        .bind("intendedSettlementDate", Date.valueOf(e.intendedSettlementDate()))
-                                        .bind("state", SettlementState.INSTRUCTED.name())
-                                        .execute();
+    void on(Handle handle, SettlementSettled e) {
+        handle.createUpdate("UPDATE projection_settlement SET state = :state, updated_at = CURRENT_TIMESTAMP WHERE execution_id = :executionId")
+              .bind("state", SettlementState.SETTLED.name())
+              .bind("executionId", e.executionId().toString())
+              .execute();
     }
 
-    @MessageHandler
-    void handle(SettlementPostponed e) {
-        getRequiredUnitOfWork().handle()
-                                .createUpdate("UPDATE projection_settlement SET intended_settlement_date = :intendedSettlementDate, updated_at = CURRENT_TIMESTAMP WHERE execution_id = :executionId AND state = :state")
-                                .bind("intendedSettlementDate", Date.valueOf(e.intendedSettlementDate()))
-                                .bind("executionId", e.executionId().toString())
-                                .bind("state", SettlementState.INSTRUCTED.name())
-                                .execute();
+    void on(Handle handle, SettlementAbandoned e) {
+        handle.createUpdate("UPDATE projection_settlement SET state = :state, outcome = :outcome, reason = :reason, updated_at = CURRENT_TIMESTAMP WHERE execution_id = :executionId")
+              .bind("state", SettlementState.ABANDONED.name())
+              .bind("outcome", e.outcome())
+              .bind("reason", e.reason())
+              .bind("executionId", e.executionId().toString())
+              .execute();
     }
 
-    @MessageHandler
-    void handle(SettlementSettled e) {
-        getRequiredUnitOfWork().handle()
-                                .createUpdate("UPDATE projection_settlement SET state = :state, updated_at = CURRENT_TIMESTAMP WHERE execution_id = :executionId")
-                                .bind("state", SettlementState.SETTLED.name())
-                                .bind("executionId", e.executionId().toString())
-                                .execute();
-    }
-
-    @MessageHandler
-    void handle(SettlementAbandoned e) {
-        getRequiredUnitOfWork().handle()
-                                .createUpdate("UPDATE projection_settlement SET state = :state, outcome = :outcome, reason = :reason, updated_at = CURRENT_TIMESTAMP WHERE execution_id = :executionId")
-                                .bind("state", SettlementState.ABANDONED.name())
-                                .bind("outcome", e.outcome())
-                                .bind("reason", e.reason())
-                                .bind("executionId", e.executionId().toString())
-                                .execute();
-    }
-
-    @MessageHandler
-    void handle(SettlementAmountChanged e) {
-        getRequiredUnitOfWork().handle()
-                                .createUpdate("UPDATE projection_settlement SET amount = :amount, updated_at = CURRENT_TIMESTAMP WHERE execution_id = :executionId")
-                                .bind("amount", e.amount().getAmount().value())
-                                .bind("executionId", e.executionId().toString())
-                                .execute();
+    void on(Handle handle, SettlementAmountChanged e) {
+        handle.createUpdate("UPDATE projection_settlement SET amount = :amount, updated_at = CURRENT_TIMESTAMP WHERE execution_id = :executionId")
+              .bind("amount", e.amount().getAmount().value())
+              .bind("executionId", e.executionId().toString())
+              .execute();
     }
 }

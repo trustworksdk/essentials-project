@@ -24,7 +24,7 @@ import io.swagger.v3.core.util.Json;
 import io.swagger.v3.oas.models.media.*;
 
 import java.time.Duration;
-import java.util.Iterator;
+import java.util.*;
 
 /**
  * swagger-core {@link ModelConverter} that renders Essentials semantic {@link SingleValueType} wrappers
@@ -43,6 +43,9 @@ import java.util.Iterator;
  *     <li>{@link IntegerType} &rarr; {@code integer} ({@code int32})</li>
  *     <li>{@link BigDecimalType} / any other {@link NumberType} &rarr; {@code number}</li>
  *     <li>{@link Duration} &rarr; {@code string} (ISO-8601, e.g. {@code PT5M})</li>
+ *     <li>{@link OptionalLong} / {@link OptionalInt} &rarr; {@code integer} ({@code int64} / {@code int32}), the value or
+ *     {@code null} as Jackson writes them; without this swagger-core introspects them as beans
+ *     ({@code present}, {@code asLong}, ...). {@link Optional} itself is unwrapped by swagger-core</li>
  * </ul>
  */
 public class EssentialsValueTypeModelConverter implements ModelConverter {
@@ -63,6 +66,12 @@ public class EssentialsValueTypeModelConverter implements ModelConverter {
             }
             if (BigDecimalType.class.isAssignableFrom(raw) || NumberType.class.isAssignableFrom(raw)) {
                 return new NumberSchema();
+            }
+            if (OptionalLong.class.equals(raw)) {
+                return new IntegerSchema().format("int64");
+            }
+            if (OptionalInt.class.equals(raw)) {
+                return new IntegerSchema().format("int32");
             }
             if (Duration.class.isAssignableFrom(raw)) {
                 return new StringSchema().format("duration").example("PT5M");

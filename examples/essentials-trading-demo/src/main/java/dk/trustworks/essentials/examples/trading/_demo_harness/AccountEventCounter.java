@@ -18,7 +18,6 @@ package dk.trustworks.essentials.examples.trading._demo_harness;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 import dk.trustworks.essentials.examples.trading.accounts.types.AccountsAggregateTypes;
 import dk.trustworks.essentials.examples.trading.orders.types.*;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -38,9 +37,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 @Component
 public class AccountEventCounter {
     private final JdbcTemplate                                                         jdbcTemplate;
-    private final ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
+    private final ConfigurableEventStore<?> eventStore;
 
-    public AccountEventCounter(JdbcTemplate jdbcTemplate, ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+    public AccountEventCounter(JdbcTemplate jdbcTemplate, ConfigurableEventStore<?> eventStore) {
         this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
     }
@@ -48,10 +47,10 @@ public class AccountEventCounter {
     public long countEventsForAccountsStartingWith(String accountIdPrefix) {
         // Resolved per call, not in the constructor: an aggregate type's stream configuration is registered lazily,
         // when its repository is first built, which can be after this bean is
-        var configuration = eventStore.getAggregateEventStreamConfiguration(AccountsAggregateTypes.ACCOUNTS);
-        // Both names come from the event store's configuration, not from a request
-        var countSql = "SELECT count(*) FROM " + configuration.eventStreamTableName
-                       + " WHERE " + configuration.eventStreamTableColumnNames.aggregateIdColumn + " LIKE ?";
+        var table = EventTable.of(eventStore, AccountsAggregateTypes.ACCOUNTS);
+        // Every name comes from the event store's configuration or the engine's naming rules, not from a request
+        var countSql = "SELECT count(*) FROM " + table.from()
+                       + " WHERE " + table.aggregateId() + " LIKE ?";
         var count = jdbcTemplate.queryForObject(countSql, Long.class, accountIdPrefix + "%");
         return count == null ? 0 : count;
     }
@@ -60,10 +59,9 @@ public class AccountEventCounter {
      * @param eventSimpleName the event's simple class name; the table stores the fully qualified one
      */
     public long countEventsOfTypeForAccountsStartingWith(String accountIdPrefix, String eventSimpleName) {
-        var configuration = eventStore.getAggregateEventStreamConfiguration(AccountsAggregateTypes.ACCOUNTS);
-        var columns       = configuration.eventStreamTableColumnNames;
-        var countSql = "SELECT count(*) FROM " + configuration.eventStreamTableName
-                       + " WHERE " + columns.aggregateIdColumn + " LIKE ? AND " + columns.eventTypeColumn + " LIKE ?";
+        var table = EventTable.of(eventStore, AccountsAggregateTypes.ACCOUNTS);
+        var countSql = "SELECT count(*) FROM " + table.from()
+                       + " WHERE " + table.aggregateId() + " LIKE ? AND " + table.eventType() + " LIKE ?";
         var count = jdbcTemplate.queryForObject(countSql, Long.class, accountIdPrefix + "%", "%." + eventSimpleName);
         return count == null ? 0 : count;
     }
@@ -72,11 +70,10 @@ public class AccountEventCounter {
      * Execution id to the time its {@code TradeBooked} was appended, for the order-flow scenario's end-to-end latency.
      */
     public Map<String, Instant> tradeBookingTimesForAccountsStartingWith(String accountIdPrefix) {
-        var configuration = eventStore.getAggregateEventStreamConfiguration(AccountsAggregateTypes.ACCOUNTS);
-        var columns       = configuration.eventStreamTableColumnNames;
-        var sql = "SELECT " + columns.eventPayloadColumn + "->'trade'->>'executionId' AS execution_id, " + columns.timestampColumn + " AS booked_at"
-                  + " FROM " + configuration.eventStreamTableName
-                  + " WHERE " + columns.aggregateIdColumn + " LIKE ? AND " + columns.eventTypeColumn + " LIKE ?";
+        var table = EventTable.of(eventStore, AccountsAggregateTypes.ACCOUNTS);
+        var sql = "SELECT " + table.payload() + "->'trade'->>'executionId' AS execution_id, " + table.timestamp() + " AS booked_at"
+                  + " FROM " + table.from()
+                  + " WHERE " + table.aggregateId() + " LIKE ? AND " + table.eventType() + " LIKE ?";
         var bookedAt = new HashMap<String, Instant>();
         jdbcTemplate.query(sql, rs -> {
             bookedAt.put(rs.getString("execution_id"), rs.getTimestamp("booked_at").toInstant());
@@ -90,12 +87,11 @@ public class AccountEventCounter {
      * account id, so the account prefix selects them.
      */
     public List<OrderId> openAcceptedOrdersForAccountsStartingWith(String accountIdPrefix) {
-        var configuration = eventStore.getAggregateEventStreamConfiguration(OrdersAggregateTypes.ORDERS);
-        var columns       = configuration.eventStreamTableColumnNames;
-        var type          = columns.eventTypeColumn;
-        var sql = "SELECT " + columns.aggregateIdColumn + " AS order_id FROM " + configuration.eventStreamTableName
-                  + " WHERE " + columns.aggregateIdColumn + " LIKE ?"
-                  + " GROUP BY " + columns.aggregateIdColumn
+        var table = EventTable.of(eventStore, OrdersAggregateTypes.ORDERS);
+        var type          = table.eventType();
+        var sql = "SELECT " + table.aggregateId() + " AS order_id FROM " + table.from()
+                  + " WHERE " + table.aggregateId() + " LIKE ?"
+                  + " GROUP BY " + table.aggregateId()
                   + " HAVING bool_or(" + type + " LIKE '%.OrderAccepted')"
                   + " AND NOT bool_or(" + type + " LIKE '%.OrderFilled' OR " + type + " LIKE '%.OrderCancelRequested' OR " + type + " LIKE '%.OrderClosed')";
         return jdbcTemplate.query(sql, (rs, row) -> OrderId.of(rs.getString("order_id")), accountIdPrefix + "%");
@@ -106,10 +102,9 @@ public class AccountEventCounter {
      * the funding scenario, the outcomes on its deposits and withdrawals.
      */
     public long countEventsOfType(AggregateType aggregateType, String idPrefix, String eventSimpleName) {
-        var configuration = eventStore.getAggregateEventStreamConfiguration(aggregateType);
-        var columns       = configuration.eventStreamTableColumnNames;
-        var count = jdbcTemplate.queryForObject("SELECT count(*) FROM " + configuration.eventStreamTableName
-                                                + " WHERE " + columns.aggregateIdColumn + " LIKE ? AND " + columns.eventTypeColumn + " LIKE ?",
+        var table = EventTable.of(eventStore, aggregateType);
+        var count = jdbcTemplate.queryForObject("SELECT count(*) FROM " + table.from()
+                                                + " WHERE " + table.aggregateId() + " LIKE ? AND " + table.eventType() + " LIKE ?",
                                                 Long.class, idPrefix + "%", "%." + eventSimpleName);
         return count == null ? 0 : count;
     }
@@ -120,11 +115,10 @@ public class AccountEventCounter {
      * {@code CashWithdrawn}. Both names are the caller's constants, not a request's.
      */
     public Map<String, Instant> accountEventTimesByPayloadField(String accountIdPrefix, String eventSimpleName, String payloadField) {
-        var configuration = eventStore.getAggregateEventStreamConfiguration(AccountsAggregateTypes.ACCOUNTS);
-        var columns       = configuration.eventStreamTableColumnNames;
-        var sql = "SELECT " + columns.eventPayloadColumn + "->>'" + payloadField + "' AS reference, " + columns.timestampColumn + " AS appended_at"
-                  + " FROM " + configuration.eventStreamTableName
-                  + " WHERE " + columns.aggregateIdColumn + " LIKE ? AND " + columns.eventTypeColumn + " LIKE ?";
+        var table = EventTable.of(eventStore, AccountsAggregateTypes.ACCOUNTS);
+        var sql = "SELECT " + table.payload() + "->>'" + payloadField + "' AS reference, " + table.timestamp() + " AS appended_at"
+                  + " FROM " + table.from()
+                  + " WHERE " + table.aggregateId() + " LIKE ? AND " + table.eventType() + " LIKE ?";
         var appendedAt = new HashMap<String, Instant>();
         jdbcTemplate.query(sql, rs -> {
             appendedAt.put(rs.getString("reference"), rs.getTimestamp("appended_at").toInstant());

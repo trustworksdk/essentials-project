@@ -18,7 +18,7 @@ package dk.trustworks.essentials.examples.trading.orders.aggregates;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.examples.trading.accounts.types.*;
 import dk.trustworks.essentials.examples.trading.orders.events.UnknownExchangeOrderEvent;
 import dk.trustworks.essentials.examples.trading.orders.types.*;
@@ -40,7 +40,7 @@ public class UnknownExchangeOrders {
 
     private final StatefulAggregateRepository<OrderId, UnknownExchangeOrderEvent, UnknownExchangeOrder> repository;
 
-    public UnknownExchangeOrders(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+    public UnknownExchangeOrders(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore) {
         requireNonNull(eventStore, "No eventStore provided");
         repository = StatefulAggregateRepository.from(eventStore, AGGREGATE_TYPE, reflectionBasedAggregateRootFactory(), UnknownExchangeOrder.class);
     }

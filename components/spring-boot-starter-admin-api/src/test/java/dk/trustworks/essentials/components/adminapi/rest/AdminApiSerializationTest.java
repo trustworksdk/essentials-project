@@ -113,6 +113,9 @@ class AdminApiSerializationTest {
         assertMatchesContractSchema("PurgeResult", new PurgeResult(7));
         assertMatchesContractSchema("QueueNameResult", new QueueNameResult("orders"));
         assertMatchesContractSchema("GlobalEventOrderResult", new GlobalEventOrderResult(99L));
+        assertMatchesContractSchema("EventLogResetResult", new EventLogResetResult(true));
+        assertMatchesContractSchema("EventLogParkedRequestResult",
+                                    new EventLogParkedRequestResult(dk.trustworks.essentials.components.eventlog.ParkedRequestResult.ACCEPTED));
         assertMatchesContractSchema("Error", new ApiError(403, "Forbidden", "nope"));
     }
 

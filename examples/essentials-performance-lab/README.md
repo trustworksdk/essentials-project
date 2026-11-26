@@ -230,6 +230,54 @@ examples/essentials-performance-lab/scripts/summarize-compare.sh \
   examples/essentials-performance-lab/target/baseline-compare-3way-bytes-long-after-directfix.json
 ```
 
+## New event store engine vs polling vs CDC (opt-in)
+
+`event-log-vs-polling-vs-cdc-compare` runs the baseline workload six times, each in its own child Spring context and
+under the same load profile: the old engine's four legs from `baseline-polling-vs-cdc-compare` (`polling`,
+`notifyPolling`, `cdcInbox`, `cdcDirect`) and two legs on the new event store engine (design phase 8):
+
+- `eventLogReactor`: appends through the `EventLogEventStore` adapter, `subscriber-count` `EventReactor`s (`FRESH`).
+- `eventLogProjection`: the same appends, `subscriber-count` `ViewProjection`s (`CONTIGUOUS`, in the page transaction).
+
+The new-engine handlers record the delivery in memory and write nothing, like the old legs' subscribers, so every leg
+measures the engine's delivery path and not a view's writes. The new engine is opt-in: both its scenarios
+(`event-log-vs-polling-vs-cdc-compare` and its child `event-log-baseline`) exist only with
+`essentials.lab.event-log.enabled=true`; without it the lab is unchanged.
+
+```bash
+mvn -pl examples/essentials-performance-lab -DskipTests -Dspring-boot.run.profiles=compose \
+  -Dspring-boot.run.arguments="--essentials.lab.event-log.enabled=true --essentials.lab.scenario=event-log-vs-polling-vs-cdc-compare --essentials.eventstore.cdc.enabled=false --essentials.lab.metrics-output-file=./target/event-log-compare.json" \
+  spring-boot:run
+```
+
+Over the four profiles of `run-baseline-matrix.sh` (`s1_card5000`, `s1_card50`, `s5_card5000`, `s5_card50`), with a
+summary table in `target/event-log-matrix/summary.md`:
+
+```bash
+WARMUP=PT5S DURATION=PT20S examples/essentials-performance-lab/scripts/run-event-log-compare-matrix.sh
+```
+
+With the defaults (`warmup=10s`, `duration=30s`) one run takes about six times (warmup + duration) plus six context
+starts. Properties:
+
+- `essentials.lab.event-log.enabled` (default `false`): registers the two scenarios.
+- `essentials.lab.event-log.processor` (`reactor` default, or `projection`): the child's processor; the comparison sets it.
+- `essentials.lab.event-log.pool-size` (default `20`): the new engine's own Hikari pool on the application's database.
+
+The comparison JSON has one object per leg with the baseline's fields, and `deltaNotifyPolling`, `deltaCdcInbox`,
+`deltaCdcDirect`, `deltaEventLogReactor` and `deltaEventLogProjection` (each `leg - polling`). The new-engine legs add
+`engineStatementsDuringMeasurement`, `engineStatementsPerSecond`, `engineStatementsPerDeliveredEvent` and
+`enginePoolSize`.
+
+How the statements are counted: the old legs count `SELECT`s naming `laborders_events` with a JDBI `SqlLogger`. The new
+engine talks plain JDBC, so its pool is wrapped in a counting `DataSource` (`harness/StatementCountingDataSource`) and
+the adapter runs on a JDBI unit of work over that pool. `eventStoreSelects*` apply the same rule to
+`el_laborders_events`; `engineStatements*` count every statement of the leg, appends, progress updates and wake-ups
+included. In every leg the old engine's starter still runs (fenced locks, durable queues), so its background load is
+the same everywhere.
+
+Smoke test: `EventLogComparisonScenarioSmokeIT` (Testcontainers, 1 s per leg).
+
 ## CI smoke test (Testcontainers)
 
 There is a CI-friendly smoke test that runs the compare scenario with Testcontainers Postgres and validates that comparison JSON is produced:

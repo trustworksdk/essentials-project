@@ -125,7 +125,7 @@ class MongoDurableQueueMessageObserverIT {
                   .untilAsserted(() -> assertThat(registry.findStatistics(queueName))
                           .hasValueSatisfying(statistics -> assertThat(statistics.delivery().messagesHandled()).isEqualTo(1)));
 
-        var statistics = registry.findStatistics(queueName).orElseThrow();
+        var statistics = registry.findStatistics(queueName).orElseThrow(() -> new AssertionError("No statistics yet for " + queueName));
         assertThat(statistics.outcomes().messagesDeadLettered()).isZero();
         assertThat(meterRegistry.find(DEAD_LETTERED_COUNTER_NAME).counter()).isNull();
     }
@@ -142,7 +142,7 @@ class MongoDurableQueueMessageObserverIT {
         Awaitility.waitAtMost(Duration.ofSeconds(20))
                   .untilAsserted(() -> assertThat(deadLetteredCount("redeliveries_exhausted")).isEqualTo(1d));
 
-        assertThat(registry.findStatistics(queueName).orElseThrow().outcomes().messagesDeadLettered()).isEqualTo(1);
+        assertThat(registry.findStatistics(queueName).orElseThrow(() -> new AssertionError("No statistics yet for " + queueName)).outcomes().messagesDeadLettered()).isEqualTo(1);
         assertThat(deadLetteredCount("permanent_error")).isZero();
     }
 

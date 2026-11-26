@@ -1,0 +1,318 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package dk.trustworks.essentials.components.eventlog;
+
+import java.time.Duration;
+import java.util.Set;
+
+/**
+ * Callbacks for metrics and diagnostics of the tail reader and the subscriptions. Every
+ * method has a no-op default; implementations must be fast - they run on the reader loop's thread, a subscription's
+ * delivery thread or the lease keeper's. The engine catches and logs (at most one WARN a minute) whatever a callback
+ * throws, so a faulty observer loses its own data but never stops the engine. {@code observability.micrometer.MicrometerEventLogObserver} is the Micrometer
+ * binding; the event-log Spring Boot starter wires it when a {@code MeterRegistry} bean exists and no other observer is
+ * declared.
+ */
+public interface EventLogObserver {
+    EventLogObserver NONE = new EventLogObserver() {
+    };
+
+    /**
+     * One tail read or combined probe finished.
+     *
+     * @param aggregateType         the reader's aggregate type
+     * @param combined              {@code true} for the combined probe (running set read), {@code false} for the plain tail
+     * @param nanos                 the statement's wall-clock time
+     * @param rows                  event rows returned (late commits included)
+     * @param outstandingHoles      values or ranges not yet resolved after the read
+     * @param outstandingCandidates candidates not yet retired after the read
+     * @param oldestCandidateAge    age of the oldest outstanding candidate, {@link Duration#ZERO} if none
+     */
+    default void onRead(String aggregateType, boolean combined, long nanos, int rows, int outstandingHoles, int outstandingCandidates, Duration oldestCandidateAge) {
+    }
+
+    /**
+     * A candidate retired and its holes were re-read.
+     *
+     * @param resolvedHoles values or ranges resolved
+     * @param lateRows      late commits the hole read returned
+     */
+    default void onHoleRead(String aggregateType, int resolvedHoles, int lateRows) {
+    }
+
+    /**
+     * The tail reader's cursor after a tail read or combined probe: the highest {@code global_order} of the aggregate type
+     * it has read. Reported once per read, after {@link #onRead}, so an observer can tell how far a subscription's saved
+     * resume point ({@link #onProgressSaved}) is behind the tail without a query. Reader loop thread.
+     */
+    default void onReaderCursor(String aggregateType, long cursor) {
+    }
+
+    /**
+     * A subscription saved its resume point.
+     */
+    default void onProgressSaved(String subscriber, String aggregateType, long resumeFrom) {
+    }
+
+    /**
+     * A reader or handler failed; the subscription retries.
+     */
+    default void onError(String subscriber, String aggregateType, Throwable error) {
+    }
+
+    /**
+     * A subscription's inbox was attached to its aggregate type's reader. Reader loop thread.
+     *
+     * @param cursor    the reader's cursor {@code C}: the bridge reads up to it
+     * @param watermark the reader's watermark {@code W}; {@link Long#MIN_VALUE} for a {@code FRESH} subscription attached
+     *                  while it is unknown, which hands its gaps off after the bridge
+     */
+    default void onAttach(String subscriber, String aggregateType, long cursor, long watermark) {
+    }
+
+    /**
+     * A subscription detached and catches up from {@code resumeFrom}. Delivery thread.
+     *
+     * @param reason {@code OVERFLOW}, {@code READER_RESTART}, {@code RESET}, {@code STOPPED}, {@code ERROR} or
+     *               {@code TOO_MANY_GAPS}
+     */
+    default void onDetach(String subscriber, String aggregateType, String reason, long resumeFrom) {
+    }
+
+    /**
+     * One catch-up or bridge statement finished. Delivery thread.
+     *
+     * @param bridge {@code true} for a bridge page
+     * @param rows   rows returned
+     */
+    default void onCatchUpRead(String subscriber, String aggregateType, boolean bridge, long nanos, int rows) {
+    }
+
+    /**
+     * An attached subscription took a batch from its inbox. Delivery thread.
+     *
+     * @param rows        rows in the batch
+     * @param inboxEvents events still in the inbox after the take: the inbox depth
+     */
+    default void onBatchTaken(String subscriber, String aggregateType, int rows, int inboxEvents) {
+    }
+
+    /**
+     * A subscription started or stopped waiting because its aggregate type's watermark is unknown (F4): after a reader
+     * (re)start while a writer holds a value below the head. Delivery thread.
+     *
+     * @param waiting {@code true} when the wait starts, {@code false} when it ends
+     * @param heldBy  the {@code backend_xid}s of the reader's initial candidate - the writers the wait is for; empty
+     *                when the reader has not started yet, or when the wait ends
+     */
+    default void onWaitingForWatermark(String subscriber, String aggregateType, boolean waiting, Set<String> heldBy) {
+    }
+
+    /**
+     * An in-transaction page committed together with its resume point. Delivery thread.
+     *
+     * @param size events in the page
+     */
+    default void onPageCommitted(String subscriber, String aggregateType, int size) {
+    }
+
+    /**
+     * An in-transaction page committed together with its resume point. Delivery thread. The engine calls this variant; its
+     * default calls {@link #onPageCommitted(String, String, int)}, so an observer written against that one keeps working.
+     *
+     * @param size  events in the page
+     * @param nanos the page's wall-clock time, from opening its transaction to its commit (handler included)
+     */
+    default void onPageCommitted(String subscriber, String aggregateType, int size, long nanos) {
+        onPageCommitted(subscriber, aggregateType, size);
+    }
+
+    /**
+     * A page transaction rolled back. Delivery thread.
+     *
+     * @param size  events in the page
+     * @param cause what failed
+     */
+    default void onPageFailed(String subscriber, String aggregateType, int size, Throwable cause) {
+    }
+
+    /**
+     * A page transaction rolled back. Delivery thread. The engine calls this variant; its default calls
+     * {@link #onPageFailed(String, String, int, Throwable)}, so an observer written against that one keeps working.
+     *
+     * @param size  events in the page
+     * @param nanos the page's wall-clock time, from opening its transaction to the failure's rollback
+     * @param cause what failed
+     */
+    default void onPageFailed(String subscriber, String aggregateType, int size, long nanos, Throwable cause) {
+        onPageFailed(subscriber, aggregateType, size, cause);
+    }
+
+    /**
+     * {@code CONTIGUOUS}: rows moved to pending under a received watermark. Delivery thread.
+     *
+     * @param rows              rows released
+     * @param receivedWatermark the received watermark that covers them
+     * @param heldBack          rows still held back above it
+     */
+    default void onReleased(String subscriber, String aggregateType, int rows, long receivedWatermark, int heldBack) {
+    }
+
+    /**
+     * An event was parked, or held behind its aggregate's parked head; the row is committed.
+     * Delivery thread.
+     *
+     * @param blockedBy the parked head this event is held behind, or {@code null} if it is a head itself
+     * @param attempts  how often the handler failed on it alone ({@code 0} for an event held behind a head)
+     */
+    default void onParked(String subscriber, String aggregateType, long globalOrder, Long blockedBy, int attempts) {
+    }
+
+    /**
+     * The number of aggregates held behind a parked head changed, or was loaded at start. Delivery thread.
+     */
+    default void onHeldAggregates(String subscriber, String aggregateType, int count) {
+    }
+
+    /** How a serve of a parked head ended, for {@link #onParkedRetry} */
+    enum ParkedRetryOutcome {
+        /** The serve committed: the head was retried (or discarded) and its aggregate released or moved to a new head */
+        RELEASED,
+        /** The head (or, on a discard, nothing) failed again: its retries grew and its next automatic retry moved out */
+        FAILED,
+        /**
+         * The serve did not run to the end and stored nothing: the head was no longer parked, a reset or takeover got there
+         * first, or the parked rows changed meanwhile. An automatic retry is due again one backoff later
+         */
+        DEFERRED
+    }
+
+    /**
+     * A serve of a parked head ended: an automatic retry of the retry schedule or an operator's retry or discard. Delivery
+     * thread, once per serve - never per event.
+     *
+     * @param head    the {@code global_order} of the parked head served
+     * @param auto    {@code true} for an automatic retry, {@code false} for an operator's request
+     * @param outcome how it ended
+     * @param retries the head's failed retries after the serve ({@link ParkedRetryOutcome#RELEASED}: before it)
+     * @param nextIn  the wait until the head's next automatic retry, or {@code null} when none is scheduled (the head was
+     *                released, is terminal or is no longer held)
+     */
+    default void onParkedRetry(String subscriber, String aggregateType, long head, boolean auto, ParkedRetryOutcome outcome, int retries, Duration nextIn) {
+    }
+
+    /**
+     * The subscription's parked heads changed: the held set (a park, a release, a new head, a load at start or after a
+     * reposition, a standby) or the retry schedule (a failed retry). Delivery thread; only on such a change, never per
+     * event or per pass.
+     *
+     * @param retrying  heads the engine retries by itself
+     * @param terminal  heads that failed with a {@link ParkEventException}: only an operator retries or discards them
+     * @param oldestAge how long the oldest parked head has been parked, {@link Duration#ZERO} when none is
+     */
+    default void onParkedHeads(String subscriber, String aggregateType, int retrying, int terminal, Duration oldestAge) {
+    }
+
+    /**
+     * A delivery thread acquired a catch-up permit. Delivery thread.
+     *
+     * @param waitNanos how long it waited for it
+     * @param inUse     permits of the database in use after acquiring
+     */
+    default void onCatchUpPermit(String subscriber, String aggregateType, long waitNanos, int inUse) {
+    }
+
+    /**
+     * A filtered catch-up, skip-ahead or deferred-bridge read finished. Delivery thread.
+     *
+     * @param scannedOrders the orders its range covered
+     * @param rows          matching rows returned
+     * @param window        the scan window it ran with
+     * @param usedIndex     whether the type index could serve it (the index is valid and the read is not dense)
+     */
+    default void onFilteredRead(String subscriber, String aggregateType, long scannedOrders, int rows, long window, boolean usedIndex) {
+    }
+
+    /**
+     * A {@code FRESH} subscription attached under an unknown watermark handed the gaps its bridge found below the reader's
+     * cursor to the reader. Reader loop thread, at the quiescent point.
+     *
+     * @param gaps     single values and ranges handed off
+     * @param toReader {@code true} if the reader holds them as holes of its restart's initial candidate; {@code false} if
+     *                 that candidate had retired already, so every gap is final and the subscription's own re-read of them
+     *                 answers the hand-off
+     */
+    default void onGapsHandedOff(String subscriber, String aggregateType, int gaps, boolean toReader) {
+    }
+
+    /**
+     * The reader loop read its due types: one statement for a single type, one pgjdbc flush for
+     * several, with at most one running set. Reader loop thread.
+     *
+     * @param aggregateTypes the types read, in flush order
+     * @param statements     statements sent (a running set counts as one)
+     * @param nanos          the statement's or the whole flush's wall-clock time
+     */
+    default void onFlush(java.util.List<String> aggregateTypes, int statements, long nanos) {
+    }
+
+    // ---- leases of exclusive subscriptions ----
+
+    /** An exclusive subscription's lease was claimed with {@code fence}; delivery starts. Lease keeper thread */
+    default void onLeaseClaimed(String subscriber, String aggregateType, long fence) {
+    }
+
+    /**
+     * An exclusive subscription lost its lease ({@code reason}: a renewal or fenced write found another fence or owner);
+     * it stops delivering and goes back to standby
+     */
+    default void onLeaseLost(String subscriber, String aggregateType, String reason) {
+    }
+
+    /** An owner passed its local deadline without a confirmed renewal and stopped delivering. Delivery thread */
+    default void onLeaseSuspended(String subscriber, String aggregateType) {
+    }
+
+    /** A suspended owner's lease was confirmed again; delivery resumes where it stopped. Delivery thread */
+    default void onLeaseResumed(String subscriber, String aggregateType) {
+    }
+
+    /** A handler call that started before the local deadline ended {@code nanos} after it. Delivery thread */
+    default void onLeaseOverrun(String subscriber, String aggregateType, long nanos) {
+    }
+
+    /** One renewal statement: {@code owned} leases sent, {@code renewed} returned, in {@code nanos}. Lease keeper thread */
+    default void onRenewal(int owned, int renewed, long nanos) {
+    }
+
+    /** A keeper pass failed (no connection, a timeout, a lost connection); no lease was confirmed. Lease keeper thread */
+    default void onRenewalFailed(Throwable cause) {
+    }
+
+    /**
+     * The subscription's delivery thread started - first call for this subscription, always followed by
+     * {@link #onStopped}. Several instances of one subscriber on one type each make their own pair.
+     */
+    default void onStarted(String subscriber, String aggregateType) {
+    }
+
+    /**
+     * The subscription ended - {@code stop()}, a failed start or a fatal error - and its delivery thread is done. Delivery
+     * thread, last call for this subscription. For an observer that keeps per-subscription state (meters) to drop it.
+     */
+    default void onStopped(String subscriber, String aggregateType) {
+    }
+}

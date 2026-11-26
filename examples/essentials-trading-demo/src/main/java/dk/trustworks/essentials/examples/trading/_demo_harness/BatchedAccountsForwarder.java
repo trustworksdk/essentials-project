@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading._demo_harness;
 
+import dk.trustworks.essentials.examples.trading.config.ClassicEngine;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStoreSubscription;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
@@ -55,6 +56,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * (a strictly ordered hot key is serial whatever the instance count). Off unless {@code trading-demo.ef2.batched-forwarder=true}; batch size
  * from {@code trading-demo.ef2.batch-size}.
  */
+@ClassicEngine
 @Component
 @ConditionalOnProperty(prefix = "trading-demo.ef2", name = "batched-forwarder", havingValue = "true")
 public class BatchedAccountsForwarder implements DisposableBean {

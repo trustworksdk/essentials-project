@@ -76,9 +76,13 @@ public final class AppendedEvents {
      * Called by {@link PostgresqlEventStore#appendToStream(AppendToStream)} with the events it has just persisted - the
      * one place every append passes, whoever started it and whichever {@link EventStore} decorators it went through
      *
+     * <p>
+     * Public for {@link EventStore} implementations to report their appends: an implementation calls it once per append,
+     * after the events are persisted, with the events it persisted.
+     *
      * @param events the events persisted, in the order they were appended
      */
-    static void appended(List<PersistedEvent> events) {
+    public static void appended(List<PersistedEvent> events) {
         if (RECORDER.isBound()) {
             var recorder = RECORDER.get();
             events.forEach(recorder::record);

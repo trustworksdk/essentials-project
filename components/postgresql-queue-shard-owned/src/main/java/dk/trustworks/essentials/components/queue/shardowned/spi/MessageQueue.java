@@ -492,6 +492,18 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     long purge() throws SQLException;
 
     /**
+     * As {@link #purge()}, but on the caller's connection: the removal commits or rolls back with the caller's
+     * transaction, which is neither committed nor rolled back here.
+     *
+     * @param connection the caller's connection, in a transaction
+     * @return the number of messages removed
+     * @throws UnsupportedOperationException (the default) for an implementation that cannot purge on a given connection
+     */
+    default long purge(Connection connection) throws SQLException {
+        throw new UnsupportedOperationException(getClass().getSimpleName() + " cannot purge on the caller's connection");
+    }
+
+    /**
      * {@inheritDoc}
      * <p>
      * Equivalent to {@link #stop()}, so the queue can be used in a try-with-resources as well as

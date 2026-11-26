@@ -733,6 +733,117 @@ Idle (`ShardOwnedMultiQueueCostIT`, `ShardOwnedOrderedIdleCostIT`), three rounds
 Idle cost is level across queues. On 0.60.1, `ShardOwnedOrderedIdleCostIT`'s own gate failed once (282 statements
 against a bound of 243); the branch stayed well inside it in every round.
 
+### 3.17 Tier 1 under sustained notification traffic: pgjdbc holds the notifications back
+
+Measured **2026-11-12**. Findings only; nothing in the engine has changed.
+
+**The cause, in pgjdbc 42.7.14** (the version the build resolves). `PGConnection.getNotifications(timeout)` calls
+`QueryExecutorImpl.processNotifies(int)`, which blocks with the timeout only for the first message. After each
+notification it sets the timeout to -1 and loops while `PGStream.hasMessagePending()` is true. That method returns true
+when bytes are already buffered. Otherwise, unless it is inside a one-second cool-down that starts after a failed peek,
+it peeks the socket with a 1 ms `SO_TIMEOUT`. Nothing the loop has read is returned until a peek comes up empty, and it
+holds the connection's lock throughout. So `ShardWakeupListener` (`getNotifications(200)`) receives nothing while
+notifications keep arriving less than about a millisecond apart, and that lasts for as long as the stream stays that
+dense. Nothing bounds the loop by time or by count, and no connection property shortens it.
+
+**On the queue.** `ShardWakeupListenerDrainIT` (benchmark-gated). The producing runtime serves nothing, so every wake-up
+goes through its `ShardWakeupNotifier`. The consuming runtime, in the same JVM, stands in for another process. Eight
+producer threads enqueue one message per transaction at a steady rate, with 8 shards. Latency runs from `enqueue`
+returning (the commit) to the handler. Each arm runs 10 s measured after a 2 s warm-up. The listener's connection is
+wrapped so every `getNotifications` call is counted and timed. Three arms: Tier 1 with the backstop and both sweep
+intervals at 10 s, which shows a late wake-up at full size; Tier 1 at the defaults (500 ms backstop); and a control at
+the defaults whose listener reads every notification and hands none on, which is the backstop-only path. One run per
+shape; the 3 000/s arms ran in a second invocation.
+
+| Offered | Arm | p50 (ms) | p90 (ms) | p99 (ms) | max (ms) | notifications | non-empty returns | largest return |
+|---|---|---|---|---|---|---|---|---|
+| 200/s | Tier 1, 10 s backstop | 1.86 | 2.46 | 3.22 | 5.80 | 2 400 | 2 352 | 3 |
+| 200/s | Tier 1, defaults | 1.94 | 2.54 | 3.35 | 4.98 | 2 400 | 2 383 | 4 |
+| 200/s | backstop only | 245.9 | 449.0 | 495.4 | 501.6 | 2 400 | 2 359 | 4 |
+| 1 000/s | Tier 1, 10 s backstop | 12.7 | 74.8 | 204.0 | 284.9 | 12 000 | 1 197 | 194 |
+| 1 000/s | Tier 1, defaults | 5.45 | 26.6 | 76.3 | 113.7 | 12 000 | 1 683 | 97 |
+| 1 000/s | backstop only | 271.7 | 476.2 | 767.5 | 985.6 | 12 000 | 242 | 371 |
+| 3 000/s | Tier 1, 10 s backstop | 3 147 | 28 391 | 42 197 | 42 974 | 35 995 | **25** | **8 191** |
+| 3 000/s | Tier 1, defaults | 375.2 | 1 070 | 2 305 | 2 868 | 36 000 | 16 | 3 694 |
+| 3 000/s | backstop only | 399.4 | 1 186 | 1 950 | 2 345 | 36 000 | 24 | 3 582 |
+
+The notifier sends one key per shard per batch, so notifications here equal keys sent. Batches per run were 98-100 % of
+keys sent: almost every batch carried a single key.
+
+- **It reproduces, and it depends on the rate.** At 200/s notifications arrive about 5 ms apart, the peek comes up empty
+  and Tier 1 is as good as §3.2's figures: one return per notification. At 1 000/s ten notifications are returned per
+  call on average and up to 194 at once, and p99 rises 60-fold. At 3 000/s the listener returned 25 times in about
+  12 s, once with 8 191 notifications. The longest single call took 2.7 s.
+- **At 3 000/s Tier 1 does nothing.** At the defaults its latency matches the backstop-only control (p50 375 against
+  399 ms), so owners are woken by their 500 ms backstop, not by the notification. With the backstop at 10 s, a queue
+  that relies on Tier 1 for cross-process delivery fell seconds behind (p50 3.1 s). Its 42 s p99 is above the backstop
+  too, so the consuming owners were probably also short of capacity in that arm; treat the tail as an upper bound and
+  not as the driver's share alone.
+- **The call-duration columns the test prints include the idle wait** (up to 200 ms) before the first notification, so
+  read them only at the high rates. The returns column and the largest-return column are the clean signals.
+- **Which path is affected:** wake-ups that cross a process (the notifier) and in-transaction `enqueue(Connection)`
+  notifications. Owners in the same process are woken in memory and never see this. The channel is global, so the
+  density that counts is the sum over every producing process and every queue on the database, not one queue's rate.
+
+Reproduce: `mvn verify -pl components/postgresql-queue-shard-owned -DskipUTs -Dit.test=ShardWakeupListenerDrainIT
+-Dfailsafe.failIfNoSpecifiedTests=false -Dbenchmark.run=true [-Ddrain.rates=200,1000,3000]`.
+
+### 3.18 The horizon probe's statement: the view stays
+
+The trading demo (2 instances, 4 business days, about 18 000 orders) put the ordered lane's horizon probe
+(`runningWriteTransactionIds`) at about 16 calls and 1.9 ms of PostgreSQL execution per order, 111.6 µs per call by
+`pg_stat_statements` - the largest single extra database cost of the shard-owned arm at 2 instances. The new event log
+reads `pg_stat_get_activity(NULL)` directly instead of the `pg_stat_activity` view, so the obvious question was whether
+the queue should too.
+
+It should not. Measured on `postgres:17.5-bookworm` (the module's Testcontainers image) with 106 backends (90 idle
+connections, 10 writers each holding an xid for 20 ms per transaction, the measuring connections), `max_connections`
+300, through pgJDBC 42.7.14 with its defaults, every statement issued 10 000 times on one connection the way the queue
+issues it (`prepareStatement`, execute, close), execution from `pg_stat_statements`, client time per call around it:
+
+| statement (same result) | superuser: exec / client | plain LOGIN role: exec / client | unprepared (`prepareThreshold=0`), superuser: exec + plan / client |
+|---|---|---|---|
+| current: rows from `pg_stat_activity` | **39 / 85 µs** | **24 / 68 µs** | 65 + 17 / 229 µs |
+| rows from `pg_stat_get_activity(NULL)` | 68 / 120 µs | 51 / 101 µs | 67 + 3 / 133 µs |
+| one array from `pg_stat_get_activity(NULL)` | 66 / 120 µs | 49 / 100 µs | 66 + 6 / 136 µs |
+| one array from `pg_stat_activity` | 39 / 85 µs | 24 / 68 µs | 72 + 20 / 252 µs |
+| `pg_locks` transactionid locks (not the same set; reference) | 55 µs (pgbench) | - | 56 + 6 µs |
+
+- **The view's joins cost nothing once prepared.** The planner removes both left joins (`pg_database`, `pg_authid`) as
+  unused, so the plan is the same single function scan. Calling the function directly saves only parsing and
+  planning, about 95 µs of client time per call - which pgJDBC already saves from the fifth execution on a connection
+  by preparing the statement on the server. The pumps' connections are long-lived, so that is the path that runs.
+- **The 25-30 µs between the two prepared forms is the memory allocator, not the SQL.** Each call allocates and frees a
+  copy of every backend's status, sized by `max_connections`. With glibc's dynamic `mmap` threshold, whether that
+  copy is `mmap`ed and page-faulted on every call depends on the connection's allocation history. Starting the server
+  with `MALLOC_MMAP_THRESHOLD_=8388608 MALLOC_TRIM_THRESHOLD_=33554432` made all four forms cost the same 24-25 µs
+  (plain role). Without it, a connection issuing only the view landed in the cheap state in every run, and one
+  issuing only the function in the expensive one - also with an insert and an indexed read between probes, and at
+  `max_connections` 120 and 1 000. A connection issuing both was cheap for both. So switching the queue to the
+  function would, as measured, make every probe dearer, and gains nothing a prepared statement does not already give.
+- **A plain role is cheaper than a superuser** (24 against 39 µs): other roles' query text comes back as
+  `<insufficient privilege>`, so it is not copied and clipped per row. It still sees every `backend_xid`, which is
+  what `verifyWatermarkPrerequisites` asserts.
+- **No other statement returns the same set for less.** No in-core function returns `backend_xid` without building
+  the whole activity row (P0.12 of the event-log redesign, `docs/archive/event-store-redesign-phase0.md`).
+  `pg_locks` is a little cheaper, but takes every lock-manager partition lock on each call, which writers then wait
+  on, and returns a different set (subtransaction xids, prepared transactions).
+- **The count is already at the floor of the current design.** A pass probes only when an owner behind its watermark
+  asks (`horizonProbeWanted`; a caught-up owner returns before probing), one probe serves every owner of a pump pass,
+  and an owner waiting for a candidate's writers re-probes no sooner than `chaseDelay` unless woken. A message still
+  needs about three probing passes before the watermark passes it: one after its read records the candidate, one shows
+  its writers ended, and the next pass's read lets the cursor move. Two ways to issue fewer were looked at and not
+  built: sharing one probe across a runtime's pumps (a pump whose reads have finished waits for the probe in flight
+  to end and then shares the next one - safe by the existing timestamp rule, but it trades pump latency for database
+  CPU and its gain depends on how often pumps overlap, which needs the demo to measure), and pacing a pump's probes
+  (a pass without a probe records no candidate, which is safe, but the watermark then trails further and every
+  cursor read re-reads more rows).
+
+Reproduce: a `postgres:17.5-bookworm` container with `shared_preload_libraries=pg_stat_statements`, 90 connections
+held by `pgbench -c 90 -f idle.sql` (`\sleep 1 s`) and 10 writers by `pgbench -c 10 -f writer.sql`
+(`BEGIN; SELECT pg_current_xact_id(); \sleep 20 ms; COMMIT;`), then a loop of each statement on its own connection,
+`pg_stat_statements_reset()` after 200 warm-up calls.
+
 ## 4. Environment
 
 | | |

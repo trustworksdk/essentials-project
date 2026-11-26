@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.adminapi.spec;
 
+import dk.trustworks.essentials.components.eventlog.ParkedRequestResult;
 import io.swagger.v3.core.converter.*;
 import io.swagger.v3.core.util.Yaml;
 import io.swagger.v3.oas.models.*;
@@ -363,6 +364,23 @@ public final class OpenApiSpecGenerator {
                                  + "is a normal answer: the key had no dead letters.")
                     .addProperty("resurrectedCount", new IntegerSchema().format("int32"))
                     .addRequiredItem("resurrectedCount"));
+            schemas.put("EventLogResetResult", new ObjectSchema()
+                    .description("Outcome of resetting an event log subscription. False is a normal answer, not an "
+                                 + "error: there is no such subscription, and none was created.")
+                    .addProperty("reset", new BooleanSchema())
+                    .addRequiredItem("reset"));
+            var parkedRequestResult = new StringSchema();
+            for (ParkedRequestResult value : ParkedRequestResult.values()) {
+                parkedRequestResult.addEnumItem(value.name());
+            }
+            schemas.put("EventLogParkedRequestResult", new ObjectSchema()
+                    .description("What became of a retry or discard request for a parked event. ACCEPTED: stored on "
+                                 + "the parked head and served by the instance running the subscription at its next "
+                                 + "parked check. DONE: served by the answering instance. FAILED: the answering instance "
+                                 + "retried it and it failed again, so it stays parked. NOT_A_HEAD: no parked head at "
+                                 + "that global order. NO_SUCH_SUBSCRIPTION: no such subscription.")
+                    .addProperty("result", parkedRequestResult)
+                    .addRequiredItem("result"));
             schemas.put("QueueNameResult", new ObjectSchema()
                     .description("A resolved queue name.")
                     .addProperty("queueName", new StringSchema())

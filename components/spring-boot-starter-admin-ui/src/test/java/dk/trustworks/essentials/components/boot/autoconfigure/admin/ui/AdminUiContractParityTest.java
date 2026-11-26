@@ -72,8 +72,10 @@ class AdminUiContractParityTest {
         // contract silently losing paths, which the two parity assertions below cannot see. The ranked
         // slow-query and the table statistics paths bring it to 50, running a scheduler job on demand to 51,
         // the four event-causation lookups to 55, resuming a subscription stopped by its error policy to 56, and
-        // releasing a shard-owned ordered unit a stop kept behind a hung handler to 57.
-        assertThat(contractPaths).hasSize(48 + 9);
+        // releasing a shard-owned ordered unit a stop kept behind a hung handler to 57, and the new event store
+        // engine's seven event-log subscription paths to 64, and retrying or discarding every parked head of an
+        // event-log subscription at once to 66.
+        assertThat(contractPaths).hasSize(48 + 18);
         assertThat(calledPaths()).isNotEmpty();
     }
 
@@ -104,6 +106,28 @@ class AdminUiContractParityTest {
             "/event-store/statistics/table-sizes",
             "/event-store/statistics/table-activity",
             "/event-store/statistics/table-cache-hit-ratio");
+
+    /**
+     * The new event store engine's subscription admin operations (tag {@code event-log-subscriptions}), surfaced by the
+     * console's event-log subscriptions view (phase 10 of the event-store redesign). Named here as well as covered by
+     * {@link #every_contract_path_is_surfaced_by_the_ui()}, so a view that stops calling one fails with the path named.
+     */
+    private static final Set<String> EVENT_LOG_SUBSCRIPTION_PATHS = Set.of(
+            "/event-log/subscriptions",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/{globalOrder}/retry",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/{globalOrder}/discard",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/retry-all",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/discard-all",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/reset",
+            "/event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/instances/{instanceName}");
+
+    @Test
+    void every_event_log_subscription_path_is_called_by_the_ui() {
+        assertThat(contractPaths).containsAll(EVENT_LOG_SUBSCRIPTION_PATHS);
+        assertThat(calledPaths()).containsAll(EVENT_LOG_SUBSCRIPTION_PATHS);
+    }
 
     @Test
     void every_contract_path_is_surfaced_by_the_ui() {

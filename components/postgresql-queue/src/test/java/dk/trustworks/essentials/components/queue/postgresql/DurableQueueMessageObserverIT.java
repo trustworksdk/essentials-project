@@ -94,11 +94,11 @@ class DurableQueueMessageObserverIT {
         }, 3);
 
         Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            var delivery = registry.findStatistics(queueName).orElseThrow().delivery();
+            var delivery = registry.findStatistics(queueName).orElseThrow(() -> new AssertionError("No statistics yet for " + queueName)).delivery();
             assertThat(delivery.messagesHandled()).isEqualTo(1);
         });
 
-        var statistics = registry.findStatistics(queueName).orElseThrow();
+        var statistics = registry.findStatistics(queueName).orElseThrow(() -> new AssertionError("No statistics yet for " + queueName));
         assertThat(statistics.delivery().lastHandledAt()).isNotNull();
         assertThat(statistics.delivery().averageHandlerDuration()).isNotNull();
         assertThat(statistics.outcomes().messagesRetried()).isZero();
@@ -119,12 +119,12 @@ class DurableQueueMessageObserverIT {
         }, 3);
 
         Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            var statistics = registry.findStatistics(queueName).orElseThrow();
+            var statistics = registry.findStatistics(queueName).orElseThrow(() -> new AssertionError("No statistics yet for " + queueName));
             assertThat(statistics.outcomes().messagesRetried()).isEqualTo(1);
             assertThat(statistics.delivery().messagesHandled()).isEqualTo(1);
         });
 
-        assertThat(registry.findStatistics(queueName).orElseThrow().outcomes().lastFailureReason())
+        assertThat(registry.findStatistics(queueName).orElseThrow(() -> new AssertionError("No statistics yet for " + queueName)).outcomes().lastFailureReason())
                 .isEqualTo("IllegalStateException: fail once");
     }
 
@@ -140,11 +140,11 @@ class DurableQueueMessageObserverIT {
         }, 3);
 
         Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            var outcomes = registry.findStatistics(queueName).orElseThrow().outcomes();
+            var outcomes = registry.findStatistics(queueName).orElseThrow(() -> new AssertionError("No statistics yet for " + queueName)).outcomes();
             assertThat(outcomes.messagesDeadLettered()).isEqualTo(1);
         });
 
-        var statistics = registry.findStatistics(queueName).orElseThrow();
+        var statistics = registry.findStatistics(queueName).orElseThrow(() -> new AssertionError("No statistics yet for " + queueName));
         assertThat(statistics.delivery().messagesHandled()).isZero();
         assertThat(statistics.outcomes().messagesRetried()).isZero();
         assertThat(statistics.outcomes().lastFailureReason()).isEqualTo("IllegalArgumentException: never valid");

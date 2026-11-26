@@ -43,6 +43,11 @@ tags:
   description: Inspect archived closing-books generations.
 - name: aggregate-archive-statistics
   description: Inspect aggregate archive runtime statistics.
+- name: event-log-subscriptions
+  description: "Inspect the subscriptions of the new event store engine (the event\
+    \ log) from the database, page their parked events, retry or discard a parked\
+    \ event, reset a subscription, and delete a retired per-instance subscription.\
+    \ Answered from the database by any instance."
 paths:
   /fenced-locks:
     get:
@@ -3089,6 +3094,608 @@ paths:
       x-required-roles:
       - essentials_subscription_reader
       - essentials_admin
+  /event-log/subscriptions:
+    get:
+      tags:
+      - event-log-subscriptions
+      summary: "List the event log's subscriptions of every instance from the database,\
+        \ optionally of one aggregate type. At most the event log's admin list limit\
+        \ of rows is returned."
+      operationId: getSubscriptions
+      parameters:
+      - name: aggregateType
+        in: query
+        description: Only the subscriptions of this aggregate type.
+        required: false
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiEventLogSubscription"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}:
+    get:
+      tags:
+      - event-log-subscriptions
+      summary: Get one event log subscription from the database.
+      operationId: getSubscription
+      parameters:
+      - name: subscriber
+        in: path
+        description: The subscriber.
+        required: true
+        schema:
+          type: string
+      - name: aggregateType
+        in: path
+        description: The aggregate type the subscriber subscribes to.
+        required: true
+        schema:
+          type: string
+      - name: instanceName
+        in: query
+        description: The instance name of a per-instance subscription. Omitted or
+          empty for an exclusive subscription.
+        required: false
+        schema:
+          type: string
+          default: ""
+      responses:
+        "200":
+          description: 200 — The subscription.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEventLogSubscription"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No value exists for the given identifier.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events:
+    get:
+      tags:
+      - event-log-subscriptions
+      summary: "Page an event log subscription's parked events in global order: the\
+        \ parked heads and the events of their aggregates held behind them. Empty\
+        \ for an unknown subscription."
+      operationId: getParkedEvents
+      parameters:
+      - name: subscriber
+        in: path
+        description: The subscriber.
+        required: true
+        schema:
+          type: string
+      - name: aggregateType
+        in: path
+        description: The aggregate type the subscriber subscribes to.
+        required: true
+        schema:
+          type: string
+      - name: instanceName
+        in: query
+        description: The instance name of a per-instance subscription. Omitted or
+          empty for an exclusive subscription.
+        required: false
+        schema:
+          type: string
+          default: ""
+      - name: afterGlobalOrder
+        in: query
+        description: Only parked events with a higher global order. Pass the previous
+          page's nextAfter.
+        required: false
+        schema:
+          type: integer
+          format: int64
+          default: 0
+      - name: limit
+        in: query
+        description: Maximum number of parked events to return. A value above the
+          maximum is capped.
+        required: false
+        schema:
+          maximum: 1000
+          minimum: 1
+          type: integer
+          format: int32
+          default: 100
+      responses:
+        "200":
+          description: 200 — One page of parked events.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiParkedEventsPage"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/reset:
+    post:
+      tags:
+      - event-log-subscriptions
+      summary: Move an event log subscription's resume point to resumeFrom and delete
+        its parked events and waiting requests. The instance running it picks the
+        new resume point up. Never creates a subscription.
+      operationId: resetSubscription
+      parameters:
+      - name: subscriber
+        in: path
+        description: The subscriber.
+        required: true
+        schema:
+          type: string
+      - name: aggregateType
+        in: path
+        description: The aggregate type the subscriber subscribes to.
+        required: true
+        schema:
+          type: string
+      - name: instanceName
+        in: query
+        description: The instance name of a per-instance subscription. Omitted or
+          empty for an exclusive subscription.
+        required: false
+        schema:
+          type: string
+          default: ""
+      - name: resumeFrom
+        in: query
+        description: The first global order to handle after the reset.
+        required: true
+        schema:
+          minimum: 1
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: 200 — Whether the subscription was reset.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventLogResetResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_writer
+      - essentials_admin
+  /event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/{globalOrder}/retry:
+    post:
+      tags:
+      - event-log-subscriptions
+      summary: "Retry a parked head. The request is stored on the head; the instance\
+        \ running the subscription serves it at once when that is the instance answering,\
+        \ else at its next parked check."
+      operationId: retryParkedEvent
+      parameters:
+      - name: subscriber
+        in: path
+        description: The subscriber.
+        required: true
+        schema:
+          type: string
+      - name: aggregateType
+        in: path
+        description: The aggregate type the subscriber subscribes to.
+        required: true
+        schema:
+          type: string
+      - name: globalOrder
+        in: path
+        description: The global order of the parked head.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: instanceName
+        in: query
+        description: The instance name of a per-instance subscription. Omitted or
+          empty for an exclusive subscription.
+        required: false
+        schema:
+          type: string
+          default: ""
+      responses:
+        "200":
+          description: 200 — What became of the request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventLogParkedRequestResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_writer
+      - essentials_admin
+  /event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/{globalOrder}/discard:
+    post:
+      tags:
+      - event-log-subscriptions
+      summary: "Discard a parked head: delete it without handling it, after which\
+        \ the events held behind it are handled. Served as a retry is."
+      operationId: discardParkedEvent
+      parameters:
+      - name: subscriber
+        in: path
+        description: The subscriber.
+        required: true
+        schema:
+          type: string
+      - name: aggregateType
+        in: path
+        description: The aggregate type the subscriber subscribes to.
+        required: true
+        schema:
+          type: string
+      - name: globalOrder
+        in: path
+        description: The global order of the parked head.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: instanceName
+        in: query
+        description: The instance name of a per-instance subscription. Omitted or
+          empty for an exclusive subscription.
+        required: false
+        schema:
+          type: string
+          default: ""
+      responses:
+        "200":
+          description: 200 — What became of the request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventLogParkedRequestResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_writer
+      - essentials_admin
+  /event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/retry-all:
+    post:
+      tags:
+      - event-log-subscriptions
+      summary: "Retry every parked head of an event log subscription, terminal heads\
+        \ included. The request is stored on each head in one statement and served\
+        \ by the instance running the subscription a few heads per pass, as a single\
+        \ retry is. The events held behind a head follow it. Does not wait for the\
+        \ heads to be served."
+      operationId: retryAllParked
+      parameters:
+      - name: subscriber
+        in: path
+        description: The subscriber.
+        required: true
+        schema:
+          type: string
+      - name: aggregateType
+        in: path
+        description: The aggregate type the subscriber subscribes to.
+        required: true
+        schema:
+          type: string
+      - name: instanceName
+        in: query
+        description: The instance name of a per-instance subscription. Omitted or
+          empty for an exclusive subscription.
+        required: false
+        schema:
+          type: string
+          default: ""
+      responses:
+        "200":
+          description: 200 — Whether the subscription exists and how many parked heads
+            the request was stored on.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiBulkParkedRequestResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_writer
+      - essentials_admin
+  /event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/parked-events/discard-all:
+    post:
+      tags:
+      - event-log-subscriptions
+      summary: "Discard every parked head of an event log subscription: delete each\
+        \ without handling it, after which the events held behind them are handled.\
+        \ Served as a retry-all is."
+      operationId: discardAllParked
+      parameters:
+      - name: subscriber
+        in: path
+        description: The subscriber.
+        required: true
+        schema:
+          type: string
+      - name: aggregateType
+        in: path
+        description: The aggregate type the subscriber subscribes to.
+        required: true
+        schema:
+          type: string
+      - name: instanceName
+        in: query
+        description: The instance name of a per-instance subscription. Omitted or
+          empty for an exclusive subscription.
+        required: false
+        schema:
+          type: string
+          default: ""
+      responses:
+        "200":
+          description: 200 — Whether the subscription exists and how many parked heads
+            the request was stored on.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiBulkParkedRequestResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_writer
+      - essentials_admin
+  /event-log/subscriptions/{subscriber}/aggregate-types/{aggregateType}/instances/{instanceName}:
+    delete:
+      tags:
+      - event-log-subscriptions
+      summary: "Delete the progress row and parked events of a retired per-instance\
+        \ subscription. Only a per-instance row whose lease is not held, and never\
+        \ one the answering instance runs."
+      operationId: deleteRetiredInstance
+      parameters:
+      - name: subscriber
+        in: path
+        description: The subscriber.
+        required: true
+        schema:
+          type: string
+      - name: aggregateType
+        in: path
+        description: The aggregate type the subscriber subscribes to.
+        required: true
+        schema:
+          type: string
+      - name: instanceName
+        in: path
+        description: The retired instance's name.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — Whether the subscription's row was deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_writer
+      - essentials_admin
 components:
   schemas:
     ApiAggregateArchiveStatistics:
@@ -3284,6 +3891,20 @@ components:
           format: date-time
         archiveError:
           type: string
+    ApiBulkParkedRequestResult:
+      required:
+      - nudgedLocally
+      - requested
+      - subscriptionFound
+      type: object
+      properties:
+        subscriptionFound:
+          type: boolean
+        requested:
+          type: integer
+          format: int32
+        nudgedLocally:
+          type: boolean
     ApiCausationEvent:
       required:
       - aggregateId
@@ -3649,6 +4270,107 @@ components:
         lockLastConfirmedTimestamp:
           type: string
           format: date-time
+    ApiEventLogSubscription:
+      required:
+      - aggregateType
+      - consistencyMode
+      - exclusive
+      - instanceName
+      - maxRetries
+      - parkedHeads
+      - parkedTotal
+      - progressModel
+      - resetEpoch
+      - resumePoint
+      - retryingHeads
+      - subscriber
+      - terminalHeads
+      - updatedAt
+      type: object
+      properties:
+        subscriber:
+          type: string
+        aggregateType:
+          type: string
+        instanceName:
+          type: string
+        exclusive:
+          type: boolean
+        consistencyMode:
+          type: string
+        progressModel:
+          type: string
+        resumePoint:
+          type: integer
+          format: int64
+        resetEpoch:
+          type: integer
+          format: int64
+        leaseOwner:
+          type: string
+          description: The node and instance holding the lease of an exclusive subscription.
+            Null while no instance holds it and for a per-instance subscription.
+          nullable: true
+        leaseUntil:
+          type: string
+          description: When the lease of an exclusive subscription expires. Null while
+            no instance holds it.
+          format: date-time
+          nullable: true
+        fence:
+          type: integer
+          description: The fencing token of the latest lease of an exclusive subscription.
+            Null when it was never leased.
+          format: int64
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+        filterDigest:
+          type: string
+          description: The digest of the subscription's event filter. Null when the
+            subscription has no filter.
+          nullable: true
+        parkedHeads:
+          type: integer
+          format: int64
+        parkedTotal:
+          type: integer
+          format: int64
+        lag:
+          type: integer
+          description: How many global orders of the aggregate type lie past the resume
+            point. Never negative. Null when the aggregate type is not registered
+            in the database.
+          format: int64
+          nullable: true
+        retryingHeads:
+          type: integer
+          format: int64
+        terminalHeads:
+          type: integer
+          format: int64
+        oldestParkedAt:
+          type: string
+          description: When the longest-parked head was parked. Null when nothing
+            is parked.
+          format: date-time
+          nullable: true
+        nextRetryAt:
+          type: string
+          description: The earliest automatic retry of a parked head. Null when no
+            head is retrying. Terminal heads are never retried automatically.
+          format: date-time
+          nullable: true
+        maxRetries:
+          type: integer
+          format: int32
+        lastFailedAt:
+          type: string
+          description: The latest failure of a parked head. Null when nothing is parked
+            or no failure was recorded.
+          format: date-time
+          nullable: true
     ApiExecutorJob:
       required:
       - initialDelay
@@ -3717,6 +4439,85 @@ components:
             requests. Null while there has been no block access since the statistics
             were reset.
           format: double
+          nullable: true
+    ApiParkedEvent:
+      required:
+      - aggregateId
+      - attempts
+      - globalOrder
+      - parkedAt
+      - retries
+      - terminal
+      type: object
+      properties:
+        globalOrder:
+          type: integer
+          format: int64
+        aggregateId:
+          type: string
+        blockedBy:
+          type: integer
+          description: The global order of the parked head this event is held behind.
+            Null for a parked head.
+          format: int64
+          nullable: true
+        attempts:
+          type: integer
+          format: int32
+        errorType:
+          type: string
+          description: The exception type of the last failed attempt. Null for an
+            event held behind a head.
+          nullable: true
+        errorMessage:
+          type: string
+          description: The exception message of the last failed attempt. Null when
+            there was none.
+          nullable: true
+        parkedAt:
+          type: string
+          format: date-time
+        requested:
+          type: string
+          description: RETRY or DISCARD while an operator's request waits to be served.
+            Null otherwise.
+          nullable: true
+        requestedAt:
+          type: string
+          description: When the waiting request was made. Null when no request waits.
+          format: date-time
+          nullable: true
+        retries:
+          type: integer
+          format: int32
+        nextRetryAt:
+          type: string
+          description: When the engine retries this parked head on its own. Null for
+            a terminal head and for an event held behind a head.
+          format: date-time
+          nullable: true
+        terminal:
+          type: boolean
+        lastFailedAt:
+          type: string
+          description: When this parked head last failed. Null for an event held behind
+            a head and when no failure was recorded.
+          format: date-time
+          nullable: true
+    ApiParkedEventsPage:
+      required:
+      - events
+      type: object
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiParkedEvent"
+        nextAfter:
+          type: integer
+          description: The afterGlobalOrder of the next page. Null when this page
+            was not full and so is the last.
+          format: int64
           nullable: true
     ApiPersistedEvent:
       type: object
@@ -4587,6 +5388,34 @@ components:
             internals.
           nullable: true
       description: Error response.
+    EventLogParkedRequestResult:
+      required:
+      - result
+      type: object
+      properties:
+        result:
+          type: string
+          enum:
+          - ACCEPTED
+          - DONE
+          - FAILED
+          - NOT_A_HEAD
+          - NO_SUCH_SUBSCRIPTION
+      description: "What became of a retry or discard request for a parked event.\
+        \ ACCEPTED: stored on the parked head and served by the instance running the\
+        \ subscription at its next parked check. DONE: served by the answering instance.\
+        \ FAILED: the answering instance retried it and it failed again, so it stays\
+        \ parked. NOT_A_HEAD: no parked head at that global order. NO_SUCH_SUBSCRIPTION:\
+        \ no such subscription."
+    EventLogResetResult:
+      required:
+      - reset
+      type: object
+      properties:
+        reset:
+          type: boolean
+      description: "Outcome of resetting an event log subscription. False is a normal\
+        \ answer, not an error: there is no such subscription, and none was created."
     GlobalEventOrderResult:
       required:
       - globalEventOrder

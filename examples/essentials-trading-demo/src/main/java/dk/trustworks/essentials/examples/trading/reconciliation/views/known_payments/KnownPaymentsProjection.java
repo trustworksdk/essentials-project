@@ -16,124 +16,98 @@
 
 package dk.trustworks.essentials.examples.trading.reconciliation.views.known_payments;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
-import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoSchema;
 import dk.trustworks.essentials.examples.trading.funding.events.*;
-import dk.trustworks.essentials.examples.trading.funding.types.FundingAggregateTypes;
 import dk.trustworks.essentials.types.Money;
-import dk.trustworks.essentials.examples.trading.config.TradingDemoViewEventProcessor;
+import org.jdbi.v3.core.Handle;
 import org.springframework.stereotype.Service;
 
 import java.sql.Date;
 import java.time.LocalDate;
-import java.util.List;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * {@code reconciliation}'s own record of the brokerage's payments, projected from {@code funding}'s events - a
  * cross-BC {@code events/} import, so reconciliation never calls into {@code funding}: what was requested (kind,
  * amount), the gateway's id it was taken under, and the value dates of its completion and return. What a bank statement is checked against.
  * <p>
- * Every handler write goes through {@code getRequiredUnitOfWork().handle()…}, the {@code UnitOfWork} a
- * {@link ViewEventProcessor} handles each event in, so the row commits together with the processor's progress by construction - not, as
- * with Spring's {@code JdbcTemplate}, only while the Spring wiring binds both to one connection. The
- * constructor's DDL runs where none is active, so it goes through {@code getUnitOfWorkFactory().usingUnitOfWork(uow -> …)},
- * which opens one.
+ * Engine-neutral: the tables, the event logic and the queries, on either event store engine. What feeds it is the
+ * engine's processor - {@link KnownPaymentsClassicView} or {@link KnownPaymentsEventLogView} - which hands each event here with
+ * the handle of the transaction it handles the event in, so the row commits together with that processor's progress.
+ * The constructor's DDL opens a unit of work of its own.
  */
-// Deliberately not handled: the startup summary warns about every sealed-hierarchy leaf a view neither handles nor lists here
-@IgnoresEventTypes({DepositFailed.class,
-                    WithdrawalFailed.class})
 @Service
-public class KnownPaymentsProjection extends TradingDemoViewEventProcessor {
-    public KnownPaymentsProjection(ViewEventProcessorDependencies dependencies) {
-        super(dependencies);
-        getUnitOfWorkFactory().usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
-                                                                                   CREATE TABLE IF NOT EXISTS projection_reconciliation_payment (
-                                                                                       reference VARCHAR PRIMARY KEY,
-                                                                                       kind VARCHAR NOT NULL,
-                                                                                       amount NUMERIC(24, 6) NOT NULL,
-                                                                                       currency VARCHAR NOT NULL,
-                                                                                       payment_id VARCHAR NULL,
-                                                                                       completed_on DATE NULL,
-                                                                                       returned_on DATE NULL
-                                                                                   )
-                                                                                   """));
+public class KnownPaymentsProjection {
+    private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
+
+    public KnownPaymentsProjection(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
+        unitOfWorkFactory.usingUnitOfWork(uow -> TradingDemoSchema.ddl(uow.handle(), """
+                                                                              CREATE TABLE IF NOT EXISTS projection_reconciliation_payment (
+                                                                                  reference VARCHAR PRIMARY KEY,
+                                                                                  kind VARCHAR NOT NULL,
+                                                                                  amount NUMERIC(24, 6) NOT NULL,
+                                                                                  currency VARCHAR NOT NULL,
+                                                                                  payment_id VARCHAR NULL,
+                                                                                  completed_on DATE NULL,
+                                                                                  returned_on DATE NULL
+                                                                              )
+                                                                              """));
     }
 
-    @Override
-    public String getProcessorName() {
-        return "ReconciliationKnownPaymentsProjection";
+    void on(Handle handle, DepositRequested e) {
+        requested(handle, e.depositId().toString(), "DEPOSIT", e.amount());
     }
 
-    @Override
-    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-        return List.of(FundingAggregateTypes.DEPOSITS, FundingAggregateTypes.WITHDRAWALS);
+    void on(Handle handle, WithdrawalRequested e) {
+        requested(handle, e.withdrawalId().toString(), "WITHDRAWAL", e.amount());
     }
 
-    @MessageHandler
-    void handle(DepositRequested e) {
-        requested(e.depositId().toString(), "DEPOSIT", e.amount());
+    void on(Handle handle, DepositInitiated e) {
+        handle.createUpdate("UPDATE projection_reconciliation_payment SET payment_id = :paymentId WHERE reference = :reference")
+              .bind("paymentId", e.paymentId().toString())
+              .bind("reference", e.depositId().toString())
+              .execute();
     }
 
-    @MessageHandler
-    void handle(WithdrawalRequested e) {
-        requested(e.withdrawalId().toString(), "WITHDRAWAL", e.amount());
+    void on(Handle handle, WithdrawalInitiated e) {
+        handle.createUpdate("UPDATE projection_reconciliation_payment SET payment_id = :paymentId WHERE reference = :reference")
+              .bind("paymentId", e.paymentId().toString())
+              .bind("reference", e.withdrawalId().toString())
+              .execute();
     }
 
-    @MessageHandler
-    void handle(DepositInitiated e) {
-        getRequiredUnitOfWork().handle()
-                                .createUpdate("UPDATE projection_reconciliation_payment SET payment_id = :paymentId WHERE reference = :reference")
-                                .bind("paymentId", e.paymentId().toString())
-                                .bind("reference", e.depositId().toString())
-                                .execute();
+    void on(Handle handle, DepositCompleted e) {
+        setDate(handle, "completed_on", e.depositId().toString(), e.valueDate());
     }
 
-    @MessageHandler
-    void handle(WithdrawalInitiated e) {
-        getRequiredUnitOfWork().handle()
-                                .createUpdate("UPDATE projection_reconciliation_payment SET payment_id = :paymentId WHERE reference = :reference")
-                                .bind("paymentId", e.paymentId().toString())
-                                .bind("reference", e.withdrawalId().toString())
-                                .execute();
+    void on(Handle handle, WithdrawalCompleted e) {
+        setDate(handle, "completed_on", e.withdrawalId().toString(), e.valueDate());
     }
 
-    @MessageHandler
-    void handle(DepositCompleted e) {
-        on("completed_on", e.depositId().toString(), e.valueDate());
+    void on(Handle handle, DepositReturnedByBank e) {
+        setDate(handle, "returned_on", e.depositId().toString(), e.valueDate());
     }
 
-    @MessageHandler
-    void handle(WithdrawalCompleted e) {
-        on("completed_on", e.withdrawalId().toString(), e.valueDate());
+    void on(Handle handle, WithdrawalReturnedByBank e) {
+        setDate(handle, "returned_on", e.withdrawalId().toString(), e.valueDate());
     }
 
-    @MessageHandler
-    void handle(DepositReturnedByBank e) {
-        on("returned_on", e.depositId().toString(), e.valueDate());
+    private void requested(Handle handle, String reference, String kind, Money amount) {
+        handle.createUpdate("INSERT INTO projection_reconciliation_payment (reference, kind, amount, currency) VALUES (:reference, :kind, :amount, :currency) ON CONFLICT (reference) DO NOTHING")
+              .bind("reference", reference)
+              .bind("kind", kind)
+              .bind("amount", amount.getAmount().value())
+              .bind("currency", amount.getCurrency().toString())
+              .execute();
     }
 
-    @MessageHandler
-    void handle(WithdrawalReturnedByBank e) {
-        on("returned_on", e.withdrawalId().toString(), e.valueDate());
-    }
-
-    private void requested(String reference, String kind, Money amount) {
-        getRequiredUnitOfWork().handle()
-                                .createUpdate("INSERT INTO projection_reconciliation_payment (reference, kind, amount, currency) VALUES (:reference, :kind, :amount, :currency) ON CONFLICT (reference) DO NOTHING")
-                                .bind("reference", reference)
-                                .bind("kind", kind)
-                                .bind("amount", amount.getAmount().value())
-                                .bind("currency", amount.getCurrency().toString())
-                                .execute();
-    }
-
-    private void on(String column, String reference, LocalDate valueDate) {
-        getRequiredUnitOfWork().handle()
-                                .createUpdate("UPDATE projection_reconciliation_payment SET " + column + " = :valueDate WHERE reference = :reference")
-                                .bind("valueDate", Date.valueOf(valueDate))
-                                .bind("reference", reference)
-                                .execute();
+    private void setDate(Handle handle, String column, String reference, LocalDate valueDate) {
+        handle.createUpdate("UPDATE projection_reconciliation_payment SET " + column + " = :valueDate WHERE reference = :reference")
+              .bind("valueDate", Date.valueOf(valueDate))
+              .bind("reference", reference)
+              .execute();
     }
 }

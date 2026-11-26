@@ -19,7 +19,7 @@ package dk.trustworks.essentials.examples.trading.reconciliation.aggregates;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.examples.trading.reconciliation.events.ReconciliationCaseEvent;
 import dk.trustworks.essentials.examples.trading.reconciliation.types.*;
 import org.springframework.stereotype.Component;
@@ -38,7 +38,7 @@ public class ReconciliationCases {
 
     private final StatefulAggregateRepository<CaseId, ReconciliationCaseEvent, ReconciliationCase> repository;
 
-    public ReconciliationCases(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+    public ReconciliationCases(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore) {
         requireNonNull(eventStore, "No eventStore provided");
         repository = StatefulAggregateRepository.from(eventStore, AGGREGATE_TYPE, reflectionBasedAggregateRootFactory(), ReconciliationCase.class);
     }

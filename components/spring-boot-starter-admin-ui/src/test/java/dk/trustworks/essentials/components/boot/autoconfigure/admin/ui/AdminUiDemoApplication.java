@@ -17,6 +17,8 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.admin.ui;
 
 import dk.trustworks.essentials.components.boot.autoconfigure.admin.api.EssentialsAdminApiAutoConfiguration;
+import dk.trustworks.essentials.components.eventlog.ParkedRequestResult;
+import dk.trustworks.essentials.components.eventlog.processor.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
@@ -49,7 +51,7 @@ import static org.mockito.Mockito.*;
  * Runs the admin UI against stubbed SPIs so the real thing can be opened, driven and screenshotted —
  * templates, static assets, the API adapter and the JavaScript all exercised together.
  * <p>
- * There is no database: the seven {@code *Api} beans are Mockito stubs returning fixture data of the
+ * There is no database: the {@code *Api} beans are Mockito stubs returning fixture data of the
  * shape the contract declares. That is enough, because the UI only ever talks HTTP to the API, and the
  * API only ever talks to these beans.
  * <p>
@@ -367,6 +369,53 @@ public class AdminUiDemoApplication {
                                         OffsetDateTime.parse("2026-07-31T11:19:36Z"),
                                         "Database connection failed when writing to copy",
                                         OffsetDateTime.parse("2026-07-31T11:19:36.600Z"))));
+        return api;
+    }
+
+    /** The new event store engine's subscriptions: one leased exclusive subscription with a parked head, one retired instance. */
+    @Bean
+    EventLogSubscriptionsApi eventLogSubscriptionsApi() {
+        var api     = mock(EventLogSubscriptionsApi.class);
+        var updated = OffsetDateTime.parse("2026-07-31T11:20:00Z");
+        var exclusive = new ApiEventLogSubscription("OrderProjector", "Orders", "", true, "CONTIGUOUS", "PERIODIC", 918150, 0,
+                                                    Optional.of("node-1/orders-1"), Optional.of(updated.plusSeconds(30)), OptionalLong.of(17),
+                                                    updated, Optional.empty(), 2, 4, OptionalLong.of(54), 1, 1,
+                                                    Optional.of(OffsetDateTime.parse("2026-07-31T11:18:02Z")), Optional.of(updated.plusSeconds(16)), 5,
+                                                    Optional.of(updated.minusSeconds(16)));
+        var retired = new ApiEventLogSubscription("AuditTrail", "Orders", "orders-2", false, "FRESH", "IN_HANDLER_TRANSACTION", 902114, 0,
+                                                  Optional.empty(), Optional.empty(), OptionalLong.empty(),
+                                                  updated.minusDays(3), Optional.of("9f2c41"), 0, 0, OptionalLong.of(16090), 0, 0,
+                                                  Optional.empty(), Optional.empty(), 0, Optional.empty());
+        when(api.getSubscriptions(any(), any())).thenReturn(List.of(exclusive, retired));
+        when(api.getSubscription(any(), any())).thenAnswer(call -> {
+            var key = call.getArgument(1, dk.trustworks.essentials.components.eventlog.ProgressKey.class);
+            return key.instanceName().isEmpty() ? Optional.of(exclusive) : Optional.of(retired);
+        });
+        var parkedAt = OffsetDateTime.parse("2026-07-31T11:18:02Z");
+        when(api.getParkedEvents(any(), any(), anyLong(), anyInt())).thenReturn(new ApiParkedEventsPage(List.of(
+                new ApiParkedEventsPage.ApiParkedEvent(918151, "order-4711", OptionalLong.empty(), 3,
+                                                       Optional.of("java.lang.IllegalStateException"),
+                                                       Optional.of("Order order-4711 has no customer"), parkedAt,
+                                                       Optional.empty(), Optional.empty(), 5, Optional.of(updated.plusSeconds(16)), false,
+                                                       Optional.of(updated.minusSeconds(16))),
+                new ApiParkedEventsPage.ApiParkedEvent(918163, "order-4711", OptionalLong.of(918151), 0, Optional.empty(),
+                                                       Optional.empty(), parkedAt.plusSeconds(4), Optional.empty(), Optional.empty(), 0,
+                                                       Optional.empty(), false, Optional.empty()),
+                new ApiParkedEventsPage.ApiParkedEvent(918170, "order-4711", OptionalLong.of(918151), 0, Optional.empty(),
+                                                       Optional.empty(), parkedAt.plusSeconds(9), Optional.empty(), Optional.empty(), 0,
+                                                       Optional.empty(), false, Optional.empty()),
+                new ApiParkedEventsPage.ApiParkedEvent(918190, "order-4802", OptionalLong.empty(), 1,
+                                                       Optional.of("dk.trustworks.essentials.components.eventlog.ParkEventException"),
+                                                       Optional.of("Malformed JSON payload"), parkedAt.plusSeconds(40),
+                                                       Optional.empty(), Optional.empty(), 0, Optional.empty(), true,
+                                                       Optional.of(parkedAt.plusSeconds(40)))),
+                OptionalLong.empty()));
+        when(api.retryAllParked(any(), any())).thenReturn(new ApiBulkParkedRequestResult(true, 2, true));
+        when(api.discardAllParked(any(), any())).thenReturn(new ApiBulkParkedRequestResult(true, 2, false));
+        when(api.retryParkedEvent(any(), any(), anyLong())).thenReturn(ParkedRequestResult.ACCEPTED);
+        when(api.discardParkedEvent(any(), any(), anyLong())).thenReturn(ParkedRequestResult.ACCEPTED);
+        when(api.resetSubscription(any(), any(), anyLong())).thenReturn(true);
+        when(api.deleteRetiredInstance(any(), any())).thenReturn(true);
         return api;
     }
 }

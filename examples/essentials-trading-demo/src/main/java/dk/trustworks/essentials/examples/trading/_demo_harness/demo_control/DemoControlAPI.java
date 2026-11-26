@@ -37,6 +37,7 @@ public class DemoControlAPI {
     private final ExchangeClockControl clock;
     private final BackgroundTraffic    traffic;
     private final JdbcTemplate         jdbcTemplate;
+    private final ViewFaultSwitch      viewFault;
 
     public record Speed(BigDecimal speed) {
     }
@@ -50,6 +51,9 @@ public class DemoControlAPI {
     public record Rate(double ordersPerExchangeMinute) {
     }
 
+    public record ViewFault(ViewFaultSwitch.Mode mode) {
+    }
+
     /**
      * What the system holds now, from the views: orders and payments by status, reconciliation cases by state, and how
      * many fenced locks - exclusive processors and consumers - each instance holds.
@@ -58,10 +62,21 @@ public class DemoControlAPI {
                            Map<String, Long> fencedLocksByInstance) {
     }
 
-    public DemoControlAPI(ExchangeClockControl clock, BackgroundTraffic traffic, JdbcTemplate jdbcTemplate) {
+    public DemoControlAPI(ExchangeClockControl clock, BackgroundTraffic traffic, JdbcTemplate jdbcTemplate, ViewFaultSwitch viewFault) {
         this.clock = requireNonNull(clock, "No clock provided");
         this.traffic = requireNonNull(traffic, "No traffic provided");
         this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+        this.viewFault = requireNonNull(viewFault, "No viewFault provided");
+    }
+
+    @GetMapping("/view-fault")
+    public ViewFaultSwitch.Status viewFault() {
+        return viewFault.status();
+    }
+
+    @PutMapping("/view-fault")
+    public ViewFaultSwitch.Status viewFault(@RequestBody ViewFault fault) {
+        return viewFault.set(requireNonNull(fault, "No fault provided").mode());
     }
 
     @GetMapping("/clock")

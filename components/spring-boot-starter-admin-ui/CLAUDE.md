@@ -18,7 +18,7 @@ implementation that could drift impossible.
 | `AdminUiController` | Serves one Thymeleaf view. Puts the API base path and role flags in the model |
 | `templates/essentials-admin/index.html` | Layout + role-gated nav. The entire server-rendered surface |
 | `static/essentials-admin/admin.css` | Design tokens and components. Extracted from the mockup |
-| `static/essentials-admin/admin.js` | Fetch layer, seven views, detail drawer, dialogs |
+| `static/essentials-admin/admin.js` | Fetch layer, one view per admin area, detail drawer, dialogs |
 | `EssentialsAdminUiAutoConfiguration` | Gated on both `essentials.admin-ui.enabled` and `essentials.admin-api.enabled` |
 
 ## Test Structure

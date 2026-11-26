@@ -122,6 +122,19 @@ async function refreshTraffic() {
     document.getElementById('traffic-stop').disabled = !traffic.running;
 }
 
+async function refreshViewFault() {
+    const fault = await api('/api/admin/demo/view-fault');
+    const text = {
+        OFF: 'Off. The orders view handles every order.',
+        RETRYING: 'On - retrying: new orders are parked and retried by the engine until the fault is switched off.',
+        TERMINAL: 'On - terminal: new orders are parked until an operator retries or discards them.'
+    }[fault.mode];
+    setText('view-fault-text', `${text} Failures thrown since start: ${fault.failuresThrown}.`);
+    document.getElementById('view-fault-retrying').disabled = fault.mode === 'RETRYING';
+    document.getElementById('view-fault-terminal').disabled = fault.mode === 'TERMINAL';
+    document.getElementById('view-fault-off').disabled = fault.mode === 'OFF';
+}
+
 async function refreshOverview() {
     const overview = await api('/api/admin/demo/overview');
     buckets('orders-by-status', overview.ordersByStatus, 'No orders yet.');
@@ -166,6 +179,11 @@ act('traffic-rate', () => api('/api/admin/demo/traffic/rate', 'PUT', rate()), re
 act('traffic-stop', () => api('/api/admin/demo/traffic/stop', 'POST'), refreshTraffic);
 act('traffic-burst', () => api('/api/admin/demo/traffic/burst', 'POST'), refreshTraffic);
 
+for (const [id, mode] of [['view-fault-retrying', 'RETRYING'], ['view-fault-terminal', 'TERMINAL'], ['view-fault-off', 'OFF']]) {
+    act(id, () => api('/api/admin/demo/view-fault', 'PUT', { mode }), refreshViewFault);
+}
+
 poll(refreshClock, 1000);
+poll(refreshViewFault, 2000);
 poll(refreshTraffic, 2000);
 poll(refreshOverview, 5000);

@@ -344,7 +344,7 @@ td.actions, th.sticky {
 .tabs { display: inline-flex; gap: 2px; background: color-mix(in oklab, var(--ink-primary) 5%, transparent); padding: 2px; border-radius: 8px; }
 .tab { font: inherit; font-size: 13px; border: none; background: none; padding: 4px 10px; border-radius: 6px; cursor: pointer; color: var(--ink-secondary); }
 .tab[aria-selected="true"] { background: var(--surface-1); color: var(--ink-primary); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); }
-select, input[type="text"] { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-1); color: var(--ink-primary); }
+select, input[type="text"], input[type="number"] { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-1); color: var(--ink-primary); }
 .spacer { flex: 1; }
 .pager { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--gridline); color: var(--ink-secondary); font-size: 12px; }
 
@@ -434,7 +434,7 @@ tbody tr.is-selected { background: color-mix(in oklab, var(--accent) 9%, transpa
 .modal-body { padding: 8px 16px 14px; color: var(--ink-secondary); font-size: 13px; }
 .modal-foot { padding: 12px 16px; border-top: 1px solid var(--gridline); display: flex; gap: 8px; justify-content: flex-end; }
 .modal-body label { display: block; color: var(--ink-primary); margin: 12px 0 4px; font-size: 12px; }
-.modal-body input[type="text"], .modal-body select { width: 100%; }
+.modal-body input[type="text"], .modal-body input[type="number"], .modal-body select { width: 100%; }
 .btn-solid-danger {
     background: var(--status-critical); border-color: var(--status-critical); color: #fff;
 }
