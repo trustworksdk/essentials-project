@@ -25,6 +25,8 @@ targets, with a `-N` suffix for plugin-only releases.
   names a gap handler its `isAwaitedAsGap` does not read makes `awaitProcessed` miss that handler's transient gaps.
 - **Foundation reference: the Leadership Election example** checks that the lock manager is started (WARN, stays not
   running otherwise) and says its shutdown release is not bounded by the Essentials shutdown timeout.
+- **Foundation reference: `PostgresqlNotificationDrain`** - for a hand-written LISTEN loop on a dedicated pgjdbc
+  connection; pgjdbc's `getNotifications(timeout)` holds back a dense notification stream (Essentials 0.61.1).
 - **Shard-owned reference: which sweep counter to alert on** - not `sweepRecoveries` by its value (it counts harmless
   rows too); `sweepRecoveriesBehindCursor` on the ordered lane.
 
