@@ -4,14 +4,14 @@ Work that is **not built yet**: plans, proposals and improvement lists. A docume
 items. When the work ships, the part that describes the feature goes into a reference document in `docs/` (or the
 module's `LLM/` doc), and the plan moves to [`../archive/`](../archive).
 
-Last checked against the code: 2026-11-25 (`main` after 0.61.0, plus the 0.61.1 fixes).
+Last checked against the code: 2026-11-25 (`main` after 0.61.0, plus the 0.61.1 fixes); durable-queues plan 2026-11-26.
 
 ## Documents
 
 | Document | Area | What is open |
 |---|---|---|
 | [ROADMAP-0.6x.md](ROADMAP-0.6x.md) | Whole framework | The open fixes and improvements for the 0.6x line, bucketed by the earliest release they may ship in. Items are deleted when shipped. |
-| [durable-queues-improvement-plan.md](durable-queues-improvement-plan.md) | `postgresql-queue`, shard-owned engine | D4 virtual-thread handlers for the classic queue; E3 document a lower HikariCP `minimumIdle`; F5 a retrying shard-owned message keeps no error; C4 "skip the ordered claim" (reverted, measure first); batched acknowledgements. |
+| [durable-queues-improvement-plan.md](durable-queues-improvement-plan.md) | `postgresql-queue`, shard-owned engine | Open items only; the full plan is archived. D4 virtual-thread handlers for the classic queue; C4 "skip the ordered claim" (reverted, measure first); batched acknowledgements; verify the batched fetch under competing consumers and fix its "work in progress" javadoc; F5 a retrying shard-owned message keeps no error; F10 measure NOTIFY cost on the commit path; E3 document a lower HikariCP `minimumIdle`. |
 | [shard-owned-queue-polling-reduction.md](shard-owned-queue-polling-reduction.md) | Shard-owned engine | Item 1(b) cache the Micrometer queue-depth read - since 0.61.0 the interceptor is registered whenever a `MeterRegistry` bean exists, so this read now runs in every Actuator application; items 2 and 4 (their `wip/sq-item2` and `wip/sq-item4` branches no longer exist, so start over); item 5. Items 1(a) and 3 shipped in 0.61.0. |
 | [shard-owned-consumer-overhead-proposal.md](shard-owned-consumer-overhead-proposal.md) | Shard-owned engine | Candidate 1 shipped in 0.61.0. Candidate 2: the cost of the batched cursor read when units are split (profile first). |
 | [shard-owned-test-time-reduction.md](shard-owned-test-time-reduction.md) | Shard-owned engine tests | Items 1–4 and 6 done (engine module 12:42 → 8:40). Open: §7, a profiling pass over the remaining waits in `ShardOwnedLifecycleIT` and `ShardOwnedUnsubscribeIT`, then SQL lease ageing where safe. |
