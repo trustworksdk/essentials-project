@@ -409,6 +409,12 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
 
         // Under the monitor, so a job registered meanwhile waits and then sees lockAcquired = true - see jobSchedulingMonitor
         synchronized (jobSchedulingMonitor) {
+            // During a shutdown the lock manager can release the lock, and call lockReleased, before this callback runs (see
+            // LockCallback). Scheduling then would leave jobs - pg_cron jobs in the database - that nothing unschedules
+            if (!started || !lock.isLocked()) {
+                log.info("FencedLock '{}' was released, or the scheduler stopped, before lockAcquired ran - not scheduling any jobs", lockName);
+                return;
+            }
             deleteJobsWithInstanceId();
 
             scheduleJobs();
