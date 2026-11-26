@@ -292,7 +292,7 @@ check `confirmationEnded`; and collect the refusal rule (`started`, `stopping`, 
     cancelled may be resumed with its original callback after a stop and start, and a repeated call with another
     callback may replace it. Keep the database-specific detail on `DBFencedLockManager`.
   - Update the README and `LLM/LLM-foundation.md` accounts of the replacement (see RW-20), and add a release-notes
-    entry. RW-18 adds the missing test for a replacement while another node holds the lock.
+    entry. The test for a replacement while another node holds the lock exists since 0.61.1 (RW-18, `DBFencedLockManagerIT`).
 
 (review findings F-952, F-954, F-955, F-958, F-959)
 
@@ -335,51 +335,6 @@ the `LockCallback` javadoc, `acquireLockAsync` and `LLM/LLM-foundation.md`. Open
 (event processors, exclusive subscriptions, inbox consumers, the scheduler) against it, or close the gap with a
 per-registration flag that the tick sets around `lockAcquired`, so the shutdown release leaves the local
 `lockReleased` to the tick.
-
-**Two async-acquiring races no test reaches, and two loose ends in the tests (RW-18).**
-
-- **Problem:**
-  - Replacing a resumed registration (RW-13) while another node holds the lock runs nowhere. In that case
-    `cancelAsyncLockAcquiring` finds nothing in `locksAcquiredByThisLockManager` and only swaps the registration: the
-    old callback must not get `lockReleased`, and the new one must get the lock when the other node lets go. The unit
-    tests cover only the case where the resumed acquiring holds the lock. No replacement test runs against a real
-    database: the reusable `DBFencedLockManagerIT` in `foundation-test`, which the PostgreSQL and MongoDB subclasses
-    run, resumes only with the same callback.
-  - The second registration check in `asyncLockAcquiringTick` rests on a two-sided argument: either the cancel finds
-    the recorded lock and releases it, or the tick finds its registration gone and releases it, and when both happen
-    only the first local release calls `lockReleased` and publishes `LockReleased`. Both tests of it in
-    `DBFencedLockManagerAcquiredCallbackErrorTest`
-    (`an_async_acquiring_cancelled_while_its_tick_acquires_the_lock_releases_the_lock_and_does_not_call_lock_acquired`
-    and its critical-error variant) block the tick in `lookupLockInDB`, before the lock is recorded, so only the tick
-    releases. The side where both release, where the once-only announcement matters, is not exercised.
-  - In `DBFencedLockManagerLostLockReleaseTest`, the `withUnitOfWork` override in `TestDBFencedLockManager` matches the
-    confirmation thread by a copied literal, `"-FencedLock-Confirmation-"`, which `start()` spells separately in its
-    `nameFormat`; the async acquiring threads already have `ASYNC_LOCK_ACQUIRING_THREAD_NAME_INFIX`. The same class has
-    an unnecessary `@SuppressWarnings("PMD.CloseResource")` on
-    `an_acquire_waiting_for_the_lock_managers_lock_while_the_confirmation_ends_with_a_critical_error_does_not_acquire_the_lock`:
-    the lock it acquires is never kept in a local.
-- **Consequence:** a regression in either race ships with a green build. A rename of the confirmation thread turns
-  `a_non_critical_failure_escaping_the_confirmation_releases_every_held_lock_locally_and_is_logged_as_an_unexpected_failure`
-  into a 5-second Awaitility timeout on the ERROR line, far from the cause.
-- **Fix:**
-  - Add a two-node test to `DBFencedLockManagerIT`, for example
-    `acquireLockAsync_with_another_callback_replaces_a_resumed_acquiring_waiting_for_a_lock_another_node_holds`: node 1
-    registers `cb1` and stops; node 2 registers `cb2` and takes the lock at token t; node 1 starts and registers `cb3`.
-    Assert that `cb1.released` stays 1 and `cb2.released` stays 0. Then cancel on node 2, await `cb3` acquiring at
-    token t + 1, and assert that `cb1.acquired` does not move over a `during(5s)` window.
-  - Add a test that lands the cancel after the lock is recorded. `_tryAcquireLock` records the lock and then publishes
-    `LockAcquired` on the tick thread while it holds `reentrantLock`, so an `eventSubscriberAction` can start a thread
-    that calls `cancelAsyncLockAcquiring` on the first `LockAcquired`, and wait until
-    `reentrantLockForTests().hasQueuedThread(thatThread)` before it returns. Assert no `lockAcquired` or `lockReleased`
-    on the callback, exactly one `LockReleased`, an unlocked row, no exception on the cancelling thread, and
-    `isLockedByThisLockManagerInstance` false. It is the same cancel-against-tick race as RW-11; if RW-11 is still
-    open, do them together.
-  - Add a package-private `CONFIRMATION_THREAD_NAME_INFIX` next to `ASYNC_LOCK_ACQUIRING_THREAD_NAME_INFIX`, and use
-    it in `start()` and in the override. Drop the unnecessary suppression. PMD run on that class without the test
-    classpath also flags suppressions that are needed, so check each one by hand rather than trusting the report.
-  - Tests only: no release-notes entry.
-
-(review findings F-951, F-969, F-971, F-972)
 
 ### Value types
 

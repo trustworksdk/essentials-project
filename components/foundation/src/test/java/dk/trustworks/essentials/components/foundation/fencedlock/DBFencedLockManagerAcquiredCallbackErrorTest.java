@@ -541,6 +541,58 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
     }
 
     /**
+     * The other side of the race in
+     * {@link #an_async_acquiring_cancelled_while_its_tick_acquires_the_lock_releases_the_lock_and_does_not_call_lock_acquired()}:
+     * the cancel lands after the tick has recorded the lock, so the cancel finds the lock and releases it, and the tick
+     * then finds its registration gone and releases it too. The cancel is started from the lock manager's
+     * <code>LockAcquired</code> event, which the tick publishes while it holds the lock manager's lock, and the event
+     * subscriber returns only once the cancel waits for that lock. Both release; only the first local release may announce
+     * it, and the cancelled callback is never called.
+     */
+    @Test
+    void an_async_acquiring_cancelled_after_its_tick_recorded_the_lock_is_released_once_and_its_callback_is_not_called() throws Exception {
+        var callback       = new CountingLockCallback();
+        var cancelFailure  = new AtomicReference<Throwable>();
+        var cancellingThread = new AtomicReference<Thread>();
+        eventSubscriberAction = event -> {
+            if (event instanceof FencedLockEvents.LockAcquired && cancellingThread.get() == null) {
+                var thread = new Thread(() -> {
+                    try {
+                        node.cancelAsyncLockAcquiring(LOCK_NAME);
+                    } catch (Throwable e) {
+                        cancelFailure.set(e);
+                    }
+                }, "cancel-after-the-lock-was-recorded");
+                cancellingThread.set(thread);
+                thread.start();
+                // The cancel has removed the registration, found the recorded lock and waits for the lock manager's lock,
+                // which this tick holds, to release it
+                Awaitility.waitAtMost(Duration.ofSeconds(5))
+                          .until(() -> node.reentrantLockForTests().hasQueuedThread(thread));
+            }
+        };
+
+        node.acquireLockAsync(LOCK_NAME, callback);
+
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .until(() -> cancellingThread.get() != null);
+        cancellingThread.get().join(Duration.ofSeconds(5));
+        assertThat(cancellingThread.get().isAlive()).isFalse();
+        assertThat(cancelFailure.get()).isNull();
+        Awaitility.await()
+                  .during(Duration.ofMillis(500))
+                  .atMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(storage.rows.get(LOCK_NAME)).isNotNull();
+                      assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
+                      assertThat(callback.acquired.get()).isZero();
+                      assertThat(callback.released.get()).isZero();
+                  });
+        assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isFalse();
+        assertThat(events).filteredOn(LockReleased.class::isInstance).hasSize(1);
+    }
+
+    /**
      * As {@link #an_async_acquiring_cancelled_while_its_tick_acquires_the_lock_releases_the_lock_and_does_not_call_lock_acquired()},
      * but the tick's release of the lock fails in the DB with a critical error: the lock is still released locally, so this
      * lock manager stops confirming it and its row expires after the lock timeout, and the critical error ends the async

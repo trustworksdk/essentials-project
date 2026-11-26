@@ -126,6 +126,12 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * tests can find those threads by the same name
      */
     static final String ASYNC_LOCK_ACQUIRING_THREAD_NAME_INFIX = "-Lock-Acquiring-";
+    /**
+     * What {@link #start()} puts between the lock manager instance id and the thread number in the name of the lock
+     * confirmation thread (<code>&lt;lockManagerInstanceId&gt;-FencedLock-Confirmation-&lt;n&gt;</code>). Package-private so
+     * tests can find that thread by the same name
+     */
+    static final String CONFIRMATION_THREAD_NAME_INFIX         = "-FencedLock-Confirmation-";
 
     protected final Logger log = LoggerFactory.getLogger(this.getClass());
 
@@ -296,7 +302,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 asyncAcquiringsRefusedAsTheConfirmationHasEnded.clear();
                 lockConfirmationExecutor = Executors.newScheduledThreadPool(1,
                                                                             new ThreadFactoryBuilder()
-                                                                                    .nameFormat(lockManagerInstanceId + "-FencedLock-Confirmation-%d")
+                                                                                    .nameFormat(lockManagerInstanceId + CONFIRMATION_THREAD_NAME_INFIX + "%d")
                                                                                     .daemon(true)
                                                                                     .build());
 

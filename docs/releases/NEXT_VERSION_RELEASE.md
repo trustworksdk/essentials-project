@@ -148,6 +148,9 @@ Not published; listed because they are the reference for how to use the framewor
 - Test and javadoc only: `EssentialsRunReport` documents its lock order (the registry of registered reports first, then a
   report's own lock, never the other way round), and `EssentialsRunReportTest` pins it by registering and closing a
   second report in a loop while another thread renders the registered one (RW-8).
+- Test only: two fenced-lock races no test reached are now covered - an `acquireLockAsync` replacing a resumed acquiring
+  while another node holds the lock (`DBFencedLockManagerIT`, PostgreSQL and MongoDB), and a cancel landing after the
+  tick recorded the lock, where both release it; the confirmation thread's name infix is a shared constant (RW-18).
 - Test only: `SubscriptionResetOnPoisonNotifierIT` no longer polls for a resume point the replay re-advances within
   75 ms; it reads the stored reset when the subscription reports it (CI failure on `f86018aaf`).
 - The repository's PostgreSQL test image (`docker/postgresql`, now `essentials-postgres:17.5-2`) runs the server its tag

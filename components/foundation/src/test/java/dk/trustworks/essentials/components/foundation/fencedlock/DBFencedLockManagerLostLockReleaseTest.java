@@ -766,7 +766,6 @@ class DBFencedLockManagerLostLockReleaseTest {
     }
 
     @Test
-    @SuppressWarnings("PMD.CloseResource") // lock is released locally by the lock manager when the confirmation ends, the behaviour under test
     void an_acquire_waiting_for_the_lock_managers_lock_while_the_confirmation_ends_with_a_critical_error_does_not_acquire_the_lock() throws Exception {
         // Given a held lock, and a confirmation tick held inside its UnitOfWork - holding the lock manager's lock - until the
         // test lets it end with a critical error
@@ -1034,7 +1033,7 @@ class DBFencedLockManagerLostLockReleaseTest {
         @Override
         protected <R> R withUnitOfWork(CheckedFunction<ThreadLocalUnitOfWork, R> unitOfWorkFunction, CheckedFunction<Throwable, R> onError) {
             var failure = withUnitOfWorkFailureOnTheConfirmationThread;
-            if (failure != null && Thread.currentThread().getName().startsWith(getLockManagerInstanceId() + "-FencedLock-Confirmation-")) {
+            if (failure != null && Thread.currentThread().getName().startsWith(getLockManagerInstanceId() + CONFIRMATION_THREAD_NAME_INFIX)) {
                 throw failure;
             }
             return super.withUnitOfWork(unitOfWorkFunction, onError);
