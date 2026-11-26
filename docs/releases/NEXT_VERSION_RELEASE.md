@@ -136,6 +136,10 @@ Not published; listed because they are the reference for how to use the framewor
   it waits out the connection-pool timeout) and how to bound it with `stop(Runnable)`. An application that copied the
   example should make the same two changes. `DefaultLifecycleManagerTest` now pins the start/stop order the example
   relies on: `DefaultLifecycleManager`'s phase stays below `SmartLifecycle.DEFAULT_PHASE` (RW-19).
+- Fenced locks (`components/foundation/README.md`): the README's account of an `acquireLockAsync` that replaces a
+  registration kept by `stop()` now matches `LLM/LLM-foundation.md`: the release also takes the lock from any other
+  caller in the same JVM holding it, a failing release is logged and the new callback registered anyway, and the resumes
+  after an ended lock confirmation are logged at INFO (RW-20).
 
 ---
 

@@ -415,17 +415,7 @@ starter that WARNs once when a DML statement runs with no active transaction.
 
 ## P3: documentation
 
-Everything planned here before 2026-10-13 shipped in 0.60.1.
-
-- **The README's account of a replaced async registration is shorter than the LLM doc's (RW-20).**
-  `components/foundation/README.md`, in the paragraph on what a lock manager's `stop()` keeps, says that the release on
-  a replaced registration "calls `lockReleased` on the callbacks registered with it". `LLM/LLM-foundation.md`
-  describes the same release more fully: any other caller in this JVM holding the same lock loses it too, and a failure
-  of that release (a throwing `lockReleased`) is logged while the new callback is registered all the same, and a
-  critical error is rethrown. A README reader misses the cross-caller effect that the README's own next section,
-  "Ownership is per lock-manager instance", warns about. Fix: extend the README's parenthesis to match, with a link to
-  that section. If RW-13 changes what the replacement releases, write both accounts from the new behaviour instead.
-  (review findings F-983)
+Everything planned here before 2026-10-13 shipped in 0.60.1; NW-5, RW-7, RW-8, RW-19 and RW-20 ship in 0.61.1. None open.
 
 ---
 
