@@ -70,7 +70,8 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * report.logRunReport();
  * registration.close();
  * }</pre>
- * The report is thread-safe.
+ * The report is thread-safe. Internally the registry of registered reports is locked before a report's own lock,
+ * never the other way round (see {@code REGISTERED}).
  */
 public final class EssentialsRunReport {
     /**
@@ -91,6 +92,11 @@ public final class EssentialsRunReport {
     /**
      * Every report {@link #registerAsRunReport() registered}, by identity, with how many open registrations it has.
      * Guarded by itself.
+     * <p>
+     * Lock order: {@code REGISTERED}, then a report's own {@link #lock} ({@link #registerAsRunReport()} and
+     * {@link Registration#close()} update every registered report's uncollected period while holding it). Never take
+     * {@code REGISTERED} while holding a report's lock - a method that does would deadlock against a concurrent
+     * registration. Pinned by {@code EssentialsRunReportTest}.
      */
     private static final Map<EssentialsRunReport, Integer> REGISTERED = new IdentityHashMap<>();
     /**

@@ -23,10 +23,12 @@ import dk.trustworks.essentials.components.foundation.startup.EssentialsRunRepor
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
 
+import java.lang.management.*;
 import java.time.*;
+import java.util.*;
 import java.util.concurrent.*;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 class EssentialsRunReportTest {
     private ListAppender<ILoggingEvent>   logAppender;
@@ -43,6 +45,70 @@ class EssentialsRunReportTest {
     @AfterEach
     void tearDown() {
         logger.detachAppender(logAppender);
+    }
+
+    /**
+     * Pins the lock order documented on {@code REGISTERED}: the registry first, then a report's own lock. Registering
+     * and deregistering a second report takes the registry and then the first report's lock (to update its
+     * uncollected period), while rendering and adding take only the first report's lock. A change that makes a
+     * report method take the registry while it holds its own lock deadlocks here instead of in production.
+     * <p>
+     * A deadlock is detected with {@link ThreadMXBean#findMonitorDeadlockedThreads()} and fails the test. Nothing after
+     * a detected deadlock touches the registry again (the deadlocked thread holds it forever), and the worker threads
+     * are daemons, so the failure cannot hang the test JVM.
+     */
+    @Test
+    void registering_and_deregistering_a_report_while_another_thread_renders_a_registered_one_does_not_deadlock() throws Exception {
+        var first        = new EssentialsRunReport();
+        var registration = first.registerAsRunReport();
+        var iterations   = 2_000;
+        var start        = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(2, runnable -> {
+            var thread = new Thread(runnable, "run-report-lock-order");
+            thread.setDaemon(true);
+            return thread;
+        });
+        try {
+            var registering = executor.submit(() -> {
+                start.await();
+                for (var i = 0; i < iterations; i++) {
+                    new EssentialsRunReport().registerAsRunReport().close();
+                }
+                return null;
+            });
+            var rendering = executor.submit(() -> {
+                start.await();
+                for (var i = 0; i < iterations; i++) {
+                    first.add(Finding.info("component " + (i % 10), "a note", ""));
+                    first.render();
+                    first.renderRunReport();
+                    first.isRegisteredAsRunReport();
+                }
+                return null;
+            });
+            start.countDown();
+
+            var threads  = ManagementFactory.getThreadMXBean();
+            var deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+            while (!(registering.isDone() && rendering.isDone())) {
+                var deadlocked = threads.findMonitorDeadlockedThreads();
+                if (deadlocked != null) {
+                    fail("Deadlock between registering a report and rendering another: " + Arrays.stream(threads.getThreadInfo(deadlocked, true, true))
+                                                                                                .map(ThreadInfo::toString)
+                                                                                                .toList());
+                }
+                if (System.nanoTime() > deadline) {
+                    fail("Registering and rendering did not finish within 30 seconds");
+                }
+                Thread.sleep(10);
+            }
+            registering.get();
+            rendering.get();
+        } finally {
+            executor.shutdownNow();
+        }
+        registration.close();
+        assertThat(EssentialsRunReport.runReport()).isEmpty();
     }
 
     @Test

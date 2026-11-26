@@ -417,11 +417,6 @@ starter that WARNs once when a DML statement runs with no active transaction.
 
 Everything planned here before 2026-10-13 shipped in 0.60.1.
 
-- **The run report's lock order (RW-8; review F-106).** `EssentialsRunReport` takes the static `REGISTERED` monitor and
-  then a report's `lock` (`registerAsRunReport`/`deregister` → `recomputeRunReport`); nothing takes them the other way
-  round today, and nothing says it must not. State it in the `REGISTERED` field and class javadoc ("REGISTERED, then a
-  report's lock; never take REGISTERED while holding a report's lock"), and pin it with a test that registers and
-  closes a second report in a loop while another thread renders the first, under `assertTimeoutPreemptively`.
 - **The Leadership Election example (RW-19).** The example in `LLM/LLM-foundation.md` § Leadership Election is a
   `SmartLifecycle` at `DEFAULT_PHASE`, so it starts after `DefaultLifecycleManager` (phase `Integer.MAX_VALUE - 1`)
   has started the lock manager, and stops before it. Three gaps:

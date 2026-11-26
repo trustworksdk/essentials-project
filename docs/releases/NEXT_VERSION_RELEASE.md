@@ -134,6 +134,9 @@ Not published; listed because they are the reference for how to use the framewor
 
 ## 7. Build and tooling
 
+- Test and javadoc only: `EssentialsRunReport` documents its lock order (the registry of registered reports first, then a
+  report's own lock, never the other way round), and `EssentialsRunReportTest` pins it by registering and closing a
+  second report in a loop while another thread renders the registered one (RW-8).
 - Test only: `SubscriptionResetOnPoisonNotifierIT` no longer polls for a resume point the replay re-advances within
   75 ms; it reads the stored reset when the subscription reports it (CI failure on `f86018aaf`).
 - The repository's PostgreSQL test image (`docker/postgresql`, now `essentials-postgres:17.5-2`) runs the server its tag
