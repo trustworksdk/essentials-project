@@ -119,7 +119,11 @@ Not published; listed because they are the reference for how to use the framewor
 
 ## 6. Documentation
 
-None so far.
+- Fenced locks (`LLM/LLM-foundation.md`, `components/foundation/README.md`): a lost lock can be won straight back. After
+  a database outage longer than `lockTimeOut`, the instance that lost a lock (its `LockCallback` got `lockReleased`) can
+  win it again through its still-running `acquireLockAsync`, under the next fence token. The docs implied the other
+  instance always takes over. Behaviour is unchanged; a callback that treats `lockReleased` as "another instance holds
+  the lock now" should not, and must handle `lockAcquired` again after `lockReleased` (NW-5).
 
 ---
 

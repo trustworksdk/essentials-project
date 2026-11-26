@@ -508,6 +508,14 @@ Lock Acquisitions Over Time:
 > Instance A's `FencedLockManager` will then release the lock locally and notify any registered `LockCallback`.  
 > At this point, only Instance B remains the active lock holder.
 
+**A lost lock can be won straight back.** Instance B is not guaranteed to be the one that takes over. After a database
+outage longer than `lockTimeOut`, Instance A is told it lost the lock (`lockReleased`), but if it acquired the lock with
+`acquireLockAsync`, that registration keeps running, and its next acquire tick competes with Instance B for the expired
+lock. Either instance can win. Whichever does holds the lock under the **next fence token** (43 above, even when the
+winner is Instance A), so anything still running under token 42 is rejected downstream all the same. Do not read
+`lockReleased` as "another instance holds the lock now", and make your `LockCallback` handle `lockAcquired` again after
+`lockReleased`.
+
 ### Using Fence Tokens for Stale Lock Detection
 
 **Pass the fence token to all downstream operations**, then validate it before performing work:

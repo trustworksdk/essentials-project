@@ -417,10 +417,6 @@ starter that WARNs once when a DML statement runs with no active transaction.
 
 Everything planned here before 2026-10-13 shipped in 0.60.1.
 
-- **A lost fenced lock can be won straight back (NW-5).** After a database outage longer than the lock timeout, the
-  instance that lost a lock can win it again through its still-running `acquireLockAsync`, under the next fence token.
-  That is correct fencing, and `DBFencedLockManagerIT` now accepts either instance as the new holder, but the fenced
-  lock docs (`LLM-foundation.md`, the module READMEs) do not say so. Say it, next to the fence-token explanation.
 - **The coupled contract of `transientGapsReadFrom` (RW-7; review F-113).** `AwaitedGapInspector.transientGapsReadFrom()`
   lets an inspector claim that its `isAwaitedAsGap` already reads a gap handler's transient gaps, and `CdcEventStore`
   then skips its own read. The javadoc describes only the safe direction. Add: "Return a gap handler only if
