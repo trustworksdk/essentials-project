@@ -21,6 +21,8 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Foundation reference: a lost fenced lock can be won straight back** - after a database outage longer than the
   lock timeout, the instance that lost a lock can win it again through its still-running `acquireLockAsync`, under the
   next fence token; `lockReleased` does not mean another instance holds the lock.
+- **Event-store reference: forward `isAwaitedAsGap` and `transientGapsReadFrom()` both or neither** - a decorator that
+  names a gap handler its `isAwaitedAsGap` does not read makes `awaitProcessed` miss that handler's transient gaps.
 - **Shard-owned reference: which sweep counter to alert on** - not `sweepRecoveries` by its value (it counts harmless
   rows too); `sweepRecoveriesBehindCursor` on the ordered lane.
 

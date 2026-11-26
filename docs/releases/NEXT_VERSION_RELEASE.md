@@ -124,6 +124,11 @@ Not published; listed because they are the reference for how to use the framewor
   win it again through its still-running `acquireLockAsync`, under the next fence token. The docs implied the other
   instance always takes over. Behaviour is unchanged; a callback that treats `lockReleased` as "another instance holds
   the lock now" should not, and must handle `lockAcquired` again after `lockReleased` (NW-5).
+- Event store decorators (`AwaitedGapInspector` javadoc, `LLM/LLM-postgresql-event-store.md`): forward
+  `isAwaitedAsGap` and `transientGapsReadFrom()` both or neither. `transientGapsReadFrom()` may return a gap handler
+  only if `isAwaitedAsGap` reads that handler's transient gaps on every call; otherwise a `CdcEventStore` over the
+  decorator skips them, and `awaitProcessed` can report an event the subscriber still awaits as a gap as processed.
+  Only matters for an `EventStore` you wrote that decorates one of Essentials'; when in doubt, return empty (RW-7).
 
 ---
 

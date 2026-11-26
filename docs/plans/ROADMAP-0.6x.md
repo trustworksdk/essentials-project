@@ -417,13 +417,6 @@ starter that WARNs once when a DML statement runs with no active transaction.
 
 Everything planned here before 2026-10-13 shipped in 0.60.1.
 
-- **The coupled contract of `transientGapsReadFrom` (RW-7; review F-113).** `AwaitedGapInspector.transientGapsReadFrom()`
-  lets an inspector claim that its `isAwaitedAsGap` already reads a gap handler's transient gaps, and `CdcEventStore`
-  then skips its own read. The javadoc describes only the safe direction. Add: "Return a gap handler only if
-  `isAwaitedAsGap` reads that handler's transient gaps on every call; otherwise a decorating `CdcEventStore` skips
-  them and `awaitProcessed` can report an event still awaited as a gap as processed. When in doubt, return empty."
-  State the same "forward both or neither" rule where decorators are told to forward `isAwaitedAsGap`, and in the
-  decorator note in `LLM/LLM-postgresql-event-store.md`.
 - **The run report's lock order (RW-8; review F-106).** `EssentialsRunReport` takes the static `REGISTERED` monitor and
   then a report's `lock` (`registerAsRunReport`/`deregister` → `recomputeRunReport`); nothing takes them the other way
   round today, and nothing says it must not. State it in the `REGISTERED` field and class javadoc ("REGISTERED, then a

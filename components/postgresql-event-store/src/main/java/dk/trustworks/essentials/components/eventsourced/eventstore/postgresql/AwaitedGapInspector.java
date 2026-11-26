@@ -41,7 +41,8 @@ import java.util.Optional;
  * decorates one of them must implement it too, and forward to its delegate</b> - the same as
  * {@link EventStore#forgetGapMiddlesAwaitedInMemory(SubscriberId, AggregateType)}. It should forward
  * {@link #transientGapsReadFrom()} as well, so an event store decorating it in turn can tell which transient gaps its
- * answer already covers.
+ * answer already covers. Forward both or neither: forwarding {@link #transientGapsReadFrom()} while answering
+ * {@link #isAwaitedAsGap} without the delegate's transient gaps makes a decorating store skip them.
  * <p>
  * A {@code CdcEventStore} over an event store that does not implement it gives a full answer only while CDC is active:
  * while it is not, the delegate's polls serve the subscriptions, and the middles of wide gaps those polls await in memory
@@ -67,6 +68,10 @@ public interface AwaitedGapInspector {
      * <p>
      * A decorator that forwards {@link #isAwaitedAsGap} should forward this method too: the default, empty, only costs
      * the decorating store that second read - its answer stays the same.
+     * <p>
+     * <b>Return a gap handler only if {@link #isAwaitedAsGap} reads that handler's transient gaps on every call.</b>
+     * Otherwise a decorating {@code CdcEventStore} skips them, and {@code awaitProcessed} can report an event the
+     * subscriber still awaits as a gap as processed. When in doubt, return empty: that is always safe.
      *
      * @return the gap handler whose transient gaps {@link #isAwaitedAsGap} covers, or empty when unknown (the default)
      */
