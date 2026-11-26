@@ -187,6 +187,10 @@ Not published; listed because they are the reference for how to use the framewor
   as "work in progress - doesn't handle competing consumers yet". It does: `BatchedFetchStrategyIT` now runs the
   batched claim from four threads on two instances against one table at once and finds no message claimed twice
   (removing the statement's `FOR UPDATE SKIP LOCKED` makes it fail). The javadoc now says what the strategy does.
+- Test only: `PostgresqlFencedLockSpreadingIT.a_lock_whose_preferred_owner_never_takes_it_...` waited a fixed 13
+  rebalance intervals for rebalancing to finish, though 15 of its 30 locks prefer the other member and at most one is
+  released per interval; it failed on CI with "not fulfilled within 5 seconds". It now waits for the releases to stop
+  and then asserts none happens over 13 intervals.
 - Test only: `SubscriptionResetOnPoisonNotifierIT` no longer polls for a resume point the replay re-advances within
   75 ms; it reads the stored reset when the subscription reports it (CI failure on `f86018aaf`).
 - The repository's PostgreSQL test image (`docker/postgresql`, now `essentials-postgres:17.5-2`) runs the server its tag
