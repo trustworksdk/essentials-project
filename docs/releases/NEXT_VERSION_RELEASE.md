@@ -145,6 +145,10 @@ Not published; listed because they are the reference for how to use the framewor
   registration kept by `stop()` now matches `LLM/LLM-foundation.md`: the release also takes the lock from any other
   caller in the same JVM holding it, a failing release is logged and the new callback registered anyway, and the resumes
   after an ended lock confirmation are logged at INFO (RW-20).
+- Durable queues (`LLM/LLM-postgresql-queue.md`, `components/postgresql-queue/README.md`): services that only consume
+  queues can lower HikariCP's `minimumIdle` (`spring.datasource.hikari.minimum-idle`), which defaults to the pool size
+  and so keeps every connection open while the queues are idle; the docs give the trade-off and why to keep it at least
+  one above the starter's LISTEN connection. No default changes (E3).
 
 ---
 

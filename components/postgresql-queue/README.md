@@ -143,6 +143,25 @@ reaches only a handler run in the queue's own unit of work: a boundary-owning ha
 before returning and is still handed back, so it must be idempotent across a partial run. A crash before the commit
 still redelivers, so handlers should stay idempotent.
 
+### Connection pool size in services that only consume queues
+
+HikariCP's `minimumIdle` defaults to `maximumPoolSize`, so a pool keeps every connection open even while its queues
+are idle. A service that only consumes queues is idle most of the time, and across its instances those open
+connections add up against PostgreSQL's `max_connections`. Essentials changes no HikariCP default. For such a service,
+consider a lower `minimumIdle`, for example in Spring Boot:
+
+```properties
+spring.datasource.hikari.maximum-pool-size=10
+spring.datasource.hikari.minimum-idle=2
+```
+
+HikariCP then closes connections above `minimumIdle` once they have been idle for `idleTimeout` (10 minutes by
+default; it applies only when `minimumIdle` is below `maximumPoolSize`). The cost is a new connection, and its
+handshake, when a burst arrives after an idle period. Keep `minimumIdle` at least 1 above the connections the
+application holds permanently: the LISTEN connection of the `MultiTableChangeListener` the Spring Boot starter creates is
+borrowed from the same pool and held for as long as the application runs. For connections held by handlers that wait on
+other systems, see [`LLM-postgresql-queue.md`](../../LLM/LLM-postgresql-queue.md).
+
 ## Polling Mechanisms
 
 PostgreSQL Queue supports two polling approaches:

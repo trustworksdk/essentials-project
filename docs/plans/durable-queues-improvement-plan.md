@@ -53,9 +53,3 @@ Either way, store the root cause, as the classic queue does through `DeliveryErr
 ### F10. NOTIFY cost on the commit path
 
 One channel per queue was tried and performed worse (closed). The local hand-off already wakes the owner after commit instead of notifying inside an autocommit transaction (`ShardOwnedQueue.wakesAfterCommit`). Not yet measured: commit throughput with N concurrent producers, with NOTIFY on and off. Measure before changing anything. The related pgjdbc notification drain limit is tracked in [`README.md`](README.md) under "Open items from documents kept elsewhere".
-
-## Documentation
-
-### E3. HikariCP `minimumIdle`
-
-HikariCP keeps `maximumPoolSize` connections open even when idle, because `minimumIdle` defaults to the pool size. Services that only consume queues add up quickly against PostgreSQL's `max_connections`. Document a lower `minimumIdle` for such services in `LLM/LLM-postgresql-queue.md` and the module README, next to the connection guidance added for D2 and D3. Change no default.
