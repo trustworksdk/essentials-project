@@ -1,7 +1,22 @@
 # Shard-owned queue: fewer read statements per message
 
-Status (2026-11-08): items 1(a) (`69da17c65`) and 3 (`cf2d69575`) are built. Item 1(b) is open, items 2 and 4 are
-parked on `wip/sq-item2` and `wip/sq-item4`, item 5 is not started. The checkpoint further down has the detail.
+## Status (2026-11-26, checked against the code on `release/0.61.1`)
+
+Items 1(a) and 3 shipped in 0.61.0. Items 1(b), 2, 4 and 5 are not in the code. The checkpoint of 2026-11-03 further
+down is kept as history; the branches, worktrees and scripts it names no longer exist, except as noted here.
+
+| Item | State |
+|---|---|
+| 1(a) Depth with one statement per lane | **Shipped in 0.61.0** (release notes §2.13). `ShardOwnedStorage.unorderedDepth()` and `orderedDepth()` count each lane with one `WHERE queue_id = ?` statement, called from `PostgresqlMessageQueue`'s depth read. It reached `main` in the squash merge of #57 (`687826c69`), so `69da17c65` is not in `main`'s history |
+| 1(b) Cached depth in `DurableQueuesMicrometerInterceptor` | **Open.** `updateQueueGaugeValues` still calls `getQueuedMessageCountsFor` after every queue operation, with no cache. For a shard-owned queue that recount is now 3 statements instead of 69; the other `DurableQueues` implementations are unchanged |
+| 2 No cursor read on a dispatch-only pass | **Not in the code.** `OrderedShardOwner.needsAttention()` still selects a unit for a read for every reason listed under "Why a read happens far more often than an enqueue". The work is kept on the local branch `wip/sq-item2` at `f535f2708` (re-created 2026-11-26; the original branch had been deleted). Its parent is `69da17c65` (item 1(a)) although its message says it sits on item 3, so it probably carries item 3's change as well; check before reusing it. The follow-up WIP commit with the `readWanted` fix described in the checkpoint is lost. The branch predates 0.61.0, so it will not apply cleanly to current code |
+| 3 Sweep and `millisUntilNextVisible` in one statement | **Shipped in 0.61.0**, through the same squash merge (`cf2d69575` is not in `main`'s history). Read statements per delivered message 3.82–3.98 → 3.34–3.67 |
+| 4 Sweep backoff under load | **Not in the code.** `OrderedShardOwner.adjustSweepBackoff` still resets the interval to its base on any delivery. `wip/sq-item4` is gone and no commit for it was found; it would be rebuilt from the description in the table below |
+| 5 Payload-free re-read, xid in the INSERT, higher `ackFlushInterval` | **Not started.** The ordered cursor read still starts at `safeCursor`; `SELECT pg_current_xact_id()` is still its own statement (`ShardOwnedStorage.assignTransactionIdBeforeAllocating`); `ackFlushInterval` still defaults to 1 ms (`ShardOwnerSettings`) |
+
+The checkpoint's next step 1, a demo rerun with `pg_stat_statements` compared per order, has no recorded result. That
+run is what decides whether item 2 is picked up again. Not re-checked: whether the gap the checkpoint found in item 2's
+work (`nextAttentionNanos` does not report "now" after a capped read) also exists in the current code.
 
 ## Evidence
 
@@ -106,7 +121,10 @@ The demo is the evidence, not the target.
   implementations.
 - Demo confirmation: a repeat `pg_stat_statements` run with `reset-stack.sh` beforehand, compared per order.
 
-## Status (checkpoint 2026-11-03)
+## Status (checkpoint 2026-11-03, historical)
+
+Superseded by the status at the top of this document. Kept for the measurements; the worktrees under `/tmp/sq-*`,
+the scripts and logs under `/tmp/claude-1000`, and the `wip/sq-item3` and `wip/sq-item4` branches no longer exist.
 
 Measured against the commit before each item, not `main`: `main`'s copy of this module is ~178 files behind the
 branch. Worktrees are under `/tmp/sq-*` (`sq-base`, `sq-item1`, `sq-item3`, `sq-item2`). Scripts are in
