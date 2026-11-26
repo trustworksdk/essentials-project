@@ -160,11 +160,6 @@ deadlock with instances using the table, which 0.60.1 fixed for 14+ only. **Fix:
 drop `ListenNotifyPostgresql12IT` and `MultiTableChangeListenerPostgresql12IT`, and log a WARN at startup on a server
 below the supported floor. Not in a patch: a 0.60.x deployment on PostgreSQL 13 or 14 keeps working.
 
-**Lock order of the event store's startup transaction (NW-3).** The event store applies several event tables in one
-schema transaction. A user transaction that writes those tables in the opposite order could, in theory, deadlock with
-a starting instance. Not reproduced. **Plan:** confirm or rule out with a test like `QueueSchemaReapplyConcurrencyIT`
-first; if confirmed, apply each table's changes in its own transaction, or take the table locks in a fixed order.
-
 ### Messaging
 
 **Application LISTEN/NOTIFY channels (LN-1).**

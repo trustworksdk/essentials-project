@@ -154,6 +154,11 @@ Not published; listed because they are the reference for how to use the framewor
 - Test only: two fenced-lock races no test reached are now covered - an `acquireLockAsync` replacing a resumed acquiring
   while another node holds the lock (`DBFencedLockManagerIT`, PostgreSQL and MongoDB), and a cancel landing after the
   tick recorded the lock, where both release it; the confirmation thread's name infix is a shared constant (RW-18).
+- Test only: the event store's start-up schema re-apply takes no lock on any event stream table, causation index and
+  notify triggers included, so a starting instance cannot deadlock with a unit of work appending to several aggregate
+  types in either order. `EventStoreSchemaReapplyConcurrencyIT` now asserts the re-apply never waits for such an append;
+  the existing test only checked both sides succeed, which still passed when PostgreSQL broke a real deadlock and the
+  applier retried (NW-3, ruled out).
 - Test only: `SubscriptionResetOnPoisonNotifierIT` no longer polls for a resume point the replay re-advances within
   75 ms; it reads the stored reset when the subscription reports it (CI failure on `f86018aaf`).
 - The repository's PostgreSQL test image (`docker/postgresql`, now `essentials-postgres:17.5-2`) runs the server its tag
