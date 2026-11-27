@@ -9,14 +9,38 @@ down is kept as history; the branches, worktrees and scripts it names no longer 
 |---|---|
 | 1(a) Depth with one statement per lane | **Shipped in 0.61.0** (release notes §2.13). `ShardOwnedStorage.unorderedDepth()` and `orderedDepth()` count each lane with one `WHERE queue_id = ?` statement, called from `PostgresqlMessageQueue`'s depth read. It reached `main` in the squash merge of #57 (`687826c69`), so `69da17c65` is not in `main`'s history |
 | 1(b) Cached depth in `DurableQueuesMicrometerInterceptor` | **Open.** `updateQueueGaugeValues` still calls `getQueuedMessageCountsFor` after every queue operation, with no cache. For a shard-owned queue that recount is now 3 statements instead of 69; the other `DurableQueues` implementations are unchanged |
-| 2 No cursor read on a dispatch-only pass | **Not in the code.** `OrderedShardOwner.needsAttention()` still selects a unit for a read for every reason listed under "Why a read happens far more often than an enqueue". The work is kept on the local branch `wip/sq-item2` at `f535f2708` (re-created 2026-11-26; the original branch had been deleted). Its parent is `69da17c65` (item 1(a)) although its message says it sits on item 3, so it probably carries item 3's change as well; check before reusing it. The follow-up WIP commit with the `readWanted` fix described in the checkpoint is lost. The branch predates 0.61.0, so it will not apply cleanly to current code |
+| 2 No cursor read on a dispatch-only pass | **Not in the code.** `OrderedShardOwner.needsAttention()` still selects a unit for a read for every reason listed under "Why a read happens far more often than an enqueue". The work is kept on the local branch `wip/sq-item2` at `f535f2708` (re-created 2026-11-26; the original branch had been deleted). Its parent is `69da17c65` (item 1(a)) and its message says it contains item 3's change as well, so take only item 2's part when reusing it. The follow-up WIP commit with the `readWanted` fix described in the checkpoint is lost. The branch predates 0.61.0, so it will not apply cleanly to current code |
 | 3 Sweep and `millisUntilNextVisible` in one statement | **Shipped in 0.61.0**, through the same squash merge (`cf2d69575` is not in `main`'s history). Read statements per delivered message 3.82–3.98 → 3.34–3.67 |
 | 4 Sweep backoff under load | **Not in the code.** `OrderedShardOwner.adjustSweepBackoff` still resets the interval to its base on any delivery. `wip/sq-item4` is gone and no commit for it was found; it would be rebuilt from the description in the table below |
 | 5 Payload-free re-read, xid in the INSERT, higher `ackFlushInterval` | **Not started.** The ordered cursor read still starts at `safeCursor`; `SELECT pg_current_xact_id()` is still its own statement (`ShardOwnedStorage.assignTransactionIdBeforeAllocating`); `ackFlushInterval` still defaults to 1 ms (`ShardOwnerSettings`) |
 
-The checkpoint's next step 1, a demo rerun with `pg_stat_statements` compared per order, has no recorded result. That
-run is what decides whether item 2 is picked up again. Not re-checked: whether the gap the checkpoint found in item 2's
-work (`nextAttentionNanos` does not report "now" after a capped read) also exists in the current code.
+### What remains
+
+1. **Demo rerun (decides item 2).** Rerun the trading demo with items 1(a) and 3 in place, `reset-stack.sh`
+   beforehand and `pg_stat_statements` compared per order. No result is recorded. Pick item 2 up again only if
+   passes that only dispatch turn out to be a large share of the reads.
+2. **Item 2, if picked up.** `wip/sq-item2` (`f535f2708`) holds item 2 together with item 3's change ("Contains item
+   3's changes too", per its message). Take only item 2's part (`ShardWakeup.signalWithoutRows`/`consumeRows`, the
+   `readWanted` flag in `OrderedShardOwner`, `BatchReadableOwner.batchReadWanted()`, and the `ShardPump` changes to
+   `readAhead` and `horizonProbeWanted`) and port it to current code. Then:
+   - re-apply the lost fix: clear `readWanted` after the read statement, not before, so a read that throws does not
+     lose the wake-up;
+   - make `nextAttentionNanos` return "now" after a capped read (not yet checked against the current code);
+   - adapt the five `ShardOwnedOrderedWatermarkIT` tests that drive `pumpOnce` by hand, so they model the pump's
+     selection and enqueue wake-ups, and check that they still fail without the watermark fixes;
+   - run the correctness ITs (`ShardOwnedOrderedWatermarkIT`, `ShardOwnedWatermarkXidWindowIT`,
+     `ShardOwnedConcurrentProducersOrderIT`, `ShardOwnedWakeUpAfterCommitIT`, `ShardOwnedPumpScheduleIT`, and the
+     rebalance, shed and lifecycle ITs);
+   - A/B against current code with `ShardOwnedOrderedLoadedCostIT` plus the idle and multi-queue cost ITs,
+     reporting p50/p99 alongside statements per message;
+   - add a release note and a bullet in the module's CLAUDE.md.
+3. **Item 1(b).** Give `DurableQueuesMicrometerInterceptor` a max-age, single-flight depth cache (the pattern of
+   `MicrometerQueueObserver.CachedDepth`). Test it on all three `DurableQueues` implementations; it needs a release
+   note because it changes when the gauge value is computed.
+4. **Item 4.** Rebuild from the description in the table below: in `OrderedShardOwner.adjustSweepBackoff`, reset to
+   the base interval only when the sweep itself recovered a row, and keep the post-takeover `holeExpiry` pin. Measure
+   it as for item 2, and run the delayed-delivery and lost-wake-up ITs, because the sweep is the safety net for both.
+5. **Item 5.** Not started. Each of its three parts needs its own design and measurement.
 
 ## Evidence
 
