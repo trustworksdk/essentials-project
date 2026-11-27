@@ -133,7 +133,21 @@ public class NotifyPollingAutoConfigurationIT {
                     assertThat(props.getInitialDelay()).isEqualTo(Duration.ofMillis(20));
                     assertThat(props.getMaxDelay()).isEqualTo(Duration.ofMillis(500));
                     assertThat(props.getBackoffMultiplier()).isEqualTo(1.5d);
+                    assertThat(props.isInterruptibleWait()).as("S2 stays opt-in").isFalse();
                 });
+    }
+
+    @Test
+    void notifyPolling_interruptibleWait_bindsFromConfiguration() {
+        contextRunner
+                .withPropertyValues(
+                        "essentials.eventstore.subscription-manager.notify-polling.enabled=true",
+                        "essentials.eventstore.subscription-manager.notify-polling.interruptible-wait=true"
+                )
+                .run(ctx -> assertThat(ctx.getBean(EssentialsEventStoreProperties.class)
+                                          .getSubscriptionManager()
+                                          .getNotifyPolling()
+                                          .isInterruptibleWait()).isTrue());
     }
 
     @Test

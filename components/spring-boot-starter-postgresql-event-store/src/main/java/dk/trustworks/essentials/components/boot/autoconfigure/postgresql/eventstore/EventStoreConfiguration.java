@@ -275,10 +275,11 @@ public class EventStoreConfiguration {
         var notifySettings = new NotifyPollingSettings(true,
                                                        notifyPollingProps.getInitialDelay(),
                                                        notifyPollingProps.getMaxDelay(),
-                                                       notifyPollingProps.getBackoffMultiplier());
+                                                       notifyPollingProps.getBackoffMultiplier(),
+                                                       notifyPollingProps.isInterruptibleWait());
         var epochSource = notifyEpochSource.get();
-        log.info("Notify-aware polling optimizer enabled: initialDelay={} maxDelay={} backoffMultiplier={}",
-                 notifySettings.initialDelay(), notifySettings.maxDelay(), notifySettings.backoffMultiplier());
+        log.info("Notify-aware polling optimizer enabled: initialDelay={} maxDelay={} backoffMultiplier={} interruptibleWait={}",
+                 notifySettings.initialDelay(), notifySettings.maxDelay(), notifySettings.backoffMultiplier(), notifySettings.interruptibleWait());
 
         return eventStreamLogName -> {
             var aggregateType = parseAggregateTypeFromLogName(eventStreamLogName);

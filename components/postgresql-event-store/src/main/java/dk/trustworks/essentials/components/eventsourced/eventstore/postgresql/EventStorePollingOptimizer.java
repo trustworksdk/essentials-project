@@ -53,4 +53,27 @@ public interface EventStorePollingOptimizer {
     default boolean mayRepollImmediatelyAfterAnEmptyPoll() {
         return false;
     }
+
+    /**
+     * Called by the polling worker right before every poll, on the worker's thread. An optimizer that can end the wait
+     * between polls early (see {@link #awaitNextPoll(long)}) reads here what it compares against before it waits - such
+     * as a notify epoch - so that a change landing while the poll runs ends the following wait at once instead of being lost.
+     * The default does nothing.
+     */
+    default void eventStorePollingStarting() {
+    }
+
+    /**
+     * Wait between an empty poll and the next poll, on the polling worker's thread. Called only with a positive
+     * {@code delayMs} - the {@link #currentDelayMs()} the worker resolved after {@link #eventStorePollingReturnedNoEvents()}.
+     * The default sleeps the full delay. An optimizer may return earlier - such as when a NOTIFY says new events were
+     * appended - but must return no later than {@code delayMs}, and must let an interrupt end the wait: the worker is
+     * interrupted when its subscription is cancelled or stopped.
+     *
+     * @param delayMs the delay to wait at most, in milliseconds
+     * @throws InterruptedException if the worker's thread is interrupted while waiting
+     */
+    default void awaitNextPoll(long delayMs) throws InterruptedException {
+        Thread.sleep(delayMs);
+    }
 }

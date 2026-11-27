@@ -9,7 +9,7 @@ scoped to the subscription / event-delivery layer rather than the CDC pipeline i
 |---|---|---|
 | S1 phase 1: NOTIFY-reset polling backoff | Shipped in 0.50.0, opt-in (`essentials.eventstore.subscription-manager.notify-polling.enabled=true`). In 0.60.0 the `pg_notify` trigger became part of each event-stream table's schema contribution (see "Trigger installation" below). | `NotifyAwareEventStorePollingOptimizer`, `NotifyEpochSource`, `NotifyPollingSettings`, `NotifyTriggerInstaller` in `components/postgresql-event-store/.../subscription/notify/`; trigger via `SeparateTablePerAggregateTypePersistenceStrategy.enableNotifyTriggers(...)`, called by `EventStoreNotifyPollingBootstrap`; Spring wiring in `EventStoreConfiguration` (`spring-boot-starter-postgresql-event-store`). Tests: `NotifyPollingIT`, `NotifyAwareEventStorePollingOptimizerTest`, `NotifyEpochSourceTest`, `NotifyPollingAutoConfigurationIT`. |
 | S1 open questions 1-3 (trigger overhead breakeven, NOTIFY storms, listener bean ownership) | Measured 2026-11-27, see "S1 open questions: measured 2026-11-27". The trigger costs about 25 µs per append transaction and pays off only below about 1 append/s per aggregate type; a NOTIFY burst loses nothing but can be delayed by a slow subscriber on the shared event bus; no event-store-specific listener interval is needed for phase 1. Still to decide: coalescing notifications per poll (or a bus of its own for the listener), and the listener interval for S2. | "Risks & open questions" below; `EventStoreConfiguration.eventStoreNotifyPollingBootstrap(...)` and `notifyEpochSource(...)` |
-| S2: interruptible (reactive) wake-up | Open. The poll loop still sleeps on `Thread.sleep(...)` with the delay from `pollingOptimizer.currentDelayMs()`. | `PostgresqlEventStore`, polling-worker loop |
+| S2: interruptible wake-up | Implemented 2026-11-27 on `feature/subscription-notify-wakeup`, opt-in (`essentials.eventstore.subscription-manager.notify-polling.interruptible-wait=true`, default `false`). With it on, a NOTIFY ends the wait between two polls at once. Measured: at 0.1 Hz and `max-delay=5s` the p95 wake-up latency is 56 ms (17 ms with a 10 ms listener interval), against 903 ms for Phase 1 at `max-delay=1s`, with 0.79 polls per second per subscriber against 1.36. See "S2: implemented and measured 2026-11-27". | `EventStorePollingOptimizer.eventStorePollingStarting()` / `awaitNextPoll(long)`, `NotifyEpoch`, `NotifyEpochSource.awaitEpochChange(...)`, `NotifyAwareEventStorePollingOptimizer`, `NotifyPollingSettings.interruptibleWait()`; tests `NotifyEpochTest`, `NotifyAwareInterruptibleWaitTest`, `NotifyInterruptibleWaitIT`; benchmark `NotifyWakeUpLatencyBenchmarkIT` |
 | S3: consumer-group-scoped resume points | Open for durable subscriptions. Only CDC has the cooperative half (`CdcConsumerGroup.namespaced(...)`). | Backlog below |
 | S4: trim the one-event overlap after a crash | Deferred on purpose; the code comment points to this document. | `DefaultEventStoreSubscriptionManager.saveResumePointsForAllSubscribers()` |
 | S5: count-bounded resume-point save | Shipped in 0.60.0, opt-in. | Backlog below |
@@ -17,17 +17,22 @@ scoped to the subscription / event-delivery layer rather than the CDC pipeline i
 
 ### What remains
 
-Each of these is open. The plan is kept because most users still run polling subscriptions, not CDC, so
+Items 2 to 4 are open; item 1 is implemented. The plan is kept because most users still run polling subscriptions, not CDC, so
 improvements to the polling path reach most deployments.
 
-1. **S2, interruptible wake-up.** Let a NOTIFY end the poll loop's sleep early, so `max-delay` limits the database
-   query rate without also setting the wake-up latency on a quiet system.
+1. **S2, interruptible wake-up. Implemented 2026-11-27, opt-in.** A NOTIFY now ends the poll loop's wait early, so
+   `max-delay` limits the database query rate without also setting the wake-up latency on a quiet system. See
+   "S2: implemented and measured 2026-11-27" for the design, the measurements and the known limit under a burst.
 2. **S3, consumer-group-scoped resume points** for durable subscriptions.
 3. **S4, trimming the one-event overlap** that the periodic resume-point checkpoint leaves after an ungraceful
    failure. Build it only if a user needs it; see the reasons for deferring it below.
-4. **What the S1 measurements left to decide:** whether `MultiTableChangeListener` should coalesce event-store
-   notifications to one per table per poll (or publish on a bus of its own) so a slow subscriber on the shared bus
-   cannot delay wake-ups, and the listener's polling interval for S2. See "S1 open questions: measured 2026-11-27".
+4. **What the S1 measurements left to decide - decided 2026-11-27.** The listener now publishes at most one
+   notification per event-stream table per poll (`EventStreamTableNotificationDuplicationFilter`), and the epoch source
+   subscribes synchronously, so a slow subscriber on the shared bus no longer delays wake-ups. The listener's polling
+   interval was not given an event-store-specific setting: it is the floor of S2's wake-up latency, it is documented,
+   and the existing shared setting `essentials.multi-table-change-listener.polling-interval` (default 50 ms) can be
+   lowered at no SQL cost. A separate interval would need a second listener, which means a second LISTEN connection and
+   a second thread. See "S1 open questions: measured 2026-11-27" and "S2: implemented and measured 2026-11-27".
 
 ---
 
@@ -742,6 +747,88 @@ What remains a decision:
   poll, and is no worse than phase 1 at 1 Hz. Add one burst arm with a slow asynchronous bus subscriber to show that
   wake-ups are not stalled once Q2's remedy is in.
 
+### S2: implemented and measured 2026-11-27
+
+**Design.**
+
+- `EventStorePollingOptimizer` gets two default methods. `eventStorePollingStarting()` is called by the polling worker
+  before every poll and does nothing by default. `awaitNextPoll(long delayMs)` replaces the worker's
+  `Thread.sleep(delayMs)` after an empty poll, and its default is exactly that `Thread.sleep`. Every optimizer other
+  than the notify-aware one, and the notify-aware one with the option off, therefore behaves as before.
+- With `NotifyPollingSettings.interruptibleWait()` on, `NotifyAwareEventStorePollingOptimizer` reads the table's notify
+  epoch in `eventStorePollingStarting()` and, in `awaitNextPoll`, waits until the epoch differs from that value or the
+  delay has passed (`NotifyEpochSource.awaitEpochChange(...)`, implemented by `NotifyEpoch` with a lock-based
+  wait/notify). The epoch is read before the poll, and an append that the poll did not see commits after that read, so
+  its NOTIFY always ends the wait. No wake-up can be lost between "the poll came back empty" and "start waiting".
+- `currentDelayMs()` is then the plain backoff ramp; the Phase 1 check that returns `0` when the epoch moved is not
+  used, so there is one wake-up mechanism, not two.
+- Coalescing: any number of NOTIFYs collapse into one change of the epoch, and the optimizer ends a wait early at most
+  once per `initialDelay` (default 50 ms) per subscription. A wake-up that comes sooner after the previous one waits for
+  the rest of `initialDelay`, but never past the wait's own delay.
+- The wait runs on the subscription's existing polling thread, so no thread is added. Cancelling or stopping the
+  subscription interrupts that thread, which ends the wait at once.
+- The listener's polling interval is the floor of the wake-up latency. It is documented, not given a new setting
+  (see "What remains", item 4).
+
+**A/B measurement.** `NotifyWakeUpLatencyBenchmarkIT` (opt-in, `-Dbenchmark.run=true`), on the same environment as
+"S1 open questions: measured 2026-11-27". Four aggregate types, each appended to at a fixed rate with one event per
+transaction and polled by two subscriptions. Three rounds per arm, with the order of the arms rotated between rounds.
+Each run starts with an idle warm-up so the backoff is in its steady state. Wake-up latency is the time from the append's
+commit to the subscriber's handler, pooled over the rounds (96 events per arm at 0.1 Hz, about 360 at 1 Hz). Polls per
+second is per subscription, the median of the rounds.
+
+| Arm | 0.1 Hz p50 / p95 / p99 ms | 0.1 Hz polls/s | 1 Hz p50 / p95 / p99 ms | 1 Hz polls/s |
+|---|---:|---:|---:|---:|
+| Plain polling (Spring default jittered optimizer, 100 ms, backing off to 2 s) | 549 / 1045 / 1288 | 1.99 | 157 / 316 / 841 | 6.37 |
+| Phase 1, `max-delay=1s` | 450 / 903 / 1003 | 1.36 | 329 / 782 / 800 | 4.32 |
+| S2, `max-delay=5s`, listener interval 50 ms | 29 / 56 / 64 | 0.79 | 29 / 56 / 61 | 4.90 |
+| S2, `max-delay=5s`, listener interval 10 ms | 12 / 17 / 19 | 0.79 | 8 / 14 / 17 | 4.92 |
+
+What the numbers say:
+
+- At 0.1 Hz, S2 at `max-delay=5s` polls 60 % less than plain polling and 42 % less than Phase 1, while its p95
+  wake-up latency is 56 ms instead of 903 ms. This meets the pass criterion set above (keep the large query-rate saving
+  at 0.1 Hz with p95 at or below the listener interval plus one poll).
+- With the listener polling every 10 ms the p95 is 17 ms at 0.1 Hz and 14 ms at 1 Hz, so the 50 ms listener interval is
+  the main remaining part of the latency. The query rate does not change.
+- At 1 Hz, S2's latency is far lower than Phase 1's, but it polls about 13 % more often (4.90 against 4.32 polls per
+  second). After each delivered event the backoff starts again from `initialDelay`, and the polls of that ramp are what
+  remains. It is still 23 % fewer polls than plain polling.
+
+**Burst: a known limit, not an S2 defect.** Same 1 Hz workload, while 8 appenders commit single-event transactions as
+fast as they can to another aggregate type whose table also has the notify trigger (about 28 000 transactions per
+second, which saturates this database), with an asynchronous bus subscriber that takes 1 ms per event. Three rounds per
+arm, order rotated (`-Dbenchmark.wakeup.burst-only=true`). For every delivered event the benchmark records when the
+listener delivered the quiet table's first NOTIFY after the commit, when the poll that handed the event over started,
+and when the handler ran.
+
+| Arm | Wake-up p50 / p95 / p99 ms | NOTIFY delivered after the commit, p50 / p95 ms | Poll duration p50 / p95 ms | Polls/s per subscription (rounds) |
+|---|---:|---:|---:|---:|
+| Plain polling | 143 / 310 / 872 | 515 / 3 850 | 0.4 / 0.9 | 6.38 to 6.46 |
+| Phase 1, `max-delay=1s` | 248 / 750 / 798 | 531 / 3 398 | 0.5 / 0.8 | 4.87 to 5.28 |
+| S2, `max-delay=5s` | 200 / 923 / 2 892 | 850 / 5 231 | 0.5 / 2.1 | 4.01 to 4.93 |
+
+Where the S2 tail comes from:
+
+- **Not the poll.** The poll that handed the event over took 0.5 ms at the median and at most a few milliseconds in
+  every arm, so the saturated database does not make the poll itself slow.
+- **Not the coalescing gate.** It holds a wake-up for at most `initialDelay` (50 ms); the tail is seconds.
+- **The NOTIFY arrives late, in every arm.** The listener delivered the quiet table's NOTIFY a median 0.5 to 0.85 s and
+  a p95 3.4 to 5.2 s after the commit, also in the arms that do not use it. NOTIFYs reach the listener in commit order,
+  so the quiet table's notification waits behind the burst table's tens of thousands per second. This matches the Q2
+  burst measurement, where the listener lagged the appends by up to about one second of notifications.
+- **So S2 falls back to its timeout.** In the S2 tail every one of the 18 events was handed over by a poll that started
+  before its NOTIFY arrived, that is by the backoff's timeout. S2 lets the backoff ramp towards `max-delay=5s`, while
+  plain polling is capped at 2 s and Phase 1 at 1 s, so S2's fallback is the slowest. Its round-to-round spread is
+  large (p95 599, 771 and 2 518 ms) because it depends on how far the ramp got before the next event.
+
+Consequence: S2's wake-up latency is only as good as the NOTIFY delivery. When notify-triggered appends on the same
+database run at tens of thousands per second, the listener falls seconds behind and S2 behaves like polling at its
+`max-delay`. This is the case the Q1 guidance already warns against: notify-polling pays off below about 1 append per
+second per aggregate type, and the trigger on a write-heavy aggregate type delays the wake-ups of every other
+aggregate type. Remedy, not built: a per-aggregate-type opt-in for the trigger, so a write-heavy aggregate type does
+not send NOTIFYs at all; or a smaller `max-delay` when write-heavy and quiet aggregate types share a database.
+
 ### Estimated effort (Phase 1) (history: the pre-implementation estimate, kept for reference)
 
 Significantly smaller now that we're composing existing infrastructure rather than
@@ -784,7 +871,11 @@ Testcontainers IT covering:
 
 ## Backlog (not yet specced)
 
-- **S2 — Phase 2 reactive wake-up** (sub-10 ms live latency; poll-loop change).
+- **S2 — Phase 2 reactive wake-up. Implemented 2026-11-27, opt-in; see "S2: implemented and measured 2026-11-27".**
+  The text below is the design as written before the implementation. The implementation differs in two places: the
+  wait is a lock-based wait on a per-table epoch counter (`NotifyEpoch`), not `Mono.firstWithSignal` on a
+  `Sinks.Many<Void>`, so it blocks the polling worker's own thread and creates no thread or Reactor pipeline; and the
+  SPI method is `awaitNextPoll(long delayMs)`, plus `eventStorePollingStarting()` to read the epoch before each poll.
   Design-ready, awaiting user demand.
 
   **What Phase 2 fixes that Phase 1 can't.** Phase 1 forces a trade-off because

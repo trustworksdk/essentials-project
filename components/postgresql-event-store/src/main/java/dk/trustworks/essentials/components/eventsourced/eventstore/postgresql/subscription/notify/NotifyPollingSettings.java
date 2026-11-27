@@ -50,11 +50,18 @@ import static dk.trustworks.essentials.shared.FailFast.requireTrue;
  *                           against worst-case latency (shorter = better).
  * @param backoffMultiplier  exponential ramp factor between consecutive no-events polls.
  *                           Default 2.0. Must be {@code > 1.0}.
+ * @param interruptibleWait  S2: when {@code true} a NOTIFY ends the wait between two polls at once,
+ *                           instead of only shortening the next wait, so {@link #maxDelay()} bounds
+ *                           the query rate of a quiet subscription without also being its wake-up
+ *                           latency. Early wake-ups are coalesced to at most one per
+ *                           {@link #initialDelay()} per subscription. Default {@code false}: the
+ *                           Phase 1 behaviour above.
  */
 public record NotifyPollingSettings(boolean enabled,
                                     Duration initialDelay,
                                     Duration maxDelay,
-                                    double backoffMultiplier) {
+                                    double backoffMultiplier,
+                                    boolean interruptibleWait) {
 
     public static final Duration DEFAULT_INITIAL_DELAY      = Duration.ofMillis(50);
     public static final Duration DEFAULT_MAX_DELAY          = Duration.ofSeconds(1);
@@ -71,6 +78,24 @@ public record NotifyPollingSettings(boolean enabled,
                     "maxDelay must be >= initialDelay");
         requireTrue(backoffMultiplier > 1.0d,
                     "backoffMultiplier must be > 1.0");
+    }
+
+    /**
+     * Phase 1 settings, without the S2 interruptible wait - the constructor of the record before {@code interruptibleWait} was added
+     */
+    public NotifyPollingSettings(boolean enabled,
+                                 Duration initialDelay,
+                                 Duration maxDelay,
+                                 double backoffMultiplier) {
+        this(enabled, initialDelay, maxDelay, backoffMultiplier, false);
+    }
+
+    /**
+     * @param interruptibleWait see {@link #interruptibleWait()}
+     * @return a copy of these settings with {@link #interruptibleWait()} set to {@code interruptibleWait}
+     */
+    public NotifyPollingSettings withInterruptibleWait(boolean interruptibleWait) {
+        return new NotifyPollingSettings(enabled, initialDelay, maxDelay, backoffMultiplier, interruptibleWait);
     }
 
     /** Disabled-state instance — feature off, behaviour unchanged from pre-S1. */

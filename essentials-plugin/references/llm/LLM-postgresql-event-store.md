@@ -1743,6 +1743,17 @@ NOTIFY-driven polling wake-up: use `strategy.enableNotifyTriggers(tableName -> l
 The `pg_notify` trigger is then part of each table's schema. `enableNotifyTriggerInstallation(NotifyTriggerInstaller)`
 is deprecated - it runs the trigger DDL itself, where `validate`/`emit` cannot see it - and the two exclude each other.
 
+Interruptible wake-up (opt-in, S2): `new NotifyPollingSettings(true, initialDelay, maxDelay, multiplier, true)` (or
+`.withInterruptibleWait(true)`; Spring: `essentials.eventstore.subscription-manager.notify-polling.interruptible-wait=true`)
+makes `NotifyAwareEventStorePollingOptimizer` end the wait between polls when the table's notify epoch moves, instead of
+only shortening the next wait. `max-delay` then caps the query rate of a quiet subscription without being its wake-up
+latency; the latency floor is the shared `MultiTableChangeListener` polling interval (Spring
+`essentials.multi-table-change-listener.polling-interval`, default 50 ms - lowering it runs no SQL, but also changes the
+durable queues' wake-ups). Early wake-ups are capped at one per `initialDelay` per subscription. A custom
+`EventStorePollingOptimizer` can do the same through the default methods `eventStorePollingStarting()` (read what you
+compare against **before** the poll, or a NOTIFY landing mid-poll is lost) and `awaitNextPoll(delayMs)` (default
+`Thread.sleep`; must return within `delayMs` and let an interrupt end it).
+
 ### IdentifierColumnType
 
 Enum: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.IdentifierColumnType`

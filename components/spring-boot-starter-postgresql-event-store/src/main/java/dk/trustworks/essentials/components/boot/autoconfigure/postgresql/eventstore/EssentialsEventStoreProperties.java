@@ -885,6 +885,17 @@ public class EssentialsEventStoreProperties {
          */
         private double   backoffMultiplier  = 2.0d;
 
+        /**
+         * S2 interruptible wake-up. {@code false} (default) keeps the Phase 1 behaviour: a NOTIFY only shortens the
+         * next wait, so on a quiet system the wake-up latency is up to {@code max-delay}. {@code true}: a NOTIFY ends the
+         * wait between two polls at once, so {@code max-delay} bounds the query rate of a quiet subscription without
+         * also being its wake-up latency, and a larger {@code max-delay} can be used. Early wake-ups are coalesced to at
+         * most one per {@code initial-delay} per subscription. The wake-up latency is then bounded by
+         * {@code essentials.multi-table-change-listener.polling-interval} (default 50 ms), the interval at which the
+         * shared listener reads NOTIFYs; lowering it runs no extra SQL. Only applies when {@code enabled=true}.
+         */
+        private boolean  interruptibleWait  = false;
+
         public boolean isEnabled() {
             return enabled;
         }
@@ -915,6 +926,14 @@ public class EssentialsEventStoreProperties {
 
         public void setBackoffMultiplier(double backoffMultiplier) {
             this.backoffMultiplier = backoffMultiplier;
+        }
+
+        public boolean isInterruptibleWait() {
+            return interruptibleWait;
+        }
+
+        public void setInterruptibleWait(boolean interruptibleWait) {
+            this.interruptibleWait = interruptibleWait;
         }
     }
 

@@ -24,7 +24,6 @@ import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -38,7 +37,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <ul>
  *   <li>filters for {@link TableChangeNotification} events (the bus may carry other event
  *       types — durable-queue notifications, custom app events, etc.);</li>
- *   <li>bumps the {@link AtomicLong} epoch counter for the notification's table name in a
+ *   <li>bumps the {@link NotifyEpoch} counter for the notification's table name in a
  *       {@link ConcurrentHashMap};</li>
  *   <li>creates the counter lazily on first observation so we don't need to know the full
  *       set of event-stream tables up front.</li>
@@ -56,13 +55,16 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * running it on the publishing thread costs that thread nothing noticeable; for every other
  * event the bus carries it is a single {@code instanceof} check.
  * <p>
+ * S2 (interruptible wake-up): a polling worker can also wait for a table's epoch to move with
+ * {@link #awaitEpochChange(String, long, long)}; every advance wakes the workers waiting on that table.
+ * <p>
  * Thread-safe by construction: the map and per-key counters are concurrent; the handler
  * runs on the publishing thread; optimizer reads happen from per-subscription
  * scheduler threads. No external synchronization is required.
  * <p>
  * The collapse from "N notifications" to "epoch incremented N times" is fine — the
  * optimizer only cares whether the epoch <em>changed</em> since its last poll, not the
- * absolute count. {@link AtomicLong#incrementAndGet()} provides the strict-monotonicity
+ * absolute count. {@link NotifyEpoch#advance()} provides the strict-monotonicity
  * guarantee the optimizer's compare-and-update relies on.
  */
 public final class NotifyEpochSource {
@@ -70,7 +72,7 @@ public final class NotifyEpochSource {
 
     private final EventBus                          eventBus;
     private final EventHandler                      handler;
-    private final ConcurrentMap<String, AtomicLong> epochByTable = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, NotifyEpoch> epochByTable = new ConcurrentHashMap<>();
 
     public NotifyEpochSource(EventBus eventBus) {
         this.eventBus = requireNonNull(eventBus, "eventBus cannot be null");
@@ -80,12 +82,11 @@ public final class NotifyEpochSource {
             if (event instanceof TableChangeNotification notification) {
                 String table = notification.getTableName();
                 if (table != null) {
-                    epochByTable.computeIfAbsent(table, ignored -> new AtomicLong())
-                                .incrementAndGet();
+                    epochFor(table).advance();
                     if (log.isTraceEnabled()) {
                         log.trace("Notify epoch advanced: table='{}' op='{}' newEpoch='{}'",
                                   table, notification.getOperation(),
-                                  epochByTable.get(table).get());
+                                  epochByTable.get(table).current());
                     }
                 }
             }
@@ -101,8 +102,26 @@ public final class NotifyEpochSource {
      * baseline".
      */
     public long currentEpoch(String tableName) {
-        AtomicLong counter = epochByTable.get(tableName);
-        return counter == null ? 0L : counter.get();
+        NotifyEpoch epoch = epochByTable.get(tableName);
+        return epoch == null ? 0L : epoch.current();
+    }
+
+    /**
+     * S2: wait until the epoch of {@code tableName} is no longer {@code seenEpoch}, or until {@code timeoutMs} has passed -
+     * see {@link NotifyEpoch#awaitChangeFrom(long, long)}. Waits on the calling thread; creates no thread.
+     *
+     * @param tableName the event-stream table
+     * @param seenEpoch the epoch the caller read with {@link #currentEpoch(String)} before the poll it waits after
+     * @param timeoutMs the longest time to wait
+     * @return {@code true} if the epoch moved (also when it already had on entry), {@code false} on timeout
+     * @throws InterruptedException if the waiting thread is interrupted
+     */
+    public boolean awaitEpochChange(String tableName, long seenEpoch, long timeoutMs) throws InterruptedException {
+        return epochFor(tableName).awaitChangeFrom(seenEpoch, timeoutMs);
+    }
+
+    private NotifyEpoch epochFor(String tableName) {
+        return epochByTable.computeIfAbsent(tableName, ignored -> new NotifyEpoch());
     }
 
     /**

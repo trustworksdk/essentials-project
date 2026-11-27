@@ -20,6 +20,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.Ev
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.concurrent.TimeUnit;
+
 import static dk.trustworks.essentials.shared.FailFast.requireNonBlank;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -46,8 +48,26 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <p>
  * Phase 1 limitation (documented in subscription-improvements.md): a NOTIFY arriving
  * mid-sleep cannot interrupt the in-flight sleep — only shorten the next one. Worst-
- * case live latency on a quiet system equals {@code maxDelay}. Phase 2 (interruptible
- * delays via reactive merge) is gated on a concrete sub-100ms requirement.
+ * case live latency on a quiet system equals {@code maxDelay}. S2 below removes it.
+ * <p>
+ * <b>S2, interruptible wait</b> ({@link NotifyPollingSettings#interruptibleWait()}, off by default): the wait between
+ * two polls ends as soon as the table's epoch moves, instead of only the next wait being shortened. So
+ * {@code maxDelay} bounds the query rate of a quiet subscription without also being its wake-up latency.
+ * <ul>
+ *   <li>{@link #eventStorePollingStarting()} reads the epoch before every poll; {@link #awaitNextPoll(long)} waits
+ *       for the epoch to move away from that value. A NOTIFY for an append the poll did not see therefore always
+ *       ends the wait - also one that arrived while the poll ran (no lost wake-up between "the poll came back empty"
+ *       and "start waiting").</li>
+ *   <li>{@link #currentDelayMs()} is then the plain backoff ramp: the Phase 1 epoch peek would be a second wake-up
+ *       mechanism doing the same thing.</li>
+ *   <li>Coalescing: any number of NOTIFYs collapse into one epoch change, and an early wake-up comes at most once per
+ *       {@code initialDelay} per subscription - a wake-up sooner than that after the previous one waits out the rest
+ *       of {@code initialDelay} (never past the delay itself). A burst cannot turn into a poll storm.</li>
+ *   <li>The wait runs on the polling worker's own thread (no thread is added) and ends on an interrupt, which is how a
+ *       cancelled or stopped subscription stops its worker.</li>
+ * </ul>
+ * The wake-up latency is then the time for the NOTIFY to reach the {@link NotifyEpochSource}: the
+ * {@code MultiTableChangeListener}'s polling interval (0 to 50 ms with the Spring default) plus the poll.
  * <p>
  * Thread-safety: each subscription has its own optimizer instance; the optimizer's state
  * is mutated only by the per-subscription poll loop, which is single-threaded. The
@@ -63,8 +83,15 @@ public final class NotifyAwareEventStorePollingOptimizer implements EventStorePo
     private final long                  initialDelayMs;
     private final long                  maxDelayMs;
 
+    private final boolean               interruptibleWait;
+
     private long currentDelayMs;
     private long lastSeenEpoch;
+    /** S2: the epoch read before the latest poll */
+    private long epochAtPollStart;
+    /** S2: when the latest wait ended early on an epoch change ({@link System#nanoTime()}); none yet when {@link #hasWokenEarly} is false */
+    private long    lastEarlyWakeUpNanos;
+    private boolean hasWokenEarly;
 
     /**
      * @param epochSource per-table epoch source fed by {@code MultiTableChangeListener}'s
@@ -83,12 +110,14 @@ public final class NotifyAwareEventStorePollingOptimizer implements EventStorePo
         this.settings = requireNonNull(settings, "settings cannot be null");
         this.initialDelayMs = settings.initialDelay().toMillis();
         this.maxDelayMs = settings.maxDelay().toMillis();
+        this.interruptibleWait = settings.interruptibleWait();
         this.currentDelayMs = initialDelayMs;
         this.lastSeenEpoch = epochSource.currentEpoch(tableName);
+        this.epochAtPollStart = lastSeenEpoch;
         if (log.isDebugEnabled()) {
             log.debug("Created NotifyAwareEventStorePollingOptimizer for table='{}' "
-                              + "initialDelay={} ms maxDelay={} ms multiplier={}",
-                      tableName, initialDelayMs, maxDelayMs, settings.backoffMultiplier());
+                              + "initialDelay={} ms maxDelay={} ms multiplier={} interruptibleWait={}",
+                      tableName, initialDelayMs, maxDelayMs, settings.backoffMultiplier(), interruptibleWait);
         }
     }
 
@@ -134,7 +163,49 @@ public final class NotifyAwareEventStorePollingOptimizer implements EventStorePo
     }
 
     @Override
+    public void eventStorePollingStarting() {
+        if (interruptibleWait) {
+            // Read before the poll: an append the poll does not see commits after this, so its NOTIFY moves the epoch past this value
+            epochAtPollStart = epochSource.currentEpoch(tableName);
+        }
+    }
+
+    @Override
+    public void awaitNextPoll(long delayMs) throws InterruptedException {
+        if (!interruptibleWait) {
+            Thread.sleep(delayMs);
+            return;
+        }
+        long waitStartedNanos = System.nanoTime();
+        if (!epochSource.awaitEpochChange(tableName, epochAtPollStart, delayMs)) {
+            return;
+        }
+        long now = System.nanoTime();
+        if (hasWokenEarly) {
+            // Coalesce: at most one early wake-up per initialDelay, and never later than the delay itself
+            long earliestWakeUpNanos = lastEarlyWakeUpNanos + TimeUnit.MILLISECONDS.toNanos(initialDelayMs);
+            long deadlineNanos       = waitStartedNanos + TimeUnit.MILLISECONDS.toNanos(delayMs);
+            long holdNanos           = Math.min(earliestWakeUpNanos, deadlineNanos) - now;
+            if (holdNanos > 0) {
+                TimeUnit.NANOSECONDS.sleep(holdNanos);
+                now = System.nanoTime();
+            }
+        }
+        hasWokenEarly = true;
+        lastEarlyWakeUpNanos = now;
+        currentDelayMs = initialDelayMs;
+        if (log.isTraceEnabled()) {
+            log.trace("Table='{}' NOTIFY ended the wait after '{}' ms (delay '{}' ms)",
+                      tableName, TimeUnit.NANOSECONDS.toMillis(now - waitStartedNanos), delayMs);
+        }
+    }
+
+    @Override
     public long currentDelayMs() {
+        if (interruptibleWait) {
+            // awaitNextPoll owns the wake-up
+            return currentDelayMs;
+        }
         long epoch = epochSource.currentEpoch(tableName);
         if (epoch != lastSeenEpoch) {
             // A NOTIFY has landed since our last poll. Force an immediate re-poll and
@@ -159,6 +230,7 @@ public final class NotifyAwareEventStorePollingOptimizer implements EventStorePo
                 + ", lastSeenEpoch=" + lastSeenEpoch
                 + ", initialDelayMs=" + initialDelayMs
                 + ", maxDelayMs=" + maxDelayMs
+                + ", interruptibleWait=" + interruptibleWait
                 + '}';
     }
 }

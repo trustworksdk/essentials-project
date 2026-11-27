@@ -1170,6 +1170,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
 
             while (remainingDemandForEvents > 0 && !sink.isCancelled() && !Thread.currentThread().isInterrupted()) {
 
+                pollingOptimizer.eventStorePollingStarting();
                 var numberOfEventsPublished = pollForEvents(remainingDemandForEvents);
                 remainingDemandForEvents -= numberOfEventsPublished;
                 eventStoreStreamLog.trace("[{}] Polling worker published {} event(s) - Outstanding demand for events {}",
@@ -1187,7 +1188,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                     }
                     if (delayMs > 0) {
                         try {
-                            Thread.sleep(delayMs);
+                            // The default is Thread.sleep(delayMs); notify-polling's interruptible wait ends it early on a NOTIFY
+                            pollingOptimizer.awaitNextPoll(delayMs);
                         } catch (InterruptedException e) {
                             // Restore the flag - the loop condition then ends this worker rather than polling without sleeping
                             Thread.currentThread().interrupt();

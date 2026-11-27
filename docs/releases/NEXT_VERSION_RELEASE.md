@@ -35,6 +35,8 @@ remove it, instead of keeping it because nobody can tell._
   present, not only with `management.tracing.enabled=true`, which Spring Boot 4 no longer reads (§1.1.6).
 - Fenced locks: opt-in spreading of async-acquired locks, and so of exclusive processors, over the instances (§2.9).
 - Notify-polling: a slow asynchronous subscriber on the shared event bus no longer delays subscription wake-ups (§3).
+- Notify-polling: an opt-in interruptible wait lets a NOTIFY wake a backed-off subscription at once, so `max-delay` no
+  longer sets the wake-up latency of a quiet subscription (§2.20).
 - Interceptors: every interceptor family can replace what it passes on - queue, message-handler, command-bus and
   event-store interceptors share one contract (§2.19); handlers now receive replacements and `PatternMatchingMessageHandler`
   honours `@InterceptorOrder` (§1.1.7).
@@ -71,6 +73,7 @@ same shard-owned queues** (§1).
    - [2.17 Guarded closing-books rollovers refuse an aggregate from a generation that has since rolled (`eventsourced-aggregates`)](#217-guarded-closing-books-rollovers-refuse-an-aggregate-from-a-generation-that-has-since-rolled-eventsourced-aggregates)
    - [2.18 `FailoverRedeliveryPolicy`: an event processor retry budget that outlasts a failover, opt-in (`postgresql-event-store`)](#218-failoverredeliverypolicy-an-event-processor-retry-budget-that-outlasts-a-failover-opt-in-postgresql-event-store)
    - [2.19 Interceptors can replace what they pass on, in every interceptor family (foundation, `reactive`, `postgresql-event-store`, `shared`)](#219-interceptors-can-replace-what-they-pass-on-in-every-interceptor-family-foundation-reactive-postgresql-event-store-shared)
+   - [2.20 Notify-polling: a NOTIFY can end the wait between polls, opt-in (`postgresql-event-store`, Spring Boot starter)](#220-notify-polling-a-notify-can-end-the-wait-between-polls-opt-in-postgresql-event-store-spring-boot-starter)
 3. [Bug fixes](#3-bug-fixes)
 4. [The `essentials` Claude Code plugin](#4-the-essentials-claude-code-plugin)
 5. [Examples](#5-examples)
@@ -186,6 +189,36 @@ None so far.
 ### 2.19 Interceptors can replace what they pass on, in every interceptor family (foundation, `reactive`, `postgresql-event-store`, `shared`)
 
 None so far.
+
+### 2.20 Notify-polling: a NOTIFY can end the wait between polls, opt-in (`postgresql-event-store`, Spring Boot starter)
+
+With notify-polling on, a NOTIFY used to shorten only the *next* wait of a backed-off polling subscription: the wait in
+progress ran to its end, so on a quiet system `max-delay` was both the cap on the query rate and the wake-up latency.
+The new opt-in `essentials.eventstore.subscription-manager.notify-polling.interruptible-wait=true` (without Spring:
+`NotifyPollingSettings.withInterruptibleWait(true)`, or the new fifth record component) ends the wait as soon as the
+aggregate type's notify epoch moves. `max-delay` can then be raised (for example to `5s`) to lower the query rate of a
+quiet subscription without raising its wake-up latency, which becomes the listener's polling interval plus one poll.
+
+- **What you must do:** nothing. It is off by default, and only applies when `notify-polling.enabled=true`. With
+  notify-polling off nothing changes.
+- **Wake-up latency floor:** NOTIFYs are read by the shared `MultiTableChangeListener`, every
+  `essentials.multi-table-change-listener.polling-interval` (default 50 ms), so a wake-up takes up to that long.
+  Lowering the interval (for example to `PT0.01S`) runs no extra SQL - a listener poll only reads what the server has
+  already pushed to the socket - but it is shared, so the durable queues' NOTIFY wake-ups get faster too.
+- **Bounded:** NOTIFYs collapse into one epoch change, and an early wake-up comes at most once per
+  `notify-polling.initial-delay` per subscription, so a burst of appends cannot turn into a poll storm. The wait runs on
+  the subscription's existing polling thread (no thread is added) and ends at once when the subscription is stopped.
+- **SPI, additive:** `EventStorePollingOptimizer` gains two default methods, `eventStorePollingStarting()` (called
+  before every poll; does nothing by default) and `awaitNextPoll(long delayMs)` (sleeps `delayMs` by default), so a
+  custom optimizer is unaffected. `NotifyEpochSource.awaitEpochChange(...)` and the new `NotifyEpoch` are the wait primitive.
+- **Measured** (`NotifyWakeUpLatencyBenchmarkIT`; full tables in `docs/plans/subscription-improvements.md`, "S2:
+  implemented and measured 2026-11-27"): at one append every 10 s per aggregate type and `max-delay=5s`, p95 wake-up
+  latency 56 ms (17 ms with a 10 ms listener interval) against 903 ms for Phase 1 at `max-delay=1s`, and 0.79 polls per
+  second per subscription against 1.36 (plain polling: 1.99).
+- **Known limit:** the wake-up is only as fast as the NOTIFY. When other aggregate types with the notify trigger take
+  tens of thousands of appends per second on the same database, the listener falls seconds behind and a subscription
+  wakes on its backoff timeout instead, up to `max-delay`. Keep notify-polling for aggregate types that are appended to
+  rarely, or use a smaller `max-delay`.
 
 ---
 
