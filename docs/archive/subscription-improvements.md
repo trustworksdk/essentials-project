@@ -1,5 +1,11 @@
 # Subscription Improvements
 
+> **ARCHIVED (2026-11-27).** S1 phase 1 (0.50.0), S5 and S6 (0.60.0), the slow-event-bus-subscriber fix for
+> notify-polling (0.61.1) and S2 (interruptible wait, opt-in) are implemented in `components/postgresql-event-store`.
+> S3 and S4 were decided against on 2026-11-27 (reasons in the Status table and the Backlog). The remaining follow-ups
+> are tracked in [`../plans/README.md`](../plans/README.md) ("Open items from documents kept elsewhere"). Kept as the
+> design record; the code is authoritative.
+
 Companion to the CDC improvements log ([cdc-improvements.md](../archive/cdc-improvements.md)),
 scoped to the subscription / event-delivery layer rather than the CDC pipeline itself.
 
@@ -10,22 +16,33 @@ scoped to the subscription / event-delivery layer rather than the CDC pipeline i
 | S1 phase 1: NOTIFY-reset polling backoff | Shipped in 0.50.0, opt-in (`essentials.eventstore.subscription-manager.notify-polling.enabled=true`). In 0.60.0 the `pg_notify` trigger became part of each event-stream table's schema contribution (see "Trigger installation" below). | `NotifyAwareEventStorePollingOptimizer`, `NotifyEpochSource`, `NotifyPollingSettings`, `NotifyTriggerInstaller` in `components/postgresql-event-store/.../subscription/notify/`; trigger via `SeparateTablePerAggregateTypePersistenceStrategy.enableNotifyTriggers(...)`, called by `EventStoreNotifyPollingBootstrap`; Spring wiring in `EventStoreConfiguration` (`spring-boot-starter-postgresql-event-store`). Tests: `NotifyPollingIT`, `NotifyAwareEventStorePollingOptimizerTest`, `NotifyEpochSourceTest`, `NotifyPollingAutoConfigurationIT`. |
 | S1 open questions 1-3 (trigger overhead breakeven, NOTIFY storms, listener bean ownership) | Measured 2026-11-27, see "S1 open questions: measured 2026-11-27". The trigger costs about 25 µs per append transaction and pays off only below about 1 append/s per aggregate type; a NOTIFY burst loses nothing but can be delayed by a slow subscriber on the shared event bus; no event-store-specific listener interval is needed for phase 1. Still to decide: coalescing notifications per poll (or a bus of its own for the listener), and the listener interval for S2. | "Risks & open questions" below; `EventStoreConfiguration.eventStoreNotifyPollingBootstrap(...)` and `notifyEpochSource(...)` |
 | S2: interruptible wake-up | Implemented 2026-11-27 on `feature/subscription-notify-wakeup`, opt-in (`essentials.eventstore.subscription-manager.notify-polling.interruptible-wait=true`, default `false`). With it on, a NOTIFY ends the wait between two polls at once. Measured: at 0.1 Hz and `max-delay=5s` the p95 wake-up latency is 56 ms (17 ms with a 10 ms listener interval), against 903 ms for Phase 1 at `max-delay=1s`, with 0.79 polls per second per subscriber against 1.36. See "S2: implemented and measured 2026-11-27". | `EventStorePollingOptimizer.eventStorePollingStarting()` / `awaitNextPoll(long)`, `NotifyEpoch`, `NotifyEpochSource.awaitEpochChange(...)`, `NotifyAwareEventStorePollingOptimizer`, `NotifyPollingSettings.interruptibleWait()`; tests `NotifyEpochTest`, `NotifyAwareInterruptibleWaitTest`, `NotifyInterruptibleWaitIT`; benchmark `NotifyWakeUpLatencyBenchmarkIT` |
-| S3: consumer-group-scoped resume points | Open for durable subscriptions. Only CDC has the cooperative half (`CdcConsumerGroup.namespaced(...)`). | Backlog below |
-| S4: trim the one-event overlap after a crash | Deferred on purpose; the code comment points to this document. | `DefaultEventStoreSubscriptionManager.saveResumePointsForAllSubscribers()` |
+| S3: consumer-group-scoped resume points | Won't do (2026-11-27): low value compared to its cost. Only deployments that share one database and use identical `SubscriberId`s would benefit, and it needs a schema migration and a primary-key change on `durable_subscriptions` for every user, re-scoping of every resume-point query, and must keep the 0.61.1 `fence_token` rule working. CDC already has the cooperative helper `CdcConsumerGroup.namespaced(...)`. A cheaper step, if multi-deployment users ever need it: detect a collision instead (record which deployment or group last wrote a resume point and WARN or refuse when another one writes the same row; one nullable column, no key change). | Backlog below |
+| S4: trim the one-event overlap after a crash | Won't do (2026-11-27). The dominant duplicate after a crash is every event handled since the last checkpoint, which is bounded by the 1 s `snapshot-resume-points-every` default and S5's count-bounded save; S4 would remove only the one boundary event on top of that. At-least-once delivery and idempotent handlers remain required regardless. A wrong "clean boundary" decision for an in-flight or mid-batch subscriber would skip an event, turning a duplicate into a loss. The code comment points to this document. | `DefaultEventStoreSubscriptionManager.saveResumePointsForAllSubscribers()` |
 | S5: count-bounded resume-point save | Shipped in 0.60.0, opt-in. | Backlog below |
 | S6: reposition epoch | Shipped in 0.60.0. 0.61.1 adds a second rule on top of it: every resume-point save of an exclusive subscription carries the token of the fenced lock it holds, stored in a new nullable column `durable_subscriptions.fence_token`. A save with a newer token wins whatever its reposition epoch, a save with the same token is checked against the epoch as before, and a save with an older token is refused. Non-exclusive subscriptions save without a token and are checked by the epoch alone. | S6 below; `docs/releases/NEXT_VERSION_RELEASE.md` (the `fence_token` schema change and the exclusive-subscriptions fix) |
 
 ### What remains
 
-Items 2 to 4 are open; item 1 is implemented. The plan is kept because most users still run polling subscriptions, not CDC, so
-improvements to the polling path reach most deployments.
+Nothing remains open in this document. Item 1 is implemented, items 2 and 3 were decided against on 2026-11-27, and
+item 4 was decided on 2026-11-27. The follow-ups that are still open are tracked in
+[`../plans/README.md`](../plans/README.md) ("Open items from documents kept elsewhere").
 
 1. **S2, interruptible wake-up. Implemented 2026-11-27, opt-in.** A NOTIFY now ends the poll loop's wait early, so
    `max-delay` limits the database query rate without also setting the wake-up latency on a quiet system. See
    "S2: implemented and measured 2026-11-27" for the design, the measurements and the known limit under a burst.
-2. **S3, consumer-group-scoped resume points** for durable subscriptions.
+2. **S3, consumer-group-scoped resume points** for durable subscriptions. **Won't do (2026-11-27).** The value is low
+   compared to the cost: only deployments that share one database and use identical `SubscriberId`s would benefit,
+   while every user would get a schema migration and a primary-key change on `durable_subscriptions`, every
+   resume-point query would have to be re-scoped, and the 0.61.1 `fence_token` rule would have to keep working. CDC
+   already ships the cooperative helper `CdcConsumerGroup.namespaced(...)`. If multi-deployment users ever need
+   protection, the cheaper step is to detect a collision: record which deployment or group last wrote a resume point,
+   and WARN or refuse when another one writes the same row (a nullable column, no key change).
 3. **S4, trimming the one-event overlap** that the periodic resume-point checkpoint leaves after an ungraceful
-   failure. Build it only if a user needs it; see the reasons for deferring it below.
+   failure. **Won't do (2026-11-27).** The dominant duplicate after a crash is every event handled since the last
+   checkpoint, bounded by the 1 s `snapshot-resume-points-every` default and S5's count-bounded save; S4 would remove
+   only the one boundary event on top of that. At-least-once delivery and idempotent handlers remain required either
+   way, and a wrong "clean boundary" decision for an in-flight or mid-batch subscriber would skip an event, turning a
+   duplicate into a loss.
 4. **What the S1 measurements left to decide - decided 2026-11-27.** The listener now publishes at most one
    notification per event-stream table per poll (`EventStreamTableNotificationDuplicationFilter`), and the epoch source
    subscribes synchronously, so a slow subscriber on the shared bus no longer delays wake-ups. The listener's polling
@@ -952,9 +969,16 @@ Testcontainers IT covering:
     mechanism). Once S2's interruptible await owns the wake, that epoch-peek is redundant
     (harmless, but the optimizer should be simplified to a pure backoff ramp to avoid two
     overlapping wake mechanisms).
-- **S3 — Consumer-group-scoped resume points.** Cross-reference cdc-improvements.md P7
+- **S3 — Consumer-group-scoped resume points. Won't do (decided 2026-11-27).** Cross-reference cdc-improvements.md P7
   (`CdcConsumerGroup.namespaced(...)` already ships the cooperative half).
-- **S4 — Trim the one-event crash-recovery overlap in the periodic resume-point checkpoint.**
+
+  **Decision.** Low value compared to the cost. Only deployments that share one database and use identical
+  `SubscriberId`s benefit. It needs a schema migration and a primary-key change on `durable_subscriptions` for every
+  user, re-scoping of every resume-point query, and it must keep the 0.61.1 `fence_token` rule working. The
+  cooperative helper `CdcConsumerGroup.namespaced(...)` already exists. A cheaper step, if multi-deployment users ever
+  need it: detect a collision by recording which deployment or group last wrote a resume point, and WARN or refuse
+  when another one writes the same row. That is one nullable column and no key change.
+- **S4 — Trim the one-event crash-recovery overlap in the periodic resume-point checkpoint. Won't do (decided 2026-11-27).**
   `DefaultEventStoreSubscriptionManager.saveResumePointsForAllSubscribers()` runs on a fixed
   schedule as a crash-safety net and persists each active subscriber's *current* resume point
   verbatim. A graceful `stop()`/`unsubscribe` records a precise resume boundary, but an
@@ -974,6 +998,12 @@ Testcontainers IT covering:
   harmless duplicate into a loss), so it needs careful handling of the active/in-flight case — the
   open question the inline note at `saveResumePointsForAllSubscribers()` flags. Build it only if a
   user is sensitive to duplicate-on-crash-recovery and idempotency isn't sufficient.
+
+  **Decision: won't do (2026-11-27).** The dominant duplicate after a crash is every event handled since the last
+  checkpoint, which is bounded by the 1 s `snapshot-resume-points-every` default and by S5's count-bounded save. S4
+  removes only the one boundary event on top of that. At-least-once delivery and idempotent handlers remain required
+  regardless. A wrong "clean boundary" decision for an in-flight or mid-batch subscriber would skip an event, turning
+  a duplicate into a loss.
 - **S5 — Count-bounded resume-point save. Shipped in 0.60, opt-in.**
   `snapshotResumePointsAfterEvents` (builder) / `essentials.eventstore.subscription-manager.snapshot-resume-points-after-events`
   (Spring). A second task on the resume-point scheduler thread checks every active subscriber in memory and saves

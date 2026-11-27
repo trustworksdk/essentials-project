@@ -992,7 +992,7 @@ consumer API; the `examples/` modules are excluded from the release.
 | [`docs/design/constructor-ergonomics-and-optional-policy.md`](../design/constructor-ergonomics-and-optional-policy.md) | Why the sweep was done and what the ArchUnit guard enforces |
 | [`docs/design/cdc.md`](../design/cdc.md) | CDC design and operations — prerequisites, plugins, slots, poison handling |
 | [`docs/archive/cdc-improvements.md`](../archive/cdc-improvements.md) | CDC hardening work in detail |
-| [`docs/plans/subscription-improvements.md`](../plans/subscription-improvements.md) | Subscription statistics and observer work |
+| [`docs/archive/subscription-improvements.md`](../archive/subscription-improvements.md) | Subscription-layer improvements: the design and measurements of NOTIFY-driven polling wake-up (S1), plus the later resume-point work |
 | [`docs/openapi/README.md`](../openapi/README.md) | The admin API contract, its gates and its changelog |
 | [`docs/ai-tooling.md`](../ai-tooling.md) | AI tooling conventions used in this repository |
 | [`LLM/LLM.md`](../../LLM/LLM.md) | Entry point for the per-module consumer references |

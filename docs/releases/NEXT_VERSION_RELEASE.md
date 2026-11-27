@@ -211,7 +211,7 @@ quiet subscription without raising its wake-up latency, which becomes the listen
 - **SPI, additive:** `EventStorePollingOptimizer` gains two default methods, `eventStorePollingStarting()` (called
   before every poll; does nothing by default) and `awaitNextPoll(long delayMs)` (sleeps `delayMs` by default), so a
   custom optimizer is unaffected. `NotifyEpochSource.awaitEpochChange(...)` and the new `NotifyEpoch` are the wait primitive.
-- **Measured** (`NotifyWakeUpLatencyBenchmarkIT`; full tables in `docs/plans/subscription-improvements.md`, "S2:
+- **Measured** (`NotifyWakeUpLatencyBenchmarkIT`; full tables in `docs/archive/subscription-improvements.md`, "S2:
   implemented and measured 2026-11-27"): at one append every 10 s per aggregate type and `max-delay=5s`, p95 wake-up
   latency 56 ms (17 ms with a 10 ms listener interval) against 903 ms for Phase 1 at `max-delay=1s`, and 0.79 polls per
   second per subscription against 1.36 (plain polling: 1.99).

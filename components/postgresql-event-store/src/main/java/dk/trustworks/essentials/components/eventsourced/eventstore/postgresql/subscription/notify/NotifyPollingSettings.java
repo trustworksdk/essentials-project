@@ -33,8 +33,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireTrue;
  *   <li>After a no-events poll: current delay ramps by {@link #backoffMultiplier()},
  *       capped at {@link #maxDelay()}. The cap is the worst-case live latency on a
  *       quiet system — a NOTIFY arriving mid-sleep cannot interrupt the in-flight
- *       sleep (this is Phase 1; Phase 2 in subscription-improvements.md addresses
- *       interruptible delays).</li>
+ *       sleep (this is Phase 1; Phase 2, S2 in docs/archive/subscription-improvements.md,
+ *       addresses it with the opt-in {@link #interruptibleWait()}).</li>
  *   <li>On {@code currentDelayMs()}: if a NOTIFY has landed since the last poll, the
  *       optimizer returns {@code 0} to force an immediate re-poll and resets the
  *       backoff to {@link #initialDelay()}.</li>

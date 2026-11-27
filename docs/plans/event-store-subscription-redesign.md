@@ -10,7 +10,7 @@ Related documents:
 
 | Document | Relevance |
 |---|---|
-| [`subscription-improvements.md`](./subscription-improvements.md) | S1 (NOTIFY-reset backoff, shipped), S2 (interruptible wake-up, never built), S5/S6 (resume-point saves and the reposition epoch) |
+| [`subscription-improvements.md`](../archive/subscription-improvements.md) (archived) | S1 (NOTIFY-reset backoff, shipped), S2 (interruptible wake-up, implemented 2026-11-27, opt-in), S5/S6 (resume-point saves and the reposition epoch) |
 | [`durable-queue-shard-owned.md`](../design/durable-queue-shard-owned.md) | The engine whose lessons this borrows: cursor, holes, wake-up tiers, leases, fencing |
 | [`durable-queue-ordered-routing-design.md`](../design/durable-queue-ordered-routing-design.md) §3 | The safe watermark, which is the core mechanism proposed here |
 | [`archive/durable-queue-design-history.md`](../archive/durable-queue-design-history.md) §9 | The defect log. Most of its entries have an equivalent hazard in this design |

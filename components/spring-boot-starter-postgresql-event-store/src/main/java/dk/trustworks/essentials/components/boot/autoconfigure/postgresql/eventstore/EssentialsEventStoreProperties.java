@@ -523,7 +523,7 @@ public class EssentialsEventStoreProperties {
          * {@code EventStorePollingOptimizer} so subscribers ramp their poll cadence to
          * the configured cap on quiet systems but wake immediately on writes.
          * <p>
-         * See {@code subscription-improvements.md} (S1) for the full design including
+         * See {@code docs/archive/subscription-improvements.md} (S1) for the full design including
          * trade-offs vs CDC INBOX, the operator decision tree, and the phase-2 path to
          * sub-10 ms reactive wake-up.
          */

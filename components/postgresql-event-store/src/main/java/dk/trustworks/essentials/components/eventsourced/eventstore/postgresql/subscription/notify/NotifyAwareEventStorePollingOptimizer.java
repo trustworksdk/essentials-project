@@ -27,7 +27,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * NOTIFY-aware {@link EventStorePollingOptimizer} — Phase 1 of S1 (see
- * {@code subscription-improvements.md}).
+ * {@code docs/archive/subscription-improvements.md}).
  * <p>
  * Behaviour:
  * <ul>
@@ -46,7 +46,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * table resets the delay on the very next iteration, so a quiet system that suddenly
  * becomes active doesn't pay an extra full cycle of backoff before delivering.
  * <p>
- * Phase 1 limitation (documented in subscription-improvements.md): a NOTIFY arriving
+ * Phase 1 limitation (documented in docs/archive/subscription-improvements.md): a NOTIFY arriving
  * mid-sleep cannot interrupt the in-flight sleep — only shorten the next one. Worst-
  * case live latency on a quiet system equals {@code maxDelay}. S2 below removes it.
  * <p>

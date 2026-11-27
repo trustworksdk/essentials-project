@@ -15,7 +15,6 @@ Last checked against the code: 2026-11-08.
 | [shard-owned-queue-polling-reduction.md](shard-owned-queue-polling-reduction.md) | Shard-owned engine | Item 1(b) cache the Micrometer queue-depth read; items 2 and 4 (parked on `wip/` branches); item 5. |
 | [shard-owned-consumer-overhead-proposal.md](shard-owned-consumer-overhead-proposal.md) | Shard-owned engine | Candidate 2: the cost of the batched cursor read when units are split (profile first). |
 | [shard-owned-test-time-reduction.md](shard-owned-test-time-reduction.md) | Shard-owned engine tests | Items 1–4 and 6 done (engine module 12:42 → 8:40). Open: §7, a profiling pass over the remaining waits in `ShardOwnedLifecycleIT` and `ShardOwnedUnsubscribeIT`, then SQL lease ageing where safe. |
-| [subscription-improvements.md](subscription-improvements.md) | Event store subscriptions | S2 interruptible (reactive) wake-up; S3 consumer-group-scoped resume points; S4 trimming the one-event overlap after a crash. S1 phase 1, S5 and S6 are built. |
 | [event-store-subscription-redesign.md](event-store-subscription-redesign.md) | Event store subscriptions | Whole document: a proposal, nothing built or measured. |
 
 ## Open items from documents kept elsewhere
@@ -26,6 +25,9 @@ document above.
 | Open item | Source |
 |---|---|
 | CDC P10 Tier 2 (deferred) | [../archive/cdc-improvements.md](../archive/cdc-improvements.md) |
+| Notify-polling wake-up latency floor: the wake-up of S1/S2 can be no faster than the shared `MultiTableChangeListener` polling interval (`essentials.multi-table-change-listener.polling-interval`, default 50 ms). Lowering it also changes how often the durable queues are woken. An event-store-specific interval would need a second listener (a second LISTEN connection and a second thread). | [../archive/subscription-improvements.md](../archive/subscription-improvements.md), "S1 open questions: measured 2026-11-27" (Q3) and "What remains" item 4 |
+| Notify-polling burst limit: the notify trigger is installed for every aggregate type, so a busy table's NOTIFYs can delay a quiet table's wake-up. The remedy is a per-aggregate-type opt-in for the notify trigger. | [../archive/subscription-improvements.md](../archive/subscription-improvements.md), "S2: implemented and measured 2026-11-27" (the known limit under a burst) |
+| S3 cheaper alternative, only if multi-deployment users need it: detect a resume-point collision between deployments that share one database with identical `SubscriberId`s (record which deployment or group last wrote a resume point, and WARN or refuse when another one writes the same row; one nullable column on `durable_subscriptions`, no primary-key change). | [../archive/subscription-improvements.md](../archive/subscription-improvements.md), Backlog "S3" |
 | Event causation phase 9: the webshop worked example (capture webhook binds `FundsCaptureRequested`, end-to-end test of the F6 chains) | [../design/event-causation.md](../design/event-causation.md) |
 | Key-partitioned processing §9.1 batched handling of queued messages; §9.2 a rebuild path for `InTransactionEventProcessor` | [../design/key-partitioned-event-processing.md](../design/key-partitioned-event-processing.md) |
 | Schema harness step 8 (Mongo contributors and `MongoSchemaApplier`), steps 11–12 (`essentials-schema-flyway`, `essentials-schema-liquibase`) | [../design/database-schema-harness.md](../design/database-schema-harness.md) §9 |

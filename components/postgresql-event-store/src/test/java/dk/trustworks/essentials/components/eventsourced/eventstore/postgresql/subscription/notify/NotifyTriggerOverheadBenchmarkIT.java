@@ -74,7 +74,7 @@ import java.util.stream.IntStream;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration;
 
 /**
- * Opt-in benchmark for the S1 open questions in {@code docs/plans/subscription-improvements.md}: what the per
+ * Opt-in benchmark for the S1 open questions in {@code docs/archive/subscription-improvements.md}: what the per
  * aggregate type {@code pg_notify} trigger of notify-polling costs an append, and what a burst of NOTIFYs does to the
  * {@link MultiTableChangeListener} that drains them. Benchmark only: it asserts nothing and prints its numbers.
  * <p>

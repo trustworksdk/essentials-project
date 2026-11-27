@@ -50,7 +50,7 @@ import java.util.function.Function;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration;
 
 /**
- * Opt-in A/B benchmark for S2 (interruptible wake-up) in {@code docs/plans/subscription-improvements.md}. Asserts nothing,
+ * Opt-in A/B benchmark for S2 (interruptible wake-up) in {@code docs/archive/subscription-improvements.md}. Asserts nothing,
  * prints its numbers and writes them to {@code target/notify-wake-up-benchmark.txt}.
  * <p>
  * Workload: {@code benchmark.wakeup.aggregate-types} aggregate types, each appended to with one single-event transaction

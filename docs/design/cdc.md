@@ -1685,7 +1685,7 @@ always available as the fallback, by construction. Don't disable polling.
 finer choices — the **polling sub-variants** (plain, jittered, notify-driven) and the
 **CDC delivery modes** (INBOX vs DIRECT) — into one place, with indicative numbers and a
 need-based recommendation. For the polling-side tuning detail see
-[subscription-improvements.md](../plans/subscription-improvements.md); for the INBOX/DIRECT delivery
+[subscription-improvements.md](../archive/subscription-improvements.md); for the INBOX/DIRECT delivery
 guarantees see the `CdcDeliveryMode` javadoc.
 
 > **The numbers below are *indicative* (a 10 Hz / 1 s-window smoke run, plus the S1
@@ -1770,7 +1770,7 @@ considered and rejected — the inbox already provides durable, ordered,
 multi-node fan-out with no service-discovery or leader-election layer. For
 teams that find CDC operationally heavy *or* that see high DB load from plain
 polling, the relevant alternative isn't bus federation — it's
-[`NOTIFY-driven polling wake-up`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/subscription/subscription-improvements.md)
+[`NOTIFY-driven polling wake-up`](../archive/subscription-improvements.md)
 (S1), which keeps polling's operational simplicity while making it
 event-driven (near-zero idle query load, no slot, no `wal_level=logical`).
 
