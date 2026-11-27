@@ -84,7 +84,8 @@ import static dk.trustworks.essentials.components.eventsourced.eventstore.postgr
  * {@link MultiTableChangeListener} LISTENing throughout. Every shape (events per transaction x concurrent appenders) runs
  * the arms alternately, off first, for {@code benchmark.notify.rounds} rounds of {@code benchmark.notify.seconds}
  * each (after an unmeasured warm-up of {@code benchmark.notify.warmup-seconds}). Each append is one unit of work on a new
- * stream; every run starts on a truncated table. The NOTIFYs delivered to the {@link NotifyEpochSource} are counted per run, after the listener has drained.
+ * stream; every run starts on a truncated table. The epoch advances of the {@link NotifyEpochSource} are counted per run, after the listener has drained
+ * (one per table per listener poll, since {@link EventStreamTableNotificationDuplicationFilter} collapses a poll's notifications).
  * <p>
  * <b>Empty poll cost</b> - what one empty subscription poll ({@code loadEventsByGlobalOrder} past the head, in its own
  * unit of work) costs, the unit the trigger saves. It leaves out the gap handler's queries, so it is a lower bound.
@@ -103,7 +104,9 @@ import static dk.trustworks.essentials.components.eventsourced.eventstore.postgr
 class NotifyTriggerOverheadBenchmarkIT {
     private static final Logger        log             = LoggerFactory.getLogger(NotifyTriggerOverheadBenchmarkIT.class);
     private static final AggregateType ORDERS          = AggregateType.of("Orders");
+    private static final AggregateType PROBES          = AggregateType.of("Probes");
     private static final String        TABLE           = "orders_events";
+    private static final String        PROBE_TABLE     = "probes_events";
     private static final String        TRIGGER         = "notify_on_" + TABLE + "_changes";
     private static final EventMetaData META_DATA       = EventMetaData.of("k", "v");
     private static final int           ROUNDS          = Integer.getInteger("benchmark.notify.rounds", 3);
@@ -112,6 +115,7 @@ class NotifyTriggerOverheadBenchmarkIT {
     private static final int           BURST_APPENDERS = Integer.getInteger("benchmark.notify.burst-appenders", 8);
     private static final int           BURST_SECONDS   = Integer.getInteger("benchmark.notify.burst-seconds", 5);
     private static final int           EMPTY_POLLS     = Integer.getInteger("benchmark.notify.empty-polls", 3_000);
+    private static final boolean       BURST_ONLY      = Boolean.getBoolean("benchmark.notify.burst-only");
 
     @Container
     private static final PostgreSQLContainer postgres = EssentialsTestContainers.postgres("notify-trigger-benchmark");
@@ -153,12 +157,13 @@ class NotifyTriggerOverheadBenchmarkIT {
                                                         Duration.ofMillis(50),
                                                         EssentialsObjectMappers.createJSONSerializer(),
                                                         notifyBus,
-                                                        false);
+                                                        true); // The Spring starter's default (essentials.multi-table-change-listener.filter-duplicate-notifications)
         changeListener.start();
         epochSource = new NotifyEpochSource(notifyBus);
 
-        persistenceStrategy.enableNotifyTriggers(tableName -> changeListener.listenToNotificationsFor(tableName, EventStreamTableChangeNotification.class));
+        persistenceStrategy.enableNotifyTriggers(EventStreamTableNotificationDuplicationFilter.registerWith(changeListener)::listenTo);
         persistenceStrategy.addAggregateEventStreamConfiguration(ORDERS, AggregateIdSerializer.serializerFor(OrderId.class));
+        persistenceStrategy.addAggregateEventStreamConfiguration(PROBES, AggregateIdSerializer.serializerFor(OrderId.class));
 
         var version = jdbi.withHandle(h -> h.createQuery("SELECT version()").mapTo(String.class).one());
         line("Environment: %d CPUs visible to the JVM, %s, JDK %s", Runtime.getRuntime().availableProcessors(), version, System.getProperty("java.version"));
@@ -178,6 +183,14 @@ class NotifyTriggerOverheadBenchmarkIT {
 
     @Test
     void trigger_overhead_empty_poll_cost_and_notify_burst() throws Exception {
+        if (BURST_ONLY) {
+            setTrigger(true);
+            runAppenders(4, 1, WARMUP_SECONDS);
+            awaitListenerDrained();
+            burst(false);
+            burst(true);
+            return;
+        }
         // Warm-up: JIT, pool, table and index pages, both arms
         truncate();
         setTrigger(false);
@@ -189,7 +202,7 @@ class NotifyTriggerOverheadBenchmarkIT {
         line("");
         line("== Trigger overhead (alternating arms, %d rounds) ==", ROUNDS);
         line("%-6s %-9s %-7s %-5s %12s %12s %10s %10s %12s %12s",
-             "events", "appenders", "trigger", "round", "tx/s", "events/s", "p50 ms", "p99 ms", "notifies", "notify/tx");
+             "events", "appenders", "trigger", "round", "tx/s", "events/s", "p50 ms", "p99 ms", "epoch +", "epoch+/tx");
         for (int batch : new int[]{1, 100}) {
             for (int appenders : new int[]{1, 4}) {
                 var offRuns = new ArrayList<RunResult>();
@@ -280,8 +293,15 @@ class NotifyTriggerOverheadBenchmarkIT {
             var  result   = runAppenders(BURST_APPENDERS, 1, BURST_SECONDS, committed);
             long burstEnd = System.nanoTime();
             long expected = committed.get();
-            while (epochSource.currentEpoch(TABLE) - epochBefore < expected && System.nanoTime() - burstEnd < Duration.ofSeconds(120).toNanos()) {
-                LockSupport.parkNanos(5_000_000);
+            // The probe commits after the burst; NOTIFYs reach the listener in commit order, so the probe's wake-up
+            // arrives once every notification of the burst has been read: the time a subscription waits for its wake-up
+            long probeEpochBefore = epochSource.currentEpoch(PROBE_TABLE);
+            var  probeUow         = unitOfWorkFactory.getOrCreateNewUnitOfWork();
+            var  probeId          = OrderId.random();
+            persistenceStrategy.persist(probeUow, PROBES, probeId, Optional.empty(), List.of(new OrderEvent.OrderAdded(probeId, CustomerId.random(), 0)));
+            probeUow.commit();
+            while (epochSource.currentEpoch(PROBE_TABLE) == probeEpochBefore && System.nanoTime() - burstEnd < Duration.ofSeconds(120).toNanos()) {
+                LockSupport.parkNanos(1_000_000);
             }
             long drainMs   = (System.nanoTime() - burstEnd) / 1_000_000;
             long delivered = epochSource.currentEpoch(TABLE) - epochBefore;
@@ -290,7 +310,7 @@ class NotifyTriggerOverheadBenchmarkIT {
             line("");
             line("== NOTIFY burst: %d appenders x 1 event/tx for %ds, trigger on, %s ==", BURST_APPENDERS, BURST_SECONDS,
                  withSlowSubscriber ? "plus a 1 ms/event async subscriber on the same bus" : "epoch source the only bus subscriber");
-            line("committed tx %d (%.0f tx/s), NOTIFYs delivered %d, max backlog (committed - delivered) %d, drain after burst end %d ms, max pg_notification_queue_usage %.6f",
+            line("committed tx %d (%.0f tx/s), epoch advances %d, max (committed - epoch advances) %d, probe committed after the burst woke up after %d ms, max pg_notification_queue_usage %.6f",
                  expected, result.txPerSecond(), delivered, maxBacklog.get(), drainMs, maxQueueUse[0]);
         } finally {
             if (withSlowSubscriber) notifyBus.removeAsyncSubscriber(slow);

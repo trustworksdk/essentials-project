@@ -621,7 +621,8 @@ whether it breaks.
 
 #### Q2: can a NOTIFY storm overflow or delay anything?
 
-**Overflow or loss: no. Delay: yes, when any asynchronous subscriber on the listener's event bus is slow.**
+**Overflow or loss: no. Delay: yes, when any asynchronous subscriber on the listener's event bus was slow - fixed
+2026-11-27, see "Fixed" at the end of this answer.**
 
 The path, from the code:
 
@@ -659,9 +660,48 @@ NOTIFY-driven wake-up is delayed the same way. A slow subscriber combined with a
 the 20 retries for one event would reach the bus's `OnErrorHandler` and drop that notification; that was not reached
 here.
 
-Two remedies, not built: (a) let the listener coalesce event-store notifications to at most one per table per poll
-before publishing (the epoch source only needs to know that something changed), or (b) give the listener its own bus
-instead of the application's shared one.
+Two remedies were considered: (a) let the listener coalesce event-store notifications to at most one per table per
+poll before publishing (the epoch source only needs to know that something changed), or (b) give the listener its own
+bus instead of the application's shared one.
+
+**Fixed (2026-11-27): remedy (a), plus a synchronous epoch source.** The exact path was:
+`MultiTableChangeListener.pollForNotifications` reads the poll's notifications (`getNotifications()`) and publishes
+each one with `eventBus.publish(event)`; `LocalEventBus.publish` calls the synchronous subscribers on the poll thread,
+then emits to the multicast sink, which every asynchronous subscriber reads through `publishOn` (prefetch 256) and
+which moves at the pace of the slowest one; on `FAIL_OVERFLOW` `retryEmitWithBackoff` parks the poll thread.
+`NotifyEpochSource` was one of those asynchronous subscribers. So there were two separate delays, and the fix removes
+both:
+
+1. **The listener flooded the bus.** Every event-stream notification has the same payload
+   (`{"table_name":…,"sql_operation":"INSERT"}`), so collapsing a poll's notifications per table loses nothing. The new
+   `EventStreamTableNotificationDuplicationFilter` (a `NotificationDuplicationFilter`, added last, keyed on the table
+   name, and only for the event-stream tables registered through it) makes the listener publish at most one per table
+   per poll. `EventStoreNotifyPollingBootstrap` registers it. Other tables' notifications are untouched: the durable
+   queues keep their `QueueNameDuplicationFilter` (added first, so it still decides for queue notifications) and receive
+   their notifications on the same bus as before. It needs duplicate filtering on (the default); with it off a WARN is
+   logged.
+2. **The epoch source queued behind the slowest subscriber.** `NotifyEpochSource` now subscribes synchronously: its
+   handler only increments a counter, and it now runs on the poll thread before the bus hands the notification to the
+   asynchronous subscribers.
+
+Remedy (b) was not chosen: in Spring the listener's bus is the bean the queues and any application code subscribe to,
+so moving it would change who receives table-change notifications, and it would not remove the poll thread's park on a
+full bus. What remains: when *other* traffic keeps the shared bus full (in Spring the `EventStoreEventBus` also carries
+every `PersistedEvents`), the one publish per table per poll can still park the poll thread; the epoch for that poll has
+already advanced, and later polls wait. Removing that needs the listener to publish without blocking its poll thread,
+which is a listener change for S2 to decide.
+
+Pinned by `NotifyPollingWakeUpWithSlowBusSubscriberTest` (unit, no Docker; an asynchronous subscriber blocked on a
+latch, so the result does not depend on machine speed): a burst of 5 000 notifications followed by one on another
+table, and a bus filled ahead of the notification by application events; the epoch must advance within 2 s in both.
+Both failed before the fix and pass after it. Burst re-measured with `NotifyTriggerOverheadBenchmarkIT`
+(`-Dbenchmark.notify.burst-only=true`, which now measures the time until an append committed after the burst wakes
+its subscriptions):
+
+| Burst | Before: transactions/s, wake-up after the burst | After: transactions/s, wake-up after the burst |
+|---|---:|---:|
+| `NotifyEpochSource` the only bus subscriber | 23 367, 92 ms | 23 993, 45 ms |
+| plus an asynchronous subscriber taking 1 ms per event | 11 642, 64 037 ms | 11 216, 44 ms |
 
 #### Q3: `MultiTableChangeListener` bean ownership and polling interval
 
@@ -682,12 +722,12 @@ What remains a decision:
   poll) but changes it for the queues as well; the alternative is to make the listener block in
   `getNotifications(timeoutMillis)` instead of polling on a schedule. Either is a listener change, not an event-store
   setting.
-- Whether to apply one of the Q2 remedies (coalesce per poll, or a bus of its own) before S2 or notify-polling become
-  more widely used.
+- Q2's remedy is applied (coalescing per poll plus a synchronous epoch source, 2026-11-27); whether the listener
+  should also stop parking its poll thread on a bus kept full by other traffic is open for S2.
 
 #### What this means for S2 and the default
 
-- **S2 is worth doing, but after the Q2 fix.** The trigger is cheap where notify-polling helps (rare appends), so the
+- **S2 is worth doing; the Q2 fix it waited for is in (2026-11-27).** The trigger is cheap where notify-polling helps (rare appends), so the
   only thing standing between a quiet system and both a low query rate and a fast wake-up is the phase 1 limitation S2
   removes. S2 makes wake-up latency depend on the listener's delivery path, so the shared-bus stall of Q2 would then
   directly become wake-up latency; coalescing per poll (remedy a) should come first, and the listener's 50 ms interval
