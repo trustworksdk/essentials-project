@@ -1770,7 +1770,7 @@ considered and rejected — the inbox already provides durable, ordered,
 multi-node fan-out with no service-discovery or leader-election layer. For
 teams that find CDC operationally heavy *or* that see high DB load from plain
 polling, the relevant alternative isn't bus federation — it's
-[`NOTIFY-driven polling wake-up`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/subscription/subscription-improvements.md)
+[`NOTIFY-driven polling wake-up`](../plans/subscription-improvements.md)
 (S1), which keeps polling's operational simplicity while making it
 event-driven (near-zero idle query load, no slot, no `wal_level=logical`).
 

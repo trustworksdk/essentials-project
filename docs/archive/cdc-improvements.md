@@ -490,7 +490,7 @@ extended to wrap the per-row writes via the same `setQueryTimeout` pattern.
 was not needed; the code path is conclusive); the original hypothesis below is **refuted**.
 The fix ships in [`CdcEventStore.pollEvents`](../../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcEventStore.java) and is covered by unit +
 Testcontainers ITs — see [The fix (delivered)](#the-fix--delivered). Triggered by perf-lab
-data captured during the [S1 notify-polling spec](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/subscription/subscription-improvements.md).
+data captured during the [S1 notify-polling spec](../plans/subscription-improvements.md).
 
 ### What we observed
 
