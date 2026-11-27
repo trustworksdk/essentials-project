@@ -39,9 +39,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * {@link #deliverLockAcquired(LockName)} plays an ordinary acquisition, so a test can also check that the component still
  * starts its work when nothing overlaps.
  * <p>
- * This is a copy of <code>dk.trustworks.essentials.components.foundation.fencedlock.ShutdownOverlapFencedLockManager</code>
- * in the foundation module's test tree: foundation-test depends on foundation, so foundation's own tests cannot use this
- * one, and modules downstream of foundation cannot use the test-tree one. Keep the two in step.
+ * The foundation module's own tests that need it live in foundation-test's test tree, because foundation-test depends on
+ * foundation.
  */
 public final class ShutdownOverlapFencedLockManager implements FencedLockManager {
     private final Map<LockName, LockCallback> callbacks = new ConcurrentHashMap<>();

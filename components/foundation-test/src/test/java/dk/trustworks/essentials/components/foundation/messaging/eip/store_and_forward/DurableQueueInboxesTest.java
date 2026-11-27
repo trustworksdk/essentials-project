@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward;
 
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
+import dk.trustworks.essentials.components.foundation.test.fencedlock.ShutdownOverlapFencedLockManager;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import org.junit.jupiter.api.Test;

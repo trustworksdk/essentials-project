@@ -47,58 +47,6 @@ public class EssentialsSchedulerIT_WithExecutor extends AbstractEssentialsSchedu
         return postgreSQLContainer;
     }
 
-    /**
-     * During a shutdown the lock manager can call <code>lockReleased</code> before the async acquiring tick's
-     * <code>lockAcquired</code> has run (see {@link LockCallback}). A scheduler stopped in that window must not schedule its
-     * jobs when the late <code>lockAcquired</code> arrives: nothing would unschedule them, and pg_cron jobs would stay in the
-     * database after the JVM is gone.
-     */
-    @Test
-    public void a_lockAcquired_arriving_after_stop_released_the_lock_schedules_nothing() {
-        var unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
-        var fencedLockManager = new ShutdownOverlapFencedLockManager();
-        fencedLockManager.start();
-        var essentialsScheduler = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, 2);
-        essentialsScheduler.start();
-        var runs = new AtomicInteger();
-        essentialsScheduler.scheduleExecutorJob(new ExecutorJob("countRuns", new FixedDelay(0, 50, TimeUnit.MILLISECONDS), runs::incrementAndGet));
-
-        // The shutdown release runs lockReleased from the scheduler's stop, and only then does the tick's lockAcquired arrive
-        essentialsScheduler.stop();
-        assertThat(fencedLockManager.wasCancelled(essentialsScheduler.getLockName())).isTrue();
-        fencedLockManager.deliverLateLockAcquired(essentialsScheduler.getLockName());
-
-        assertThat(essentialsScheduler.getTotalExecutorJobEntries()).isZero();
-        org.awaitility.Awaitility.await()
-                                 .during(Duration.ofMillis(300))
-                                 .atMost(Duration.ofSeconds(2))
-                                 .untilAsserted(() -> assertThat(runs.get()).isZero());
-    }
-
-    /**
-     * The control for {@link #a_lockAcquired_arriving_after_stop_released_the_lock_schedules_nothing()}: with no overlap the
-     * same test double's <code>lockAcquired</code> schedules the job
-     */
-    @Test
-    public void a_lockAcquired_while_started_schedules_the_jobs() {
-        var unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
-        var fencedLockManager = new ShutdownOverlapFencedLockManager();
-        fencedLockManager.start();
-        var essentialsScheduler = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, 2);
-        essentialsScheduler.start();
-        try {
-            var runs = new AtomicInteger();
-            essentialsScheduler.scheduleExecutorJob(new ExecutorJob("countRunsWhileStarted", new FixedDelay(0, 50, TimeUnit.MILLISECONDS), runs::incrementAndGet));
-
-            fencedLockManager.deliverLockAcquired(essentialsScheduler.getLockName());
-
-            waitAtMost(Duration.ofSeconds(5)).until(() -> runs.get() > 0);
-            assertThat(essentialsScheduler.getTotalExecutorJobEntries()).isEqualTo(1);
-        } finally {
-            essentialsScheduler.stop();
-        }
-    }
-
     @Test
     public void schedule_with_1_node() {
         JdbiUnitOfWorkFactory unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
