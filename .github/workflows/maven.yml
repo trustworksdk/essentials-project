@@ -18,6 +18,14 @@ on:
   pull_request:
     branches: [ main, 'release/**' ]
 
+# A newer push to the same branch, or to the same pull request, cancels the run still in progress for the older commit:
+# its result is out of date, and finishing it only spends runner time and leaves a red mark for a commit nobody will
+# merge. A push run and a pull-request run land in different groups (github.ref against the PR number), so they never
+# cancel each other. main is exempt: every merge there gets a full result of its own.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   # LLM/ is the only place the framework docs are edited; essentials-plugin/references/llm/ is a generated, committed
   # copy (scripts/sync-plugin-llm.sh). The pre-commit hook keeps the two in step on a contributor's machine, but hooks
