@@ -3,6 +3,32 @@
 Companion to the CDC improvements log ([cdc-improvements.md](../archive/cdc-improvements.md)),
 scoped to the subscription / event-delivery layer rather than the CDC pipeline itself.
 
+## Status (2026-11-27, checked against the code on release/0.61.1)
+
+| Item | State | Where |
+|---|---|---|
+| S1 phase 1: NOTIFY-reset polling backoff | Shipped in 0.50.0, opt-in (`essentials.eventstore.subscription-manager.notify-polling.enabled=true`). In 0.60.0 the `pg_notify` trigger became part of each event-stream table's schema contribution (see "Trigger installation" below). | `NotifyAwareEventStorePollingOptimizer`, `NotifyEpochSource`, `NotifyPollingSettings`, `NotifyTriggerInstaller` in `components/postgresql-event-store/.../subscription/notify/`; trigger via `SeparateTablePerAggregateTypePersistenceStrategy.enableNotifyTriggers(...)`, called by `EventStoreNotifyPollingBootstrap`; Spring wiring in `EventStoreConfiguration` (`spring-boot-starter-postgresql-event-store`). Tests: `NotifyPollingIT`, `NotifyAwareEventStorePollingOptimizerTest`, `NotifyEpochSourceTest`, `NotifyPollingAutoConfigurationIT`. |
+| S1 open questions 1-3 (trigger overhead breakeven, NOTIFY storms, listener bean ownership) | Measured 2026-11-27, see "S1 open questions: measured 2026-11-27". The trigger costs about 25 µs per append transaction and pays off only below about 1 append/s per aggregate type; a NOTIFY burst loses nothing but can be delayed by a slow subscriber on the shared event bus; no event-store-specific listener interval is needed for phase 1. Still to decide: coalescing notifications per poll (or a bus of its own for the listener), and the listener interval for S2. | "Risks & open questions" below; `EventStoreConfiguration.eventStoreNotifyPollingBootstrap(...)` and `notifyEpochSource(...)` |
+| S2: interruptible (reactive) wake-up | Open. The poll loop still sleeps on `Thread.sleep(...)` with the delay from `pollingOptimizer.currentDelayMs()`. | `PostgresqlEventStore`, polling-worker loop |
+| S3: consumer-group-scoped resume points | Open for durable subscriptions. Only CDC has the cooperative half (`CdcConsumerGroup.namespaced(...)`). | Backlog below |
+| S4: trim the one-event overlap after a crash | Deferred on purpose; the code comment points to this document. | `DefaultEventStoreSubscriptionManager.saveResumePointsForAllSubscribers()` |
+| S5: count-bounded resume-point save | Shipped in 0.60.0, opt-in. | Backlog below |
+| S6: reposition epoch | Shipped in 0.60.0. 0.61.1 adds a second rule on top of it: every resume-point save of an exclusive subscription carries the token of the fenced lock it holds, stored in a new nullable column `durable_subscriptions.fence_token`. A save with a newer token wins whatever its reposition epoch, a save with the same token is checked against the epoch as before, and a save with an older token is refused. Non-exclusive subscriptions save without a token and are checked by the epoch alone. | S6 below; `docs/releases/NEXT_VERSION_RELEASE.md` (the `fence_token` schema change and the exclusive-subscriptions fix) |
+
+### What remains
+
+Each of these is open. The plan is kept because most users still run polling subscriptions, not CDC, so
+improvements to the polling path reach most deployments.
+
+1. **S2, interruptible wake-up.** Let a NOTIFY end the poll loop's sleep early, so `max-delay` limits the database
+   query rate without also setting the wake-up latency on a quiet system.
+2. **S3, consumer-group-scoped resume points** for durable subscriptions.
+3. **S4, trimming the one-event overlap** that the periodic resume-point checkpoint leaves after an ungraceful
+   failure. Build it only if a user needs it; see the reasons for deferring it below.
+4. **What the S1 measurements left to decide:** whether `MultiTableChangeListener` should coalesce event-store
+   notifications to one per table per poll (or publish on a bus of its own) so a slow subscriber on the shared bus
+   cannot delay wake-ups, and the listener's polling interval for S2. See "S1 open questions: measured 2026-11-27".
+
 ---
 
 ## S1 — NOTIFY-driven polling wake-up
@@ -61,7 +87,7 @@ The honest constraint: `currentDelayMs()` is a *pull* — the poll loop reads it
 sleeps that long. A NOTIFY that arrives mid-sleep can't interrupt the current sleep, only
 shorten the *next* one. So there are two achievable targets, and we ship them in order.
 
-#### Phase 1 (this iteration): NOTIFY-reset adaptive backoff
+#### Phase 1 (shipped in 0.50.0): NOTIFY-reset adaptive backoff
 
 Behaviour:
 - After a poll returns **no events**, the optimizer ramps `currentDelayMs()` up an
@@ -102,9 +128,9 @@ design composes existing pieces rather than rebuilding them:
 
 | Need | Provided by |
 |---|---|
-| Per-table NOTIFY trigger + sanitised DDL | [`ListenNotify.addChangeNotificationTriggerToTable(handle, tableName, List<SqlOperation>, …)`](../../../../../../../../foundation/src/main/java/dk/trustworks/essentials/components/foundation/postgresql/ListenNotify.java) |
-| Per-table channel name resolution | [`ListenNotify.resolveTableChangeChannelName(tableName)`](../../../../../../../../foundation/src/main/java/dk/trustworks/essentials/components/foundation/postgresql/ListenNotify.java) |
-| Single shared `LISTEN` connection per JVM | [`MultiTableChangeListener`](../../../../../../../../foundation/src/main/java/dk/trustworks/essentials/components/foundation/postgresql/MultiTableChangeListener.java) — already a `Lifecycle` bean, runs a single-threaded poll loop, multiplexes channels |
+| Per-table NOTIFY trigger + sanitised DDL | [`ListenNotify.addChangeNotificationTriggerToTable(handle, tableName, List<SqlOperation>, …)`](../../components/foundation/src/main/java/dk/trustworks/essentials/components/foundation/postgresql/ListenNotify.java) |
+| Per-table channel name resolution | [`ListenNotify.resolveTableChangeChannelName(tableName)`](../../components/foundation/src/main/java/dk/trustworks/essentials/components/foundation/postgresql/ListenNotify.java) |
+| Single shared `LISTEN` connection per JVM | [`MultiTableChangeListener`](../../components/foundation/src/main/java/dk/trustworks/essentials/components/foundation/postgresql/MultiTableChangeListener.java) — already a `Lifecycle` bean, runs a single-threaded poll loop, multiplexes channels |
 | Per-table subscription registration | `MultiTableChangeListener.listenToNotificationsFor(tableName, NotificationClass)` |
 | Notification deduplication | `MultiTableChangeListener`'s `NotificationFilterChain` (built in) |
 | Notification fan-out to consumers | `MultiTableChangeListener`'s `EventBus` (built in) |
@@ -162,6 +188,17 @@ That's the entire bridge — ~30 lines.
 
 #### Trigger installation (no new class)
 
+**How it works today (since 0.60.0).** The trigger is no longer executed directly. The starter's
+`EventStoreNotifyPollingBootstrap` calls `SeparateTablePerAggregateTypePersistenceStrategy.enableNotifyTriggers(Consumer<String>)`.
+From then on, every event-stream table's schema contribution includes its `pg_notify` trigger, so the trigger is
+created, validated or emitted together with the table by whichever schema applier owns the strategy's schema
+(including `essentials.schema.mode=validate` and `emit`). The callback is then called once per event-stream table,
+for tables registered so far and for each one registered later, and the bootstrap uses it to register the table with
+the shared `MultiTableChangeListener`. The original mechanism, `enableNotifyTriggerInstallation(NotifyTriggerInstaller)`,
+which ran the trigger DDL itself outside the schema harness, is deprecated and cannot be combined with the new one.
+
+**Original design (history, as planned and first shipped in 0.50.0):**
+
 Installed in
 [`SeparateTablePerAggregateTypePersistenceStrategy`](../../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/persistence/table_per_aggregate_type/SeparateTablePerAggregateTypePersistenceStrategy.java)'s
 `addAggregateEventStreamConfiguration` path, immediately after the existing
@@ -196,10 +233,10 @@ New settings on `EventStoreSubscriptionManagerSettings` (and Spring properties):
 
 | Property | Default | Meaning |
 |---|---|---|
-| `essentials.eventstore.subscription.notify-polling.enabled` | `false` | Master switch. `false` = today's behaviour exactly. |
-| `essentials.eventstore.subscription.notify-polling.initial-delay` | `PT0.05S` | Backoff floor after a no-events poll. |
-| `essentials.eventstore.subscription.notify-polling.max-delay` | `PT1S` | Backoff cap = worst-case live latency on a quiet system. |
-| `essentials.eventstore.subscription.notify-polling.backoff-multiplier` | `2.0` | Exponential ramp factor. |
+| `essentials.eventstore.subscription-manager.notify-polling.enabled` | `false` | Master switch. `false` = today's behaviour exactly. |
+| `essentials.eventstore.subscription-manager.notify-polling.initial-delay` | `PT0.05S` | Backoff floor after a no-events poll. |
+| `essentials.eventstore.subscription-manager.notify-polling.max-delay` | `PT1S` | Backoff cap = worst-case live latency on a quiet system. |
+| `essentials.eventstore.subscription-manager.notify-polling.backoff-multiplier` | `2.0` | Exponential ramp factor. |
 
 Default `enabled=false` makes the whole feature opt-in and the change non-breaking.
 Channel naming is derived per-table via `ListenNotify.resolveTableChangeChannelName(...)` —
@@ -221,6 +258,10 @@ When `notify-polling.enabled=true`:
    creation.
 
 All four are conditional on the master switch; none fire when it's off.
+
+As built, the autoconfig does not create a scoped listener: `EventStoreConfiguration` takes the application's
+existing `MultiTableChangeListener` bean, and step 4 uses `enableNotifyTriggers(...)` as described under
+"Trigger installation" above.
 
 ### Interaction with CDC (coexistence, not mutual exclusion)
 
@@ -492,7 +533,7 @@ Resolved during design review:
   polling is a coherent combination (CDC for steady-state bus delivery, notify-aware
   polling for the fallback path when CDC degrades).
 
-Still open:
+Still open (answered on 2026-11-27, see "S1 open questions: measured 2026-11-27" below):
 
 1. **Trigger overhead at high write rates.** Each INSERT fires `pg_notify`. Measure
    the breakeven where CDC INBOX becomes the operationally better choice — estimate
@@ -509,7 +550,159 @@ Still open:
    otherwise. Decide whether the listener's `pollingInterval` setting (separate from
    our `notify-polling.max-delay`) needs an event-store-specific override.
 
-### Estimated effort (Phase 1)
+### S1 open questions: measured 2026-11-27
+
+The three open questions above were answered with an opt-in benchmark and by reading the code. No production
+behaviour was changed.
+
+**Environment.** 8 CPUs (Docker Desktop VM on an aarch64 host, shared with other running containers), PostgreSQL 18.4
+(Testcontainers, `EssentialsTestContainers.POSTGRES_IMAGE`), JDK 25.0.5.1 (Temurin), pgjdbc 42.7.14, HikariCP pool,
+`MultiTableChangeListener` polling every 50 ms (the Spring default). Storage inside this VM makes a commit unusually
+cheap (about 0.17 ms for a one-event append), so the absolute costs below are realistic but the percentages are an upper
+bound: on production storage, where a commit costs more, the same absolute trigger cost is a smaller share.
+
+**How to reproduce.**
+
+```bash
+mvn verify -pl components/postgresql-event-store -am -DskipUTs -Dbenchmark.run=true \
+    -Dit.test=NotifyTriggerOverheadBenchmarkIT -Dfailsafe.failIfNoSpecifiedTests=false
+```
+
+The test is `NotifyTriggerOverheadBenchmarkIT` (package `...postgresql.subscription.notify`). It asserts nothing and
+writes its numbers to the log and to `components/postgresql-event-store/target/notify-trigger-benchmark.txt`. Knobs:
+`-Dbenchmark.notify.rounds` (3), `.seconds` (5 per run), `.warmup-seconds` (3), `.burst-appenders` (8),
+`.burst-seconds` (5), `.empty-polls` (3000). Both arms append to the same event-stream table, whose trigger is created
+with the table by `enableNotifyTriggers(...)`; the arms switch it with `ALTER TABLE ... DISABLE/ENABLE TRIGGER`, alternate
+(off first) for 3 rounds per shape, and every run starts on a truncated table. Each append is one unit of work on a new
+stream through `SeparateTablePerAggregateTypePersistenceStrategy.persist(...)`.
+
+#### Q1: trigger overhead and breakeven
+
+Medians of 3 rounds per arm. The one-event shapes come from the first run; in the second run those two shapes were
+bimodal (individual rounds jumped between about 2 500 and 17 000 transactions/s regardless of the arm), so they are not
+used. The 100-event shapes come from the second run; the first run's 100-event/1-appender result agreed (−16.8 %,
++0.28 ms). The first run stopped in the 100-event/4-appender shape because the Docker disk filled up, which is why the
+benchmark now truncates the table before each run.
+
+| Events per transaction | Appenders | Transactions/s off → on | Change | p50 ms off → on | p99 ms off → on | Mean cost added per transaction | NOTIFYs per transaction |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1 | 6 148 → 5 279 | −14.1 % | 0.166 → 0.188 | 0.217 → 0.237 | +0.027 ms | 1.000 |
+| 1 | 4 | 17 269 → 15 598 | −9.7 % | 0.225 → 0.250 | 0.303 → 0.343 | +0.025 ms | 1.000 |
+| 100 | 1 | 646 → 574 | −11.2 % | 1.364 → 1.685 | 3.164 → 2.779 | +0.195 ms | 1.000 |
+| 100 | 4 | 898 → 808 | −10.0 % | 1.510 → 1.810 | 49.6 → 49.1 | +0.494 ms | 1.000 |
+
+What the numbers say:
+
+- The trigger costs about **25 µs per append transaction**, plus about **2 to 5 µs per event row** in it (the row trigger
+  runs and calls `pg_notify` once per row). At saturation that is a 10 to 17 % lower maximum append rate in this
+  environment. Four concurrent appenders did not make it worse than one, so the cluster-wide lock PostgreSQL takes to
+  queue notifications at commit did not show up as a bottleneck at this concurrency.
+- **Coalescing happens inside each transaction, and only there.** The payload is only `table_name` and `sql_operation`
+  (`ListenNotify.changeNotificationTriggerStatements`), so the 100 identical `pg_notify` calls of a 100-event transaction
+  are folded by PostgreSQL into one NOTIFY. Separate transactions are never folded: 24 072 one-event transactions per
+  second delivered 24 072 NOTIFYs per second.
+- One empty subscription poll (`loadEventsByGlobalOrder` past the head in its own unit of work, without the gap handler's
+  queries) costs 0.140 ms mean, 0.134 ms p50. One append transaction's trigger cost is therefore about 0.18 of one empty
+  poll.
+
+**Breakeven.** The trigger cost grows with the append rate; the saving only exists when appends are rare. The plan's
+own measurements put the saving at 0.68 polls/s per subscriber per JVM at 0.1 Hz (2.09 → 1.41 SELECTs/s), about 0 at
+1 Hz with a 200 ms cap, and nothing at 10 Hz or more, where both optimizers stay at their floor. Per subscriber and
+JVM the saving at 0.1 Hz is 0.68 × 0.140 ms ≈ 95 µs of database time per second, against 0.1 × 25 µs = 2.5 µs per second
+for the trigger: about 40 times cheaper than what it saves. Setting the two equal gives a breakeven of about
+0.68 × 140 / 25 ≈ **4 append transactions per second per aggregate type, multiplied by the number of subscriber × JVM
+pairs that poll that aggregate type**. In practice the saving disappears from about 1 append/s upward anyway, so: below
+about 1 append transaction/s per aggregate type the trigger is a clear win; above about 10/s it saves nothing and costs
+about 25 µs per transaction (for example 25 ms of database time per second at 1 000 transactions/s, and at most a 10 to
+17 % lower peak append rate). The plan's earlier estimate of "~10–20k events/s" as the point where CDC becomes the
+better choice is not a trigger limit: the trigger kept up with 24 000 transactions/s without errors or a growing
+server-side queue. The real question above about 10 appends/s is whether notify-polling buys anything at all, not
+whether it breaks.
+
+#### Q2: can a NOTIFY storm overflow or delay anything?
+
+**Overflow or loss: no. Delay: yes, when any asynchronous subscriber on the listener's event bus is slow.**
+
+The path, from the code:
+
+1. PostgreSQL's notification queue (8 GB, `max_notify_queue_pages`) only fills when a listening session stops reading.
+   The listener's session is idle in autocommit, so the server pushes notifications to the socket as they arrive.
+   Measured: `pg_notification_queue_usage()` stayed at 0.000001 in both bursts below.
+2. pgjdbc: `MultiTableChangeListener.pollForNotifications` calls `PGConnection.getNotifications()`, which is
+   `getNotifications(-1)`: it reads every message already waiting on the socket without blocking and hands back
+   everything buffered, emptying pgjdbc's list. The client buffer is unbounded, but it is emptied on every poll. A poll
+   sends no SQL (the liveness probe `isValid` runs every 10 s), so a 50 ms poll costs no database load.
+3. The listener then publishes **each** notification separately to its `EventBus`. For event-store channels nothing is
+   coalesced before that: the duplicate filter only has `QueueNameDuplicationFilter`, which the durable queues add. The
+   `NotifyEpochSource` collapses notifications afterwards (it only increments a per-table counter), so the optimizer's
+   cost does not depend on the notification volume, but the bus still carries every one.
+4. The bus is a `LocalEventBus` with a multicast buffer of 1 024 (default `backpressureBufferSize`). When the slowest
+   asynchronous subscriber falls 1 024 events behind, `publish` gets `FAIL_OVERFLOW` and the listener's poll thread
+   parks and retries (100 ms, 200 ms, … up to 1 s per attempt, 20 attempts per event). In the Spring starter that bus is
+   the application's shared `EventStoreEventBus` (`EventStoreConfiguration.eventBus(...)` builds it, and
+   `EssentialsComponentsConfiguration.multiTableChangeListener(...)` hands it to the listener), so every application
+   asynchronous subscriber on it receives every table-change notification and the slowest one sets the pace.
+
+Measured (8 appenders, one event per transaction, 5 s, trigger on, listener polling every 50 ms):
+
+| Burst | Transactions/s | NOTIFYs delivered / committed | Largest backlog (committed, not yet delivered) | Time to deliver the rest after the burst ended |
+|---|---:|---:|---:|---:|
+| `NotifyEpochSource` the only bus subscriber | 24 072 | 120 365 / 120 365 | 26 672 | 15 ms |
+| plus an asynchronous subscriber taking 1 ms per event | 14 238 | 71 222 / 71 222 | 66 673 | 78 085 ms |
+
+Nothing was lost in either burst. With a fast subscriber the listener keeps up (the largest backlog, about one second
+of appends, was momentary and the rest was delivered 15 ms after the burst). With one slow subscriber on the same bus
+the listener's poll thread spends its time parked in the overflow retry, and the last notification arrived 78 s after
+the last commit. While that lasts, notify-polling falls back to its `max-delay` cap (the optimizer simply sees no epoch
+advance), so subscriptions are not lost, only slower; but the same listener also wakes the durable queues, so their
+NOTIFY-driven wake-up is delayed the same way. A slow subscriber combined with a storm that lasts long enough to use up
+the 20 retries for one event would reach the bus's `OnErrorHandler` and drop that notification; that was not reached
+here.
+
+Two remedies, not built: (a) let the listener coalesce event-store notifications to at most one per table per poll
+before publishing (the epoch source only needs to know that something changed), or (b) give the listener its own bus
+instead of the application's shared one.
+
+#### Q3: `MultiTableChangeListener` bean ownership and polling interval
+
+Settled, from the code: `EssentialsComponentsConfiguration.multiTableChangeListener(...)` creates one listener bean
+(`@ConditionalOnMissingBean`, so an application can supply its own), and `EventStoreConfiguration.notifyEpochSource(...)`
+and `eventStoreNotifyPollingBootstrap(...)` take that bean. The event store, the durable queues and any other user share
+one listener and one LISTEN connection; there is no scoped instance for the event store, and none is needed.
+
+The polling interval: there is one setting, `essentials.multi-table-change-listener.polling-interval` (default 50 ms),
+shared by every user of the listener. **No event-store-specific override is needed for phase 1.** A poll reads only what
+is already on the socket and runs no SQL, so the interval costs no database load, and in phase 1 it adds at most 50 ms
+to the next poll's start while `max-delay` (default 1 s) dominates the latency.
+
+What remains a decision:
+
+- For S2 the interval becomes the floor of the wake-up latency (0 to 50 ms, about 25 ms on average). The plan's target
+  of about 10 ms for S2 cannot be met at 50 ms. Lowering the shared interval is cheap for the database (no SQL per
+  poll) but changes it for the queues as well; the alternative is to make the listener block in
+  `getNotifications(timeoutMillis)` instead of polling on a schedule. Either is a listener change, not an event-store
+  setting.
+- Whether to apply one of the Q2 remedies (coalesce per poll, or a bus of its own) before S2 or notify-polling become
+  more widely used.
+
+#### What this means for S2 and the default
+
+- **S2 is worth doing, but after the Q2 fix.** The trigger is cheap where notify-polling helps (rare appends), so the
+  only thing standing between a quiet system and both a low query rate and a fast wake-up is the phase 1 limitation S2
+  removes. S2 makes wake-up latency depend on the listener's delivery path, so the shared-bus stall of Q2 would then
+  directly become wake-up latency; coalescing per poll (remedy a) should come first, and the listener's 50 ms interval
+  has to be revisited for the 10 ms target.
+- **Notify-polling should stay opt-in.** On write-heavy aggregate types it saves nothing and costs about 25 µs per append
+  transaction (up to 10 to 17 % of peak append rate here), and in Spring it puts one bus event per append transaction on
+  the application's shared bus. A per-aggregate-type opt-in would be the natural next step if defaults are revisited.
+- **The A/B S2 needs:** the Runs C and D workload (0.1 Hz and 1 Hz, 2 subscribers, alternating arms, at least 3 rounds),
+  with arms plain polling, phase 1 `max-delay=1s`, and S2 at `max-delay=5s`; S2 also at a 10 ms listener interval.
+  Measure commit-to-handler wake-up latency p50/p95/p99 and event-store SELECTs/s per subscriber. Pass criteria: S2 at
+  `max-delay=5s` keeps phase 1's −60 % query rate at 0.1 Hz with p95 wake-up at or below the listener interval plus one
+  poll, and is no worse than phase 1 at 1 Hz. Add one burst arm with a slow asynchronous bus subscriber to show that
+  wake-ups are not stalled once Q2's remedy is in.
+
+### Estimated effort (Phase 1) (history: the pre-implementation estimate, kept for reference)
 
 Significantly smaller now that we're composing existing infrastructure rather than
 building a parallel notify listener:
@@ -525,7 +718,10 @@ building a parallel notify listener:
 Total ≈ **2.5–3 days** for Phase 1. Phase 2 (true reactive wake-up) is a separate,
 larger effort gated on a concrete latency requirement.
 
-### Test plan (Phase 1)
+### Test plan (Phase 1) (history: the plan written before implementation)
+
+Phase 1 shipped with `NotifyPollingIT`, `NotifyAwareEventStorePollingOptimizerTest`, `NotifyEpochSourceTest` and
+`NotifyPollingAutoConfigurationIT`; this list is the plan as written, not a description of what those tests cover.
 
 Testcontainers IT covering:
 1. **Idle DB-load drop**: register a subscriber, no writes, assert poll-query count over
@@ -713,3 +909,10 @@ Testcontainers IT covering:
   the flag-based `isChanged()` it was written against. The reset was always persisted by `overrideResumePoint` inside
   `resetFrom`, before the callback runs. The callback is now a no-op. Making it write would only have added a second
   writer, from a second resume-point object, to the race described above.
+
+  **Follow-up in 0.61.1: fence token for exclusive subscriptions.** The epoch alone did not cover a lock hand-over:
+  a previous lock holder that repositioned its resume point (starting a newer epoch) and saved late could make the
+  epoch guard refuse every save of the new holder. Every resume-point save of an exclusive subscription now carries
+  the token of its fenced lock, stored in `durable_subscriptions.fence_token`. A newer token wins whatever its epoch,
+  the same token is checked against the epoch as before, and an older token is refused. Non-exclusive subscriptions
+  save without a token. Details: `docs/releases/NEXT_VERSION_RELEASE.md`.
