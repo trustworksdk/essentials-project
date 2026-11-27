@@ -56,6 +56,11 @@ class ShardOwnedOrderedRebalanceIT {
      * returns when its test lets it go, never on its own while the test still counts on it being held.
      */
     private static final Duration HANDLER_HOLD = Duration.ofMinutes(5);
+    /**
+     * A lease long enough that a heartbeat stall on a loaded build does not make one instance read as gone to the other,
+     * for a test whose premise is that the incumbent keeps its units ({@code a_shed_that_cannot_drain_is_abandoned...}).
+     */
+    private static final Duration STALL_TOLERANT_LEASE = Duration.ofSeconds(3);
 
     /** Short lease, so several heartbeat-and-rebalance ticks happen inside the test window. */
     private static ShardOwnerSettings fast(Duration shedGrace) {
@@ -273,7 +278,12 @@ class ShardOwnedOrderedRebalanceIT {
             // the default of ten across eight shards some shards had none, drained cleanly, and the
             // shed succeeded — which is the opposite of what this test is about.
             first.setParallelConsumers(ShardOwnedSchema.ORDERED_UNITS * 8);
-            first.startConsumingOrdered(stuck, fast(Duration.ofMillis(500)), SHARD_COUNT);
+            // A lease with headroom over a heartbeat stall. With the one-second lease, a stall of a second on a loaded build
+            // let the joiner count the incumbent as gone, take all 64 units (its fair share being 64 of 64 while it saw
+            // itself alone) and leave the incumbent nothing to shed: no shed was abandoned and the wait below timed out at 0.
+            // That is a liveness lapse, not the stuck-handler shed this test is about. Three seconds keeps the heartbeat
+            // (leaseTtl / 3) at one second, so the abandoned shed is still retried several times inside the window below.
+            first.startConsumingOrdered(stuck, fast(Duration.ofMillis(500), STALL_TOLERANT_LEASE), SHARD_COUNT);
             Awaitility.await().atMost(Duration.ofSeconds(10))
                       .untilAsserted(() -> assertThat(first.shardsHeld())
                               .isEqualTo(ShardOwnedSchema.ORDERED_UNITS));
@@ -283,7 +293,7 @@ class ShardOwnedOrderedRebalanceIT {
             assertThat(inHandler.await(15, TimeUnit.SECONDS)).as("handlers must be running").isTrue();
 
             second.startConsumingOrdered((messageId, key, payload, payloadType) -> {
-            }, fast(Duration.ofMillis(500)), SHARD_COUNT);
+            }, fast(Duration.ofMillis(500), STALL_TOLERANT_LEASE), SHARD_COUNT);
 
             // The shed is attempted, cannot drain, and is given up on - and, being retried every
             // heartbeat, given up on again, several times per shard.

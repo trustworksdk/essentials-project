@@ -25,6 +25,7 @@ import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
+import dk.trustworks.essentials.components.foundation.test.fencedlock.ShutdownOverlapFencedLockManager;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -91,7 +92,44 @@ class PartitionedViewEventProcessorTest {
         assertNeverConsumed(durableQueues);
     }
 
+    @Test
+    void a_lock_acquired_arriving_after_stop_released_the_lock_starts_no_reader_subscriptions() {
+        // During a shutdown the lock manager can release the lock, and call lockReleased, before the async acquiring
+        // tick's lockAcquired has run (see LockCallback) - ShutdownOverlapFencedLockManager replays that without timing
+        var subscriptionManager = subscriptionManager();
+        var fencedLockManager   = shutdownOverlapFencedLockManager();
+        var processor           = new ThingsPartitionedViewProcessor(subscriptionManager, fencedLockManager, durableQueues(true));
+        var lockName            = LockName.of("ThingsPartitionedViewProcessor:lock");
+
+        processor.start();
+        processor.stop();
+        fencedLockManager.deliverLateLockAcquired(lockName);
+
+        assertThat(fencedLockManager.wasCancelled(lockName)).isTrue();
+        verify(subscriptionManager, never()).batchSubscribeToAggregateEventsAsynchronously(any(), any(), any(), any(), anyInt(), any(), any());
+    }
+
+    @Test
+    void an_ordinary_lock_acquired_starts_the_reader_subscriptions() {
+        var subscriptionManager = subscriptionManager();
+        var fencedLockManager   = shutdownOverlapFencedLockManager();
+        var processor           = new ThingsPartitionedViewProcessor(subscriptionManager, fencedLockManager, durableQueues(true));
+
+        processor.start();
+        fencedLockManager.deliverLockAcquired(LockName.of("ThingsPartitionedViewProcessor:lock"));
+
+        verify(subscriptionManager).batchSubscribeToAggregateEventsAsynchronously(any(), eq(THINGS), any(), any(), anyInt(), any(), any());
+    }
+
     // -------------------------------------------------------------------------------------------------------------------
+
+    private static ShutdownOverlapFencedLockManager shutdownOverlapFencedLockManager() {
+        // The processor registers its queue consumer holding the reset lock, which the double does not hand out
+        var lockManager = spy(new ShutdownOverlapFencedLockManager());
+        doAnswer(invocation -> Optional.of(mock(FencedLock.class))).when(lockManager).tryAcquireLock(any(LockName.class), any(Duration.class));
+        lockManager.start();
+        return lockManager;
+    }
 
     private static void assertNeverConsumed(DurableQueues durableQueues) {
         verify(durableQueues, never()).consumeFromQueue(any(QueueName.class), any(RedeliveryPolicy.class), anyInt(), any(QueuedMessageHandler.class));
@@ -127,7 +165,11 @@ class PartitionedViewEventProcessorTest {
 
     static class ThingsPartitionedViewProcessor extends PartitionedViewEventProcessor {
         ThingsPartitionedViewProcessor(DurableQueues durableQueues) {
-            super(subscriptionManager(), fencedLockManager(), durableQueues, mock(DurableLocalCommandBus.class), List.of());
+            this(subscriptionManager(), fencedLockManager(), durableQueues);
+        }
+
+        ThingsPartitionedViewProcessor(EventStoreSubscriptionManager subscriptionManager, FencedLockManager fencedLockManager, DurableQueues durableQueues) {
+            super(subscriptionManager, fencedLockManager, durableQueues, mock(DurableLocalCommandBus.class), List.of());
         }
 
         @Override

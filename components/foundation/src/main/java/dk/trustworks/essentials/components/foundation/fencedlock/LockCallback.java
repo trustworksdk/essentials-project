@@ -20,6 +20,17 @@ import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Callbacks for a lock acquired asynchronously ({@link FencedLockManager#acquireLockAsync(LockName, LockCallback)}) or
+ * registered with a {@link FencedLock}.
+ * <p>
+ * <b>Threading:</b> outside a shutdown of the lock manager, <code>lockReleased</code> for an acquisition runs after its
+ * <code>lockAcquired</code> has returned. During a shutdown, a {@link FencedLockManager#cancelAsyncLockAcquiring(LockName)}
+ * that lands while the lock is being handed to <code>lockAcquired</code> may call <code>lockReleased</code> on another
+ * thread while <code>lockAcquired</code> is still running. A <code>lockAcquired</code> that starts work (a subscription,
+ * a consumer, a scheduled task) therefore needs a <code>lockReleased</code> that is safe to run alongside it - guard the
+ * started state with a lock or an atomic, rather than assume the two calls are sequential.
+ */
 public interface LockCallback {
     /**
      * This method is called when the lock in question is acquired by the {@link FencedLockManager}
@@ -57,6 +68,15 @@ public interface LockCallback {
             @Override
             public void lockReleased(FencedLock lock) {
                 onLockReleased.accept(lock);
+            }
+
+            /**
+             * Names the consumers, whose (lambda) class names the component that created them, so a log line about this
+             * callback says whose it is rather than naming the anonymous class
+             */
+            @Override
+            public String toString() {
+                return "LockCallback{onLockAcquired=" + onLockAcquired + ", onLockReleased=" + onLockReleased + "}";
             }
         };
     }

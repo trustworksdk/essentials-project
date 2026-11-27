@@ -542,6 +542,25 @@ handlers then queue on the pool. Two remedies, in order of preference:
 A successful handler's transaction always ends with the acknowledgement (since 0.60.1), so it needs a connection
 at some point; laziness only shortens how long it is held.
 
+### Idle connections in services that only consume queues
+
+HikariCP's `minimumIdle` defaults to `maximumPoolSize`, so the pool keeps every connection open while the queues are
+idle; across a queue-only service's instances that adds up against PostgreSQL's `max_connections`. Essentials changes
+no pool default. For such a service set a lower `minimumIdle` (`spring.datasource.hikari.minimum-idle=2`): HikariCP
+closes connections above it after `idleTimeout` (10 minutes by default; only applies when `minimumIdle` <
+`maximumPoolSize`). Cost: a new connection, with its handshake, when a burst follows an idle period. Keep it at least 1
+above the connections held permanently - the Spring Boot starter's `MultiTableChangeListener` holds one LISTEN
+connection from the same pool for the application's lifetime.
+
+### A stalled connection holds a poll
+
+Queue statements run with no timeout of their own: a fetch on a connection whose socket stalled (a half-open TCP
+connection after a network failure, say) waits for as long as the driver does, and the consumer's poll waits with it.
+pgjdbc waits forever by default. Set the driver's socket timeout, well above the longest statement the application
+runs, for example `jdbc:postgresql://host/db?socketTimeout=60` (seconds), or in Spring Boot
+`spring.datasource.hikari.data-source-properties.socketTimeout=60`. It bounds every statement on the pool, not only
+the queue's.
+
 ### Ordered queues whose backlog sits on few keys
 
 The ordered claim takes each key's head: its lowest `key_order`, which blocks the rest of the key. The default

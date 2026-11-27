@@ -230,12 +230,12 @@ public class ShardOwnedDurableQueues implements DurableQueues {
         if (unitOfWorkFactory == null) {
             log.warn("ShardOwnedDurableQueues was built without a UnitOfWorkFactory: every enqueue commits on its own connection "
                      + "and is NOT rolled back with the caller's transaction, so an Outbox on this engine is not transactional. "
-                     + "Call setUnitOfWorkFactory(...) on the builder - from 0.61 the builder will require one.");
+                     + "Call setUnitOfWorkFactory(...) on the builder - a later release will make the builder require one.");
             EssentialsRunReport.addToCurrent(EssentialsRunReport.Finding.warn(
                     "ShardOwnedDurableQueues",
                     "built without a UnitOfWorkFactory: every enqueue commits on its own connection and is NOT rolled back with the caller's transaction, "
                             + "so an Outbox on this engine is not transactional",
-                    "Call setUnitOfWorkFactory(...) on ShardOwnedDurableQueuesBuilder - from 0.61 the builder requires one"));
+                    "Call setUnitOfWorkFactory(...) on ShardOwnedDurableQueuesBuilder - a later release will make the builder require one"));
         }
     }
 
@@ -765,8 +765,17 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     private Optional<QueuedMessage> doGetQueuedMessage(QueueEntryId queueEntryId) {
         var decoded = QueueEntryIdCodec.decode(queueEntryId);
         return onQueue(decoded.queueName(), "read message '" + queueEntryId + "'",
-                       () -> resolve(decoded.queueName()).getMessage(decoded.messageId())
-                                                         .map(message -> toQueuedMessage(decoded.queueName(), message)));
+                       () -> {
+                           var queue   = resolve(decoded.queueName());
+                           var message = queue.getMessage(decoded.messageId());
+                           if (message.isEmpty()) {
+                               return Optional.<QueuedMessage>empty();
+                           }
+                           // The engine's QueuedMessage carries no error; one more point lookup gives the single-message
+                           // read its last delivery error. The list read does not pay it per row and reports none
+                           var lastError = queue.lastError(decoded.messageId()).orElse(null);
+                           return Optional.<QueuedMessage>of(toQueuedMessage(decoded.queueName(), message.get(), lastError));
+                       });
     }
 
     @Override
@@ -1037,7 +1046,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                                                                   () -> resolve(queueName).messages(offset, pageSize,
                                                                                                     operation.getQueueingSortOrder() != QueueingSortOrder.DESC)
                                                                                           .stream()
-                                                                                          .map(message -> toQueuedMessage(queueName, message))
+                                                                                          .map(message -> toQueuedMessage(queueName, message, null))
                                                                                           .<QueuedMessage>map(message -> message)
                                                                                           .toList());
                                                })
@@ -1122,7 +1131,11 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                : dk.trustworks.essentials.components.queue.shardowned.spi.Message.delayed(payload, MessageEnvelope.FORMAT_VERSION, delay);
     }
 
-    private ShardOwnedQueuedMessage toQueuedMessage(QueueName queueName, dk.trustworks.essentials.components.queue.shardowned.spi.QueuedMessage message) {
+    /**
+     * @param lastError the live message's stored error ({@code MessageQueue.lastError}), or null - always null on a list read
+     */
+    private ShardOwnedQueuedMessage toQueuedMessage(QueueName queueName, dk.trustworks.essentials.components.queue.shardowned.spi.QueuedMessage message,
+                                                    String lastError) {
         return ShardOwnedQueuedMessage.read(QueueEntryIdCodec.encode(queueName, message.id()),
                                             queueName,
                                             MessageEnvelope.deserialize(jsonSerializer, message.payload(), message.payloadType(),
@@ -1131,7 +1144,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                                             message.enqueuedAt(),
                                             message.visibleAt(),
                                             false,
-                                            null);
+                                            lastError);
     }
 
     private ShardOwnedQueuedMessage toQueuedMessage(QueueName queueName, DeadLetter deadLetter) {

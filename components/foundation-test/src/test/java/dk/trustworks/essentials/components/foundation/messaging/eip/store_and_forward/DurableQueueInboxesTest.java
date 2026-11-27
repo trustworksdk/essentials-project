@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward;
 
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
+import dk.trustworks.essentials.components.foundation.test.fencedlock.ShutdownOverlapFencedLockManager;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import org.junit.jupiter.api.Test;
@@ -67,6 +68,53 @@ class DurableQueueInboxesTest {
                 o -> {
                 });
         assertThat(inbox2).isSameAs(inbox);
+    }
+
+    /**
+     * During a shutdown the fenced-lock manager can call <code>lockReleased</code> before the async acquiring tick's
+     * <code>lockAcquired</code> has run (see {@link LockCallback}). The late <code>lockAcquired</code> must not start a
+     * consumer: it would consume the Inbox without the lock, after <code>stopConsuming()</code>.
+     */
+    @Test
+    void a_SingleGlobalConsumer_lockAcquired_arriving_after_stopConsuming_released_the_lock_starts_no_consumer() {
+        var durableQueues     = mock(DurableQueues.class);
+        var fencedLockManager = new ShutdownOverlapFencedLockManager();
+        var inboxes           = Inboxes.durableQueueBasedInboxes(durableQueues, fencedLockManager);
+        var inboxName         = InboxName.of("overlap");
+        var inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
+                                                        .inboxName(inboxName)
+                                                        .redeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(1), 3))
+                                                        .messageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
+                                                        .build(),
+                                             o -> {
+                                             });
+
+        inbox.stopConsuming();
+        fencedLockManager.deliverLateLockAcquired(inboxName.asLockName());
+
+        verify(durableQueues, never()).consumeFromQueue(any(QueueName.class), any(RedeliveryPolicy.class), anyInt(), any(QueuedMessageHandler.class));
+    }
+
+    /**
+     * The control: with no overlap the same test double's <code>lockAcquired</code> starts the consumer
+     */
+    @Test
+    void a_SingleGlobalConsumer_lockAcquired_while_consuming_starts_the_consumer() {
+        var durableQueues     = mock(DurableQueues.class);
+        var fencedLockManager = new ShutdownOverlapFencedLockManager();
+        var inboxes           = Inboxes.durableQueueBasedInboxes(durableQueues, fencedLockManager);
+        var inboxName         = InboxName.of("no-overlap");
+        inboxes.getOrCreateInbox(InboxConfig.builder()
+                                            .inboxName(inboxName)
+                                            .redeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(1), 3))
+                                            .messageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
+                                            .build(),
+                                 o -> {
+                                 });
+
+        fencedLockManager.deliverLockAcquired(inboxName.asLockName());
+
+        verify(durableQueues).consumeFromQueue(eq(inboxName.asQueueName()), any(RedeliveryPolicy.class), eq(1), any(QueuedMessageHandler.class));
     }
 
     @Test
@@ -156,7 +204,9 @@ class DurableQueueInboxesTest {
                                                    eq(lockCallBackCaptor.getValue()));
 
         // And When
-        lockCallBackCaptor.getValue().lockAcquired(mock(FencedLock.class));
+        var acquiredLock = mock(FencedLock.class);
+        when(acquiredLock.isLocked()).thenReturn(true);
+        lockCallBackCaptor.getValue().lockAcquired(acquiredLock);
 
         // Then
         verify(durableQueues).consumeFromQueue(eq(inboxName.asQueueName()),

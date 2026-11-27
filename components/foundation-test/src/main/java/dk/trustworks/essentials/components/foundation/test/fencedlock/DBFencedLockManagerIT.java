@@ -823,6 +823,63 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
     }
 
     /**
+     * An <code>acquireLockAsync</code> with another callback replaces an acquiring that a stop kept and a start resumed. When
+     * another node holds the lock, this node holds nothing to release: the replacement only swaps the callback. The old
+     * callback is not told the lock was released (it was told at the stop), the node holding the lock keeps it, and the new
+     * callback gets the lock once that node lets go - never the old one.
+     */
+    @Test
+    void acquireLockAsync_with_another_callback_replaces_a_resumed_acquiring_waiting_for_a_lock_another_node_holds() {
+        var lockName      = LockName.of("replacedResumedLock");
+        var oldCallback   = new CountingLockCallback();
+        var node2Callback = new CountingLockCallback();
+        var newCallback   = new CountingLockCallback();
+
+        lockManagerNode1.acquireLockAsync(lockName, oldCallback);
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(oldCallback.acquired.get()).isEqualTo(1));
+
+        // Node 1 stops, which releases the lock and keeps the registration; node 2 takes the lock
+        lockManagerNode1.stop();
+        assertThat(oldCallback.released.get()).isEqualTo(1);
+        lockManagerNode2.acquireLockAsync(lockName, node2Callback);
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(node2Callback.acquired.get()).isEqualTo(1));
+        var node2Token = node2Callback.lastAcquired.getCurrentToken();
+
+        // Node 1 starts, resuming the kept acquiring, and is given another callback for the lock: a replacement
+        lockManagerNode1.start();
+        lockManagerNode1.acquireLockAsync(lockName, newCallback);
+        Awaitility.await()
+                  .during(Duration.ofSeconds(3))
+                  .atMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> {
+                      assertThat(oldCallback.released.get()).isEqualTo(1);
+                      assertThat(oldCallback.acquired.get()).isEqualTo(1);
+                      assertThat(newCallback.acquired.get()).isZero();
+                      assertThat(node2Callback.released.get()).isZero();
+                      assertThat(lockManagerNode2.isLockedByThisLockManagerInstance(lockName)).isTrue();
+                  });
+
+        // Node 2 lets go: node 1 takes the lock for the new callback, at the next fence token, and the old one is not called
+        lockManagerNode2.cancelAsyncLockAcquiring(lockName);
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(newCallback.acquired.get()).isEqualTo(1));
+        assertThat(newCallback.lastAcquired.getCurrentToken()).isEqualTo(node2Token + 1L);
+        Awaitility.await()
+                  .during(Duration.ofSeconds(5))
+                  .atMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> {
+                      assertThat(oldCallback.acquired.get()).isEqualTo(1);
+                      assertThat(oldCallback.released.get()).isEqualTo(1);
+                  });
+        assertThat(lockManagerNode1.isLockedByThisLockManagerInstance(lockName)).isTrue();
+
+        lockManagerNode1.cancelAsyncLockAcquiring(lockName);
+        assertThat(newCallback.released.get()).isEqualTo(1);
+    }
+
+    /**
      * Counts the calls of each callback method, and keeps the last lock <code>lockAcquired</code> was called with
      */
     private static class CountingLockCallback implements LockCallback {

@@ -62,9 +62,12 @@ public abstract class SpringTransactionAwareUnitOfWorkFactory<TRX_MGR extends Pl
     }
 
     protected Class<?> resolveUnitOfWorkType() {
-        return GenericType.resolveGenericTypeForInterface(this.getClass(),
-                                                          UnitOfWorkFactory.class,
-                                                          0);
+        // Found through superclasses too, so a subclass of a concrete factory resolves the UnitOfWork type its superclass declares
+        return GenericType.resolveTypeArgument(this.getClass(), UnitOfWorkFactory.class, 0)
+                          .orElseThrow(() -> new IllegalStateException(msg("Cannot resolve the UnitOfWork type of {}: give {} a concrete UOW type argument, " +
+                                                                                   "or override resolveUnitOfWorkType()",
+                                                                           this.getClass().getName(),
+                                                                           UnitOfWorkFactory.class.getName())));
     }
 
     /**

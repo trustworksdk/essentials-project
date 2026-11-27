@@ -44,7 +44,12 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  *                                         it late; each one is logged at WARN with the key and both values
  * @param sweepRecoveries                  messages the backstop sweep found that the cursor had not reached. Not a
  *                                         defect by itself — a queue filling faster than it drains legitimately
- *                                         produces them — but a rising share means the fast path is not keeping up
+ *                                         produces them, and so does a message that committed between a cursor read
+ *                                         and the sweep that follows it (most often in the start-up sweep), which
+ *                                         the next cursor read would have found anyway — so alert on its share of
+ *                                         the messages delivered rising, not on its value. For the ordered lane,
+ *                                         {@code ShardOwnerMetrics.sweepRecoveriesBehindCursor} counts only the
+ *                                         messages the cursor had already passed
  * @param shardsAcquired                   units taken since start
  * @param shardsReleased                   units no longer held since start, one per acquisition, however lost: handed
  *                                         back, taken away by another instance (see {@code leasesLost}), or given up by

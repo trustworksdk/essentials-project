@@ -1,11 +1,19 @@
 # Proposal: shard-owned consumer overhead that grows with instances
 
-**Status (2026-11-08):** candidate 1 (one horizon probe per pump pass) is built — `3be11d757`, measured in
-`docs/design/durable-queue-measurements.md` §3.12. Candidate 2 is open and needs profiling first. Evidence from the trading demo's EF-2 measurements
-(`docs/design/key-partitioned-event-processing.md` §5, "Investigation of the forwarder slowdown").
+**Status (2026-11-26, checked against the code on `release/0.61.1`):**
+
+- **Candidate 1 (one horizon probe per pump pass): shipped in 0.61.0.** It was built as `3be11d757` and reached `main`
+  in the squash merge of #57 (`687826c69`), so that commit id is not in `main`'s history. Measured in
+  `docs/design/durable-queue-measurements.md` §3.12. The built version differs from this proposal in two places; see
+  [As built](#as-built-0610).
+- **Candidate 2 (cursor-read cost when units are split): not started.** No profile has been taken and none of its
+  possible directions is in the code; see [Status of candidate 2](#status-of-candidate-2-2026-11-26).
+
+Evidence from the trading demo's EF-2 measurements (`docs/design/key-partitioned-event-processing.md` §5,
+"Investigation of the forwarder slowdown").
 **Module:** `components/postgresql-queue-shard-owned`.
-**Where it would land:** a new branch off `main` once 0.60.1 is released — not `queue_improvements`, which is being
-assembled into that release.
+**Where it would land:** candidate 1 landed on `main` with #57. Candidate 2 would start on a new branch created from
+`origin/main`.
 
 ## What was measured
 
@@ -27,9 +35,10 @@ order of magnitude, not a precise ratio.
 
 ## Candidate 1 — one horizon probe per pump pass, not per owner
 
-**Today.** `ShardPump` runs one batched read for every attentive owner (`ShardPump.batchRead`, line 140) and then calls
-`pumpOnce` on each (line 144). Each `OrderedShardOwner.pumpOnce` that has watermark candidates calls
-`advanceWatermark`, which issues its own probe (`OrderedShardOwner.java:934`). A pump serving 32 attentive units issues
+**Before (as proposed against the code of 2026-11-08; line numbers from that time, since changed).** `ShardPump` ran
+one batched read for every attentive owner (`ShardPump.batchRead`) and then called `pumpOnce` on each. Each
+`OrderedShardOwner.pumpOnce` that had watermark candidates called `advanceWatermark`, which issued its own probe. A pump
+serving 32 attentive units issued
 up to 32 identical `pg_stat_activity` scans per pass. Reading `pg_stat_activity` takes the procarray and backend-status
 snapshot, so it is not free at thousands per second.
 
@@ -46,7 +55,30 @@ every owner's read in the next pass. Both conditions hold for all owners at once
 a few hundred.
 
 **Risk.** Low. The set is read-only and pass-scoped. Any probe failure must fail the pass for all owners, as one
-owner's probe failure does today.
+owner's probe failure does today. (The built version handles failure differently; see below.)
+
+### As built (0.61.0)
+
+Where it lives: `HorizonProbingOwner` (new interface), `ShardPump.probeHorizon`, and
+`OrderedShardOwner.applyHorizonProbe`; `OrderedShardOwner.advanceWatermark` uses the pass's probe when it has one.
+Probes are counted in the `horizonProbes` owner metric, once per shared probe.
+
+It differs from the proposal in two places:
+
+| | Proposal | Built |
+|---|---|---|
+| When the probe is taken | Once, after the pass's batched read; owners that read on their own keep probing themselves | After *all* of the pass's reads: the batched read, then a `readAhead` by each owner that reads on its own. Those owners share the probe too, so the probe still follows every owner's read |
+| Probe failure | Fails the pass for all owners | On a connection that is still valid, it is logged at ERROR and each owner probes for itself that pass, as before the probe was shared. On a broken connection the exception is rethrown and the pump reconnects. An owner that throws while being asked whether it wants the probe, or while reading ahead, falls back to probing or reading for itself |
+
+A first version took the probe after the whole pass instead; it was dropped before it was measured cleanly
+(measurements doc §3.12).
+
+**Measured effect** (`ShardOwnedOrderedLoadedCostIT`, 8 ordered queues on 2 pumps, one process; §3.12): horizon
+probes per delivered message fell from 2.35 to 0.52 at 2 000 msg/s and from 2.59 to 0.24 at 3 000 msg/s;
+transactions per message fell by about a quarter; p99 fell from 20.9 to 13.7 ms and from 151 to 71 ms. One cost not
+foreseen here: pumps that no longer wait on a probe per owner run more passes, so read statements per message rose
+at 3 000 msg/s (1.00 to 1.99), and with handlers that burn CPU at saturation p99 got worse (121 to 363 ms). Idle cost
+is unchanged.
 
 ## Candidate 2 — the batched cursor read's cost when units are split
 
@@ -65,6 +97,21 @@ for fewer rows, and the head-of-line check refuses rows whose key is in flight, 
 **Possible directions**, depending on the answer: back off a pump whose attentive owners are all key-blocked; read
 fewer rows per owner when its keys are in flight; batch acknowledgements across owners in a pass.
 
+### Status of candidate 2 (2026-11-26)
+
+Nothing has been done. Checked against the code:
+
+| Item | State in the code |
+|---|---|
+| Profile: one instance against two | Not taken. No two-instance measurement in the measurements doc or the release notes |
+| Back off a pump whose owners are all key-blocked | Absent |
+| Read fewer rows per owner when its keys are in flight | Absent. The ordered lane's cursor read still uses the fixed `readBatchSize` (`ShardPump` batched read, `OrderedShardOwner` own read). Only the unordered lane's read became adaptive (capped at 64 rows or twice the free handlers, 0.60.1) |
+| Batch acknowledgements across owners | Absent. The ordered lane acknowledges with one `DELETE … WHERE queue_id = ? AND shard = ? AND seq = ANY(?)` per shard (`ShardOwnedStorage`) |
+
+Related but not this candidate: 0.61.0 merged each head sweep's two statements into one `UNION ALL` statement, which
+lowered read statements per delivered message from 3.82–3.98 to 3.34–3.67. That cuts per-pass cost everywhere; it
+does not address why splitting units across instances makes the cursor read more frequent and slower per call.
+
 ## How it would be measured
 
 Per the standing rule for queue changes: before/after benchmark suites against `main`, run from worktrees outside
@@ -75,6 +122,10 @@ Per the standing rule for queue changes: before/after benchmark suites against `
 2. The demo's `m4-drain` replay (uniform stretch, one and two instances, pinned cores), with `pg_stat_statements`.
 
 Candidate 1 is a small change with a clear expected effect. Candidate 2 starts with a measurement, not a change.
+
+For candidate 1, neither targeted measurement was run as written. It was measured with `ShardOwnedOrderedLoadedCostIT`
+instead (one process, 2 pumps; measurements doc §3.12), so the two-instance effect it was motivated by has not been
+re-measured. Both measurements above still apply to candidate 2.
 
 ## Not proposed
 

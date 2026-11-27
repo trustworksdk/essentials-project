@@ -126,6 +126,12 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * tests can find those threads by the same name
      */
     static final String ASYNC_LOCK_ACQUIRING_THREAD_NAME_INFIX = "-Lock-Acquiring-";
+    /**
+     * What {@link #start()} puts between the lock manager instance id and the thread number in the name of the lock
+     * confirmation thread (<code>&lt;lockManagerInstanceId&gt;-FencedLock-Confirmation-&lt;n&gt;</code>). Package-private so
+     * tests can find that thread by the same name
+     */
+    static final String CONFIRMATION_THREAD_NAME_INFIX         = "-FencedLock-Confirmation-";
 
     protected final Logger log = LoggerFactory.getLogger(this.getClass());
 
@@ -288,12 +294,15 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             reentrantLock.lock();
             try {
                 stopping = false;
+                // A stop and start after the lock confirmation ended is the documented recovery: the registrations it resumes
+                // belong to live components, so they are not reported as possible leaks
+                var recoveringFromAnEndedConfirmation = confirmationEnded;
                 confirmationEnded = false;
                 acquiresRefusedAsTheConfirmationHasEnded.clear();
                 asyncAcquiringsRefusedAsTheConfirmationHasEnded.clear();
                 lockConfirmationExecutor = Executors.newScheduledThreadPool(1,
                                                                             new ThreadFactoryBuilder()
-                                                                                    .nameFormat(lockManagerInstanceId + "-FencedLock-Confirmation-%d")
+                                                                                    .nameFormat(lockManagerInstanceId + CONFIRMATION_THREAD_NAME_INFIX + "%d")
                                                                                     .daemon(true)
                                                                                     .build());
 
@@ -316,14 +325,21 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 // tick therefore acts only while its own entry is still the one in asyncLockAcquirings, which it checks
                 // once it has reentrantLock (asyncLockAcquiringTick).
                 // Logged at WARN: a registration whose component was discarded without cancelAsyncLockAcquiring is resumed
-                // too, and its callback then holds the lock with nothing on this instance serving it
+                // too, and its callback then holds the lock with nothing on this instance serving it. At INFO when this start
+                // recovers from an ended lock confirmation, where every kept registration is expected to be resumed
                 var executor = asyncLockAcquiringExecutor;
                 for (var lockName : asyncLockAcquirings.keySet()) {
                     asyncLockAcquirings.computeIfPresent(lockName, (name, kept) -> {
-                        log.warn("[{}] Resuming async lock acquiring for lock '{}' kept across the last stop(), with the LockCallback '{}'. " +
-                                         "A component that no longer wants the lock must call cancelAsyncLockAcquiring when it stops, " +
-                                         "or its callback is given the lock again",
-                                 lockManagerInstanceId, name, kept.lockCallback().getClass().getName());
+                        if (recoveringFromAnEndedConfirmation) {
+                            log.info("[{}] Resuming async lock acquiring for lock '{}' kept across the stop() that followed the end of the lock confirmation, " +
+                                             "with the LockCallback '{}'",
+                                     lockManagerInstanceId, name, kept.lockCallback());
+                        } else {
+                            log.warn("[{}] Resuming async lock acquiring for lock '{}' kept across the last stop(), with the LockCallback '{}'. " +
+                                             "A component that no longer wants the lock must call cancelAsyncLockAcquiring when it stops, " +
+                                             "or its callback is given the lock again",
+                                     lockManagerInstanceId, name, kept.lockCallback());
+                        }
                         kept.scheduledFuture().cancel(true);
                         return scheduleAsyncLockAcquiring(executor, name, kept.lockCallback(), true);
                     });
@@ -761,8 +777,19 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             }
             log.trace("[{}] Completed releasing lock '{}'",
                       lockManagerInstanceId, lock.getName());
+        } else {
+            var held = locksAcquiredByThisLockManager.get(lock.getName());
+            if (held != null) {
+                // Only the instance the acquire returned (or handed to lockAcquired) releases the lock - a lookupLock copy
+                // or a stale instance from an earlier acquisition releases nothing
+                log.warn("[{}] Not releasing lock '{}': this lock manager holds it, but under another FencedLock instance than the one release() " +
+                                 "was called on (a copy from lookupLock, or an instance from an earlier acquisition). " +
+                                 "Release the FencedLock that the acquire returned or that lockAcquired was given. Called on: {} - held: {}",
+                         lockManagerInstanceId, lock.getName(), lock, held);
+            } else {
+                log.debug("[{}] Not releasing lock '{}': this lock manager does not hold it: {}", lockManagerInstanceId, lock.getName(), lock);
+            }
         }
-
     }
 
     @Override
@@ -1543,7 +1570,8 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * <p>
      * {@link #stop()} cancels the scheduled acquiring but keeps the registration (the lock name and this
      * <code>lockCallback</code>), and {@link #start()} schedules every kept registration again, an ended one included, and
-     * logs each one it resumes at WARN, naming the lock and the callback's class; only
+     * logs each one it resumes at WARN, naming the lock and the callback (its <code>toString()</code>) - at INFO when the
+     * start follows the end of the lock confirmation, the documented recovery; only
      * {@link #cancelAsyncLockAcquiring(LockName)} removes a registration for good, so a component must call it in its own
      * stop, or the next {@link #start()} gives this <code>lockCallback</code> the lock again. Called for a lock name whose registration
      * a {@link #stop()} kept - by a component recreated across a stop and start of the lock manager, say - with another
@@ -1556,7 +1584,12 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * the new <code>lockCallback</code> replaces the kept one (no lock is held then), and {@link #start()} schedules it.
      * Called with the kept <code>lockCallback</code> itself, or for a lock name whose registration was made since the last
      * {@link #start()}, this method does nothing and keeps the registered <code>lockCallback</code>. Called while the lock
-     * manager is not started, it registers nothing new.
+     * manager is not started, it registers nothing new: for a lock name without a kept registration (its previous owner
+     * called {@link #cancelAsyncLockAcquiring(LockName)}, or there never was one) the call is lost - the following
+     * {@link #start()} does not acquire the lock for it - and it is logged at WARN. Call it again once the lock manager
+     * has started.
+     * <p>
+     * See {@link LockCallback} for when <code>lockAcquired</code> and <code>lockReleased</code> may overlap.
      */
     @Override
     @SuppressWarnings("PMD.CompareObjectsWithEquals") // a registration's callback is the caller's instance, compared by identity
@@ -1588,7 +1621,16 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 }
             }
             if (!started || stopping || shutdown != null || executor == null) {
-                log.debug("[{}] Lock Manager isn't started - ignoring async lock acquiring for lock '{}'", lockManagerInstanceId, lockName);
+                if (!started && !stopping && shutdown == null) {
+                    // Not stopping or shutting down, just not started: the caller most likely expects the lock once the lock
+                    // manager starts, and it will not get it - nothing is registered for it
+                    log.warn("[{}] Lock Manager isn't started - ignoring async lock acquiring for lock '{}' with the LockCallback '{}': " +
+                                     "nothing acquires the lock for this callback, also not after start(). Start the lock manager before the components " +
+                                     "that acquire locks, or call acquireLockAsync again after it has started",
+                             lockManagerInstanceId, lockName, lockCallback);
+                } else {
+                    log.debug("[{}] Lock Manager is stopping or shutting down - ignoring async lock acquiring for lock '{}'", lockManagerInstanceId, lockName);
+                }
                 return;
             }
 

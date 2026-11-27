@@ -17,10 +17,10 @@
 package dk.trustworks.essentials.shared.types;
 
 import java.lang.reflect.*;
-import java.util.Optional;
+import java.util.*;
 import java.util.stream.Stream;
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
@@ -189,4 +189,97 @@ public abstract class GenericType<T> {
         }
     }
 
+
+    /**
+     * Resolve the type argument at <code>typeArgumentIndex</code> that <code>forType</code> gives the generic class or
+     * interface <code>genericSupertype</code>, wherever in its type hierarchy that happens.<br>
+     * Unlike {@link #resolveGenericTypeForInterface(Class, Class, int)}, which only reads the interfaces
+     * <code>forType</code> itself declares, this walks every superclass and (sub-)interface and maps type variables
+     * through each parameterization on the way. So it also resolves:
+     * <ul>
+     *     <li>a subclass of a type that implements <code>genericSupertype</code>:
+     *     {@code class SpecialOrder extends Order}, where {@code Order implements WithState<String, Order, OrderState>}</li>
+     *     <li>a type argument passed on through a generic base class:
+     *     {@code abstract class Base<ID, S> implements WithState<ID, ..., S>} and {@code class Order extends Base<String, OrderState>}</li>
+     *     <li>a sub-interface that declares its type parameters in another order than <code>genericSupertype</code></li>
+     * </ul>
+     * When more than one path leads to <code>genericSupertype</code>, the first that binds the argument to a type wins;
+     * interfaces are tried before the superclass.
+     *
+     * @param forType           the type to resolve the type argument for
+     * @param genericSupertype  the generic class or interface that declares the type parameter
+     * @param typeArgumentIndex the index (0 based) of the type parameter in <code>genericSupertype</code>'s declaration
+     * @return the raw class of the type argument (for a parameterized argument such as {@code List<String>}, its raw
+     * type {@code List}); empty when <code>forType</code> does not extend or implement <code>genericSupertype</code>,
+     * or when no path binds the argument to a type (it stays a type variable, for instance on a raw or still generic
+     * type)
+     * @throws IllegalArgumentException if <code>genericSupertype</code> declares no type parameter with that index
+     */
+    public static Optional<Class<?>> resolveTypeArgument(Class<?> forType, Class<?> genericSupertype, int typeArgumentIndex) {
+        requireNonNull(forType, "No forType provided");
+        requireNonNull(genericSupertype, "No genericSupertype provided");
+        var typeParameters = genericSupertype.getTypeParameters();
+        if (typeArgumentIndex < 0 || typeArgumentIndex >= typeParameters.length) {
+            throw new IllegalArgumentException(msg("{} declares {} type parameter(s), cannot resolve the type argument with index {}",
+                                                   genericSupertype.getName(),
+                                                   typeParameters.length,
+                                                   typeArgumentIndex));
+        }
+        return findTypeArgument(forType, genericSupertype, typeArgumentIndex, Map.of(), new HashSet<>());
+    }
+
+    private static Optional<Class<?>> findTypeArgument(Class<?> type,
+                                                       Class<?> genericSupertype,
+                                                       int typeArgumentIndex,
+                                                       Map<TypeVariable<?>, Type> bindings,
+                                                       Set<Class<?>> typesOnThePath) {
+        if (type == null || type == Object.class || !typesOnThePath.add(type)) {
+            return Optional.empty();
+        }
+        try {
+            var supertypes = new ArrayList<Type>(Arrays.asList(type.getGenericInterfaces()));
+            if (type.getGenericSuperclass() != null) {
+                supertypes.add(type.getGenericSuperclass());
+            }
+            for (var supertype : supertypes) {
+                Optional<Class<?>> found = Optional.empty();
+                if (supertype instanceof ParameterizedType parameterized && parameterized.getRawType() instanceof Class<?> rawType) {
+                    var arguments = parameterized.getActualTypeArguments();
+                    if (rawType == genericSupertype) {
+                        found = rawClassOf(bound(arguments[typeArgumentIndex], bindings));
+                    } else {
+                        var rawTypeParameters = rawType.getTypeParameters();
+                        var nextBindings      = new HashMap<TypeVariable<?>, Type>();
+                        for (int i = 0; i < rawTypeParameters.length && i < arguments.length; i++) {
+                            nextBindings.put(rawTypeParameters[i], bound(arguments[i], bindings));
+                        }
+                        found = findTypeArgument(rawType, genericSupertype, typeArgumentIndex, nextBindings, typesOnThePath);
+                    }
+                } else if (supertype instanceof Class<?> rawType && rawType != genericSupertype) {
+                    // A raw (non-parameterized) supertype passes no type arguments on
+                    found = findTypeArgument(rawType, genericSupertype, typeArgumentIndex, Map.of(), typesOnThePath);
+                }
+                if (found.isPresent()) {
+                    return found;
+                }
+            }
+            return Optional.empty();
+        } finally {
+            typesOnThePath.remove(type);
+        }
+    }
+
+    private static Type bound(Type argument, Map<TypeVariable<?>, Type> bindings) {
+        return argument instanceof TypeVariable<?> variable && bindings.containsKey(variable) ? bindings.get(variable) : argument;
+    }
+
+    private static Optional<Class<?>> rawClassOf(Type type) {
+        if (type instanceof Class<?> clazz) {
+            return Optional.of(clazz);
+        }
+        if (type instanceof ParameterizedType parameterized && parameterized.getRawType() instanceof Class<?> rawType) {
+            return Optional.of(rawType);
+        }
+        return Optional.empty();
+    }
 }

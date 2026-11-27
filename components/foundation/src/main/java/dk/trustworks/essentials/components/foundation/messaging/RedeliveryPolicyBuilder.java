@@ -63,8 +63,8 @@ public final class RedeliveryPolicyBuilder {
      * <p>
      * A setting that was never given is logged in one WARN naming the setter to call (QL-3): an unset delay (which
      * still fails, as before), {@code setMaximumNumberOfRedeliveries} not called (it silently means 0 redeliveries), and a multiplier below 1.0 or not set (it silently means no growth).
-     * <b>From 0.61 these make {@code build()} throw an {@link IllegalArgumentException}</b>; in 0.60.x the policy is
-     * built exactly as before.
+     * <b>A later 0.6x minor release will make these throw an {@link IllegalArgumentException} from {@code build()}</b>;
+     * until then the policy is built exactly as before.
      *
      * @return the policy
      */

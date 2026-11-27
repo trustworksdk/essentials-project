@@ -103,7 +103,10 @@ class ProcessorSubscriptionErrorPolicyTest {
         // A ViewEventProcessor subscribes once it holds its fenced lock
         var lockCallback = ArgumentCaptor.forClass(LockCallback.class);
         verify(fencedLockManager).acquireLockAsync(any(LockName.class), lockCallback.capture());
-        lockCallback.getValue().lockAcquired(mock(FencedLock.class));
+        // Held, as lockAcquired is handed it - it starts nothing for a lock no longer held
+        var lock = mock(FencedLock.class);
+        when(lock.isLocked()).thenReturn(true);
+        lockCallback.getValue().lockAcquired(lock);
 
         var handler = ArgumentCaptor.forClass(PersistedEventHandler.class);
         verify(subscriptionManager).subscribeToAggregateEventsAsynchronously(any(SubscriberId.class),

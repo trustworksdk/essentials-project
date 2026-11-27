@@ -33,10 +33,15 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * It also carries the consumer-supplied {@link QueueObserver}, because the two are the same wiring
  * reaching two audiences: these counters exist to debug the engine, the observer exists to feed the
  * consumer's metrics and tracing. Threading one object rather than two keeps the owners' already-wide
- * constructors from growing again. {@code sweepRecoveries} is the one to watch: it counts
- * messages the cursor and the hole chase both missed and the backstop caught. A healthy engine
- * shows a small number; a large one means the fast path is losing track of work and the design's
- * claim to need no claim write is in trouble.
+ * constructors from growing again. {@code sweepRecoveries} counts messages the backstop sweep handed out
+ * that this owner did not already hold. Not all of them were missed: it also counts a row that committed
+ * between a pass's cursor read and its sweep (two statements, two snapshots), which the next cursor read
+ * would have found anyway - most often in the start-up sweep and on a queue filling faster than it drains.
+ * So do not alert on its absolute value. On the ordered lane, watch {@code sweepRecoveriesBehindCursor}
+ * (in {@link #snapshot()}, through {@code ShardOwnedQueue.metrics()}): it leaves those rows out, so a rising
+ * value there means the fast path is losing track of work, or watermarks are being capped
+ * ({@code watermarkCapped}). On the unordered lane, watch the trend of {@code sweepRecoveries} relative to
+ * {@code delivered} rather than its value.
  */
 public final class ShardOwnerMetrics {
     private final QueueObserver observer;

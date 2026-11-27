@@ -138,16 +138,35 @@ class PostgresqlFencedLockSpreadingIT {
         acquireAllLocksAsync(first, lock -> releases.computeIfAbsent(lock.getName().toString(), name -> new CopyOnWriteArrayList<>()).add(System.nanoTime()));
         Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> holders.size() == LOCKS);
 
-        var window = REBALANCE_INTERVAL.multipliedBy(13);
-        sleep(window);
-
-        // A lock released moments ago is held again once the grace has passed
-        Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> holders.size() == LOCKS);
+        // Rebalancing offers node2 one lock per interval, and each comes back to node1 after the grace. How long that takes
+        // depends on how many of the locks prefer node2 (15 of 30 for these names) and on how promptly the ticks run, so
+        // wait for the releases to stop rather than for a fixed time: a fixed 13-interval window was shorter than 15
+        // releases and failed on a loaded CI machine
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(60))
+                  .pollInterval(Duration.ofMillis(100))
+                  .until(() -> holders.size() == LOCKS
+                          && !releases.isEmpty()
+                          && System.nanoTime() - lastRelease(releases) > REBALANCE_INTERVAL.multipliedBy(4).toNanos());
         assertThat(locksHeldBy()).containsOnlyKeys("node1");
-        assertThat(releases).as("node1 released some locks to node2, their preferred owner").isNotEmpty();
+
+        // While the membership stands, a lock its preferred owner did not take is not released again
+        var window        = REBALANCE_INTERVAL.multipliedBy(13);
+        var releasesSoFar = releases.values().stream().mapToInt(List::size).sum();
+        Awaitility.await()
+                  .during(window)
+                  .atMost(window.plusSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(releases.values().stream().mapToInt(List::size).sum()).isEqualTo(releasesSoFar);
+                      assertThat(holders).hasSize(LOCKS);
+                  });
         releases.forEach((lock, at) -> assertThat(at).as("releases of %s to a preferred owner that never takes it", lock).hasSize(1));
-        System.out.printf("%nReleases of locks nobody else takes, over %s: %d releases of %d locks%n%n",
-                          window, releases.values().stream().mapToInt(List::size).sum(), releases.size());
+        System.out.printf("%nReleases of locks nobody else takes: %d releases of %d locks, none in the %s after%n%n",
+                          releasesSoFar, releases.size(), window);
+    }
+
+    private static long lastRelease(Map<String, List<Long>> releases) {
+        return releases.values().stream().flatMap(List::stream).mapToLong(Long::longValue).max().orElse(Long.MIN_VALUE);
     }
 
     private void startManagers(boolean spreadLocks) {

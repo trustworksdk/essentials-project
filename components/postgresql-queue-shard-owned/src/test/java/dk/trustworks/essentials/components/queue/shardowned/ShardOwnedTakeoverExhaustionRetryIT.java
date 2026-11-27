@@ -65,7 +65,8 @@ import static org.awaitility.Awaitility.await;
  *     <li>A plain reconnect after the pass has run must not run it again: it would dead-letter a row this owner
  *     itself is delivering on its last attempt.</li>
  *     <li>The dead letter's text, and the cause the observer is given, must hold for a row a pull session failed
- *     before the takeover - the live lanes keep no error, so it cannot claim that no failure was ever recorded.</li>
+ *     before the takeover with no error stored on the row (a failure recorded by an older release, or by a caller of
+ *     {@code failSessionRow} without one), so it cannot claim that no failure was ever recorded.</li>
  * </ul>
  */
 @Testcontainers(disabledWithoutDocker = true)

@@ -307,8 +307,9 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                                                                                   return nextMessageReadyForDelivery;
                                                                               }
                                                                              )
-                                                                // TODO: In the future support configurable timeout
-//                                                                .timeout(Duration.ofSeconds(5))
+                                                                // No timeout here: a fetch on a stalled connection is bounded by the driver's socket timeout
+                                                                // (pgjdbc socketTimeout, MongoDB socketTimeoutMS), which also covers every other statement.
+                                                                // An optional per-consumer fetch timeout is on the roadmap (RW-6)
                                                                 .onErrorResume(throwable -> {
                                                                     if (isCriticalError(throwable)) {
                                                                         return Mono.error(throwable);

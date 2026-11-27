@@ -34,7 +34,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * {@link NotifyAwareEventStorePollingOptimizer} reads.
  * <p>
  * Constructed with the framework's shared {@link EventBus}. On construction it subscribes
- * an async event handler that:
+ * a <b>synchronous</b> event handler that:
  * <ul>
  *   <li>filters for {@link TableChangeNotification} events (the bus may carry other event
  *       types — durable-queue notifications, custom app events, etc.);</li>
@@ -47,8 +47,17 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * a notification for — that's the correct "no notify since the optimizer started"
  * baseline because the optimizer's {@code lastSeenEpoch} also starts at {@code 0L}.
  * <p>
+ * The handler is synchronous so that the epoch advances on the publishing thread - the
+ * {@code MultiTableChangeListener}'s poll thread - before the bus hands the notification to
+ * its asynchronous subscribers. An asynchronous handler shared the bus's multicast buffer with
+ * every other asynchronous subscriber, and that buffer moves at the pace of the slowest one: a
+ * slow application subscriber on the shared bus (in Spring the {@code EventStoreEventBus})
+ * held back every subscription wake-up behind it. The handler only increments a counter, so
+ * running it on the publishing thread costs that thread nothing noticeable; for every other
+ * event the bus carries it is a single {@code instanceof} check.
+ * <p>
  * Thread-safe by construction: the map and per-key counters are concurrent; the handler
- * runs on the bus's async scheduler; optimizer reads happen from per-subscription
+ * runs on the publishing thread; optimizer reads happen from per-subscription
  * scheduler threads. No external synchronization is required.
  * <p>
  * The collapse from "N notifications" to "epoch incremented N times" is fine — the
@@ -66,7 +75,7 @@ public final class NotifyEpochSource {
     public NotifyEpochSource(EventBus eventBus) {
         this.eventBus = requireNonNull(eventBus, "eventBus cannot be null");
         // Inline handler so we hold a reference for later unsubscribe. Anonymous-class
-        // handlers can't be used with EventBus#removeAsyncSubscriber (instance equality).
+        // handlers can't be used with EventBus#removeSyncSubscriber (instance equality).
         this.handler = event -> {
             if (event instanceof TableChangeNotification notification) {
                 String table = notification.getTableName();
@@ -81,8 +90,9 @@ public final class NotifyEpochSource {
                 }
             }
         };
-        eventBus.addAsyncSubscriber(this.handler);
-        log.info("NotifyEpochSource subscribed to EventBus for TableChangeNotification events");
+        // Synchronous: see the class Javadoc - an asynchronous handler waits for the slowest asynchronous subscriber on the bus
+        eventBus.addSyncSubscriber(this.handler);
+        log.info("NotifyEpochSource subscribed (synchronously) to EventBus for TableChangeNotification events");
     }
 
     /**
@@ -102,7 +112,7 @@ public final class NotifyEpochSource {
      */
     public void close() {
         try {
-            eventBus.removeAsyncSubscriber(handler);
+            eventBus.removeSyncSubscriber(handler);
             log.info("NotifyEpochSource unsubscribed from EventBus");
         } catch (Exception e) {
             log.debug("Failed to unsubscribe NotifyEpochSource handler (likely already removed) '{}'",

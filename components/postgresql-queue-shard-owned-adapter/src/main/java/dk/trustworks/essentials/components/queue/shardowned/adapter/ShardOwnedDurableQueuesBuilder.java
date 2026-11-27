@@ -65,7 +65,7 @@ public class ShardOwnedDurableQueuesBuilder {
     }
 
     /**
-     * Strongly recommended, and required from 0.61. Every enqueue runs inside
+     * Strongly recommended; a later 0.6x minor release will require it (N-15; 0.61.0 did not). Every enqueue runs inside
      * {@code unitOfWorkFactory.withUnitOfWork(...)} and is written on the {@code HandleAwareUnitOfWork}'s
      * connection, so it commits with the caller's own work — an Essentials {@code UnitOfWork}, or with a
      * Spring-aware factory (as the Spring Boot starter wires) a plain {@code @Transactional} /

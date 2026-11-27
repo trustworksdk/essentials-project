@@ -56,7 +56,8 @@ import static org.assertj.core.api.Assertions.*;
  * Committing the unit of work must complete the transaction - roll it back - and tell the caller its work was
  * discarded with an {@link UnexpectedRollbackException}, rather than leave the transaction and the unit of work bound
  * to the thread. The appended event was never committed, so it must never be handed to
- * {@link PersistedEventsCommitLifecycleCallback#afterCommit(EventStoreUnitOfWork, List)}.
+ * {@link PersistedEventsCommitLifecycleCallback#afterCommit(EventStoreUnitOfWork, List)}; it must be handed to
+ * {@link PersistedEventsCommitLifecycleCallback#afterRollback(EventStoreUnitOfWork, List)} instead.
  */
 @SpringBootTest
 @DirtiesContext
@@ -136,6 +137,9 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_RollbackOnlyIT {
         assertThat(unitOfWorkFactory.getCurrentUnitOfWork()).as("unit of work still bound to the thread").isEmpty();
         assertThat(TransactionSynchronizationManager.isActualTransactionActive()).as("transaction still bound to the thread").isFalse();
         assertThat(recordingCallback.afterCommitEvents).as("events handed to afterCommit").isEmpty();
+        assertThat(recordingCallback.afterRollbackEvents).as("events handed to afterRollback")
+                                                         .extracting(persistedEvent -> persistedEvent.aggregateId())
+                                                         .containsExactly(orderId);
         // The event stream is read lazily, so its presence is resolved inside the UnitOfWork
         var streamPersisted = unitOfWorkFactory.withUnitOfWork(uow -> eventStore.fetchStream(ORDERS, orderId).isPresent());
         assertThat(streamPersisted).as("the appended event was rolled back").isFalse();
@@ -150,7 +154,8 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_RollbackOnlyIT {
     }
 
     private static class RecordingPersistedEventsCommitLifecycleCallback implements PersistedEventsCommitLifecycleCallback {
-        private final List<PersistedEvent> afterCommitEvents = new CopyOnWriteArrayList<>();
+        private final List<PersistedEvent> afterCommitEvents   = new CopyOnWriteArrayList<>();
+        private final List<PersistedEvent> afterRollbackEvents = new CopyOnWriteArrayList<>();
 
         @Override
         public void beforeCommit(EventStoreUnitOfWork unitOfWork, List<PersistedEvent> persistedEvents) {
@@ -163,6 +168,7 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_RollbackOnlyIT {
 
         @Override
         public void afterRollback(EventStoreUnitOfWork unitOfWork, List<PersistedEvent> persistedEvents) {
+            afterRollbackEvents.addAll(persistedEvents);
         }
     }
 

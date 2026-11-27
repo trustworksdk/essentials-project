@@ -150,7 +150,8 @@ public final class ShardQueueSession implements QueueSession {
             // Fenced like the acknowledgement, so a superseded session cannot push out the visibility of
             // a row the shard's new holder is delivering.
             if (!storage.countAndScheduleRetryIfOwned(connection, ShardOwnedSchema.UNORDERED_TABLE, id.shard(), id.sequence(),
-                                                      1_000L, sessionId, fence.getAsLong())) {
+                                                      1_000L, sessionId, fence.getAsLong(),
+                                                      RowLeaseQueueSession.errorText(cause))) {
                 log.warn("Session {}: the failure of {} was not recorded - the session was superseded, or the message is gone",
                          sessionId, id);
                 return;

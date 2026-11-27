@@ -72,6 +72,12 @@ class ShardOwnedRowLeaseSessionIT {
         return new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, instanceId);
     }
 
+    private String lastErrorOf(MessageId id) throws Exception {
+        return SingleRowQueries.queryForString(dataSource, "Reading the stored last error of " + id,
+                                               "SELECT last_error FROM " + ShardOwnedSchema.UNORDERED_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ?",
+                                               QUEUE_ID, id.shard(), id.sequence());
+    }
+
     private List<Message> messages(int count, String prefix) {
         var messages = new ArrayList<Message>();
         for (var index = 0; index < count; index++) {
@@ -231,6 +237,20 @@ class ShardOwnedRowLeaseSessionIT {
                     assertThat(third).hasSize(1);
                     assertThat(third.getFirst().attempts()).isEqualTo(2);
                 }
+
+                assertThat(lastErrorOf(pulled.getFirst().id()))
+                        .as("the error of the latest failure is kept on the live row")
+                        .isEqualTo("java.lang.IllegalStateException: nope again");
+                assertThat(queue.lastError(pulled.getFirst().id()))
+                        .as("the by-id lookup reads the stored error")
+                        .contains("java.lang.IllegalStateException: nope again");
+                assertThat(queue.lastError(pulled.get(1).id()))
+                        .as("a message that has not failed has no error")
+                        .isEmpty();
+                var unknown = pulled.get(1).id();
+                assertThat(queue.lastError(new MessageId(unknown.lane(), unknown.shard(), unknown.sequence() + 1_000_000)))
+                        .as("an unknown id has no error")
+                        .isEmpty();
 
                 assertThat(session.acknowledge(pulled.subList(1, 3).stream()
                                                      .map(QueueSession.PulledMessage::id).toList())).isTrue();

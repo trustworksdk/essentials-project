@@ -1013,7 +1013,10 @@ What "processed" means per processor type:
   implement: transient-gap rows and the middles of wide gaps awaited in memory only - under CDC also one the running
   subscription found itself. An `EventStore` you write that decorates one of them must implement it and forward to
   its delegate, like `forgetGapMiddlesAwaitedInMemory` - `transientGapsReadFrom()` included, or a `CdcEventStore`
-  over it reads the transient gaps a second time (same answer, one extra lookup). Otherwise the check is off (one WARN per processor, logged
+  over it reads the transient gaps a second time (same answer, one extra lookup). Forward both or neither:
+  `transientGapsReadFrom()` may return a gap handler only if `isAwaitedAsGap` reads that handler's transient gaps on
+  every call; otherwise a `CdcEventStore` over it skips them, and `awaitProcessed` can report an event still awaited as
+  a gap as processed. When in doubt, return empty. A decorator that does not implement `AwaitedGapInspector` turns the check off (one WARN per processor, logged
   when it starts and worded "If you call awaitProcessed…"; a `CdcEventStore` over such a store WARNs once too and
   answers fully only while CDC is active), and an event that committed after a later one can be reported processed before its gap fill was
   handled.

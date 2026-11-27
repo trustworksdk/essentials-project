@@ -25,7 +25,7 @@ import static org.assertj.core.api.Assertions.*;
 
 /**
  * QL-3: the {@link RedeliveryPolicy} builders report every setting left out, naming the setter - and, in 0.60.x, still
- * build exactly what they built before (from 0.61 they will throw instead).
+ * build exactly what they built before (a later 0.6x minor release will make them throw instead).
  */
 class RedeliveryPolicyBuilderChecksTest {
     private static final Duration DELAY     = Duration.ofMillis(100);

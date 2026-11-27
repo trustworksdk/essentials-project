@@ -202,7 +202,13 @@ public interface Outboxes {
             private              Consumer<Message> messageConsumer;
             public final QueueName            outboxQueueName;
             public final OutboxConfig         config;
-            private      DurableQueueConsumer durableQueueConsumer;
+            private volatile DurableQueueConsumer durableQueueConsumer;
+            /**
+             * Taken by both {@link LockCallback} methods of the {@link MessageConsumptionMode#SingleGlobalConsumer} mode, so
+             * a <code>lockReleased</code> that runs before a still-running <code>lockAcquired</code> (possible during a shutdown,
+             * see {@link LockCallback}) is seen by it
+             */
+            private final    Object               lockCallbackMonitor = new Object();
 
             public DurableQueueBasedOutbox(OutboxConfig config,
                                            Consumer<Message> messageConsumer) {
@@ -279,17 +285,27 @@ public interface Outboxes {
                         fencedLockManager.acquireLockAsync(config.outboxName.asLockName(),
                                                            LockCallback.builder()
                                                                        .onLockAcquired(lock -> {
-                                                                           log.info("FencedLock '{}' for Outbox '{}' was ACQUIRED - will start Exclusive DurableQueueConsumer", lockName, config.outboxName);
-                                                                           durableQueueConsumer = consumeFromDurableQueue(lock);
-                                                                           log.info("Exclusive DurableQueueConsumer for Outbox '{}': {}", config.outboxName, durableQueueConsumer);
+                                                                           synchronized (lockCallbackMonitor) {
+                                                                               // During a shutdown lockReleased can run before this callback (see
+                                                                               // LockCallback): a consumer started now would run without the lock
+                                                                               if (!lock.isLocked()) {
+                                                                                   log.info("FencedLock '{}' for Outbox '{}' was released before lockAcquired ran - not starting the Exclusive DurableQueueConsumer", lockName, config.outboxName);
+                                                                                   return;
+                                                                               }
+                                                                               log.info("FencedLock '{}' for Outbox '{}' was ACQUIRED - will start Exclusive DurableQueueConsumer", lockName, config.outboxName);
+                                                                               durableQueueConsumer = consumeFromDurableQueue(lock);
+                                                                               log.info("Exclusive DurableQueueConsumer for Outbox '{}': {}", config.outboxName, durableQueueConsumer);
+                                                                           }
                                                                        })
                                                                        .onLockReleased(lock -> {
-                                                                           if (durableQueueConsumer != null) {
-                                                                               log.info("FencedLock '{}' for Outbox '{}' was RELEASED - will stop Exclusive DurableQueueConsumer: {}", lockName, config.outboxName, durableQueueConsumer);
-                                                                               durableQueueConsumer.cancel();
-                                                                               log.info("Stopped Exclusive DurableQueueConsumer for Outbox '{}': {}", config.outboxName, durableQueueConsumer);
-                                                                           } else {
-                                                                               log.warn("FencedLock '{}' for Outbox '{}' was RELEASED - didn't find an Exclusive DurableQueueConsumer!", lockName, config.outboxName);
+                                                                           synchronized (lockCallbackMonitor) {
+                                                                               if (durableQueueConsumer != null) {
+                                                                                   log.info("FencedLock '{}' for Outbox '{}' was RELEASED - will stop Exclusive DurableQueueConsumer: {}", lockName, config.outboxName, durableQueueConsumer);
+                                                                                   durableQueueConsumer.cancel();
+                                                                                   log.info("Stopped Exclusive DurableQueueConsumer for Outbox '{}': {}", config.outboxName, durableQueueConsumer);
+                                                                               } else {
+                                                                                   log.warn("FencedLock '{}' for Outbox '{}' was RELEASED - didn't find an Exclusive DurableQueueConsumer!", lockName, config.outboxName);
+                                                                               }
                                                                            }
                                                                        })
                                                                        .build());

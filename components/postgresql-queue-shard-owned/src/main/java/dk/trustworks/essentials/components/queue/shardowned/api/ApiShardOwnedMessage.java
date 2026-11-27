@@ -48,6 +48,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param visibleAt         when the message becomes eligible for delivery; {@code null} for a dead letter,
  *                          which is not eligible at all
  * @param isDeadLetter      whether this was read from the dead-letter table rather than from a lane
+ * @param lastError         a dead letter's recorded error; for a live message read by id, the error of its latest
+ *                          recorded failure ({@code MessageQueue.lastError}), {@code null} when none was recorded;
+ *                          always {@code null} for a live message in a list
  * @param blockedByKeyOrder for a dead letter that was never delivered, the {@code key_order} of the
  *                          message whose failure stopped its key; {@code null} for anything else, including
  *                          a dead letter that was itself tried and failed. An operator cannot tell those
@@ -77,6 +80,13 @@ public record ApiShardOwnedMessage(String id,
     }
 
     public static ApiShardOwnedMessage from(QueueName queueName, QueuedMessage message, boolean includePayload) {
+        return from(queueName, message, null, includePayload);
+    }
+
+    /**
+     * @param lastError the live message's stored error - {@code MessageQueue.lastError(MessageId)} - or {@code null}
+     */
+    public static ApiShardOwnedMessage from(QueueName queueName, QueuedMessage message, String lastError, boolean includePayload) {
         requireNonNull(queueName, "No queueName provided");
         requireNonNull(message, "No message provided");
         return new ApiShardOwnedMessage(message.id().toString(),
@@ -91,7 +101,7 @@ public record ApiShardOwnedMessage(String id,
                                         atOffset(message.enqueuedAt()),
                                         atOffset(message.visibleAt()),
                                         false,
-                                        null,
+                                        lastError,
                                         null);
     }
 

@@ -420,7 +420,7 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
 
     /**
      * Enable NOTIFY-driven polling wake-up (S1) for this persistence strategy. Called by
-     * Spring autoconfig when {@code essentials.eventstore.subscription.notify-polling.enabled=true}.
+     * Spring autoconfig when {@code essentials.eventstore.subscription-manager.notify-polling.enabled=true}.
      * <p>
      * Two-phase: the installer is invoked once-per-already-registered-aggregate (the
      * start-of-day sweep) and then for every subsequently-registered aggregate via

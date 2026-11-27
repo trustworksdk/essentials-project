@@ -508,6 +508,14 @@ Lock Acquisitions Over Time:
 > Instance A's `FencedLockManager` will then release the lock locally and notify any registered `LockCallback`.  
 > At this point, only Instance B remains the active lock holder.
 
+**A lost lock can be won straight back.** Instance B is not guaranteed to be the one that takes over. After a database
+outage longer than `lockTimeOut`, Instance A is told it lost the lock (`lockReleased`), but if it acquired the lock with
+`acquireLockAsync`, that registration keeps running, and its next acquire tick competes with Instance B for the expired
+lock. Either instance can win. Whichever does holds the lock under the **next fence token** (43 above, even when the
+winner is Instance A), so anything still running under token 42 is rejected downstream all the same. Do not read
+`lockReleased` as "another instance holds the lock now", and make your `LockCallback` handle `lockAcquired` again after
+`lockReleased`.
+
 ### Using Fence Tokens for Stale Lock Detection
 
 **Pass the fence token to all downstream operations**, then validate it before performing work:
@@ -637,7 +645,7 @@ lockManager.acquireLockAsync(LockName.of("ScheduledTask"), new LockCallback() {
 });
 ```
 
-A `stop()` of a database-backed lock manager (`PostgresqlFencedLockManager`, `MongoFencedLockManager`) cancels each async acquiring but keeps its registration (the lock name and its `LockCallback`), and its `start()` resumes every registration not cancelled with `cancelAsyncLockAcquiring`, logging each one at WARN. Call `cancelAsyncLockAcquiring(lockName)` in your component's own stop, or the next `start()` gives the lock to the old callback again. A component recreated across the `stop()`/`start()` may call `acquireLockAsync` again: while the lock manager is started, one with another callback for a registration a `stop()` kept replaces it, as `cancelAsyncLockAcquiring` followed by `acquireLockAsync` would (the lock, when this instance holds it, is released first, which calls `lockReleased` on the callbacks registered with it), and one with the kept callback itself, or for a lock name registered since the last `start()`, does nothing. While it is stopped, a call with another callback replaces the kept one and `start()` schedules it; a call for a lock name with no registration registers nothing.
+A `stop()` of a database-backed lock manager (`PostgresqlFencedLockManager`, `MongoFencedLockManager`) cancels each async acquiring but keeps its registration (the lock name and its `LockCallback`), and its `start()` resumes every registration not cancelled with `cancelAsyncLockAcquiring`, logging each one at WARN (at INFO when the start follows an ended lock confirmation, the documented recovery). Call `cancelAsyncLockAcquiring(lockName)` in your component's own stop, or the next `start()` gives the lock to the old callback again. A component recreated across the `stop()`/`start()` may call `acquireLockAsync` again: while the lock manager is started, one with another callback for a registration a `stop()` kept replaces it, as `cancelAsyncLockAcquiring` followed by `acquireLockAsync` would (the lock, when this instance holds it, is released first, which calls `lockReleased` on every callback registered with the lock, the old callback included when its resumed acquiring acquired it; any other caller in this JVM holding the same lock loses it too, see [Ownership is per lock-manager instance](#ownership-is-per-lock-manager-instance-not-per-caller-or-thread); after that the old callback is not called again, and a failure of that release, such as a throwing `lockReleased`, is logged and the new callback is registered all the same, while a critical error is rethrown), and one with the kept callback itself, or for a lock name registered since the last `start()`, does nothing. While it is stopped, a call with another callback replaces the kept one and `start()` schedules it; a call for a lock name with no registration registers nothing (logged at WARN).
 
 ### Ownership is per lock-manager instance, not per caller or thread
 

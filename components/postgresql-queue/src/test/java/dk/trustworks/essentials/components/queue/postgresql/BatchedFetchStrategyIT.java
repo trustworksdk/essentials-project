@@ -540,6 +540,70 @@ class BatchedFetchStrategyIT {
         // genuine race, and a fast instance legitimately drains every queue before the other one polls.
     }
 
+    /**
+     * The batched fetch under real contention: four threads, two per instance, run the batched claim against the same
+     * table at the same time until every message is claimed. The end-to-end test above cannot guarantee that two claims
+     * ever overlap (one instance may drain everything before the other polls); this one makes them overlap, so a claim
+     * that does not lock its rows (<code>FOR UPDATE SKIP LOCKED</code>) hands the same message to two callers.
+     * <p>
+     * Overlapping claims legitimately come back empty: every caller picks the same oldest candidates, one locks them and
+     * the rest skip them. So the polling backoff is switched off - with it, one empty claim parks that queue on that
+     * instance for longer than the test runs (its polling interval is an hour), and the claims stop with messages left.
+     * For the same reason a fetcher stops when every message has been claimed, not after a run of empty claims.
+     */
+    @Test
+    void concurrent_batched_fetches_from_two_instances_never_claim_the_same_message_twice() throws Exception {
+        var messagesPerQueue = 300;
+        var durableQueues1   = newDurableQueuesWithoutPollingBackoff();
+        var queueNames       = registerQueues(durableQueues1, QUEUE_COUNT_ABOVE_THRESHOLD);
+        var durableQueues2   = newDurableQueuesWithoutPollingBackoff();
+        registerQueues(durableQueues2, queueNames);
+        var expectedCount = 0;
+        for (var queueName : queueNames) {
+            for (int i = 0; i < messagesPerQueue; i++) {
+                durableQueues1.queueMessage(queueName, Message.of("message-" + queueName + "-" + i));
+                expectedCount++;
+            }
+        }
+
+        var claimed       = new ConcurrentLinkedQueue<QueueEntryId>();
+        var start         = new java.util.concurrent.CountDownLatch(1);
+        var executor      = java.util.concurrent.Executors.newFixedThreadPool(4);
+        var allClaimedBy  = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        var totalExpected = expectedCount;
+        try {
+            var fetchers = new ArrayList<java.util.concurrent.Future<?>>();
+            for (var durableQueues : List.of(durableQueues1, durableQueues1, durableQueues2, durableQueues2)) {
+                fetchers.add(executor.submit(() -> {
+                    start.await();
+                    // A claim lost to SKIP LOCKED is empty although messages are left, so stop on the count, not on
+                    // empty claims. A claim that hands out a message twice reaches the count early; the assertions
+                    // below catch that, and a message never handed out shows as a short count at the deadline.
+                    while (claimed.size() < totalExpected && System.nanoTime() < allClaimedBy) {
+                        var messages = durableQueues.fetchNextBatchOfMessagesBatched(queueNames, Map.of(), slotsFor(queueNames, 8));
+                        if (messages.isEmpty()) {
+                            Thread.sleep(1);
+                        } else {
+                            messages.forEach(message -> claimed.add(message.getId()));
+                        }
+                    }
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (var fetcher : fetchers) {
+                fetcher.get(60, java.util.concurrent.TimeUnit.SECONDS);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(claimed)
+                .as("Competing batched fetches must never claim the same message twice")
+                .doesNotHaveDuplicates();
+        assertThat(claimed).hasSize(expectedCount);
+    }
+
     // ------------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------------
@@ -601,7 +665,22 @@ class BatchedFetchStrategyIT {
     }
 
     private PostgresqlDurableQueues newDurableQueues(int batchedFetchSwitchThreshold, Duration pollingInterval) {
+        return newDurableQueues(batchedFetchSwitchThreshold, pollingInterval, null);
+    }
+
+    /**
+     * For tests that drive {@link PostgresqlDurableQueues#fetchNextBatchOfMessagesBatched} by hand: an empty claim does
+     * not back the queue off, so the next call claims again rather than returning empty without asking the database.
+     */
+    private PostgresqlDurableQueues newDurableQueuesWithoutPollingBackoff() {
+        return newDurableQueues(BATCHED_FETCH_SWITCH_THRESHOLD, NON_INTERFERING_POLLING_INTERVAL, queueName -> QueuePollingOptimizer.None());
+    }
+
+    private PostgresqlDurableQueues newDurableQueues(int batchedFetchSwitchThreshold,
+                                                     Duration pollingInterval,
+                                                     java.util.function.Function<QueueName, QueuePollingOptimizer> pollingOptimizerFactory) {
         var durableQueues = PostgresqlDurableQueues.builder()
+                                                   .setCentralizedQueuePollingOptimizerFactory(pollingOptimizerFactory)
                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
                                                    .setUseCentralizedMessageFetcher(true)
                                                    // Batched fetching is opt-in in production; every test here is about that path

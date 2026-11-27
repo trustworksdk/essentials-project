@@ -230,7 +230,7 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
 
             fencedLockManager.acquireLockAsync(lockName,
                                                LockCallback.builder()
-                                                           .onLockAcquired(lock -> onLockAcquired(processorName, subscribeToEventsRelatedTo))
+                                                           .onLockAcquired(lock -> onLockAcquired(processorName, subscribeToEventsRelatedTo, lock))
                                                            .onLockReleased(lock -> onLockReleased(processorName))
                                                            .build());
         }, () -> {
@@ -242,8 +242,14 @@ public abstract class PartitionedViewEventProcessor extends AbstractEventProcess
         }, () -> started = false);
     }
 
-    private void onLockAcquired(String processorName, List<AggregateType> subscribeToEventsRelatedTo) {
+    private void onLockAcquired(String processorName, List<AggregateType> subscribeToEventsRelatedTo, FencedLock lock) {
         synchronized (lockCallbackMonitor) {
+            // During a shutdown the lock manager can release the lock, and call lockReleased, before this callback runs (see
+            // LockCallback): a reader subscribed now would forward events without the lock, after stop()
+            if (!started || !lock.isLocked()) {
+                logger.info("FencedLock '{}' for PartitionedViewEventProcessor '{}' was released, or the processor stopped, before lockAcquired ran - not subscribing the reader", lockName, processorName);
+                return;
+            }
             logger.info("FencedLock '{}' for PartitionedViewEventProcessor '{}' was ACQUIRED - will read the events and forward them to '{}'", lockName, processorName, durableQueueName);
             // A failing subscribe unsubscribes the ones before it and throws: the lock manager releases the lock and it is acquired again later
             var forwardBatchSize = Math.max(1, getForwardBatchSize());

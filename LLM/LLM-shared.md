@@ -1031,6 +1031,7 @@ Type getGenericType()
 
 // Static utility
 static Class<?> resolveGenericTypeOnSuperClass(Class<?> concreteType, int genericTypeArgumentIndex)
+static Optional<Class<?>> resolveTypeArgument(Class<?> forType, Class<?> genericSupertype, int typeArgumentIndex) // since 0.61.1
 
 // Usage - Capture parameterized type
 var genericType = new GenericType<List<Money>>(){};
@@ -1042,6 +1043,14 @@ class ConcreteClass extends GenericClass<String, Integer> {}
 
 Class<?> firstType = GenericType.resolveGenericTypeOnSuperClass(ConcreteClass.class, 0);
 // Returns: String.class
+
+// Resolve a type argument of any generic superclass or interface, anywhere in the hierarchy (superclasses,
+// sub-interfaces, type variables passed on through generic base classes); empty when nothing binds it to a type
+class Order extends AggregateRoot<OrderId, OrderEvent, Order> implements WithState<OrderId, OrderEvent, Order, OrderState> {}
+class SpecialOrder extends Order {}
+
+Optional<Class<?>> stateType = GenericType.resolveTypeArgument(SpecialOrder.class, WithState.class, 3);
+// Returns: Optional[OrderState.class] - resolveGenericTypeForInterface only reads the type's own interfaces and throws here
 ```
 
 ### Network

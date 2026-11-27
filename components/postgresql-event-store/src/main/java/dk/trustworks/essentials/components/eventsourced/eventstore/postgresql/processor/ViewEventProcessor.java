@@ -197,6 +197,12 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
     private void onLockAcquired(String processorName, List<AggregateType> subscribeToEventsRelatedTo, FencedLock lock) {
         // Under the monitor, so a release delivered meanwhile waits and then finds the consumer and every subscription - see lockCallbackMonitor
         synchronized (lockCallbackMonitor) {
+            // During a shutdown the lock manager can release the lock, and call lockReleased, before this callback runs (see
+            // LockCallback): a consumer and subscriptions started now would run without the lock, after stop()
+            if (!started || !lock.isLocked()) {
+                logger.info("FencedLock '{}' for ViewProcessor '{}' was released, or the processor stopped, before lockAcquired ran - not starting the Exclusive DurableQueueConsumer or any subscription", lockName, processorName);
+                return;
+            }
             logger.info("FencedLock '{}' for ViewProcessor '{}' with DurableQueue '{}' was ACQUIRED - will start Exclusive DurableQueueConsumer", lockName, processorName, durableQueueName);
             startSubscribersAndDurableConsumer(processorName, subscribeToEventsRelatedTo, lock);
             logger.info("Exclusive DurableQueueConsumer for Queue '{}': {}", durableQueueName, durableQueueConsumer);

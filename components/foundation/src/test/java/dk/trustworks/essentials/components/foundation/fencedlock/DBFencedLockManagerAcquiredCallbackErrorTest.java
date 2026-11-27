@@ -331,6 +331,98 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
         }
     }
 
+    /**
+     * A builder-made callback is an anonymous class: the resume WARN names it by its <code>toString()</code>, which names the
+     * consumers - and so the class that created them - rather than <code>LockCallback$1</code> alone (RW-15)
+     */
+    @Test
+    void start_names_a_builder_made_callback_by_the_class_that_created_it() {
+        var acquiredCalls = new AtomicInteger();
+        node.acquireLockAsync(LOCK_NAME, LockCallback.builder()
+                                                     .onLockAcquired(lock -> acquiredCalls.incrementAndGet())
+                                                     .onLockReleased(lock -> {
+                                                     })
+                                                     .build());
+        Awaitility.waitAtMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(acquiredCalls.get()).isEqualTo(1));
+
+        node.stop();
+        var logEvents = captureLockManagerLog();
+        try {
+            node.start();
+
+            assertThat(logEvents.list.stream()
+                                     .filter(event -> event.getLevel() == Level.WARN)
+                                     .map(ILoggingEvent::getFormattedMessage)
+                                     .filter(message -> message.contains("Resuming async lock acquiring"))
+                                     .toList())
+                    .singleElement()
+                    .satisfies(message -> assertThat(message).contains(DBFencedLockManagerAcquiredCallbackErrorTest.class.getName()));
+        } finally {
+            detachLockManagerLog(logEvents);
+        }
+    }
+
+    /**
+     * A call made while the lock manager is stopped, for a lock name with no kept registration, registers nothing: the next
+     * start() does not acquire the lock for it. It is logged at WARN, so the lost call is visible (RW-12)
+     */
+    @Test
+    void an_async_acquiring_requested_while_the_lock_manager_is_stopped_is_logged_at_warn_and_not_acquired_by_its_start() {
+        node.stop();
+        var callback  = new CountingLockCallback();
+        var logEvents = captureLockManagerLog();
+        try {
+            node.acquireLockAsync(LOCK_NAME, callback);
+
+            assertThat(logEvents.list.stream()
+                                     .filter(event -> event.getLevel() == Level.WARN)
+                                     .map(ILoggingEvent::getFormattedMessage)
+                                     .filter(message -> message.contains("ignoring async lock acquiring for lock '" + LOCK_NAME + "'"))
+                                     .toList())
+                    .singleElement()
+                    .satisfies(message -> assertThat(message).contains("also not after start()"));
+        } finally {
+            detachLockManagerLog(logEvents);
+        }
+
+        node.start();
+        Awaitility.await()
+                  .during(Duration.ofMillis(500))
+                  .atMost(Duration.ofSeconds(3))
+                  .untilAsserted(() -> assertThat(callback.acquired.get()).isZero());
+    }
+
+    /**
+     * Only the instance the acquire returned releases the lock. Releasing the copy lookupLock returns releases nothing,
+     * and is logged at WARN (RW-16)
+     */
+    @Test
+    @SuppressWarnings("PMD.CloseResource") // the held lock is released at the end of the test
+    void releasing_the_lookupLock_copy_of_a_held_lock_releases_nothing_and_is_logged_at_warn() {
+        var heldLock = node.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var copy     = node.lookupLock(LOCK_NAME).orElseThrow();
+        assertThat(copy).isNotSameAs(heldLock);
+
+        var logEvents = captureLockManagerLog();
+        try {
+            copy.release();
+
+            assertThat(logEvents.list.stream()
+                                     .filter(event -> event.getLevel() == Level.WARN)
+                                     .map(ILoggingEvent::getFormattedMessage)
+                                     .filter(message -> message.contains("Not releasing lock '" + LOCK_NAME + "'"))
+                                     .toList())
+                    .hasSize(1);
+        } finally {
+            detachLockManagerLog(logEvents);
+        }
+        assertThat(heldLock.isLocked()).isTrue();
+        assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isTrue();
+
+        heldLock.release();
+        assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isFalse();
+    }
+
     @Test
     void an_async_acquiring_cancelled_while_the_lock_manager_is_stopped_is_not_resumed_by_its_start() {
         var acquiredCalls = new AtomicInteger();
@@ -444,6 +536,58 @@ class DBFencedLockManagerAcquiredCallbackErrorTest {
                   });
         assertThat(callback.released.get()).isZero();
         storage.blockedLookupGate = null;
+        assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isFalse();
+        assertThat(events).filteredOn(LockReleased.class::isInstance).hasSize(1);
+    }
+
+    /**
+     * The other side of the race in
+     * {@link #an_async_acquiring_cancelled_while_its_tick_acquires_the_lock_releases_the_lock_and_does_not_call_lock_acquired()}:
+     * the cancel lands after the tick has recorded the lock, so the cancel finds the lock and releases it, and the tick
+     * then finds its registration gone and releases it too. The cancel is started from the lock manager's
+     * <code>LockAcquired</code> event, which the tick publishes while it holds the lock manager's lock, and the event
+     * subscriber returns only once the cancel waits for that lock. Both release; only the first local release may announce
+     * it, and the cancelled callback is never called.
+     */
+    @Test
+    void an_async_acquiring_cancelled_after_its_tick_recorded_the_lock_is_released_once_and_its_callback_is_not_called() throws Exception {
+        var callback       = new CountingLockCallback();
+        var cancelFailure  = new AtomicReference<Throwable>();
+        var cancellingThread = new AtomicReference<Thread>();
+        eventSubscriberAction = event -> {
+            if (event instanceof FencedLockEvents.LockAcquired && cancellingThread.get() == null) {
+                var thread = new Thread(() -> {
+                    try {
+                        node.cancelAsyncLockAcquiring(LOCK_NAME);
+                    } catch (Throwable e) {
+                        cancelFailure.set(e);
+                    }
+                }, "cancel-after-the-lock-was-recorded");
+                cancellingThread.set(thread);
+                thread.start();
+                // The cancel has removed the registration, found the recorded lock and waits for the lock manager's lock,
+                // which this tick holds, to release it
+                Awaitility.waitAtMost(Duration.ofSeconds(5))
+                          .until(() -> node.reentrantLockForTests().hasQueuedThread(thread));
+            }
+        };
+
+        node.acquireLockAsync(LOCK_NAME, callback);
+
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .until(() -> cancellingThread.get() != null);
+        cancellingThread.get().join(Duration.ofSeconds(5));
+        assertThat(cancellingThread.get().isAlive()).isFalse();
+        assertThat(cancelFailure.get()).isNull();
+        Awaitility.await()
+                  .during(Duration.ofMillis(500))
+                  .atMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(storage.rows.get(LOCK_NAME)).isNotNull();
+                      assertThat(storage.rows.get(LOCK_NAME).lockedBy()).isNull();
+                      assertThat(callback.acquired.get()).isZero();
+                      assertThat(callback.released.get()).isZero();
+                  });
         assertThat(node.isLockedByThisLockManagerInstance(LOCK_NAME)).isFalse();
         assertThat(events).filteredOn(LockReleased.class::isInstance).hasSize(1);
     }

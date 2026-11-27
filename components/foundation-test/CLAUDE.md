@@ -4,6 +4,8 @@ Reusable abstract IT base classes for testing `foundation` module implementation
 
 All classes live in `src/main/java` — shipped as a test-support library consumed by DB-specific modules (postgresql, mongodb, etc.), not a standalone test module.
 
+The module's own `src/test/java` also holds a few of `foundation`'s tests: the ones that need a test double from this module, such as `ShutdownOverlapFencedLockManager`. They keep their `foundation` packages and live here because foundation-test depends on foundation, so foundation's test tree cannot see this module's classes. These are `DurableQueueInboxesTest`, `DurableQueueOutboxesTest` and `EssentialsSchedulerShutdownOverlapIT` (the shutdown-overlap cases split out of foundation's `EssentialsSchedulerIT_WithExecutor`).
+
 ## Package Structure
 
 - `...foundation.test.fencedlock` — abstract ITs for `DBFencedLockManager` implementations
@@ -34,7 +36,7 @@ All classes live in `src/main/java` — shipped as a test-support library consum
 
 ## Test Structure
 
-- All ITs are `abstract` — no `@SpringBootTest`, no Testcontainers here. DB setup is delegated to subclass.
+- All ITs in `src/main/java` are `abstract` — no `@SpringBootTest`, no Testcontainers there. DB setup is delegated to subclass.
 - Subclass provides: factory methods (`createDurableQueues`, `createUnitOfWorkFactory`, `resetQueueStorage`, `createLockManagerNode1/2`, etc.).
 - `@BeforeEach` calls factory methods then starts the SUT; `@AfterEach` stops and nulls.
 - Awaitility used for async assertions; typical timeouts 2–10 s.

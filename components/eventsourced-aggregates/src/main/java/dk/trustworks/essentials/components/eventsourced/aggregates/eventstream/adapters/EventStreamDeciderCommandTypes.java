@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.adapters;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamDecider;
+import dk.trustworks.essentials.shared.types.GenericType;
 
 import java.lang.reflect.*;
 import java.util.*;
@@ -31,8 +32,9 @@ import java.util.*;
  * {@link EventStreamDeciderAndAggregateTypeConfigurator} and the aggregate type routing of
  * {@link dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType}
  *
- * @deprecated internal; it was never meant to be called by an application, and it becomes package-private once a
- * general type-argument resolver in {@code shared} replaces it
+ * @deprecated internal; it was never meant to be called by an application. Use
+ * {@link GenericType#resolveTypeArgument(Class, Class, int)} instead; this class becomes package-private in a later
+ * minor release
  */
 @Deprecated(forRemoval = true, since = "0.60.1")
 public final class EventStreamDeciderCommandTypes {
@@ -64,54 +66,7 @@ public final class EventStreamDeciderCommandTypes {
      * {@link EventStreamDecider} with type arguments
      */
     public static Optional<Class<?>> resolveCommandTypeArgument(Class<?> deciderType) {
-        return findCommandTypeArgument(deciderType, Map.of(), new HashSet<>())
-                .map(commandTypeArgument -> {
-                    if (commandTypeArgument instanceof Class<?> commandType) {
-                        return commandType;
-                    }
-                    if (commandTypeArgument instanceof ParameterizedType parameterizedCommandType && parameterizedCommandType.getRawType() instanceof Class<?> commandType) {
-                        return commandType;
-                    }
-                    return null;
-                });
-    }
-
-    private static Optional<Type> findCommandTypeArgument(Class<?> type, Map<TypeVariable<?>, Type> bindings, Set<Class<?>> visited) {
-        if (type == null || type == Object.class || !visited.add(type)) {
-            return Optional.empty();
-        }
-        var supertypes = new ArrayList<Type>(Arrays.asList(type.getGenericInterfaces()));
-        if (type.getGenericSuperclass() != null) {
-            supertypes.add(type.getGenericSuperclass());
-        }
-        for (var supertype : supertypes) {
-            if (supertype instanceof ParameterizedType parameterized && parameterized.getRawType() instanceof Class<?> rawType) {
-                var arguments = parameterized.getActualTypeArguments();
-                if (rawType == EventStreamDecider.class) {
-                    var argument = arguments[0];
-                    while (argument instanceof TypeVariable<?> variable && bindings.containsKey(variable)) {
-                        argument = bindings.get(variable);
-                    }
-                    return Optional.of(argument);
-                }
-                var typeParameters = rawType.getTypeParameters();
-                var nextBindings = new HashMap<TypeVariable<?>, Type>();
-                for (int i = 0; i < typeParameters.length && i < arguments.length; i++) {
-                    var argument = arguments[i];
-                    nextBindings.put(typeParameters[i], argument instanceof TypeVariable<?> variable && bindings.containsKey(variable) ? bindings.get(variable) : argument);
-                }
-                var found = findCommandTypeArgument(rawType, nextBindings, visited);
-                if (found.isPresent()) {
-                    return found;
-                }
-            } else if (supertype instanceof Class<?> rawType && rawType != EventStreamDecider.class) {
-                var found = findCommandTypeArgument(rawType, Map.of(), visited);
-                if (found.isPresent()) {
-                    return found;
-                }
-            }
-        }
-        return Optional.empty();
+        return GenericType.resolveTypeArgument(deciderType, EventStreamDecider.class, 0);
     }
 
     /**

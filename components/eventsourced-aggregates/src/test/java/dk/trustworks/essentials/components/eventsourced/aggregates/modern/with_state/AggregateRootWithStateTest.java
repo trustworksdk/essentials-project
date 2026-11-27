@@ -24,6 +24,35 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class AggregateRootWithStateTest {
+    /**
+     * A subclass of a concrete aggregate: it declares no {@link WithState} itself, so the state type has to be found
+     * through its superclass (RW-5)
+     */
+    public static class SpecialOrder extends Order {
+        public SpecialOrder(OrderId orderId) {
+            super(orderId);
+        }
+
+        public SpecialOrder(OrderId orderId, CustomerId orderingCustomerId, int orderNumber) {
+            super(orderId, orderingCustomerId, orderNumber);
+        }
+    }
+
+    @Test
+    void a_subclass_of_a_concrete_aggregate_resolves_the_state_type_of_its_superclass() {
+        var orderId   = OrderId.random();
+        var productId = ProductId.random();
+
+        var aggregate = new SpecialOrder(orderId, CustomerId.random(), 123);
+        aggregate.addProduct(productId, 2);
+
+        assertThat(aggregate.state()).isInstanceOf(OrderState.class);
+        assertThat(aggregate.state().productAndQuantity.get(productId)).isEqualTo(2);
+
+        var rehydrated = new SpecialOrder(orderId).rehydrate(aggregate.getUncommittedChanges().stream());
+        assertThat(rehydrated.state().productAndQuantity.get(productId)).isEqualTo(2);
+    }
+
     @Test
     void verify_markChangesAsCommitted_resets_uncomittedChanges() {
         // Given

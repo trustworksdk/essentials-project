@@ -112,6 +112,50 @@ class ShardOwnedFailurePathIT {
     }
 
     @Test
+    void a_retried_unordered_message_keeps_the_error_of_its_failed_delivery_on_its_live_row() throws Exception {
+        try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
+            // A backoff far longer than the test, so the row is read while it waits for its retry
+            queue.startConsuming((messageId, payload, payloadType) -> {
+                throw new IllegalStateException("wrapper", new IllegalArgumentException("the real reason"));
+            }, ShardOwnerSettings.defaults(), SHARD_COUNT, RedeliveryPolicy.fixed(Duration.ofMinutes(5), 3));
+
+            queue.enqueue(List.of(bytes("failing")), 1);
+
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .until(() -> liveAttempts(ShardOwnedSchema.UNORDERED_TABLE) == 1);
+            assertThat(liveLastError(ShardOwnedSchema.UNORDERED_TABLE))
+                    .isEqualTo(DeliveryErrorText.describe(new IllegalStateException("wrapper", new IllegalArgumentException("the real reason"))))
+                    .contains("IllegalArgumentException: the real reason", "IllegalStateException: wrapper");
+        }
+    }
+
+    @Test
+    void a_retried_ordered_message_keeps_the_error_of_its_failed_delivery_on_its_live_row() throws Exception {
+        try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
+            queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
+                throw new IllegalStateException("wrapper", new IllegalArgumentException("the real reason"));
+            }, ShardOwnerSettings.defaults(), SHARD_COUNT, RedeliveryPolicy.fixed(Duration.ofMinutes(5), 3));
+
+            queue.enqueueOrdered(List.of(new OrderedPayload("key-1", 0, bytes("failing"), 1, Duration.ZERO)));
+
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .until(() -> liveAttempts(ShardOwnedSchema.ORDERED_TABLE) == 1);
+            assertThat(liveLastError(ShardOwnedSchema.ORDERED_TABLE))
+                    .contains("IllegalArgumentException: the real reason", "IllegalStateException: wrapper");
+        }
+    }
+
+    private int liveAttempts(String table) throws Exception {
+        return SingleRowQueries.queryForInt(dataSource, "Reading the stored attempts of the one message in " + table,
+                                            "SELECT coalesce(max(attempts), 0) FROM " + table);
+    }
+
+    private String liveLastError(String table) throws Exception {
+        return SingleRowQueries.queryForString(dataSource, "Reading the stored last error of the one message in " + table,
+                                               "SELECT last_error FROM " + table);
+    }
+
+    @Test
     void a_requested_redelivery_is_delivered_after_the_requested_delay_and_never_dead_lettered() throws Exception {
         // Five requests against a policy that allows three attempts, with a backoff far longer than the test:
         // a request treated as a failure would either be parked or not come back in time

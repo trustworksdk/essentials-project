@@ -519,8 +519,8 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
             // Parked before the blocks are read below, so its key is blocked from the first dispatch
             for (var seq : storage.exhaustedAfterTakeover(connection, ShardOwnedSchema.ORDERED_TABLE, shard,
                                                            redeliveryPolicy.maxAttempts())) {
-                if (storage.moveToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, seq,
-                                                    ShardOwnedStorage.EXHAUSTED_BY_TAKEOVERS, instanceId, fence)) {
+                if (storage.moveExhaustedByTakeoversToDeadLetterIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, seq,
+                                                                        instanceId, fence)) {
                     // Counted before the observer is told: the move has committed, so an observer that throws must not
                     // take the count with it - no later pass finds the row to move again.
                     metrics.deadLettered.increment();
@@ -1117,7 +1117,7 @@ final class OrderedShardOwner implements BatchReadableOwner, HorizonProbingOwner
             }
             var delay = redeliveryPolicy.delayAfter(attempts);
             if (!storage.scheduleRetryIfOwned(connection, ShardOwnedSchema.ORDERED_TABLE, shard, row.seq(), attempts,
-                                              delay.toMillis(), instanceId, fence)
+                                              delay.toMillis(), instanceId, fence, DeliveryErrorText.describe(cause))
                     && leaseLost(key, row, "retry")) {
                 return;
             }

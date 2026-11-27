@@ -1,6 +1,30 @@
 # Shard-owned queue modules: test-time reduction plan
 
-Status: items 1, 2, 3, 4 and 6 done, item 5 skipped, item 7 measured and not worth doing (see each item's status line). Written 2026-11-08
+> **ARCHIVED (2026-11-27).** Items 1, 2, 3, 4 and 6 are implemented and shipped in 0.61.0; item 5 was skipped and
+> item 7 rejected. The remaining optional follow-ups are listed in the status table below and tracked in
+> [`../plans/README.md`](../plans/README.md) under "Open items from documents kept elsewhere". Kept as the record of
+> the measurements and decisions; the code is authoritative.
+
+**Status (2026-11-27, checked against the code on `release/0.61.1`):** the plan is complete. Items 1, 2, 3, 4 and 6
+are in the code and shipped in 0.61.0: the `benchmark.run` gate on `ShardOwnedMultiQueueCostIT`, the short lease in
+`ShardOwnedSpiFairShareIT`, `StatementHold`, the `ShardOwnedQueue.useNanoTime` seam, and lease ageing through
+`CrashedInstances.ageMembershipOf`. They reached `main` in the squash merge of #57 (`687826c69`), so the commit ids in
+each item's status line are not in `main`'s history. Item 5 stays skipped, and item 7 stays rejected.
+
+Optional follow-ups, none started except where noted (details in "Smaller items" and §7):
+
+| Follow-up | State in the code |
+|---|---|
+| Negative-window sleeps in `ShardOwnedDeadPumpHandBackIT` | Not done: the three `Thread.sleep(1_000)` are still there |
+| `OrderedRetryHandoverOnShardOwnedIT` backoff | Partly: `BACKOFF` is 4 s, down from 8 s; the plan suggested 2 s |
+| `ShardOwnedConcurrentProducersOrderIT` sharing one queue start | Not confirmed: the class no longer has the parameter rows described; it is behind `loadtest.skip` |
+| Moving WARN-text and `KeptUnit`-phase assertions to unit tests | Not started; by design only when touching those tests for another reason |
+| §7: age the remaining lease waits, starting with `ShardOwnedUnsubscribeIT`'s `a_queue_restarted…longer_than_the_lease_ttl…` | Not done: that test still waits out a real 3 s lease |
+| §7: review `ShardOwnedLifecycleIT`'s row matrix; a third Failsafe fork | Not started |
+| §7 next step: a report of every remaining sleep and lease wait in `ShardOwnedLifecycleIT` and `ShardOwnedUnsubscribeIT` | Not produced |
+
+Original status line: items 1, 2, 3, 4 and 6 done, item 5 skipped, item 7 measured and not worth doing (see each item's
+status line). Written 2026-11-08
 against `feature/trading-demo-expansion` at `4ffad19fb`.
 
 After items 1, 2, 3 and 6, `postgresql-queue-shard-owned` alone (`mvn verify -pl components/postgresql-queue-shard-owned`,
